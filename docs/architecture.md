@@ -1687,7 +1687,10 @@ The optional grouped Forge rewrite capability owns authoritative head snapshots,
 immutable `refs/autobuild/archive/<slug>/<sha>` publication and expected-head CAS.
 Remote archives also publish commits present only on the remote: GitHub uses create-only
 Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
-pushes for local objects. Exact remote readback confirms publication, then a non-shallow
+pushes for local objects. `gitRewrite` takes an optional refusal fallback: when a remote
+archive push exits non-zero without a transient classification, GitHub creates the
+identical ref through the same REST call, probing the commit only after a 422 to report a
+local-only commit. Exact remote readback confirms publication, then a non-shallow
 fetch of only that exact archive ref (without tags, configured refmap expansion or a
 depth limit) restores missing commits and their missing ancestry, writes no shallow
 boundary, leaves an already-shallow repository's existing boundaries unchanged, and

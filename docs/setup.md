@@ -475,7 +475,9 @@ For GitHub, enable **Allow squash merging** and **Allow rebase merging** in
 Settings → General. The kernel needs direct publication and force-push permission
 throughout `refs/heads/ab/` and `refs/heads/ab-node/`, including future branch
 names. It also publishes immutable `refs/autobuild/archive/` refs, a non-head
-namespace. Review protection rules, inherited organization rulesets, push rules,
+namespace. If the environment's Git transport refuses non-branch pushes, the GitHub
+adapter falls back to creating the archive ref through the REST API (Contents: write),
+so that path needs REST access to the archive namespace. Review protection rules, inherited organization rulesets, push rules,
 and actor restrictions for all three namespaces. GitHub's branch APIs cannot
 prove archive-domain access: manually verify it with your administrator without
 creating probe refs or overwriting archives. Autobuild never changes settings or

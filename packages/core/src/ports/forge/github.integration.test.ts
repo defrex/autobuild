@@ -12,7 +12,8 @@ import {
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
-import { isForgeFailure, isForgeRejection } from '../forge-failure'
+import { ForgeFailure, isForgeFailure, isForgeRejection } from '../forge-failure'
+import { ForgeRequestDeferred } from '../forge-request-context'
 import { NoCommitsBetweenBranchesError } from '../types'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -3102,6 +3103,128 @@ for (const entry of ['rewrite', 'kernelRewrite'] as const) {
         await promise
         expect(materialized).toBe(true)
       }
+    })
+  }
+}
+for (const entry of ['rewrite', 'kernelRewrite'] as const) {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  const refusal = 'remote: pushes of anything other than a branch are not allowed'
+  function refusedForge(
+    respond: (method: string, path: string, opts?: GitHubRequestOpts) => GitHubResponse,
+    push = { exitCode: 1, stderr: refusal },
+  ) {
+    const calls: { method: string; path: string; body: unknown }[] = []
+    const state = { published: false }
+    const forge = new GitHubForge({
+      repository: 'acme/app',
+      token: 'test-token',
+      exec: async (cmd) => {
+        if (cmd[1] === 'push') {
+          if (push.exitCode === 0) state.published = true
+          return { stdout: '', ...push }
+        }
+        return {
+          exitCode: 0,
+          stdout: cmd[1] === 'ls-remote' && state.published ? `${sha}\t${ref}\n` : '',
+          stderr: '',
+        }
+      },
+      transport: async (method, path, opts) => {
+        calls.push({ method, path, body: opts?.body })
+        return respond(method, path, opts)
+      },
+    })
+    const archive = () => forge[entry].archive({ workspacePath: '/ws', sha, ref })
+    return { archive, calls, state }
+  }
+  const post = { method: 'POST', path: 'repos/acme/app/git/refs', body: { ref, sha } }
+  const probe = { method: 'GET', path: `repos/acme/app/git/commits/${sha}`, body: undefined }
+
+  for (const outcome of [
+    'success',
+    'rest-failure',
+    'readback-mismatch',
+    'local-only',
+    'race',
+  ] as const) {
+    test(`${entry} falls back to REST archive creation after a refused push: ${outcome}`, async () => {
+      const h = refusedForge((method) => {
+        if (method === 'GET') {
+          if (outcome === 'local-only') throw new GitHubApiError(404, 'Not Found')
+          h.state.published = true // a concurrent writer published the same SHA
+          return { status: 200, headers: {}, json: { sha } }
+        }
+        if (outcome === 'rest-failure') throw new GitHubApiError(403, 'Resource not accessible')
+        if (outcome === 'local-only' || outcome === 'race')
+          throw new GitHubApiError(422, 'Object does not exist')
+        if (outcome === 'success') h.state.published = true
+        return { status: 201, headers: {}, json: { ref, object: { sha, type: 'commit' } } }
+      })
+      const result = h.archive().then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      )
+      const failure = await result
+      for (const call of h.calls)
+        expect(JSON.stringify(call.body ?? {})).not.toMatch(/refs\/(?:heads|tags)\//)
+      if (outcome === 'success') {
+        expect(failure).toBeUndefined()
+        expect(h.calls).toEqual([post])
+      } else if (outcome === 'race') {
+        expect(failure).toBeUndefined()
+        expect(h.calls).toEqual([post, probe])
+      } else if (outcome === 'rest-failure') {
+        expect(failure?.message).toContain(`git push refused (${refusal})`)
+        expect(failure?.message).toContain('GitHub REST ref creation failed (')
+        expect(failure?.message).toContain('Resource not accessible')
+        expect(h.calls).toEqual([post])
+      } else if (outcome === 'readback-mismatch') {
+        expect(failure?.message).toContain('git push refused')
+        expect(failure?.message).toContain('did not confirm publication')
+        expect(h.calls).toEqual([post])
+      } else {
+        expect(failure?.message).toContain('refuses non-branch git pushes')
+        expect(failure?.message).toContain('exists only in the local workspace')
+        expect(failure?.message).toContain('git push refused')
+        expect(h.calls).toEqual([post, probe])
+      }
+    })
+  }
+
+  test(`${entry} successful archive push makes no GitHub requests`, async () => {
+    const h = refusedForge(
+      () => {
+        throw new Error('no REST request expected')
+      },
+      { exitCode: 0, stderr: '' },
+    )
+    await h.archive()
+    expect(h.calls).toEqual([])
+  })
+
+  for (const [label, failure] of [
+    ['transient', new ForgeFailure('unavailable', { kind: 'transient', retry: 'retryable' })],
+    [
+      'rate-limited',
+      new ForgeFailure('rate limited', { kind: 'rate-limited', resetAt: '2026-11-17T12:00:00Z' }),
+    ],
+    ['deferred', new ForgeRequestDeferred('deferred')],
+  ] as const) {
+    test(`${entry} typed commit probe failure after a 422 keeps its class: ${label}`, async () => {
+      const h = refusedForge((method) => {
+        if (method === 'GET') throw failure
+        throw new GitHubApiError(422, 'Object does not exist')
+      })
+      await expect(h.archive()).rejects.toBe(failure)
+      expect(h.calls).toEqual([post, probe])
+    })
+    test(`${entry} typed REST creation failure after a refusal keeps its class: ${label}`, async () => {
+      const h = refusedForge(() => {
+        throw failure
+      })
+      await expect(h.archive()).rejects.toBe(failure)
+      expect(h.calls).toEqual([post])
     })
   }
 }

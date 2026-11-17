@@ -145,6 +145,10 @@ Before replacement the kernel publishes retained tips, displaced heads and the
 temporary change under immutable exact archive refs. Remote archives also publish
 commits present only on the remote: GitHub uses create-only Git-reference REST creation
 when the workspace lacks the commit, retaining guarded Git pushes for local objects.
+When the environment refuses a non-branch Git push of an archive ref, as Claude Code on
+the web's GitHub proxy does, GitHub creates the identical archive ref through the same
+REST call; a commit that exists only in the local workspace cannot use this fallback and
+fails with an error naming both refusals.
 Exact remote readback confirms publication, then a non-shallow fetch of only that exact
 archive ref (without tags, configured refmap expansion or a depth limit) restores
 missing commits and their missing ancestry, writes no shallow boundary, leaves an
