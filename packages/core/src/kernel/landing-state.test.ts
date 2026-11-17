@@ -47,7 +47,46 @@ const ack = (seq: number, commandSeq: number) =>
     payload: { commandSeq },
   })
 
+const deferred = (seq: number, replacement = candidate) =>
+  event(seq, {
+    actor: DISPATCHER,
+    type: 'landing.deferred',
+    payload: {
+      candidate: replacement,
+      reason: 'paths-unrecorded',
+      rule: { index: 0, snapshot: { within: ['docs/**'], mode: 'auto' } },
+      policy: 'sha256:policy',
+    },
+  })
+
 describe('durable landing state', () => {
+  test('a path deferral folds; a later decision or accepted reparent clears it', () => {
+    const next = { ...candidate, head: 'next' }
+    const state = buildReducer.reduce([decided(), deferred(2, next)]).landing
+    expect(state?.deferral).toMatchObject({
+      seq: 2,
+      candidate: next,
+      policy: 'sha256:policy',
+    })
+    expect(state?.decision?.candidate).toEqual(candidate)
+    expect(landingAuthorized(state)).toBe(false)
+    expect(buildReducer.reduce([deferred(1), decided(2)]).landing?.deferral).toBeUndefined()
+    const moved = event(2, {
+      actor: DISPATCHER,
+      type: 'node.parent-accepted',
+      payload: {
+        id: 'move',
+        old: { target: null, branch: 'main' },
+        next: {
+          target: { ticket: { source: 'file', id: 'Q' }, build: 'q' },
+          branch: 'ab-node/q',
+        },
+        revision: 'r2',
+      },
+    })
+    expect(buildReducer.reduce([deferred(1), moved]).landing?.deferral).toBeUndefined()
+  })
+
   test('accepted reparent revokes land and policy, preserves holds and evaluates the new destination', () => {
     const moved = event(4, {
       actor: DISPATCHER,
@@ -55,7 +94,10 @@ describe('durable landing state', () => {
       payload: {
         id: 'move',
         old: { target: null, branch: 'main' },
-        next: { target: { ticket: { source: 'file', id: 'Q' }, build: 'q' }, branch: 'ab-node/q' },
+        next: {
+          target: { ticket: { source: 'file', id: 'Q' }, build: 'q' },
+          branch: 'ab-node/q',
+        },
         revision: 'r2',
       },
     })
@@ -80,7 +122,11 @@ describe('durable landing state', () => {
             { into: 'root', mode: 'consent' },
             { into: 'Q', mode: 'auto' },
           ],
-          { from: 'node', into: { kind: 'node', ticket: 'Q' }, labels: decision.labels },
+          {
+            from: 'node',
+            into: { kind: 'node', ticket: 'Q' },
+            labels: decision.labels,
+          },
         ),
       },
     })
@@ -127,7 +173,10 @@ describe('durable landing state', () => {
     expect(replaced?.decision?.candidate.head).toBe('replacement')
     expect(landingAuthorized(replaced)).toBe(true)
     log.push(hold(4))
-    expect(buildReducer.reduce(log).landing?.command).toEqual({ kind: 'hold', seq: 4 })
+    expect(buildReducer.reduce(log).landing?.command).toEqual({
+      kind: 'hold',
+      seq: 4,
+    })
     // A consent naming a superseded decision records no head.
     expect(buildReducer.reduce([decided(), decided(2), land(3)]).landing?.command?.head).toBe(
       undefined,

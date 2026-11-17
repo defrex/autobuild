@@ -59,7 +59,10 @@ test('consent given at an old head shows both heads in text and JSON', async () 
     await store.append(slug, finalized('bbb'))
   })
   expect(lines).toContain('  merge:    consented at aaa · current head bbb')
-  expect(shown.tree).toMatchObject({ consentedHead: 'aaa', currentHead: 'bbb' })
+  expect(shown.tree).toMatchObject({
+    consentedHead: 'aaa',
+    currentHead: 'bbb',
+  })
 })
 
 test('a hold shows held', async () => {
@@ -85,4 +88,50 @@ test('legacy consent has no recorded head', async () => {
     })
   })
   expect(lines).toContain('  merge:    consented (head not recorded) · current head aaa')
+})
+
+test('a node whose integration candidate is deferred on unrecorded paths says so', async () => {
+  const head = 'c'.repeat(40)
+  const candidate = { head, parent: 'p'.repeat(40), cycle: 'cycle-1' }
+  const { shown, lines } = await render(async (store, slug) => {
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: '/repo',
+        ticket: { source: 'fake', id: 'N' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: { number: 2, url: 'https://forge/2', headSha: head } },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.prepared',
+      payload: {
+        id: candidate.cycle,
+        head,
+        parent: candidate.parent,
+        config: '{}',
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.deferred',
+      payload: {
+        candidate,
+        reason: 'paths-unrecorded',
+        rule: { index: 1, snapshot: { within: ['docs/**'], mode: 'auto' } },
+        policy: 'sha256:x',
+      },
+    })
+  })
+  expect(shown.landingDeferred).toContain('merge[1] matches on changed paths')
+  expect(lines).toContain(
+    `  landing:  undecided — deferred — [[merge]] rule merge[1] matches on changed paths, but the changed paths of head ${head.slice(0, 12)} are not recorded; the decision waits for a head this build records (heads pushed outside a build are never recorded)`,
+  )
 })

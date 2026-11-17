@@ -3359,6 +3359,9 @@ export async function headPathsLandingReadBudget(opts: {
   slug: string
   /** Whether the PR head carries a recorded fact. */
   recorded: boolean
+  /** Path-predicate merge rules: warm-up must have appended exactly one of
+   * these, reading a decided head's complete paths exactly once. */
+  warm?: 'landing.decided' | 'landing.deferred'
   /** One tick on a fresh dispatcher. */
   tick: () => Promise<unknown>
   advance: (ms: number) => void
@@ -3372,9 +3375,13 @@ export async function headPathsLandingReadBudget(opts: {
     '../kernel/head-paths'
   )
   let artifactReads = 0
+  let totalArtifactReads = 0
   const getArtifact = store.getArtifact.bind(store)
   store.getArtifact = async (s, kind, rev) => {
-    if (kind === HEAD_PATHS_ARTIFACT) artifactReads++
+    if (kind === HEAD_PATHS_ARTIFACT) {
+      artifactReads++
+      totalArtifactReads++
+    }
     return getArtifact(s, kind, rev)
   }
   await store.ensureRepo(repo)
@@ -3398,6 +3405,13 @@ export async function headPathsLandingReadBudget(opts: {
       for (let n = 0; n < 2; n++) {
         opts.advance(120_000)
         await opts.tick()
+      }
+      if (opts.warm) {
+        const landing = (await store.getEvents(slug)).filter(
+          (event) => event.type === 'landing.decided' || event.type === 'landing.deferred',
+        )
+        expect(landing.map((event) => event.type)).toEqual([opts.warm])
+        expect(totalArtifactReads).toBe(opts.warm === 'landing.decided' ? 1 : 0)
       }
       const rows = memoryRepositoryReadCounter(store, repo)
       const requests = memoryStoreRequestCounter(store)

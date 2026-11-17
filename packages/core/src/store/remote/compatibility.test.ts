@@ -524,6 +524,66 @@ for (const release of matrixReleases)
     expect(checked).toBeGreaterThan(0)
   })
 
+for (const release of matrixReleases)
+  test(`published ${release.version}: merge path predicates, matches and deferrals project away`, async () => {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    const store = new MemoryBuildStore()
+    const slug = 'released-merge-paths'
+    await store.createBuild({ slug, repo: 'repo' })
+    const candidate = { head: 'a'.repeat(40), parent: 'b'.repeat(40), cycle: '1' }
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate,
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'auto',
+        rule: { index: 0, snapshot: { within: ['docs/**'], mode: 'auto' } },
+        paths: { total: 1, preview: ['docs/a.md'] },
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'landing.deferred',
+      payload: {
+        candidate: { ...candidate, head: 'c'.repeat(40) },
+        reason: 'paths-unrecorded',
+        rule: { index: 0, snapshot: { paths: ['autobuild.toml'], mode: 'consent' } },
+        policy: 'sha256:policy',
+      },
+    })
+    const added = /"deferral":\{"candidate"|"within":|"paths":\{"total"/
+    let checked = 0
+    for (const reducer of ['build', 'buildReadFacts', 'buildStreamSeed']) {
+      if (!Object.hasOwn(catalog.versions, reducer)) continue
+      const answer = await store.getReducerValue({ kind: 'build', slug }, { reducer })
+      expect(JSON.stringify(answer.value)).toMatch(added)
+      const projected = reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        reducer,
+        answer,
+        matrixReleases,
+      )
+      expect(projected.version, reducer).toBe(catalog.versions[reducer]!)
+      expect(projectReducerValue(reducer, projected.value, catalog), reducer).toEqual({
+        value: projected.value,
+      })
+      // `pollingActivity` holds opaque canonical strings, not structure.
+      const served = JSON.stringify(projected.value, (key, value) =>
+        key === 'pollingActivity' ? undefined : value,
+      )
+      expect(served, reducer).not.toMatch(added)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
 test('default and next-minor services admit only recorded historical protocols', () => {
   for (const service of ['1.3.0', '1.4.0']) {
     for (const client of ['1.2.0', '1.2.999', '1.3.0', '1.3.999'])
