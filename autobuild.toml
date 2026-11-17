@@ -69,6 +69,7 @@ lint = "./scripts/verify-bun.sh bun run check"
 typecheck = "./scripts/verify-bun.sh bun run typecheck"
 test = "./scripts/verify-bun.sh bun run test"
 build = "./scripts/verify-bun.sh bun run check:build"
+app-load = "./scripts/verify-bun.sh bun run check:app-load"
 # Integration tests need a real PostgreSQL; the sandbox's `postgres`
 # provisioning step installs it, and a local run uses the host's own.
 test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' ./scripts/verify-bun.sh bun run test:integration"
@@ -87,6 +88,8 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # integration, both heavy, overran 5 s test defaults on the 4-vCPU sandbox;
 # with unit reduced to seconds of CPU, integration plus build carries the same
 # load the old unit plus build stage did.
+# app-load is a short local Chromium run that writes only .ab/app-load, distinct
+# from every capture directory, so it joins the independent suites.
 # All deterministic checks precede agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
 # ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
@@ -96,7 +99,7 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # reports here; cheap gates already run before the long suites.
 steps = [
   ["lint", "types"],
-  ["unit", "build", "integration"],
+  ["unit", "build", "integration", "app-load"],
   "ui-tui",
   ["ui-app", "ui-website", "docs"],
 ]
@@ -129,6 +132,19 @@ always = true
 [verify.integration]
 kind = "check"
 command = "test-integration"
+
+# Every operator web app page's real client code, bundled for the browser and
+# mounted in headless Chromium over fixture data; an uncaught exception or
+# unhandled rejection while a page loads fails, naming the page and the error.
+# #951 changed only kernel files, yet pulled Bun-only code into the dashboard's
+# client bundle and took the app down while every step passed. So the paths
+# cover every file that bundle reads, core included, not just the app tree;
+# docs-, skills- and website-only diffs still skip it. The bundle-input
+# integration test fails when the bundle reads a file these paths miss.
+[verify.app-load]
+kind = "check"
+command = "app-load"
+paths = ["packages/hosted-store-service/app/**", "packages/hosted-store-service/src/**", "packages/hosted-store-service/package.json", "packages/hosted-store-service/tsconfig.json", "packages/core/src/**", "packages/core/package.json", "packages/web-dashboard-capture/**", "package.json", "bun.lock", "tsconfig.json"]
 
 # Visual evidence for dashboard-touching builds. The kernel decides
 # applicability from the build-owned diff; the skill never inspects Git or skips.

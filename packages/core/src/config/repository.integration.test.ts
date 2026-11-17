@@ -22,6 +22,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     'unit',
     'build',
     'integration',
+    'app-load',
     'ui-tui',
     'ui-app',
     'ui-website',
@@ -41,6 +42,12 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
   expect(config.verify.stepConfigs.integration).toEqual({
     kind: 'check',
     command: 'test-integration',
+  })
+  // Browser load failures: every file the web app's client bundle reads gates it.
+  expect(config.verify.stepConfigs['app-load']).toMatchObject({
+    kind: 'check',
+    command: 'app-load',
+    paths: expect.arrayContaining(['packages/hosted-store-service/app/**', 'packages/core/src/**']),
   })
   expect(config.verify.stepConfigs['ui-tui']).toEqual({
     kind: 'agent',

@@ -1,6 +1,13 @@
 import { accountCredentialsCapture } from '../../../tools/account-credentials-capture'
 import { SETTINGS_SCENARIOS, settingsFixture } from './settings-fixtures'
-import { fullDocumentScreenshot } from './full-document'
+import { chromiumBinary, fullDocumentScreenshot } from './full-document'
+import {
+  checkClientPages,
+  type ClientPageResult,
+  clientFixtures,
+  formatClientFailure,
+  pageForFrame,
+} from './client-load'
 import { verifyStagesCapture } from '../../../tools/verify-stages-capture'
 import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
@@ -31,7 +38,6 @@ import ConnectionPage from '../../hosted-store-service/app/connect/page'
  * imports no react) remains at the repository root.
  */
 import { FONT_FILES } from '../../hosted-store-service/app/fonts'
-import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
@@ -68,6 +74,8 @@ import { SignIn } from '../../hosted-store-service/app/sign-in/SignIn'
 import { Consent } from '../../hosted-store-service/app/oauth/consent/Consent'
 import ConsentPage from '../../hosted-store-service/app/oauth/consent/page'
 import { captureDashboardFrames, RENDER_NOW } from '../../../tools/dashboard-capture'
+
+export { chromiumBinary }
 
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 const FIXTURE_REPO = 'example/repository'
@@ -1373,35 +1381,6 @@ export function fontFaceCss(repoRoot = REPO_ROOT): string {
     .join('\n')}\n:root { --font-mono: 'ANSI mono'; --font-sans: 'ANSI sans'; }`
 }
 
-/**
- * Locate a Chromium-family binary: `CHROMIUM_BIN` or `CHROME_BIN` first, then
- * common install paths, then PATH. Undefined when none exists.
- */
-export function chromiumBinary(
-  env: Record<string, string | undefined> = process.env,
-  exists: (path: string) => boolean = existsSync,
-  which: (name: string) => string | undefined | null = (name) => Bun.which(name),
-): string | undefined {
-  const configured = [env.CHROMIUM_BIN, env.CHROME_BIN].filter(
-    (value): value is string => typeof value === 'string' && value.length > 0,
-  )
-  for (const candidate of configured) if (exists(candidate)) return candidate
-  const installed = [
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  ]
-  for (const candidate of installed) if (exists(candidate)) return candidate
-  for (const name of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
-    const found = which(name)
-    if (found) return found
-  }
-  return undefined
-}
-
 /** Retry transient browser failures once, with a fresh isolated profile. */
 const SCREENSHOT_ATTEMPTS = 2
 
@@ -1447,6 +1426,8 @@ export interface WebDashboardFrame {
   width: number
   height: number
   ground?: 'light' | 'dark'
+  /** The app route whose client code the capture mounted for this frame. */
+  page: string
   htmlPath: string
   pngPath: string
 }
@@ -1456,6 +1437,8 @@ export interface WebDashboardCaptureResult {
   reportPath: string
   chromium: string
   frames: WebDashboardFrame[]
+  /** Every depicted page, mounted in Chromium over the capture's models. */
+  clientLoad: ClientPageResult[]
 }
 
 export interface WebDashboardCaptureOptions {
@@ -1497,7 +1480,12 @@ export async function harnessModels(): Promise<WebFixtureModels> {
   }
 }
 
-export function report(frames: WebDashboardFrame[], chromium: string, outputDir: string): string {
+export function report(
+  frames: WebDashboardFrame[],
+  chromium: string,
+  outputDir: string,
+  clientLoad: readonly ClientPageResult[] = [],
+): string {
   const lines = [
     '# Web dashboard visual verification',
     '',
@@ -1512,6 +1500,16 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     'The wide rest/hover pair uses one model so row coordinates can be compared.',
     'Fine-pointer hover and keyboard focus are modeled explicitly in dedicated wide frames; capture-only CSS emulates capabilities that static Chromium markup cannot establish.',
     'The state-change flash and keyboard shortcuts are code-reviewed; narrow frames carry no hover preview.',
+    '',
+    '## Client load',
+    '',
+    'Before any screenshot, the capture mounts the real client component of every page these frames depict in Chromium, over the same fixture models, with effects and initial data requests running.',
+    'An uncaught exception, unhandled rejection, empty render, unserved fixture request or settle timeout aborts the capture, naming the page, its frames and the browser error; no frames are written then.',
+    'The frames below are static markup and prove presentation only; this section proves the pages load.',
+    '',
+    ...clientLoad.map(
+      (page) => `- \`${page.route}\` (${page.component}): loaded without browser errors`,
+    ),
     '',
     '## Frames',
     '',
@@ -1566,6 +1564,33 @@ export async function captureWebDashboardFrames(
   }
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
+  // Static frames cannot show a client that throws while loading, so mount
+  // every depicted page's real client code first; a failure is never retried.
+  const framePages = new Map(
+    WEB_FRAME_SPECS.map((spec) => [frameName(spec), pageForFrame(spec.id)]),
+  )
+  const clientDir = join(outputDir, 'client')
+  const clientLoad = await checkClientPages({
+    chromium,
+    outDir: clientDir,
+    routes: [...new Set(framePages.values())],
+    fixtures: await clientFixtures({ model: models.mixed }),
+  })
+  const failures = clientLoad.filter((page) => page.errors.length > 0)
+  if (failures.length)
+    throw new Error(
+      failures
+        .map((page) => {
+          const ids = new Set(
+            WEB_FRAME_SPECS.filter((spec) => pageForFrame(spec.id) === page.route).map(
+              (spec) => spec.id,
+            ),
+          )
+          return formatClientFailure(page, `web dashboard capture (frames ${[...ids].join(', ')})`)
+        })
+        .join('\n'),
+    )
+  await rm(clientDir, { recursive: true, force: true })
   const userDataDir = await mkdtemp(join(outputDir, 'chromium-'))
   try {
     const frames: WebDashboardFrame[] = []
@@ -1586,6 +1611,7 @@ export async function captureWebDashboardFrames(
       frames.push({
         id: frameName(spec),
         ground: spec.ground,
+        page: framePages.get(frameName(spec))!,
         width: dimensions.width,
         height: dimensions.height,
         htmlPath,
@@ -1594,8 +1620,8 @@ export async function captureWebDashboardFrames(
     }
     await writeFile(join(outputDir, 'frames.json'), JSON.stringify(frames, null, 2))
     const reportPath = join(outputDir, 'verify-report.md')
-    await writeFile(reportPath, report(frames, chromium, outputDir))
-    return { outputDir, reportPath, chromium, frames }
+    await writeFile(reportPath, report(frames, chromium, outputDir, clientLoad))
+    return { outputDir, reportPath, chromium, frames, clientLoad }
   } finally {
     await rm(userDataDir, { recursive: true, force: true })
   }
