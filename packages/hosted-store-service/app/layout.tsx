@@ -1,5 +1,9 @@
 import type { Metadata } from 'next'
 import localFont from 'next/font/local'
+import {
+  browserErrorBootstrap,
+  deploymentIdentity,
+} from '@defrex/autobuild-hosted-store-service/web/client-errors'
 import { ThemeProvider } from './ThemeProvider'
 import { THEME_BOOTSTRAP } from './theme'
 import type { ReactNode } from 'react'
@@ -18,6 +22,8 @@ const mono = localFont({
   display: 'swap',
 })
 
+const BROWSER_ERRORS = browserErrorBootstrap(deploymentIdentity(process.env))
+
 export const metadata: Metadata = {
   title: 'Autobuild operator',
   description: 'Watch and control Autobuild pipelines',
@@ -27,6 +33,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: constant browser error reporter; first so it precedes every chunk, with only an escaped deployment id interpolated */}
+        <script dangerouslySetInnerHTML={{ __html: BROWSER_ERRORS }} />
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: constant validated preference bootstrap, with no user content */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>

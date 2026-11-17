@@ -1600,7 +1600,7 @@ export async function ticketWaitIdleReadBudget(opts: {
 }
 
 /** Count every MemoryBuildStore method call made while `run` executes. */
-async function countStoreRequests(
+export async function countStoreRequests(
   store: import('../store/memory').MemoryBuildStore,
   run: () => Promise<void>,
 ): Promise<Record<string, number>> {

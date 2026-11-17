@@ -10,6 +10,8 @@ const config: NextConfig = {
     '@defrex/autobuild-hosted-dispatcher',
   ],
   serverExternalPackages: ['better-auth', 'pg'],
+  // Browser error stacks in the runtime log resolve through the public .js.map files.
+  productionBrowserSourceMaps: true,
   // Installed deployments explicitly supply their root (the deployment folder,
   // or the workspace root above it); source deployments retain workspace-wide
   // resolution and Next's inferred tracing root.
