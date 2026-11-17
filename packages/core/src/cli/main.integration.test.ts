@@ -578,6 +578,7 @@ describe('runCli — read-only status routing', () => {
       upgradeStatus: {},
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],
+      hooks: [],
     })
   })
 

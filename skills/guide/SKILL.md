@@ -473,7 +473,7 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[profiles]`,
+verifier. The open maps are `[accounts]`, `[commands]`, `[hooks]`, `[roles]`, `[profiles]`,
 `[profiles.<name>.roles]`, `[workspace.config]`,
 `[workspace.config.runtimeProvisioning]`, `[verify.<step>]`, and
 `[finalize.<step>]`. Autobuild strictly validates the
@@ -1616,6 +1616,44 @@ stays in the repository journal;
 `dispatcher.upgrade-failed` and `dispatcher.runtime-rolled-back` are actionable attention. Status also exposes the last rollback and current-lineage hold. Unrelated base commits do not
 retry an unchanged failed target. No registry credentials belong in these facts.
 
+### `[hooks]`
+
+An open map of hook name → observe-only hook. The lease-holding **local**
+dispatcher delivers each record that matches the hook's filter to its command,
+so tooling reacts to attention without keeping its own `ab watch` alive.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `command` | required | Shell command run with `sh -c` from the checkout, once per record. |
+| `events` | absent | `ab watch --event` globs, catalog-validated; absent means the default watch attention set. |
+| `timeoutSeconds` | `30` | Per-invocation limit; a timeout is a failure and kills the command's process group. |
+
+- **Validation.** Names use ASCII letters, digits, `.`, `_` and `-`; a duplicate
+  table, a missing `command`, an empty `events` list, or a glob matching no build
+  or repository event type (or `dispatcher.lost`) is rejected naming the hook, at
+  startup and on reload. `hooks` hot-reloads. The **hosted dispatcher rejects
+  command hooks** as a config error; they are never silently ignored.
+- **Record.** stdin carries exactly one record per invocation: the line `ab watch
+  --json` prints for the same event under the same filter, including derived
+  observations such as `build.consent-ready`. The record's `id` is stable across
+  redelivery; its `cursor` is the hook's position after it. The environment drops
+  build and session identity and adds `AB_HOOK=<name>`.
+- **Guarantee.** Exit 0 within the timeout is success. Records arrive in order,
+  one invocation at a time; delivery is at least once, so consumers deduplicate
+  by `id`. Hooks run outside the dispatch tick and nothing reads their outcome:
+  a hook never delays or changes a build, a tick or another hook.
+- **Progress.** Durable per hook name (the latest `hook-progress.<name>`
+  repository artifact) across restarts, hot upgrades and reloads. A new name
+  starts when first loaded, without history; a renamed hook starts fresh; a
+  changed command or filter resumes from saved progress. History too old to read
+  resumes from the current position and records `hook.skipped`. `ab dispatch
+  --once` makes one delivery pass per hook and stops at the first failure.
+- **Failure.** Retries back off to one minute between attempts. Five minutes of
+  continuous failure records `hook.failing` once per episode; the next success
+  records `hook.recovered`. All three `hook.*` events are default watch
+  attention. `ab repository status` lists each hook's last delivery, backlog or
+  "caught up", and current failure.
+
 ## Setup and upgrades
 
 For 0.x upgrades, first read the [migration reference](references/migration-1.0.md):
@@ -2683,7 +2721,9 @@ It also lists the latest ticket scan's ticket and dependency diagnostics
 including ready tickets whose labels select more than one role profile and
 tickets held because their target
 node is being built by another store, and dispatcher startup warnings
-(`warningLines`).
+(`warningLines`). Each hook configured by the latest dispatcher run is listed
+with its last successful delivery, pending backlog or "caught up", and current
+failure (`hook <name> — …` lines; `hooks` in JSON, empty when none).
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
@@ -2834,6 +2874,14 @@ The default watch reports actionable conditions only:
   line names the process whose GitHub request was rate-limited outside the
   dispatcher's credential (unauthenticated, with why, or on that process's own
   credential) and its reset; dispatcher forge work continues.
+- Repository `hook.failing`, `hook.recovered` and `hook.skipped`: a configured
+  hook (`[hooks]`) has failed continuously for five minutes (once per episode,
+  naming the latest error and the record `id` it is stuck on), has delivered
+  again after a reported episode, or resumed past history it could no longer
+  read (with the skipped stream ranges) or a build announcement it could not
+  resolve. Inspect `ab repository status`, fix the hook command or
+  configuration, and treat a skipped range as records the hook's consumer never
+  received.
 - Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic
   preparation recovery stopped and left the ticket unchanged. The line names the
   ticket, attempt and recorded reason; the payload's `claimed` says whether the
@@ -2892,7 +2940,10 @@ arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
 With `--json`, stdout is newline-delimited JSON — exactly one object per
-matching event, flushed as soon as it is written — with fields `build` (slug,
+matching event, flushed as soon as it is written — with fields `id` (the
+record's stable identity, the same on redelivery and resume:
+`build:<slug>:<seq>`, `repo:<seq>`, `<observation type>:<dedupe identity>`, or
+`dispatcher.lost:<run>`), `build` (slug,
 or null for a repository event), `repo` (present only for repository events),
 `event` (the complete durable envelope: build, seq, ts, actor, type, payload),
 `state` (for build events, the reduction after that event: `status`, `phase`,

@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
-import { BUILD_ATTENTION_EVENTS, projectRecord, summarizeEvent } from './watch'
+import { BUILD_ATTENTION_EVENTS, projectRecord, summarizeEvent, watchRecordId } from './watch'
 
 function event(seq: number, type: string, payload: unknown, actor: unknown = DISPATCHER): AbEvent {
   return {
@@ -106,4 +106,27 @@ test('an answer to another escalation keeps its ordinary summary', () => {
   const line = summarizeEvent(answered, after(created, requested, entered, raised, answered))
   expect(line).not.toContain('wait')
   expect(line).toContain('retry it')
+})
+
+test('watch record ids derive only from durable identities', () => {
+  expect(watchRecordId({ event: event(4, 'escalation.raised', { id: 'e' }) })).toBe('build:waits:4')
+  expect(
+    watchRecordId({
+      event: {
+        repo: 'r',
+        seq: 9,
+        ts: '2026-01-01T00:00:00.000Z',
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-failed',
+        payload: { run: 'r1', error: 'x' },
+      } as never,
+    }),
+  ).toBe('repo:9')
+  expect(watchRecordId({ observation: 'build.consent-ready', identity: '["consent","b",3]' })).toBe(
+    'build.consent-ready:["consent","b",3]',
+  )
+  expect(
+    watchRecordId({ observation: 'dispatcher.tick-failure-persistent', identity: 'tick:7' }),
+  ).toBe('dispatcher.tick-failure-persistent:tick:7')
+  expect(watchRecordId({ lost: 'run-1' })).toBe('dispatcher.lost:run-1')
 })

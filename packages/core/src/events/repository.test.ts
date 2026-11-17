@@ -826,6 +826,56 @@ test('forge readiness notices only accept hard check keys and dispatcher authors
   expect(() => validateRepositoryEventWrite({ ...notice, actor: humanActor('user') })).toThrow()
 })
 
+test('hook delivery health events are bounded and dispatcher-authored', () => {
+  const since = '2026-11-17T00:00:00.000Z'
+  const writes = [
+    {
+      actor: DISPATCHER,
+      type: 'hook.failing' as const,
+      payload: { hook: 'notify', since, attempts: 4, error: 'exit status 1', record: 'repo:3' },
+    },
+    {
+      actor: DISPATCHER,
+      type: 'hook.recovered' as const,
+      payload: { hook: 'notify', since, attempts: 4 },
+    },
+    {
+      actor: DISPATCHER,
+      type: 'hook.skipped' as const,
+      payload: {
+        hook: 'notify',
+        reason: 'cursor too old',
+        ranges: [{ stream: '#repo', after: 3, through: 1200 }],
+      },
+    },
+  ]
+  for (const write of writes) {
+    expect(validateRepositoryEventWrite(write)).toEqual(write)
+    expect(() => validateRepositoryEventWrite({ ...write, actor: KERNEL })).toThrow()
+    expect(() =>
+      validateRepositoryEventWrite({ ...write, payload: { ...write.payload, extra: true } }),
+    ).toThrow()
+    expect(() =>
+      validateRepositoryEventWrite({ ...write, payload: { ...write.payload, hook: 'a b' } }),
+    ).toThrow()
+  }
+  expect(() =>
+    validateRepositoryEventWrite({
+      ...writes[0]!,
+      payload: { ...writes[0]!.payload, error: 'x'.repeat(1_001) },
+    }),
+  ).toThrow()
+  expect(() =>
+    validateRepositoryEventWrite({
+      ...writes[2]!,
+      payload: {
+        ...writes[2]!.payload,
+        ranges: Array.from({ length: 1_001 }, () => ({ stream: 'b', after: 0, through: 1 })),
+      },
+    }),
+  ).toThrow()
+})
+
 test('kernel Git condition events are bounded and dispatcher-authored', () => {
   const unavailable = {
     actor: DISPATCHER,
