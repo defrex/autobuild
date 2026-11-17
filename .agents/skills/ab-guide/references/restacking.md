@@ -3,7 +3,10 @@
 A leaf contributes one net change, independent of its WIP commit count. Before
 verification the kernel collapses its contribution relative to the effective
 diff base and replays it onto the sampled destination. Implementation and review
-do not rewrite history. Verification failures return to implementation; later
+do not rewrite history; the one exception is a build resuming from a ticket
+wait, which the kernel restacks between phases so the resumed phase sees the
+merged blockers. A build with nothing published yet simply fast-forwards to
+the destination. Verification failures return to implementation; later
 commits append until the next approved cycle. Later reviews use the effective
 base from the preceding successful restack; the original cut remains provenance.
 
@@ -49,7 +52,15 @@ polls read no receipts or event rows.
 
 Accepted destination observations are durable `target.moved` facts, including while an
 agent runs. Verify-entry restack freezes a current base before verification;
-path selection excludes upstream-only paths. After finalize and post-steps,
+path selection excludes upstream-only paths. A build leaving a ticket wait
+restacks with trigger `wait-resume` before its declaring phase resumes, when the
+target moved from the base its work sits on; an unchanged target resumes
+without a restack. Published work replays through the guarded restack, and a
+conflict runs reconcile before the declaring phase resumes. Unpublished,
+uncommitted work only fast-forwards (`restack.advanced`). A wait declared by a
+reconcile session supersedes that session's frozen replay when the target
+moved, discarding its undeposited resolution, and replays onto the current
+target instead. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
 are canonicalized before guarded merge even when the target SHA is unchanged.
 Clean replay starts no agent. A clean waiting leaf rewrite preserves completed
@@ -68,7 +79,7 @@ dependency presence requires an ancestor change; on `ab restack <node>`; or on
 accepted re-parenting. There is no eager mode or cadence option. Nested nodes
 need their own demand. Existing frozen transactions, including ones reserved
 before upgrade, finish first; later demand coalesces onto the latest parent.
-Leaves keep verify-entry and awaiting-merge restacks for every target.
+Leaves keep verify-entry, wait-resume and awaiting-merge restacks for every target.
 
 For observation cadence, durable wakes and last-check evidence, see
 [node polling and status](integration-tree.md#polling-and-status).

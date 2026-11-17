@@ -29,6 +29,7 @@ import { decideNext } from './engine'
 import { leafTransaction } from './generators/leaf-restack-log'
 import { checkIncremental } from './incremental-contract'
 import { logIndexReducer } from './log-index'
+import { leafBaseInUse, leafRestackedBase } from './leaf-restack-state'
 import { buildReducer, reduceBuild as reduceBuildWhole, type BuildState } from './reducer'
 import { terminalGuardReducer } from './terminal-guard'
 import {
@@ -37,6 +38,7 @@ import {
   ticketWaitStatus,
   waitBlock,
   waitParked,
+  waitResumeSupersedes,
 } from './ticket-wait'
 
 const BUILD = 'waits-on-a'
@@ -591,4 +593,422 @@ test('terminal guard: after wait.requested this session can run no other termina
   expect(guard.reduce(log).diagnostic).toContain('already declared a wait')
   const other = terminalGuardReducer({ phase: 'plan', round: 1, session: 's_other' })
   expect(other.reduce(log).diagnostic).toBeUndefined()
+})
+
+describe('wait-resume restack', () => {
+  const BASE = '1'.repeat(40)
+  const T1 = '2'.repeat(40)
+  const T2 = '3'.repeat(40)
+  const HEAD = '4'.repeat(40)
+
+  function oidPrelude(): EventWrite[] {
+    return prelude().map((write) =>
+      write.type === 'workspace.provisioned'
+        ? ev('workspace.provisioned', {
+            provider: 'worktree',
+            ref: '/ws/a',
+            branch: 'ab/a',
+            base: { source: 'remote', sha: BASE },
+          })
+        : write,
+    )
+  }
+  const moved = (sha: string) => ev('target.moved', { branch: 'main', sha })
+  const answer = ev('escalation.answered', {
+    id: 'esc_w',
+    answer: 'B landed',
+    resolution: 'guidance',
+  })
+  /** toLog inserts nothing for these fixtures, so seq is index + 1. */
+  const seqOf = (writes: EventWrite[], write: EventWrite) => writes.indexOf(write) + 1
+
+  function plannedWait(): EventWrite[] {
+    return [
+      ...oidPrelude(),
+      ev('plan.started', { round: 1 }),
+      session('s_plan', 'plan', 1),
+      request('wait_1', 'plan', 1, 's_plan'),
+      ended('s_plan'),
+      entered('wait_1', 'esc_w'),
+      answer,
+    ]
+  }
+
+  function approvedThroughCode(): EventWrite[] {
+    return [
+      ...oidPrelude(),
+      ev('plan.started', { round: 1 }),
+      ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
+      ev('plan-review.started', { round: 1 }),
+      ev('plan-review.verdict', {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      }),
+      ev('implement.started', { round: 1 }),
+      ev('implement.completed', {
+        round: 1,
+        commits: { base: BASE, head: HEAD },
+        artifact: { kind: 'implement-notes', rev: 0 },
+      }),
+      ev('code-review.started', { round: 1 }),
+      ev('code-review.verdict', {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'code-review', rev: 0 },
+      }),
+    ]
+  }
+
+  const transaction = (
+    trigger: 'verify-entry' | 'wait-resume',
+    targetBase: string,
+    id = 'rs-1',
+  ) => ({
+    ...leafTransaction,
+    id,
+    trigger,
+    oldBase: BASE,
+    oldHead: HEAD,
+    targetBase,
+  })
+
+  const {
+    trigger: _trigger,
+    cycle: _cycle,
+    observation: _observation,
+    message: _message,
+    ...reconcileTx
+  } = transaction('verify-entry', T1)
+
+  /** Verify entry conflicts onto T1; the reconcile session waits on B. */
+  function reconcileWait(): EventWrite[] {
+    return [
+      ...approvedThroughCode(),
+      moved(T1),
+      ev('restack.prepared', transaction('verify-entry', T1)),
+      ev('restack.replayed', { id: 'rs-1', conflicted: true }),
+      ev('reconcile.started', { attempt: 1, baseSha: T1, restackId: 'rs-1' }),
+      session('s_rec', 'reconcile', 1),
+      request('wait_1', 'reconcile', 1, 's_rec'),
+      ended('s_rec'),
+      entered('wait_1', 'esc_w'),
+      answer,
+    ]
+  }
+
+  test('an ended wait whose target moved restacks before the declaring phase', () => {
+    const log = [...plannedWait(), moved(T1)]
+    expect(decide(log)).toEqual({
+      kind: 'restack',
+      trigger: 'wait-resume',
+      cycle: seqOf(log, answer),
+    })
+  })
+
+  test('an unchanged target resumes the declaring phase without a restack', () => {
+    expect(decide([...plannedWait(), moved(BASE)])).toMatchObject({
+      kind: 'run-phase',
+      phase: 'plan',
+      round: 1,
+    })
+    // No observation at all also resumes directly.
+    expect(decide(plannedWait())).toMatchObject({ kind: 'run-phase', phase: 'plan' })
+  })
+
+  test('a fast-forward resumes the phase, promotes the base and ends parking', () => {
+    const log = [...plannedWait(), moved(T1)]
+    const cycle = seqOf(log, answer)
+    const advanced = [
+      ...log,
+      ev('restack.advanced', {
+        trigger: 'wait-resume',
+        cycle,
+        observation: cycle + 1,
+        branch: 'ab/a',
+        from: BASE,
+        to: T1,
+      }),
+    ]
+    expect(decide(advanced)).toMatchObject({ kind: 'run-phase', phase: 'plan', round: 1 })
+    const state = reduce(advanced)
+    expect(state.implement.contributionBase).toBe(T1)
+    expect(state.wait?.resumedSeq).toBeDefined()
+    expect(waitParked(state)).toBe(false)
+    const index = logIndexReducer.reduce(toLog(advanced))
+    expect(leafRestackedBase(index.restack)).toBe(T1)
+    expect(leafBaseInUse(index)).toBe(T1)
+  })
+
+  test('a wait-resume transaction runs ahead of the loops: conflict reconciles, clean restacks', () => {
+    const base = [
+      ...oidPrelude(),
+      ev('plan.started', { round: 1 }),
+      ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
+      ev('plan-review.started', { round: 1 }),
+      ev('plan-review.verdict', {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      }),
+      ev('implement.started', { round: 1 }),
+      session('s_impl', 'implement', 1),
+      request('wait_1', 'implement', 1, 's_impl'),
+      ended('s_impl'),
+      entered('wait_1', 'esc_w'),
+      answer,
+      moved(T1),
+      ev('restack.prepared', { ...transaction('wait-resume', T1), cycle: 9 }),
+    ]
+    const resumed = reduce(base)
+    expect(resumed.wait?.resumedSeq).toBeDefined()
+    expect(decide(base)).toEqual({ kind: 'restack', trigger: 'wait-resume', cycle: 9 })
+    const conflicted = [...base, ev('restack.replayed', { id: 'rs-1', conflicted: true })]
+    expect(decide(conflicted)).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 1,
+      reconcile: { attempt: 1 },
+    })
+    const reconciling = [
+      ...conflicted,
+      ev('reconcile.started', { attempt: 1, baseSha: T1, restackId: 'rs-1' }),
+    ]
+    expect(logIndexReducer.reduce(toLog(reconciling)).restack.initialVerification).toBe(true)
+    const completed = [
+      ...base,
+      ev('restack.completed', { ...transaction('wait-resume', T1), cycle: 9, headSha: HEAD }),
+    ]
+    expect(decide(completed)).toMatchObject({ kind: 'run-phase', phase: 'implement', round: 1 })
+    expect(reduce(completed).implement.contributionBase).toBe(T1)
+  })
+
+  test('a later target move after the build resumed does not restack it mid-phase', () => {
+    const log = [...plannedWait(), moved(BASE), session('s_plan2', 'plan', 1), moved(T1)]
+    expect(decide(log)).toMatchObject({ kind: 'run-phase', phase: 'plan' })
+  })
+
+  test('a revise-spec answer parks for the revision instead of restacking', () => {
+    const log = [
+      ...plannedWait().slice(0, -1),
+      ev('escalation.answered', { id: 'esc_w', answer: 'new spec', resolution: 'revise-spec' }),
+      moved(T1),
+    ]
+    expect(decide(log)).toEqual({ kind: 'wait', reason: 'awaiting-spec' })
+  })
+
+  test('a reconcile wait supersedes its frozen occurrence when the target moved', () => {
+    const log = [...reconcileWait(), moved(T2)]
+    expect(decide(log)).toEqual({
+      kind: 'restack',
+      trigger: 'wait-resume',
+      cycle: seqOf(log, answer),
+    })
+    const index = logIndexReducer.reduce(toLog(log))
+    expect(index.openReconcile).toMatchObject({ attempt: 1, baseSha: T1, intended: false })
+    expect(waitResumeSupersedes(reduce(log), index)).toBe(true)
+  })
+
+  test('a reconcile wait keeps its attempt when the target is unchanged or intent exists', () => {
+    expect(decide(reconcileWait())).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 1,
+      reconcile: { attempt: 1 },
+    })
+    const withIntent = [
+      ...approvedThroughCode(),
+      moved(T1),
+      ev('restack.prepared', transaction('verify-entry', T1)),
+      ev('restack.replayed', { id: 'rs-1', conflicted: true }),
+      ev('reconcile.started', { attempt: 1, baseSha: T1, restackId: 'rs-1' }),
+      ev(
+        'reconcile.publish-intended',
+        {
+          ...reconcileTx,
+          attempt: 1,
+          restackId: 'rs-1',
+          headSha: HEAD,
+          conflicted: true,
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        } as never,
+        KERNEL,
+      ),
+    ]
+    const index = logIndexReducer.reduce(toLog(withIntent))
+    expect(index.openReconcile?.intended).toBe(true)
+  })
+
+  test('superseding closes the occurrence, its automatic restack and its phase', () => {
+    const log = [...reconcileWait(), moved(T2)]
+    const cycle = seqOf(log, answer)
+    const superseded = [
+      ...log,
+      ev('reconcile.superseded', { attempt: 1, cycle, cause: 'wait-resume', restackId: 'rs-1' }),
+    ]
+    const index = logIndexReducer.reduce(toLog(superseded))
+    expect(index.openReconcile).toBeUndefined()
+    expect(index.restack.active).toBeUndefined()
+    expect(index.conflictReconcileStarted).toBeUndefined()
+    const state = reduce(superseded)
+    expect(state.currentPhase).toBeUndefined()
+    // The next decision restacks onto T2.
+    expect(decide(superseded)).toEqual({ kind: 'restack', trigger: 'wait-resume', cycle })
+  })
+
+  test('a wait during a wait-resume conflict supersedes that transaction too', () => {
+    const log = [
+      ...approvedThroughCode(),
+      moved(T1),
+      ev('restack.prepared', { ...transaction('wait-resume', T1), cycle: 3 }),
+      ev('restack.replayed', { id: 'rs-1', conflicted: true }),
+      ev('reconcile.started', { attempt: 1, baseSha: T1, restackId: 'rs-1' }),
+      session('s_rec', 'reconcile', 1),
+      request('wait_2', 'reconcile', 1, 's_rec'),
+      ended('s_rec'),
+      entered('wait_2', 'esc_w'),
+      answer,
+      moved(T2),
+    ]
+    expect(decide(log)).toEqual({
+      kind: 'restack',
+      trigger: 'wait-resume',
+      cycle: seqOf(log, answer),
+    })
+  })
+
+  test('implement wait publication: requested, published and lost', () => {
+    const publication = { branch: 'ab/a', base: BASE, sha: HEAD }
+    const requested = [
+      ...oidPrelude(),
+      ev(
+        'publication.requested',
+        { operation: 'wait', id: 'wait_1', ...publication },
+        agent('s_impl'),
+      ),
+      ev(
+        'wait.requested',
+        {
+          id: 'wait_1',
+          phase: 'implement',
+          round: 1,
+          tickets: ['B'],
+          reason: 'needs B',
+          publication: { ...publication, settlement: 'requested' },
+        },
+        agent('s_impl'),
+      ),
+    ]
+    const state = reduce(requested)
+    expect(state.waitRequest?.publication).toEqual({
+      ...publication,
+      published: false,
+      requestSeq: seqOf(requested, requested.at(-2)!),
+    })
+    const published = [...requested, ev('wait.published', { id: 'wait_1', sha: HEAD })]
+    expect(reduce(published).waitRequest?.publication?.published).toBe(true)
+    const lost = [
+      ...requested,
+      ev('publication.lost', {
+        request: seqOf(requested, requested.at(-2)!),
+        operation: 'wait',
+        reason: 'workspace released',
+        branch: publication.branch,
+        sha: publication.sha,
+      }),
+    ]
+    expect(reduce(lost).waitRequest?.publication?.lost).toBe(true)
+    const local = [
+      ...oidPrelude(),
+      ev(
+        'wait.requested',
+        {
+          id: 'wait_1',
+          phase: 'implement',
+          round: 1,
+          tickets: ['B'],
+          reason: 'needs B',
+          publication: { ...publication, settlement: 'published' },
+        },
+        agent('s_impl'),
+      ),
+    ]
+    expect(reduce(local).waitRequest?.publication?.published).toBe(true)
+  })
+
+  test('implement wait publication settled before its declaration is retained', () => {
+    const publication = { branch: 'ab/a', base: BASE, sha: HEAD }
+    const prelude = [
+      ...oidPrelude(),
+      ev(
+        'publication.requested',
+        { operation: 'wait', id: 'wait_1', ...publication },
+        agent('s_impl'),
+      ),
+    ]
+    const requestSeq = seqOf(prelude, prelude.at(-1)!)
+    const declared = ev(
+      'wait.requested',
+      {
+        id: 'wait_1',
+        phase: 'implement',
+        round: 1,
+        tickets: ['B'],
+        reason: 'needs B',
+        publication: { ...publication, settlement: 'requested' },
+      },
+      agent('s_impl'),
+    )
+    const published = reduce([
+      ...prelude,
+      ev('wait.published', { id: 'wait_1', sha: HEAD }),
+      declared,
+    ])
+    expect(published.waitRequest?.publication).toEqual({
+      ...publication,
+      published: true,
+      requestSeq,
+    })
+    const lost = reduce([
+      ...prelude,
+      ev('publication.lost', {
+        request: requestSeq,
+        operation: 'wait',
+        reason: 'workspace released',
+        branch: publication.branch,
+        sha: publication.sha,
+      }),
+      declared,
+    ])
+    expect(lost.waitRequest?.publication).toEqual({
+      ...publication,
+      published: false,
+      requestSeq,
+      lost: true,
+    })
+    // A settlement for another wait id, or another sha, does not publish this one.
+    const foreign = reduce([
+      ...prelude,
+      ev('wait.published', { id: 'wait_2', sha: HEAD }),
+      declared,
+    ])
+    expect(foreign.waitRequest?.publication?.published).toBe(false)
+  })
+
+  test('without a fast-forward the restacked base is the last completion, else the provision', () => {
+    const index = logIndexReducer.reduce(toLog(approvedThroughCode()))
+    expect(leafRestackedBase(index.restack)).toBe(BASE)
+    const completed = [
+      ...approvedThroughCode(),
+      moved(T1),
+      ev('restack.completed', { ...transaction('verify-entry', T1), headSha: HEAD }),
+    ]
+    expect(leafRestackedBase(logIndexReducer.reduce(toLog(completed)).restack)).toBe(T1)
+    // A never-waited build keeps its contribution range on the commits.
+    expect(reduce(completed).implement).toMatchObject({ commits: { base: T1, head: HEAD } })
+    expect(reduce(completed).implement.contributionBase).toBeUndefined()
+  })
 })

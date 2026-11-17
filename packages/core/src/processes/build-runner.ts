@@ -21,6 +21,7 @@ import type { RuntimeIdentity } from '../events/runtime'
 import { relaunchTarget } from './execution-relaunch'
 import { runtimeIdentity } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
+import { waitResumeSupersedes } from '../kernel/ticket-wait'
 import {
   deferMixedVersion,
   MixedVersionDeferral,
@@ -545,7 +546,7 @@ export const setupStreakReducer = defineReducer<
   finish: (acc) => acc.failures.filter((seq) => seq > acc.boundary).length,
 })
 
-export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 4
+export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 5
 
 /** Latest event-checkpointed branch head that kernel plumbing published;
  * undefined while the build has none. */
@@ -570,6 +571,13 @@ export const publishedBranchHeadReducer = defineReducer<
       } else if (event.type === 'reconcile.completed') {
         acc.head = reconcileHead(event.payload)
       } else if (
+        event.type === 'wait.requested' &&
+        event.payload.publication?.settlement === 'published'
+      ) {
+        acc.head = event.payload.publication.sha
+      } else if (event.type === 'wait.published') {
+        acc.head = event.payload.sha
+      } else if (
         event.type === 'finalize.step-completed' &&
         event.payload.ok &&
         event.payload.headSha !== undefined
@@ -593,7 +601,7 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
-export const VERIFY_DIFF_BASE_REDUCER_VERSION = 2
+export const VERIFY_DIFF_BASE_REDUCER_VERSION = 3
 
 /**
  * The durable tree against which a conditional verifier evaluates the
@@ -615,6 +623,11 @@ export const verifyDiffBaseReducer = defineReducer<
         if (acc.provisioned === undefined) acc.provisioned = event.payload.base.sha
       } else if (event.type === 'restack.completed') {
         acc.promoted = event.payload.targetBase
+      } else if (event.type === 'restack.advanced') {
+        acc.promoted = event.payload.to
+      } else if (event.type === 'reconcile.superseded') {
+        // An abandoned occurrence's base never promotes.
+        delete acc.pendingReconcileBase
       } else if (event.type === 'reconcile.started') {
         acc.pendingReconcileBase = event.payload.baseSha
       } else if (event.type === 'reconcile.completed') {
@@ -2090,6 +2103,12 @@ export class BuildRunner {
     }
     try {
       await this.assertAutomaticRewriteOwnership()
+      // A reconcile session that waited left its occurrence frozen onto the
+      // old target. Abandon it so the resume replays onto the current one.
+      if (decision.trigger === 'wait-resume' && waitResumeSupersedes(facts.state, facts.log)) {
+        await this.supersedeReconcile(decision)
+        facts = (await readBuildFacts(store, slug)).value
+      }
       if (facts.log.restack.intent)
         await publicationRetryGate(
           { ...this.deps, actor: KERNEL },
@@ -2103,6 +2122,14 @@ export class BuildRunner {
       >
       let id: string
       let targetBase: string
+      if (
+        transaction === undefined &&
+        decision.trigger === 'wait-resume' &&
+        (await readBuildSelector(store, slug, 'publishedBranchHead')) === undefined
+      ) {
+        await this.advanceWaitResume(decision)
+        return
+      }
       if (transaction === undefined) {
         targetBase = await this.refreshReconcileBase(true)
         const branch = facts.lastCreated?.payload.baseBranch
@@ -2261,6 +2288,90 @@ export class BuildRunner {
         !(error instanceof StoreWriteTooLargeError),
       )
     }
+  }
+
+  /** Abandon the open reconcile occurrence whose session declared a ticket
+   * wait: abort its workspace operation, then record `reconcile.superseded`.
+   * Only the resolver's undeposited, uncommitted resolution is discarded;
+   * every published head and recorded transaction stays. Idempotent up to
+   * the append, so a crash before it repeats harmlessly. */
+  private async supersedeReconcile(
+    decision: Extract<Decision, { kind: 'restack' }>,
+  ): Promise<void> {
+    const { store, slug, workspacePath } = this.deps
+    await this.assertAutomaticRewriteOwnership()
+    const facts = (await readBuildFacts(store, slug)).value
+    const open = facts.log.openReconcile
+    if (open === undefined) throw new Error('no open reconcile occurrence to supersede')
+    const head = await readBuildSelector(store, slug, 'publishedBranchHead')
+    if (head === undefined) throw new Error('a reconcile occurrence has no published head')
+    const git = async (args: string[]) => {
+      const result = await this.deps.exec(['git', ...args], { cwd: workspacePath })
+      if (result.exitCode !== 0)
+        throw new Error(`git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim()}`)
+    }
+    const picking = await this.deps.exec(
+      ['git', 'rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD'],
+      { cwd: workspacePath },
+    )
+    if (picking.exitCode === 0) await git(['cherry-pick', '--abort'])
+    await git(['reset', '-q', '--hard'])
+    await git(['checkout', '-q', '--detach', head])
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'reconcile.superseded',
+      payload: {
+        attempt: open.attempt,
+        cycle: decision.cycle,
+        cause: 'wait-resume',
+        ...(open.restackId === undefined ? {} : { restackId: open.restackId }),
+      },
+    })
+  }
+
+  /** A wait-resume restack with nothing published: the local branch has no
+   * commits beyond its contribution base, so it fast-forwards to the fresh
+   * target snapshot and records `restack.advanced`. No remote write; no
+   * conflict is possible. */
+  private async advanceWaitResume(decision: Extract<Decision, { kind: 'restack' }>): Promise<void> {
+    const { store, slug, workspacePath, branch } = this.deps
+    const targetBase = await this.refreshReconcileBase(true)
+    const facts = (await readBuildFacts(store, slug)).value
+    const oldBase = await readBuildSelector(store, slug, 'verifyDiffBase')
+    if (oldBase === undefined) throw new Error('missing contribution base')
+    const git = async (args: string[], allowFailure = false) => {
+      const result = await this.deps.exec(['git', ...args], { cwd: workspacePath })
+      if (result.exitCode !== 0 && !allowFailure)
+        throw new Error(
+          `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || '(no output)'}`,
+        )
+      return result
+    }
+    const local = (await git(['rev-parse', '--verify', `refs/heads/${branch}`])).stdout.trim()
+    if (local !== targetBase) {
+      // Every commit the target already contains is safe to move past; that
+      // also covers a crash after an earlier fast-forward.
+      if ((await git(['merge-base', '--is-ancestor', local, targetBase], true)).exitCode !== 0)
+        throw new Error(
+          `local branch ${branch} has unpublished commits at ${local}; a wait-resume restack replays only published work`,
+        )
+      const status = (await git(['status', '--porcelain', '--untracked-files=no'])).stdout.trim()
+      if (status !== '') throw new Error(`workspace has uncommitted tracked changes:\n${status}`)
+      await this.assertAutomaticRewriteOwnership()
+      await git(['checkout', '-q', '-B', branch, targetBase])
+    }
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'restack.advanced',
+      payload: {
+        trigger: 'wait-resume',
+        cycle: decision.cycle,
+        observation: facts.log.restack.target!.seq,
+        branch,
+        from: oldBase,
+        to: targetBase,
+      },
+    })
   }
 
   /** Snapshot the frozen target in a build-private ref without tracking-ref updates. */

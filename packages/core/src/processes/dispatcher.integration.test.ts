@@ -38,6 +38,7 @@ import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import { waitGuidance } from '../kernel/ticket-wait'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
@@ -17918,6 +17919,92 @@ describe('dispatcher — ticket waits', () => {
     })
   }
 
+  /** An implement session whose wait awaits the remote publication of its commits. */
+  async function seedPublishingWaiter(h: Harness, slug = WAITER, ticketId = 'A') {
+    await seedBuild(h, { slug, ticketId })
+    const actor = agentActor('implement', `s_${slug}`)
+    const publication = { branch: `ab/${slug}`, base: 'a'.repeat(40), sha: 'b'.repeat(40) }
+    const request = await h.store.append(slug, {
+      actor,
+      type: 'publication.requested',
+      payload: { operation: 'wait', id: `wait_${slug}`, ...publication },
+    })
+    await h.store.append(slug, {
+      actor,
+      type: 'wait.requested',
+      payload: {
+        id: `wait_${slug}`,
+        phase: 'implement',
+        round: 1,
+        tickets: ['B'],
+        reason: 'needs the B schema',
+        publication: { ...publication, settlement: 'requested' },
+      },
+    })
+    return { request, publication }
+  }
+
+  test('a wait is entered only after its commits are published; a lost publication refuses it', async () => {
+    const reads: string[] = []
+    const make = () =>
+      harness({
+        toml: 'capacity = 1\n',
+        tickets: [
+          readyTicket('A', { state: 'In Progress' }),
+          readyTicket('B', { state: 'Backlog' }),
+        ],
+        wrapTickets(source) {
+          const get = source.get.bind(source)
+          source.get = async (id) => {
+            reads.push(id)
+            return get(id)
+          }
+          return source
+        },
+      })
+    const h = make()
+    const { publication } = await seedPublishingWaiter(h)
+    await h.dispatcher.tick()
+    expect((await waitEvents(h)).map((event) => event.type)).toEqual(['wait.requested'])
+    expect(reads).not.toContain('B')
+    await h.store.append(WAITER, {
+      actor: DISPATCHER,
+      type: 'wait.published',
+      payload: { id: `wait_${WAITER}`, sha: publication.sha },
+    })
+    await h.dispatcher.tick()
+    expect((await waitEvents(h)).map((event) => event.type)).toEqual([
+      'wait.requested',
+      'wait.published',
+      'wait.entered',
+    ])
+
+    const lost = make()
+    const seeded = await seedPublishingWaiter(lost, 'waits-lost')
+    await lost.store.append('waits-lost', {
+      actor: DISPATCHER,
+      type: 'publication.lost',
+      payload: {
+        request: seeded.request.seq,
+        operation: 'wait',
+        branch: seeded.publication.branch,
+        sha: seeded.publication.sha,
+        reason: 'workspace released with the publication uncompleted',
+      },
+    })
+    await lost.dispatcher.tick()
+    const refused = (await lost.store.getEvents('waits-lost')).find(
+      (event) => event.type === 'wait.refused',
+    )
+    expect(refused?.payload).toMatchObject({ cause: 'publication-lost', tickets: ['B'] })
+    expect((await lost.tickets.get('A'))?.blockedBy).toBeUndefined()
+    // The refusal routes back to implement as its guidance.
+    const { state } = (await readBuildFacts(lost.store, 'waits-lost')).value
+    expect(waitGuidance(state)).toEqual([
+      expect.objectContaining({ id: 'wait_waits-lost', phase: 'implement' }),
+    ])
+  })
+
   test('a completed refusal says to continue without waiting', async () => {
     const h = waitHarness()
     await seedWaiter(h, ['DONE'])
@@ -18005,6 +18092,7 @@ describe('dispatcher — ticket waits', () => {
       readyTicket('A', { state: 'In Progress' }),
       readyTicket('E', { state: 'In Progress' }),
       readyTicket('F', { state: 'In Progress' }),
+      readyTicket('G', { state: 'In Progress' }),
       readyTicket('B', { state: 'Backlog' }),
     ])
     let waitCalls = 0
@@ -18028,6 +18116,8 @@ describe('dispatcher — ticket waits', () => {
     // F holds the only slot with a live runner, so the ended wait keeps waiting.
     await seedBuild(h, { slug: 'busy', ticketId: 'F' })
     await store.claimLease('busy', 'runner-busy', 24 * 60 * 60_000)
+    // A third leaf's wait awaits the publication of its commits.
+    await seedPublishingWaiter(h, 'waiter-publishing', 'G')
     for (const [slug, ticketId] of [
       ['waiter-open', 'A'],
       ['waiter-ended', 'E'],
@@ -18048,7 +18138,7 @@ describe('dispatcher — ticket waits', () => {
     })
     await ticketWaitIdleReadBudget({
       store,
-      slugs: ['waiter-open', 'waiter-ended'],
+      slugs: ['waiter-open', 'waiter-ended', 'waiter-publishing'],
       dispatcher: () => make().dispatcher,
       waitCalls: () => waitCalls,
       advance: () => clock.advance(60_000),
@@ -18079,6 +18169,8 @@ describe('dispatcher — ticket waits', () => {
     expect(final.wait?.ended?.cause).toBe('operator')
     expect(final.wait?.resumedSeq).toBeUndefined()
     expect((await readBuildFacts(store, 'waiter-open')).value.state.status).toBe('blocked')
+    const publishing = (await readBuildFacts(store, 'waiter-publishing')).value.state
+    expect(publishing.waitRequest?.outcome).toBeUndefined()
   }, 60_000)
 
   test('a waiting leaf is neither reaped nor relaunched; answered, it resumes ahead of intake', async () => {
