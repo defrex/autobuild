@@ -704,7 +704,12 @@ fallback.
 
 An ordered list of strict merge rules. Predicates within one rule are ANDed;
 the first matching rule wins. Omitted predicates match everything. With no
-matching rule, leaves default to `auto` and nodes to `consent`.
+matching rule, leaves default to `auto` and nodes to `consent`. Besides
+`from`, `into` and `label`, a rule can match the paths a candidate head
+changes: `paths` when any changed path matches, `within` when every one does.
+Path selectors use the `[verify.<step>].paths` grammar. A head without
+recorded changed paths defers a decision that reaches a path rule. See
+[changed paths](merge-policy.md#changed-paths).
 
 The deprecated `[[landing]]` spelling accepts identical rules and emits a migration warning.
 Do not declare both spellings, even as empty arrays. `ab upgrade` migrates the
@@ -763,6 +768,32 @@ old key without changing policy values or order. See [deprecated spellings](merg
 **Description:** Optional exact, case-sensitive label on the source ticket. Blank labels are invalid.
 
 **Constraints:** label must be nonblank (labels match exactly, including case)
+
+#### `merge[].paths`
+
+**TOML key:** `merge[].paths`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Match when at least one changed path matches a selector. Same glob grammar and case sensitivity as `[verify.<step>].paths`.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
+#### `merge[].within`
+
+**TOML key:** `merge[].within`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Match when every changed path matches a selector and at least one path changed.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
 
 #### `merge[].mode`
 

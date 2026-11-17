@@ -16561,63 +16561,83 @@ test('head path facts cost the landing poll no git, artifact or event-row reads'
   const { headPathsLandingReadBudget } = await import('../testing/reduced-read-budget')
   const { headPathsWrite } = await import('../kernel/head-paths')
   const head = 'f'.repeat(40)
-  const vectors: Record<string, number>[] = []
-  for (const recorded of [true, false]) {
-    const git: string[][] = []
-    const exec: Exec = async (cmd) => {
-      if (cmd[0] === 'git') git.push(cmd)
-      return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
-    }
-    const h = harness({ exec })
-    const slug = 'paths-budget'
-    await h.tickets.create(
-      { title: slug, body: CONFORMING_BODY, labels: [] },
-      { requestedId: `T-${slug}` },
-    )
-    await seedBuild(h, { slug, ticketId: `T-${slug}` })
-    await seedLoopsApproved(h, slug)
-    if (recorded) {
-      const { artifacts, makeEvent } = headPathsWrite(
-        {
-          version: 1,
-          head,
-          destination: 'e'.repeat(40),
-          mergeBase: 'e'.repeat(40),
-          paths: Array.from({ length: 150 }, (_, i) => `src/f${String(i).padStart(3, '0')}.ts`),
-        },
-        'finalize',
-        KERNEL,
+  // Path rules: a recorded head beyond the preview reads its complete paths
+  // once while warming up and is decided; an unrecorded head defers once.
+  const pathRules = `
+[[merge]]
+paths = ["autobuild.toml"]
+mode = "consent"
+
+[[merge]]
+within = ["docs/**"]
+mode = "auto"
+
+[[merge]]
+mode = "consent"
+`
+  for (const toml of [undefined, pathRules]) {
+    const vectors: Record<string, number>[] = []
+    for (const recorded of [true, false]) {
+      const git: string[][] = []
+      const exec: Exec = async (cmd) => {
+        if (cmd[0] === 'git') git.push(cmd)
+        return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+      }
+      const h = harness({ exec, ...(toml === undefined ? {} : { toml }) })
+      const slug = 'paths-budget'
+      await h.tickets.create(
+        { title: slug, body: CONFORMING_BODY, labels: [] },
+        { requestedId: `T-${slug}` },
       )
-      await h.store.appendWithArtifacts(slug, artifacts, makeEvent)
+      await seedBuild(h, { slug, ticketId: `T-${slug}` })
+      await seedLoopsApproved(h, slug)
+      if (recorded) {
+        const { artifacts, makeEvent } = headPathsWrite(
+          {
+            version: 1,
+            head,
+            destination: 'e'.repeat(40),
+            mergeBase: 'e'.repeat(40),
+            paths: Array.from({ length: 150 }, (_, i) => `src/f${String(i).padStart(3, '0')}.ts`),
+          },
+          'finalize',
+          KERNEL,
+        )
+        await h.store.appendWithArtifacts(slug, artifacts, makeEvent)
+      }
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { ...PR, headSha: head } },
+      })
+      h.forge.setPrState(1, { state: 'open', mergeable: null })
+      vectors.push(
+        await headPathsLandingReadBudget({
+          store: h.store as MemoryBuildStore,
+          repo: REPO,
+          slug,
+          recorded,
+          ...(toml === undefined
+            ? {}
+            : { warm: recorded ? ('landing.decided' as const) : ('landing.deferred' as const) }),
+          advance: (ms) => h.clock.advance(ms),
+          git: () => git,
+          tick: () =>
+            harness({
+              store: h.store,
+              clock: h.clock,
+              wrapTickets: () => h.tickets,
+              forge: h.forge,
+              exec,
+              ...(toml === undefined ? {} : { toml }),
+            }).dispatcher.tick({ acceptNewWork: false }),
+        }),
+      )
     }
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: { pr: { ...PR, headSha: head } },
-    })
-    h.forge.setPrState(1, { state: 'open', mergeable: null })
-    vectors.push(
-      await headPathsLandingReadBudget({
-        store: h.store as MemoryBuildStore,
-        repo: REPO,
-        slug,
-        recorded,
-        advance: (ms) => h.clock.advance(ms),
-        git: () => git,
-        tick: () =>
-          harness({
-            store: h.store,
-            clock: h.clock,
-            wrapTickets: () => h.tickets,
-            forge: h.forge,
-            exec,
-          }).dispatcher.tick({ acceptNewWork: false }),
-      }),
-    )
+    // A recorded fact and a pre-change log cost the poll exactly the same.
+    expect(vectors[0]).toEqual(vectors[1])
   }
-  // A recorded fact and a pre-change log cost the poll exactly the same.
-  expect(vectors[0]).toEqual(vectors[1])
-}, 120_000)
+}, 240_000)
 
 test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 100000 events', async () => {
   const h = harness()
