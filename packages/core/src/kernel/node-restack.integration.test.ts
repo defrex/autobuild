@@ -14,6 +14,34 @@ const roots: string[] = []
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
+/** Operator consent to a node landing decided under a path-predicate rule. */
+async function protectedConsent(
+  store: import('../store/types').BuildStore,
+  slug: string,
+  head: string,
+  paths: string[],
+) {
+  const { DISPATCHER, humanActor } = await import('../events/envelope')
+  const decided = await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head, parent: 'main', cycle: '1' },
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { index: 0, snapshot: { paths, mode: 'consent' } },
+      paths: { total: 1, preview: [paths[0]!] },
+    },
+  })
+  return store.append(slug, {
+    actor: humanActor('operator'),
+    type: 'build.land-requested',
+    payload: { decisionSeq: decided.seq },
+  })
+}
+
 async function fixture() {
   const workspacePath = await mkdtemp(join(tmpdir(), 'node-replay-'))
   roots.push(workspacePath)
@@ -338,12 +366,19 @@ test('durable node transaction publishes ordered changes and promotes its bounda
     })
     return replace(input)
   }
+  // A clean replay has no resolution, so even consent protecting every path survives.
+  const consent = await protectedConsent(store, 'a', oldHead, ['**'])
   const tx = { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true }
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'first' }),
   ).toBe('completed')
   const node = (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value
     .state.nodeRestack!
+  expect((await store.getEvents('a')).map((e) => e.type)).not.toContain('landing.consent-revoked')
+  expect(
+    (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state.landing
+      ?.command?.seq,
+  ).toBe(consent.seq)
   expect(node.contributionBase).toBe(parent)
   expect(node.active).toBeUndefined()
   expect(node.inventory?.builds).toEqual(['one'])
@@ -700,6 +735,7 @@ test('a real conflicted transaction records NUL-delimited filenames including sp
   for (const path of files) await Bun.write(join(deps.workspacePath, path), 'node\n')
   await git('add', '.')
   await git('commit', '-m', 'node edit')
+  const nodeHead = await git('rev-parse', 'HEAD')
   await git('checkout', 'main')
   for (const path of files) await Bun.write(join(deps.workspacePath, path), 'parent\n')
   await git('add', '.')
@@ -743,9 +779,26 @@ test('a real conflicted transaction records NUL-delimited filenames including sp
     type: 'node.item-replayed',
     payload: { id: 'conflict', index: 0, base: parent, head, dropped: false },
   })
+  const consent = await protectedConsent(store, 'a', nodeHead, ['extra.ts'])
   expect(
     await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'conflict' }),
   ).toBe('completed')
+  // The resolver's edit to the protected file revokes consent before publication.
+  const log = await store.getEvents('a')
+  const types = log.map((e) => e.type)
+  expect(types.filter((type) => type === 'landing.consent-revoked')).toHaveLength(1)
+  expect(types.indexOf('landing.consent-revoked')).toBeLessThan(
+    types.indexOf('node.publish-intended'),
+  )
+  expect(log.find((e) => e.type === 'landing.consent-revoked')?.payload).toEqual({
+    commandSeq: consent.seq,
+    source: 'node-rewrite',
+    rule: { index: 0, snapshot: { paths: ['extra.ts'], mode: 'consent' } },
+    previousHead: nodeHead,
+    head,
+    consentedHead: nodeHead,
+    paths: { total: 1, preview: ['extra.ts'] },
+  })
   const { headPathsFor, readHeadPaths } = await import('./head-paths')
   const recorded = headPathsFor(
     (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state,

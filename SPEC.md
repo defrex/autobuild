@@ -3484,7 +3484,7 @@ with illustrative members:
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.abort-requested {reason?, to?}` → `build.aborted`; `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
-| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); `landing.native-enable-started`; `landing.native-applied` |
+| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -4099,7 +4099,8 @@ the newest four summaries, first per head. A head is "not recorded" until
 such a fact names it, which is distinct from "recorded and empty"; heads a
 build did not produce and heads that predate the fact read as not recorded.
 The dispatcher never derives the fact on a poll; merge-rule path predicates
-read it (§15.7).
+read it, and a reconcile's `resolution` decides protected consent revocation
+(§15.7).
 
 Automatic leaf transactions use `restack.*`, independently of reconcile attempt
 numbers. Preparation freezes the trigger, verify-cycle boundary, absorbed target
@@ -4217,12 +4218,23 @@ Policy is live dispatcher configuration, outside the pinned execution pipeline.
 `ab hold <slug>` durably suppresses merge and revokes previous consent, even
 before readiness. `ab merge <slug>` requires readiness, clears hold, and consents
 to this build/node merge into its frozen destination. Consent survives head
-replacement, restacking, verification and re-finalization until another hold or
-completion. It is consent to the merge, not approval of an immutable diff.
+replacement, clean restacking, verification and re-finalization until another
+hold or completion. It is consent to the merge, not approval of an immutable diff.
+Consent given under a rule with `paths` or `within` predicates is the exception:
+the consent records that rule, and when a reconcile's own edits (its recorded
+`resolution`) touch a file those predicates match, the kernel appends
+decisive `landing.consent-revoked` naming the consent, rule, matched paths
+(sorted, first 20 plus total), and the previous and new heads. It is written
+where the leaf reconcile completion or node rewrite records the new head, before
+its publication intent, from recorded facts only; no poll derives it. The fact
+removes that consent only, so the build returns to the consent queue for its new
+head and needs fresh consent. Clean restacks record no resolution and keep
+consent, as do reconciles that edit no matched file and consent under rules
+without path predicates. Accepted node reparenting also revokes consent.
 The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
 `head-mismatch`, recording nothing, unless `<sha>` (full or at least seven
 characters) is the current candidate head. The consented head is the head of
-the recorded decision the consent named; consent survival is unchanged.
+the recorded decision the consent named; `--head` does not change survival.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
@@ -4995,7 +5007,7 @@ Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listin
 diagnostics; effective build targets remain frozen independently of source metadata.
 
 Default watch attention includes `integration.verification-failed`, `integration.landed`, `node.item-conflicted`,
-and conflicted `restack.replayed`. Derived `build.consent-ready` observations
+`landing.consent-revoked`, and conflicted `restack.replayed`. Derived `build.consent-ready` observations
 carry target, branch, candidate and the durable readiness entry position in the
 existing cursor envelope. Cursor identities retain readiness episodes across
 restart; a new candidate or exit/re-entry can wake again. Explicit event globs

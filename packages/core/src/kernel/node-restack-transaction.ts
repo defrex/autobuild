@@ -9,6 +9,7 @@ import type { EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import { snapshotParent } from './snapshot-parent'
 import { recordHeadPaths } from './head-paths'
+import { consentRevocation, resolutionPathsFor, revocableConsent } from './consent-revocation'
 import type { RestackDeps } from './reconcile-restack'
 import { retainReplay, restoreReplay, requireRewrite } from './reconcile-restack'
 import {
@@ -373,6 +374,18 @@ export async function runNodeTransaction(
   )
   if (recorded === null) throw new Error('node writer log advanced; retry reserved operation')
   if (recorded.recorded === 'appended') revision = recorded.event.seq
+  // Protected consent lapses when resolver-finished items edited protected
+  // files. A recovered attempt reads state after any earlier revocation.
+  if (resolution.length > 0 && revocableConsent(latest.landing)) {
+    const revocation = consentRevocation(latest.landing, {
+      source: 'node-rewrite',
+      previousHead: active.expected,
+      head,
+      resolution: await resolutionPathsFor(deps.store, deps.slug, recorded),
+    })
+    if (revocation)
+      await append({ actor: KERNEL, type: 'landing.consent-revoked', payload: revocation })
+  }
   if (!node!.intent)
     await append({
       actor: KERNEL,

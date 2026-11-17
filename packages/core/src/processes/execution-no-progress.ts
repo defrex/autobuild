@@ -20,6 +20,7 @@ export const executionProgress = {
   'landing.application-failed': 'failure',
   'landing.decided': 'progress',
   'landing.deferred': 'bookkeeping',
+  'landing.consent-revoked': 'bookkeeping',
   'build.hold-requested': 'progress',
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',

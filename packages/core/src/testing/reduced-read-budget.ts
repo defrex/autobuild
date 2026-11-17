@@ -3418,6 +3418,9 @@ export async function headPathsLandingReadBudget(opts: {
   /** Path-predicate merge rules: warm-up must have appended exactly one of
    * these, reading a decided head's complete paths exactly once. */
   warm?: 'landing.decided' | 'landing.deferred'
+  /** After a decided warm-up: consent to that decision, then a reconcile's
+   * revocation of it, re-warmed once. Revoked consent adds no poll cost. */
+  revokedConsent?: true
   /** One tick on a fresh dispatcher. */
   tick: () => Promise<unknown>
   advance: (ms: number) => void
@@ -3468,6 +3471,38 @@ export async function headPathsLandingReadBudget(opts: {
         )
         expect(landing.map((event) => event.type)).toEqual([opts.warm])
         expect(totalArtifactReads).toBe(opts.warm === 'landing.decided' ? 1 : 0)
+      }
+      if (opts.revokedConsent && length === 100) {
+        const decided = (await store.getEvents(slug)).findLast(
+          (event) => event.type === 'landing.decided',
+        )
+        if (decided?.type !== 'landing.decided') throw new Error('revokedConsent needs a decision')
+        const consent = await store.append(slug, {
+          actor: humanActor('budget'),
+          type: 'build.land-requested',
+          payload: { decisionSeq: decided.seq },
+        })
+        expect((await readBuildFacts(store, slug)).value.state.landing?.command?.rule).toBeDefined()
+        const rule = 'index' in decided.payload.rule ? decided.payload.rule : undefined
+        if (rule?.snapshot.paths === undefined && rule?.snapshot.within === undefined)
+          throw new Error('revokedConsent needs a decision under a path-predicate rule')
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'landing.consent-revoked',
+          payload: {
+            commandSeq: consent.seq,
+            source: 'reconcile',
+            rule,
+            previousHead: decided.payload.candidate.head,
+            head: decided.payload.candidate.head,
+            paths: { total: 1, preview: ['autobuild.toml'] },
+          },
+        })
+        expect((await readBuildFacts(store, slug)).value.state.landing?.command).toBeUndefined()
+        for (let n = 0; n < 2; n++) {
+          opts.advance(120_000)
+          await opts.tick()
+        }
       }
       const rows = memoryRepositoryReadCounter(store, repo)
       const requests = memoryStoreRequestCounter(store)

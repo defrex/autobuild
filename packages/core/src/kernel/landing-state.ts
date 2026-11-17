@@ -1,4 +1,5 @@
 import type { AbEvent } from '../events/catalog'
+import type { LandingRule } from '../config/schema'
 import type { EventPayload } from '../events/payloads'
 import { landingCandidateId, type LandingCandidate } from './landing-policy'
 
@@ -15,6 +16,9 @@ export interface LandingState {
     decisionSeq?: number
     /** The candidate head of the decision this consent named; absent for legacy commands. */
     head?: string
+    /** The path-predicate rule the named decision matched; only consent given
+     * under such a rule is revocable by a reconcile's edits. */
+    rule?: { index: number; snapshot: LandingRule }
     legacy?: true
   }
   acknowledgedSeq?: number
@@ -46,14 +50,26 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       delete state.applicationFailure
       state.command = { kind: 'hold', seq: event.seq }
       break
-    case 'build.land-requested':
+    case 'build.land-requested': {
+      const decision =
+        state.decision?.seq === event.payload.decisionSeq ? state.decision : undefined
+      const rule = decision && 'index' in decision.rule ? decision.rule : undefined
       state.command = {
         kind: 'land',
         seq: event.seq,
         decisionSeq: event.payload.decisionSeq,
-        ...(state.decision?.seq === event.payload.decisionSeq
-          ? { head: state.decision.candidate.head }
+        ...(decision ? { head: decision.candidate.head } : {}),
+        ...(rule && (rule.snapshot.paths !== undefined || rule.snapshot.within !== undefined)
+          ? { rule: { index: rule.index, snapshot: { ...rule.snapshot } } }
           : {}),
+      }
+      break
+    }
+    case 'landing.consent-revoked':
+      // Only the consent it names; a later hold or consent stands.
+      if (state.command?.kind === 'land' && state.command.seq === event.payload.commandSeq) {
+        delete state.command
+        delete state.acknowledgedSeq
       }
       break
     case 'landing.command-acknowledged':

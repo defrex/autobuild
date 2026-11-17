@@ -320,7 +320,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   not on `build.aborted` or the build leaving `ab builds`.
 - `ab hold <slug>` — persistently hold a merge and revoke earlier consent.
 - `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
-  survives restacks and verification; use hold to withdraw it when work changes.
+  survives clean restacks and verification; use hold to withdraw it when work
+  changes. Consent given under a `[[merge]]` rule with `paths` or `within`
+  predicates is revoked when a reconcile's own edits touch a file those
+  predicates match; `landing.consent-revoked` reports it.
   Read the matched policy, readiness, acknowledged command and gate deferral in
   build status before acting. Work the consent queue by checking completeness
   and current verification, then issuing merge for the chosen merge. A merge
@@ -334,8 +337,8 @@ Read events with a cursor or a small `--events` count; logs are long.
   build's current candidate head; otherwise it refuses with code
   `head-mismatch`, records nothing, and names the current head. Review that
   head before retrying. The guard applies only when consent is given: consent
-  still survives later restacks, and build status shows the consented head
-  beside the current one.
+  still survives later clean restacks, and build status shows the consented
+  head beside the current one.
 - Configure ordered `[[merge]]` rules for project policy through ab-guide.
   Repository auto-merge defaults and per-build auto-merge toggles are retired.
 
@@ -485,6 +488,10 @@ Treat every default-watch record as a call to act:
 - `build.consent-ready`: inspect the one consent queue, then merge or hold the
   selected candidate under the human's policy. Unready or stale candidates
   do not produce this observation.
+- `landing.consent-revoked`: a reconcile edited files protected by the rule
+  your consent was given under. Review the reconcile's edits to the named files
+  at the new head, then consent again with `ab merge <slug> --head <new head>`
+  or hold it. The build is back in the consent queue until you do.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
@@ -646,7 +653,7 @@ Watch for decisions and conflicts with `ab watch --operator --json`; save its op
 and resume with `ab watch --operator --since <watch-cursor> --json`. On
 `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge the
 unavailable historical gap. Default attention includes
-failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays and derived
+failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays, revoked protected consent (`landing.consent-revoked`) and derived
 `build.consent-ready` observations, including already-ready merges on first
 repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or
