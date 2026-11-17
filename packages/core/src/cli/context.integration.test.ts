@@ -758,6 +758,113 @@ describe('buildContext — ticket waits against older guidance (SPEC §11 "Ticke
   })
 })
 
+describe('buildContext — an unresolvable wait answered (SPEC §11 "Ticket waits")', () => {
+  async function waitThenUnresolvable(phase: 'finalize' | 'code-review') {
+    await store.append(BUILD, {
+      actor: agent(phase),
+      type: 'wait.requested',
+      payload: { id: 'wait_1', phase, round: 1, tickets: ['T-B'], reason: 'needs T-B first' },
+    })
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'wait.entered',
+      payload: {
+        id: 'wait_1',
+        escalation: 'esc_wait',
+        tickets: [{ source: 'local', id: 'T-B' }],
+        reason: 'needs T-B first',
+        question: 'Waiting on T-B',
+      },
+    })
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_u',
+        phase,
+        round: 1,
+        source: 'policy',
+        policyCause: 'wait-unresolvable',
+        question: 'Waiting on T-B can never end: T-B was rejected',
+        refs: ['T-B'],
+      },
+    })
+  }
+
+  async function answerUnresolvable(resolution: 'guidance' | 'retry') {
+    await store.append(BUILD, {
+      actor: humanActor('aron'),
+      type: 'escalation.answered',
+      payload: { id: 'esc_u', answer: 'proceed without T-B', resolution },
+    })
+  }
+
+  const block = {
+    id: 'wait_1',
+    tickets: ['T-B'],
+    reason: 'needs T-B first',
+    outcome: 'ended',
+    cause: 'unresolvable',
+  }
+
+  test('a reviewer resumes the same round with the answer and the wait block', async () => {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, { actor: KERNEL, type: 'code-review.started', payload: { round: 1 } })
+    await waitThenUnresolvable('code-review')
+    await answerUnresolvable('guidance')
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 1 }),
+      workspacePath: workspace,
+    })
+    const guidance = JSON.parse(await abFile('guidance.json'))
+    expect(guidance).toMatchObject({
+      escalation: 'esc_u',
+      answer: 'proceed without T-B',
+      wait: block,
+    })
+    expect(manifest.feedback).toEqual({
+      guidance: { escalation: 'esc_u', answer: 'proceed without T-B' },
+    })
+  })
+
+  test('a producer phase gets the answer with the wait block', async () => {
+    await seedPlanApproved()
+    await waitThenUnresolvable('finalize')
+    await answerUnresolvable('guidance')
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'finalize', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.materialized['guidance.json']).toBe('derived')
+    expect(JSON.parse(await abFile('guidance.json'))).toMatchObject({
+      escalation: 'esc_u',
+      answer: 'proceed without T-B',
+      wait: block,
+    })
+  })
+
+  test('a bare retry answer still tells the session what it waited on', async () => {
+    await seedPlanApproved()
+    await waitThenUnresolvable('finalize')
+    await answerUnresolvable('retry')
+
+    await buildContext({
+      store,
+      env: makeEnv({ phase: 'finalize', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(JSON.parse(await abFile('guidance.json'))).toMatchObject({
+      answer: expect.stringContaining('T-B'),
+      wait: block,
+    })
+  })
+})
+
 describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start)', () => {
   test('materializes the fresh reconcile.started base instead of the detection snapshot', async () => {
     await seedPlanApproved()

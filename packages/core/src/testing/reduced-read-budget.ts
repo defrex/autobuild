@@ -1549,7 +1549,11 @@ export async function ticketWaitIdleReadBudget(opts: {
   store: import('../store/memory').MemoryBuildStore
   slugs: string[]
   dispatcher: () => Dispatcher
+  /** Per-request wait calls (`get`, `addBlocker`): none on idle ticks. */
   waitCalls: () => number
+  /** Batched `dependencyStates` calls naming waited tickets: exactly one per
+   * tick while some wait is open. */
+  releaseBatches: () => number
   advance: () => void
   surfaces?: () => Promise<void>
 }): Promise<void> {
@@ -1578,6 +1582,7 @@ export async function ticketWaitIdleReadBudget(opts: {
     historicalRows = 0
     for (const _ of [0, 1]) {
       opts.advance()
+      const batches = opts.releaseBatches()
       const requests = await countStoreRequests(store, async () => {
         await dispatcher.tick()
         await opts.surfaces?.()
@@ -1585,6 +1590,7 @@ export async function ticketWaitIdleReadBudget(opts: {
       expect(requests.append ?? 0).toBe(0)
       expect(requests.appendIfCurrent ?? 0).toBe(0)
       expect(requests.appendWithArtifactsIfCurrent ?? 0).toBe(0)
+      expect(opts.releaseBatches() - batches).toBe(1)
     }
     expect(historicalRows).toBe(0)
     expect(opts.waitCalls()).toBe(calls)

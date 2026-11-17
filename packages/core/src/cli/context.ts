@@ -506,9 +506,18 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
 
   // A ticket wait refused or ended for this phase occurrence (SPEC §11
   // "Ticket waits"): every guidance.json naming its escalation or request id
-  // carries a `wait` block saying what the session waited on.
+  // carries a `wait` block saying what the session waited on, including the
+  // answer to the dispatcher's unresolvable raise that ended the wait.
   const wait = waitBlock(state, phase, round)
-  const waitIds = new Set([wait?.id, wait && state.wait?.escalation])
+  const waitIds = new Set([
+    wait?.id,
+    wait && state.wait?.escalation,
+    ...(wait?.outcome === 'ended'
+      ? state.answeredEscalations
+          .filter((escalation) => escalation.wait?.id === wait.id)
+          .map((escalation) => escalation.id)
+      : []),
+  ])
   // seq of the refusal or end the wait block reports, and of the answer
   // behind the guidance.json written so far: only a strictly newer answer
   // may stand in for the wait's own guidance.

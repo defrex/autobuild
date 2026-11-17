@@ -715,7 +715,12 @@ request against the ticket source, adds `blockedBy`, and appends `wait.entered`
 or `wait.refused`. `kernel/ticket-wait.ts` holds the reduced-state predicates
 the engine, capacity, `ab context` and `ab build status` share: a pending
 request decides `wait ticket-wait`, an entered wait parks the leaf without a
-slot, and an ended one requests a `resume` slot. An implement declaration
+slot, and an ended one requests a `resume` slot. The digest's `ticketWait`
+names each open wait, and the dispatcher's `releaseTicketWaits` stage, run once
+per tick before the lease sweep's per-build pass, checks them all with one
+batched `dependencyStates` read: all completed appends `wait.ended {cause:
+automatic}`, and a rejected or deleted ticket raises `policy/wait-unresolvable`,
+which the reducer reads as the wait's end (`ticketWaitRelease` decides). An implement declaration
 publishes first: `waitOn` pushes locally before the fact, or deposits
 `publication.requested {operation: wait}` that `cli/publication-settlement.ts`
 completes with `wait.published`; `serviceWaitRequest` enters the wait only
