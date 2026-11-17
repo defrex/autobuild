@@ -8,7 +8,7 @@ amends it. Decisions are in §13; §14 records what is deferred.
 **Hat:** product. The objective, the measurement gate, the proposer phase,
 the stop policy, the events, the operator surfaces and the guidance ship to
 every user. Nothing here encodes this repository's configuration. Trying an
-optimization node on this repository is separate, later work (§15, item 8).
+optimization node on this repository is separate, later work (§15).
 
 ---
 
@@ -603,39 +603,26 @@ Made by the maintainer on 2026-11-17:
 
 ## 15. Delivery plan
 
-A node ticket targeting root, with these children. Each child updates the
+Filed 2026-11-17 as node AUT-1223, targeting root. Each child updates the
 skills and `ab-guide` passages that describe its behavior in the same commit.
-Until the proposer lands, scenarios construct attempts directly.
+The first child is the contract; the rest build against it in parallel, with
+recorded facts standing in for siblings that have not landed.
 
-1. **Objective.** The `autobuild-objective` marker and its false-positive
-   rules, the schema and validation at node opening, `harnessPin`, the
-   reducer digest, `ab objective <node>` (show and revise), revised-field
-   marking in `ab ticket show`, and the operator tool. Amends `SPEC.md`
-   §13.1 and §15.3.
-2. **Measurement gate.** Paired command measurement, the starting
-   measurement and noise check, harness overwrite, `attempt.measured`, the
-   landing condition and its execution, measurement invalidation on restack,
-   starvation priority, the non-regression rule for human children,
-   settlement and `attempt.settled`, the rejected-role exception, and the
-   opening check for a configured rejected role. Amends §5, §13.1 and §15.7.
-   Depends on 1.
-3. **Attempt context and guidance.** Objective and purpose in attempt
-   context, harness validation at `ab done`, `ab done --no-improvement` and
-   the `declined` outcome, and the §10 passages for `ab-implement`,
-   `ab-plan`, `ab-plan-review`, `ab-code-review` and `ab-reconcile`. Depends
-   on 2.
-4. **Proposer phase.** Admission, the attempt ledger with near-miss flags,
-   `ab propose`, dispatcher ticket creation with deduplication, the
-   `ab-propose` skill, and the §5.4 exception in `SPEC.md` §2. Depends on 3.
-5. **Stopping and completion.** Stop causes, abort and drain, the
-   completion predicate, and the `ab-operate` passages. Depends on 4.
-6. **Surfaces.** The projection, terminal dashboard, `ab status`, `ab watch`
-   and operator tools. Depends on 5.
-7. **Judge panels.** Pairwise acceptance, head-against-start progress, the
-   panel noise check and win-rate thresholds. Depends on 2. The web app
-   progress view is a separate design ticket with a human at the table.
-8. **This repository's configuration.** A first optimization node on this
-   repository, chosen when the series lands. Separate hat, separate ticket.
+| Ticket | Scope | Blocked by |
+|---|---|---|
+| AUT-1224 | Objective marker, schema and validation, every event, the reducer digest, attempt identity, the ledger, `ab objective`, ticket and tree labelling | — |
+| AUT-1225 | Paired, harness-pinned measurement; starting measurement and noise check | 1224 |
+| AUT-1226 | Landing gate, invalidation, starvation, settlement, the rejected-role move, non-regression for other children | 1224 |
+| AUT-1227 | Attempt context, harness validation at `ab done`, declining, implement and review guidance | 1224 |
+| AUT-1228 | Proposer phase, `ab propose`, dispatcher ticket creation, `ab-propose`, the design-rule exception | 1224 |
+| AUT-1229 | Stop causes, abort and drain, completion, `ab-operate` | 1224 |
+| AUT-1230 | Shared projection, terminal dashboard, status, watch, operator tools | 1224 |
+| AUT-1231 | Judge panels | 1225, 1226 |
+| AUT-1232 | End-to-end scenarios, adopter docs, stale-passage sweep | all of the above |
+
+Not filed yet: the web app progress view (a design ticket with a human at the
+table) and a first optimization node on this repository (this repository's
+configuration, after the series lands).
 
 ## 16. Alternatives considered
 
