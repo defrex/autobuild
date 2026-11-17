@@ -4158,7 +4158,11 @@ history and rewrite facts, plus both heads and the temporary change, under immut
 namespace or permission failures stop publication without a branch/tag fallback. Remote
 archives also publish commits present only on the remote: GitHub uses create-only
 Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
-pushes for local objects. Exact remote readback confirms publication, then a non-shallow
+pushes for local objects. When an environment refuses a non-branch Git push of an
+archive ref (a refusal, not a transient failure), GitHub creates the identical archive
+ref through the same create-only REST call and holds it to the same exact readback; this
+is a transport for the same ref, never a branch or tag, never overwrites an archive, and
+cannot publish a commit that exists only locally, which fails naming both refusals. Exact remote readback confirms publication, then a non-shallow
 fetch of only that exact archive ref (without tags, configured refmap expansion or a
 depth limit) restores missing commits and their missing ancestry, writes no shallow
 boundary, leaves an already-shallow repository's existing boundaries unchanged, and
