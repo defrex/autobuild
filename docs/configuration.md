@@ -3571,8 +3571,8 @@ registry's closed-table filtering; external harnesses own approvals.
 ## `[hooks]`
 
 A hook is a named, observe-only consumer of the same records `ab watch --json`
-prints. The lease-holding local dispatcher delivers each record that matches a
-hook's filter to the hook's command, one record per invocation, so tooling can
+prints. The lease-holding dispatcher delivers each record that matches a
+hook's filter to the hook's command or URL, one record per delivery, so tooling can
 react to escalations, merges awaiting consent, or tickets handed back without
 keeping its own `ab watch` process alive. A hook cannot change any build's state,
 phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
@@ -3589,7 +3589,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Named observe-only hooks: the local dispatcher delivers each matching watch record to a command, in order and at least once.
+**Description:** Named observe-only hooks: the dispatcher delivers each matching watch record to a command or URL, in order and at least once.
 
 **Constraints:** Entry names: nonempty
 
@@ -3602,9 +3602,9 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Named observe-only hook delivered matching watch records by the local dispatcher.
+**Description:** Named observe-only hook delivered matching watch records by the dispatcher.
 
-**Constraints:** Hook names use ASCII letters, digits, ., _ and -. A command is required. The hosted dispatcher rejects command hooks.
+**Constraints:** Hook names use ASCII letters, digits, ., _ and -. Exactly one of command or url. A url hook requires secretEnv naming a set, nonempty variable in the dispatcher environment. The hosted dispatcher rejects command hooks and delivers url hooks.
 
 #### `hooks.<name>.command`
 
@@ -3615,9 +3615,35 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success.
+**Description:** Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success. Set exactly one of command or url.
 
 **Constraints:** hook command must be nonblank
+
+#### `hooks.<name>.url`
+
+**TOML key:** `hooks.<name>.url`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** HTTPS endpoint that receives each record as a signed JSON POST; http only to loopback. A 2xx response within the timeout is success; redirects are not followed.
+
+**Constraints:** Absolute HTTPS URL; HTTP allowed only to loopback (localhost, 127.0.0.0/8, [::1]). No credentials or fragment. Query strings are kept.
+
+#### `hooks.<name>.secretEnv`
+
+**TOML key:** `hooks.<name>.secretEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Name of the dispatcher environment variable holding the HMAC signing secret; required with url. The value never appears in config, events, status or logs.
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/
 
 #### `hooks.<name>.events`
 
@@ -3641,7 +3667,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Seconds one invocation may run before it is killed and counted as a failure.
+**Description:** Seconds one delivery may take (a command run or a request) before it is stopped and counted as a failure.
 
 **Constraints:** safe integer; > 0; ≤ 3600
 
@@ -3656,13 +3682,23 @@ command = "./tools/notify.sh"
 command = "cat >> .autobuild/audit.jsonl"
 events = ["escalation.*", "ticket.handed-back", "hook.*"]
 timeoutSeconds = 10
+
+[hooks.relay]
+url = "https://hooks.example.com/autobuild"
+secretEnv = "RELAY_HOOK_SECRET"
 ```
 
 **Names and validation.** Hook names use ASCII letters, digits, `.`, `_` and
-`-`. Each `[hooks.<name>]` table is declared once and needs a `command`. Each
-`events` entry uses the `ab watch --event` grammar and must match an event type
-in the build or repository catalog, or `dispatcher.lost`; a glob that matches
-nothing is rejected. Every error names the hook, at startup and on reload.
+`-`. Each `[hooks.<name>]` table is declared once and sets exactly one target:
+a `command` or a `url`. A `url` must use `https`, or `http` only to a loopback
+host (`localhost`, `127.0.0.0/8`, `[::1]`), and may not carry credentials or a
+fragment. A url hook needs `secretEnv`, the name of the environment variable
+holding its signing secret; `secretEnv` is rejected on a command hook. The
+dispatcher checks that the variable is set and not blank in its own
+environment, and the error names the variable, never a value. Each `events`
+entry uses the `ab watch --event` grammar and must match an event type in the
+build or repository catalog, or `dispatcher.lost`; a glob that matches nothing
+is rejected. Every error names the hook, at startup and on reload.
 
 **Default filter.** A hook without `events` receives exactly `ab watch`'s default
 attention set: the build attention events, conflicted restacks, the derived
@@ -3671,7 +3707,7 @@ attention including `hook.failing`, `hook.recovered` and `hook.skipped`, the
 derived persistent-failure observations, and `dispatcher.lost`. Supplying
 `events` replaces that set entirely, as `--event` does.
 
-**The record.** The command runs with `sh -c` from the repository checkout. Its
+**The record.** A command runs with `sh -c` from the repository checkout. Its
 stdin carries one record as a single JSON line, identical to the line `ab watch
 --json` prints for the same event under the same filter, including derived
 records. The environment is the dispatcher's, without build or session
@@ -3686,9 +3722,11 @@ identity variables, plus `AB_HOOK=<name>`.
 observation, and `dispatcher.lost:<run>`. `cursor` is the hook's position after
 the record and is a valid `ab watch --since` cursor.
 
-**Delivery guarantee.** Exit status 0 within `timeoutSeconds` is success;
-anything else, including a timeout, is failure, and the command's whole process
-group is killed. Each hook receives its records in order, one invocation at a
+**Delivery guarantee.** For a command, exit status 0 within `timeoutSeconds` is
+success; anything else, including a timeout, is failure, and the command's whole
+process group is killed. For a URL, a 2xx response within `timeoutSeconds` is
+success; any other status, a redirect, a timeout or a connection error is
+failure. Each hook receives its records in order, one invocation at a
 time: a record is not delivered until the previous one succeeded. Delivery is
 at least once — a consumer can see a record again after a restart or a failed
 attempt — so deduplicate by `id`. Each hook has its own loop outside the
@@ -3705,6 +3743,51 @@ history can no longer be read, it resumes from the current position and records
 `hook.skipped` with the skipped ranges. `ab dispatch --once` makes one delivery
 pass per hook and stops at the first failure; the next invocation retries.
 
+**Webhook delivery.** A url hook receives one `POST` per record. The body is the
+record line without its trailing newline, sent as `Content-Type:
+application/json` with `User-Agent: autobuild-hook`, and these headers:
+
+| Header | Value |
+| --- | --- |
+| `Autobuild-Hook` | The hook name. |
+| `Autobuild-Delivery` | The record `id`, the same on every redelivery. Deduplicate on it. |
+| `Autobuild-Timestamp` | Unix seconds when this attempt was sent. |
+| `Autobuild-Signature` | `v1=` and the lowercase hex HMAC-SHA256 of `<timestamp>.<body>`, keyed by the secret's UTF-8 bytes. |
+
+Redirects are not followed, the response body is ignored, and failure text
+records only the status or the kind of error, never the URL, headers, body or
+secret.
+
+**Verifying a signature.** A receiver recomputes the HMAC over the timestamp
+header, a `.`, and the raw request body, compares it in constant time, and
+rejects a timestamp too far from its own clock so a captured request cannot be
+replayed later. Five minutes is a reasonable tolerance.
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+const TOLERANCE_SECONDS = 5 * 60
+
+export async function verifyAutobuildHook(request: Request, secret: string): Promise<string> {
+  const timestamp = request.headers.get('autobuild-timestamp') ?? ''
+  const signature = request.headers.get('autobuild-signature') ?? ''
+  const body = await request.text() // the raw body, before any JSON parsing
+  const expected = `v1=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp))
+  if (
+    !(age <= TOLERANCE_SECONDS) ||
+    signature.length !== expected.length ||
+    !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  )
+    throw new Error('invalid Autobuild hook signature')
+  return body // JSON.parse(body) is the record; skip it if Autobuild-Delivery was already handled
+}
+```
+
+As a test vector, the secret `example-secret`, timestamp `1794909600` and body
+`{"id":"c1.0"}` sign to
+`v1=8c513d8d2b28c00d3c4f56b8afacc447ba1bd294e1df5f1b60b0ea1fe7d57a54`.
+
 **Failures and status.** A failed delivery is retried with increasing delay, up
 to one minute between attempts. After five minutes of continuous failure the
 dispatcher records `hook.failing` with the hook name and latest error, once per
@@ -3714,7 +3797,11 @@ its pending backlog or "caught up", and whether it is failing.
 
 **Hosted dispatchers.** Command hooks need a dispatcher that can run local
 commands. The hosted dispatcher rejects a configured command hook as a config
-error naming the hook; it is never silently ignored.
+error naming the hook; it is never silently ignored. Url hooks work on local and
+hosted dispatchers alike: the variable `secretEnv` names must be set in the
+environment of whichever dispatcher delivers them. Each hosted invocation makes
+one delivery pass, and a delivery still in flight at the invocation's deadline
+is stopped and redelivered by the next one.
 
 ## Complete example
 

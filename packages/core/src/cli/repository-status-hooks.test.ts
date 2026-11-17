@@ -20,6 +20,10 @@ command = "./notify.sh"
 [hooks.audit]
 command = "cat >> audit.log"
 events = ["escalation.*"]
+
+[hooks.relay]
+url = "https://hooks.example/autobuild"
+secretEnv = "RELAY_SECRET"
 `)
 
 async function storeWithRun(): Promise<MemoryBuildStore> {
@@ -79,6 +83,7 @@ test('repository status lists each configured hook with its delivery progress', 
     {
       name: 'notify',
       command: './notify.sh',
+      url: null,
       lastSuccessAt: '2026-11-17T10:00:00.000Z',
       backlog: 2,
       caughtUp: false,
@@ -93,6 +98,17 @@ test('repository status lists each configured hook with its delivery progress', 
     {
       name: 'audit',
       command: 'cat >> audit.log',
+      url: null,
+      lastSuccessAt: null,
+      backlog: 0,
+      caughtUp: true,
+      failing: null,
+      updatedAt: null,
+    },
+    {
+      name: 'relay',
+      command: null,
+      url: 'https://hooks.example/autobuild',
       lastSuccessAt: null,
       backlog: 0,
       caughtUp: true,
@@ -103,6 +119,7 @@ test('repository status lists each configured hook with its delivery progress', 
   expect(hooks.map(renderHookStatus)).toEqual([
     'hook notify — last delivered 2026-11-17T10:00:00.000Z — 2 pending — failing since 2026-11-17T10:01:00.000Z: exit status 1',
     'hook audit — last delivered never — caught up',
+    'hook relay — last delivered never — caught up',
   ])
 })
 

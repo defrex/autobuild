@@ -140,6 +140,10 @@ credentials stay on the host and are applied by provider-scoped egress header
 transforms.
 See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
+Configured hooks on the hosted dispatcher deployment must be URL hooks: it
+rejects command hooks, and delivers URL hooks once their `secretEnv` variable is
+set in its environment. See [`[hooks]`](configuration.md#hooks).
+
 Integration nodes need Git on the dispatcher host even in origin mode: the
 kernel bare-clones the origin to snapshot, restack, check presence and land.
 The hosted dispatcher deployment ships its own self-contained `linux-x64` Git

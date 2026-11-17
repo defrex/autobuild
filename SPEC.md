@@ -4560,25 +4560,40 @@ execution settings; each ready candidate retains its immutable `landing.decided`
 rule snapshot and mode after config edits. Historical `build.auto-merge-requested`
 and default-attribution fields remain replay-compatible but are not new controls.
 
-`[hooks.<name>]` declares an observe-only hook: a `command` and optional
-`events` globs with `ab watch --event` grammar and catalog validation (absent
-means `ab watch`'s default attention filter), plus `timeoutSeconds` (default
-30). Bad names, duplicates, missing targets and globs matching no catalog event
-are rejected naming the hook, at startup and on reload; the hosted dispatcher
-rejects command hooks as a config error. The lease-holding local dispatcher
-feeds each hook an in-process watch feed from durable per-hook progress (a
-retention-managed `hook-progress.<name>` repository artifact) and runs the
-command once per record with the exact `ab watch --json` line, stable `id`
-included, on stdin. Exit 0 within the timeout is success. Delivery is
-at-least-once, ordered per hook, one invocation at a time, outside the dispatch
-tick; no decision path reads a hook's outcome. A new hook name starts when first
-loaded; progress survives restarts, hot upgrades and reloads. Failures retry
-with increasing delay; five minutes of continuous failure records `hook.failing`
-once per episode, the next success `hook.recovered`, and unretrievable history
-`hook.skipped` with the skipped ranges. Feeds discover builds from the
-`ticket-preparation` announcements in the repository journal and never list the
-build population on a pass; idle passes read no event rows. `ab repository
-status` lists each hook's last success, backlog and failure.
+`[hooks.<name>]` declares an observe-only hook with exactly one target, a
+`command` or a `url`, plus optional `events` globs with `ab watch --event`
+grammar and catalog validation (absent means `ab watch`'s default attention
+filter) and `timeoutSeconds` (default 30). A `url` must be `https`, or `http`
+only to a loopback host, without credentials or a fragment; it requires
+`secretEnv`, the name of a dispatcher environment variable holding the signing
+secret, which must be set and nonblank. Bad names, duplicates, missing or doubled
+targets, bad URLs, a missing `secretEnv`, an unset or blank secret variable and
+globs matching no catalog event are rejected naming the hook, at startup and on
+reload; errors name the variable, never its value. The hosted dispatcher rejects
+command hooks as a config error and delivers url hooks. The lease-holding
+dispatcher feeds each hook an in-process watch feed from durable per-hook
+progress (a retention-managed `hook-progress.<name>` repository artifact) and
+delivers each record, the exact `ab watch --json` line with its stable `id`.
+A command runs once per record with the line on stdin; exit 0 within the timeout
+is success. A url receives one `POST` per record whose `application/json` body
+is that line without its newline, with headers `Autobuild-Hook` (the hook name),
+`Autobuild-Delivery` (the record `id`), `Autobuild-Timestamp` (Unix seconds, per
+attempt) and `Autobuild-Signature: v1=<hex HMAC-SHA256 of
+"<timestamp>.<body>" keyed by the secret>`; a 2xx response within the timeout is
+success, and any other status, a redirect (never followed), a timeout or a
+connection error is a failure. The secret never appears in events, status, logs
+or errors. Delivery is at-least-once, ordered per hook, one invocation at a
+time, outside the dispatch tick; no decision path reads a hook's outcome. A
+one-pass dispatch delivers until its first failure and stops in-flight
+deliveries at its deadline for redelivery next pass. A new hook name starts when
+first loaded; progress survives restarts, hot upgrades and reloads. Failures
+retry with increasing delay; five minutes of continuous failure records
+`hook.failing` once per episode, the next success `hook.recovered`, and
+unretrievable history `hook.skipped` with the skipped ranges. Feeds discover
+builds from the `ticket-preparation` announcements in the repository journal and
+never list the build population on a pass; idle passes read no event rows. `ab
+repository status` lists each hook's last success, backlog and failure; its JSON
+also carries the hook's `command` or `url`.
 
 
 ```toml
@@ -4591,8 +4606,10 @@ plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 [upgrade]
 automatic = true                # immediate/60-second target checks; false requires manual restart
 
-#[hooks.notify]                 # optional observe-only hook; local dispatchers only
-#command = "./tools/notify.sh"  # one ab watch --json record on stdin per invocation
+#[hooks.notify]                 # optional observe-only hook; exactly one of command or url
+#command = "./tools/notify.sh"  # one ab watch --json record on stdin per invocation; local dispatchers only
+#url = "https://hooks.example.com/autobuild"  # or: one signed JSON POST per record
+#secretEnv = "NOTIFY_HOOK_SECRET"             # required with url; names the signing-secret variable
 #events = ["escalation.*"]      # optional; default is the watch attention set
 
 #[workspace]                     # optional; default provider = "git-worktree"

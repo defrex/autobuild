@@ -1618,27 +1618,43 @@ retry an unchanged failed target. No registry credentials belong in these facts.
 
 ### `[hooks]`
 
-An open map of hook name → observe-only hook. The lease-holding **local**
-dispatcher delivers each record that matches the hook's filter to its command,
-so tooling reacts to attention without keeping its own `ab watch` alive.
+An open map of hook name → observe-only hook. The lease-holding dispatcher
+delivers each record that matches the hook's filter to its command or URL, so
+tooling reacts to attention without keeping its own `ab watch` alive.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `command` | required | Shell command run with `sh -c` from the checkout, once per record. |
+| `command` | one of `command`/`url` | Shell command run with `sh -c` from the checkout, once per record. |
+| `url` | one of `command`/`url` | Endpoint that receives one signed JSON `POST` per record: `https`, or `http` only to loopback (`localhost`, `127.0.0.0/8`, `[::1]`); no credentials or fragment. |
+| `secretEnv` | required with `url` | Name of the dispatcher environment variable holding the signing secret; rejected on a command hook. |
 | `events` | absent | `ab watch --event` globs, catalog-validated; absent means the default watch attention set. |
-| `timeoutSeconds` | `30` | Per-invocation limit; a timeout is a failure and kills the command's process group. |
+| `timeoutSeconds` | `30` | Per-delivery limit; a timeout is a failure and kills a command's process group or abandons a request. |
 
 - **Validation.** Names use ASCII letters, digits, `.`, `_` and `-`; a duplicate
-  table, a missing `command`, an empty `events` list, or a glob matching no build
-  or repository event type (or `dispatcher.lost`) is rejected naming the hook, at
-  startup and on reload. `hooks` hot-reloads. The **hosted dispatcher rejects
-  command hooks** as a config error; they are never silently ignored.
+  table, no target or both `command` and `url`, a bad `url`, a `url` without
+  `secretEnv`, an empty `events` list, or a glob matching no build or repository
+  event type (or `dispatcher.lost`) is rejected naming the hook, at startup and
+  on reload. The dispatcher also rejects a `secretEnv` variable that is unset or
+  blank in its own environment, naming the hook and the variable but never a
+  value. `hooks` hot-reloads. The **hosted dispatcher rejects command hooks** as
+  a config error, never silently ignored, and **delivers url hooks**.
 - **Record.** stdin carries exactly one record per invocation: the line `ab watch
   --json` prints for the same event under the same filter, including derived
   observations such as `build.consent-ready`. The record's `id` is stable across
   redelivery; its `cursor` is the hook's position after it. The environment drops
   build and session identity and adds `AB_HOOK=<name>`.
-- **Guarantee.** Exit 0 within the timeout is success. Records arrive in order,
+- **Webhook.** A url hook gets one `POST` per record. The body is the record
+  line without its newline (`Content-Type: application/json`), with headers
+  `Autobuild-Hook` (hook name), `Autobuild-Delivery` (the record `id`, stable
+  across redelivery), `Autobuild-Timestamp` (Unix seconds, per attempt) and
+  `Autobuild-Signature: v1=<lowercase hex HMAC-SHA256 of "<timestamp>.<body>">`
+  keyed by the secret. A 2xx response within the timeout is success; any other
+  status, a redirect (never followed), a timeout or a connection error is a
+  failure. Receivers recompute the signature over the raw body, compare in
+  constant time, reject stale timestamps (five minutes is reasonable) and
+  deduplicate on `Autobuild-Delivery`. The secret never appears in events,
+  status, logs or errors.
+- **Guarantee.** For a command, exit 0 within the timeout is success. Records arrive in order,
   one invocation at a time; delivery is at least once, so consumers deduplicate
   by `id`. Hooks run outside the dispatch tick and nothing reads their outcome:
   a hook never delays or changes a build, a tick or another hook.
@@ -1647,7 +1663,9 @@ so tooling reacts to attention without keeping its own `ab watch` alive.
   starts when first loaded, without history; a renamed hook starts fresh; a
   changed command or filter resumes from saved progress. History too old to read
   resumes from the current position and records `hook.skipped`. `ab dispatch
-  --once` makes one delivery pass per hook and stops at the first failure.
+  --once` makes one delivery pass per hook and stops at the first failure; a
+  delivery in flight at a hosted invocation's deadline is stopped and
+  redelivered next pass.
 - **Failure.** Retries back off to one minute between attempts. Five minutes of
   continuous failure records `hook.failing` once per episode; the next success
   records `hook.recovered`. All three `hook.*` events are default watch
@@ -2723,7 +2741,8 @@ tickets held because their target
 node is being built by another store, and dispatcher startup warnings
 (`warningLines`). Each hook configured by the latest dispatcher run is listed
 with its last successful delivery, pending backlog or "caught up", and current
-failure (`hook <name> — …` lines; `hooks` in JSON, empty when none).
+failure (`hook <name> — …` lines; `hooks` in JSON, empty when none, each with its
+`command` or `url`).
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
@@ -2879,7 +2898,7 @@ The default watch reports actionable conditions only:
   naming the latest error and the record `id` it is stuck on), has delivered
   again after a reported episode, or resumed past history it could no longer
   read (with the skipped stream ranges) or a build announcement it could not
-  resolve. Inspect `ab repository status`, fix the hook command or
+  resolve. Inspect `ab repository status`, fix the hook's command, endpoint or
   configuration, and treat a skipped range as records the hook's consumer never
   received.
 - Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic
