@@ -23,7 +23,22 @@ export interface LandingState {
   }
   acknowledgedSeq?: number
   native?: EventPayload<'landing.native-applied'> & { seq: number }
+  /** The landing route taken when native application is unavailable:
+   * polling, or settled awaiting a human merge. Human merge overrides
+   * polling. Current only for its own candidate, decision and command. */
+  fallback?: LandingFallback
 }
+
+export type LandingFallback = {
+  seq: number
+  candidate: LandingCandidate
+  decisionSeq: number
+  commandSeq?: number
+  detail: string
+} & (
+  | { mode: 'polling' }
+  | { mode: 'human-merge'; cause: EventPayload<'landing.human-merge-required'>['cause'] }
+)
 
 export function advanceLanding(state: LandingState, event: AbEvent): void {
   switch (event.type) {
@@ -37,11 +52,20 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       delete state.decision
       delete state.deferral
       delete state.native
+      delete state.fallback
       break
     case 'landing.decided':
       delete state.applicationFailure
       delete state.deferral
+      delete state.fallback
       state.decision = { ...event.payload, seq: event.seq }
+      break
+    case 'landing.polling-selected':
+      if (state.fallback?.mode === 'human-merge') break
+      state.fallback = { mode: 'polling', seq: event.seq, ...event.payload }
+      break
+    case 'landing.human-merge-required':
+      state.fallback = { mode: 'human-merge', seq: event.seq, ...event.payload }
       break
     case 'landing.deferred':
       state.deferral = { ...event.payload, seq: event.seq }
@@ -101,6 +125,8 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
     case 'landing.native-applied':
       delete state.applicationFailure
       if (event.payload.enableSeq === state.nativeEnablePending) delete state.nativeEnablePending
+      // Native application succeeded after all: the fallback route is over.
+      if (event.payload.enabled) delete state.fallback
       state.native = { ...event.payload, seq: event.seq }
       break
     case 'build.auto-merge-requested':
@@ -140,4 +166,34 @@ export function nativeLandingApplied(landing: LandingState | undefined): boolean
     native.commandSeq === landing?.command?.seq &&
     sameLandingCandidate(native.candidate, landing?.decision?.candidate)
   )
+}
+
+/** The fallback route for the current candidate, decision and command, or
+ * undefined. Same currency predicate as {@link nativeLandingApplied}. */
+export function currentLandingFallback(
+  landing: LandingState | undefined,
+): LandingFallback | undefined {
+  const fallback = landing?.fallback
+  return fallback &&
+    fallback.decisionSeq === landing?.decision?.seq &&
+    fallback.commandSeq === landing?.command?.seq &&
+    sameLandingCandidate(fallback.candidate, landing?.decision?.candidate)
+    ? fallback
+    : undefined
+}
+
+/** The shared status wording for a fallback landing route, used by
+ * `ab status`, `ab watch` and both dashboards. */
+export function landingFallbackReason(fallback: LandingFallback, prNumber?: number): string {
+  const pr = prNumber === undefined ? 'the PR' : `PR #${prNumber}`
+  if (fallback.mode === 'polling')
+    return (
+      'Landing by polling because GitHub GraphQL is unavailable — Autobuild merges ' +
+      `${pr} when GitHub reports it clear to merge; this needs a running dispatcher`
+    )
+  const detail =
+    fallback.cause === 'merge-refused'
+      ? `GitHub refused the merge: ${JSON.stringify(fallback.detail)}`
+      : fallback.detail
+  return `Awaiting a human merge — ${detail}; merge ${pr} on GitHub`
 }

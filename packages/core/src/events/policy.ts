@@ -25,6 +25,12 @@ export const buildEventPolicy = {
   'build.land-requested': 'decisive',
   'landing.command-acknowledged': 'decisive',
   'landing.native-enable-started': 'decisive',
+  // Advisory: they record which landing route was taken and gate only
+  // further landing attempts. An older runtime that ignores them retries
+  // native application and records its existing deferral, which is safe;
+  // a decisive unknown type would defer every kernel decision on the build.
+  'landing.polling-selected': 'advisory',
+  'landing.human-merge-required': 'advisory',
   'landing.forge-merged': 'decisive',
   'landing.native-applied': 'decisive',
   'target.distance': 'advisory',

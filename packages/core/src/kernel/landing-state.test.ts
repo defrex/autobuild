@@ -4,7 +4,12 @@ import { validateEventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { evaluateLandingPolicy } from './landing-policy'
 import { buildReducer } from './reducer'
-import { landingAuthorized, nativeLandingApplied } from './landing-state'
+import {
+  currentLandingFallback,
+  landingAuthorized,
+  landingFallbackReason,
+  nativeLandingApplied,
+} from './landing-state'
 
 const candidate = { head: 'head', parent: 'parent', cycle: 'cycle' }
 const decision = {
@@ -347,5 +352,95 @@ describe('durable landing state', () => {
       )
       expect(result).toEqual(buildReducer.reduce(log))
     }
+  })
+})
+
+describe('landing fallback route', () => {
+  const route = { candidate, decisionSeq: 1, commandSeq: 2 }
+  const polling = (seq: number, fact: Partial<typeof route> = {}) =>
+    event(seq, {
+      actor: DISPATCHER,
+      type: 'landing.polling-selected',
+      payload: { ...route, ...fact, detail: 'GitHub GraphQL is unavailable' },
+    })
+  const human = (
+    seq: number,
+    cause: 'merge-queue-rule' | 'merge-queue-activity' | 'merge-refused' = 'merge-refused',
+  ) =>
+    event(seq, {
+      actor: DISPATCHER,
+      type: 'landing.human-merge-required',
+      payload: { ...route, cause, detail: 'Pull Request is not mergeable' },
+    })
+  const fold = (events: AbEvent[]) => buildReducer.reduce(events).landing
+
+  test('polling, then human merge, which polling never overrides', () => {
+    expect(currentLandingFallback(fold([decided(), land(2), polling(3)]))?.mode).toBe('polling')
+    const settled = fold([decided(), land(2), polling(3), human(4), polling(5)])
+    expect(currentLandingFallback(settled)).toMatchObject({
+      mode: 'human-merge',
+      cause: 'merge-refused',
+      seq: 4,
+    })
+  })
+
+  test('only the current candidate, decision and command own the route', () => {
+    expect(currentLandingFallback(fold([decided(), land(2), polling(3, { commandSeq: 9 })]))).toBe(
+      undefined,
+    )
+    expect(
+      currentLandingFallback(
+        fold([decided(), land(2), polling(3, { candidate: { ...candidate, head: 'moved' } })]),
+      ),
+    ).toBe(undefined)
+  })
+
+  test('a new decision, native application, or parent acceptance clears it', () => {
+    expect(fold([decided(), land(2), human(3), decided(4)])?.fallback).toBe(undefined)
+    expect(
+      fold([
+        decided(),
+        land(2),
+        polling(3),
+        event(4, {
+          actor: DISPATCHER,
+          type: 'landing.native-applied',
+          payload: { enabled: true, candidate, decisionSeq: 1, commandSeq: 2 },
+        }),
+      ])?.fallback,
+    ).toBe(undefined)
+    expect(
+      fold([
+        decided(),
+        land(2),
+        polling(3),
+        event(4, {
+          actor: DISPATCHER,
+          type: 'node.parent-accepted',
+          payload: {
+            id: 'move',
+            old: { target: null, branch: 'main' },
+            next: {
+              target: { ticket: { source: 'file', id: 'Q' }, build: 'q' },
+              branch: 'ab-node/q',
+            },
+            revision: 'r2',
+          },
+        }),
+      ])?.fallback,
+    ).toBe(undefined)
+  })
+
+  test('shared wording names the PR and quotes a refusal verbatim', () => {
+    const landing = fold([decided(), land(2), polling(3)])
+    expect(landingFallbackReason(currentLandingFallback(landing)!, 7)).toBe(
+      'Landing by polling because GitHub GraphQL is unavailable — Autobuild merges PR #7 when ' +
+        'GitHub reports it clear to merge; this needs a running dispatcher',
+    )
+    const refused = fold([decided(), land(2), human(3)])
+    expect(landingFallbackReason(currentLandingFallback(refused)!, 7)).toBe(
+      'Awaiting a human merge — GitHub refused the merge: "Pull Request is not mergeable"; ' +
+        'merge PR #7 on GitHub',
+    )
   })
 })

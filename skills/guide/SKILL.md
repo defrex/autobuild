@@ -2474,7 +2474,12 @@ followed by its later kernel acknowledgement, never by the request alone.
 Every build row renders a `merge <state>` token. Cyan requested means
 authorized but not yet applied natively; green enabled means the native request
 is armed; yellow cancelling means cancellation is in flight; dim off means no
-authorization. A recorded consent decision waiting for an operator reads
+authorization. Cyan `merge polling` means GitHub GraphQL is unavailable to the
+dispatcher, so Autobuild lands the gated PR itself when GitHub reports it clear
+to merge, which needs a running dispatcher. Yellow `merge awaits a human merge`
+means the landing settled and makes no further attempts: the base requires a
+merge queue, or GitHub refused the guarded merge (its message is shown), and a
+person merges the PR on GitHub. A recorded consent decision waiting for an operator reads
 `merge awaiting consent`; an explicit hold reads `merge held`.
 There is no red comparison with a repository default. Row and detail merge
 explanations distinguish a pending policy decision, consent, and hold, and name
@@ -2882,8 +2887,8 @@ The default watch reports actionable conditions only:
   It names the matched files and the previous and new heads; the build returns
   to the consent queue and needs fresh consent for its new head.
 - Build `build.merge-decision`: a finalized open PR
-  with a recorded consent decision awaiting consent, an explicit hold, or a
-  current actionable merge-gate deferral. Policy decisions not yet recorded and
+  with a recorded consent decision awaiting consent, an explicit hold, a
+  current actionable merge-gate deferral, or a landing awaiting a human merge. Policy decisions not yet recorded and
   authorized merges awaiting application are silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty

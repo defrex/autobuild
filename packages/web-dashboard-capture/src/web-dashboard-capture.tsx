@@ -49,6 +49,7 @@ import {
   NO_DISPATCHER_RUN_LINE,
 } from '../../core/src/cli/dashboard/model'
 import { getOperatorDashboard } from '../../core/src/operator/query'
+import { landingFallbackReason } from '../../core/src/kernel/landing-state'
 import { MemoryBuildStore } from '../../core/src/store/memory'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -534,6 +535,18 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     ],
   },
   {
+    id: 'builds-merge-human-wide',
+    width: 1440,
+    height: 1300,
+    requires: [
+      'merge awaits a human merge',
+      'Awaiting a human merge',
+      'GitHub refused the merge',
+      'merge PR #3 on GitHub',
+    ],
+    forbids: ['merge awaits consent', 'merge requested', 'BLOCKED', 'QUEUED'],
+  },
+  {
     id: 'builds-mixed-selected-narrow',
     width: 390,
     height: 1700,
@@ -986,6 +999,36 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
   }
 }
 
+/** A landing settled as awaiting a human merge: GitHub GraphQL is
+ * unavailable and GitHub refused the guarded squash of a PR it reported
+ * clear. Row, merge step and blockers share the same reason. */
+function humanMergeModel(source: DashboardModel): DashboardModel {
+  const parked = parkedNoConsentModel(source)
+  const build = parked.builds[0]!
+  const decision = { ...build.landing!.decision!, mode: 'auto' as const }
+  const fallback = {
+    mode: 'human-merge' as const,
+    cause: 'merge-refused' as const,
+    seq: 2,
+    candidate: decision.candidate,
+    decisionSeq: decision.seq,
+    detail: 'Pull Request is not mergeable',
+  }
+  const reason = landingFallbackReason(fallback, 3)
+  return {
+    ...parked,
+    builds: [
+      {
+        ...build,
+        autoMerge: 'human-merge',
+        blockers: [reason],
+        landing: { ...build.landing, decision, fallback },
+        steps: build.steps.map((step) => (step.label === 'merge' ? { ...step, reason } : step)),
+      },
+    ],
+  }
+}
+
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
   const settings = settingsFixture(spec.id)
   if (settings) return settings
@@ -1145,6 +1188,10 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       const parked = model.builds[0]
       if (parked === undefined) throw new Error('parked model has no build')
       return shell(buildPage(model, parked.slug), { model })
+    }
+    case 'builds-merge-human-wide': {
+      const model = humanMergeModel(models.mixed)
+      return shell(buildPage(model, model.builds[0]!.slug), { model })
     }
     case 'builds-post-reconcile-policy-wide':
     case 'builds-post-reconcile-policy-narrow':
