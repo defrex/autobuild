@@ -936,10 +936,13 @@ cleanup observations. Unsupported or failed inspection leaves evidence unknown;
 a read failure also records an observation without preventing completion. Old
 logs need no migration and keep the same status and presentation.
 
-GitHub merge queues ignore squash-message overrides. The message query also
-reads `repository.mergeQueue(branch:)`, covering classic protection and rulesets.
-Its branch hint is checked against the PR's actual base, with a bounded re-query
-after a retarget rather than assuming the repository default is the base.
+GitHub merge queues ignore squash-message overrides. Native enable, repair and
+the guarded direct squash read the base's effective branch rules over REST
+(`rules/branches/{branch}`, including organization rules) and treat a
+`merge_queue` rule as a queue; a quiet poll of an already matching request reads
+no rules. The base comes from the REST PR representation and must equal the
+build's base branch: a retargeted PR defers native enable and refuses the
+direct squash rather than following the new base.
 Kernel auto-merge therefore
 returns an actionable `unproven-gate-state` deferral for queue-protected bases;
 it never bypasses the queue. Human queue merges still settle normally with
