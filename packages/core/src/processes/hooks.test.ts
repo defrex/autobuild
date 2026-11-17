@@ -169,7 +169,7 @@ type Outcome = (line: string) => HookInvokeResult | Promise<HookInvokeResult>
 interface Harness {
   supervisor: HookSupervisor
   /** Completed attempts (success or failure), in order. */
-  attempts: { hook: string; line: string; ok: boolean }[]
+  attempts: { hook: string; line: string; ok: boolean; record?: { id: string } }[]
   backoffs: number[]
   warnings: string[]
   outcomes: Map<string, Outcome>
@@ -195,7 +195,7 @@ function harness(
     storeRef: STORE_REF,
     checkout: REPO,
     clock,
-    invoke: async (hook, line, signal) => {
+    invoke: async (hook, line, signal, record) => {
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       try {
@@ -210,7 +210,7 @@ function harness(
               ),
             ])
           : { ok: true as const }
-        if (!signal.aborted) attempts.push({ hook: hook.name, line, ok: result.ok })
+        if (!signal.aborted) attempts.push({ hook: hook.name, line, ok: result.ok, record })
         return result
       } finally {
         inFlight -= 1
@@ -1227,6 +1227,44 @@ describe('configured hooks', () => {
     await h.supervisor.stop()
     // Reducing 600+ events in one pass takes seconds; the default 5 s is too tight.
   }, 30_000)
+
+  test('each delivery carries the record identity alongside its line', async () => {
+    const store = await newStore()
+    await store.createBuild({ slug: 'b', repo: REPO })
+    await harness(store).supervisor.drainOnce({ notify: NOTIFY })
+    await escalate(store, 'b', 'e1')
+    const h = harness(store)
+    await h.supervisor.drainOnce({ notify: NOTIFY })
+    expect(h.attempts.length).toBeGreaterThan(0)
+    for (const attempt of h.attempts)
+      expect(attempt.record).toEqual({ id: JSON.parse(attempt.line).id })
+  })
+
+  test('aborting drainOnce stops the in-flight attempt without failing or advancing it', async () => {
+    const store = await newStore()
+    await store.createBuild({ slug: 'b', repo: REPO })
+    await harness(store).supervisor.drainOnce({ notify: NOTIFY })
+    await escalate(store, 'b', 'e1')
+    const before = await progressOf(store)
+    const deadline = new AbortController()
+    const stopped = harness(store)
+    stopped.outcomes.set('notify', () => {
+      queueMicrotask(() => deadline.abort())
+      return new Promise<HookInvokeResult>(() => {})
+    })
+    await stopped.supervisor.drainOnce({ notify: NOTIFY }, deadline.signal)
+    expect(stopped.attempts).toEqual([])
+    const after = await progressOf(store)
+    expect(after.failing).toBeUndefined()
+    expect(after.position).toBe(before.position)
+    expect(after.delivered).toBe(before.delivered)
+    const preAborted = harness(store)
+    await preAborted.supervisor.drainOnce({ notify: NOTIFY }, AbortSignal.abort())
+    expect(preAborted.attempts).toEqual([])
+    const next = harness(store)
+    await next.supervisor.drainOnce({ notify: NOTIFY })
+    expect(ids(next, 'notify')).toEqual(['build:b:1'])
+  })
 
   test('drainOnce delivers until the first failure and persists the failure', async () => {
     const store = await newStore()

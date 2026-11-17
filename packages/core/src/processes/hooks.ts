@@ -1,9 +1,10 @@
 /**
  * Configured hooks (§16.1 `[hooks]`): observe-only consumers the
- * lease-holding local dispatcher feeds. Each hook runs its own in-process
+ * lease-holding dispatcher feeds. Each hook runs its own in-process
  * `ab watch` feed (`cli/watch.ts`, `WatchFeed`) from a durable position, and
  * every record the feed emits — the exact `ab watch --json` line, `id`
- * included — is delivered to the hook's command, one at a time and in order.
+ * included — is delivered to the hook's command or URL, one at a time and in
+ * order.
  * Progress advances only after a success, so delivery is at-least-once.
  *
  * Nothing here is read by a decision path: a hook's exit status, output and
@@ -94,11 +95,13 @@ export async function readHookProgress(
 }
 
 export type HookInvokeResult = { ok: true } | { ok: false; error: string }
-/** Deliver one record (`line` ends with a newline). Never throws. */
+/** Deliver one record (`line` ends with a newline; `record` carries its
+ * stable id). Never throws. */
 export type HookInvoke = (
   hook: { name: string; config: HookConfig },
   line: string,
   signal: AbortSignal,
+  record?: { id: string },
 ) => Promise<HookInvokeResult>
 
 export interface HookSupervisorDeps {
@@ -170,14 +173,26 @@ export class HookSupervisor {
   /**
    * `ab dispatch --once`: each hook resumes, makes one full pass, delivers its
    * queue until empty or its first failure, and stops at a safe checkpoint.
-   * The next invocation is the retry.
+   * The next invocation is the retry. An abort of `signal` (the invocation
+   * deadline) stops every worker as `stop()` does: the in-flight attempt is
+   * neither success nor failure and is redelivered next time.
    */
-  async drainOnce(hooks: Readonly<Record<string, HookConfig>>): Promise<void> {
+  async drainOnce(
+    hooks: Readonly<Record<string, HookConfig>>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     await Promise.all(
       Object.entries(hooks).map(async ([name, config]) => {
         const worker = new HookWorker(this, name, config, 'once')
-        worker.start()
-        await worker.settled
+        const onAbort = (): void => void worker.stop()
+        signal?.addEventListener('abort', onAbort, { once: true })
+        try {
+          worker.start()
+          if (signal?.aborted === true) onAbort()
+          await worker.settled
+        } finally {
+          signal?.removeEventListener('abort', onAbort)
+        }
       }),
     )
   }
@@ -624,7 +639,7 @@ class HookWorker {
         this.state = { ...this.state, pending: this.queue.length }
         await this.persist()
       }
-      const result = await this.deps.invoke(hook, `${head.line}\n`, signal)
+      const result = await this.deps.invoke(hook, `${head.line}\n`, signal, { id: head.id })
       // A stop terminates the in-flight attempt; it is neither a success nor
       // a failure, and the record is redelivered by the next session.
       if (signal.aborted) return

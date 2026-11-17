@@ -97,7 +97,7 @@ Existing attention returns immediately, even with a cursor, so looping `wait` do
 ### React to attention with a hook
 
 Tooling that should react to attention, such as a notifier, does not need its
-own long-running `ab watch`. Declare a hook and the local dispatcher delivers each
+own long-running `ab watch`. Declare a hook and the dispatcher delivers each
 matching record to it, one JSON line on stdin per invocation, at least once and
 in order:
 
@@ -106,10 +106,13 @@ in order:
 command = "jq -r '.id + \"  \" + (.event.type // .observation.type)' >> attention.log"
 ```
 
+A hook can instead target an HTTPS URL, which receives each record as a signed
+JSON `POST` and also works from a hosted dispatcher.
+
 A hook complements your operator's standing watch; it does not replace it.
 Failing hooks surface as `hook.failing` attention, and `bun ab repository status`
 shows each hook's progress. See [`[hooks]`](configuration.md#hooks) for filters,
-the record format and the delivery guarantee.
+the record format, webhook signing and the delivery guarantee.
 
 ## Answer and pause
 

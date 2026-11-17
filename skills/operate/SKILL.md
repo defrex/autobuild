@@ -535,11 +535,11 @@ Treat every default-watch record as a call to act:
   or return it to Ready for another attempt. Each abandonment reports once;
   history does not replay.
 - Configured hook health (`hook.failing`, `hook.recovered`, `hook.skipped`): a
-  hook's command has failed for five minutes, recovered, or resumed past history
-  or a build announcement it could not read. Inspect `ab repository status` for
-  the hook's latest error and backlog and report the broken command or
-  configuration to the human. A skipped range means the hook's consumer missed
-  those records; reconcile what it needed through status.
+  hook's command or endpoint has failed for five minutes, recovered, or resumed
+  past history or a build announcement it could not read. Inspect `ab repository
+  status` for the hook's latest error and backlog and report the broken command,
+  endpoint or configuration to the human. A skipped range means the hook's
+  consumer missed those records; reconcile what it needed through status.
 - Ticket hand-back (`ticket.handed-back`): the dispatcher returned a claimed or
   ready ticket other than as completion, and the move is already committed.
   `cause` is `abort`, `spec-bounce`, `preparation-failed`, `pr-closed` or
