@@ -841,7 +841,7 @@ describe('watch record emission', () => {
     expect(h.out).toHaveLength(3)
     for (const line of h.out.slice(0, -1)) {
       const record = JSON.parse(line) as Record<string, unknown>
-      expect(Object.keys(record)).toEqual(['build', 'event', 'state', 'cursor'])
+      expect(Object.keys(record)).toEqual(['id', 'build', 'event', 'state', 'cursor'])
     }
     expect(Object.keys(JSON.parse(h.out.at(-1)!))).toEqual(['cursor'])
   })

@@ -52,6 +52,9 @@ describe('repository attention projection', () => {
     ['dispatcher.ticket-source-recovered', {}, false],
     ['dispatcher.kernel-git-unavailable', { executable: 'git', detail: 'missing' }, true],
     ['dispatcher.kernel-git-recovered', { executable: 'git' }, false],
+    ['hook.failing', { hook: 'notify', attempts: 3, error: 'exit status 1' }, true],
+    ['hook.recovered', { hook: 'notify', attempts: 3 }, true],
+    ['hook.skipped', { hook: 'notify', reason: 'cursor too old', ranges: [] }, true],
     [
       'forge.credential-limited',
       { process: 'build-runner b', credential: 'unauthenticated' },
