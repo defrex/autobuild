@@ -168,6 +168,16 @@ export async function readDeferralLedger(store: Reader, slug: string) {
   )
 }
 
+/** An optimization node's attempt ledger, advanced from the node's own log
+ * once per `attempt.settled`; never rebuilt from attempt logs. */
+export async function readOptimizationLedger(store: Reader, slug: string) {
+  return readValue<import('../kernel/optimization').OptimizationLedger>(
+    store,
+    { kind: 'build', slug },
+    'optimizationLedger',
+  )
+}
+
 export async function readRepositoryAttention(store: Reader, repo: string) {
   return readValue<import('../kernel/repository-attention').RepositoryAttentionState>(
     store,

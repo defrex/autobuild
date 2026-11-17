@@ -8,6 +8,13 @@ import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
 import { creationAssignees, parseAssigneesFlag } from '../ports/tickets/assignees'
 import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
+import {
+  formatObjective,
+  objectiveFieldDiff,
+  parseObjective,
+  type ObjectiveField,
+} from '../objective'
+import type { OptimizationState } from '../kernel/optimization'
 import type { TicketRef } from '../ontology'
 import { exportTickets, importTickets, directMigration } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
@@ -548,12 +555,22 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
         rejected: holdsState(state, rejectedName),
       }))
     : []
+  const objective = await effectiveTicketObjective(opts, ticket)
   if (opts.json === true) {
     opts.stdout(
       JSON.stringify(
         {
           ...ticketJson(ticket),
           ...(blockers.length > 0 ? { blockers } : {}),
+          ...(objective !== undefined
+            ? {
+                objective: {
+                  effective: objective.state.objective,
+                  revision: objective.state.revision,
+                  revised: objective.revised,
+                },
+              }
+            : {}),
           assets: assets.map(({ kind, name, revision, size, layout, fileCount }) => ({
             kind,
             name,
@@ -571,6 +588,13 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   }
   const rejected = new Set(blockers.filter((blocker) => blocker.rejected).map(({ id }) => id))
   for (const line of ticketDetail(ticket, assets, rejected)) opts.stdout(line)
+  if (objective !== undefined) {
+    opts.stdout(
+      `Objective (effective, revision ${objective.state.revision}, node ${objective.slug}):`,
+    )
+    for (const line of formatObjective(objective.state.objective, new Set(objective.revised)))
+      opts.stdout(`  ${line}`)
+  }
   // Keep the adapter-provided body untouched. It may itself be multiline and
   // may intentionally end (or not end) with a newline.
   opts.stdout(ticket.body)
@@ -580,6 +604,46 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
     )
     opts.stdout(comment.body)
   }
+}
+
+/**
+ * The effective objective of the newest open optimization node built from a
+ * node ticket, with every field that differs from the ticket's own block. The
+ * open build decides whether the node optimizes, not the ticket body: an edit
+ * that removes, comments out or duplicates the block leaves the node running,
+ * and every field then counts as revised. Reads only for node tickets: one
+ * build listing, one digest batch and one `readBuildFacts`.
+ */
+async function effectiveTicketObjective(
+  opts: TicketCommandOpts,
+  ticket: Ticket,
+): Promise<{ slug: string; state: OptimizationState; revised: ObjectiveField[] } | undefined> {
+  if (ticket.kind !== 'node') return undefined
+  return withTicketStore(opts, async ({ store, repo }) => {
+    const records = await store.listBuildsForRepo(repo)
+    const digests = await readBuildDigests(store, repo)
+    const open = records
+      .filter(
+        (record) =>
+          record.ticket?.id === ticket.ref.id &&
+          record.ticket.source === ticket.ref.source &&
+          digests.get(record.slug)?.kind === 'node' &&
+          digests.get(record.slug)?.terminal === undefined,
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    if (open === undefined) return undefined
+    const state = (await readBuildFacts(store, open.slug)).value.state.optimization
+    if (state === undefined) return undefined
+    const block = parseObjective(ticket.body)
+    return {
+      slug: open.slug,
+      state,
+      revised: objectiveFieldDiff(
+        state.objective,
+        'objective' in block ? block.objective : undefined,
+      ),
+    }
+  })
 }
 
 function withTicketStore<T>(
@@ -1236,7 +1300,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         const print = (entries: TicketTreeEntry[], depth: number): void => {
           for (const entry of entries) {
             opts.stdout(
-              `${'  '.repeat(depth)}${entry.ticket.ref.id} [${entry.ticket.kind}] (${entry.ticket.state ?? 'unknown'}) ${entry.ticket.title}`,
+              `${'  '.repeat(depth)}${entry.ticket.ref.id} [${entry.ticket.kind}${entry.optimization ? ', optimization' : ''}] (${entry.ticket.state ?? 'unknown'}) ${entry.ticket.title}`,
             )
             print(entry.children, depth + 1)
           }

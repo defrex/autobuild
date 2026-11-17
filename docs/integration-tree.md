@@ -363,6 +363,9 @@ A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
 spec and its publication is confirmed.
+A revision of an optimization node may change its `autobuild-objective` block
+but cannot remove it, and a revision of a plain node or a leaf cannot add one;
+both refusals record nothing.
 
 
 

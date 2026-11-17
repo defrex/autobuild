@@ -16,6 +16,7 @@ import { nativeSessionHandleSchema } from './native-session'
  */
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
+import { objectiveSchema, revisableChangesSchema } from '../objective'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
 import {
   HEAD_PATHS_ARTIFACT,
@@ -450,6 +451,144 @@ const reviewVerdictPayload = z.strictObject({
   reason: z.string().optional(),
 })
 
+const objectiveRevision = z.number().int().min(1)
+const sha = z.string().min(1)
+/** A positive delta is an improvement in the objective's direction:
+ * minimize `baseline − candidate`, maximize `candidate − baseline`, panel
+ * `winRate − 0.5` (SPEC §15.5). */
+const delta = z.number()
+export const attemptOutcomeSchema = z.enum([
+  'accepted',
+  'no-improvement',
+  'declined',
+  'stopped',
+  'aborted',
+])
+export type AttemptOutcome = z.infer<typeof attemptOutcomeSchema>
+export const optimizationStopCauseSchema = z.enum([
+  'threshold',
+  'plateau',
+  'budget',
+  'exhausted',
+  'operator',
+])
+export type OptimizationStopCause = z.infer<typeof optimizationStopCauseSchema>
+export const optimizationStopModeSchema = z.enum(['abort', 'drain'])
+
+/** The optimization-node facts (RFC 0005 §11.1, SPEC §15.3). `attempt.measured`
+ * and `attempt.measurement-requested` live on the attempt's log; every other
+ * fact, including `attempt.settled`, lives on the node's log. */
+const optimizationPayloadSchemas = {
+  'optimization.objective-accepted': z.strictObject({
+    objective: objectiveSchema,
+    revision: objectiveRevision,
+    /** The commit whose harness paths measurements are pinned to. */
+    harnessPin: sha,
+    /** The spec revision the objective was parsed from. */
+    specRev: z.number().int().nonnegative(),
+  }),
+  'optimization.objective-revised': z.strictObject({
+    changes: revisableChangesSchema,
+    revision: z.number().int().min(2),
+  }),
+  'optimization.baseline-measured': z.strictObject({
+    revision: objectiveRevision,
+    head: sha,
+    harnessPin: sha,
+    samples: z.number().int().min(1),
+    /** A panel records the self-comparison win rate here. */
+    median: z.number(),
+    /** A panel records the win rate's distance from 0.5 here. */
+    spread: z.number().nonnegative(),
+  }),
+  'optimization.proposal-requested': z.strictObject({
+    id: z.string().min(1),
+    head: sha,
+    room: z.number().int().nonnegative(),
+    budgetUsed: z.strictObject({
+      attempts: z.number().int().nonnegative(),
+      hours: z.number().nonnegative(),
+    }),
+  }),
+  'optimization.attempts-proposed': z
+    .strictObject({
+      request: z.string().min(1),
+      proposals: z.array(
+        z.strictObject({
+          id: z.string().min(1),
+          ticket: ticketRefSchema,
+          title: z.string().min(1),
+          strategy: z.string().min(1),
+        }),
+      ),
+      reason: z.string().min(1).optional(),
+    })
+    .refine(
+      (proposed) => proposed.proposals.length > 0 || proposed.reason !== undefined,
+      'an empty proposal requires a reason',
+    ),
+  'attempt.measurement-requested': z.strictObject({
+    id: z.string().min(1),
+    node: z.string().min(1),
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: objectiveRevision,
+  }),
+  'attempt.measured': z
+    .strictObject({
+      request: z.string().min(1),
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: objectiveRevision,
+      samples: z.number().int().min(1),
+      medians: z.strictObject({ candidate: z.number(), baseline: z.number() }).optional(),
+      winRate: z.number().min(0).max(1).optional(),
+      delta,
+      decision: z.enum(['improved', 'no-improvement', 'non-regressing', 'regressed']),
+    })
+    .refine(
+      (measured) => (measured.medians === undefined) !== (measured.winRate === undefined),
+      'exactly one of medians or winRate',
+    ),
+  'optimization.progress-measured': z.strictObject({
+    revision: objectiveRevision,
+    head: sha,
+    start: sha,
+    winRate: z.number().min(0).max(1),
+    judges: z.number().int().min(1),
+  }),
+  'attempt.settled': z
+    .strictObject({
+      attempt: z.strictObject({
+        proposal: z.string().min(1),
+        ticket: ticketRefSchema,
+        build: z.string().min(1).optional(),
+      }),
+      outcome: attemptOutcomeSchema,
+      measurement: z
+        .strictObject({
+          revision: objectiveRevision,
+          baseline: z.number(),
+          candidate: z.number(),
+          delta,
+        })
+        .optional(),
+      note: z.string().max(4000).optional(),
+    })
+    .refine(
+      (settled) =>
+        (settled.outcome !== 'accepted' && settled.outcome !== 'no-improvement') ||
+        settled.measurement !== undefined,
+      'an accepted or no-improvement settlement requires its measurement',
+    ),
+  'optimization.stopped': z.strictObject({
+    cause: optimizationStopCauseSchema,
+    mode: optimizationStopModeSchema,
+  }),
+} as const
+
 export const eventPayloadSchemas = {
   'build.compatibility-deferred': z.strictObject({
     boundary: z.number().int().positive(),
@@ -563,6 +702,7 @@ export const eventPayloadSchemas = {
     reason: z.string(),
   }),
   'node.opened': z.strictObject({ sha: z.string().min(1) }),
+  ...optimizationPayloadSchemas,
   'node.writer-reserved': z.strictObject({
     id: z.string().min(1),
     operation: z.enum(['restack', 'landing']),

@@ -5,7 +5,7 @@ import { formatRuntimeIdentity } from '../events/runtime'
 import { projectHandPushed, handPushedText, type HandPushedChange } from './dashboard/hand-pushed'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
-import { projectTree, type TreeProjection } from './dashboard/tree'
+import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
 import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -124,6 +124,9 @@ export interface BuildSummary {
   compatibility?: BuildState['compatibility']
   compatibilityDiagnostic?: string
   kind?: 'integration' | 'work'
+  optimization?: true
+  /** An optimization node's current objective revision. */
+  objectiveRevision?: number
   target?: string
   integration?: ReturnType<typeof buildVocabulary>['integration']
   integrationState?: BuildState['integration']
@@ -345,6 +348,9 @@ export function summarizeFrom(
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    ...(state.kind === 'node' && state.optimization !== undefined
+      ? { objectiveRevision: state.optimization.revision }
+      : {}),
     ...((state.verify.running?.length ?? 0) > 1
       ? { runningVerifySteps: state.verify.running }
       : {}),
@@ -712,7 +718,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       summary.slug,
       summaryStatus(summary),
       summary.kind === 'integration'
-        ? `integration ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
+        ? `${summary.optimization ? treeVocabulary.optimizationKind : treeVocabulary.integrationKind} ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
         : `${phaseCell(summary)}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}${ticketWait}`,
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
@@ -779,6 +785,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   if (d.kind === 'integration')
     lines.push(`  hand-pushed changes (node-owned): ${handPushedText(d.handPushedCommits)}`)
+  if (d.optimization)
+    lines.push(`  ${treeVocabulary.optimizationKind}: objective revision ${d.objectiveRevision}`)
   if (d.nodeRestack) {
     const node = d.nodeRestack
     const move = node.parentRequest ?? node.parentChange
