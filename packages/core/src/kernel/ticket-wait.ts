@@ -1,5 +1,7 @@
 import type { WaitEndCause } from '../events/payloads'
 import type { AnsweredEscalation, BuildState } from './reducer'
+import type { LogIndex } from './log-index'
+import { leafBaseInUse } from './leaf-restack-state'
 
 /**
  * Ticket waits (SPEC §11 "Ticket waits"): a phase agent declares with
@@ -61,6 +63,43 @@ export function waitResumeDue(state: BuildState): boolean {
   return !state.answeredEscalations.some(
     (escalation) => escalation.id === wait.escalation && escalation.resolution === 'revise-spec',
   )
+}
+
+type WaitResumeLog = Pick<LogIndex, 'restack' | 'openReconcile' | 'lastReconcileCompleted'>
+
+/** The reconcile occurrence open when its session declared the wait is
+ * frozen onto an older target and recorded no publish intent: the resume
+ * abandons it (`reconcile.superseded`) and restacks onto the current target. */
+export function waitResumeSupersedes(state: BuildState, log: WaitResumeLog): boolean {
+  const target = log.restack.target
+  const open = log.openReconcile
+  return (
+    waitResumeDue(state) &&
+    state.wait?.phase === 'reconcile' &&
+    target !== undefined &&
+    open !== undefined &&
+    !open.intended &&
+    log.restack.intent === undefined &&
+    target.sha !== open.baseSha
+  )
+}
+
+/** The cycle of the restack a build leaving a ticket wait takes before its
+ * declaring phase resumes (SPEC §11 "Ticket waits"), or undefined when none
+ * is due: the wait has not ended, the build already resumed, the target has
+ * not moved from the base in use, or an open transaction finishes through
+ * its own path. The cycle is the wait end's seq. Reads reduced state only. */
+export function waitResumeRestackCycle(state: BuildState, log: WaitResumeLog): number | undefined {
+  const wait = state.wait
+  const target = log.restack.target
+  if (!waitResumeDue(state) || wait?.ended === undefined || target === undefined) return undefined
+  const cycle = wait.ended.seq
+  if (wait.phase === 'reconcile' && log.openReconcile !== undefined)
+    return waitResumeSupersedes(state, log) ? cycle : undefined
+  if (log.restack.active !== undefined) return undefined
+  if (log.restack.gates[String(cycle)] !== undefined || log.restack.advanced?.cycle === cycle)
+    return undefined
+  return target.sha !== leafBaseInUse(log) ? cycle : undefined
 }
 
 /** Refused wait requests, shaped as answered guidance so the engine routes

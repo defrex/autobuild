@@ -3,7 +3,11 @@
 import '../kernel/reducer-registry'
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
-import { publicationPending } from './build-runner'
+import {
+  publicationPending,
+  publishedBranchHeadReducer,
+  verifyDiffBaseReducer,
+} from './build-runner'
 import { latestUncompletedPublicationRequest, publicationLostRecorded } from './publication-state'
 
 function event(seq: number, type: string, payload: unknown): AbEvent {
@@ -200,5 +204,89 @@ describe('latestUncompletedPublicationRequest and publicationLostRecorded', () =
     expect(publicationLostRecorded([request, lost(5, 4)], asRequest)).toBe(true)
     expect(publicationLostRecorded([request, lost(5, 99)], asRequest)).toBe(false)
     expect(publicationLostRecorded([request], asRequest)).toBe(false)
+  })
+})
+
+describe('wait-resume selectors', () => {
+  const BASE = '1'.repeat(40)
+  const T1 = '2'.repeat(40)
+  const HEAD = '4'.repeat(40)
+  const provisioned = event(1, 'workspace.provisioned', {
+    provider: 'worktree',
+    ref: '/ws/a',
+    branch: 'ab/a',
+    base: { source: 'remote', sha: BASE },
+  })
+  const waitRequested = (settlement: 'published' | 'requested') =>
+    event(2, 'wait.requested', {
+      id: 'wait_1',
+      phase: 'implement',
+      round: 1,
+      tickets: ['B'],
+      reason: 'needs B',
+      publication: { branch: 'ab/a', base: BASE, sha: HEAD, settlement },
+    })
+
+  test('a wait publication is the published head once pushed', () => {
+    expect(publishedBranchHeadReducer.reduce([provisioned, waitRequested('published')])).toBe(HEAD)
+    expect(
+      publishedBranchHeadReducer.reduce([provisioned, waitRequested('requested')]),
+    ).toBeUndefined()
+    expect(
+      publishedBranchHeadReducer.reduce([
+        provisioned,
+        waitRequested('requested'),
+        event(3, 'wait.published', { id: 'wait_1', sha: HEAD }),
+      ]),
+    ).toBe(HEAD)
+  })
+
+  test('a wait request completes on its matching wait.published only', () => {
+    const request = event(2, 'publication.requested', {
+      operation: 'wait',
+      id: 'wait_1',
+      branch: 'ab/a',
+      sha: HEAD,
+      base: BASE,
+    })
+    expect(publicationPending([provisioned, request])).toBe(true)
+    expect(
+      publicationPending([
+        provisioned,
+        request,
+        event(3, 'wait.published', { id: 'wait_2', sha: HEAD }),
+      ]),
+    ).toBe(true)
+    expect(
+      publicationPending([
+        provisioned,
+        request,
+        event(3, 'wait.published', { id: 'wait_1', sha: HEAD }),
+      ]),
+    ).toBe(false)
+  })
+
+  test('a fast-forward promotes the diff base; a superseded reconcile base never does', () => {
+    expect(
+      verifyDiffBaseReducer.reduce([
+        provisioned,
+        event(2, 'restack.advanced', {
+          trigger: 'wait-resume',
+          cycle: 1,
+          observation: 1,
+          branch: 'ab/a',
+          from: BASE,
+          to: T1,
+        }),
+      ]),
+    ).toBe(T1)
+    expect(
+      verifyDiffBaseReducer.reduce([
+        provisioned,
+        event(2, 'reconcile.started', { attempt: 1, baseSha: T1 }),
+        event(3, 'reconcile.superseded', { attempt: 1, cycle: 1, cause: 'wait-resume' }),
+        event(4, 'reconcile.started', { attempt: 2, baseSha: T1 }),
+      ]),
+    ).toBe(BASE)
   })
 })
