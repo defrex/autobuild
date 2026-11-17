@@ -10,10 +10,9 @@ export const SETTINGS_SCENARIOS = [
   'refused',
   'remove',
 ] as const
-export function settingsFixture(id: string) {
-  if (!id.startsWith('settings-')) return undefined
-  const state = id.slice(9).replace(/-(wide|narrow)$/, '')
-  const data: ProjectSettings = {
+/** The project settings the secrets endpoint answers for a scenario. */
+export function settingsData(state: string): ProjectSettings {
+  return {
     configuration: state === 'no-dispatcher' ? 'no-dispatcher' : 'available',
     accounts:
       state === 'empty' || state === 'no-dispatcher'
@@ -69,6 +68,11 @@ export function settingsFixture(id: string) {
             },
           ],
   }
+}
+export function settingsFixture(id: string) {
+  if (!id.startsWith('settings-')) return undefined
+  const state = id.slice(9).replace(/-(wide|narrow)$/, '')
+  const data = settingsData(state)
   return (
     <OperatorShell
       repo="example/repository"

@@ -82,6 +82,7 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
   expect(testIntegration).toBe(
     "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' ./scripts/verify-bun.sh bun run test:integration",
   )
+  expect(config.commands['app-load']).toBe('./scripts/verify-bun.sh bun run check:app-load')
   await access(join(REPO_ROOT, 'scripts/verify-bun.sh'), constants.X_OK)
   expect(config.verify.steps).toEqual([
     'lint',
@@ -89,6 +90,7 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
     'unit',
     'build',
     'integration',
+    'app-load',
     'ui-tui',
     'ui-app',
     'ui-website',
@@ -102,7 +104,7 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
   })
   expect(verifyStages(config.verify)).toEqual([
     ['lint', 'types'],
-    ['unit', 'build', 'integration'],
+    ['unit', 'build', 'integration', 'app-load'],
     ['ui-tui'],
     ['ui-app', 'ui-website', 'docs'],
   ])
@@ -112,6 +114,11 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
   expect(config.verify.stepConfigs.integration).toEqual({
     kind: 'check',
     command: 'test-integration',
+  })
+  expect(config.verify.stepConfigs['app-load']).toMatchObject({
+    kind: 'check',
+    command: 'app-load',
+    paths: expect.arrayContaining(['packages/hosted-store-service/app/**', 'packages/core/src/**']),
   })
   expect(config.verify.stepConfigs['ui-tui']).toMatchObject({
     kind: 'agent',
