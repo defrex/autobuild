@@ -36,7 +36,7 @@ import {
   normalizeVerifyCompletion,
   type EventPayload,
   type PinnedAsset,
-  type WaitEndCause,
+  type ReducedWaitEndCause,
   type WaitRefusalCause,
 } from '../events/payloads'
 import type {
@@ -93,7 +93,9 @@ export interface OpenEscalation {
    * target, no cause); the janitor's recovery closes it unanswered. */
   janitor?: true
   /** Opened by `wait.entered`: this escalation is a ticket wait, and
-   * answering it ends the wait (SPEC §11 "Ticket waits"). */
+   * answering it ends the wait (SPEC §11 "Ticket waits"). Also carried by
+   * the `policy/wait-unresolvable` raise that ended a wait, so its answer
+   * routes and resumes like the wait's own. */
   wait?: { id: string }
   question: string
   refs?: string[]
@@ -285,9 +287,10 @@ export interface TicketWaitState {
   enteredSeq: number
   /** Envelope ts of `wait.entered`. */
   enteredAt: string
-  /** The first end: an answer to the wait's escalation (`operator`), or
-   * `wait.ended` with its cause. */
-  ended?: { cause: WaitEndCause; seq: number; message: string }
+  /** The first end: an answer to the wait's escalation (`operator`),
+   * `wait.ended` with its cause, or the dispatcher's
+   * `policy/wait-unresolvable` raise (`unresolvable`). */
+  ended?: { cause: ReducedWaitEndCause; seq: number; message: string }
   /** seq of the first `session.started`, `spec.revised`, wait-resume
    * `restack.prepared` or `restack.advanced` after `ended`: the build has
    * left the wait and holds a slot again. */
@@ -1598,6 +1601,28 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           question: event.payload.question,
           refs: event.payload.refs,
           seq: event.seq,
+        }
+        // A waited ticket can never complete: the raise ends the open wait
+        // (closing its escalation as answered, like `wait.ended`) and carries
+        // the wait marker, so its answer resumes the declaring phase.
+        const wait = acc.wait
+        const waitEscalation = wait === undefined ? undefined : openEscalations.get(wait.escalation)
+        if (
+          event.payload.source === 'policy' &&
+          event.payload.policyCause === 'wait-unresolvable' &&
+          wait !== undefined &&
+          wait.ended === undefined &&
+          waitEscalation !== undefined
+        ) {
+          wait.ended = { cause: 'unresolvable', seq: event.seq, message: event.payload.question }
+          openEscalations.delete(waitEscalation.id)
+          answeredEscalations.push({
+            ...waitEscalation,
+            answer: event.payload.question,
+            resolution: 'guidance',
+            answeredSeq: event.seq,
+          })
+          escalation.wait = { id: wait.id }
         }
         const key =
           escalation.session === undefined ? undefined : acc.verifyStage.owners[escalation.session]

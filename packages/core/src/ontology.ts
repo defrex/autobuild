@@ -115,6 +115,7 @@ export const policyEscalationCauseSchema = z.enum([
   'publication-retry-limit',
   'phase-attempt-limit',
   'non-retryable-phase-failure',
+  'wait-unresolvable',
 ])
 export type PolicyEscalationCause = z.infer<typeof policyEscalationCauseSchema>
 

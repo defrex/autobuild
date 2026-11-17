@@ -35,7 +35,7 @@ import { reducerSnapshotWireSchema } from '../snapshots'
 import { z } from 'zod'
 import { CREATION_KEY } from '../../kernel/build-creation'
 import { actorSchema } from '../../events/envelope'
-import { eventPayloadSchemas } from '../../events/payloads'
+import { eventPayloadSchemas, WAIT_TICKET_LIMIT } from '../../events/payloads'
 import { ticketRefSchema } from '../../ontology'
 import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
 
@@ -350,6 +350,16 @@ export const buildDigestWireSchema = z.object({
   readinessChangeSeq: z.number().int().positive().optional(),
   reclaimPending: z.literal(true).optional(),
   executionOpen: z.literal(true).optional(),
+  // Additive ticket-wait members; an older service omits both, and its
+  // clients then see no pending request and no open wait to release.
+  waitPending: z.literal(true).optional(),
+  ticketWait: z
+    .object({
+      id: z.string().min(1),
+      escalation: z.string().min(1),
+      tickets: z.array(ticketRefSchema).max(WAIT_TICKET_LIMIT),
+    })
+    .optional(),
 })
 export const buildDigestListSchema = z.array(buildDigestWireSchema)
 

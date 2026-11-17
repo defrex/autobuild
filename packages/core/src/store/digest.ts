@@ -17,7 +17,8 @@ import {
  */
 import type { AbEvent } from '../events/catalog'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
-import type { BuildDigest } from './types'
+import type { PolicyEscalationCause, TicketRef } from '../ontology'
+import type { BuildDigest, BuildDigestTicketWait } from './types'
 
 /** The event types a digest is derived from. Adapters filter their event
  * rows to exactly these, so a per-build type-filtered index keeps the scan's
@@ -42,6 +43,9 @@ export const DIGEST_EVENT_TYPES = [
   'wait.requested',
   'wait.refused',
   'wait.entered',
+  'wait.ended',
+  'escalation.raised',
+  'escalation.answered',
 ] as const
 
 /** The digest-relevant slice of one event row. Adapters ship `hostedSeq` for
@@ -57,6 +61,14 @@ export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
   nodeTargets?: string[]
   hostedSeq?: number
   instance?: string
+  /** `wait.entered` / `wait.ended`: the wait id. */
+  waitId?: string
+  /** `wait.entered`: the wait's escalation; `escalation.answered`: the id answered. */
+  escalation?: string
+  /** `wait.entered`: the waited tickets. */
+  waitTickets?: TicketRef[]
+  /** `escalation.raised`: the policy cause, when one. */
+  policyCause?: PolicyEscalationCause
 }
 
 /** The digest-relevant projection of one build's events, in log order.
@@ -90,10 +102,12 @@ export interface DigestAcc {
   nodeTargets: string[]
   /** The latest ticket-wait fact is a request without its outcome. */
   waitPending?: true
+  /** The entered ticket wait that has not ended. */
+  ticketWait?: BuildDigestTicketWait
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 12
+export const BUILD_DIGEST_REDUCER_VERSION = 13
 
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */
@@ -165,9 +179,22 @@ export const buildDigestReducer: IncrementalReducer<
         if (event.hostedSeq !== undefined && event.seq > event.hostedSeq)
           acc.reclaimed.push(event.hostedSeq)
       } else if (event.type === 'wait.requested') acc.waitPending = true
-      else if (event.type === 'wait.refused' || event.type === 'wait.entered')
+      else if (event.type === 'wait.refused') acc.waitPending = undefined
+      else if (event.type === 'wait.entered') {
         acc.waitPending = undefined
-      else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
+        if (event.waitId !== undefined && event.escalation !== undefined)
+          acc.ticketWait = {
+            id: event.waitId,
+            escalation: event.escalation,
+            tickets: (event.waitTickets ?? []).map((ticket) => ({ ...ticket })),
+          }
+      } else if (event.type === 'wait.ended') {
+        if (event.waitId === acc.ticketWait?.id) acc.ticketWait = undefined
+      } else if (event.type === 'escalation.answered') {
+        if (event.escalation === acc.ticketWait?.escalation) acc.ticketWait = undefined
+      } else if (event.type === 'escalation.raised') {
+        if (event.policyCause === 'wait-unresolvable') acc.ticketWait = undefined
+      } else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
       else if (event.type === 'execution.ended') {
         if (acc.openInstance !== null && event.instance === acc.openInstance)
           acc.openInstance = null
@@ -191,6 +218,7 @@ export const buildDigestReducer: IncrementalReducer<
     openInstance,
     nodeTargets,
     waitPending,
+    ticketWait,
   }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
@@ -211,6 +239,7 @@ export const buildDigestReducer: IncrementalReducer<
       ...(reclaimPending ? { reclaimPending: true as const } : {}),
       ...(openInstance !== null ? { executionOpen: true as const } : {}),
       ...(waitPending ? { waitPending } : {}),
+      ...(ticketWait !== undefined ? { ticketWait: structuredClone(ticketWait) } : {}),
       nodeTargets: [...nodeTargets],
     }
   },

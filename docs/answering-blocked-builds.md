@@ -59,15 +59,23 @@ ticket lists those tickets in `blockedBy`, and the build holds no capacity
 slot. `ab builds` and both dashboards show it as `waiting` on those tickets
 rather than as a blocked question; in `ab builds --json` its `status` stays
 `blocked` and a `wait` field names the tickets. On either dashboard, `r` or
-RESUME on a waiting build answers it. Completing the named tickets does not end the wait: an answer does,
-whether the blockers have completed or the work landed another way.
-`ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, and the
-build takes the next free slot ahead of new ticket claims. If its target
+RESUME on a waiting build answers it. The dispatcher ends the wait on its
+first tick after every named ticket completes; a wait with some tickets still
+open stays in place. To end it early, for example when the work landed another
+way, `ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait.
+Either way the build takes the next free slot ahead of new ticket claims. If its target
 branch has moved past the base the build's work sits on, the build first
 restacks onto the target's current head so the resumed phase sees the merged blockers; a conflicting
 restack shows as `reconcile` and resolves first. The phase that declared the
 wait then re-runs at the same round or attempt. Its `guidance.json` carries a
 `wait` block naming the tickets, the reason, and how the wait ended.
+
+If a named ticket is rejected or deleted, the wait can never end by itself.
+The dispatcher then ends it with an ordinary `wait-unresolvable` escalation
+that names the ticket and why, and the build shows as blocked in the default
+attention filter. Answer it with guidance to resume the declaring phase without
+that ticket, revise the spec, or abort. Guidance resumes the same phase with
+the same `wait` block.
 
 A wait declared in `implement` first publishes the build's commits, so the
 agent must commit or discard its changes before running `ab wait-on`; the
