@@ -1820,8 +1820,11 @@ escape hatches independent of completeness and verification.
 ### Merge authorization
 
 The pure evaluator in `kernel/landing-policy.ts` chooses the first matching
-`[[merge]]` rule. `kernel/landing-state.ts` reduces immutable candidate
-decisions and persistent hold/merge commands. The dispatcher owns readiness,
+`[[merge]]` rule. Its `paths` and `within` predicates read the candidate
+head's recorded path facts (`kernel/head-paths-state.ts`), never git, and a
+reached path rule without recorded paths returns a deferral.
+`kernel/landing-state.ts` reduces immutable candidate decisions, deferrals and
+persistent hold/merge commands. The dispatcher owns readiness,
 ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
 confirms native cancellation at local and trusted remote head-publication seams.
 Node merges retain the existing writer serialization and gate proof.

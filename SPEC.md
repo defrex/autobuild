@@ -3406,7 +3406,7 @@ with illustrative members:
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
-| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
+| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -3995,8 +3995,8 @@ destination do not. The complete sets live in an atomically deposited
 the newest four summaries, first per head. A head is "not recorded" until
 such a fact names it, which is distinct from "recorded and empty"; heads a
 build did not produce and heads that predate the fact read as not recorded.
-The dispatcher never derives the fact on a poll, and no decision reads it
-yet.
+The dispatcher never derives the fact on a poll; merge-rule path predicates
+read it (§15.7).
 
 Automatic leaf transactions use `restack.*`, independently of reconcile attempt
 numbers. Preparation freezes the trigger, verify-cycle boundary, absorbed target
@@ -4074,20 +4074,41 @@ observable regardless of trailer evidence.
 
 Ordered `[[merge]]` rules in `autobuild.toml` decide authorization. Each rule
 requires `mode = "auto" | "consent"` and may match `into = "root" | "node" |
-<node-ticket-id>`, `from = "leaf" | "node"`, and an exact, case-sensitive
-`label`. Predicates are ANDed; the first matching rule wins. Omitted predicates
-match anything. With no match, leaves use auto and nodes require consent.
+<node-ticket-id>`, `from = "leaf" | "node"`, an exact, case-sensitive
+`label`, and the paths the candidate head changes: `paths` matches when at
+least one changed path matches a selector, `within` when every changed path
+matches and at least one path changed. Path selectors share the
+`[verify.<step>].paths` grammar and case sensitivity, and an invalid selector
+is rejected at load naming its rule index. Predicates are ANDed; the first
+matching rule wins. Omitted predicates match anything. With no match, leaves
+use auto and nodes require consent.
 The target is the immutable destination frozen at claim, not a ticket's current
 parent. Labels are sampled from a successful source-ticket read at readiness;
 unavailable ticket data defers the decision instead of supplying empty labels.
+
+Path predicates read only the candidate head's recorded head path fact: the
+reduced summary, plus one read of the complete `head-paths` artifact at
+decision time when a reached path rule needs paths beyond the preview. When
+evaluation reaches a path rule whose head has no recorded fact, the
+dispatcher appends one advisory `landing.deferred {candidate, reason, rule,
+policy}` and decides nothing; it never evaluates the head as an empty change.
+The deferral holds without further reads or evaluation until the candidate or
+the `[[merge]]` rules' identity changes, and `ab build status` explains it. A
+recorded empty change matches neither predicate. Protective path rules belong
+first, because first match still wins.
 
 A leaf becomes ready after verification and finalize on a current base; a node
 must be complete and verified at its exact head and parent. A pending pause or
 abort defers readiness; a resume that only cancelled a never-acknowledged pause
 does not. `landing.decided`
 records that candidate, the sampled labels, resulting mode, and the full matched
-rule and index (or explicit default). Editing configuration cannot change this
-recorded decision. A replacement candidate gets a new decision once ready.
+rule and index (or explicit default). When the matched rule has a path
+predicate it also records the changed paths its selectors matched: the exact
+total and the first 20, sorted. Editing configuration cannot change this
+recorded decision. A replacement candidate gets a new decision once ready,
+evaluated on its own changed paths, and that decision governs: native
+auto-merge armed under the old decision is cancelled before a replacement head
+is published.
 Policy is live dispatcher configuration, outside the pinned execution pipeline.
 
 `ab hold <slug>` durably suppresses merge and revokes previous consent, even
@@ -4303,8 +4324,12 @@ ordinary boundary reload resumes.
 
 Merge policy is an ordered `[[merge]]` array. Each rule requires
 `mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,
-`from = "leaf" | "node"`, and an exact, case-sensitive `label`. Predicates
+`from = "leaf" | "node"`, an exact, case-sensitive `label`, and changed-path
+predicates `paths` (any changed path matches) and `within` (every changed path
+matches, at least one changed) over the candidate head's recorded paths, with
+the `[verify.<step>].paths` selector grammar. Predicates
 within a rule are ANDed; omitted predicates are wildcards; first match wins.
+A reached path rule without recorded paths defers the decision (§15.7).
 The destination is the frozen target identity, and labels are sampled when
 readiness is recorded. No matching rule, including no rules, means leaf auto /
 node consent. Policy is hot dispatcher-owned configuration, not pinned build
