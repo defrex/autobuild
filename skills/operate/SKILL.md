@@ -120,7 +120,7 @@ record calls for action. It reports failed node verification, build escalations,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket hand-backs (`ticket.handed-back`), ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), forge rate limits outside the dispatcher's credential
-(`forge.credential-limited`), and five minutes of continuous tick failures. Advertised resets
+(`forge.credential-limited`), configured hook failures and skips (`hook.*`), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
 on that retry stays silent. Source grace and cooldown-driven failures do not
 start the tick-failure clock. When failure writes are unavailable, dispatch watch
@@ -129,8 +129,10 @@ configured interval, if longer). Recovery records the bounded unreported window;
 local warnings do not start durable attention retroactively. Explicit shutdown
 still stops dispatch without waiting for reporting recovery. Routine outcomes and self-healing failures stay silent.
 
-Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
-line. Normally re-arm with `ab watch --operator --json --since <watch-cursor>`,
+Every record carries a cursor and a stable `id`; bounded watches end with a bare `{"cursor": …}`
+line. A repository's configured hooks (`[hooks]`) can replace a separately
+supervised `ab watch` integration for tooling such as notifiers, but they never
+replace this standing monitor. Normally re-arm with `ab watch --operator --json --since <watch-cursor>`,
 using this standing watch's own cursor. Hosted resume covers the most recent
 1,000 sequence positions (inclusive at head minus 1,000). On typed
 `cursor-too-old`, re-arm without `--since` and reconcile repository/build status;
@@ -284,7 +286,8 @@ operator presence is not exposed there, and its
   in JSON and unrecorded in human output.
 - `ab repository status` — the repository's derived status, including the lease
   holder’s recorded runtime version, commit, and source kind/location, and the
-  latest scan's queue diagnostics and startup warnings. Historical runtime is
+  latest scan's queue diagnostics and startup warnings, and each configured
+  hook's last delivery, backlog and failure. Historical runtime is
   null in JSON and unrecorded in human output.
 - `ab artifact` — fetch one artifact's bytes.
 
@@ -531,6 +534,12 @@ Treat every default-watch record as a call to act:
   assuming it sits in Doing. Decide whether to leave it finished or cancelled,
   or return it to Ready for another attempt. Each abandonment reports once;
   history does not replay.
+- Configured hook health (`hook.failing`, `hook.recovered`, `hook.skipped`): a
+  hook's command has failed for five minutes, recovered, or resumed past history
+  or a build announcement it could not read. Inspect `ab repository status` for
+  the hook's latest error and backlog and report the broken command or
+  configuration to the human. A skipped range means the hook's consumer missed
+  those records; reconcile what it needed through status.
 - Ticket hand-back (`ticket.handed-back`): the dispatcher returned a claimed or
   ready ticket other than as completion, and the move is already committed.
   `cause` is `abort`, `spec-bounce`, `preparation-failed`, `pr-closed` or
