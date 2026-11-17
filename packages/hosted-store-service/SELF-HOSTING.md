@@ -343,8 +343,8 @@ line carries `kind`, `message`, `stack`, `path` (without query or fragment),
 A page load reports each distinct message once and at most 5 reports in
 total. The `POST /client-errors` endpoint needs no session and reads no
 database rows. It rejects bodies over 16 KiB and truncates long fields. Stacks
-point into `/_next/static/chunks/<chunk>.js`; the source map is published
-beside each chunk as `<chunk>.js.map`. For grouping, alerting or retention,
+point into `/_next/static/chunks/`; each chunk's trailing `sourceMappingURL`
+comment names its published source map in the same directory. For grouping, alerting or retention,
 attach a log drain of your choice.
 
 ## Upgrading
