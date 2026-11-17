@@ -4187,8 +4187,10 @@ uses the no-rules fallback.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
 merge state. While a consented request is armed and the build is eligible, each
-poll also reads the forge's armed merge method and message (one GraphQL query
-on GitHub). A request with a different method, headline, body or
+poll also reads the forge's armed merge method and message (on GitHub, the PR
+read the poll already made plus one conditional repository settings read; a
+PR's commit messages are read only when the squash settings need them, and are
+cached per commit set, so a moved head or base re-reads them). A request with a different method, headline, body or
 `Autobuild-Build` trailer, including one a human enabled, is replaced under the
 consent and gate guards before it counts as applied. A matching request costs
 no mutation, consent read or event. It is disabled while held, unauthorized, unready, or replacement

@@ -882,13 +882,19 @@ or reporting failure.
 **Stable build identity.** The forge merge seam accepts optional build identity at operation time. Both
 built-in adapters preserve their squash message and normalize a final
 `Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub
-adapter reads the viewer's squash headline/body and head in one GraphQL query;
-it never reconstructs server defaults from repository settings. The janitor
+adapter derives the squash headline/body from the PR and the repository's
+`squash_merge_commit_title` and `squash_merge_commit_message` settings
+(`packages/core/src/ports/forge/github-squash-message.ts`), all read over REST;
+GraphQL carries only the native enable and disable mutations. The janitor
 maintains native request message freshness after acknowledgement. A matching
-request costs one GraphQL freshness query and no extra consent or pipeline read;
-full gate inspection and refreshed durable consent/engine eligibility precede
-any repair. Body comparison tolerates provider trimming of trailing whitespace
-while preserving the complete headline, body content, and squash method.
+request costs the PR representation the poll already read plus one conditional
+repository read shared by every build in the tick; a PR's commit messages are
+read once per commit set. It needs no extra consent or pipeline read and no
+merge-queue read; full gate inspection, including the queue check, and
+refreshed durable consent/engine eligibility precede any repair. Comparison
+normalizes line endings and tolerates provider trimming of surrounding
+headline whitespace and trailing body whitespace while preserving the
+headline, body content, and squash method.
 `packages/core/src/kernel/issue-keywords.ts` composes a build's sealed issue
 links into `Closes #N` / `Refs #N` lines, neutralizes closing keywords aimed at
 `refs` issues, and places the keyword paragraph before the trailer block; a
@@ -930,10 +936,13 @@ cleanup observations. Unsupported or failed inspection leaves evidence unknown;
 a read failure also records an observation without preventing completion. Old
 logs need no migration and keep the same status and presentation.
 
-GitHub merge queues ignore squash-message overrides. The message query also
-reads `repository.mergeQueue(branch:)`, covering classic protection and rulesets.
-Its branch hint is checked against the PR's actual base, with a bounded re-query
-after a retarget rather than assuming the repository default is the base.
+GitHub merge queues ignore squash-message overrides. Native enable, repair and
+the guarded direct squash read the base's effective branch rules over REST
+(`rules/branches/{branch}`, including organization rules) and treat a
+`merge_queue` rule as a queue; a quiet poll of an already matching request reads
+no rules. The base comes from the REST PR representation and must equal the
+build's base branch: a retargeted PR defers native enable and refuses the
+direct squash rather than following the new base.
 Kernel auto-merge therefore
 returns an actionable `unproven-gate-state` deferral for queue-protected bases;
 it never bypasses the queue. Human queue merges still settle normally with
