@@ -170,14 +170,15 @@ Autobuild's own chain: this repository's choices, not defaults.
 | 3 | unit | check | the in-memory test suite; a guard fails any test that does IO |
 | 4 | build | check | packs every publishable package and checks its contents, imports and bins; mandatory |
 | 5 | integration | check | every IO test (filesystem, processes, network, real time) plus database-backed suites and a packed hosted-service deploy rehearsal; runs concurrently with unit and build |
-| 6 | ui-tui | agent | captures terminal-dashboard frames and judges them |
-| 7 | ui-app | agent | captures operator web-app frames and judges them against the design |
-| 8 | ui-website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
-| 9 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
+| 6 | app-load | check | mounts each operator web-app page's real client code in headless Chromium over fixture data; any uncaught exception or unhandled rejection fails, naming the page and error |
+| 7 | ui-tui | agent | captures terminal-dashboard frames and judges them |
+| 8 | ui-app | agent | captures operator web-app frames and judges them against the design; the capture first mounts each depicted page the same way |
+| 9 | ui-website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
+| 10 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
 
-Steps 5 to 9 are optional. Integration covers every package plus `tools/`, `scripts/` and `bin/`, and applies to every build because many of its tests check skills, docs and configuration. Steps 6 to 9 are path-scoped and run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
+Steps 5 to 10 are optional. Integration covers every package plus `tools/`, `scripts/` and `bin/`, and applies to every build because many of its tests check skills, docs and configuration. Steps 6 to 10 are path-scoped. App-load is the step that catches a web-app page failing to load in a browser. Its paths cover every file the web app's client bundle reads: the app, the hosted service source, `packages/core/src/`, the capture tooling and the workspace manifests. A kernel-only diff that changes what the dashboard bundles still runs it, while docs-, skills- and website-only diffs skip it. Steps 7 to 10 run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
 
-A plan for a docs change like this page selects lint, types, unit, build, integration, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.
+A plan for a docs change like this page selects lint, types, unit, build, integration, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched app-load, ui-tui and ui-app steps aren't selected.
 
 Grouped failures retain the legacy `feedback.verify` object for the first report
 in configured order. A decisive `verify.stage-failed` receipt carries the full
