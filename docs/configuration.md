@@ -704,7 +704,12 @@ fallback.
 
 An ordered list of strict merge rules. Predicates within one rule are ANDed;
 the first matching rule wins. Omitted predicates match everything. With no
-matching rule, leaves default to `auto` and nodes to `consent`.
+matching rule, leaves default to `auto` and nodes to `consent`. Besides
+`from`, `into` and `label`, a rule can match the paths a candidate head
+changes: `paths` when any changed path matches, `within` when every one does.
+Path selectors use the `[verify.<step>].paths` grammar. A head without
+recorded changed paths defers a decision that reaches a path rule. See
+[changed paths](merge-policy.md#changed-paths).
 
 The deprecated `[[landing]]` spelling accepts identical rules and emits a migration warning.
 Do not declare both spellings, even as empty arrays. `ab upgrade` migrates the
