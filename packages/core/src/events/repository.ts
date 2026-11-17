@@ -801,6 +801,42 @@ export const kernelGitHealthEventPayloadSchemas = {
   }),
 } as const
 
+/** Configured hook delivery health (§16.1 `[hooks]`). Advisory attention only:
+ * no reducer consumes these and no decision path reads them. */
+const hookName = z.string().regex(/^(?!\.{1,2}$)[A-Za-z0-9._-]+$/)
+export const hookEventPayloadSchemas = {
+  /** A hook has been failing continuously for the attention threshold; once per episode. */
+  'hook.failing': z.strictObject({
+    hook: hookName,
+    since: z.iso.datetime(),
+    attempts: z.number().int().min(1),
+    error: z.string().min(1).max(1_000),
+    /** The id of the record the hook keeps failing on. */
+    record: z.string().min(1),
+  }),
+  /** The first success after a reported failure episode. */
+  'hook.recovered': z.strictObject({
+    hook: hookName,
+    since: z.iso.datetime(),
+    attempts: z.number().int().min(1),
+  }),
+  /** History the hook could no longer retrieve, or a build announcement it
+   * could not resolve; the hook resumed past it. Never silent. */
+  'hook.skipped': z.strictObject({
+    hook: hookName,
+    reason: z.string().min(1).max(1_000),
+    ranges: z
+      .array(
+        z.strictObject({
+          stream: z.string().min(1),
+          after: z.number().int().min(0),
+          through: z.number().int().min(0),
+        }),
+      )
+      .max(1_000),
+  }),
+} as const
+
 export const ticketMigrationEventPayloadSchemas = {
   'tickets.migration-recorded': z
     .strictObject({
@@ -924,6 +960,7 @@ export const repositoryEventPayloadSchemas = {
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...kernelGitHealthEventPayloadSchemas,
+  ...hookEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
   ...harvestEventPayloadSchemas,
@@ -949,6 +986,9 @@ export const REPOSITORY_ATTENTION_EVENTS = [
   'forge.credential-limited',
   'dispatcher.kernel-git-unavailable',
   'dispatcher.kernel-git-recovered',
+  'hook.failing',
+  'hook.recovered',
+  'hook.skipped',
   'dispatcher.ticket-source-degraded',
   'dispatcher.ticket-source-recovered',
   'dispatcher.tick-failed',
@@ -1078,6 +1118,9 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'forge.credential-limited': ['dispatcher', 'kernel'],
   'dispatcher.kernel-git-unavailable': ['dispatcher'],
   'dispatcher.kernel-git-recovered': ['dispatcher'],
+  'hook.failing': ['dispatcher'],
+  'hook.recovered': ['dispatcher'],
+  'hook.skipped': ['dispatcher'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],

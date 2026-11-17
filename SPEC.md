@@ -1958,6 +1958,11 @@ presence and its final renewal for re-arming. SIGKILL cannot be caught and still
 relies on TTL expiry. `ab wait` does not
 renew or preserve this identity. MCP presence and dashboard display are deferred.
 
+Every `ab watch --json` record carries an `id` stable across redelivery and
+resume: `build:<slug>:<seq>`, `repo:<seq>`, `<observation type>:<dedupe
+identity>` for derived observations, or `dispatcher.lost:<run>`. Configured
+hooks (§16.1) receive exactly these records.
+
 Filing agents check CLI repository status before ready filing. With a live
 operator they put intent, rejected alternatives and out-of-scope reasons into
 ticket bodies, file, tell the human the existing operator will pick it up, and
@@ -3594,7 +3599,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled` |
+| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
 live, the janitor defers the saga so it cannot race process-tree teardown. Once
@@ -4551,6 +4556,26 @@ execution settings; each ready candidate retains its immutable `landing.decided`
 rule snapshot and mode after config edits. Historical `build.auto-merge-requested`
 and default-attribution fields remain replay-compatible but are not new controls.
 
+`[hooks.<name>]` declares an observe-only hook: a `command` and optional
+`events` globs with `ab watch --event` grammar and catalog validation (absent
+means `ab watch`'s default attention filter), plus `timeoutSeconds` (default
+30). Bad names, duplicates, missing targets and globs matching no catalog event
+are rejected naming the hook, at startup and on reload; the hosted dispatcher
+rejects command hooks as a config error. The lease-holding local dispatcher
+feeds each hook an in-process watch feed from durable per-hook progress (a
+retention-managed `hook-progress.<name>` repository artifact) and runs the
+command once per record with the exact `ab watch --json` line, stable `id`
+included, on stdin. Exit 0 within the timeout is success. Delivery is
+at-least-once, ordered per hook, one invocation at a time, outside the dispatch
+tick; no decision path reads a hook's outcome. A new hook name starts when first
+loaded; progress survives restarts, hot upgrades and reloads. Failures retry
+with increasing delay; five minutes of continuous failure records `hook.failing`
+once per episode, the next success `hook.recovered`, and unretrievable history
+`hook.skipped` with the skipped ranges. Feeds discover builds from the
+`ticket-preparation` announcements in the repository journal and never list the
+build population on a pass; idle passes read no event rows. `ab repository
+status` lists each hook's last success, backlog and failure.
+
 
 ```toml
 baseBranch = "main"
@@ -4561,6 +4586,10 @@ plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 [upgrade]
 automatic = true                # immediate/60-second target checks; false requires manual restart
+
+#[hooks.notify]                 # optional observe-only hook; local dispatchers only
+#command = "./tools/notify.sh"  # one ab watch --json record on stdin per invocation
+#events = ["escalation.*"]      # optional; default is the watch attention set
 
 #[workspace]                     # optional; default provider = "git-worktree"
 #provider = "vercel-sandbox"    # shipped remote provider, or plugin name

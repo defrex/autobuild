@@ -3465,6 +3465,34 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           ).toEqual([1, 2])
         })
       })
+
+      test('hook progress kinds are retention-managed per hook name', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/retention')
+          for (let i = 0; i < 3; i++) {
+            await store.putRepoArtifact('acme/retention', {
+              kind: 'hook-progress.notify',
+              content: `progress-${i}`,
+            })
+          }
+          await store.putRepoArtifact('acme/retention', {
+            kind: 'hook-progress.other',
+            content: 'other',
+          })
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'hook-progress.notify')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([1, 2])
+          const latest = await store.getRepoArtifact('acme/retention', 'hook-progress.notify')
+          expect(new TextDecoder().decode(latest!.content)).toBe('progress-2')
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'hook-progress.other')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([0])
+        })
+      })
     })
 
     describe('validation-before-prune ordering (AUT-322)', () => {

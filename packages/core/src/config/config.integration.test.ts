@@ -104,6 +104,7 @@ describe('parseConfig — complete flattened surface', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       accounts: {},
       upgrade: { automatic: true },
+      hooks: {},
       landing: [],
       baseBranch: 'main',
       capacity: 3,
@@ -197,6 +198,7 @@ describe('parseConfig — defaults', () => {
     expect(parseConfig(READY)).toEqual({
       accounts: {},
       upgrade: { automatic: true },
+      hooks: {},
       landing: [],
       baseBranch: 'main',
       capacity: 1,

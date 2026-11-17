@@ -246,6 +246,24 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
       }),
       () => ({ type: 'dispatcher.kernel-git-recovered', payload: { executable: 'git' } }),
       () => ({
+        type: 'hook.failing',
+        payload: {
+          hook: 'notify',
+          since: '2026-01-01T00:00:00.000Z',
+          attempts: 3,
+          error: 'exit status 1',
+          record: 'repo:1',
+        },
+      }),
+      () => ({
+        type: 'hook.recovered',
+        payload: { hook: 'notify', since: '2026-01-01T00:00:00.000Z', attempts: 3 },
+      }),
+      () => ({
+        type: 'hook.skipped',
+        payload: { hook: 'notify', reason: 'cursor too old', ranges: [] },
+      }),
+      () => ({
         type: 'dispatcher.run-started',
         payload: {
           run,
