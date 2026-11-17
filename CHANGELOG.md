@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the web dashboard and settings pages crashing in the browser with "Bun is not defined", a regression from [#951](https://github.com/defrex/autobuild/pull/951)
+
 ## v1.8.0 — 2026-11-17
 
 This release makes builds that depend on other tickets much smoother. Waiting builds now park without holding capacity, are restacked before their declaring phase resumes, and are released automatically when their blockers complete, and these waits now appear across status surfaces and watch streams. Merge safety is also tighter: consent is bound to the exact head the operator reviewed, merge rules match the paths a change actually touches, and consent is revoked when a reconcile edits protected files. Every ready leaf now gets a landing decision, and abort can return tickets to ready while reporting completed hand-backs.

@@ -1,7 +1,7 @@
 import type { ReducedWaitEndCause } from '../events/payloads'
 import type { AnsweredEscalation, BuildState } from './reducer'
 import type { LogIndex } from './log-index'
-import { leafBaseInUse } from './leaf-restack-state'
+import { leafBaseInUse } from './leaf-restack-base'
 
 /**
  * Ticket waits (SPEC §11 "Ticket waits"): a phase agent declares with
