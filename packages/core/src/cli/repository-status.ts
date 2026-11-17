@@ -24,7 +24,8 @@ import {
   type ForgeDegradation,
 } from '../kernel/forge-health'
 import { forgeHotspot, type ForgeRequestCounts } from '../ports/forge-telemetry'
-import { configSchema } from '../config/schema'
+import { configSchema, hooksSchema } from '../config/schema'
+import { readHookProgress } from '../processes/hooks'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import { forgeReadinessWarnings, reduceDispatchStatus } from '../kernel/dispatch-status'
@@ -171,6 +172,9 @@ export interface RepositoryStatus extends DispatchSettings {
   upgradeStatus: RepositoryUpgradeStatus
   rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
+  /** Configured hooks of the latest dispatcher run and their delivery
+   * progress; set only by `ab repository status`. */
+  hooks?: HookStatus[]
   /** Dispatcher startup warnings, then forge readiness warnings. */
   warningLines?: string[]
   /** Standing ticket diagnostics from the latest completed ticket scan — for
@@ -471,6 +475,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
         ]
       : []),
     ...(status.warningLines ?? []),
+    ...(status.hooks ?? []).map(renderHookStatus),
     `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatRepositoryDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
     ...(status.dispatcher.expiredHolder
       ? [
@@ -503,6 +508,63 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
         `publication by ${publication.operator} — ${publication.branch} at ${publication.sha.slice(0, 8)} → PR #${publication.prNumber} (${publication.prUrl})`,
     ),
   ]
+}
+
+/** One configured hook's delivery status, from its durable progress. */
+export interface HookStatus {
+  name: string
+  command: string | null
+  lastSuccessAt: string | null
+  /** Records queued (including one in flight) at the last progress write. */
+  backlog: number
+  caughtUp: boolean
+  failing: { since: string; attempts: number; error: string; reported: boolean } | null
+  updatedAt: string | null
+}
+
+/**
+ * Hooks configured by the latest dispatcher run's effective config, each
+ * with its progress artifact: one artifact read plus one per hook. Only the
+ * `hooks` field is parsed, so unrelated drift never fails status.
+ */
+export async function readRepositoryHooks(
+  store: BuildStore,
+  repo: string,
+  facts: RepositoryReadFacts,
+): Promise<HookStatus[]> {
+  const ref = facts.status?.effectiveConfig
+  if (!ref) return []
+  const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
+  if (!artifact) return []
+  let raw: unknown
+  try {
+    raw = (JSON.parse(new TextDecoder().decode(artifact.content)) as { hooks?: unknown }).hooks
+  } catch {
+    return []
+  }
+  const parsed = hooksSchema.safeParse(raw ?? {})
+  if (!parsed.success) return []
+  const hooks: HookStatus[] = []
+  for (const [name, hook] of Object.entries(parsed.data)) {
+    const progress = await readHookProgress(store, repo, name)
+    const backlog = progress?.pending ?? 0
+    hooks.push({
+      name,
+      command: hook.command ?? null,
+      lastSuccessAt: progress?.lastSuccessAt ?? null,
+      backlog,
+      caughtUp: backlog === 0 && progress?.failing === undefined,
+      failing: progress?.failing ?? null,
+      updatedAt: progress?.updatedAt ?? null,
+    })
+  }
+  return hooks
+}
+
+export function renderHookStatus(hook: HookStatus): string {
+  return `hook ${hook.name} — last delivered ${hook.lastSuccessAt ?? 'never'} — ${
+    hook.backlog === 0 ? 'caught up' : `${hook.backlog} pending`
+  }${hook.failing ? ` — failing since ${hook.failing.since}: ${hook.failing.error}` : ''}`
 }
 
 /** Capacity is optional when no held dispatcher has a retrievable configuration. */
@@ -572,6 +634,7 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
     }
     const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, observedAt)
     if (capacity) status.capacity = capacity
+    status.hooks = await readRepositoryHooks(store, repo, facts)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))
       return

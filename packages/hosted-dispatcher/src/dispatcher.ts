@@ -511,6 +511,9 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             stderr: (line) => stderr(redact(line).replaceAll(token, '[redacted]')),
             kernelRunId: runId,
             deadlineAt,
+            // A hosted dispatcher cannot run repository-configured local
+            // commands; command hooks are a config error here.
+            localCommands: false,
           })
         } catch (error) {
           failure = redact(error instanceof Error ? error.message : String(error))
