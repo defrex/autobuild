@@ -793,16 +793,21 @@ const FEED_REPOSITORY_IDENTITY_CAP = 256
  * fixed order — reordering them reopens a gap:
  *
  * 1. repository facts `P0` (open preparations) at cursor `Cf0`;
- * 2. the journal high-water `J0`, the load boundary (`Cf0 <= J0`, since
- *    values are served at the tail and the journal only grows);
- * 3. the repository's build digests `D` — the one population read, once per
+ * 2. the repository's build digests `D` — the one population read, once per
  *    feed lifetime;
- * 4. repository attention `A` at cursor `B`, the `#repo` baseline;
- * 5. the journal window `(Cf0, B]`, walked in order so the open-attempt map
+ * 3. the stream seed `S` of every work build in `D`, whose cursor is that
+ *    build's position;
+ * 4. the journal high-water `J0`, the load boundary (`Cf0 <= J0`, since
+ *    values are served at the tail and the journal only grows). Every
+ *    existing build's position was sampled before it, so no event appended
+ *    to an existing build after the boundary is taken as history;
+ * 5. repository attention `A` at cursor `B`, the `#repo` baseline;
+ * 6. the journal window `(Cf0, B]`, walked in order so the open-attempt map
  *    is exact before every resolution.
  *
- * Builds resolved `owned` after `J0` (set `R`) start at seq 0; other work
- * builds in `D` start at their current seed; preparations still open at `B`
+ * Builds resolved `owned` in the window after `J0`, or absent from `D`
+ * (created after the population read), form set `R` and start at seq 0;
+ * other sampled builds start at their seed; preparations still open at `B`
  * are carried in `preparing` for the journal rule.
  */
 async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed): Promise<string> {
@@ -810,9 +815,18 @@ async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed
   for (;;) {
     const facts = await readRepositoryFacts(store, repo)
     const cf0 = facts.cursor
+    const digests = await readBuildDigests(store, repo)
+    const sampled = new Map<string, { cursor: number; merges: string[] }>()
+    for (const [slug, digest] of digests) {
+      if (!hasWork(digest)) continue
+      const seed = await readBuildStreamSeed(store, slug)
+      sampled.set(slug, {
+        cursor: seed.cursor,
+        merges: seed.value.mergeAttentionPrs.map((pr) => mergeIdentity(slug, pr)),
+      })
+    }
     const j0 = (await store.getRepo(repo)) === null ? 0 : await store.getRepoHighWater(repo)
     if (cf0 > j0) continue
-    const digests = await readBuildDigests(store, repo)
     const attention =
       (await store.getRepo(repo)) === null
         ? { cursor: 0 }
@@ -839,24 +853,24 @@ async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed
         })
       } else if (event.type === 'ticket-preparation.resolved') {
         const entry = preparing.get(event.payload.attempt)
-        if (event.payload.outcome === 'owned' && event.seq > j0) {
+        if (event.payload.outcome === 'owned') {
           const slug =
             entry === undefined ? undefined : await resolveAnnouncedBuild(store, repo, entry)
           if (slug === undefined)
             await feed.unresolved(unresolvedAnnouncement(event.payload.attempt))
-          else announced.add(slug)
+          // After the boundary, or created after the population read and so
+          // never sampled: replayed from its first event.
+          else if (event.seq > j0 || !digests.has(slug)) announced.add(slug)
         }
         preparing.delete(event.payload.attempt)
       }
     }
     const streams: Record<string, number> = { [REPO_STREAM_KEY]: b }
     const deliveredAttention: string[] = []
-    for (const [slug, digest] of digests) {
-      if (announced.has(slug) || !hasWork(digest)) continue
-      const seed = await readBuildStreamSeed(store, slug)
-      streams[slug] = seed.cursor
-      for (const pr of seed.value.mergeAttentionPrs)
-        deliveredAttention.push(mergeIdentity(slug, pr))
+    for (const [slug, { cursor, merges }] of sampled) {
+      if (announced.has(slug)) continue
+      streams[slug] = cursor
+      deliveredAttention.push(...merges)
     }
     for (const slug of announced) streams[slug] = 0
     return encodeCursor({

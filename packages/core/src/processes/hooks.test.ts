@@ -887,14 +887,48 @@ describe('configured hooks', () => {
         await h.supervisor.reconcile({ notify: NOTIFY })
         await h.pulse()
         await h.pulse()
-        // Resolved before the high-water read (`J0`), the build settled
-        // before the population sample: pre-load history.
+        // Resolved before the population read (`D`), the build settled
+        // before it: pre-load history. Created after it, it was never
+        // sampled and replays from seq 0.
         expect(ids(h, 'notify')).toEqual(point === 'P0' ? [] : ['build:interleaved:1'])
         expect(await repoEvents(store, 'hook.skipped')).toEqual([])
         await h.supervisor.stop()
         expect(positionStreams((await progressOf(store)).position)).not.toHaveProperty(
           'interleaved',
         )
+      },
+    )
+
+    test.each(['P0', 'D', 'S', 'J0', 'A'] as const)(
+      'an existing build escalated right after the %s read is delivered whenever the escalation follows its sampled position',
+      async (point) => {
+        const store = await newStore()
+        await store.createBuild({ slug: 'existing', repo: REPO })
+        await escalate(store, 'existing', 'e0')
+        const counted = countingStore(store, {
+          after: {
+            P0: 'getReducerValue:repositoryReadFacts',
+            D: 'getRepoBuildDigests',
+            S: 'getReducerValue:buildStreamSeed',
+            J0: 'getRepoHighWater',
+            A: 'getReducerValue:repositoryAttention',
+          }[point],
+          once: async () => {
+            await escalate(store, 'existing', 'e1')
+          },
+        })
+        const h = harness(counted.store)
+        await h.supervisor.reconcile({ notify: NOTIFY })
+        await h.pulse()
+        await h.pulse()
+        // Every existing build's position is sampled before `J0`: an event
+        // after the boundary is always delivered, and one between the sample
+        // and the boundary is over-delivered, never lost.
+        expect(ids(h, 'notify')).toEqual(
+          ['S', 'J0', 'A'].includes(point) ? ['build:existing:2'] : [],
+        )
+        expect(await repoEvents(store, 'hook.skipped')).toEqual([])
+        await h.supervisor.stop()
       },
     )
 
