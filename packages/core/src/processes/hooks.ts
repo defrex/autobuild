@@ -350,6 +350,15 @@ class HookWorker {
       this.passes = 0
       this.consumed = this.supervisor.position
 
+      // A position this store or repository cannot resume (a moved checkout,
+      // a switched store) is history the hook can no longer read.
+      if (rebaseline === undefined && progress !== undefined) {
+        try {
+          decodeCursor(progress.position, { store: this.deps.storeRef, repo: this.deps.repo })
+        } catch (error) {
+          rebaseline = { reason: errorMessage(error), old: undefined }
+        }
+      }
       const session = new AbortController()
       const signal = AbortSignal.any([stopping, session.signal])
       const since = rebaseline === undefined ? progress?.position : undefined

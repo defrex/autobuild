@@ -10,7 +10,7 @@ import { MemoryBuildStore } from '../store/memory'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { BuildStore } from '../store/types'
 import type { HookConfig } from '../config/schema'
-import { abWatch, decodeCursor } from '../cli/watch'
+import { abWatch, decodeCursor, encodeCursor } from '../cli/watch'
 import { creationBuildSlug } from '../kernel/build-creation'
 import { CursorTooOldError } from '../store/event-reads'
 import { hookProgressKind } from '../store/retention'
@@ -729,6 +729,35 @@ describe('configured hooks', () => {
     await second.pulse()
     expect(ids(second, 'notify')).toEqual([`repo:${skipped[0]!.seq}`])
     await second.supervisor.stop()
+  })
+
+  test('a saved position from another store rebaselines and reports the skip', async () => {
+    const store = await newStore()
+    await store.createBuild({ slug: 'b', repo: REPO })
+    await store.putRepoArtifact(REPO, {
+      kind: hookProgressKind('notify'),
+      content: JSON.stringify({
+        v: 1,
+        hook: 'notify',
+        position: encodeCursor({ v: 1, store: '/elsewhere', repo: REPO, streams: {} }),
+        delivered: 3,
+        pending: 0,
+        updatedAt: '2026-11-17T00:00:00.000Z',
+      }),
+    })
+    const h = harness(store)
+    await h.supervisor.reconcile({ notify: NOTIFY })
+    await h.pulse()
+    const skipped = await repoEvents(store, 'hook.skipped')
+    expect(skipped).toHaveLength(1)
+    expect((skipped[0]!.payload as { reason: string }).reason).toContain('/elsewhere')
+    // Counters carry over; the skip report itself is the first delivery.
+    expect((await progressOf(store)).delivered).toBe(4)
+    await escalate(store, 'b')
+    await h.pulse()
+    await h.pulse()
+    expect(ids(h, 'notify')).toEqual([`repo:${skipped[0]!.seq}`, 'build:b:1'])
+    await h.supervisor.stop()
   })
 
   describe('safe checkpoints', () => {
