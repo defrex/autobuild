@@ -377,6 +377,7 @@ test('build row controls contain only authoritative lifecycle and destructive ac
     ['paused', ['ABORT', 'RESUME']],
     ['resuming', ['ABORT']],
     ['blocked', ['ABORT', 'RESUME']],
+    ['waiting', ['ABORT', 'RESUME']],
     ['aborting', []],
     ['cleaning', []],
   ]

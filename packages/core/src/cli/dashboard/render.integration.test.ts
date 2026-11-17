@@ -3483,3 +3483,49 @@ describe('renderDashboard: a repository with no dispatcher run', () => {
     expect(lines.join('\n')).not.toContain(NO_DISPATCHER_RUN_LINE)
   })
 })
+
+describe('renderDashboard: a ticket wait is held work, not a blocker', () => {
+  const wait = {
+    tickets: ['B', 'C'],
+    reason: 'needs B',
+    since: '2026-11-16T00:00:00.000Z',
+    escalation: 'esc_w',
+    question: 'Waiting on B, C to complete: needs B.',
+    text: 'waiting on B, C — needs B',
+  }
+  const waiting = build({ status: 'waiting', wait })
+
+  test('the list shows a yellow WAITING word and one yellow wait line, never a red question', () => {
+    const lines = rd(model([waiting]), { color: true, width: 200 })
+    const plain = lines.map(stripAnsi)
+    expect(lines.some((line) => line.includes('\x1b[33mWAITING'))).toBe(true)
+    const waitLine = lines.find((line) => stripAnsi(line).includes('! waiting on B, C — needs B'))
+    expect(waitLine).toContain('\x1b[33m')
+    expect(plain.some((line) => line.includes('! Waiting on'))).toBe(false)
+    expect(lines.some((line) => line.includes('\x1b[31m') && stripAnsi(line).includes('!'))).toBe(
+      false,
+    )
+  })
+
+  test('the detail body has a Waiting section with how to end it early', () => {
+    const plain = rd(
+      { ...model([waiting]), view: { kind: 'detail', slug: 'auth-rate-limit', scroll: 0 } },
+      { color: false, width: 120, height: 80 },
+    )
+    expect(plain).toContain(' Waiting')
+    expect(plain).toContain('   waiting on B, C — needs B')
+    expect(plain).toContain('   since 2026-11-16T00:00:00.000Z')
+    expect(plain).toContain('   r answers the wait and ends it early')
+    expect(plain).not.toContain(' Unresolved blockers')
+  })
+
+  test('the resume panel shows the wait question being answered', () => {
+    const rows = resumePanel(
+      { ...model([waiting]), resumeInput: { slug: 'auth-rate-limit', value: '', cursor: 0 } },
+      false,
+      80,
+      12,
+    ).map(stripAnsi)
+    expect(rows).toContain('  ! Waiting on B, C to complete: needs B.')
+  })
+})

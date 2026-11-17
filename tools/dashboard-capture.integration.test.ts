@@ -132,6 +132,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'viewer-unknown-100-light',
     'viewer-session-100',
     'viewer-session-100-light',
+    'ticket-wait-wide',
+    'ticket-wait-detail',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
@@ -244,6 +246,18 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.model.capacity?.waitingBuilds).toEqual([
         { slug: 'cache-warm-on-deploy', request: 'reconcile' },
       ])
+    } else if (frame.id.startsWith('ticket-wait-')) {
+      const waiting = frame.model.builds.find((build) => build.status === 'waiting')
+      expect(waiting?.slug).toBe('implement-blocked-dashboard')
+      expect(waiting?.blockers).toEqual([])
+      expect(waiting?.wait?.text).toBe('waiting on CAP-API, CAP-SCHEMA — needs the new API schema')
+      expect(frame.text).toContain('WAITING')
+      expect(frame.text).toContain('waiting on CAP-API, CAP-SCHEMA')
+      expect(frame.text).not.toContain('! Waiting on')
+      if (frame.id === 'ticket-wait-detail') {
+        expect(frame.text).toContain('Build  implement-blocked-dashboard')
+        expect(frame.text).not.toContain('Unresolved blockers')
+      }
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
@@ -288,6 +302,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       !frame.id.startsWith('harvest-suspended-') &&
       !frame.id.startsWith('handoff-') &&
       frame.id !== 'parked-slot-wait-wide' &&
+      frame.id !== 'ticket-wait-detail' &&
       !frame.id.startsWith('rollback-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-') &&
