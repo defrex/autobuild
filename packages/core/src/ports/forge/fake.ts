@@ -803,16 +803,23 @@ export class FakeForge implements Forge {
       return { kind: 'deferred', reason: gate }
     }
     const disposition = classifyAutoMergeEnable(mergeState, gate)
+    if (
+      options !== undefined &&
+      disposition.kind !== 'direct' &&
+      !this.graphqlAvailable() &&
+      this.queueActivity(number)
+    ) {
+      this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+      return {
+        kind: 'human-merge',
+        cause: 'merge-queue-activity',
+        detail: 'Fake GraphQL is unavailable and the base reports merge-queue merges',
+      }
+    }
     switch (disposition.kind) {
       case 'native': {
         if (options !== undefined && !this.graphqlAvailable()) {
           this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
-          if (this.queueActivity(number))
-            return {
-              kind: 'human-merge',
-              cause: 'merge-queue-activity',
-              detail: 'Fake GraphQL is unavailable and the base reports merge-queue merges',
-            }
           return {
             kind: 'polling',
             headSha: this.headShas.get(number)!,

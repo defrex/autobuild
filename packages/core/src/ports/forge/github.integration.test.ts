@@ -3662,8 +3662,8 @@ describe('GitHub landing when GraphQL is unavailable', () => {
       const { forge, calls } = blocked(state)
       const first = await tick(forge)
       expect(first).not.toMatchObject({ clear: true })
-      // Only the native-disposition states reach the queue check.
-      expect(activityCalls(calls)).toHaveLength(['dirty', 'draft'].includes(state) ? 0 : 1)
+      // Every full-path evaluation reaches the queue check, whatever the state.
+      expect(activityCalls(calls)).toHaveLength(1)
       const before = calls.length
       expect(await tick(forge, true)).toMatchObject({ kind: 'polling', clear: false })
       expect(activityCalls(calls.slice(before))).toEqual([])
@@ -3677,7 +3677,7 @@ describe('GitHub landing when GraphQL is unavailable', () => {
     expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: false })
   })
 
-  test.each(['clean', 'blocked'])(
+  test.each(['clean', 'unstable', 'has_hooks', 'blocked', 'behind', 'unknown', 'dirty', 'draft'])(
     "recorded merge-queue activity settles a '%s' PR on its first evaluation",
     async (state) => {
       // Classic required checks, no ruleset merge_queue rule.

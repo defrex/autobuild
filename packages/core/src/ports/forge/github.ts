@@ -1857,19 +1857,25 @@ export class GitHubForge implements Forge {
         view.auto_merge !== null && options !== undefined && mergeState !== 'DIRTY'
           ? { kind: 'native' as const }
           : classifyAutoMergeEnable(mergeState, gate.presence)
+      // Queue activity is checked on every full-path evaluation with GraphQL
+      // unavailable, whatever the merge state or disposition, so a blocked,
+      // draft or conflicted PR on a queued base settles on its first
+      // evaluation. Only a proved ungated direct candidate skips it.
+      if (
+        options !== undefined &&
+        disposition.kind !== 'direct' &&
+        !(await this.graphqlAvailable()) &&
+        (await this.baseMergeQueueActivity(view.base.ref))
+      )
+        return {
+          kind: 'human-merge',
+          cause: 'merge-queue-activity',
+          detail: `GitHub GraphQL is unavailable and GitHub reports merge-queue merges on ${view.base.ref}`,
+        }
       switch (disposition.kind) {
         case 'native': {
           if (options !== undefined && !(await this.graphqlAvailable())) {
-            // Repository auto-merge permission is irrelevant to a REST
-            // squash. Queue activity is checked on every full-path
-            // evaluation, whatever the merge state, so a blocked PR on a
-            // queued base settles on its first evaluation.
-            if (await this.baseMergeQueueActivity(view.base.ref))
-              return {
-                kind: 'human-merge',
-                cause: 'merge-queue-activity',
-                detail: `GitHub GraphQL is unavailable and GitHub reports merge-queue merges on ${view.base.ref}`,
-              }
+            // Repository auto-merge permission is irrelevant to a REST squash.
             const { clear } = restMergeClear(view)
             return {
               kind: 'polling',
