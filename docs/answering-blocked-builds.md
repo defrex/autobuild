@@ -69,8 +69,11 @@ restack shows as `reconcile` and resolves first. The phase that declared the
 wait then re-runs at the same round or attempt. Its `guidance.json` carries a
 `wait` block naming the tickets, the reason, and how the wait ended.
 
-A wait declared in `implement` first publishes the build's commits. When that
-publication is lost before the wait is entered, the dispatcher refuses the
+A wait declared in `implement` first publishes the build's commits, so the
+agent must commit or discard its changes before running `ab wait-on`; the
+command refuses a dirty worktree. When a local push fails, the command
+records no wait and the same session can fix the failure and run it again.
+When a remote publication is lost before the wait is entered, the dispatcher refuses the
 wait with cause `publication-lost` and implement re-runs with the refusal as
 guidance.
 
