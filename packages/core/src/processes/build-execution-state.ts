@@ -20,11 +20,12 @@ export interface BuildRunnerDiagnostic {
 
 /** JSON form of the normalized config's strict declarative input shape. */
 export function effectiveBuildConfigContent(config: Config): string {
-  const { verify, finalize, profiles, ...root } = config
+  const { verify, finalize, profiles, hooks, ...root } = config
   return JSON.stringify({
     ...root,
-    // Omitted when empty so repositories without profiles keep byte-identical
-    // artifacts that an older client's strict root parse still accepts.
+    // Omitted when empty so repositories without profiles or hooks keep
+    // byte-identical artifacts that an older client's strict root parse still accepts.
+    ...(hooks !== undefined && Object.keys(hooks).length > 0 ? { hooks } : {}),
     ...(profiles !== undefined && Object.keys(profiles).length > 0 ? { profiles } : {}),
     verify: {
       steps: verify.stages ?? verify.steps,

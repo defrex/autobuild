@@ -224,6 +224,7 @@ const DYNAMIC_SHELL_ALLOWLIST: Record<string, string> = {
   'ports/workspace/fake.ts request.command': 'fake sandbox command for tests',
   'processes/build-runner.ts setup': 'repository setup command in the build workspace',
   'processes/build-runner.ts command': 'configured verify/finalize command in the build workspace',
+  'processes/hook-command.ts command': 'operator-configured hook command in the checkout',
 }
 
 /** Sandbox-side scripts that name Git. They run inside the Vercel Sandbox VM

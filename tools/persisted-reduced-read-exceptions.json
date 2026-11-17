@@ -439,34 +439,39 @@
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/processBuildEvent::advance": {
+  "packages/core/src/cli/watch.ts::abWatch/body/processBuildEvent::advance": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/processBuildEvent::finish": {
+  "packages/core/src/cli/watch.ts::abWatch/body/processBuildEvent::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/trackBuild::finish": {
+  "packages/core/src/cli/watch.ts::abWatch/body/trackBuild::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/discoverBuilds::finish": {
+  "packages/core/src/cli/watch.ts::abWatch/body/discoverBuilds::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/trackRepository::getRepoEvents": {
+  "packages/core/src/cli/watch.ts::abWatch/body/trackRepository::getRepoEvents": {
     "kind": "raw",
     "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
     "cursor": true
   },
-  "packages/core/src/cli/watch.ts::abWatch/pollBuild::finish": {
+  "packages/core/src/cli/watch.ts::abWatch/body/pollBuild::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/pollRepository::getRepoEvents": {
+  "packages/core/src/cli/watch.ts::abWatch/body/pollRepository::getRepoEvents": {
     "kind": "raw",
     "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
+    "cursor": true
+  },
+  "packages/core/src/cli/watch.ts::feedBaselineCursor::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Once per new feed: the journal window between the persisted repository-facts cursor and the persisted attention cursor, both read just before; never fetches the log from the start.",
     "cursor": true
   },
   "packages/core/src/cli/historical-build-state.ts::historicalBuildState::getEvents": {
@@ -562,7 +567,7 @@
     "kind": "reduction",
     "reason": "Pure caller-supplied event-array reference overload; production wait passes the persisted stream restack facts."
   },
-  "packages/core/src/cli/watch.ts::abWatch/checkConsent::finish": {
+  "packages/core/src/cli/watch.ts::abWatch/body/checkConsent::finish": {
     "kind": "reduction",
     "reason": "Presentation over the retained stream prefix, seeded by persisted reduced reads and advanced in event order."
   },

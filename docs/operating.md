@@ -77,6 +77,7 @@ one-off events from that gap.
 - **Default filter:** actionable attention only, such as escalations and ready merges awaiting consent. Add `--event` globs for routine lifecycle events. Ticket waits beginning and ending are routine: follow them with `--event 'wait.*' --event escalation.answered`. A `wait-unresolvable` escalation, raised when a waited ticket is rejected or deleted, is ordinary attention.
 - **Starts now:** a fresh watch ignores history, so check current status too.
 - **Resumable:** pass the opaque cursor from the JSON output back with `--since` to receive events recorded while away within the hosted window described above. The final JSON line always carries one.
+- **Identified:** every JSON record carries an `id` that stays the same when the record is seen again after a resume, so consumers can deduplicate by it.
 - **Duration:** 30 minutes by default; `--timeout 0` keeps it open.
 
 ```
@@ -92,6 +93,23 @@ bun ab wait my-build --for attention --json --timeout 5m
 | 3 | Timed out |
 
 Existing attention returns immediately, even with a cursor, so looping `wait` doesn't consume events. Use `watch --since` for that. Hosted `wait --since` uses the same inclusive 1,000-position resume window and too-old recovery described above: re-arm without `--since`, reconcile repository and build status, and account for the unavailable historical gap.
+
+### React to attention with a hook
+
+Tooling that should react to attention, such as a notifier, does not need its
+own long-running `ab watch`. Declare a hook and the local dispatcher delivers each
+matching record to it, one JSON line on stdin per invocation, at least once and
+in order:
+
+```toml
+[hooks.notify]
+command = "jq -r '.id + \"  \" + (.event.type // .observation.type)' >> attention.log"
+```
+
+A hook complements your operator's standing watch; it does not replace it.
+Failing hooks surface as `hook.failing` attention, and `bun ab repository status`
+shows each hook's progress. See [`[hooks]`](configuration.md#hooks) for filters,
+the record format and the delivery guarantee.
 
 ## Answer and pause
 
