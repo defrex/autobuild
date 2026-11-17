@@ -46,6 +46,10 @@
     "./web/access": {
       "types": "./src/web/access.ts",
       "import": "./src/web/access.ts"
+    },
+    "./web/client-errors": {
+      "types": "./src/web/client-errors.ts",
+      "import": "./src/web/client-errors.ts"
     }
   },
   "bin": {

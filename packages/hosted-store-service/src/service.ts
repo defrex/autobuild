@@ -16,6 +16,11 @@ import {
 } from '@defrex/autobuild-postgres-store/project-secrets'
 import { accessForEnv } from './web/access'
 import {
+  BROWSER_ERROR_ENDPOINT,
+  deploymentIdentity,
+  handleBrowserErrorReport,
+} from './web/client-errors'
+import {
   withRepositoryReads,
   withHostedProjectContext,
 } from '@defrex/autobuild-postgres-store/request-context'
@@ -111,6 +116,8 @@ export interface HostedStoreServiceOptions {
     error: unknown,
     context: HostedStoreErrorContext,
   ) => unknown | Promise<unknown>
+  /** Receives one JSON line per browser error report. Defaults to `console.error`. */
+  logBrowserError?: (line: string) => void
 }
 
 const internalError = (): Response =>
@@ -929,6 +936,13 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           const url = new URL(req.url)
           if (url.pathname.startsWith('/secrets/v1/')) return secretHandler(req)
           if (url.pathname.startsWith('/connect/v1/')) return connectionHandler(req)
+          // Unauthenticated and store-free: one bounded log line per report.
+          if (req.method === 'POST' && url.pathname === BROWSER_ERROR_ENDPOINT) {
+            return handleBrowserErrorReport(req, {
+              log: options.logBrowserError ?? ((line) => console.error(line)),
+              serverDeployment: deploymentIdentity(env),
+            })
+          }
           if (req.method === 'GET' && url.pathname === '/health') {
             return Response.json({
               ok: true,

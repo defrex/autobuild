@@ -80,6 +80,7 @@ export {
   catalogSkewReadBudget,
   reducedReadBudget,
   countHistoricalRows,
+  countStoreRequests,
   type ReducedReadCosts,
 } from './reduced-read-budget'
 
