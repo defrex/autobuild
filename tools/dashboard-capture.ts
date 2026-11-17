@@ -8,6 +8,7 @@ import { reportIntegrationFailures } from '../packages/core/src/kernel/integrati
 import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
 import { handoffCapture } from './handoff-capture'
 import { parkedSlotWaitCapture } from './parked-slot-wait-capture'
+import { ticketWaitCapture, ticketWaitSlug } from './ticket-wait-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
@@ -66,6 +67,9 @@ export interface FrameSpec {
   rollback?: boolean
   handoff?: boolean
   parkedSlotWait?: boolean
+  /** Park one running row on a ticket wait beside the blocked row; `detail`
+   * opens that row's detail view. */
+  ticketWait?: 'list' | 'detail'
   nativeSessions?: boolean
   verifyStages?: boolean
   accountCredentials?: 'missing' | 'recovered'
@@ -566,6 +570,30 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       },
     ])
     .flatMap((spec) => [spec, { ...spec, id: `${spec.id}-light`, ground: 'light' as const }]),
+  // Ticket-wait frames run last: each paint is a real dispatch pass over the
+  // shared mixed harness, so placing them earlier would advance the state
+  // every later mixed frame captures.
+  {
+    id: 'ticket-wait-wide',
+    scenario: 'mixed',
+    columns: 180,
+    rows: 32,
+    ticketWait: 'list',
+    requires: ['WAITING', '! waiting on CAP-API, CAP-SCHEMA — needs the new API schema', 'BLOCKED'],
+  },
+  {
+    id: 'ticket-wait-detail',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 60,
+    ticketWait: 'detail',
+    requires: [
+      'WAITING',
+      'Waiting',
+      'waiting on CAP-API, CAP-SCHEMA — needs the new API schema',
+      'r answers the wait and ends it early',
+    ],
+  },
 ]
 
 // One capture pass appends many durable receipts on the stepping clock, so it
@@ -1780,12 +1808,14 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
           ? ['Transcript', 'complete-dashboard-evidence']
           : spec.session !== undefined
             ? ['Session', spec.session.slug]
-            : spec.detail === undefined
-              ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-              : [
-                  `Build  ${spec.detail.slug}`,
-                  ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
-                ]
+            : spec.ticketWait === 'detail'
+              ? ['Build  ']
+              : spec.detail === undefined
+                ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+                : [
+                    `Build  ${spec.detail.slug}`,
+                    ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
+                  ]
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
@@ -1934,7 +1964,10 @@ async function capturePaint(
               ? handoffCapture(model)
               : spec.parkedSlotWait
                 ? parkedSlotWaitCapture(model)
-                : model
+                : spec.ticketWait
+                  ? ticketWaitCapture(model)
+                  : model
+      const ticketWaitDetail = spec.ticketWait === 'detail' ? ticketWaitSlug(model) : undefined
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
@@ -1977,6 +2010,9 @@ async function capturePaint(
                 scroll: spec.detail.scroll,
               },
             }
+          : {}),
+        ...(ticketWaitDetail !== undefined
+          ? { view: { kind: 'detail' as const, slug: ticketWaitDetail, scroll: 0 } }
           : {}),
         ...(spec.transcript !== undefined
           ? {

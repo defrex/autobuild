@@ -22,6 +22,7 @@ describe('shared dashboard action availability', () => {
     ['pausing', 'cancel-pause'],
     ['paused', 'resume'],
     ['blocked', 'resume'],
+    ['waiting', 'resume'],
     ['resuming', undefined],
     ['aborting', undefined],
     ['cleaning', undefined],
@@ -40,6 +41,21 @@ describe('shared dashboard action availability', () => {
       primary: 'resume',
       answer: true,
     })
+    // A waiting build has no blockers; its open wait is what answering ends.
+    expect(
+      buildActionAvailability({
+        ...row('waiting'),
+        wait: {
+          tickets: ['B'],
+          reason: 'needs B',
+          since: '2026-11-16T00:00:00.000Z',
+          escalation: 'esc_w',
+          question: 'Waiting on B to complete: needs B.',
+          text: 'waiting on B — needs B',
+        },
+      }),
+    ).toMatchObject({ primary: 'resume', abort: true, answer: true })
+    expect(buildActionAvailability(row('waiting'))).toMatchObject({ answer: false })
     expect(buildActionAvailability(row('aborting'))).toMatchObject({
       abort: false,
       autoMerge: false,

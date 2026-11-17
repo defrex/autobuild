@@ -6,6 +6,7 @@ import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
 import { handoffCapture } from '../../../tools/handoff-capture'
 import { parkedSlotWaitCapture } from '../../../tools/parked-slot-wait-capture'
+import { ticketWaitCapture, ticketWaitSlug } from '../../../tools/ticket-wait-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
@@ -225,6 +226,23 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'reconcile waiting for a slot ahead of new ticket claims',
     ],
   })),
+  ...['wide', 'narrow'].map((size) => ({
+    id: `builds-ticket-wait-${size}`,
+    width: size === 'narrow' ? 390 : 1440,
+    height: 2200,
+    requires: ['WAITING', 'waiting on CAP-API, CAP-SCHEMA', 'end wait early', 'BLOCKED'],
+  })),
+  {
+    id: 'build-page-ticket-wait-wide',
+    width: 1440,
+    height: 1800,
+    requires: [
+      'WAITING',
+      'waiting on CAP-API, CAP-SCHEMA',
+      'holds no slot',
+      'Answering ends the wait early',
+    ],
+  },
   {
     id: 'capacity-wide',
     width: 1440,
@@ -985,6 +1003,16 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
   if (spec.id.startsWith('builds-handoff-')) {
     const model = handoffCapture(models.happy)
     return shell(builds(model), { model })
+  }
+  if (spec.id.startsWith('builds-ticket-wait-')) {
+    const model = ticketWaitCapture(models.mixed)
+    return shell(builds(model), { model })
+  }
+  if (spec.id === 'build-page-ticket-wait-wide') {
+    const model = ticketWaitCapture(models.mixed)
+    const slug = ticketWaitSlug(models.mixed)
+    if (slug === undefined) throw new Error('web dashboard capture: no ticket-wait row to page')
+    return shell(buildPage(model, slug), { model })
   }
   if (spec.id.startsWith('builds-parked-slot-wait-')) {
     const model = parkedSlotWaitCapture(models.happy)
