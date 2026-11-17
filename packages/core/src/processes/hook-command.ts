@@ -84,16 +84,12 @@ export async function runCommandHook(
     tail(child.stdout as ReadableStream<Uint8Array>, output),
     tail(child.stderr as ReadableStream<Uint8Array>, output),
   ]).catch(() => {})
-  try {
-    const stdin = child.stdin as import('bun').FileSink
-    stdin.write(line)
-    await stdin.end()
-  } catch {
-    // A command that never reads stdin may close it first; its exit decides.
-  }
   let reaping: Promise<void> | undefined
   const reap = (): Promise<void> =>
     (reaping ??= terminateProcessGroup(child.pid, opts.stopTimeoutMs).catch(() => {}))
+  // Timeout and abort are armed before any stdin is written: a command that
+  // never reads a record larger than the pipe buffer must not hold delivery
+  // past its timeout or a stop.
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
@@ -102,6 +98,13 @@ export async function runCommandHook(
   const onAbort = (): void => void reap()
   signal.addEventListener('abort', onAbort, { once: true })
   if (signal.aborted) onAbort()
+  // The write runs inside the protected lifetime and is never awaited: the
+  // command's exit decides, and one that closes stdin first only fails it.
+  void (async () => {
+    const stdin = child.stdin as import('bun').FileSink
+    stdin.write(line)
+    await stdin.end()
+  })().catch(() => {})
   try {
     const exitCode = await child.exited
     // Descendants that outlive a natural exit are reaped with the group.

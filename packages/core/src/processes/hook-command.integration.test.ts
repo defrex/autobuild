@@ -99,6 +99,36 @@ test('an abort terminates the attempt', async () => {
   expect(processGroupAlive(group)).toBe(false)
 })
 
+// A record larger than the pipe buffer, to a command that never reads stdin.
+const backpressured = `${JSON.stringify({ id: 'repo:1', pad: 'x'.repeat(1024 * 1024) })}\n`
+
+test('a backpressured stdin write does not hold a command past its timeout', async () => {
+  const dir = await scratch()
+  const started = Date.now()
+  const result = await run('sleep 30', backpressured, dir, 1)
+  expect(result).toEqual({ ok: false, error: 'timed out after 1s' })
+  expect(Date.now() - started).toBeLessThan(10_000)
+})
+
+test('an abort stops a command whose stdin write is backpressured', async () => {
+  const dir = await scratch()
+  const controller = new AbortController()
+  const started = Date.now()
+  const pending = runCommandHook(
+    hook('echo $$ > group.pid; sleep 30'),
+    backpressured,
+    controller.signal,
+    { checkout: dir, env: process.env, stopTimeoutMs: 200 },
+  )
+  for (let i = 0; i < 100; i++) {
+    if (await Bun.file(join(dir, 'group.pid')).exists()) break
+    await Bun.sleep(20)
+  }
+  controller.abort()
+  expect(await pending).toEqual({ ok: false, error: 'stopped' })
+  expect(Date.now() - started).toBeLessThan(10_000)
+})
+
 test('the hook environment strips build identity and names the hook', () => {
   expect(
     hookCommandEnv({ PATH: '/bin', AB_BUILD: 'b', AB_CONTEXT_DIR: 'x', AB_STORE: 's' }, 'notify'),
