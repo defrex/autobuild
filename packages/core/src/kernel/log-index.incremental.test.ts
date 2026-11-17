@@ -66,6 +66,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
   const reconcileCompletions: ReconcileCompletionRecord[] = []
   const reconcileProgressChecks: ReconcileProgressRecord[] = []
   let activeReconcileStart: ReconcileStartRecord | undefined
+  let activeReconcileIntended = false
 
   /** Track a loop round: maxRoundEver over the full log; the per-round record
    * only for post-restart events (returns undefined pre-restart). */
@@ -235,6 +236,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
         const start = { seq: event.seq, ...event.payload }
         reconcileStarts.push(start)
         activeReconcileStart = start
+        activeReconcileIntended = false
         if (lastConflict !== undefined && event.seq > lastConflict.seq) {
           conflictReconcileStarted = { attempt: event.payload.attempt }
         }
@@ -249,6 +251,14 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
           })
           activeReconcileStart = undefined
         }
+        conflictReconcileStarted = undefined
+        break
+      case 'reconcile.publish-intended':
+        if (activeReconcileStart?.attempt === event.payload.attempt) activeReconcileIntended = true
+        break
+      case 'reconcile.superseded':
+        if (activeReconcileStart?.attempt === event.payload.attempt)
+          activeReconcileStart = undefined
         conflictReconcileStarted = undefined
         break
 
@@ -322,6 +332,9 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
     lastConflict,
     conflictReconcileStarted,
     lastReconcileCompleted,
+    ...(activeReconcileStart === undefined
+      ? {}
+      : { openReconcile: { ...activeReconcileStart, intended: activeReconcileIntended } }),
     lastConflictProgressCheck,
     reconcileNoProgressCount,
     guidanceDeliveries,
@@ -412,6 +425,7 @@ function randomWrite(rand: () => number): EventWrite {
       }),
     () => w('pr.conflicted', { baseSha: 'm' }),
     () => w('reconcile.started', { attempt, baseSha: pick(rand, ['m1', 'm2']) }),
+    () => w('reconcile.superseded', { attempt, cycle: 1, cause: 'wait-resume' }),
     () =>
       w('reconcile.completed', {
         mergeCommit: 'mc',

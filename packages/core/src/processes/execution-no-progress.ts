@@ -39,6 +39,7 @@ export const executionProgress = {
   'restack.rewritten': 'progress',
   'restack.contended': 'progress',
   'restack.completed': 'progress',
+  'restack.advanced': 'progress',
   'build.created': 'progress',
   'integration.abandoned': 'progress',
   'integration.observed': 'bookkeeping',
@@ -159,6 +160,7 @@ export const executionProgress = {
   'reconcile.rewritten': 'progress',
   'reconcile.started': 'progress',
   'reconcile.completed': 'progress',
+  'reconcile.superseded': 'progress',
   'issue-link.downgraded': 'progress',
   'issue-links.sealed': 'bookkeeping',
   'observation.recorded': 'progress',
@@ -172,6 +174,7 @@ export const executionProgress = {
   'wait.refused': 'bookkeeping',
   'wait.entered': 'bookkeeping',
   'wait.ended': 'bookkeeping',
+  'wait.published': 'bookkeeping',
   'phase.failed': 'failure',
 } satisfies Record<EventType, 'bookkeeping' | 'failure' | 'progress'>
 
