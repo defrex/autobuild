@@ -50,6 +50,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.janitor-escalated': ['dispatcher'],
   'landing.application-failed': ['dispatcher', 'kernel'],
   'landing.decided': ['dispatcher', 'kernel'],
+  'landing.deferred': ['dispatcher'],
   'build.hold-requested': ['human'],
   'build.land-requested': ['human'],
   'landing.command-acknowledged': ['dispatcher', 'kernel'],
@@ -305,7 +306,9 @@ export function validateEventWrite(input: {
   return {
     ...(input.compatibility === undefined
       ? {}
-      : { compatibility: stampCompatibility(buildEventPolicy[input.type], input.compatibility) }),
+      : {
+          compatibility: stampCompatibility(buildEventPolicy[input.type], input.compatibility),
+        }),
     actor,
     type: input.type,
     payload: payloadResult.data,

@@ -58,7 +58,7 @@ bun ab ticket block <id> <blocker-id>
 
 ## Policy authorizes merge
 
-Ordered `[[merge]]` rules in `autobuild.toml` select `auto` or `consent`; the first match wins. Rules match source kind (`from`), destination (`into`), and ticket `label`. Without a match, leaves default to `auto` and nodes to `consent`.
+Ordered `[[merge]]` rules in `autobuild.toml` select `auto` or `consent`; the first match wins. Rules match source kind (`from`), destination (`into`), ticket `label`, and changed paths (`paths`, `within`). Without a match, leaves default to `auto` and nodes to `consent`.
 
 ```toml
 # Leaves merge on the root automatically; everything else needs consent.

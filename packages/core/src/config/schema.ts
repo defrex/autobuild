@@ -16,6 +16,7 @@ import { isSafeStepName } from '../context-directory'
 import { z } from 'zod'
 import { documentSchema, documentFields } from './reference-metadata'
 import { landingRuleSchema } from './landing'
+import { pathSelectorSchema } from './path-selectors'
 export { landingRuleSchema, type LandingRule } from './landing'
 import { normalizeServiceURL } from '../connection'
 import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
@@ -441,67 +442,28 @@ export const BUILTIN_WORKSPACE_PROVIDER_CONFIG: ReadonlyMap<
 
 export const commandsSchema = openMap(
   '[commands]',
-  documentSchema(z.string().min(1), { description: 'Named deterministic shell command.' }),
+  documentSchema(z.string().min(1), {
+    description: 'Named deterministic shell command.',
+  }),
 )
 export type Commands = z.infer<typeof commandsSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
 
-/**
- * The intentionally small path-selector grammar (§16.1): positive,
- * repository-relative globs with literal characters, `*`, `?`, and `**` only
- * as a complete path segment. Reject every ambiguous/unsafe form at config
- * load rather than allowing a typo to become a never-running safety gate.
- */
-export function verifyPathGlobError(pattern: string): string | undefined {
-  if (pattern.length === 0) return 'path selectors must be nonempty'
-  if (pattern.includes('\0')) return 'path selectors must not contain NUL bytes'
-  if (pattern.startsWith('/') || /^[A-Za-z]:\//.test(pattern)) {
-    return 'path selectors must be repository-relative, not absolute'
-  }
-  if (pattern.includes('\\')) {
-    return 'path selectors use Git-style "/" separators; backslashes and escapes are unsupported'
-  }
-  if (pattern.startsWith('!')) {
-    return 'path selectors are positive globs; negation is unsupported'
-  }
-  if (/[[\]{}]/.test(pattern)) {
-    return 'path selectors support only literal characters, *, ?, and whole-segment **; character classes and brace expansion are unsupported'
-  }
-  if (/[?*+@!]\(/.test(pattern)) {
-    return 'path selectors support only literal characters, *, ?, and whole-segment **; extglobs are unsupported'
-  }
-
-  const segments = pattern.split('/')
-  if (segments.some((segment) => segment.length === 0)) {
-    return 'path selectors must not contain empty path segments'
-  }
-  if (segments.some((segment) => segment === '.' || segment === '..')) {
-    return 'path selectors must not contain "." or ".." traversal segments'
-  }
-  if (segments.some((segment) => segment.includes('**') && segment !== '**')) {
-    return 'the ** wildcard must occupy a complete path segment'
-  }
-  return undefined
-}
-
-export const verifyPathGlobSchema = z.string().superRefine((pattern, ctx) => {
-  const message = verifyPathGlobError(pattern)
-  if (message !== undefined) ctx.addIssue({ code: 'custom', message })
-})
-
-documentSchema(verifyPathGlobSchema, {
-  constraints:
-    'Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.',
-})
+export {
+  pathSelectorError as verifyPathGlobError,
+  pathSelectorSchema as verifyPathGlobSchema,
+} from './path-selectors'
 
 const verifyApplicabilityShape = {
   /** Absence preserves historical serialized configuration identity. */
-  failFast: documentSchema(z.boolean().optional(), { default: 'false (omission is preserved)' }),
+  failFast: documentSchema(z.boolean().optional(), {
+    default: 'false (omission is preserved)',
+  }),
   afterReconcile: z.boolean().optional(),
   /** Any-match positive path selectors; absent means unconditional. */
   paths: z
-    .array(verifyPathGlobSchema)
+    .array(pathSelectorSchema)
     .min(1, 'paths must contain at least one repository-relative glob')
     .optional(),
   /** Explicit mandatory-gate guard: true takes precedence over paths and a
@@ -585,7 +547,9 @@ export const verifySectionSchema = stepSection(
     stepConfigs,
     afterReconcile,
     ...(entries.some(Array.isArray)
-      ? { stages: entries.map((entry) => (typeof entry === 'string' ? [entry] : entry)) }
+      ? {
+          stages: entries.map((entry) => (typeof entry === 'string' ? [entry] : entry)),
+        }
       : {}),
   }),
   true,
@@ -1036,7 +1000,9 @@ documentSchema(ticketsInputSchema.shape.readyState, {
 documentSchema(ticketsInputSchema.shape.teamKey, {
   required: 'Required for linear and hosted; forbidden for file and github; optional for plugins.',
 })
-documentSchema(ticketsInputSchema.shape.claimedState, { constraints: 'Forbidden for file.' })
+documentSchema(ticketsInputSchema.shape.claimedState, {
+  constraints: 'Forbidden for file.',
+})
 documentSchema(ticketsInputSchema.shape.dir, {
   constraints: 'Forbidden for linear, hosted and github.',
 })
@@ -1105,7 +1071,10 @@ const DISPATCHER_ROLES = [
  * never claims from, moves into, or files proposals into them, whatever the
  * other lifecycle names say, and the two may not share a state. */
 function refuseOptionalRoleOverlap(tickets: TicketsConfig, ctx: z.RefinementCtx): void {
-  const names = ticketLifecycle({ ...tickets, readyState: tickets.readyState ?? 'ready' })
+  const names = ticketLifecycle({
+    ...tickets,
+    readyState: tickets.readyState ?? 'ready',
+  })
   // The file source ignores claimedState and doneState: claims always move
   // into doing and completion is Done. Check the states it actually uses as
   // well as the configured spellings.
@@ -1141,7 +1110,11 @@ export const ticketsSchema = ticketsInputSchema
       try {
         normalizeServiceURL(tickets.url, 'tickets.url')
       } catch (error) {
-        ctx.addIssue({ code: 'custom', path: ['url'], message: (error as Error).message })
+        ctx.addIssue({
+          code: 'custom',
+          path: ['url'],
+          message: (error as Error).message,
+        })
       }
     }
     if (!['hosted', 'github'].includes(tickets.source) && tickets.readyState === undefined)
@@ -1417,7 +1390,11 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
             `${label(role)}${index ? ` alternate[${index - 1}]` : ''}`,
           )
         } catch (error) {
-          ctx.addIssue({ code: 'custom', path: path(role), message: (error as Error).message })
+          ctx.addIssue({
+            code: 'custom',
+            path: path(role),
+            message: (error as Error).message,
+          })
         }
       })
     }
@@ -1675,7 +1652,11 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
       assignee === assignee.trim() &&
       !form.accepts(assignee)
     ) {
-      ctx.addIssue({ code: 'custom', path: ['tickets', 'readyAssignee'], message: form.message })
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'readyAssignee'],
+        message: form.message,
+      })
     }
   }
   // createAssignee is the `assignees` capability, checked the same way.

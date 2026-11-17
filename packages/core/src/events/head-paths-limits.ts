@@ -5,6 +5,10 @@
  * The complete sets live in the `head-paths` artifact. */
 export const HEAD_PATHS_PREVIEW = 100
 
+/** The most matched paths a `landing.decided` event carries for a merge rule
+ * with path predicates; the exact total travels beside them. */
+export const LANDING_MATCHED_PATHS_PREVIEW = 20
+
 /** The most per-head summaries build state keeps, newest last. */
 export const HEAD_PATHS_RECORDS = 4
 
