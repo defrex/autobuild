@@ -162,6 +162,60 @@ describe('the autobuild-objective marker', () => {
     for (const body of cases) expect(parseObjective(spec(body))).toEqual({ absent: true })
   })
 
+  test('a fence inside an HTML block never counts', () => {
+    const fenced = block(MINIMAL)
+    const cases = [
+      ['<!--', fenced, '-->'].join('\n'),
+      ['<!-- An example objective:', '', fenced, '', '-->'].join('\n'),
+      ['<div>', fenced, '</div>'].join('\n'),
+      ['<details>', '<summary>Example</summary>', fenced, '</details>'].join('\n'),
+      ['<pre>', '', fenced, '', '</pre>'].join('\n'),
+      ['<custom-note>', fenced].join('\n'),
+      ['# Heading', '<custom-note>', fenced].join('\n'),
+    ]
+    for (const body of cases) expect(parseObjective(spec(body))).toEqual({ absent: true })
+  })
+
+  test('a commented-out example beside a real objective leaves exactly one block', () => {
+    const body = spec(['<!--', block(MINIMAL), '-->'].join('\n'), '', block(MINIMAL))
+    expect(objectiveBlocks(body)).toEqual([MINIMAL])
+    expect(objectiveOf(body).purpose).toBe('faster')
+  })
+
+  test('a fence after a closed HTML block or a tag inside a paragraph counts', () => {
+    const cases = [
+      ['<!-- note -->', block(MINIMAL)].join('\n'),
+      ['<!-- note --> trailing', block(MINIMAL)].join('\n'),
+      ['<div>', 'html', '</div>', '', block(MINIMAL)].join('\n'),
+      ['A paragraph', '<custom-note>', block(MINIMAL)].join('\n'),
+      ['<!--', 'note', '-->', block(MINIMAL)].join('\n'),
+    ]
+    for (const body of cases) expect(objectiveBlocks(spec(body))).toEqual([MINIMAL])
+  })
+
+  test('the scan agrees with a CommonMark renderer about HTML blocks', () => {
+    const fenced = block(MINIMAL)
+    const bodies = [
+      ['<!--', fenced, '-->'].join('\n'),
+      ['<!-- note -->', fenced].join('\n'),
+      ['<div>', fenced, '</div>'].join('\n'),
+      ['<div>', '', fenced].join('\n'),
+      ['<custom-note>', fenced].join('\n'),
+      ['A paragraph', '<custom-note>', fenced].join('\n'),
+      ['# Heading', '<custom-note>', fenced].join('\n'),
+      ['<?php', fenced, '?>', fenced].join('\n'),
+      ['<![CDATA[', fenced, ']]>'].join('\n'),
+      ['<script>', '', fenced, '', '</script>', fenced].join('\n'),
+    ]
+    for (const body of bodies) {
+      const rendered = Bun.markdown.html(body).match(/language-autobuild-objective/g) ?? []
+      expect({ body, blocks: objectiveBlocks(body).length }).toEqual({
+        body,
+        blocks: rendered.length,
+      })
+    }
+  })
+
   test('a fence indented up to three spaces counts', () => {
     expect(
       objectiveBlocks(spec(['   ```autobuild-objective', 'purpose = "x"', '   ```'].join('\n'))),

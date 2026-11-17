@@ -3311,6 +3311,8 @@ of these count:
   the block never marks the spec that contains it;
 - a fence line that begins with a blockquote or list marker, or is indented
   four or more spaces;
+- a fence inside an HTML block, such as an HTML comment, so a commented-out
+  example never counts;
 - a heading named "Objective";
 - a `toml` block, or a fence with any other info string;
 - prose describing an objective, and inline code.
@@ -3386,7 +3388,9 @@ only through a spec revision.
 The effective objective is the kernel's, reduced from events; a quick revision
 is never written back to the ticket. `ab ticket show` prints the effective
 objective of an open optimization node and marks each field that differs from
-the ticket's block `(revised)`. `ab ticket tree` labels such a ticket
+the ticket's block `(revised)`. The open build decides this, not the ticket
+body: when an edit removes the block or leaves it invalid, every field is
+marked. `ab ticket tree` labels such a ticket
 `[node, optimization]`, and status labels the build `optimization node`.
 
 **Attempts.** A build is an attempt of node N exactly when its ticket ref

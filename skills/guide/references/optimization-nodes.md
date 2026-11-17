@@ -32,6 +32,8 @@ None of these count:
   the block (as below) never marks the spec that contains it;
 - a fence line that begins with a blockquote or list marker, or is indented
   four or more spaces;
+- a fence inside an HTML block, such as an HTML comment, so a commented-out
+  example never counts;
 - a heading named "Objective";
 - a `toml` block, or a fence with any other info string, such as
   `Autobuild-Objective` or `autobuild-objective toml`;
@@ -184,7 +186,9 @@ in history but are never compared with new ones. Otherwise the pin is unchanged.
 
 A quick revision is never written back to the ticket. `ab ticket show` prints
 the effective objective of an open optimization node and marks each field that
-differs from the ticket's block `(revised)`, so a stale ticket is visible.
+differs from the ticket's block `(revised)`, so a stale ticket is visible. The
+open build, not the ticket body, decides this: when an edit removes the block or
+leaves it invalid, every field is marked.
 `ab ticket tree` labels the ticket `[node, optimization]`, and status labels the
 build `optimization node`.
 

@@ -9,6 +9,7 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
 import { openLocalStore } from '../store/local/store'
 import { runCli } from './main'
+import { REVISABLE_FIELDS } from '../objective'
 import { abTicketShow } from './ticket'
 
 let tmp: string
@@ -227,6 +228,49 @@ test('ab ticket show prints the effective objective and marks fields revised sin
       expect(text).toContain('  threshold: 35 (revised)')
       expect(text).toContain('  max attempts: 60')
       expect(text).not.toContain('max attempts: 60 (revised)')
+    }
+  }
+})
+
+test('ab ticket show keeps an open node’s effective objective after the ticket block is edited away', async () => {
+  const slug = await seed({ optimization: true })
+  const bodies = [
+    '## What and why\n\nFaster.\n',
+    `## What and why\n\nFaster.\n\n<!--\n${BLOCK}\n-->\n`,
+    `## What and why\n\nFaster.\n\n${BLOCK}\n\n${BLOCK}\n`,
+  ]
+  for (const body of bodies) {
+    const ticket: Ticket = {
+      revision: 'fixture',
+      ref: { source: 'fake', id: 'OPT-1' },
+      title: 'Faster search',
+      body,
+      state: 'Ready',
+      resolved: false,
+      labels: [],
+      kind: 'node',
+    }
+    for (const json of [false, true]) {
+      const out: string[] = []
+      await abTicketShow({
+        targetRepo: tmp,
+        id: 'OPT-1',
+        env: { AB_STORE: storeRef },
+        exec: async () => ({ stdout: '', stderr: 'not a git repo', exitCode: 128 }),
+        json,
+        stdout: (line) => out.push(line),
+        sourceFactory: () => new FakeTicketSource([ticket]),
+      })
+      if (json)
+        expect(JSON.parse(out[0]!).objective).toMatchObject({
+          revision: 1,
+          revised: ['purpose', 'metric', ...REVISABLE_FIELDS],
+        })
+      else {
+        const text = out.join('\n')
+        expect(text).toContain(`Objective (effective, revision 1, node ${slug}):`)
+        expect(text).toContain('  max attempts: 60 (revised)')
+      }
     }
   }
 })

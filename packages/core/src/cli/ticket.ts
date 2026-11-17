@@ -10,7 +10,6 @@ import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import {
   formatObjective,
-  objectiveBlocks,
   objectiveFieldDiff,
   parseObjective,
   type ObjectiveField,
@@ -609,15 +608,17 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
 
 /**
  * The effective objective of the newest open optimization node built from a
- * node ticket that carries the block, with every field that differs from the
- * ticket's own block. Reads only for such tickets: one build listing, one
- * digest batch and one `readBuildFacts`.
+ * node ticket, with every field that differs from the ticket's own block. The
+ * open build decides whether the node optimizes, not the ticket body: an edit
+ * that removes, comments out or duplicates the block leaves the node running,
+ * and every field then counts as revised. Reads only for node tickets: one
+ * build listing, one digest batch and one `readBuildFacts`.
  */
 async function effectiveTicketObjective(
   opts: TicketCommandOpts,
   ticket: Ticket,
 ): Promise<{ slug: string; state: OptimizationState; revised: ObjectiveField[] } | undefined> {
-  if (ticket.kind !== 'node' || objectiveBlocks(ticket.body).length !== 1) return undefined
+  if (ticket.kind !== 'node') return undefined
   return withTicketStore(opts, async ({ store, repo }) => {
     const records = await store.listBuildsForRepo(repo)
     const digests = await readBuildDigests(store, repo)

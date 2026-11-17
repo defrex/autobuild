@@ -27,13 +27,21 @@ interface FenceScan {
  * spaces with three or more backticks or tildes, and closes on a fence of the
  * same character, at least as long, with no info string. Only a fence whose
  * trimmed info string is exactly `autobuild-objective` counts, and never one
- * nested inside another open fence, inside a blockquote, or indented four or
- * more spaces. Headings, `toml` blocks, prose and inline code never count.
+ * nested inside another open fence, inside an HTML block (an HTML comment
+ * included), inside a blockquote, or indented four or more spaces. Headings,
+ * `toml` blocks, prose and inline code never count.
  */
 function scanObjectiveFences(body: string): FenceScan {
   const blocks: string[] = []
   let open: { char: string; length: number; indent: number; lines: string[] | null } | undefined
+  let html: HtmlBlockEnd | undefined
+  let paragraph = false
   for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
+    if (html !== undefined) {
+      if (html === 'blank' ? isBlank(line) : html.test(line)) html = undefined
+      paragraph = false
+      continue
+    }
     if (open !== undefined) {
       const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/)
       if (close?.[1] !== undefined && close[1][0] === open.char && close[1].length >= open.length) {
@@ -44,12 +52,26 @@ function scanObjectiveFences(body: string): FenceScan {
       open.lines?.push(stripIndent(line, open.indent))
       continue
     }
+    const htmlEnd = htmlBlockStart(line, paragraph)
+    if (htmlEnd !== undefined) {
+      // A block whose end condition holds on its first line ends there.
+      if (htmlEnd === 'blank' || !htmlEnd.test(line)) html = htmlEnd
+      paragraph = false
+      continue
+    }
     const match = line.match(FENCE_OPEN)
-    if (match === null) continue
+    if (match === null) {
+      paragraph = continuesParagraph(line, paragraph)
+      continue
+    }
     const [, indent = '', fence = '', info = ''] = match
     // A backtick fence's info string never contains a backtick: that line is
     // inline code, not a fence.
-    if (fence[0] === '`' && info.includes('`')) continue
+    if (fence[0] === '`' && info.includes('`')) {
+      paragraph = true
+      continue
+    }
+    paragraph = false
     open = {
       char: fence[0] ?? '`',
       length: fence.length,
@@ -62,6 +84,69 @@ function scanObjectiveFences(body: string): FenceScan {
     return { blocks, unterminated: true }
   }
   return { blocks, unterminated: false }
+}
+
+/** How an HTML block ends: at a blank line, or on a line matching the pattern. */
+type HtmlBlockEnd = 'blank' | RegExp
+
+const HTML_BLOCK_NAMES =
+  'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|' +
+  'dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|' +
+  'h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|' +
+  'option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul'
+
+const HTML_ATTRIBUTE = String.raw`\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>\x60]+|'[^']*'|"[^"]*"))?`
+
+/**
+ * The CommonMark HTML block starts (types 1–7), each with its end condition.
+ * Type 7, a complete tag alone on its line, cannot interrupt a paragraph.
+ */
+const HTML_BLOCK_STARTS: { start: RegExp; end: HtmlBlockEnd; interruptsParagraph: boolean }[] = [
+  {
+    start: /^ {0,3}<(?:pre|script|style|textarea)(?:[\s>]|$)/i,
+    end: /<\/(?:pre|script|style|textarea)>/i,
+    interruptsParagraph: true,
+  },
+  { start: /^ {0,3}<!--/, end: /-->/, interruptsParagraph: true },
+  { start: /^ {0,3}<\?/, end: /\?>/, interruptsParagraph: true },
+  { start: /^ {0,3}<![A-Za-z]/, end: />/, interruptsParagraph: true },
+  { start: /^ {0,3}<!\[CDATA\[/, end: /\]\]>/, interruptsParagraph: true },
+  {
+    start: new RegExp(String.raw`^ {0,3}<\/?(?:${HTML_BLOCK_NAMES})(?:\s|\/?>|$)`, 'i'),
+    end: 'blank',
+    interruptsParagraph: true,
+  },
+  {
+    start: new RegExp(
+      String.raw`^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:${HTML_ATTRIBUTE})*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$`,
+    ),
+    end: 'blank',
+    interruptsParagraph: false,
+  },
+]
+
+function htmlBlockStart(line: string, paragraph: boolean): HtmlBlockEnd | undefined {
+  for (const { start, end, interruptsParagraph } of HTML_BLOCK_STARTS)
+    if ((interruptsParagraph || !paragraph) && start.test(line)) return end
+  return undefined
+}
+
+function isBlank(line: string): boolean {
+  return /^[ \t]*$/.test(line)
+}
+
+/**
+ * Whether a line that opens no fence or HTML block leaves an open paragraph
+ * behind it, which only matters to whether the next line can start a type 7
+ * HTML block. A blank line, an ATX heading or a thematic break leaves none, and
+ * an indented line opens indented code unless it continues a paragraph.
+ */
+function continuesParagraph(line: string, paragraph: boolean): boolean {
+  if (isBlank(line)) return false
+  if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(line)) return false
+  if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) return false
+  if (!paragraph && /^(?: {4}| {0,3}\t)/.test(line)) return false
+  return true
 }
 
 function stripIndent(line: string, indent: number): string {
