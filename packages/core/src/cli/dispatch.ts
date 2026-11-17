@@ -62,7 +62,7 @@ import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
 import { isRemoteStoreRef } from './repo-state'
 import { HookSupervisor, type HookInvoke } from '../processes/hooks'
-import { commandHookInvoker } from '../processes/hook-command'
+import { hookInvoker } from '../processes/hook-webhook'
 import { watchSelection } from './watch'
 import { projectToken } from './project-credentials'
 import {
@@ -525,24 +525,35 @@ export interface DispatchOpts {
   upgradeNoticeScheduler?: UpgradeNoticeScheduler
   /** False when this dispatcher cannot run repository-configured local
    * commands (the hosted dispatcher): a configured command hook is then a
-   * config error at startup and on reload, never silently ignored. */
+   * config error at startup and on reload, never silently ignored. URL hooks
+   * are delivered either way. */
   localCommands?: false
   /** Test seam for configured hook delivery; defaults to running the hook's
-   * command (`processes/hook-command.ts`). */
+   * command or POSTing to its URL (`processes/hook-webhook.ts`). */
   invokeHook?: HookInvoke
 }
 
-/** Reject command hooks on a dispatcher that cannot run local commands. */
-export function assertHooksRunnable(
+/** Reject hooks this dispatcher cannot deliver: command hooks where local
+ * commands cannot run, and URL hooks whose signing-secret variable is unset
+ * or blank in the dispatcher environment. Errors name the variable, never
+ * its value. */
+export function assertHooksDeliverable(
   config: Config,
-  opts: Pick<DispatchOpts, 'localCommands'>,
+  opts: Pick<DispatchOpts, 'localCommands' | 'env'>,
 ): void {
-  if (opts.localCommands !== false) return
-  for (const [name, hook] of Object.entries(config.hooks ?? {}))
-    if (hook.command !== undefined)
+  for (const [name, hook] of Object.entries(config.hooks ?? {})) {
+    if (hook.command !== undefined && opts.localCommands === false)
       throw new ConfigError(
-        `autobuild.toml: [hooks.${name}] is a command hook, which needs a dispatcher that can run local commands; the hosted dispatcher cannot — remove it or dispatch locally`,
+        `autobuild.toml: [hooks.${name}] is a command hook, which needs a dispatcher that can run local commands; the hosted dispatcher cannot — use a url hook, remove it, or dispatch locally`,
       )
+    if (hook.url !== undefined && hook.secretEnv !== undefined) {
+      const value = opts.env[hook.secretEnv]
+      if (value === undefined || value.trim() === '')
+        throw new ConfigError(
+          `autobuild.toml: [hooks.${name}].secretEnv names ${hook.secretEnv}, which is unset or empty in the dispatcher environment`,
+        )
+    }
+  }
 }
 
 /** setTimeout that also resolves the moment ANY stop signal aborts, so OS
@@ -3901,7 +3912,11 @@ class DispatchLoop {
       clock: () => this.wiring.clock(),
       invoke:
         this.opts.invokeHook ??
-        commandHookInvoker({ checkout: this.opts.targetRepo, env: this.opts.env }),
+        hookInvoker({
+          checkout: this.opts.targetRepo,
+          env: this.opts.env,
+          clock: () => this.wiring.clock(),
+        }),
       warn: (line) => this.warn(line),
       appendRepo: (event) => this.repoView.appendRepo(this.repoIdentity, event),
       intervalMs: watchSelection(this.wiring.storeRef).intervalMs,
@@ -3919,7 +3934,6 @@ class DispatchLoop {
     try {
       const hooks = this.currentConfig().config.hooks ?? {}
       if (
-        this.opts.localCommands !== false &&
         this.holdsRepoAuthority() &&
         !this.yieldPending &&
         this.retirement === undefined &&
@@ -3941,16 +3955,25 @@ class DispatchLoop {
 
   private async drainHooksOnce(): Promise<void> {
     const hooks = this.currentConfig().config.hooks ?? {}
-    if (
-      this.opts.localCommands === false ||
-      Object.keys(hooks).length === 0 ||
-      !this.holdsRepoAuthority()
-    )
-      return
+    if (Object.keys(hooks).length === 0 || !this.holdsRepoAuthority()) return
+    // A one-pass invocation with a deadline (the hosted cron) stops in-flight
+    // deliveries when it passes; stopped records are redelivered next time.
+    const deadline = this.opts.deadlineAt
+    const timers = this.opts.timers ?? DEFAULT_TIMERS
+    const controller = new AbortController()
+    const handle =
+      deadline === undefined
+        ? undefined
+        : timers.setTimeout(
+            () => controller.abort(),
+            Math.max(0, deadline - this.wiring.clock().getTime()),
+          )
     try {
-      await this.hookSupervisor().drainOnce(hooks)
+      await this.hookSupervisor().drainOnce(hooks, controller.signal)
     } catch (error) {
       this.warn(`hooks: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      if (handle !== undefined) timers.clearTimeout(handle)
     }
   }
 
@@ -5667,7 +5690,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // both modes, so passing it as `packageRoot` is behavior-preserving; the
   // installation candidate (AUT-517) and the disk-first EROFS gate (AUT-587)
   // are unchanged.
-  assertHooksRunnable(config, resolvedOpts)
+  assertHooksDeliverable(config, resolvedOpts)
   const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo, {
     packageRoot: state.checkout,
     onNotice: (line) => resolvedOpts.stderr(line),
@@ -5763,7 +5786,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     (next) => {
       assertReadyAssigneeAccepted(next.tickets, wiring.tickets)
       assertCreateAssigneeAccepted(next.tickets, wiring.tickets)
-      assertHooksRunnable(next, resolvedOpts)
+      assertHooksDeliverable(next, resolvedOpts)
     },
   )
 

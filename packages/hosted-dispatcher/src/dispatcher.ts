@@ -512,7 +512,8 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             kernelRunId: runId,
             deadlineAt,
             // A hosted dispatcher cannot run repository-configured local
-            // commands; command hooks are a config error here.
+            // commands: command hooks are a config error here; url hooks are
+            // delivered from this dispatcher's environment.
             localCommands: false,
           })
         } catch (error) {

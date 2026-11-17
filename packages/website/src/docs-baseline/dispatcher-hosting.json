@@ -4,7 +4,7 @@
   "title": "Dispatcher hosting",
   "group": "reference",
   "description": "Run a local dispatcher with local or remote workspaces over durable state.",
-  "textHash": "1ebf712adb4a062ab38233baed86b8e1a2333d6b0fb1f79df1f0824bed8ab3da",
+  "textHash": "7312ad5afdd7e06ed4deb9ae47d40730a59aad5d7b11b9f62c79c202e6af6e05",
   "headings": [
     "Responsibility",
     "Viewing from a local checkout",

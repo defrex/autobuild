@@ -514,6 +514,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
 export interface HookStatus {
   name: string
   command: string | null
+  url: string | null
   lastSuccessAt: string | null
   /** Records queued (including one in flight) at the last progress write. */
   backlog: number
@@ -551,6 +552,7 @@ export async function readRepositoryHooks(
     hooks.push({
       name,
       command: hook.command ?? null,
+      url: hook.url ?? null,
       lastSuccessAt: progress?.lastSuccessAt ?? null,
       backlog,
       caughtUp: backlog === 0 && progress?.failing === undefined,
