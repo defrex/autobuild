@@ -249,6 +249,18 @@ export interface WaitRequestState {
   tickets: string[]
   reason: string
   seq: number
+  /** An implement declaration's commits to publish before the wait is
+   * entered. `published` once pushed: by the CLI (local) or by the
+   * dispatcher's `wait.published` (remote); `requestSeq` is the remote
+   * `publication.requested` seq and `lost` marks its `publication.lost`. */
+  publication?: {
+    branch: string
+    base: string
+    sha: string
+    published: boolean
+    requestSeq?: number
+    lost?: true
+  }
   outcome?:
     | { kind: 'entered'; seq: number }
     | {
@@ -276,8 +288,9 @@ export interface TicketWaitState {
   /** The first end: an answer to the wait's escalation (`operator`), or
    * `wait.ended` with its cause. */
   ended?: { cause: WaitEndCause; seq: number; message: string }
-  /** seq of the first `session.started` or `spec.revised` after `ended`:
-   * the build has left the wait and holds a slot again. */
+  /** seq of the first `session.started`, `spec.revised`, wait-resume
+   * `restack.prepared` or `restack.advanced` after `ended`: the build has
+   * left the wait and holds a slot again. */
   resumedSeq?: number
 }
 
@@ -431,7 +444,14 @@ export interface BuildState {
   /** Round tracks the latest implementation start/completion; artifact identifies
    * its latest completion. Commits tracks the current contribution, including
    * successful leaf replays. */
-  implement: { round: number; commits?: CommitRange; artifactRev?: number }
+  implement: {
+    round: number
+    commits?: CommitRange
+    artifactRev?: number
+    /** A leaf's contribution base moved by a restack before any implement
+     * round completed (a wait-resume restack or fast-forward). */
+    contributionBase?: string
+  }
   /** ≡ the latest `code-review.verdict` is 'approve'. */
   codeReviewApproved: boolean
   /** The `code-review.verdict` approve that currently stands — its event seq
@@ -552,6 +572,11 @@ export interface BuildAcc {
   openEscalations: OpenEscalation[]
   answeredEscalations: AnsweredEscalation[]
   waitRequest?: WaitRequestState
+  /** Each `publication.requested {operation: 'wait'}` by wait id, awaiting
+   * the `wait.requested` that follows it. The dispatcher may settle the
+   * request before the declaration lands, so an early `wait.published` sha
+   * or `publication.lost` is held here and folded into the declaration. */
+  waitPublicationRequests?: Record<string, { seq: number; publishedSha?: string; lost?: true }>
   wait?: TicketWaitState
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
@@ -607,7 +632,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 38
+export const BUILD_REDUCER_VERSION = 39
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -925,7 +950,42 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'publication.requested':
         if (event.payload.operation === 'finalize') acc.issueLinksSealedSeq ??= event.seq
+        if (event.payload.operation === 'wait')
+          acc.waitPublicationRequests = {
+            ...acc.waitPublicationRequests,
+            [event.payload.id]: { seq: event.seq },
+          }
         break
+      case 'publication.lost': {
+        if (event.payload.operation !== 'wait') break
+        if (acc.waitRequest?.publication?.requestSeq === event.payload.request) {
+          acc.waitRequest.publication.lost = true
+          break
+        }
+        const pending = Object.entries(acc.waitPublicationRequests ?? {}).find(
+          ([, request]) => request.seq === event.payload.request,
+        )
+        if (pending !== undefined)
+          acc.waitPublicationRequests = {
+            ...acc.waitPublicationRequests,
+            [pending[0]]: { ...pending[1], lost: true },
+          }
+        break
+      }
+      case 'wait.published': {
+        if (acc.waitRequest?.id === event.payload.id) {
+          if (acc.waitRequest.publication?.sha === event.payload.sha)
+            acc.waitRequest.publication.published = true
+          break
+        }
+        const pending = acc.waitPublicationRequests?.[event.payload.id]
+        if (pending !== undefined)
+          acc.waitPublicationRequests = {
+            ...acc.waitPublicationRequests,
+            [event.payload.id]: { ...pending, publishedSha: event.payload.sha },
+          }
+        break
+      }
       // Inert loss fact (AUT-328): the dispatcher released a workspace with a
       // pending publication. Recovery runs through the existing
       // abandoned-publication flow (abandonedPublicationPending), which re-runs
@@ -933,7 +993,6 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'publication.retry-scheduled':
       case 'publication.retry-exhausted':
       case 'publication.candidate-retired':
-      case 'publication.lost':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
       case 'pr-attachment.hosted':
@@ -1362,6 +1421,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
             base: event.payload.targetBase,
             head: event.payload.headSha,
           }
+        else if (acc.kind !== 'node') implement.contributionBase = event.payload.targetBase
         if (event.type === 'restack.completed' && prState === 'conflicted') prState = 'open'
         if (pr !== undefined)
           pr = {
@@ -1372,12 +1432,35 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
                 : event.payload.headSha,
           }
         break
+      case 'restack.advanced':
+        if (acc.kind !== 'node') implement.contributionBase = event.payload.to
+        if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
+        break
+      case 'restack.prepared':
+        // A wait-resume restack is the resumed build's first step; it holds a
+        // slot from here even when no session follows.
+        if (
+          event.payload.trigger === 'wait-resume' &&
+          acc.wait?.ended &&
+          acc.wait.resumedSeq === undefined
+        )
+          acc.wait.resumedSeq = event.seq
+        break
+      case 'reconcile.superseded':
+        // The abandoned occurrence completed nothing; prState is unchanged.
+        if (
+          currentPhase?.phase === 'reconcile' &&
+          (currentPhase.attempt === undefined || currentPhase.attempt === event.payload.attempt)
+        )
+          currentPhase = undefined
+        break
       case 'reconcile.rewritten':
         if (acc.kind !== 'node' && implement.commits)
           implement.commits = {
             base: event.payload.targetBase,
             head: event.payload.headSha,
           }
+        else if (acc.kind !== 'node') implement.contributionBase = event.payload.targetBase
         if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }
         break
       case 'reconcile.completed': {
@@ -1424,6 +1507,18 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           reason: event.payload.reason,
           seq: event.seq,
         }
+        if (event.payload.publication !== undefined) {
+          const { settlement, ...publication } = event.payload.publication
+          const request =
+            settlement === 'requested' ? acc.waitPublicationRequests?.[event.payload.id] : undefined
+          acc.waitRequest.publication = {
+            ...publication,
+            published: settlement === 'published' || request?.publishedSha === publication.sha,
+            ...(request !== undefined ? { requestSeq: request.seq } : {}),
+            ...(request?.lost ? { lost: true as const } : {}),
+          }
+        }
+        delete acc.waitPublicationRequests
         break
       case 'wait.refused':
         if (acc.waitRequest?.id !== event.payload.id || acc.waitRequest.outcome) break

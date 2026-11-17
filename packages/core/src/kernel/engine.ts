@@ -43,7 +43,8 @@ import {
 import { indexLog, type LogIndex, type LoopIndex } from './log-index'
 import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer'
 import { stalledChains, type FindingChain } from './stall'
-import { pendingWaitRequest, waitGuidance } from './ticket-wait'
+import { pendingWaitRequest, waitGuidance, waitResumeRestackCycle } from './ticket-wait'
+import { leafRestackedBase } from './leaf-restack-state'
 
 // ── The decision contract ────────────────────────────────────────────────────
 
@@ -98,7 +99,11 @@ export type Decision =
       failure: import('../events/payloads').EventPayload<'verify.stage-failed'>
     }
   | ({ kind: 'raise-read-deferral' } & import('./read-deferrals').ReadDeferral)
-  | { kind: 'restack'; trigger: 'verify-entry' | 'awaiting-landing'; cycle: number }
+  | {
+      kind: 'restack'
+      trigger: 'verify-entry' | 'awaiting-landing' | 'wait-resume'
+      cycle: number
+    }
   | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
@@ -507,6 +512,22 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
       ? undefined
       : { verify: { step: pendingFail.step, report: pendingFail.report } }
 
+  // ── Wait resume (SPEC §11 "Ticket waits"): a build leaving a ticket wait
+  // first restacks onto its target's current head, so the declaring phase
+  // sees the merged blockers. Supersession of a reconcile-declared wait or a
+  // fresh wait-resume restack outranks every open transaction, including an
+  // earlier wait-resume conflict. Never-waited builds have no `state.wait`.
+  const waitCycle = waitResumeRestackCycle(state, log)
+  if (waitCycle !== undefined) return { kind: 'restack', trigger: 'wait-resume', cycle: waitCycle }
+  const waitRestack = log.restack.active?.trigger === 'wait-resume' ? log.restack.active : undefined
+  if (waitRestack) {
+    if (log.restack.replay?.conflicted) {
+      const round = log.restack.reconcileAttempt ?? state.reconcileAttempts + 1
+      return { kind: 'run-phase', phase: 'reconcile', round, reconcile: { attempt: round } }
+    }
+    return { kind: 'restack', trigger: 'wait-resume', cycle: waitRestack.cycle }
+  }
+
   // ── 5. Plan loop (§5, §10): rounds pair plan ⇄ plan-review ─────────────────
   const planDecision = decideLoop({
     loop: log.plan,
@@ -853,7 +874,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
 export function landingRestackDue(state: BuildState, log: Pick<LogIndex, 'restack'>): boolean {
   return (
     log.restack.target !== undefined &&
-    (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
+    (log.restack.target.sha !== leafRestackedBase(log.restack) ||
       (state.target !== undefined &&
         (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
   )

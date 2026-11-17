@@ -42,7 +42,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { loadConfig } from '../config/load'
 import { readTerminalGuardBoundary } from '../store/reduced-reads'
-import { WAIT_TICKET_LIMIT, type EventType } from '../events/payloads'
+import { WAIT_TICKET_LIMIT, type EventPayload, type EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { ArtifactInput } from '../store/types'
 import type { EventEnvelope } from '../events/catalog'
@@ -171,11 +171,11 @@ function singleGitObjectId(output: string, command: string): string {
 }
 
 /** No `done` on a dirty worktree (D5) — the error lists the offending files. */
-async function assertCleanWorktree(deps: TerminalDeps): Promise<void> {
+async function assertCleanWorktree(deps: TerminalDeps, command = 'ab done'): Promise<void> {
   const status = (await git(deps, ['status', '--porcelain'])).trimEnd()
   if (status !== '') {
     throw new Error(
-      `'ab done' in ${deps.env.phase} requires a clean worktree (D5) — ` +
+      `'${command}' in ${deps.env.phase} requires a clean worktree (D5) — ` +
         `commit or discard these first:\n${status}`,
     )
   }
@@ -232,6 +232,7 @@ async function implementationReviewBoundary(
     )
     const effectiveBase =
       events.state.implement.commits?.base ??
+      events.state.implement.contributionBase ??
       (provision?.type === 'workspace.provisioned' ? provision.payload.base.sha : undefined)
     if (!effectiveBase) throw new Error('missing fresh-cut contribution provenance')
     async function ancestor(base: string, tip: string): Promise<boolean> {
@@ -1055,6 +1056,9 @@ export async function waitOn(
   const own = (await store.getBuild(env.build))?.ticket?.id
   if (own !== undefined && tickets.includes(own))
     throw new Error(`ticket "${own}" is this build's own ticket; a build cannot wait on itself`)
+  const id = deps.ids('wait')
+  const publication =
+    env.phase === 'implement' ? await publishBeforeWait(deps, facts, id) : undefined
   // Checked against the same prefix the append commits to, so concurrent
   // verifiers cannot both declare: the loser re-reads and is refused.
   const { event } = await terminalDeposit(
@@ -1063,9 +1067,55 @@ export async function waitOn(
     () => ({
       actor: agentActor(env.phase, env.session),
       type: 'wait.requested',
-      payload: { id: deps.ids('wait'), phase: env.phase, round: env.round, tickets, reason },
+      payload: {
+        id,
+        phase: env.phase,
+        round: env.round,
+        tickets,
+        reason,
+        ...(publication === undefined ? {} : { publication }),
+      },
     }),
     (guard) => guard.waitHeld,
   )
   return event
+}
+
+/**
+ * Publish an implement session's commits before its wait is declared, so a
+ * resume restack replays only published work (SPEC §11 "Ticket waits").
+ * Nothing to publish when HEAD is already the published head (or the
+ * contribution base before any). A local workspace pushes before the fact,
+ * like `ab done`: a failed push throws and writes nothing. A remote one
+ * deposits `publication.requested {operation: 'wait'}`; the dispatcher
+ * settles it and enters the wait only after `wait.published`.
+ */
+async function publishBeforeWait(
+  deps: TerminalDeps,
+  facts: CurrentBuildFacts,
+  id: string,
+): Promise<EventPayload<'wait.requested'>['publication']> {
+  const { env, store } = deps
+  await assertCleanWorktree(deps, 'ab wait-on')
+  const { branch, base, head } = await implementationReviewBoundary(deps, facts)
+  const published = await readBuildSelector(store, env.build, 'publishedBranchHead')
+  if (head === (published ?? base)) return undefined
+  const scratchPaths = await scratchPathsTouchedInRange(deps.exec, deps.workspacePath, base, head)
+  if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
+  if (remotePublication(facts)) {
+    await terminalDeposit(
+      deps,
+      [],
+      () => ({
+        actor: agentActor(env.phase, env.session),
+        type: 'publication.requested',
+        payload: { operation: 'wait', id, branch, sha: head, base },
+      }),
+      (guard) => guard.waitHeld,
+    )
+    return { branch, base, sha: head, settlement: 'requested' }
+  }
+  await suspendNativeLanding({ ...deps, slug: env.build }, `wait:${id}`)
+  await publishExact(deps.forge, deps.workspacePath, branch, head)
+  return { branch, base, sha: head, settlement: 'published' }
 }

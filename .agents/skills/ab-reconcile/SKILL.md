@@ -41,8 +41,8 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
 1. Run `ab context`. Read the printed manifest and its `materialized` paths for
    the spec, approved plan, implement-notes, and any `$AB_CONTEXT_DIR/guidance.json` guidance. `replay` names the
    original head, old contribution base, single change, frozen target base and
-   whether replay conflicted. A replay may originate at verify entry before any
-   PR exists; `restackId` identifies an adopted automatic transaction. Never fetch, merge, rebase, select another base,
+   whether replay conflicted. A replay may originate at verify entry or at a
+   ticket-wait resume before any PR exists; `restackId` identifies an adopted automatic transaction. Never fetch, merge, rebase, select another base,
    or move the named branch yourself. Missing replay inputs require escalation, except a node item uses `nodeChange` and `conflict.baseSha` instead of `replay`.
    If the manifest includes `workspaceRecovery`, read that materialized note.
    It distinguishes exact preserved commits restored before the session from
@@ -81,13 +81,26 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
 A publication success message parks this turn for kernel publication;
 do not repeat `ab done` after success. Post-reconcile verification follows the
 captured policy and begins a fresh cycle after confirmed publication. A conflict
-at initial verify entry still requires initial checks regardless of that policy.
+at initial verify entry, or at a ticket-wait resume, still requires initial
+checks regardless of that policy. After a wait-resume replay publishes, the
+build resumes the phase that declared the wait.
 
 A leaf replay resumed after a spec revision uses the revised spec as its
 contract. Its historical plan and implement notes describe the retained change;
 they cannot override that contract. After confirmed publication the build
 restarts planning, implementation and review before verification, rather than
 entering the ordinary post-reconcile verification cycle directly.
+
+## Waiting on other tickets
+
+If the resolution needs work from other tickets that has not landed, end the
+session with `ab wait-on <ticket-id>... --reason <text>`. The build parks. When
+the wait ends and the target branch has moved, and no resolution of this
+replay was deposited for publication, the kernel abandons this replay,
+including any resolution you have not deposited with `ab done`, and prepares a
+fresh replay onto the target's current head, which you then resolve. If the
+target has not moved, you resume this same replay with its conflicts as you
+left them.
 
 ## When not to resolve
 
@@ -101,8 +114,8 @@ ab escalate "The target changes the session-token format but the build keys its 
 An operator answer in guidance is authoritative while the spec remains the
 contract. If they cannot both be satisfied, escalate the contradiction.
 Reconcile has no code-review round; escalate risky resolutions for external
-judgment. The only successful terminal commands are `ab done` and
-`ab escalate`.
+judgment. The only successful terminal commands are `ab done`,
+`ab escalate` and `ab wait-on`.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.
