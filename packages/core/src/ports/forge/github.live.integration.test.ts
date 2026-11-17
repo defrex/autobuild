@@ -777,11 +777,28 @@ describe.skipIf(!runLiveGitHub || process.env.AB_RUN_LIVE_IDENTITY_DEFAULTS !== 
                   await h.cleanup?.()
                 }
               }
-              const baseline = await land(false)
               const trailered = await land(true)
+              const { withBuildTrailer } = await import('../../kernel/build-identity')
+              if (body === 'COMMIT_MESSAGES') {
+                // Autobuild derives this setting itself; GitHub's own default
+                // differs (co-author hoisting), so compare to the derivation.
+                const { githubSquashDefaults } = await import('./github-squash-message')
+                const derived = githubSquashDefaults({
+                  titleSetting: title,
+                  messageSetting: body,
+                  number: 1,
+                  title: 'Identity comparison',
+                  body: '* Original body\n\nCo-authored-by: Example <example@test.invalid>',
+                  commits: ['Fixture change', 'Second change'].slice(0, commits),
+                })
+                expect(trailered.trimEnd()).toBe(
+                  `${derived.headline.replace('(#1)', '(#PR)')}\n\n${withBuildTrailer(derived.body, 'live-identity')}`.trimEnd(),
+                )
+                continue
+              }
+              const baseline = await land(false)
               // Git may omit the final newline in REST commit.message. Compare
               // all other server-produced bytes after appending only identity.
-              const { withBuildTrailer } = await import('../../kernel/build-identity')
               expect(trailered.trimEnd()).toBe(
                 withBuildTrailer(baseline, 'live-identity').trimEnd(),
               )
