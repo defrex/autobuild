@@ -65,7 +65,9 @@ Reconcile requires the optional grouped `Forge.rewrite` capability:
 2. Publish immutable exact-SHA refs under `refs/autobuild/archive/<slug>/<sha>`. Remote
    archives also publish commits present only on the remote: GitHub uses create-only
    Git-reference REST creation when the workspace lacks the commit, retaining guarded
-   Git pushes for local objects. Exact remote readback confirms publication, then a
+   Git pushes for local objects. When a non-branch Git push of the archive ref is
+   refused (not a transient failure), GitHub creates the identical ref through the same
+   REST call; the readback still decides. Exact remote readback confirms publication, then a
    non-shallow fetch of only that exact archive ref (without tags, configured refmap
    expansion or a depth limit) restores missing commits and their missing ancestry,
    writes no shallow boundary, leaves an already-shallow repository's existing

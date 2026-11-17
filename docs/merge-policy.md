@@ -209,7 +209,11 @@ No result is undone by rewriting the target.
 The kernel must publish and fetch immutable exact archive refs under
 `refs/autobuild/archive/<slug>/<sha>` and replace branches with an exact
 expected-old-head guard. Namespace or permission failures stop publication;
-there is no branch/tag fallback. Archive retention remains indefinite pending a
+there is no branch/tag fallback. When an environment refuses non-branch Git pushes,
+as Claude Code on the web's GitHub proxy does, the GitHub adapter creates the same
+archive ref through REST ref creation and confirms it by exact readback. Commits that
+exist only in the local workspace cannot use this fallback and fail with an actionable
+error. Archive retention remains indefinite pending a
 retention policy. See [restacking](restacking.md).
 
 Tree admission requires node branch creation, authoritative branch-head reads
