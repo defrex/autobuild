@@ -1670,8 +1670,10 @@ If a leaf spec revision arrives during an unfinished reconcile, the same reconci
 ### Leaf and reconcile restacking
 
 The kernel prepares a detached replay of one net build change on the base frozen
-by `reconcile.started`. The contribution baseline is the initial branch-cut base
-or latest successfully published restack/reconcile base. The resolver continues that one replay;
+by `reconcile.started`. The contribution baseline is the initial branch-cut base,
+the latest successfully published restack/reconcile base, or the target a
+`restack.advanced` fast-forward moved an unpublished branch onto, whichever is
+newest (`leafRestackedBase` and `leafBaseInUse`). The resolver continues that one replay;
 completion requires one parent at the frozen base and the build identity trailer.
 Historical merge completions retain their original shape and semantics.
 
@@ -1694,8 +1696,14 @@ A contended rewrite preserves the observed work and retries on the same base.
 
 `kernel/leaf-restack-state.ts` projects target observations, frozen transactions
 and cycle gates into the log index and persisted build facts. The engine selects
-automatic kernel work before any verify action and after finalize post-steps when
-the target moves. `reconcile-restack.ts` shares collapse, detached replay,
+automatic kernel work before any verify action, after finalize post-steps when
+the target moves, and, for an ended ticket wait whose accepted target differs
+from the base in use, before the declaring phase resumes (`wait-resume`, ahead
+of the plan and code loops). A wait-resume with no published work fast-forwards
+the local branch and records `restack.advanced` instead of replaying; a wait
+declared by an unintended reconcile occurrence on a moved target first abandons
+that occurrence with `reconcile.superseded`, then replays onto the new target
+(see Ticket waits above). `reconcile-restack.ts` shares collapse, detached replay,
 archive-before-replacement and expected-head publication mechanics. Automatic
 transactions emit `restack.*`; clean completion never starts a reconcile cycle.
 Pre-PR conflicts adopt the prepared replay through ordinary reconcile. Initial
