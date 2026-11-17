@@ -2521,3 +2521,91 @@ test('a parked work row waiting for a slot carries a yellow alert; cached rows s
   expect(decorated[1]).toBe(rows[1]!)
   expect(rows).toEqual(before)
 })
+
+describe('ticket waits project as waiting, not blocked', () => {
+  function waitWrites(): EventWrite[] {
+    return [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      validateEventWrite({
+        actor: agentActor('plan', 's_plan'),
+        type: 'wait.requested',
+        payload: { id: 'wait_1', phase: 'plan', round: 1, tickets: ['B', 'C'], reason: 'needs B' },
+      }),
+      ev('wait.entered', {
+        id: 'wait_1',
+        escalation: 'esc_w',
+        tickets: [
+          { source: 'linear', id: 'B' },
+          { source: 'linear', id: 'C' },
+        ],
+        reason: 'needs B',
+        question: 'Waiting on B, C to complete: needs B.',
+      }),
+    ]
+  }
+  const rowOf = (writes: EventWrite[]): DashboardBuild => {
+    const log = toLog(writes)
+    const row = projectBuild(RECORD, reduceBuild(log), CONFIG, log)
+    if (row === null) throw new Error('not visible')
+    return row
+  }
+
+  test('an open wait alone reads waiting with the shared wording and no blocker', () => {
+    const row = rowOf(waitWrites())
+    expect(row.status).toBe('waiting')
+    expect(row.blockers).toEqual([])
+    expect(row.alsoPaused).toBe(false)
+    expect(row.wait).toMatchObject({
+      tickets: ['B', 'C'],
+      reason: 'needs B',
+      escalation: 'esc_w',
+      question: 'Waiting on B, C to complete: needs B.',
+      text: 'waiting on B, C — needs B',
+    })
+  })
+
+  test('another open escalation outranks the wait and only it is a blocker', () => {
+    const row = rowOf([
+      ...waitWrites(),
+      ev('escalation.raised', {
+        id: 'esc_other',
+        phase: 'plan',
+        round: 1,
+        source: 'policy',
+        policyCause: 'execution-no-progress',
+        question: 'other question',
+      }),
+    ])
+    expect(row.status).toBe('blocked')
+    expect(row.blockers).toEqual(['other question'])
+    expect(row.wait?.tickets).toEqual(['B', 'C'])
+  })
+
+  test('a requested wait is not yet waiting', () => {
+    const row = rowOf(waitWrites().slice(0, -1))
+    expect(row.status).not.toBe('waiting')
+    expect(row.wait).toBeUndefined()
+  })
+
+  test('an answered wait is no longer waiting', () => {
+    const row = rowOf([
+      ...waitWrites(),
+      ev('escalation.answered', { id: 'esc_w', answer: 'B landed', resolution: 'guidance' }),
+    ])
+    expect(row.status).not.toBe('waiting')
+    expect(row.wait).toBeUndefined()
+  })
+
+  test('waiting overrides paused and keeps the pause visible', () => {
+    const row = rowOf([...waitWrites(), ev('build.paused', {})])
+    expect(row.status).toBe('waiting')
+    expect(row.alsoPaused).toBe(true)
+  })
+
+  test('a pending abort outranks waiting', () => {
+    const row = rowOf([...waitWrites(), ev('build.abort-requested', {})])
+    expect(row.status).toBe('aborting')
+    expect(row.blockers).toEqual([])
+  })
+})

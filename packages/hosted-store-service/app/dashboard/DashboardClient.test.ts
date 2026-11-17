@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test'
-import { answerModeKeyAction, isNativeKeyboardActivation } from './DashboardClient'
+import type { DashboardBuild } from '@defrex/autobuild/operator-presentation'
+import {
+  answerModeKeyAction,
+  isNativeKeyboardActivation,
+  retainAnswerStep,
+} from './DashboardClient'
 import { buildLink, projectLink, selectedProject } from './project-selection'
 
 test('native control activation is excluded from dashboard-wide keyboard shortcuts', () => {
@@ -56,4 +61,35 @@ test('build pages live under /build with the project in the query', () => {
     `/build/demo?repo=${encodeURIComponent(first)}&filter=blocked`,
   )
   expect(buildLink('', 'demo')).toBe('/build/demo')
+})
+
+test('an answer step survives refreshes while its build still offers an answer', () => {
+  const row = (patch: Partial<DashboardBuild>): DashboardBuild => ({
+    slug: 'waits',
+    status: 'running',
+    alsoPaused: false,
+    steps: [],
+    blockers: [],
+    autoMerge: 'off',
+    ...patch,
+  })
+  const wait = {
+    tickets: ['B'],
+    reason: 'needs B',
+    since: '2026-11-16T00:00:00.000Z',
+    escalation: 'esc_w',
+    question: 'Waiting on B to complete: needs B.',
+    text: 'waiting on B — needs B',
+  }
+  const step = { slug: 'waits', escalationIds: ['esc_w'], input: 'typed so far' }
+  // A waiting row has no blockers; its open wait keeps the typed answer.
+  expect(retainAnswerStep(step, { builds: [row({ status: 'waiting', wait })] })).toBe(step)
+  // The wait ended or was answered elsewhere.
+  expect(retainAnswerStep(step, { builds: [row({})] })).toBeUndefined()
+  expect(retainAnswerStep(step, { builds: [] })).toBeUndefined()
+  // Blocked rows keep the step exactly while blockers remain.
+  expect(
+    retainAnswerStep(step, { builds: [row({ status: 'blocked', blockers: ['question'] })] }),
+  ).toBe(step)
+  expect(retainAnswerStep(step, { builds: [row({ status: 'blocked' })] })).toBeUndefined()
 })

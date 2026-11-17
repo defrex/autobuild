@@ -1542,13 +1542,16 @@ export async function parkedSweepReadBudget(opts: {
  * behind an occupied slot — read zero historical rows, append nothing and
  * make no wait ticket-source call, at 100 and 100,000 events. `waitCalls`
  * counts ticket-source calls the wait stage could make (blocker reads,
- * completion checks and blocker writes). */
+ * completion checks and blocker writes). `surfaces` runs the status reads an
+ * operator polls (`ab builds`, dashboard rows) inside the same measured window,
+ * so showing a wait is held to the same bound. */
 export async function ticketWaitIdleReadBudget(opts: {
   store: import('../store/memory').MemoryBuildStore
   slugs: string[]
   dispatcher: () => Dispatcher
   waitCalls: () => number
   advance: () => void
+  surfaces?: () => Promise<void>
 }): Promise<void> {
   const { store, slugs } = opts
   let historicalRows = 0
@@ -1570,13 +1573,15 @@ export async function ticketWaitIdleReadBudget(opts: {
     // Warm durable projections over the new tail once.
     opts.advance()
     await dispatcher.tick()
+    await opts.surfaces?.()
     const calls = opts.waitCalls()
     historicalRows = 0
     for (const _ of [0, 1]) {
       opts.advance()
-      const requests = await countStoreRequests(store, () =>
-        dispatcher.tick().then(() => undefined),
-      )
+      const requests = await countStoreRequests(store, async () => {
+        await dispatcher.tick()
+        await opts.surfaces?.()
+      })
       expect(requests.append ?? 0).toBe(0)
       expect(requests.appendIfCurrent ?? 0).toBe(0)
       expect(requests.appendWithArtifactsIfCurrent ?? 0).toBe(0)

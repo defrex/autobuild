@@ -65,6 +65,14 @@ import {
   type PersistenceObservation,
 } from './attention'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
+import {
+  ticketWaitStatus,
+  waitEndedText,
+  waitingOnLine,
+  waitRefusedText,
+  waitRequestedText,
+  type TicketWaitStatus,
+} from '../kernel/ticket-wait'
 import { buildReducer } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -317,6 +325,8 @@ export interface WatchRecordState {
   pr: { number: number; url: string; headSha: string } | null
   prState: PrLifecycle | null
   outcome: BuildOutcome | null
+  /** The ticket wait while requested, open, or ended and not yet resumed. */
+  wait?: TicketWaitStatus
 }
 
 /** Lease-expiry evidence is an observation, never a fabricated journal event. */
@@ -382,6 +392,7 @@ export interface WatchRecord {
 }
 
 function projectState(state: BuildState): WatchRecordState {
+  const wait = ticketWaitStatus(state)
   return {
     status: state.status,
     phase: state.phase ?? null,
@@ -403,6 +414,7 @@ function projectState(state: BuildState): WatchRecordState {
     pr: state.pr ?? null,
     prState: state.prState ?? null,
     outcome: state.outcome ?? null,
+    ...(wait !== undefined ? { wait } : {}),
   }
 }
 
@@ -481,6 +493,47 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `${event.payload.id}: ${singleLine(event.payload.question)}`
     case 'build.compatibility-deferred':
       return event.payload.diagnostic
+    case 'wait.requested':
+      return singleLine(waitRequestedText(event.payload.tickets, event.payload.reason))
+    case 'wait.refused':
+      return singleLine(
+        waitRefusedText(event.payload.tickets, event.payload.cause, event.payload.message),
+      )
+    case 'wait.entered':
+      return singleLine(
+        waitingOnLine(
+          event.payload.tickets.map((ticket) => ticket.id),
+          event.payload.reason,
+        ),
+      )
+    case 'wait.ended':
+      return singleLine(
+        waitEndedText(
+          {
+            id: event.payload.id,
+            tickets:
+              state?.wait?.id === event.payload.id
+                ? state.wait.tickets.map((ticket) => ticket.id)
+                : undefined,
+          },
+          event.payload.cause,
+          event.payload.message,
+        ),
+      )
+    case 'escalation.answered': {
+      // An operator answer to a wait's escalation is how that wait usually
+      // ends; the post-event state says whether this answer ended it.
+      const wait = state?.wait
+      if (wait?.escalation === event.payload.id && wait.ended?.seq === event.seq)
+        return singleLine(
+          waitEndedText(
+            { id: wait.id, tickets: wait.tickets.map((ticket) => ticket.id) },
+            'operator',
+            event.payload.answer,
+          ),
+        )
+      return summarizePayload(event.payload)
+    }
     case 'phase.failed':
       return `${event.payload.phase}${
         event.payload.round !== undefined ? ` r${event.payload.round}` : ''
