@@ -61,10 +61,21 @@ rather than as a blocked question; in `ab builds --json` its `status` stays
 `blocked` and a `wait` field names the tickets. On either dashboard, `r` or
 RESUME on a waiting build answers it. Completing the named tickets does not end the wait: an answer does,
 whether the blockers have completed or the work landed another way.
-`ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, the build
-takes the next free slot ahead of new ticket claims, and the phase that
-declared the wait re-runs at the same round or attempt. Its `guidance.json`
-carries a `wait` block naming the tickets, the reason, and how the wait ended.
+`ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, and the
+build takes the next free slot ahead of new ticket claims. If its target
+branch moved while it waited, the build first restacks onto the target's
+current head so the resumed phase sees the merged blockers; a conflicting
+restack shows as `reconcile` and resolves first. The phase that declared the
+wait then re-runs at the same round or attempt. Its `guidance.json` carries a
+`wait` block naming the tickets, the reason, and how the wait ended.
+
+A wait declared in `implement` first publishes the build's commits, so the
+agent must commit or discard its changes before running `ab wait-on`; the
+command refuses a dirty worktree. When a local push fails, the command
+records no wait and the same session can fix the failure and run it again.
+When a remote publication is lost before the wait is entered, the dispatcher refuses the
+wait with cause `publication-lost` and implement re-runs with the refusal as
+guidance.
 
 ## Widening an exhausted review loop
 
