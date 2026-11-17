@@ -781,6 +781,14 @@ protocol version: older clients ignore it. A client that needs it and gets an
 answer without it, from an older service, fails with a typed error instead of
 reading each build's facts.
 
+`waitPending` (`true` while a declared ticket wait awaits the dispatcher's
+check) and `ticketWait` (`{id, escalation, tickets}` while an entered ticket
+wait is open) let a hosted dispatcher service ticket waits from digests alone.
+Both are additive and keep the protocol version; older clients ignore them. An
+older service that omits `ticketWait` yields no automatic release: open waits
+then end only when an operator answers them, and the client never rebuilds the
+field from events.
+
 The digest is derived from the event log on every call — the server persists
 nothing and there is no refresh step. Protocol version `3` reshaped the
 digest's `observations` from bare sequence numbers to `{seq, ts}` pairs and

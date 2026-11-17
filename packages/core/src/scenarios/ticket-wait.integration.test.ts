@@ -3,7 +3,8 @@
  * declares with `ab wait-on` that its build waits on another ticket. The
  * dispatcher records the blocker on the build's ticket and parks the build
  * without a slot, so a ready ticket takes it at once with capacity 1. An
- * operator answer ends the wait; the build is admitted ahead of new claims
+ * operator answer, or the dispatcher once every waited ticket completes,
+ * ends the wait; the build is admitted ahead of new claims
  * and implement re-runs the same round, told what it waited on. A refused
  * wait re-runs the phase with the refusal and writes nothing to the ticket.
  * In-memory store, scripted agents, fake forge, real git worktrees.
@@ -222,5 +223,38 @@ test('the registry answer tool ends a wait; a bare retry still names what it wai
       answer: expect.stringContaining('Your wait on T-B ended (operator)'),
       wait: expect.objectContaining({ tickets: ['T-B'], outcome: 'ended', cause: 'operator' }),
     },
+  ])
+}, 120_000)
+
+test('the dispatcher ends a wait when its ticket completes and the phase re-runs', async () => {
+  const seen: Guidance[] = []
+  const h = await makeHarness({
+    handlers: waitingHandlers(['T-B'], seen),
+    tickets: [readyTicket('T-A'), readyTicket('T-B', { state: 'Backlog' })],
+    configToml: ONE_SLOT,
+  })
+  harnesses.push(h)
+
+  await h.dispatcher.tick()
+  const a = await slugFor(h, 'T-A')
+  await runnersFor(h, a)[0]!.runner.run()
+  h.clock.advance(3_600_001)
+  await h.dispatcher.tick()
+  expect(reduceBuild(await h.events(a)).status).toBe('blocked')
+
+  // No operator answers: completing T-B ends the wait on the next tick.
+  await h.tickets.transition('T-B', 'Done')
+  h.clock.advance(3_600_001)
+  await h.dispatcher.tick()
+  expect(ofType(await h.events(a), 'wait.ended').map((event) => event.payload)).toEqual([
+    expect.objectContaining({ cause: 'automatic', message: 'all waited tickets completed: T-B' }),
+  ])
+  expect(runnersFor(h, a)).toHaveLength(2)
+  expect((await runnersFor(h, a)[1]!.runner.run()).prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+  expect(seen).toEqual([
+    expect.objectContaining({
+      wait: expect.objectContaining({ tickets: ['T-B'], outcome: 'ended', cause: 'automatic' }),
+    }),
   ])
 }, 120_000)
