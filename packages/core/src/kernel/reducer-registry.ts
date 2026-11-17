@@ -5,6 +5,7 @@ import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
+import { optimizationLedgerReducer, optimizationReducer } from './optimization'
 import { leafRestackReducer } from './leaf-restack-state'
 import { terminalGuardReducer } from './terminal-guard'
 import { repositoryAttentionReducer } from './repository-attention'
@@ -98,6 +99,8 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   ticketMigrations: { reducer: ticketMigrationsReducer, covers: [] },
   nodeRestack: { reducer: nodeRestackReducer, covers: ['advanceNodeRestack'] },
   leafRestack: { reducer: leafRestackReducer, covers: ['advanceLeafRestack'] },
+  optimization: { reducer: optimizationReducer, covers: ['advanceOptimization'] },
+  optimizationLedger: { reducer: optimizationLedgerReducer, covers: [] },
   baseBranchValue: { reducer: optionalValue(baseBranchReducer), covers: [] },
   publishedBranchHeadValue: { reducer: optionalValue(publishedBranchHeadReducer), covers: [] },
   verifyDiffBaseValue: { reducer: optionalValue(verifyDiffBaseReducer), covers: [] },

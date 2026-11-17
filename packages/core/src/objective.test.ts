@@ -351,7 +351,10 @@ describe('revisions', () => {
 
   test('the field diff ignores key order', () => {
     const reordered = JSON.parse(
-      JSON.stringify({ ...base, metric: { harness: base.metric.harness, ...base.metric } }),
+      JSON.stringify({
+        ...base,
+        metric: Object.fromEntries(Object.entries(base.metric).reverse()),
+      }),
     ) as Objective
     expect(objectiveFieldDiff(base, reordered)).toEqual([])
   })
