@@ -46,6 +46,16 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    `frames.json`, PNGs, HTML and `verify-report.md` under `.ab/web-dashboard-frames/`.
    It needs local Chromium (`CHROMIUM_BIN` may select it). A capture crash, omitted
    required fact, missing browser or unreadable PNG is a failure, never a skip.
+   Before any screenshot, the capture also mounts the real client component of
+   every page its frames depict in Chromium, over the same fixture models, with
+   effects and initial data requests running. An uncaught exception, unhandled
+   rejection, empty render, unserved fixture request or harness timeout aborts
+   the capture with an error naming the page, its frames and the browser error.
+   That is a failure, never a skip: quote the error in the fail report. Browser
+   load failures from diffs outside this step's paths are caught by the
+   deterministic `app-load` check, which runs for changes under
+   `packages/hosted-store-service/`, `packages/core/src/`,
+   `packages/web-dashboard-capture/` and the workspace manifests.
    Keep command logs and elapsed-time/exit evidence under the context directory,
    outside both `.ab/web-dashboard-frames/` and `.ab/dashboard-frames/`, which
    parity replaces. Where available, run each command under
@@ -85,7 +95,8 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    explanation, full-bleed phone answers and full-width primary controls,
    amber merge consent on ground, no clipping, no fake loading facts, and
    visible focus/pending/disabled/error states. Static captures prove
-   presentation, not hydrated theme interaction. Confirm the signed-in tab line
+   presentation, not hydrated theme interaction; the report's Client load
+   section proves the depicted pages load in a browser. Confirm the signed-in tab line
    leads with Triage, Queue, Active and Done, marks the current tab, keeps the
    repository controls at its right, and retains the multi-repository selector.
    The abort frame shows the confirmation dialog over the build page.
