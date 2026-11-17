@@ -10,6 +10,7 @@ import {
   capacityExplanation,
   NO_DISPATCHER_RUN_LINE,
   repositoryActionAvailability,
+  type DashboardModel,
 } from '@defrex/autobuild/operator-presentation'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import * as api from './api'
@@ -66,6 +67,17 @@ const snapshotCache = new Map<string, OperatorDashboardSnapshot>()
 export type AnswerModeKeyAction = 'cancel' | 'submit' | 'consume' | 'pass'
 
 const DASHBOARD_ROW_SHORTCUTS = new Set(['a', 'p', 'r', 'm', 'd', 'i', 'h'])
+
+/** Keep an in-progress answer across a refresh while its build still offers
+ * an answer: open blockers, or an open ticket wait that answering ends. The
+ * same shared rule decides whether an answer is offered at all. */
+export function retainAnswerStep(
+  step: AnswerStep,
+  model: Pick<DashboardModel, 'builds'>,
+): AnswerStep | undefined {
+  const build = model.builds.find((row) => row.slug === step.slug)
+  return build && buildActionAvailability(build).answer ? step : undefined
+}
 
 /** Answer mode owns its row: only cancellation and non-editor submission may act. */
 export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerModeKeyAction {
@@ -147,8 +159,7 @@ export function DashboardClient({
         })
         setAnswerStep((step) => {
           if (!step || answerPending.current) return step
-          const build = next.model.builds.find((row) => row.slug === step.slug)
-          return build && build.blockers.length > 0 ? step : undefined
+          return retainAnswerStep(step, next.model)
         })
         setError(undefined)
       },

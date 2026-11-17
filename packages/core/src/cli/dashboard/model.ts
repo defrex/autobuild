@@ -1,5 +1,6 @@
 import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { workTargetDistance } from './target-distance'
+import { openTicketWait, waitingOnLine } from '../../kernel/ticket-wait'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { projectRollback, type DashboardRollback } from './rollback'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
@@ -101,7 +102,9 @@ import {
 
 /** Every capacity-bearing build plus acknowledged abort cleanup is listed.
  * `aborting` and `cleaning` are display-only projections over durable abort
- * facts; neither extends the reducer's lifecycle vocabulary. */
+ * facts; neither extends the reducer's lifecycle vocabulary. `waiting` is
+ * likewise display-only: a build whose only open escalation is its open
+ * ticket wait. The reducer still calls it `blocked` (SPEC §11). */
 export type EffectiveStatus =
   | 'queued'
   | 'running'
@@ -110,6 +113,7 @@ export type EffectiveStatus =
   | 'paused'
   | 'resuming'
   | 'blocked'
+  | 'waiting'
   | 'aborting'
   | 'cleaning'
 
@@ -183,6 +187,37 @@ export interface DashboardHarvest {
   action?: HarvestRunAction
 }
 
+/** An open ticket wait as every dashboard renders it. `text` is the shared
+ * wording; `question` is the wait escalation's, which answering ends early. */
+export interface DashboardWait {
+  tickets: string[]
+  reason: string
+  since: string
+  escalation: string
+  question: string
+  text: string
+}
+
+/** The one builder of a row's wait, so captures and projections share text. */
+export function dashboardWaitFrom(wait: Omit<DashboardWait, 'text'>): DashboardWait {
+  return { ...wait, text: waitingOnLine(wait.tickets, wait.reason) }
+}
+
+/** The build's open ticket wait, or undefined when none is open. */
+export function dashboardWait(state: BuildState): DashboardWait | undefined {
+  const wait = openTicketWait(state)
+  if (wait === undefined) return undefined
+  const question =
+    state.openEscalations.find((escalation) => escalation.id === wait.escalation)?.question ?? ''
+  return dashboardWaitFrom({
+    tickets: wait.tickets.map((ticket) => ticket.id),
+    reason: wait.reason,
+    since: wait.enteredAt,
+    escalation: wait.escalation,
+    question,
+  })
+}
+
 export interface DashboardBuild {
   draining?: boolean
   /** A work row's standing alert, such as a parked build waiting for a slot. */
@@ -220,10 +255,13 @@ export interface DashboardBuild {
     | 'unverified merge'
   slug: string
   status: EffectiveStatus
-  /** True when the build is BOTH paused and blocked: blocked wins the status
-   * (the spec's visual override), and this keeps the pause visible so no
-   * information is lost. */
+  /** True when the build is BOTH paused and blocked or waiting: those win the
+   * status (the spec's visual override), and this keeps the pause visible so
+   * no information is lost. */
   alsoPaused: boolean
+  /** The open ticket wait, present even when another escalation makes the
+   * row `blocked`. Its question is never among `blockers`. */
+  wait?: DashboardWait
   ticketId?: string
   steps: PipelineStep[]
   /** Queued-only explanation of the dispatcher boundary currently pending. */
@@ -235,7 +273,8 @@ export interface DashboardBuild {
    * a later successful attachment proves recovery. */
   setupError?: string
   /** Every unresolved blocker's question. Resolved ones drop out by
-   * construction — the reducer moves them to answeredEscalations. */
+   * construction — the reducer moves them to answeredEscalations. An open
+   * ticket wait's question is excluded; it is `wait.question`. */
   blockers: string[]
   /** Current-spec per-loop review budget overrides. */
   reviewRoundCeilings?: { plan?: number; code?: number }
@@ -390,6 +429,14 @@ export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState
   if (state.status === 'aborted') return 'cleaning'
   if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
   if (state.kind === 'node' && integrationFailed(state)) return 'blocked'
+  // A ticket wait whose escalation is the only one open reads as waiting; any
+  // other open question outranks it and the build reads blocked.
+  const wait = openTicketWait(state)
+  if (
+    wait !== undefined &&
+    state.openEscalations.every((escalation) => escalation.id === wait.escalation)
+  )
+    return 'waiting'
   if (
     (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
@@ -418,6 +465,7 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
     status === 'paused' ||
     status === 'resuming' ||
     status === 'blocked' ||
+    status === 'waiting' ||
     status === 'aborting' ||
     status === 'cleaning'
   )
@@ -588,6 +636,7 @@ export function projectBuildFromFacts(
   const dashboard = facts.dashboard
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
+  const wait = dashboardWait(state)
   const abortProgress =
     status === 'aborting'
       ? state.status === 'queued'
@@ -713,7 +762,10 @@ export function projectBuildFromFacts(
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
       steps: [],
       abortProgress,
-      blockers: state.openEscalations.map((escalation) => escalation.question),
+      ...(wait !== undefined ? { wait } : {}),
+      blockers: state.openEscalations
+        .filter((escalation) => escalation.id !== wait?.escalation)
+        .map((escalation) => escalation.question),
       ...(state.reviewRoundCeilings.plan !== undefined ||
       state.reviewRoundCeilings.code !== undefined
         ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
@@ -1052,7 +1104,7 @@ export function projectBuildFromFacts(
       createdAt: record.createdAt,
     },
     status,
-    alsoPaused: state.status === 'paused' && status === 'blocked',
+    alsoPaused: state.status === 'paused' && (status === 'blocked' || status === 'waiting'),
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps:
       state.kind === 'node'
@@ -1075,8 +1127,9 @@ export function projectBuildFromFacts(
           ]
         : steps,
     ...(setupError !== undefined ? { setupError } : {}),
+    ...(wait !== undefined ? { wait } : {}),
     blockers: [
-      ...state.openEscalations.map((e) => e.question),
+      ...state.openEscalations.filter((e) => e.id !== wait?.escalation).map((e) => e.question),
       ...(state.kind === 'node' && integrationFailed(state)
         ? ['verification failed: file a repair child targeting this node']
         : []),

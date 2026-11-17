@@ -10,7 +10,12 @@ import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
-import { ticketWaitStatus, ticketWaitText, type TicketWaitStatus } from '../kernel/ticket-wait'
+import {
+  ticketWaitStatus,
+  ticketWaitText,
+  waitingOnText,
+  type TicketWaitStatus,
+} from '../kernel/ticket-wait'
 import { landingRestackDue } from '../kernel/engine'
 import type { BuildFacts } from '../processes/repo-view'
 /**
@@ -64,7 +69,7 @@ import { sameLandingCandidate } from '../kernel/landing-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferralFrom } from '../kernel/auto-merge'
-import { autoMergeDisplay, type AutoMergeDisplay } from './dashboard/model'
+import { autoMergeDisplay, effectiveStatus, type AutoMergeDisplay } from './dashboard/model'
 import { decideNextFromFacts } from '../kernel/engine'
 import {
   reduceBuild,
@@ -135,6 +140,12 @@ export interface BuildSummary {
   progress: BuildProgress
   /** A node's or parked build's runner request, admitted ahead of new ticket claims. */
   slotWait?: SlotRequest
+  /** The build's ticket wait while it is requested, open, or ended and not
+   * yet resumed (SPEC §11 "Ticket waits"); omitted otherwise. */
+  wait?: TicketWaitStatus
+  /** Set when the open ticket wait's escalation is the only one open: the
+   * dashboards' `waiting` status. `status` stays the reducer's `blocked`. */
+  waitOnly?: true
 }
 
 export interface VerifyProgress {
@@ -194,9 +205,6 @@ export interface BuildDetail extends BuildSummary {
   autoMerge: AutoMergeDisplay
   supersededEscalations?: BuildState['verifyStage']['superseded']
   openEscalations: OpenEscalation[]
-  /** The build's ticket wait while it is requested, open, or ended and not
-   * yet resumed (SPEC §11 "Ticket waits"); omitted otherwise. */
-  wait?: TicketWaitStatus
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Frozen forge issue links with effective intent; omitted when none. */
@@ -290,6 +298,7 @@ export function summarizeFrom(
   const active = state.currentPhase ?? state.lastCompletedPhase
   const round = active?.round
   const attempt = active?.attempt
+  const wait = ticketWaitStatus(state)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -333,6 +342,8 @@ export function summarizeFrom(
     lease: leaseInfo(record, now),
     progress: buildProgress(record, state),
     ...(slotWait ? { slotWait } : {}),
+    ...(wait !== undefined ? { wait } : {}),
+    ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
   }
 }
 
@@ -443,7 +454,6 @@ export function detailFromFacts(
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
     openEscalations: state.openEscalations,
-    ...(ticketWaitStatus(state) !== undefined ? { wait: ticketWaitStatus(state) } : {}),
     ...(state.issueLinks.length > 0
       ? {
           issueLinks: state.issueLinks,
@@ -633,12 +643,14 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       summary.progress.lastEventAt === undefined
         ? '—'
         : relativeTime(summary.progress.lastEventAt, now)
+    const ticketWait =
+      summary.wait?.state === 'waiting' ? `, ${waitingOnText(summary.wait.tickets)}` : ''
     rows.push([
       summary.slug,
-      summary.status,
+      summaryStatus(summary),
       summary.kind === 'integration'
         ? `integration ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
-        : `${phaseCell(summary)}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`,
+        : `${phaseCell(summary)}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}${ticketWait}`,
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
         ? '—'
@@ -649,6 +661,12 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
     ])
   }
   return padColumns(rows)
+}
+
+/** The status word text renderers print: `waiting` for a build whose only
+ * open escalation is its ticket wait, else the reducer status. */
+function summaryStatus(summary: BuildSummary): string {
+  return summary.waitOnly ? 'waiting' : summary.status
 }
 
 /** Labeled sections, each omitted when absent ("when each is available"). */
@@ -727,7 +745,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
           lines.push(`  unsafe merge ${proof.sha}: ${proof.missing.join(', ') || proof.build}`)
     }
   }
-  lines.push(`  status:   ${d.status}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
+  lines.push(`  status:   ${summaryStatus(d)}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
   if (d.reviewRoundCeilings !== undefined) {
     const ceilings = [
@@ -816,8 +834,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.wait !== undefined)
     lines.push(
       d.wait.state === 'waiting'
-        ? `  waiting on: ${safeStatusText(ticketWaitText(d.wait))}`
-        : `  waiting:  ${safeStatusText(ticketWaitText(d.wait))}`,
+        ? `  waiting on: ${safeStatusText(ticketWaitText(d.wait, d.slug))}`
+        : `  waiting:  ${safeStatusText(ticketWaitText(d.wait, d.slug))}`,
     )
   if (d.decision?.kind === 'awaiting-pr') {
     // The deferral reason (a durable observation about WHY consent could not

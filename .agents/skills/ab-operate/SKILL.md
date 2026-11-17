@@ -275,6 +275,9 @@ registry monitoring tools; operator presence is not exposed there, and its
 ### Inspect
 
 - `ab builds [--queued] [--all] [--json]` — builds and their effective status.
+  A build parked on a ticket wait lists as `waiting`, with `waiting on <ids>`
+  after its phase; in `--json` its `status` stays `blocked` and `wait` carries
+  `state` and `tickets`.
 - `ab build status <slug> [--events N]` — one build's detail, chronological runner
   attaches with runtime identity, and recent events. Historical runtime is null
   in JSON and unrecorded in human output.
@@ -638,8 +641,9 @@ raise with its own event type.
 
 ### Ticket wait attention
 
-A blocked build whose open escalation's question begins `Waiting on` is a
-ticket wait: its agent declared with `ab wait-on` that it cannot proceed until
+A build that `ab builds` and both dashboards show as `waiting` / `WAITING`,
+with an amber `waiting on <ids> — <reason>` line, is a ticket wait. It is not
+a red blocker; its escalation question begins `Waiting on`. Its agent declared with `ab wait-on` that it cannot proceed until
 the named tickets complete, and the dispatcher recorded them in the build
 ticket's `blockedBy`. It holds no capacity slot and keeps its branch and
 workspace; `ab build status` shows a `waiting on:` line naming the tickets.
@@ -649,6 +653,13 @@ way or the wait is mistaken. Any answer ends the wait; the build then takes a
 slot ahead of new ticket claims and the phase that declared the wait resumes,
 told what it waited on. Until the dispatcher accepts a request, the build keeps
 its slot and `ab build status` reports the wait as requested.
+
+Entering and leaving a wait (`wait.entered`, `wait.ended`, and the
+`escalation.answered` that ends a wait) are routine, not default-watch
+attention. To see waits begin and end, run a separate diagnostic
+`ab watch --event 'wait.*' --event escalation.answered --json` alongside the
+standing watch. On either dashboard, `r` / RESUME on a waiting build answers
+the wait and ends it early.
 
 ### Janitor escalation attention
 
