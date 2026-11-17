@@ -92,7 +92,7 @@ Ground is the page; ink carries primary reading; slack carries secondary text an
 
 **The Two Grounds Rule.** Light and dark are equal supported grounds. Use the matching palette as a whole; never transplant an ink from the other ground.
 
-**The Color Is State Rule.** Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. A build waiting on other tickets is held work, so it is amber rather than red. Status and step words carry meaning alongside color.
+**The Color Is State Rule.** Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. Status and step words carry meaning alongside color.
 
 Every state ink meets 4.5:1 on its matching ground. Ink, slack and red also meet 4.5:1 on well and red wash. These tested pairs are not permission to combine arbitrary colors and surfaces: light amber fails on the well and belongs only on ground. Primary controls use ground text on ink, or on teal for hover, in both palettes. Structural rules need not carry text contrast.
 
