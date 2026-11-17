@@ -21,6 +21,7 @@ type LedgerItem =
   | { t: 'reconcile'; seq: number; mergeCommit: string; rewriteId?: string }
   | { t: 'restack'; seq: number; id: string; head: string }
   | { t: 'finalize'; seq: number; headSha: string }
+  | { t: 'wait'; seq: number; id: string; sha: string }
   | { t: 'step'; seq: number; step: string; ok: boolean; headSha?: string }
   /** A maximal run of consecutive irrelevant events. Only its max seq
    * matters: the workspace scan's `seq > request.seq` break test. */
@@ -37,7 +38,7 @@ export interface PublicationLedger {
 }
 
 /** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 7
+export const PUBLICATION_STATE_REDUCER_VERSION = 8
 
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
@@ -76,6 +77,8 @@ function compact(event: AbEvent): LedgerItem | undefined {
       }
     case 'finalize.completed':
       return { t: 'finalize', seq: event.seq, headSha: event.payload.pr.headSha }
+    case 'wait.published':
+      return { t: 'wait', seq: event.seq, id: event.payload.id, sha: event.payload.sha }
     case 'finalize.step-completed': {
       const item: LedgerItem = {
         t: 'step',
@@ -111,6 +114,8 @@ function itemCompletes(item: LedgerItem, request: PublicationRequest): boolean {
       (payload.rewrite === undefined || item.rewriteId === payload.rewrite.id)
     )
   if (payload.operation === 'finalize') return item.t === 'finalize' && item.headSha === payload.sha
+  if (payload.operation === 'wait')
+    return item.t === 'wait' && item.id === payload.id && item.sha === payload.sha
   return (
     item.t === 'step' && item.step === payload.step && (!item.ok || item.headSha === payload.sha)
   )
