@@ -198,7 +198,12 @@ replacement confirms cancellation first; the next poll reconciles native state
 before other actions. Stale enables are repaired by polling. An
 already-enabled native request counts as applied only after the forge confirms
 its squash method and identity message. Each eligible poll re-reads an armed
-request and repairs it when PR edits or a human arm left it stale. This bounded
+request and repairs it when PR edits or a human arm left it stale. On GitHub
+the expected headline and body come from the PR and the repository's squash
+title and message settings, with the build trailer and issue-link handling on
+top. Landing reads use REST; GraphQL only arms or disarms native auto-merge.
+Quiet polls do not re-check merge queues; native enable, repair and direct
+merge do. This bounded
 model requires replacement-head checks to take far longer than a poll interval. It
 has no durable native-effect reservation. Human forge merges record whether a
 hold was overridden; possible stale-enable merges raise operator attention.
