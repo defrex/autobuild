@@ -14497,4 +14497,126 @@ command = "true"
       await fx.cleanup()
     }
   }, 30_000)
+
+  const URL_HOOKED = `${DISPATCH_CONFIG_TOML}
+[hooks.relay]
+url = "https://hooks.example/autobuild"
+secretEnv = "HOOK_SECRET"
+`
+
+  test('a hosted one-pass dispatch delivers url hooks', async () => {
+    const fx = await makeFixture([], happyHandlers(), URL_HOOKED)
+    const delivered: { hook: string; id: string; record: string | undefined }[] = []
+    const once = () =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: { HOOK_SECRET: 's' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        localCommands: false,
+        invokeHook: async (hook, line, _signal, record) => {
+          delivered.push({ hook: hook.name, id: JSON.parse(line).id, record: record?.id })
+          return { ok: true }
+        },
+        wire: fx.wire,
+      })
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await once()
+      expect(await readHookProgress(fx.store, fx.origin, 'relay')).toBeDefined()
+      await handBack(fx, 'after')
+      await once()
+      const after = (await fx.store.getRepoEvents(fx.origin)).find(
+        (event) => event.type === 'ticket.handed-back' && event.payload.attempt === 'after',
+      )!
+      expect(delivered).toEqual([
+        { hook: 'relay', id: `repo:${after.seq}`, record: `repo:${after.seq}` },
+      ])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a url hook whose signing secret is unset or blank is rejected at startup by name', async () => {
+    const fx = await makeFixture([], happyHandlers(), URL_HOOKED)
+    try {
+      for (const env of [{}, { HOOK_SECRET: '' }, { HOOK_SECRET: ' ' }])
+        await expect(
+          abDispatch({
+            targetRepo: fx.checkout,
+            env,
+            exec: spawnExec,
+            stdout: () => {},
+            stderr: () => {},
+            once: true,
+            localCommands: false,
+            wire: fx.wire,
+          }),
+        ).rejects.toThrow(
+          '[hooks.relay].secretEnv names HOOK_SECRET, which is unset or empty in the dispatcher environment',
+        )
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('the invocation deadline stops an in-flight hook delivery for redelivery', async () => {
+    const fx = await makeFixture([], happyHandlers(), URL_HOOKED)
+    const pending = new Map<number, () => void>()
+    let next = 0
+    const timers = {
+      setTimeout: (handler: () => void) => {
+        next += 1
+        pending.set(next, handler)
+        return next
+      },
+      clearTimeout: (handle: unknown) => void pending.delete(handle as number),
+    }
+    const attempts: string[] = []
+    const once = (hang: boolean) =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: { HOOK_SECRET: 's' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        localCommands: false,
+        deadlineAt: Date.now() + 10 * 60_000,
+        timers,
+        invokeHook: async (_hook, line, signal) => {
+          attempts.push(JSON.parse(line).id)
+          if (!hang) return { ok: true }
+          // The deadline passes while the receiver hangs.
+          queueMicrotask(() => {
+            for (const handler of [...pending.values()]) handler()
+          })
+          return new Promise((resolve) =>
+            signal.addEventListener('abort', () => resolve({ ok: false, error: 'stopped' }), {
+              once: true,
+            }),
+          )
+        },
+        wire: fx.wire,
+      })
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await once(false)
+      await handBack(fx, 'slow')
+      await once(true)
+      expect(attempts).toHaveLength(1)
+      const progress = await readHookProgress(fx.store, fx.origin, 'relay')
+      expect(progress?.delivered).toBe(0)
+      expect(progress?.failing).toBeUndefined()
+      expect(pending.size).toBe(0)
+      await once(false)
+      expect(attempts).toHaveLength(2)
+      expect(attempts[1]).toBe(attempts[0])
+      expect((await readHookProgress(fx.store, fx.origin, 'relay'))?.delivered).toBe(1)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
 })

@@ -312,7 +312,7 @@ The default watch reports actionable conditions only:
   naming the latest error and the record `id` it is stuck on), has delivered
   again after a reported episode, or resumed past history it could no longer
   read (with the skipped stream ranges) or a build announcement it could not
-  resolve. Inspect `ab repository status`, fix the hook command or
+  resolve. Inspect `ab repository status`, fix the hook's command, endpoint or
   configuration, and treat a skipped range as records the hook's consumer never
   received.
 - Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic

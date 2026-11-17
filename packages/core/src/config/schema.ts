@@ -1211,17 +1211,50 @@ documentSchema(storeSchema.shape.url, {
 })
 // ── Hooks ────────────────────────────────────────────────────────────────────
 //
-// Observe-only consumers the lease-holding local dispatcher feeds: each
-// matching `ab watch --json` record is delivered to the hook's command, one at
-// a time, in order, at least once. A hook never gates anything.
+// Observe-only consumers the lease-holding dispatcher feeds: each matching
+// `ab watch --json` record is delivered to the hook's command or URL, one at a
+// time, in order, at least once. A hook never gates anything.
+
+const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/
+
+/** A hook endpoint: https, or http only to a loopback host. The original
+ * string is kept; credentials and fragments are refused so no secret can sit
+ * in `autobuild.toml`. */
+const hookUrlSchema = z.string().superRefine((value, ctx) => {
+  let url: URL
+  try {
+    if (value !== value.trim()) throw new Error('surrounding whitespace')
+    url = new URL(value)
+  } catch {
+    ctx.addIssue({ code: 'custom', message: 'hook url must be an absolute URL' })
+    return
+  }
+  if (url.username !== '' || url.password !== '' || url.hash !== '' || value.includes('#'))
+    ctx.addIssue({ code: 'custom', message: 'hook url must not contain credentials or a fragment' })
+  if (
+    !(url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOST.test(url.hostname)))
+  )
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        'hook url must be https (http is allowed only to loopback: localhost, 127.0.0.0/8, [::1])',
+    })
+})
+documentSchema(hookUrlSchema, {
+  constraints:
+    'Absolute HTTPS URL; HTTP allowed only to loopback (localhost, 127.0.0.0/8, [::1]). No credentials or fragment. Query strings are kept.',
+})
 
 export const hookSchema = z.strictObject({
-  /** Shell command run once per record with the JSON line on stdin. The only
-   * target this release ships. */
+  /** Shell command run once per record with the JSON line on stdin. */
   command: z
     .string()
     .refine((value) => value.trim().length > 0, 'hook command must be nonblank')
     .optional(),
+  /** Endpoint that receives each record as a signed JSON POST. */
+  url: hookUrlSchema.optional(),
+  /** Dispatcher environment variable holding the url hook's signing secret. */
+  secretEnv: envNameSchema.optional(),
   /** `ab watch --event` globs; absent means `ab watch`'s default attention set. */
   events: z
     .array(z.string().refine((value) => value.trim().length > 0, 'event globs must be nonblank'))
@@ -1232,15 +1265,19 @@ export const hookSchema = z.strictObject({
 
 documentFields(hookSchema, {
   command:
-    'Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success.',
+    'Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success. Set exactly one of command or url.',
+  url: 'HTTPS endpoint that receives each record as a signed JSON POST; http only to loopback. A 2xx response within the timeout is success; redirects are not followed.',
+  secretEnv:
+    'Name of the dispatcher environment variable holding the HMAC signing secret; required with url. The value never appears in config, events, status or logs.',
   events:
     'Event globs with `ab watch --event` grammar, validated against the build and repository catalogs. Absent means the default attention filter of `ab watch`.',
-  timeoutSeconds: 'Seconds one invocation may run before it is killed and counted as a failure.',
+  timeoutSeconds:
+    'Seconds one delivery may take (a command run or a request) before it is stopped and counted as a failure.',
 })
 documentSchema(hookSchema, {
-  description: 'Named observe-only hook delivered matching watch records by the local dispatcher.',
+  description: 'Named observe-only hook delivered matching watch records by the dispatcher.',
   constraints:
-    'Hook names use ASCII letters, digits, ., _ and -. A command is required. The hosted dispatcher rejects command hooks.',
+    'Hook names use ASCII letters, digits, ., _ and -. Exactly one of command or url. A url hook requires secretEnv naming a set, nonempty variable in the dispatcher environment. The hosted dispatcher rejects command hooks and delivers url hooks.',
 })
 export type HookConfig = z.infer<typeof hookSchema>
 export const hooksSchema = openMap('[hooks]', hookSchema)
@@ -1300,7 +1337,7 @@ documentFields(configRootSchema, {
   store: 'Optional remote BuildStore connection. Credentials live outside TOML.',
   upgrade: 'Automatic dispatcher runtime target checks and adoption.',
   hooks:
-    'Named observe-only hooks: the local dispatcher delivers each matching watch record to a command, in order and at least once.',
+    'Named observe-only hooks: the dispatcher delivers each matching watch record to a command or URL, in order and at least once.',
   baseBranch: 'Branch used to cut builds, target PRs, and merge during reconciliation.',
   capacity:
     'Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of new claims when it must run again. Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
@@ -1501,13 +1538,18 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
         message: `[hooks.${name}] name must contain only ASCII letters, digits, ., _ or - and cannot be . or ..`,
       })
     }
-    if (hook.command === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['hooks', name],
-        message: `[hooks.${name}] has no target — set command`,
-      })
-    }
+    const target = (message: string): void =>
+      ctx.addIssue({ code: 'custom', path: ['hooks', name], message })
+    if (hook.command === undefined && hook.url === undefined)
+      target(`[hooks.${name}] has no target — set command or url`)
+    if (hook.command !== undefined && hook.url !== undefined)
+      target(`[hooks.${name}] sets both command and url — set exactly one`)
+    if (hook.url !== undefined && hook.secretEnv === undefined)
+      target(
+        `[hooks.${name}] url hooks require secretEnv naming the signing-secret environment variable`,
+      )
+    if (hook.command !== undefined && hook.secretEnv !== undefined)
+      target(`[hooks.${name}].secretEnv applies only to url hooks`)
     for (const [index, glob] of (hook.events ?? []).entries()) {
       try {
         compileEventGlobs([glob], {

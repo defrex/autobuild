@@ -3710,7 +3710,12 @@ export async function repositoryEventsReadBudget() {
  *    delivered and then retires;
  * 5. a long non-matching interval followed by graceful and crashed resumes,
  *    which read none of the old interval; and
- * 6. a brand-new hook's first initialization while a preparation is in flight.
+ * 6. a brand-new hook's first initialization while a preparation is in flight;
+ *    and
+ * 7. fresh one-shot invocations (the hosted cron's `drainOnce`, with a new
+ *    supervisor each time and no shared change gate): zero event rows and an
+ *    identical request vector while unchanged, only the new rows when
+ *    changed, and no store request at all with no hooks configured.
  *
  * No measured path lists builds; only (6) reads the repository's digests.
  */
@@ -4014,6 +4019,58 @@ export async function hookReadBudget(): Promise<void> {
     ).toEqual([])
     await brandNew.stop()
 
+    // 7. Fresh one-shot (hosted) invocations. Each cron run builds a new
+    // supervisor, resumes from durable progress and makes one feed pass.
+    const urlHooks = {
+      relay: { url: 'https://hooks.example/x', secretEnv: 'HOOK_SECRET', timeoutSeconds: 30 },
+    }
+    const onceDelivered: string[] = []
+    await supervisorFor(store, clock, onceDelivered).drainOnce(urlHooks)
+    await supervisorFor(store, clock, onceDelivered).drainOnce(urlHooks)
+    expect(onceDelivered).toEqual([])
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    const unchangedOnce: { rows: number; buildRows: number; requests: Record<string, number> }[] =
+      []
+    for (let i = 0; i < 3; i++) {
+      rows = memoryRepositoryReadCounter(store, repo)
+      requests = memoryStoreRequestCounter(store)
+      await supervisorFor(store, clock, onceDelivered).drainOnce(urlHooks)
+      unchangedOnce.push({
+        rows: rows.rows,
+        buildRows: rows.buildRows,
+        requests: requests.vector(),
+      })
+      requests.restore()
+    }
+    expect(onceDelivered).toEqual([])
+    for (const cost of unchangedOnce) {
+      expect(cost.rows).toBe(0)
+      expect(cost.buildRows).toBe(0)
+      expect(cost.requests).toEqual(unchangedOnce[0]!.requests)
+      expect(listing(cost.requests)).toEqual([0, 0, 0])
+    }
+    await escalate(store, 'active-a', 'once-escalation')
+    await filler(store)
+    await announce(store, 'once-new', 'on', 3)
+    rows = memoryRepositoryReadCounter(store, repo)
+    requests = memoryStoreRequestCounter(store)
+    await supervisorFor(store, clock, onceDelivered).drainOnce(urlHooks)
+    const changedOnce = {
+      rows: rows.rows,
+      bySlug: Object.fromEntries(rows.buildRowsBySlug),
+      requests: requests.vector(),
+    }
+    requests.restore()
+    expect(onceDelivered).toHaveLength(1)
+    expect(onceDelivered[0]).toStartWith('build:active-a:')
+    expect(Object.keys(changedOnce.bySlug).sort()).toEqual(['active-a', 'once-new'])
+    expect(listing(changedOnce.requests)).toEqual([0, 0, 0])
+    requests = memoryStoreRequestCounter(store)
+    await supervisorFor(store, clock, onceDelivered).drainOnce({})
+    expect(requests.vector()).toEqual({})
+    requests.restore()
+
     measured.push({
       changed: { rows: changed.rows, requests: changed.requests },
       fresh: { rows: fresh.rows, requests: fresh.requests },
@@ -4026,6 +4083,7 @@ export async function hookReadBudget(): Promise<void> {
         // per-build reductions are not event rows.
         requests: initialization.requests,
       },
+      once: { unchanged: unchangedOnce[0], changed: changedOnce },
     })
   }
   expect(measured[1]).toEqual(measured[0])
