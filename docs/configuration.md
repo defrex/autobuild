@@ -258,7 +258,7 @@ Changing the store requires restarting dispatch.
 
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
-command references are errors. The open maps are `[accounts]`, `[commands]`, `[roles]`,
+command references are errors. The open maps are `[accounts]`, `[commands]`, `[hooks]`, `[roles]`,
 `[profiles]`, `[profiles.<name>.roles]`, `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
@@ -385,6 +385,7 @@ These fields hot-reload:
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[profiles]` | Next agent session of a build that selected the profile; builds without it are unaffected. A build's selected profile name never changes after claim. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
+| `[hooks]` | After the next dispatcher tick: an added hook starts at its baseline, a removed one stops, and a changed one resumes from its saved progress. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |

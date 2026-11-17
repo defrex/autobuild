@@ -33,7 +33,7 @@ test('stdin carries exactly the record line, from the checkout, with AB_HOOK and
   const line = `${JSON.stringify({ id: 'repo:1', cursor: 'v1.x' })}\n`
   expect(
     await run(
-      'cat > stdin.txt; pwd > cwd.txt; printf "%s|%s" "$AB_HOOK" "${AB_BUILD-unset}" > env.txt',
+      'cat > stdin.txt; pwd > cwd.txt; printf "%s|%s" "$AB_HOOK" "$(printenv AB_BUILD || echo unset)" > env.txt',
       line,
       dir,
     ),
