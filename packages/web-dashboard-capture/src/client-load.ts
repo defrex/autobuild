@@ -23,8 +23,12 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
+import { parseConfig } from '../../core/src/config/load'
+import { DISPATCHER, KERNEL } from '../../core/src/events/envelope'
 import { getOperatorDashboard, type OperatorDashboardSnapshot } from '../../core/src/operator/query'
+import { effectiveBuildConfigContent } from '../../core/src/processes/build-execution-state'
 import { MemoryBuildStore } from '../../core/src/store/memory'
+import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../../core/src/store/retention'
 import type { Ticket } from '../../core/src/ports/types'
 import type { Discovery, Snapshot } from '../../hosted-store-service/app/access/api'
 import type { FixtureResponses } from './client-harness'
@@ -62,6 +66,8 @@ export interface ClientPageResult {
   component: string
   clientModules: string[]
   errors: string[]
+  /** Every `METHOD path?query` the page fetched while loading. */
+  requests: string[]
 }
 
 const transpiler = new Bun.Transpiler({ loader: 'tsx' })
@@ -195,8 +201,76 @@ const NORTHWIND: Snapshot = {
 }
 
 export interface ClientFixtureSource {
-  /** The dashboard model to serve; defaults to an empty repository's. */
+  /** The dashboard model to serve; defaults to `fixtureStore()`'s one blocked build. */
   model?: DashboardModel
+}
+
+const fixtureClock = () => new Date(FIXTURE_NOW)
+
+const FIXTURE_CONFIG = `[tickets]
+source = "database"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+`
+
+/**
+ * A small store holding the fixture build, blocked on an open escalation, so
+ * the standalone check's build page and lists render a real row. The capture
+ * serves its own `mixed` model instead; building that takes about 20 s.
+ */
+async function fixtureStore(): Promise<MemoryBuildStore> {
+  const store = new MemoryBuildStore({ clock: fixtureClock })
+  // A dashboard lists builds only once a dispatcher run has published its config.
+  await store.ensureRepo(FIXTURE_REPO)
+  const config = await store.putRepoArtifact(FIXTURE_REPO, {
+    kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+    content: effectiveBuildConfigContent(parseConfig(FIXTURE_CONFIG)),
+  })
+  await store.appendRepo(FIXTURE_REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'fixture-run',
+      pid: 1,
+      effectiveConfig: { kind: config.kind, rev: config.revision },
+      roleWarnings: [],
+    },
+  })
+  const fixtureTicket = TICKETS.find((entry) => entry.ref.id === FIXTURE_TICKET_ID)!.ref
+  await store.createBuild({
+    slug: FIXTURE_BUILD_SLUG,
+    repo: FIXTURE_REPO,
+    ticket: fixtureTicket,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: FIXTURE_REPO, ticket: fixtureTicket, kind: 'work', baseBranch: 'main' },
+    },
+  })
+  await store.append(FIXTURE_BUILD_SLUG, {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: `${FIXTURE_BUILD_SLUG}-runner`, host: 'fixture' },
+  })
+  await store.append(FIXTURE_BUILD_SLUG, {
+    actor: KERNEL,
+    type: 'plan.started',
+    payload: { round: 1 },
+  })
+  await store.append(FIXTURE_BUILD_SLUG, {
+    actor: KERNEL,
+    type: 'escalation.raised',
+    payload: {
+      id: 'esc-fixture',
+      phase: 'plan',
+      source: 'agent',
+      question: 'Which dashboard state should the blocked row show?',
+    },
+  })
+  return store
 }
 
 /**
@@ -205,10 +279,15 @@ export interface ClientFixtureSource {
  * passes its own model so the mounted pages render the captured data.
  */
 export async function clientFixtures(source: ClientFixtureSource = {}): Promise<FixtureResponses> {
-  const empty = await getOperatorDashboard({
-    store: new MemoryBuildStore(),
+  const populated = await getOperatorDashboard({
+    store: await fixtureStore(),
     repo: FIXTURE_REPO,
-    clock: () => new Date(FIXTURE_NOW),
+    clock: fixtureClock,
+  })
+  const empty = await getOperatorDashboard({
+    store: new MemoryBuildStore({ clock: fixtureClock }),
+    repo: ALTERNATE_FIXTURE_REPO,
+    clock: fixtureClock,
   })
   const responses: FixtureResponses['responses'] = {}
   const ok = (key: string, body: unknown) => {
@@ -217,7 +296,11 @@ export async function clientFixtures(source: ClientFixtureSource = {}): Promise<
   for (const repo of [FIXTURE_REPO, ALTERNATE_FIXTURE_REPO]) {
     const base = `/api/web/repos/${encodeURIComponent(repo)}`
     const snapshot: OperatorDashboardSnapshot =
-      source.model && repo === FIXTURE_REPO ? { ...empty, model: source.model } : empty
+      repo !== FIXTURE_REPO
+        ? empty
+        : source.model
+          ? { ...populated, model: source.model }
+          : populated
     ok(`GET ${base}/dashboard`, snapshot)
     // Every listing answers from the same tickets; the query only pages them.
     ok(`GET ${base}/tickets`, {
@@ -374,6 +457,7 @@ export async function checkClientPages(
       component: harnessComponents(page, root),
       clientModules: page.clientModules.map((file) => relative(root, file)),
       errors: clientLoadErrors(loaded),
+      requests: loaded.harness?.requests ?? [],
     })
   }
   return results

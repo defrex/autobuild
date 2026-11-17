@@ -9,7 +9,7 @@ import {
   pageForFrame,
   routeSlug,
 } from './client-load'
-import { FIXTURE_REPO } from './client-pages/fixtures'
+import { FIXTURE_BUILD_SLUG, FIXTURE_REPO, FIXTURE_TICKET_ID } from './client-pages/fixtures'
 import { WEB_FRAME_SPECS } from './web-dashboard-capture'
 
 // Browser-free coverage for the client-load check. The Chromium proofs live in
@@ -74,7 +74,11 @@ test('fixture responses serialize and serve the fixture repository', async () =>
   expect(parsed).toEqual(fixtures)
   const dashboard = parsed.responses[
     `GET /api/web/repos/${encodeURIComponent(FIXTURE_REPO)}/dashboard`
-  ]?.body as { model: { repo: string } } | undefined
+  ]?.body as { model: { repo: string; builds: { slug: string; ticketId?: string }[] } } | undefined
   expect(dashboard?.model.repo).toBe(FIXTURE_REPO)
+  // The standalone check's build page and lists render a real build row.
+  expect(dashboard?.model.builds).toContainEqual(
+    expect.objectContaining({ slug: FIXTURE_BUILD_SLUG, ticketId: FIXTURE_TICKET_ID }),
+  )
   expect(parsed.responses['GET /api/web/orgs']?.status).toBe(200)
 })

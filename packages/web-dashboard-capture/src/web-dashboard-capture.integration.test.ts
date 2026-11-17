@@ -774,7 +774,15 @@ test('report uses actual image dimensions and packaged font bindings', async () 
     ],
     '/chromium',
     '/frames',
-    [{ route: '/', component: 'dashboard/DashboardClient.tsx', clientModules: [], errors: [] }],
+    [
+      {
+        route: '/',
+        component: 'dashboard/DashboardClient.tsx',
+        clientModules: [],
+        errors: [],
+        requests: [],
+      },
+    ],
   )
   expect(text).toContain('390×4567')
   expect(text).toContain('## Client load')

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { checkClientPages, type ClientPageResult } from './client-load'
+import { FIXTURE_REPO, FIXTURE_TICKET_ID } from './client-pages/fixtures'
 import { chromiumBinary, fullDocumentScreenshot } from './full-document'
 import { fontFaceCss } from './web-dashboard-capture'
 
@@ -139,6 +140,13 @@ test.skipIf(!enabled)(
       const results = await checkClientPages({ chromium, outDir: root })
       expect(results.length).toBeGreaterThan(0)
       expect(results.filter((result) => result.errors.length > 0)).toEqual([])
+      // The build page found its build in the default fixture: only a resolved
+      // build row makes it fetch the ticket the build was claimed from.
+      const repo = encodeURIComponent(FIXTURE_REPO)
+      const buildPage = results.find((result) => result.route === '/build/[slug]')
+      expect(buildPage?.requests).toContain(
+        `GET /api/web/repos/${repo}/tickets/${encodeURIComponent(FIXTURE_TICKET_ID)}`,
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }
