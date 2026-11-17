@@ -1,4 +1,5 @@
 import { ticketPreparationReducer } from './ticket-preparation'
+import { ticketHandbacksReducer } from './ticket-handbacks'
 import { ticketMigrationsReducer } from './ticket-migrations'
 import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import {
@@ -203,6 +204,11 @@ export interface BuildReadAcc {
   reconcileReplay?: import('../events/payloads').EventPayload<'reconcile.replayed'>
   firstWorkspace?: Extract<AbEvent, { type: 'workspace.provisioned' }>
   latestAbort?: Extract<AbEvent, { type: 'build.abort-requested' }>
+  /** The newest committed ticket hand-back checkpoint of either kind. */
+  latestTicketReturned?: Extract<
+    AbEvent,
+    { type: 'abort.ticket-returned' | 'build.ticket-returned' }
+  >
   latestDiscard?: Extract<AbEvent, { type: 'build.discard-requested' }>
   maxPlanRevision: number
   created?: Extract<AbEvent, { type: 'build.created' }>
@@ -233,7 +239,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 7 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 8 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -451,6 +457,8 @@ export const buildReadFactsReducer = defineReducer({
         acc.reconcileBases[String(event.payload.attempt)] = event.payload.baseSha
       if (event.type === 'workspace.provisioned') acc.firstWorkspace ??= event
       if (event.type === 'build.abort-requested') acc.latestAbort = event
+      if (event.type === 'abort.ticket-returned' || event.type === 'build.ticket-returned')
+        acc.latestTicketReturned = event
       if (event.type === 'build.discard-requested') acc.latestDiscard = event
       if (event.type === 'plan.completed')
         acc.maxPlanRevision = Math.max(acc.maxPlanRevision, event.payload.artifact.rev)
@@ -551,6 +559,7 @@ export const buildReadFactsReducer = defineReducer({
     reconcileReplay: acc.reconcileReplay,
     firstWorkspace: acc.firstWorkspace,
     latestAbort: acc.latestAbort,
+    latestTicketReturned: acc.latestTicketReturned,
     latestDiscard: acc.latestDiscard,
     maxPlanRevision: acc.maxPlanRevision,
     seenTypes: [...acc.seenTypes],
@@ -592,6 +601,7 @@ export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
   missingAccounts: Record<string, import('../accounts/availability').MissingAccountCredential>
   preparation: ReturnType<typeof ticketPreparationReducer.initial>
+  handbacks: ReturnType<typeof ticketHandbacksReducer.initial>
   compatibility: CompatibilityState
   presence: Record<
     string,
@@ -653,6 +663,7 @@ export const repositoryReadFactsReducer = defineReducer({
     ticketMigrationsReducer.version +
     dispatchUpgradeReducer.version +
     ticketPreparationReducer.version +
+    ticketHandbacksReducer.version +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     forgeHealthReducer.version +
@@ -671,6 +682,7 @@ export const repositoryReadFactsReducer = defineReducer({
     compatibility: initialCompatibility(),
     presence: {},
     preparation: ticketPreparationReducer.initial(),
+    handbacks: ticketHandbacksReducer.initial(),
     upgrades: dispatchUpgradeReducer.initial(),
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
@@ -700,6 +712,7 @@ export const repositoryReadFactsReducer = defineReducer({
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
     acc.preparation = ticketPreparationReducer.advance(acc.preparation, events)
+    acc.handbacks = ticketHandbacksReducer.advance(acc.handbacks, events)
     advanceCompatibility(acc.compatibility, events)
     acc.upgrades = dispatchUpgradeReducer.advance(acc.upgrades, events)
     acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
@@ -829,6 +842,7 @@ export const repositoryReadFactsReducer = defineReducer({
     compatibility: structuredClone(acc.compatibility),
     presence: structuredClone(acc.presence),
     preparation: ticketPreparationReducer.finish(acc.preparation),
+    handbacks: ticketHandbacksReducer.finish(acc.handbacks),
     upgrades: dispatchUpgradeReducer.finish(acc.upgrades),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestTerminals: structuredClone(acc.harvestTerminals),

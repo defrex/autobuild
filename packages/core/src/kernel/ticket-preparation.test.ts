@@ -114,3 +114,55 @@ test('abandoned preparation diagnostic names the attempt, reason and claim certa
   )
   expect(unrecorded).not.toContain('claim confirmed')
 })
+
+test('a bounce records its missing parts and its hand-back report until resolution', () => {
+  const writes: RepositoryEventWrite[] = [
+    {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt: 'prep', ticket, readyState: 'Ready', claimedState: 'Doing' },
+    },
+    { actor: DISPATCHER, type: 'ticket-preparation.claimed', payload: { attempt: 'prep', ticket } },
+    {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.handback-selected',
+      payload: {
+        attempt: 'prep',
+        ticket,
+        state: 'Triage',
+        missing: ["an '## Out of scope' heading"],
+      },
+    },
+    {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload: {
+        ticket,
+        attempt: 'prep',
+        cause: 'spec-bounce',
+        state: 'Triage',
+        role: 'triage',
+        missing: ["an '## Out of scope' heading"],
+      },
+    },
+  ]
+  const events = writes.map((write, index) => event(write, index + 1))
+  const held = ticketPreparationReducer.reduce(events).prep!
+  expect(held.missing).toEqual(["an '## Out of scope' heading"])
+  expect(held.reported).toBe(true)
+  // A report for another attempt or a build leaves this attempt unreported.
+  const before = ticketPreparationReducer.reduce(events.slice(0, 3)).prep!
+  expect(before.reported).toBeUndefined()
+  const resolved = ticketPreparationReducer.reduce([
+    ...events,
+    event(
+      {
+        actor: DISPATCHER,
+        type: 'ticket-preparation.resolved',
+        payload: { attempt: 'prep', ticket, outcome: 'bounced' },
+      },
+      5,
+    ),
+  ])
+  expect(resolved).toEqual({})
+})
