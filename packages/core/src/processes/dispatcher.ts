@@ -74,7 +74,7 @@ import {
   type JanitorOperation,
 } from '../kernel/janitor-failure'
 import { KernelGitUnavailable, kernelGitUnavailableDetail } from '../kernel/kernel-git'
-import { isForgeFailure } from '../ports/forge-failure'
+import { isForgeFailure, isForgeRejection } from '../ports/forge-failure'
 import {
   ForgeRequestDeferred,
   withForgeRequestContext,
@@ -103,6 +103,7 @@ import { changeBlockers } from '../ports/tickets/operations'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import { landingPolicyIdentity } from '../kernel/landing-policy-identity'
 import {
+  currentLandingFallback,
   landingAuthorized,
   nativeLandingApplied,
   sameLandingCandidate,
@@ -232,7 +233,11 @@ import type {
   WorkspaceProvider,
   WorkspaceProvisionResult,
 } from '../ports/types'
-import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
+import {
+  isForgeMergeQueueRejection,
+  NoCommitsBetweenBranchesError,
+  TicketSourceRateLimitError,
+} from '../ports/types'
 import { issueLinksForForge } from '../kernel/issue-keywords'
 import {
   contributedIssueLinks,
@@ -4277,15 +4282,27 @@ export class Dispatcher {
       prState.nativeAutoMerge === true &&
       !nativeCancelled &&
       isReady
+    // A landing that cannot be armed natively lands by polling; a quiet
+    // polling tick needs no consent read, because the forge answers from the
+    // poll's PR read and consent is rechecked before any merge. A landing
+    // settled as awaiting a human merge makes no landing call at all; the PR
+    // read above still records the human's merge.
+    const fallback = currentLandingFallback(state.landing)
+    const polling =
+      fallback?.mode === 'polling' &&
+      prState.state === 'open' &&
+      prState.nativeAutoMerge !== true &&
+      isReady
     if (
       !integration &&
       !nodeTarget &&
       prState.state === 'open' &&
       landingAuthorized(state.landing) &&
+      fallback?.mode !== 'human-merge' &&
       (prState.nativeAutoMerge === false || !acknowledged || maintain) &&
       (!retry || Date.parse(retry.after) <= this.deps.clock().getTime()) &&
       commandSeq !== undefined &&
-      (maintain || (await canApply()))
+      (maintain || polling || (await canApply()))
     ) {
       const decision = state.landing!.decision!
       // The provider checks eligibility immediately before mutating. Inspection
@@ -4323,6 +4340,7 @@ export class Dispatcher {
           buildSlug: record.slug,
           baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
           ...issueLinksForForge(state, forge),
+          ...(polling ? { polling: true } : {}),
           canApply: async () => {
             if (!(await canApply())) return false
             if (enableSeq === undefined)
@@ -4363,7 +4381,58 @@ export class Dispatcher {
           await settleFailedEnable()
           throw error
         })
-      if (maintain && enableSeq === undefined) {
+      const fallbackFact = {
+        candidate: decision.candidate,
+        decisionSeq: decision.seq,
+        ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
+      }
+      const requireHumanMerge = (
+        cause: EventPayload<'landing.human-merge-required'>['cause'],
+        detail: string,
+      ) =>
+        store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'landing.human-merge-required',
+          payload: { ...fallbackFact, cause, detail },
+        })
+      if (result.kind === 'human-merge') {
+        // Settled once: later ticks make no landing call for this candidate.
+        await requireHumanMerge(result.cause, result.detail)
+      } else if (result.kind === 'polling') {
+        // The forge never called the consent guard, so nothing was mutated.
+        if (fallback?.mode !== 'polling')
+          await store.append(record.slug, {
+            actor: DISPATCHER,
+            type: 'landing.polling-selected',
+            payload: { ...fallbackFact, detail: result.detail },
+          })
+        if (
+          result.clear &&
+          prState.mergeable === true &&
+          result.headSha === decision.candidate.head &&
+          (await canApply())
+        ) {
+          try {
+            // Re-reads the PR clear at the candidate head and rechecks
+            // consent immediately before the merge request.
+            await forge.squashMerge(workspacePath, pr.number, decision.candidate.head, {
+              buildSlug: record.slug,
+              baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+              ...issueLinksForForge(state, forge),
+              requireClearState: true,
+              canApply,
+            })
+          } catch (error) {
+            // Only the forge refusing a merge it reported clear settles;
+            // pre-merge checks throw ordinary errors and poll again.
+            if (!isForgeRejection(error)) throw error
+            await requireHumanMerge(
+              isForgeMergeQueueRejection(error) ? 'merge-queue-activity' : 'merge-refused',
+              error.forgeMessage,
+            )
+          }
+        }
+      } else if (maintain && enableSeq === undefined) {
         // Quiet maintenance: no consent check passed, so nothing was mutated.
         // A vanished request is reconciled by the next poll's PR read.
         if (result.kind === 'deferred' && result.reason)

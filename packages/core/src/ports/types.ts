@@ -2,7 +2,7 @@ import type { SelectedAccount } from '../config/accounts'
 export type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { BuildStore } from '../store/types'
-import { ForgeRejection } from './forge-failure'
+import { ForgeRejection, isForgeRejection } from './forge-failure'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
  * The kernel and processes depend only on these types; adapters live in
@@ -674,6 +674,19 @@ export type AutoMergeResult =
   | { kind: 'applied' }
   | { kind: 'ungated'; headSha: string }
   | { kind: 'deferred'; reason?: AutoMergeDeferralReason }
+  /** A gated landing the forge cannot arm natively (GitHub GraphQL is
+   * unavailable from this environment). The caller lands it by polling:
+   * `clear` is true only when the forge reports the PR clear to merge at
+   * `headSha`, and then the caller squashes with `requireClearState`. */
+  | { kind: 'polling'; headSha: string; clear: boolean; detail: string }
+  /** A gated landing that cannot be armed natively and must not be merged
+   * by polling, because the base branch requires a merge queue. A human
+   * merges it on the forge. */
+  | {
+      kind: 'human-merge'
+      cause: 'merge-queue-rule' | 'merge-queue-activity'
+      detail: string
+    }
 
 /** One explicitly designated image artifact to copy to a review-window host. */
 export interface PrAttachmentUploadRequest {
@@ -703,12 +716,36 @@ export interface BuildLandingOptions {
   buildSlug: string
   /** Optional query hint, verified against the current provider PR base. */
   baseBranch?: string
-  /** Refresh durable consent and pipeline eligibility before native mutation. */
+  /** Refresh durable consent and pipeline eligibility before native mutation,
+   * and before a `requireClearState` squash. */
   canApply?: () => Promise<boolean>
+  /** Durable evidence that this exact candidate already took the polling
+   * route: a quiet poll may skip availability and gate probes and answer
+   * from the poll's PR read alone while the PR is not clear. */
+  polling?: boolean
+  /** Squash a gated PR only when a fresh read reports it clear to merge at
+   * the expected head; call `canApply` immediately before the merge request,
+   * and raise the forge's refusal of that request as a `ForgeRejection`. */
+  requireClearState?: boolean
   /** The build's sealed issue links, passed only to a `closesIssues` forge
    * for a leaf aimed at the default branch. The adapter composes them into
    * the landed headline and message with `kernel/issue-keywords`. */
   issueLinks?: readonly IssueLink[]
+}
+
+/** A gated squash withheld because the forge reports the base branch merges
+ * through a merge queue, which a squash request cannot enter. The polling
+ * route settles it as awaiting a human merge, like any refused merge. */
+export class ForgeMergeQueueRejection extends ForgeRejection {
+  readonly mergeQueue = true as const
+  constructor(message: string, rejection: { forge: string; forgeMessage: string }) {
+    super(message, { forge: rejection.forge, status: 405, forgeMessage: rejection.forgeMessage })
+    this.name = 'ForgeMergeQueueRejection'
+  }
+}
+
+export function isForgeMergeQueueRejection(error: unknown): error is ForgeMergeQueueRejection {
+  return isForgeRejection(error) && (error as { mergeQueue?: unknown }).mergeQueue === true
 }
 
 /** GitHub's "No commits between" 422: a forge rejection the empty-node path
@@ -884,7 +921,10 @@ export interface Forge {
    * is idempotent and safe to retry across the forge-call/event-append crash window.
    * With options it is also called on every eligible poll while a request is
    * armed: a matching request returns `applied` without mutation, and any
-   * repair calls `options.canApply` first.
+   * repair calls `options.canApply` first. A gated landing that cannot be
+   * armed natively returns `polling` (the caller squashes once it is clear)
+   * or `human-merge` (the base requires a merge queue); neither calls
+   * `options.canApply`.
    */
   setAutoMerge(
     workspacePath: string,
@@ -895,6 +935,10 @@ export interface Forge {
   /**
    * Perform a normal squash merge, guarded by the inspected PR head. This is
    * never an admin/force operation: forge-side protection still applies.
+   * With `options.requireClearState` it is the polling route's gated squash:
+   * it re-reads the PR, refuses unless the forge reports it clear at the
+   * expected head, rechecks `options.canApply`, and raises the forge's
+   * refusal of the merge request as a `ForgeRejection`.
    */
   squashMerge(
     workspacePath: string,

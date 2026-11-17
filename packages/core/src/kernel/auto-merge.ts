@@ -5,6 +5,7 @@ import { autoMergeDeferralClasses, type AutoMergeDeferralReason } from '../ports
 import type { BuildStore } from '../store/types'
 import { defineReducer } from './incremental'
 import type { BuildState } from './reducer'
+import { currentLandingFallback, landingAuthorized, landingFallbackReason } from './landing-state'
 
 /** The complete GitHub `mergeStateStatus` enum. Keeping this list closed is a
  * safety property: a future forge state cannot silently become direct-merge
@@ -21,6 +22,15 @@ export const mergeStateStatuses = [
 ] as const
 
 export type MergeStateStatus = (typeof mergeStateStatuses)[number]
+
+/** The merge states in which GitHub reports a PR clear to merge. The polling
+ * route merges only from these, never relying on GitHub refusing a premature
+ * merge: BLOCKED, BEHIND, DIRTY, UNKNOWN and DRAFT are never clear. */
+export const MERGE_CLEAR_STATES: ReadonlySet<MergeStateStatus> = new Set([
+  'CLEAN',
+  'UNSTABLE',
+  'HAS_HOOKS',
+])
 export type MergeGatePresence = 'present' | 'absent'
 
 export type AutoMergeEnableDisposition =
@@ -270,6 +280,24 @@ export function currentAutoMergeDeferralFrom(
   return deferralObservationFrom(ledger, state.pr.number, pending.commandSeq)?.payload.summary
 }
 
+/** Why an authorized landing on an open PR is still waiting: the current
+ * fallback route (landing by polling, or awaiting a human merge) first, then
+ * the current gate deferral. Shared by `ab status` and both dashboards. */
+export function currentLandingWaitReasonFrom(
+  ledger: DeferralLedger,
+  state: Pick<BuildState, 'autoMerge' | 'pr' | 'landing' | 'prState'>,
+): string | undefined {
+  const fallback = currentLandingFallback(state.landing)
+  if (
+    fallback !== undefined &&
+    state.pr !== undefined &&
+    state.prState === 'open' &&
+    landingAuthorized(state.landing)
+  )
+    return landingFallbackReason(fallback, state.pr.number)
+  return currentAutoMergeDeferralFrom(ledger, state)
+}
+
 const DEFERRAL_SUMMARIES = {
   'github-plan-limitation':
     'GitHub rulesets are unavailable because of the repository account plan',
@@ -353,6 +381,11 @@ export function mergeAttentionFromFacts(state: BuildState, ledger: DeferralLedge
     state.status === 'aborted'
   )
     return null
+  // A landing settled as awaiting a human merge needs a person to merge on
+  // the forge. Polling needs no action and is not attention.
+  const fallback = currentLandingFallback(state.landing)
+  if (fallback?.mode === 'human-merge' && landingAuthorized(state.landing))
+    return { pr: state.pr, reason: landingFallbackReason(fallback, state.pr.number) }
   // Consent and hold attention belongs to the current readiness queue. Only
   // gate deferrals remain here, so stale or unfinished landings cannot wake
   // through a second, weaker consent predicate.

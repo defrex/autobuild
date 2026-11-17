@@ -19,7 +19,11 @@ import {
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 export { treeVocabulary, consentQueue } from './tree'
-import { landingAuthorized } from '../../kernel/landing-state'
+import {
+  currentLandingFallback,
+  landingAuthorized,
+  landingFallbackReason,
+} from '../../kernel/landing-state'
 import {
   integrationComplete,
   integrationFailed,
@@ -70,7 +74,7 @@ import type { Config } from '../../config/schema'
 import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import {
-  currentAutoMergeDeferralFrom,
+  currentLandingWaitReasonFrom,
   currentDeferralObservationReducer,
   type DeferralLedger,
 } from '../../kernel/auto-merge'
@@ -119,8 +123,16 @@ export type EffectiveStatus =
 
 export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 
-/** Human intent versus correlated forge application, rendered non-color-only. */
-export type AutoMergeDisplay = 'off' | 'requested' | 'enabled' | 'cancelling'
+/** Human intent versus correlated forge application, rendered non-color-only.
+ * `polling` and `human-merge` are the routes an authorized landing takes when
+ * the forge cannot arm native auto-merge. */
+export type AutoMergeDisplay =
+  | 'off'
+  | 'requested'
+  | 'enabled'
+  | 'cancelling'
+  | 'polling'
+  | 'human-merge'
 
 /**
  * A step's wall-clock timing, now-INDEPENDENT so the model can be cached and
@@ -481,7 +493,7 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
       return state.landing.native?.enabled &&
         state.landing.native.decisionSeq === state.landing.decision?.seq
         ? 'enabled'
-        : 'requested'
+        : (currentLandingFallback(state.landing)?.mode ?? 'requested')
     return 'off'
   }
   const { requested, commandSeq, applied } = state.autoMerge
@@ -1054,6 +1066,13 @@ export function projectBuildFromFacts(
           ? autoMergeConsentReason(record.slug)
           : 'Merge policy decision pending'
     steps[steps.length - 1] = { ...steps[steps.length - 1]!, reason }
+  } else if (mergeCurrent && state.pr !== undefined && state.prState === 'open') {
+    const fallback = currentLandingFallback(state.landing)
+    if (fallback !== undefined)
+      steps[steps.length - 1] = {
+        ...steps[steps.length - 1]!,
+        reason: landingFallbackReason(fallback, state.pr.number),
+      }
   }
 
   const setupError = state.janitor?.attention
@@ -1075,7 +1094,7 @@ export function projectBuildFromFacts(
   const decision = decideNextFromFacts(state, facts.log, pipeline)
   const mergeWaitReason =
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
-      ? currentAutoMergeDeferralFrom(facts.deferral, state)
+      ? currentLandingWaitReasonFrom(facts.deferral, state)
       : undefined
 
   return {

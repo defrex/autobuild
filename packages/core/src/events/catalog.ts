@@ -56,6 +56,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.land-requested': ['human'],
   'landing.command-acknowledged': ['dispatcher', 'kernel'],
   'landing.native-enable-started': ['dispatcher'],
+  'landing.polling-selected': ['dispatcher'],
+  'landing.human-merge-required': ['dispatcher'],
   'landing.forge-merged': ['kernel'],
   'landing.native-applied': ['dispatcher', 'kernel'],
   'target.distance': ['dispatcher'],

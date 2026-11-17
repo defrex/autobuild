@@ -20,7 +20,12 @@ import {
   neutralizeClosingReferences,
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
-import { ForgeRejection, NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
+import {
+  ForgeMergeQueueRejection,
+  ForgeRejection,
+  NoCommitsBetweenBranchesError,
+  type BuildLandingOptions,
+} from '../types'
 import { findSummaryMarker } from './summary-marker'
 import {
   GitHubSquashMessageSetting,
@@ -63,7 +68,9 @@ import type { Exec } from '../workspace/git-worktree'
 import {
   GitHubApiError,
   classifyGitHubFailure,
+  classifyGitHubGraphQLRefusal,
   createGitHubFetchTransport,
+  isGitHubGraphQLUnavailable,
   githubCredentialRequirement,
   githubTokenSource,
   restPlanLimitation,
@@ -74,6 +81,7 @@ import {
 } from './github-transport'
 import {
   classifyAutoMergeEnable,
+  MERGE_CLEAR_STATES,
   mergeStateStatuses,
   type MergeGatePresence,
   type MergeStateStatus,
@@ -200,10 +208,25 @@ const restAutoMergeView = z
     node_id: z.string().min(1),
     auto_merge: z.object({}).passthrough().nullable(),
     mergeable_state: z.string().min(1),
+    mergeable: z.boolean().nullable().optional(),
     head: z.object({ ref: z.string().min(1), sha: z.string().min(1) }).passthrough(),
     base: z.object({ ref: z.string().min(1) }).passthrough(),
   })
   .passthrough()
+
+/** The polling route's clearance from one REST PR representation. Only the
+ * explicit clear states with `mergeable === true` count; anything else,
+ * including an unrecognised state (which throws), never merges. */
+function restMergeClear(view: { mergeable_state: string; mergeable?: boolean | null }): {
+  mergeState: MergeStateStatus
+  clear: boolean
+} {
+  const mergeState = restMergeState(view.mergeable_state)
+  return { mergeState, clear: MERGE_CLEAR_STATES.has(mergeState) && view.mergeable === true }
+}
+
+/** One page of the repository activity feed (`GET /repos/{o}/{r}/activity`). */
+const restActivity = z.array(z.object({ activity_type: z.string() }).passthrough())
 
 /** The landing path's PR facts, re-parsed from the same representation the
  * `getPrState` poll fetched. `auto_merge` carries the armed request's
@@ -465,6 +488,14 @@ const autoMergeMutationPayload = z.object({
 const enableAutoMergeData = z.object({ enablePullRequestAutoMerge: autoMergeMutationPayload })
 const disableAutoMergeData = z.object({ disablePullRequestAutoMerge: autoMergeMutationPayload })
 
+/** The read-only availability probe: the cheapest query GitHub answers. */
+const GRAPHQL_PROBE_QUERY = 'query { rateLimit { cost } }'
+const graphqlProbeData = z.object({ rateLimit: z.object({}).passthrough().nullable() })
+
+/** How long one GraphQL refusal suppresses further GraphQL from a forge
+ * instance before availability is probed again. */
+export const GITHUB_GRAPHQL_RECHECK_MS = 30 * 60_000
+
 // ── Classic branch protection (REST) ─────────────────────────────────────────
 //
 // The documented Branch-protection `protection` object (GET
@@ -585,6 +616,11 @@ function restMergeState(raw: string): MergeStateStatus {
     )
   }
   return mapped
+}
+
+/** The shared polling detail: why this landing is not armed natively. */
+function pollingDetail(number: number, mergeState: MergeStateStatus): string {
+  return `GitHub GraphQL is unavailable; PR #${number} reports mergeable_state '${mergeState}'`
 }
 
 // ── Forge adapter ────────────────────────────────────────────────────────────
@@ -769,6 +805,47 @@ export class GitHubForge implements Forge {
   /** Bounded waits between mergeability re-queries on the UNKNOWN path. */
   private readonly mergeabilityRetryDelaysMs: number[]
 
+  /** Per-instance GraphQL availability. Liveness of this environment, never
+   * a durable fact: another dispatcher may reach GraphQL. A refusal holds for
+   * {@link GITHUB_GRAPHQL_RECHECK_MS}; any successful GraphQL call proves it
+   * available. */
+  private graphqlState:
+    | { kind: 'unknown' }
+    | { kind: 'available' }
+    | {
+        kind: 'unavailable'
+        until: number
+      } = { kind: 'unknown' }
+  private graphqlProbe?: Promise<boolean>
+
+  /** Whether GraphQL is reachable, probing at most once per recheck window
+   * with a read-only query. Single-flight: the window is armed before the
+   * probe is sent, and a probe that fails for any other reason restores the
+   * previous state and re-throws. */
+  private async graphqlAvailable(): Promise<boolean> {
+    const state = this.graphqlState
+    if (state.kind === 'available') return true
+    if (state.kind === 'unavailable' && this.now() < state.until) return false
+    if (this.graphqlProbe !== undefined) return this.graphqlProbe
+    this.graphqlState = { kind: 'unavailable', until: this.now() + GITHUB_GRAPHQL_RECHECK_MS }
+    const probe = (async () => {
+      try {
+        await this.graphql('rateLimit', graphqlProbeData, GRAPHQL_PROBE_QUERY, {})
+        return true
+      } catch (error) {
+        if (isGitHubGraphQLUnavailable(error)) return false
+        this.graphqlState = state
+        throw error
+      }
+    })()
+    this.graphqlProbe = probe
+    try {
+      return await probe
+    } finally {
+      this.graphqlProbe = undefined
+    }
+  }
+
   private readonly now: () => number
 
   constructor(
@@ -820,7 +897,16 @@ export class GitHubForge implements Forge {
           return response
         } catch (error) {
           if (error instanceof GitHubApiError) outcome ??= 'restPrimary'
-          throw classifyGitHubFailure(error, this.now())
+          let classified = classifyGitHubFailure(error, this.now())
+          if (args[1] === 'graphql') {
+            classified = classifyGitHubGraphQLRefusal(classified)
+            if (isGitHubGraphQLUnavailable(classified))
+              this.graphqlState = {
+                kind: 'unavailable',
+                until: this.now() + GITHUB_GRAPHQL_RECHECK_MS,
+              }
+          }
+          throw classified
         } finally {
           for (const observer of this.requestObservers)
             observer({ ...context, ...(outcome ? { outcome } : {}) })
@@ -945,6 +1031,8 @@ export class GitHubForge implements Forge {
         this.now(),
       )
     }
+    // Any answered operation proves the endpoint reachable from here.
+    this.graphqlState = { kind: 'available' }
     if (envelope.data.data === undefined || envelope.data.data === null) {
       throw new Error(`GitHub GraphQL ${operation} returned no data`)
     }
@@ -1464,7 +1552,7 @@ export class GitHubForge implements Forge {
     controlledLanding = false,
   ): Promise<
     | { kind: 'proved'; presence: MergeGatePresence }
-    | { kind: 'deferred'; reason: AutoMergeDeferralReason }
+    | { kind: 'deferred'; reason: AutoMergeDeferralReason; mergeQueue?: true }
   > {
     const unproven = (detail: string) =>
       ({
@@ -1553,9 +1641,12 @@ export class GitHubForge implements Forge {
       if ('error' in outcome) throw outcome.error
       const parsed = outcome.rules
       if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
-        return unproven(
-          'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
-        )
+        return {
+          ...unproven(
+            'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
+          ),
+          mergeQueue: true,
+        }
       }
       rulesetGate =
         rulesetsHaveMergeGate(parsed) ||
@@ -1722,6 +1813,23 @@ export class GitHubForge implements Forge {
             },
           }
         if (await this.identityMessageMatches(number, landing, options)) return { kind: 'applied' }
+        if (options.polling === true) {
+          // Quiet polling tick: the poll's own PR read answers it. No gate,
+          // queue or GraphQL request until GitHub reports the PR clear.
+          const quiet = restAutoMergeView.safeParse(landing)
+          if (!quiet.success)
+            throw new Error(
+              `unexpected GitHub response for PR #${number} polling inspection: ${quiet.error.message}`,
+            )
+          const { mergeState, clear } = restMergeClear(quiet.data)
+          if (!clear)
+            return {
+              kind: 'polling',
+              headSha: landing.head.sha,
+              clear: false,
+              detail: pollingDetail(number, mergeState),
+            }
+        }
       }
       const { view, mergeState, requeries, waitedMs } = await this.inspectAutoMergeView(
         repoPath,
@@ -1736,13 +1844,40 @@ export class GitHubForge implements Forge {
         return { kind: 'deferred' }
 
       const gate = await this.mergeGatePresence(view.base.ref, options !== undefined)
-      if (gate.kind === 'deferred') return gate
+      if (gate.kind === 'deferred') {
+        if (gate.mergeQueue && options !== undefined && !(await this.graphqlAvailable()))
+          return {
+            kind: 'human-merge',
+            cause: 'merge-queue-rule',
+            detail: `GitHub GraphQL is unavailable and ${view.base.ref} requires its merge queue (ruleset)`,
+          }
+        return { kind: 'deferred', reason: gate.reason }
+      }
       const disposition =
         view.auto_merge !== null && options !== undefined && mergeState !== 'DIRTY'
           ? { kind: 'native' as const }
           : classifyAutoMergeEnable(mergeState, gate.presence)
       switch (disposition.kind) {
         case 'native': {
+          if (options !== undefined && !(await this.graphqlAvailable())) {
+            // Repository auto-merge permission is irrelevant to a REST
+            // squash. Queue activity is checked on every full-path
+            // evaluation, whatever the merge state, so a blocked PR on a
+            // queued base settles on its first evaluation.
+            if (await this.baseMergeQueueActivity(view.base.ref))
+              return {
+                kind: 'human-merge',
+                cause: 'merge-queue-activity',
+                detail: `GitHub GraphQL is unavailable and GitHub reports merge-queue merges on ${view.base.ref}`,
+              }
+            const { clear } = restMergeClear(view)
+            return {
+              kind: 'polling',
+              headSha: view.head.sha,
+              clear,
+              detail: pollingDetail(number, mergeState),
+            }
+          }
           const repository = await this.repositorySettings()
           if (typeof repository.allow_auto_merge !== 'boolean')
             throw new Error('unexpected GitHub response for repository auto-merge read')
@@ -1824,6 +1959,9 @@ export class GitHubForge implements Forge {
       }
     } catch (error) {
       if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
+      // The refusal set the availability memo: the next tick routes to
+      // polling. Nothing for an operator to act on, so no reason.
+      if (isGitHubGraphQLUnavailable(error)) return { kind: 'deferred' }
       return {
         kind: 'deferred',
         reason: {
@@ -1834,6 +1972,34 @@ export class GitHubForge implements Forge {
         },
       }
     }
+  }
+
+  /** Whether GitHub reports merge-queue merges on `base`: REST-visible
+   * evidence of a merge queue that classic branch protection does not
+   * expose. One page of one item is enough. Memoized per tick scope; a
+   * response the token cannot read counts as no evidence, because the
+   * guarded squash's refusal still catches a queue at merge time. */
+  private async baseMergeQueueActivity(base: string): Promise<boolean> {
+    const { owner, name } = await this.requireCoordinates()
+    const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    return this.memo(`activity:${base}`, async () => {
+      try {
+        const response = await this.request('GET', `${repoPath}/activity`, {
+          query: {
+            ref: `refs/heads/${base}`,
+            activity_type: 'merge_queue_merge',
+            per_page: '1',
+          },
+        })
+        return this.parse(restActivity, response, 'merge-queue activity read').some(
+          (entry) => entry.activity_type === 'merge_queue_merge',
+        )
+      } catch (error) {
+        if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
+        if (error instanceof GitHubApiError && [403, 404, 422].includes(error.status)) return false
+        throw error
+      }
+    })
   }
 
   /** The PR as the landing path sees it. By default this is the
@@ -2094,7 +2260,10 @@ export class GitHubForge implements Forge {
 
   /** Normal guarded squash — no admin, force, rebase, or native-auto flag.
    * A 409 (head moved) surfaces as a hard error, preserving the contract's
-   * moved-head rejection. */
+   * moved-head rejection. With `requireClearState` (the polling route), a
+   * fresh read must report the PR clear at the expected head, consent is
+   * rechecked last, and GitHub's refusal of the merge itself is raised as a
+   * `ForgeRejection`; nothing relies on GitHub refusing a premature merge. */
   async squashMerge(
     _workspacePath: string,
     number: number,
@@ -2113,25 +2282,62 @@ export class GitHubForge implements Forge {
           `GitHub PR #${number} base ${view.base.ref} differs from the build's base ${options.baseBranch}; retry inspection`,
         )
       }
-      // The dispatcher squashes only after inspection returned `ungated`; this
-      // re-checks merge queues, which ignore message overrides.
+      if (options.requireClearState === true) {
+        const current = restAutoMergeView.safeParse(view)
+        if (!current.success || !restMergeClear(current.data).clear)
+          throw new Error(`GitHub no longer reports PR #${number} clear to merge; retry inspection`)
+      }
+      // The dispatcher squashes only after inspection returned `ungated` or a
+      // clear `polling`; this re-checks merge queues, which ignore message
+      // overrides.
       const gate = await this.mergeGatePresence(view.base.ref, true)
       if (gate.kind === 'deferred') throw new Error(gate.reason.detail)
+      if (options.requireClearState === true && (await this.baseMergeQueueActivity(view.base.ref)))
+        throw new ForgeMergeQueueRejection(
+          `GitHub reports merge-queue merges on ${view.base.ref}; PR #${number} was not merged`,
+          {
+            forge: 'GitHub',
+            forgeMessage: `GitHub reports merge-queue merges on ${view.base.ref}`,
+          },
+        )
       landing = await this.expectedLanding(number, view, options)
+      if (
+        options.requireClearState === true &&
+        options.canApply !== undefined &&
+        !(await options.canApply())
+      )
+        return
     }
-    await this.request(
-      'PUT',
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
-      {
-        body: {
-          merge_method: 'squash',
-          sha: expectedHeadSha,
-          ...(landing !== undefined
-            ? { commit_title: landing.headline, commit_message: landing.body }
-            : {}),
+    try {
+      await this.request(
+        'PUT',
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
+        {
+          body: {
+            merge_method: 'squash',
+            sha: expectedHeadSha,
+            ...(landing !== undefined
+              ? { commit_title: landing.headline, commit_message: landing.body }
+              : {}),
+          },
         },
-      },
-    )
+      )
+    } catch (error) {
+      // Only the polling route settles on a refusal: GitHub declined a PR it
+      // had just reported clear at this exact head. 409 (head moved) and 404
+      // stay hard errors.
+      if (
+        options?.requireClearState === true &&
+        error instanceof GitHubApiError &&
+        [403, 405, 422].includes(error.status)
+      )
+        throw new ForgeRejection(`GitHub refused to merge PR #${number}: ${error.message}`, {
+          forge: 'GitHub',
+          status: error.status,
+          forgeMessage: error.message,
+        })
+      throw error
+    }
   }
 
   /** The build's summary comment (SPEC §7.5) — links into the store. */
