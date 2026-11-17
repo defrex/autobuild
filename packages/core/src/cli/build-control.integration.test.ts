@@ -158,6 +158,37 @@ describe('controlBuild — shared durable controls', () => {
     }
   })
 
+  test('abort records its destination and reason; repeats are idempotent only when identical', async () => {
+    const store = await makeStore()
+    const abort = (action: BuildControlAction) =>
+      controlBuild({ store, repo: REPO, slug: SLUG, env: { USER: 'operator' }, action })
+    const blank = await abort({ kind: 'abort', reason: '   ' }).catch((error) => error)
+    expect(blank).toBeInstanceOf(BuildControlError)
+    expect((blank as BuildControlError).code).toBe('invalid-argument')
+    const long = await abort({ kind: 'abort', reason: 'x'.repeat(2001) }).catch((error) => error)
+    expect((long as BuildControlError).code).toBe('invalid-argument')
+    const before = (await store.getEvents(SLUG)).length
+
+    const first = await abort({ kind: 'abort', to: 'ready', reason: '  waiting on T-2 ' })
+    expect(first).toMatchObject({
+      kind: 'command',
+      event: { type: 'build.abort-requested', payload: { to: 'ready', reason: 'waiting on T-2' } },
+    })
+    const repeat = await abort({ kind: 'abort', to: 'ready', reason: 'waiting on T-2' })
+    expect(repeat).toEqual(first)
+    for (const differing of [
+      { kind: 'abort' },
+      { kind: 'abort', to: 'ready' },
+      { kind: 'abort', to: 'triage', reason: 'waiting on T-2' },
+    ] as BuildControlAction[]) {
+      const refused = await abort(differing).catch((error) => error)
+      expect(refused).toBeInstanceOf(BuildControlError)
+      expect((refused as BuildControlError).code).toBe('abort-pending')
+    }
+    expect((await store.getEvents(SLUG)).length).toBe(before + 1)
+    await store.close()
+  })
+
   test('dashboard pause and resume derive from freshly reduced state', async () => {
     const store = await makeStore()
 

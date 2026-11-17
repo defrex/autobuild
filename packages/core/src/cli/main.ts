@@ -9,7 +9,7 @@ import { withSessionlessStore } from './store-opening'
 import { abLandings } from './landings'
 import { readBuildFacts } from '../store/reduced-reads'
 import { preparePinnedAssets } from '../store/ticket-assets'
-import type { PinnedAsset } from '../events/payloads'
+import { abortDestinationSchema, type PinnedAsset } from '../events/payloads'
 import { abConnect, abDisconnect } from './connect'
 /**
  * `ab` — the only channel between agents and the store, and the enforcement
@@ -283,6 +283,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         'auto-merge-on': 'auto-merge requested',
         'auto-merge-off': 'auto-merge cancelled',
       }
+      if (result.event.type === 'build.abort-requested')
+        return `build ${result.slug}: abort requested; ticket returns to ${result.event.payload.to ?? 'triage'}`
       return `build ${result.slug}: ${outcome[result.command]}`
     }
     case 'answered': {
@@ -1159,13 +1161,24 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'abort': {
-      const usage = 'usage: ab abort <slug> [--store <ref>]'
-      const parsed = parseArgs(rest, { store: 'value' }, usage)
+      const usage = 'usage: ab abort <slug> [--to triage|ready] [--reason <text>] [--store <ref>]'
+      const parsed = parseArgs(rest, { store: 'value', to: 'value', reason: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
+      const to = stringFlag(parsed, 'to')
+      const destination = abortDestinationSchema.safeParse(to)
+      if (to !== undefined && !destination.success)
+        throw new Error(
+          `--to must be one of: ${abortDestinationSchema.options.join(', ')} — ${usage}`,
+        )
+      const reason = stringFlag(parsed, 'reason')
       await runBuildControl(
         deps,
         parsed.positionals[0]!,
-        { kind: 'abort' },
+        {
+          kind: 'abort',
+          ...(destination.success ? { to: destination.data } : {}),
+          ...(reason !== undefined ? { reason } : {}),
+        },
         stringFlag(parsed, 'store'),
       )
       return 0

@@ -121,7 +121,9 @@ test('an aborted build leaves the issue open in triage, marked aborted', async (
   expect(reduceBuild(await h.events(SLUG)).outcome).toBe('abandoned')
   expect(github.issue(issue)?.state).toBe('open')
   expect([...github.issue(issue)!.labels].sort()).toEqual(['autobuild', 'autobuild:aborted'])
-  expect(github.comments.get(issue)?.at(-1)).toBe(`build ${SLUG} aborted — returned to triage`)
+  expect(github.comments.get(issue)?.at(-1)).toBe(
+    `build ${SLUG} aborted — returned to triage\nReason: not now`,
+  )
   expectNoCounts(github)
 }, 30_000)
 

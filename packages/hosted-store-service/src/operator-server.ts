@@ -614,7 +614,13 @@ export function createOperatorServer(opts: OperatorServerOptions): {
               ? { kind: 'dashboard-resume' }
               : request.action === 'land' && request.head !== undefined
                 ? { kind: 'land', head: request.head }
-                : { kind: request.action }
+                : request.action === 'abort'
+                  ? {
+                      kind: 'abort',
+                      ...(request.to !== undefined ? { to: request.to } : {}),
+                      ...(request.reason !== undefined ? { reason: request.reason } : {}),
+                    }
+                  : { kind: request.action }
         return json(
           200,
           await controlBuild({

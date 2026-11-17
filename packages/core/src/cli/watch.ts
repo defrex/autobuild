@@ -461,6 +461,16 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `Forge recovered: ${event.payload.forge}`
     case 'forge.credential-limited':
       return `Forge request limited for ${event.payload.process} (${event.payload.credential}${event.payload.missingCredential ? `: ${singleLine(event.payload.missingCredential)}` : ''}); reset ${event.payload.resetAt}; dispatcher forge work continues`
+    case 'ticket.handed-back': {
+      const p = event.payload
+      const details = [
+        `${p.cause}${p.build !== undefined ? ` of build ${p.build}` : ''}`,
+        ...(p.requested !== undefined ? [`requested ${p.requested}`] : []),
+        ...(p.missing !== undefined ? [`missing: ${p.missing.join('; ')}`] : []),
+        ...(p.reason !== undefined ? [`reason: ${p.reason}`] : []),
+      ]
+      return singleLine(`ticket ${p.ticket.id} handed back to ${p.state} (${details.join('; ')})`)
+    }
     case 'dispatcher.kernel-git-unavailable':
       return `Kernel Git unavailable (${event.payload.executable}): ${singleLine(event.payload.detail)}`
     case 'dispatcher.kernel-git-recovered':

@@ -7,6 +7,7 @@ import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
   ticketPreparationEventPayloadSchemas,
+  ticketHandbackEventPayloadSchemas,
   changePresenceEventPayloadSchemas,
   ticketSourceHealthEventPayloadSchemas,
   dispatcherSettingEventPayloadSchemas,
@@ -39,6 +40,7 @@ export const DISPATCH_HANDOFF_EVENT_TYPES = [
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   ...Object.keys(ticketPreparationEventPayloadSchemas),
+  ...Object.keys(ticketHandbackEventPayloadSchemas),
   'tickets.migration-recorded',
   ...DISPATCH_HANDOFF_EVENT_TYPES,
   'dispatcher.forge-degraded',

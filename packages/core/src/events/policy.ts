@@ -106,6 +106,7 @@ export const buildEventPolicy = {
   'abort.remote-branch-deleted': 'decisive',
   'abort.local-branch-deleted': 'decisive',
   'abort.ticket-returned': 'decisive',
+  'build.ticket-returned': 'decisive',
   'dispatch.failed': 'decisive',
   'dispatch.comment-posted': 'advisory',
   'build.pause-requested': 'decisive',
@@ -184,6 +185,8 @@ export const repositoryEventPolicy = {
   'ticket-preparation.recovery-failed': 'decisive',
   'ticket-preparation.handback-selected': 'decisive',
   'ticket-preparation.resolved': 'decisive',
+  'ticket.handed-back': 'decisive',
+  'ticket.handback-settled': 'decisive',
 
   'tickets.migration-recorded': 'decisive',
   'change-presence.observed': 'decisive',
