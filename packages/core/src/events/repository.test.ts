@@ -969,3 +969,57 @@ test('account credential conditions validate only nonsecret diagnostics', () => 
     }).type,
   ).toBe('account.credentials-recovered')
 })
+
+describe('ticket hand-back events', () => {
+  const ticket = { source: 'fake', id: 'T-1' }
+  const base = { ticket, cause: 'abort', state: 'Ready', role: 'ready' }
+  test.each(['abort', 'spec-bounce', 'preparation-failed', 'pr-closed', 'discard'])(
+    'accepts cause %s',
+    (cause) => {
+      expect(
+        validateRepositoryEventWrite({
+          actor: DISPATCHER,
+          type: 'ticket.handed-back',
+          payload: { ...base, cause, build: 'b' },
+        }).payload,
+      ).toMatchObject({ cause })
+    },
+  )
+  test('requires exactly one identity, a nonempty missing list and a dispatcher actor', () => {
+    const write =
+      (payload: unknown, actor: unknown = DISPATCHER) =>
+      () =>
+        validateRepositoryEventWrite({ actor, type: 'ticket.handed-back', payload })
+    expect(write({ ...base })).toThrow(EventValidationError)
+    expect(write({ ...base, build: 'b', attempt: 'prep' })).toThrow(EventValidationError)
+    expect(write({ ...base, build: 'b', missing: [] })).toThrow(EventValidationError)
+    expect(write({ ...base, build: 'b', role: 'backlog' })).toThrow(EventValidationError)
+    expect(write({ ...base, build: 'b' }, humanActor('alice'))).toThrow(EventValidationError)
+    expect(
+      write({
+        ...base,
+        attempt: 'prep',
+        requested: 'ready',
+        role: 'triage',
+        reason: 'waiting on T-2',
+        missing: ['a'],
+      })(),
+    ).toMatchObject({ type: 'ticket.handed-back' })
+  })
+  test('settlement round-trips and is dispatcher-only', () => {
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'ticket.handback-settled',
+        payload: { build: 'b' },
+      }).payload,
+    ).toEqual({ build: 'b' })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: KERNEL,
+        type: 'ticket.handback-settled',
+        payload: { build: 'b' },
+      }),
+    ).toThrow(EventValidationError)
+  })
+})

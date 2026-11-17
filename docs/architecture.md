@@ -1047,7 +1047,15 @@ defers destructive abort, discard, and terminal-PR cleanup while that lease is
 live, then resumes the event-checkpointed janitor saga that closes an unmerged PR,
 releases the workspace, deletes exact remote/local branch
 refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
-Triage, and appends abandoned completion last. Forge close/delete operations are
+its destination, and appends abandoned completion last. The destination is
+`tickets.triageState` by default (and always for dashboard aborts); an abort
+requested with `--to ready` selects `tickets.readyState`, keeping `blockedBy`,
+unless the current ticket body fails the spec standard, in which case it falls
+back to triage and records the requested role and missing parts. The
+`abort.ticket-returned` checkpoint commits the move and comment, then the
+repository `ticket.handed-back` report is appended before abandoned completion;
+once that report exists the dispatcher writes nothing more to the ticket, so it
+is the safe boundary for a subsequent ticket move. Forge close/delete operations are
 optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.
 AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit

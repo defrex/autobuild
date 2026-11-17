@@ -181,6 +181,27 @@ const headPathsRecorded = z
 
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
+/** Where an abort hands the build's ticket back. Triage is the default. */
+export const abortDestinationSchema = z.enum(['triage', 'ready'])
+export type AbortDestination = z.infer<typeof abortDestinationSchema>
+/** Why a dispatcher returned a claimed or ready ticket other than as completion. */
+export const handbackCauseSchema = z.enum([
+  'abort',
+  'spec-bounce',
+  'preparation-failed',
+  'pr-closed',
+  'discard',
+])
+export type HandbackCause = z.infer<typeof handbackCauseSchema>
+/** What a hand-back report carries beyond its identity: the lifecycle role the
+ * ticket landed in, the role asked for when it differs, the operator's reason
+ * and the spec-standard parts that forced a fallback. */
+export const handbackReport = {
+  role: abortDestinationSchema,
+  requested: abortDestinationSchema.optional(),
+  reason: z.string().min(1).max(2000).optional(),
+  missing: z.array(z.string().min(1)).min(1).optional(),
+}
 /** Fan-out provenance shared by the auto-merge command facts: the repository
  * seq of the `dispatcher.auto-merge-default-set` fact that caused the command,
  * when one did. Per-build commands omit it. `{}` stays valid, so existing
@@ -944,6 +965,20 @@ export const eventPayloadSchemas = {
     ticket: ticketRefSchema,
     state: z.string().min(1),
     label: z.string().min(1),
+    // Optional so pre-destination checkpoints replay; a legacy checkpoint's
+    // role derives from its state.
+    role: handbackReport.role.optional(),
+    requested: handbackReport.requested,
+    reason: handbackReport.reason,
+    missing: handbackReport.missing,
+  }),
+  /** Checkpoint for a non-abort build hand-back (closed PR, discard): the
+   * ticket move and comment are committed and never repeated. */
+  'build.ticket-returned': z.strictObject({
+    ticket: ticketRefSchema,
+    state: z.string().min(1),
+    cause: z.enum(['pr-closed', 'discard']),
+    role: abortDestinationSchema,
   }),
   /** A post-creation dispatch attempt stopped before runner attachment. */
   'dispatch.failed': z.strictObject({
@@ -957,7 +992,10 @@ export const eventPayloadSchemas = {
   // ── Operator commands (D2: commands are events in the same log) ───────────
   'build.pause-requested': reasonOnly,
   'build.resume-requested': reasonOnly,
-  'build.abort-requested': reasonOnly,
+  'build.abort-requested': z.strictObject({
+    reason: z.string().optional(),
+    to: abortDestinationSchema.optional(),
+  }),
   'build.discard-requested': empty,
   'build.janitor-attempt-failed': z.strictObject({
     firstFailureAt: z.iso.datetime(),

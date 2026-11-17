@@ -3553,3 +3553,84 @@ export async function headPathsStateReadBudget(opts: {
     }
   }
 }
+
+/** MCP `repository.events` pages a large backlog through the bounded tail
+ * port: every call scans at most one page of disjoint, contiguous rows, the
+ * whole backlog costs exactly its length, an unchanged cursor reads zero
+ * rows, and nothing falls back to the unbounded journal read. */
+export async function repositoryEventsReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { repositoryNeedsAttention } = await import('../cli/attention')
+  const { REPOSITORY_EVENTS_PAGE } = await import('../operator/repository-events')
+  const store = new MemoryBuildStore()
+  const repo = 'repository-events-budget'
+  await store.ensureRepo(repo)
+  const total = 900
+  for (let i = 1; i <= total; i++) {
+    if (i % 200 === 0)
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'ticket.handed-back',
+        payload: {
+          ticket: { source: 'fake', id: `T-${i}` },
+          build: `b-${i}`,
+          cause: 'abort',
+          state: 'Ready',
+          role: 'ready',
+        },
+      })
+    else
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+  }
+  const counter = memoryRepositoryReadCounter(store, repo)
+  const ranges: { since: number; through: number | undefined; rows: number }[] = []
+  const tail = store.getRepositoryTail.bind(store)
+  store.getRepositoryTail = async (r, since, opts) => {
+    const before = counter.rows
+    const events = await tail(r, since, opts)
+    ranges.push({ since: since ?? 0, through: opts?.through, rows: counter.rows - before })
+    return events
+  }
+  store.getRepoEvents = async () => {
+    throw new Error('repository.events must never read the unbounded journal')
+  }
+  const registry = buildRegistry({ store })
+  const delivered: unknown[] = []
+  let cursor = 0
+  for (;;) {
+    const page = (await registry.call('repository.events', { repo, cursor })) as {
+      events: { seq: number }[]
+      cursor: number
+      hasMore: boolean
+    }
+    delivered.push(...page.events)
+    cursor = page.cursor
+    if (!page.hasMore) break
+  }
+  const pages = ranges.length
+  expect(cursor).toBe(total)
+  expect(ranges.every((range) => range.rows <= REPOSITORY_EVENTS_PAGE)).toBe(true)
+  expect(ranges.every((range) => range.through === range.since + REPOSITORY_EVENTS_PAGE)).toBe(true)
+  ranges.forEach((range, index) => {
+    if (index > 0) expect(range.since).toBe(ranges[index - 1]!.since + ranges[index - 1]!.rows)
+  })
+  expect(ranges.reduce((sum, range) => sum + range.rows, 0)).toBe(total)
+  const all = (await tail(repo, 0)).filter(repositoryNeedsAttention)
+  expect(delivered).toEqual(all)
+  expect(all).toHaveLength(Math.floor(total / 200))
+  // Idle polls at the head read zero event rows; a baseline reads none either.
+  counter.reset()
+  const idle = await registry.call('repository.events', { repo, cursor })
+  expect(idle).toEqual({ events: [], cursor, hasMore: false })
+  expect(await registry.call('repository.events', { repo })).toEqual({
+    events: [],
+    cursor: total,
+    hasMore: false,
+  })
+  expect(counter.rows).toBe(0)
+  return pages
+}

@@ -752,6 +752,22 @@ describe('request construction', () => {
     expect(calls[2]?.url).toBe('http://store.test/sessions/os_1/events?since=0')
   })
 
+  test('a bounded repository tail sends through and clips rows an older server returns past it', async () => {
+    const rows = [1, 2, 3, 4].map((seq) => wireRepoEvent({ seq }))
+    const { store, calls } = makeStore([{ body: rows }, { body: rows.slice(0, 2) }])
+    // A server that ignores `through` (older than it) can never widen the page.
+    expect(
+      (await store.getRepositoryTail('acme/rate-limiter', 0, { through: 2 })).map((e) => e.seq),
+    ).toEqual([1, 2])
+    expect(calls[0]?.url).toBe(
+      'http://store.test/repos/acme%2Frate-limiter/events?since=0&through=2',
+    )
+    await store.getRepositoryTail('acme/rate-limiter', 0, { through: 2, waitSeconds: 5 })
+    expect(calls[1]?.url).toBe(
+      'http://store.test/repos/acme%2Frate-limiter/events?since=0&through=2&wait=5',
+    )
+  })
+
   test('artifact bodies carry base64 content and optional metadata', async () => {
     const { store, calls } = makeStore([{ body: wireArtifactMeta() }, { body: wireArtifactMeta() }])
     await store.putArtifact('build-a', { kind: 'plan', content: 'plan', metadata: { round: 1 } })

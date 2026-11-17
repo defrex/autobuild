@@ -3161,7 +3161,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** State used for spec-gate bounces, aborts, and closed-unmerged PRs.
+**Description:** State used for spec-gate bounces, aborts (unless `ab abort --to ready` with a ticket that meets the spec standard), and closed-unmerged PRs.
 
 **Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted and github, Triage for file/plugin sources.
 
