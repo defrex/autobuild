@@ -5,8 +5,10 @@ verification the kernel collapses its contribution relative to the effective
 diff base and replays it onto the sampled destination. Implementation and review
 do not rewrite history; the one exception is a build resuming from a ticket
 wait, which the kernel restacks between phases so the resumed phase sees the
-merged blockers. A build with nothing published yet simply fast-forwards to
-the destination. Verification failures return to implementation; later
+merged blockers. A build with nothing published fast-forwards to the
+destination only when its local branch has no commits the destination lacks and
+its workspace has no uncommitted tracked changes; otherwise the restack fails
+and that local work is never discarded. Verification failures return to implementation; later
 commits append until the next approved cycle. Later reviews use the effective
 base from the preceding successful restack; the original cut remains provenance.
 
@@ -56,11 +58,14 @@ path selection excludes upstream-only paths. A build leaving a ticket wait
 restacks with trigger `wait-resume` before its declaring phase resumes, when the
 target moved from the base its work sits on; an unchanged target resumes
 without a restack. Published work replays through the guarded restack, and a
-conflict runs reconcile before the declaring phase resumes. Unpublished,
-uncommitted work only fast-forwards (`restack.advanced`). A wait declared by a
-reconcile session supersedes that session's frozen replay when the target
-moved, discarding its undeposited resolution, and replays onto the current
-target instead. After finalize and post-steps,
+conflict runs reconcile before the declaring phase resumes. With nothing
+published, the local branch fast-forwards to the target (`restack.advanced`)
+only when it has no commits the target lacks and the workspace has no
+uncommitted tracked changes; unpublished local commits or uncommitted tracked
+changes prevent the advance and are never discarded. A wait declared by a
+reconcile session whose replay recorded no publish intent supersedes that
+replay when the target moved, discarding its undeposited resolution, and
+replays the published head onto the current target instead. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
 are canonicalized before guarded merge even when the target SHA is unchanged.
 Clean replay starts no agent. A clean waiting leaf rewrite preserves completed

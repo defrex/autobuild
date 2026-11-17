@@ -723,8 +723,9 @@ after that. `waitResumeRestackCycle` in the same module is the engine's
 wait-resume restack predicate, decided ahead of the plan and code loops against
 `leafBaseInUse` (`kernel/leaf-restack-state.ts`), which target observation
 shares. The runner's `restack()` replays published work through the guarded
-automatic restack, fast-forwards an unpublished branch (`advanceWaitResume`,
-`restack.advanced`), and first supersedes a reconcile occurrence whose session
+automatic restack, fast-forwards an unpublished branch that has no commits the
+target lacks and no uncommitted tracked changes (`advanceWaitResume`,
+`restack.advanced`) and otherwise fails without discarding local work, and first supersedes a reconcile occurrence whose session
 waited (`supersedeReconcile`, `reconcile.superseded`).
 The runner refreshes after workspace mutation and before constructing members;
 concurrent siblings settle before another stage is selected. Recovery and
@@ -1700,7 +1701,9 @@ automatic kernel work before any verify action, after finalize post-steps when
 the target moves, and, for an ended ticket wait whose accepted target differs
 from the base in use, before the declaring phase resumes (`wait-resume`, ahead
 of the plan and code loops). A wait-resume with no published work fast-forwards
-the local branch and records `restack.advanced` instead of replaying; a wait
+the local branch and records `restack.advanced` instead of replaying, only when
+that branch has no commits the target lacks and the workspace has no
+uncommitted tracked changes; a wait
 declared by an unintended reconcile occurrence on a moved target first abandons
 that occurrence with `reconcile.superseded`, then replays onto the new target
 (see Ticket waits above). `reconcile-restack.ts` shares collapse, detached replay,

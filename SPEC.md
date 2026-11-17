@@ -2487,14 +2487,15 @@ work sits on. When the target has not moved, no restack runs. A build with
 published work replays it through the guarded automatic restack (`restack.*`
 facts carry the `wait-resume` trigger); a conflict runs `reconcile` for that
 transaction, which counts as initial verification, and the declaring phase
-resumes after `restack.completed`. A build with nothing published and no local
-commits (plan, plan-review, implement before its first commit) fast-forwards
-its local branch to the fresh target snapshot and records `restack.advanced
+resumes after `restack.completed`. A build with nothing published, whose local
+branch has no commits the target lacks and whose workspace has no uncommitted
+tracked changes (plan, plan-review, implement before its first commit),
+fast-forwards its local branch to the fresh target snapshot and records `restack.advanced
 {trigger, cycle, observation, branch, from, to}`; nothing is written remotely
 and no conflict is possible. That fact promotes the contribution base for the
 implement terminal, conditional verification and later restack decisions. A
-local branch with unpublished commits fails the restack rather than discarding
-them. The decision is taken once per wait end: a target move after the build
+Unpublished local commits or uncommitted tracked changes fail the restack
+rather than being discarded. The decision is taken once per wait end: a target move after the build
 resumed never restacks a running phase.
 
 A reconcile session that declares a wait leaves its occurrence frozen onto its

@@ -104,7 +104,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   with cause `operator`. The build then takes a slot
   ahead of new ticket claims. If its target moved, it first restacks onto the
   target's current head (published work is replayed as one change, and a
-  conflict reconciles first; an unpublished branch just fast-forwards), so the
+  conflict reconciles first; with nothing published, the branch fast-forwards
+  only when it has no commits the target lacks and no uncommitted tracked
+  changes, and otherwise the restack fails without discarding them), so the
   resumed phase sees the merged blockers; an unchanged target resumes without
   a restack. The declaring phase then re-runs at the same round or attempt. `ab build status` shows a `waiting on:` line naming the tickets,
   and `ab builds` and both dashboards show the build as `waiting` on them.

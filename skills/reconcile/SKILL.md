@@ -94,7 +94,8 @@ entering the ordinary post-reconcile verification cycle directly.
 
 If the resolution needs work from other tickets that has not landed, end the
 session with `ab wait-on <ticket-id>... --reason <text>`. The build parks. When
-the wait ends and the target branch has moved, the kernel abandons this replay,
+the wait ends and the target branch has moved, and no resolution of this
+replay was deposited for publication, the kernel abandons this replay,
 including any resolution you have not deposited with `ab done`, and prepares a
 fresh replay onto the target's current head, which you then resolve. If the
 target has not moved, you resume this same replay with its conflicts as you

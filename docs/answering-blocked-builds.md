@@ -63,8 +63,8 @@ RESUME on a waiting build answers it. Completing the named tickets does not end 
 whether the blockers have completed or the work landed another way.
 `ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, and the
 build takes the next free slot ahead of new ticket claims. If its target
-branch moved while it waited, the build first restacks onto the target's
-current head so the resumed phase sees the merged blockers; a conflicting
+branch has moved past the base the build's work sits on, the build first
+restacks onto the target's current head so the resumed phase sees the merged blockers; a conflicting
 restack shows as `reconcile` and resolves first. The phase that declared the
 wait then re-runs at the same round or attempt. Its `guidance.json` carries a
 `wait` block naming the tickets, the reason, and how the wait ended.
