@@ -43,6 +43,7 @@ import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut
 import { createTerminalModeController } from './terminal-restore'
 import type { UpgradeNoticeScheduler, UpgradeNoticeTimer } from './upgrade-notice'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import { readHookProgress } from '../processes/hooks'
 import type { RepositoryEvent } from '../events/repository'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
@@ -14368,4 +14369,132 @@ test('explicit takeover enters execution wiring once while placement is unavaila
     await server.stop(true)
     await fx.cleanup()
   }
+})
+
+describe('abDispatch configured hooks', () => {
+  const HOOKED = `${DISPATCH_CONFIG_TOML}
+[hooks.notify]
+command = "true"
+`
+  const handBack = (fx: Fixture, attempt: string) =>
+    fx.store.appendRepo(fx.origin, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload: {
+        ticket: { source: 'file', id: `T-${attempt}` },
+        attempt,
+        cause: 'preparation-failed',
+        state: 'Backlog',
+        role: 'triage',
+      },
+    })
+
+  test('watch mode delivers records, follows a reload and stops with the dispatcher', async () => {
+    const fx = await makeFixture([], happyHandlers(), HOOKED)
+    const stop = new AbortController()
+    const delivered: { hook: string; id: string }[] = []
+    const progress = (hook: string) => readHookProgress(fx.store, fx.origin, hook)
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        invokeHook: async (hook, line) => {
+          delivered.push({ hook: hook.name, id: JSON.parse(line).id })
+          return { ok: true }
+        },
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await waitFor(async () => (await progress('notify')) !== undefined)
+            await handBack(fx, 'h1')
+            await waitFor(() => delivered.length === 1)
+            await writeFile(
+              join(fx.checkout, 'autobuild.toml'),
+              `${HOOKED}\n[hooks.second]\ncommand = "true"\n`,
+            )
+          } else if (sleeps === 2) {
+            await waitFor(async () => (await progress('second')) !== undefined)
+            await handBack(fx, 'h2')
+            await waitFor(() => delivered.length === 3)
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+      const handedBack = (await fx.store.getRepoEvents(fx.origin))
+        .filter((event) => event.type === 'ticket.handed-back')
+        .map((event) => `repo:${event.seq}`)
+      expect(delivered[0]).toEqual({ hook: 'notify', id: handedBack[0]! })
+      expect(delivered.slice(1).sort((a, b) => a.hook.localeCompare(b.hook))).toEqual([
+        { hook: 'notify', id: handedBack[1]! },
+        { hook: 'second', id: handedBack[1]! },
+      ])
+      await handBack(fx, 'h3')
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      expect(delivered).toHaveLength(3)
+      expect((await progress('notify'))?.delivered).toBe(2)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('--once baselines a new hook, then a later pass drains what landed', async () => {
+    const fx = await makeFixture([], happyHandlers(), HOOKED)
+    const delivered: string[] = []
+    const once = () =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        invokeHook: async (_hook, line) => {
+          delivered.push(JSON.parse(line).id)
+          return { ok: true }
+        },
+        wire: fx.wire,
+      })
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await handBack(fx, 'before')
+      await once()
+      expect(delivered).toEqual([])
+      expect(await readHookProgress(fx.store, fx.origin, 'notify')).toBeDefined()
+      await handBack(fx, 'after')
+      await once()
+      const after = (await fx.store.getRepoEvents(fx.origin)).find(
+        (event) => event.type === 'ticket.handed-back' && event.payload.attempt === 'after',
+      )!
+      expect(delivered).toEqual([`repo:${after.seq}`])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a dispatcher that cannot run local commands rejects a command hook by name', async () => {
+    const fx = await makeFixture([], happyHandlers(), HOOKED)
+    try {
+      await expect(
+        abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          localCommands: false,
+          wire: fx.wire,
+        }),
+      ).rejects.toThrow('[hooks.notify] is a command hook')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
 })

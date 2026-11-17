@@ -29,6 +29,7 @@ import {
 } from '../ports/workspace/provider-capabilities'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
+import { compileEventGlobs } from '../events/globs'
 import { displayName, effectiveRuntimeReferences, RESERVED_ROLE } from './roles'
 import { normalizeProfileLabel, profileRoles } from './profiles'
 import {
@@ -1208,9 +1209,46 @@ documentSchema(storeSchema.shape.url, {
   constraints:
     'Absolute HTTPS service URL; loopback HTTP allowed. No credentials, query or fragment. Trailing slashes normalized.',
 })
+// ── Hooks ────────────────────────────────────────────────────────────────────
+//
+// Observe-only consumers the lease-holding local dispatcher feeds: each
+// matching `ab watch --json` record is delivered to the hook's command, one at
+// a time, in order, at least once. A hook never gates anything.
+
+export const hookSchema = z.strictObject({
+  /** Shell command run once per record with the JSON line on stdin. The only
+   * target this release ships. */
+  command: z
+    .string()
+    .refine((value) => value.trim().length > 0, 'hook command must be nonblank')
+    .optional(),
+  /** `ab watch --event` globs; absent means `ab watch`'s default attention set. */
+  events: z
+    .array(z.string().refine((value) => value.trim().length > 0, 'event globs must be nonblank'))
+    .min(1, 'list at least one event glob, or omit events for the default attention filter')
+    .optional(),
+  timeoutSeconds: z.number().int().positive().max(3600).default(30),
+})
+
+documentFields(hookSchema, {
+  command:
+    'Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success.',
+  events:
+    'Event globs with `ab watch --event` grammar, validated against the build and repository catalogs. Absent means the default attention filter of `ab watch`.',
+  timeoutSeconds: 'Seconds one invocation may run before it is killed and counted as a failure.',
+})
+documentSchema(hookSchema, {
+  description: 'Named observe-only hook delivered matching watch records by the local dispatcher.',
+  constraints:
+    'Hook names use ASCII letters, digits, ., _ and -. A command is required. The hosted dispatcher rejects command hooks.',
+})
+export type HookConfig = z.infer<typeof hookSchema>
+export const hooksSchema = openMap('[hooks]', hookSchema)
+
 export const configRootSchema = z.strictObject({
   store: storeSchema.optional(),
   upgrade: z.strictObject({ automatic: z.boolean().default(true) }).prefault({}),
+  hooks: hooksSchema.default({}),
   /** Base branch builds cut from and target (§16.1). */
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */
@@ -1261,6 +1299,8 @@ export const configRootSchema = z.strictObject({
 documentFields(configRootSchema, {
   store: 'Optional remote BuildStore connection. Credentials live outside TOML.',
   upgrade: 'Automatic dispatcher runtime target checks and adoption.',
+  hooks:
+    'Named observe-only hooks: the local dispatcher delivers each matching watch record to a command, in order and at least once.',
   baseBranch: 'Branch used to cut builds, target PRs, and merge during reconciliation.',
   capacity:
     'Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of new claims when it must run again. Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
@@ -1450,6 +1490,38 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
           path: [kind, name],
           message: `${kind} step "${name}" must contain only ASCII letters, digits, ., _ or - and cannot be . or ..`,
         })
+    }
+  }
+
+  for (const [name, hook] of Object.entries(config.hooks ?? {})) {
+    if (!isSafeStepName(name)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['hooks', name],
+        message: `[hooks.${name}] name must contain only ASCII letters, digits, ., _ or - and cannot be . or ..`,
+      })
+    }
+    if (hook.command === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['hooks', name],
+        message: `[hooks.${name}] has no target — set command`,
+      })
+    }
+    for (const [index, glob] of (hook.events ?? []).entries()) {
+      try {
+        compileEventGlobs([glob], {
+          repository: true,
+          additionalCatalog: ['dispatcher.lost'],
+          usage: 'hooks',
+        })
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['hooks', name, 'events', index],
+          message: `[hooks.${name}].events: ${JSON.stringify(glob)} matches no known event type in the build or repository catalogs`,
+        })
+      }
     }
   }
 
