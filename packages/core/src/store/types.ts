@@ -114,6 +114,14 @@ export interface ArtifactMeta {
  * render rows. Nothing is persisted: every adapter derives the digest from
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
+/** The open ticket wait a build digest carries: the wait id, its
+ * escalation, and the tickets it waits on. */
+export interface BuildDigestTicketWait {
+  id: string
+  escalation: string
+  tickets: TicketRef[]
+}
+
 export interface BuildDigest {
   compatibility?: import('../events/compatibility').CompatibilityState
   /** A kernel landing requested an audit and no audit settlement has followed. */
@@ -136,6 +144,11 @@ export interface BuildDigest {
   /** A ticket wait was requested and the dispatcher has not yet accepted or
    * refused it — the one signal that makes its wait stage read the build. */
   waitPending?: true
+  /** An entered ticket wait that has not ended (by `wait.ended`, an answer
+   * to its escalation, or the dispatcher's `policy/wait-unresolvable`
+   * raise) — the one signal that makes the dispatcher's release stage
+   * consider the build. */
+  ticketWait?: BuildDigestTicketWait
   /** Ascending-seq `{seq, ts}` pairs for every `observation.recorded` in the
    * build's log; `ts` is the event envelope timestamp (AUT-521: the harvest
    * pressure gate measures drift from the oldest unclaimed occurrence's ts,

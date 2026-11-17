@@ -57,6 +57,14 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
    ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/plan-review.md"
    ```
 
+   If you cannot judge the plan until another ticket merges — it builds on
+   code that ticket owns and has not landed — end the session with
+   `ab wait-on <ticket-id>... --reason "…"` instead of a verdict or an
+   escalation. The build parks without a slot; when every named ticket
+   completes, this same review round resumes on the target's current head,
+   with a `wait` block in `$AB_CONTEXT_DIR/guidance.json`. Escalate as before for
+   anything else.
+
 ## Escalating an oversized plan
 
 When fulfilling the spec clearly exceeds one implement session, write review

@@ -35,10 +35,13 @@ import { terminalGuardReducer } from './terminal-guard'
 import {
   openTicketWait,
   pendingWaitRequest,
+  ticketWaitRelease,
   ticketWaitStatus,
   waitBlock,
   waitParked,
+  waitResumeDue,
   waitResumeSupersedes,
+  waitUnresolvableQuestion,
 } from './ticket-wait'
 
 const BUILD = 'waits-on-a'
@@ -487,6 +490,126 @@ describe('engine: ticket waits', () => {
       attempt: 1,
       feedback: { guidance: { escalation: 'esc_w', answer: 'B landed' } },
     })
+  })
+})
+
+describe('automatic release and unresolvable waits', () => {
+  const node = (resolved: boolean, extra: { exists?: boolean; rejected?: boolean } = {}) => ({
+    exists: extra.exists ?? true,
+    resolved,
+    ...(extra.rejected ? { rejected: true, state: 'Canceled' } : {}),
+  })
+
+  test('ticketWaitRelease: complete only when every ticket completed', () => {
+    const nodes = new Map([
+      ['B', node(true)],
+      ['C', node(false)],
+      ['R', node(false, { rejected: true })],
+      ['M', node(false, { exists: false })],
+    ])
+    expect(ticketWaitRelease(['B'], nodes)).toEqual({ kind: 'complete' })
+    expect(ticketWaitRelease(['B', 'C'], nodes)).toBeUndefined()
+    expect(ticketWaitRelease(['B', 'X'], nodes)).toBeUndefined()
+    expect(ticketWaitRelease(['R'], nodes)).toEqual({
+      kind: 'unresolvable',
+      tickets: [{ id: 'R', why: 'rejected', state: 'Canceled' }],
+    })
+    expect(ticketWaitRelease(['M'], nodes)).toEqual({
+      kind: 'unresolvable',
+      tickets: [{ id: 'M', why: 'missing' }],
+    })
+    expect(ticketWaitRelease(['C', 'R', 'M'], nodes)).toEqual({
+      kind: 'unresolvable',
+      tickets: [
+        { id: 'R', why: 'rejected', state: 'Canceled' },
+        { id: 'M', why: 'missing' },
+      ],
+    })
+  })
+
+  test('the unresolvable question names each ticket and why', () => {
+    expect(
+      waitUnresolvableQuestion(
+        ['B', 'C'],
+        [
+          { id: 'B', why: 'rejected', state: 'Canceled' },
+          { id: 'C', why: 'missing' },
+        ],
+        'linear',
+      ),
+    ).toBe(
+      'Waiting on B, C can never end: B was rejected (state "Canceled"); C no longer exists in the linear ticket source. Answer with guidance to resume the declaring phase without it, revise the spec, or abort.',
+    )
+  })
+
+  const unresolvable = (id = 'esc_u') =>
+    ev(
+      'escalation.raised',
+      {
+        id,
+        phase: 'plan',
+        round: 1,
+        source: 'policy',
+        policyCause: 'wait-unresolvable',
+        question: 'Waiting on B can never end: B was rejected',
+        refs: ['B'],
+      },
+      { kind: 'dispatcher' },
+    )
+  const raised = () => [...planWait(), entered('wait_1', 'esc_w'), unresolvable()]
+
+  test('the dispatcher may raise wait-unresolvable', () => {
+    expect(() => unresolvable()).not.toThrow()
+  })
+
+  test('the raise ends the wait, closes its escalation and blocks on the marked one', () => {
+    const state = reduce(raised())
+    expect(state.wait?.ended).toMatchObject({ cause: 'unresolvable' })
+    expect(state.status).toBe('blocked')
+    expect(state.openEscalations).toEqual([
+      expect.objectContaining({
+        id: 'esc_u',
+        source: 'policy',
+        policyCause: 'wait-unresolvable',
+        wait: { id: 'wait_1' },
+      }),
+    ])
+    expect(state.answeredEscalations).toEqual([
+      expect.objectContaining({ id: 'esc_w', resolution: 'guidance' }),
+    ])
+    expect(openTicketWait(state)).toBeUndefined()
+    expect(waitParked(state)).toBe(false)
+    expect(waitResumeDue(state)).toBe(false)
+    expect(waitBlock(state, 'plan', 1)).toMatchObject({ outcome: 'ended', cause: 'unresolvable' })
+  })
+
+  test('answering it resumes the declaring phase; revise-spec keeps it parked', () => {
+    const answered = reduce([
+      ...raised(),
+      ev('escalation.answered', { id: 'esc_u', answer: 'drop B', resolution: 'guidance' }),
+    ])
+    expect(waitParked(answered)).toBe(true)
+    expect(waitResumeDue(answered)).toBe(true)
+    expect(answered.wait?.ended).toMatchObject({ cause: 'unresolvable' })
+    const revise = reduce([
+      ...raised(),
+      ev('escalation.answered', { id: 'esc_u', answer: 'rewrite', resolution: 'revise-spec' }),
+    ])
+    expect(waitParked(revise)).toBe(true)
+    expect(waitResumeDue(revise)).toBe(false)
+  })
+
+  test('a raise against an ended wait leaves the wait alone', () => {
+    const state = reduce([
+      ...planWait(),
+      entered('wait_1', 'esc_w'),
+      ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
+      unresolvable(),
+    ])
+    expect(state.wait?.ended).toMatchObject({ cause: 'automatic' })
+    expect(state.openEscalations).toEqual([
+      expect.not.objectContaining({ wait: expect.anything() }),
+    ])
   })
 })
 
