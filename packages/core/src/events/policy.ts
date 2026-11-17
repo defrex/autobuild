@@ -17,6 +17,8 @@ export const buildEventPolicy = {
   'build.janitor-escalated': 'decisive',
   'landing.application-failed': 'decisive',
   'landing.decided': 'decisive',
+  // A reader that ignores a deferral only evaluates the candidate again.
+  'landing.deferred': 'advisory',
   'build.hold-requested': 'decisive',
   'build.land-requested': 'decisive',
   'landing.command-acknowledged': 'decisive',
@@ -28,11 +30,12 @@ export const buildEventPolicy = {
   'target.rewritten': 'decisive',
   'target.rewrite-cleared': 'decisive',
   'target.moved': 'decisive',
-  // Advisory despite describing candidate heads: no decision reads it yet, and
-  // a decisive unknown type would make an older runtime in a hot-upgrade fleet
-  // defer every kernel decision on the build. An older reader that ignores it
-  // sees what a pre-change log shows, "not recorded", which the path-rule and
-  // consent consumers must already treat safely. Revisit when one decides on it.
+  // Advisory although merge-rule path predicates decide on it: a decisive
+  // unknown type would make an older runtime in a hot-upgrade fleet defer
+  // every kernel decision on the build. An older runtime cannot parse a
+  // `[[merge]]` rule carrying `paths` or `within` (rule schemas are strict), so
+  // it never decides a path rule; ignoring the fact it sees "not recorded",
+  // which every consumer treats safely.
   'head.paths-recorded': 'advisory',
   'restack.prepared': 'decisive',
   'restack.replayed': 'decisive',

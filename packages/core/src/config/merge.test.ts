@@ -36,3 +36,50 @@ test('explicit one-shot parses default to console.error for deprecated landing',
     error.mockRestore()
   }
 })
+test('merge rules accept changed-path predicates with the verify selector grammar', () => {
+  const config = parseConfig(
+    `${base}\n[[merge]]\npaths = ["autobuild.toml", "docs/policy/**"]\nmode = "consent"\n` +
+      `\n[[merge]]\nwithin = ["docs/**", "README.md"]\nmode = "auto"\n`,
+  )
+  expect(config.landing).toEqual([
+    { paths: ['autobuild.toml', 'docs/policy/**'], mode: 'consent' },
+    { within: ['docs/**', 'README.md'], mode: 'auto' },
+  ])
+  expect(() => parseConfig(`${base}\n[[merge]]\nwithin = []\nmode = "auto"`)).toThrow(
+    'merge[0].within',
+  )
+  expect(() => parseConfig(`${base}\n[[merge]]\npaths = []\nmode = "auto"`)).toThrow(
+    'merge[0].paths',
+  )
+  for (const selector of ['{a,b}', '!x', 'a**', '/abs', 'a/../b', '[ab]']) {
+    for (const key of ['merge', 'landing']) {
+      const rules = `\n[[${key}]]\nmode = "auto"\n\n[[${key}]]\npaths = [${JSON.stringify(selector)}]\nmode = "consent"`
+      expect(() => parseConfig(`${base}${rules}`, 'bad.toml', () => {})).toThrow(
+        `${key}[1].paths[0]`,
+      )
+    }
+  }
+  expect(() =>
+    parseConfig(`${base}\n[[merge]]\nwithin = ["docs/**", "a**"]\nmode = "auto"`),
+  ).toThrow('merge[0].within[1]')
+})
+test('the documented protected-paths configuration parses as written', () => {
+  const config = parseConfig(`baseBranch = "main"
+
+[[merge]]
+paths = ["autobuild.toml", ".agents/**", "SPEC.md", "docs/policy/**"]
+mode = "consent"
+
+[[merge]]
+within = ["docs/**", "README.md"]
+mode = "auto"
+
+[[merge]]
+mode = "consent"
+
+[tickets]
+source = "file"
+readyState = "ready"
+`)
+  expect(config.landing.map((rule) => rule.mode)).toEqual(['consent', 'auto', 'consent'])
+})
