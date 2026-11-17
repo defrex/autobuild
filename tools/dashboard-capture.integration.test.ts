@@ -91,8 +91,6 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'handoff-wide',
     'handoff-narrow',
     'parked-slot-wait-wide',
-    'ticket-wait-wide',
-    'ticket-wait-detail',
     'harvest-suspended-wide',
     'harvest-suspended-narrow',
     'capacity-wide',
@@ -134,6 +132,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'viewer-unknown-100-light',
     'viewer-session-100',
     'viewer-session-100-light',
+    'ticket-wait-wide',
+    'ticket-wait-detail',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')

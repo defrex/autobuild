@@ -237,27 +237,6 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     ],
   },
   {
-    id: 'ticket-wait-wide',
-    scenario: 'mixed',
-    columns: 180,
-    rows: 32,
-    ticketWait: 'list',
-    requires: ['WAITING', '! waiting on CAP-API, CAP-SCHEMA — needs the new API schema', 'BLOCKED'],
-  },
-  {
-    id: 'ticket-wait-detail',
-    scenario: 'mixed',
-    columns: 140,
-    rows: 60,
-    ticketWait: 'detail',
-    requires: [
-      'WAITING',
-      'Waiting',
-      'waiting on CAP-API, CAP-SCHEMA — needs the new API schema',
-      'r answers the wait and ends it early',
-    ],
-  },
-  {
     id: 'harvest-suspended-wide',
     scenario: 'happy',
     columns: 180,
@@ -591,6 +570,30 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       },
     ])
     .flatMap((spec) => [spec, { ...spec, id: `${spec.id}-light`, ground: 'light' as const }]),
+  // Ticket-wait frames run last: each paint is a real dispatch pass over the
+  // shared mixed harness, so placing them earlier would advance the state
+  // every later mixed frame captures.
+  {
+    id: 'ticket-wait-wide',
+    scenario: 'mixed',
+    columns: 180,
+    rows: 32,
+    ticketWait: 'list',
+    requires: ['WAITING', '! waiting on CAP-API, CAP-SCHEMA — needs the new API schema', 'BLOCKED'],
+  },
+  {
+    id: 'ticket-wait-detail',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 60,
+    ticketWait: 'detail',
+    requires: [
+      'WAITING',
+      'Waiting',
+      'waiting on CAP-API, CAP-SCHEMA — needs the new API schema',
+      'r answers the wait and ends it early',
+    ],
+  },
 ]
 
 // One capture pass appends many durable receipts on the stepping clock, so it
