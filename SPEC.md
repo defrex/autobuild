@@ -4266,13 +4266,16 @@ best-effort: observe a provider-reported merge, or comment with the merged SHA
 and close a still-open review. Acknowledgement failure never retries or fails
 the merge.
 
-GitHub uses its authoritative viewer squash headline and body with an expected
-head guard. Native auto-merge messages are checked against fresh server defaults
-on eligible polls even after consent acknowledgement, and repaired through
-consent-guarded disable/enable. Repeated polling covers later head or metadata
-changes; it cannot make a future push atomic with an already armed native merge.
-Merge queues ignore message overrides, so identity-aware kernel merge defers
-with `unproven-gate-state` rather than bypassing the queue. Human merges remain
+GitHub derives the squash headline and body from the PR and the repository's
+squash title and message settings, read over REST, and lands with an expected
+head guard. Native auto-merge messages are checked against that derivation on
+eligible polls even after consent acknowledgement, and repaired through
+consent-guarded disable/enable. Landing reads use REST only; GraphQL carries
+just the native enable and disable mutations. Repeated polling covers later
+head or metadata changes; it cannot make a future push atomic with an already
+armed native merge. Merge queues ignore message overrides, so identity-aware
+kernel merge defers with `unproven-gate-state` rather than bypassing the queue;
+native enable, repair and direct merge check for a queue, quiet polls do not. Human merges remain
 observable regardless of trailer evidence.
 
 Ordered `[[merge]]` rules in `autobuild.toml` decide authorization. Each rule

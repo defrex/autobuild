@@ -1590,99 +1590,251 @@ describe('GitHub marked summary upsert', () => {
   })
 })
 
+type FakeCommit = { sha: string; commit: { message: string } }
+interface FakeGitHub {
+  pr: Record<string, unknown> & {
+    head: { sha: string; ref: string }
+    base: { ref: string; sha: string }
+    auto_merge: Record<string, unknown> | null
+  }
+  repo: Record<string, unknown>
+  commits: FakeCommit[]
+  rules: unknown[]
+  /** Classic protection requiring a status check: native auto-merge applies. */
+  gated?: boolean
+  /** How GitHub stores an enabled request's overrides (provider normalization). */
+  armedAs: (title: string, message: string) => Record<string, unknown>
+  afterDisable?: (fake: FakeGitHub) => void
+  /** Further open PRs by number, answered like PR #42. */
+  others?: Record<number, FakeGitHub['pr']>
+  /** Runs before each PR read is answered, with the 1-based read count. */
+  beforePrRead?: (fake: FakeGitHub, read: number) => void
+  graphqlStatus?: number
+}
+
+const fakePr = (): FakeGitHub['pr'] => ({
+  number: 42,
+  state: 'open',
+  merged: false,
+  mergeable: true,
+  merge_commit_sha: null,
+  node_id: 'PR_42',
+  title: 'Server title — unchanged',
+  body: '* unusual bullet\n\nCo-authored-by: A <a@example.test>\n',
+  commits: 2,
+  mergeable_state: 'clean',
+  head: { sha: 'head-42', ref: 'feature' },
+  base: { ref: 'main', sha: 'base-1' },
+  auto_merge: null,
+})
+
+/** A stateful REST GitHub for the landing path: conditional PR and
+ * repository reads (ETag per representation), commit listing and compare
+ * pagination, gate reads, the GraphQL auto-merge mutations, and the merge. */
+function fakeGitHub(overrides: Partial<FakeGitHub> = {}) {
+  const fake: FakeGitHub = {
+    pr: fakePr(),
+    repo: {
+      allow_auto_merge: true,
+      squash_merge_commit_title: 'PR_TITLE',
+      squash_merge_commit_message: 'PR_BODY',
+    },
+    commits: [
+      { sha: 'head-41', commit: { message: 'First commit\n\nFirst body' } },
+      { sha: 'head-42', commit: { message: 'Second commit' } },
+    ],
+    rules: [],
+    armedAs: (title, message) => ({
+      merge_method: 'squash',
+      commit_title: title,
+      commit_message: message,
+    }),
+    ...overrides,
+  }
+  const calls: ApiCall[] = []
+  let prReads = 0
+  const conditional = (value: unknown, opts?: GitHubRequestOpts): GitHubResponse => {
+    const etag = `"${Bun.hash(JSON.stringify(value)).toString(16)}"`
+    if (opts?.headers?.['If-None-Match'] === etag) return { status: 304, headers: { etag } }
+    return { status: 200, headers: { etag }, json: structuredClone(value) }
+  }
+  const page = <T>(items: T[], opts?: GitHubRequestOpts): T[] => {
+    const size = Number(opts?.query?.per_page ?? '30')
+    const index = Number(opts?.query?.page ?? '1') - 1
+    return items.slice(index * size, (index + 1) * size)
+  }
+  const transport: GitHubRequest = async (method, path, opts) => {
+    calls.push({ method, path, ...(opts !== undefined ? { opts } : {}) })
+    const route = `${method} ${path}`
+    if (route === 'GET repos/acme/app/pulls/42') {
+      fake.beforePrRead?.(fake, ++prReads)
+      return conditional(fake.pr, opts)
+    }
+    const other = /^repos\/acme\/app\/pulls\/(\d+)$/.exec(path)?.[1]
+    if (method === 'GET' && other !== undefined && fake.others?.[Number(other)])
+      return conditional(fake.others[Number(other)], opts)
+    if (route === 'GET repos/acme/app') return conditional(fake.repo, opts)
+    if (route === 'GET repos/acme/app/pulls/42/commits')
+      return { status: 200, headers: {}, json: page(fake.commits, opts) }
+    if (path.startsWith('repos/acme/app/compare/'))
+      return {
+        status: 200,
+        headers: {},
+        json: { total_commits: fake.commits.length, commits: page(fake.commits, opts) },
+      }
+    if (path.startsWith('repos/acme/app/branches/'))
+      return {
+        status: 200,
+        headers: {},
+        json: fake.gated
+          ? {
+              protected: true,
+              protection: {
+                required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+                required_pull_request_reviews: null,
+                restrictions: null,
+              },
+            }
+          : { protected: false },
+      }
+    if (path.startsWith('repos/acme/app/rules/branches/'))
+      return { status: 200, headers: {}, json: fake.rules }
+    if (route === 'PUT repos/acme/app/pulls/42/merge') return { status: 200, headers: {}, json: {} }
+    if (route === 'POST graphql') {
+      if (fake.graphqlStatus !== undefined)
+        throw new GitHubApiError(fake.graphqlStatus, 'mutation denied')
+      const { query, variables } = opts!.body as {
+        query: string
+        variables: { commitHeadline: string; commitBody: string }
+      }
+      const field = query.includes('disablePullRequestAutoMerge')
+        ? 'disablePullRequestAutoMerge'
+        : 'enablePullRequestAutoMerge'
+      if (field === 'disablePullRequestAutoMerge') {
+        fake.pr.auto_merge = null
+        fake.afterDisable?.(fake)
+      } else fake.pr.auto_merge = fake.armedAs(variables.commitHeadline, variables.commitBody)
+      return {
+        status: 200,
+        headers: {},
+        json: { data: { [field]: { pullRequest: { id: 'PR_42' } } } },
+      }
+    }
+    throw new Error(`unscripted GitHub request ${route}`)
+  }
+  const forge = new GitHubForge({
+    transport,
+    repository: 'acme/app',
+    mergeabilityRetryDelaysMs: [0, 0],
+  })
+  return { forge, calls, fake }
+}
+
+const graphqlCalls = (calls: ApiCall[]) => calls.filter((call) => call.path === 'graphql')
+const mutationKinds = (calls: ApiCall[]) =>
+  graphqlCalls(calls).map((call) =>
+    (call.opts!.body as { query: string }).query.includes('disablePullRequestAutoMerge')
+      ? 'disable'
+      : 'enable',
+  )
+const mergeCalls = (calls: ApiCall[]) => calls.filter((call) => call.method === 'PUT')
+
 describe('GitHub stable build identity', () => {
-  const headline = 'Server title (#42) — unchanged'
+  const headline = 'Server title — unchanged (#42)'
   const body = '* unusual bullet\n\nCo-authored-by: A <a@example.test>\n'
   const canonical = `${body}Autobuild-Build: stable-build\n`
-  const native = { commitHeadline: headline, commitBody: canonical, mergeMethod: 'SQUASH' }
-  const message = (
-    overrides: Record<string, unknown> = {},
-    queue: { id: string } | null = null,
-  ) => ({
-    json: {
-      data: {
-        repository: {
-          defaultBranchRef: { name: 'main' },
-          mergeQueue: queue,
-          pullRequest: {
-            baseRefName: 'main',
-            id: 'PR_42',
-            headRefOid: 'head-42',
-            state: 'OPEN',
-            viewerMergeHeadlineText: headline,
-            viewerMergeBodyText: body,
-            autoMergeRequest: null,
-            ...overrides,
-          },
-        },
-      },
-    },
+  const identity = { buildSlug: 'stable-build' }
+  const armed = (title: string | null = headline, message: string | null = canonical) => ({
+    merge_method: 'squash',
+    commit_title: title,
+    commit_message: message,
   })
-  const inspect = (enabled = true) => ({
-    json: {
-      node_id: 'PR_42',
-      auto_merge: enabled ? {} : null,
-      mergeable_state: 'clean',
-      head: { ref: 'feature', sha: 'head-42' },
-      base: { ref: 'main' },
-    },
-  })
-  const gates = [
-    { json: { protected: false } },
-    { json: [{ type: 'required_signatures' }] },
-    { json: { allow_auto_merge: true } },
-  ]
-  const applied = (name: string) => ({
-    json: { data: { [name]: { pullRequest: { id: 'PR_42' } } } },
-  })
-  const mutations = (calls: ApiCall[]) =>
-    calls.filter((c) => String((c.opts?.body as { query?: string })?.query).includes('mutation'))
+  const enableVariables = (calls: ApiCall[]) =>
+    (
+      graphqlCalls(calls).find((call) =>
+        (call.opts!.body as { query: string }).query.includes('$expectedHeadOid'),
+      )!.opts!.body as { variables: unknown }
+    ).variables
 
-  test.each([body, ''])(
-    'direct squash preserves server headline/body with body %j',
-    async (serverBody) => {
-      const { forge, calls } = makeForge([message({ viewerMergeBodyText: serverBody }), {}])
-      await forge.squashMerge('/missing-checkout', 42, 'head-42', { buildSlug: 'stable-build' })
-      expect(calls[0]?.path).toBe('graphql')
-      expect((calls[0]!.opts!.body as { query: string }).query).toContain(
-        'viewerMergeHeadlineText(mergeType: SQUASH)',
-      )
-      expect(calls[1]?.opts?.body).toEqual({
-        merge_method: 'squash',
-        sha: 'head-42',
-        commit_title: headline,
-        commit_message: serverBody === '' ? 'Autobuild-Build: stable-build\n' : canonical,
+  test.each([
+    ['PR_TITLE', 'PR_BODY', 2, headline, canonical],
+    ['PR_TITLE', 'BLANK', 2, headline, 'Autobuild-Build: stable-build\n'],
+    [
+      'PR_TITLE',
+      'COMMIT_MESSAGES',
+      2,
+      headline,
+      '* First commit\n\nFirst body\n\n* Second commit\n\nAutobuild-Build: stable-build\n',
+    ],
+    ['COMMIT_OR_PR_TITLE', 'PR_BODY', 2, headline, canonical],
+    ['COMMIT_OR_PR_TITLE', 'PR_BODY', 1, 'Second commit (#42)', canonical],
+    ['COMMIT_OR_PR_TITLE', 'BLANK', 1, 'Second commit (#42)', 'Autobuild-Build: stable-build\n'],
+    [
+      'COMMIT_OR_PR_TITLE',
+      'COMMIT_MESSAGES',
+      1,
+      'Second commit (#42)',
+      'Autobuild-Build: stable-build\n',
+    ],
+    [
+      'COMMIT_OR_PR_TITLE',
+      'COMMIT_MESSAGES',
+      2,
+      headline,
+      '* First commit\n\nFirst body\n\n* Second commit\n\nAutobuild-Build: stable-build\n',
+    ],
+  ])(
+    'ungated direct squash lands the %s / %s derivation (%i commits) with no GraphQL',
+    async (title, message, count, landedTitle, landedMessage) => {
+      const { forge, calls, fake } = fakeGitHub()
+      fake.repo.squash_merge_commit_title = title
+      fake.repo.squash_merge_commit_message = message
+      if (count === 1) fake.commits = fake.commits.slice(1)
+      fake.pr.commits = count
+      await forge.withReadScope(async () => {
+        expect(await forge.getPrState('/ws', 42)).toMatchObject({ state: 'open' })
+        const result = await forge.setAutoMerge('/ws', 42, true, {
+          ...identity,
+          baseBranch: 'main',
+        })
+        expect(result).toEqual({ kind: 'ungated', headSha: 'head-42' })
+        await forge.squashMerge('/ws', 42, 'head-42', { ...identity, baseBranch: 'main' })
       })
+      expect(mergeCalls(calls).map((call) => call.opts?.body)).toEqual([
+        {
+          merge_method: 'squash',
+          sha: 'head-42',
+          commit_title: landedTitle,
+          commit_message: landedMessage,
+        },
+      ])
+      expect(graphqlCalls(calls)).toEqual([])
+      // The direct squash re-checks the gate the enable inspection read.
+      expect(calls.filter((call) => call.path.includes('/rules/branches/'))).toHaveLength(1)
     },
   )
+
   describe('with issue links', () => {
     const issueLinks = [
       { issue: 820, intent: 'closes' as const },
       { issue: 824, intent: 'refs' as const },
     ]
     const options = { buildSlug: 'stable-build', issueLinks }
-    const linkedHeadline = 'Fixes #824 (#42)'
-    const linkedBody =
-      '* fixes acme/app#824 in a commit subject\n\nCo-authored-by: A <a@example.test>\n'
     const composedHeadline = 'Refs #824 (#42)'
     const composedBody =
       '* refs acme/app#824 in a commit subject\n\nCloses #820\nRefs #824\n\nCo-authored-by: A <a@example.test>\nAutobuild-Build: stable-build\n'
-    const linked = (overrides: Record<string, unknown> = {}) =>
-      message({
-        viewerMergeHeadlineText: linkedHeadline,
-        viewerMergeBodyText: linkedBody,
-        ...overrides,
-      })
-    const linkedNative = {
-      commitHeadline: composedHeadline,
-      commitBody: composedBody,
-      mergeMethod: 'SQUASH',
+    const linked = () => {
+      const github = fakeGitHub()
+      github.fake.pr.title = 'Fixes #824'
+      github.fake.pr.body =
+        '* fixes acme/app#824 in a commit subject\n\nCo-authored-by: A <a@example.test>\n'
+      return github
     }
 
     test('direct squash lands neutralized text and the keyword paragraph before trailers', async () => {
-      const { forge, calls } = makeForge([linked(), {}])
+      const { forge, calls } = linked()
       await forge.squashMerge('/absent', 42, 'head-42', options)
-      expect(calls[1]?.opts?.body).toEqual({
+      expect(mergeCalls(calls)[0]?.opts?.body).toEqual({
         merge_method: 'squash',
         sha: 'head-42',
         commit_title: composedHeadline,
@@ -1691,142 +1843,136 @@ describe('GitHub stable build identity', () => {
     })
 
     test('native enable writes the same composition and an applied request makes no mutation', async () => {
-      const { forge, calls } = makeForge([
-        linked(),
-        inspect(false),
-        ...gates,
-        applied('enablePullRequestAutoMerge'),
-        linked({ autoMergeRequest: linkedNative }),
-      ])
+      const { forge, calls, fake } = linked()
+      fake.pr.mergeable_state = 'blocked'
+      fake.gated = true
       expect(await forge.setAutoMerge('/absent', 42, true, options)).toEqual({ kind: 'applied' })
-      expect((mutations(calls)[0]!.opts!.body as { variables: unknown }).variables).toEqual({
+      expect(enableVariables(calls)).toEqual({
         pullRequestId: 'PR_42',
         mergeMethod: 'SQUASH',
         expectedHeadOid: 'head-42',
         commitHeadline: composedHeadline,
         commitBody: composedBody,
       })
-      const again = makeForge([linked({ autoMergeRequest: linkedNative })])
-      expect(await again.forge.setAutoMerge('/absent', 42, true, options)).toEqual({
-        kind: 'applied',
-      })
-      expect(mutations(again.calls)).toEqual([])
+      const before = graphqlCalls(calls).length
+      expect(await forge.setAutoMerge('/absent', 42, true, options)).toEqual({ kind: 'applied' })
+      expect(graphqlCalls(calls)).toHaveLength(before)
     })
   })
 
-  test('direct head mismatch or invalid defaults never attempts a merge', async () => {
-    for (const response of [
-      message({ headRefOid: 'new-head' }),
-      message({ viewerMergeBodyText: null }),
-    ]) {
-      const { forge, calls } = makeForge([response])
-      await expect(
-        forge.squashMerge('/absent', 42, 'head-42', { buildSlug: 'stable-build' }),
-      ).rejects.toThrow()
-      expect(calls).toHaveLength(1)
-    }
+  test.each([
+    ['moved head', (pr: FakeGitHub['pr']) => (pr.head = { ...pr.head, sha: 'new-head' })],
+    ['closed', (pr: FakeGitHub['pr']) => (pr.state = 'closed')],
+    [
+      'merged',
+      (pr: FakeGitHub['pr']) => {
+        pr.state = 'closed'
+        pr.merged = true
+        pr.merge_commit_sha = 'merged-sha'
+      },
+    ],
+    ['retargeted base', (pr: FakeGitHub['pr']) => (pr.base = { ...pr.base, ref: 'release' })],
+  ])('a %s refuses direct squash and defers native', async (_name, change) => {
+    const direct = fakeGitHub()
+    change(direct.fake.pr)
+    await expect(
+      direct.forge.squashMerge('/absent', 42, 'head-42', { ...identity, baseBranch: 'main' }),
+    ).rejects.toThrow()
+    expect(mergeCalls(direct.calls)).toEqual([])
+    // Native landing takes no expected head; its head race is the next test.
+    if (_name === 'moved head') return
+    const native = fakeGitHub()
+    change(native.fake.pr)
+    native.fake.pr.mergeable_state = 'blocked'
+    native.fake.gated = true
+    expect(
+      await native.forge.setAutoMerge('/absent', 42, true, { ...identity, baseBranch: 'main' }),
+    ).toMatchObject({ kind: 'deferred' })
+    expect(graphqlCalls(native.calls)).toEqual([])
   })
-  test('native enable uses guarded typed message overrides and independently confirms them', async () => {
-    const { forge, calls } = makeForge([
-      message(),
-      inspect(false),
-      ...gates,
-      applied('enablePullRequestAutoMerge'),
-      message({ autoMergeRequest: native }),
-    ])
-    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-      kind: 'applied',
+
+  test('a head that moves during the mergeability re-query never enables', async () => {
+    const { forge, calls } = fakeGitHub({
+      gated: true,
+      beforePrRead: (fake, read) => {
+        fake.pr.mergeable_state = read === 1 ? 'unknown' : 'blocked'
+        if (read > 1) fake.pr.head = { ...fake.pr.head, sha: 'new-head' }
+      },
     })
-    const mutation = mutations(calls)[0]?.opts?.body as { query: string; variables: unknown }
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toEqual({ kind: 'deferred' })
+    expect(graphqlCalls(calls)).toEqual([])
+  })
+
+  test('native enable uses guarded typed message overrides and confirms them by a fresh REST readback', async () => {
+    const { forge, calls, fake } = fakeGitHub()
+    fake.pr.mergeable_state = 'blocked'
+    fake.gated = true
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toEqual({ kind: 'applied' })
+    const mutation = graphqlCalls(calls)[0]!.opts!.body as { query: string }
     expect(mutation.query).toContain('$expectedHeadOid: GitObjectID!')
     expect(mutation.query).toContain('$mergeMethod: PullRequestMergeMethod!')
-    expect(mutation.variables).toEqual({
+    expect(enableVariables(calls)).toEqual({
       pullRequestId: 'PR_42',
       mergeMethod: 'SQUASH',
       expectedHeadOid: 'head-42',
       commitHeadline: headline,
       commitBody: canonical,
     })
-  })
-  test('new adapter repairs stale defaults despite a correct trailer; unchanged defaults make no mutation', async () => {
-    for (const oldRequest of [
-      { ...native, commitHeadline: 'Old title' },
-      { ...native, commitBody: 'Old body\n\nAutobuild-Build: stable-build\n' },
-      { ...native, mergeMethod: 'MERGE' },
-      null,
-    ]) {
-      const repair = oldRequest === null ? [] : [applied('disablePullRequestAutoMerge'), message()]
-      const { forge, calls } = makeForge([
-        message({ autoMergeRequest: oldRequest }),
-        inspect(),
-        ...gates,
-        ...repair,
-        applied('enablePullRequestAutoMerge'),
-        message({ autoMergeRequest: native }),
-      ])
-      expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-        kind: 'applied',
-      })
-      expect(mutations(calls)).toHaveLength(oldRequest === null ? 1 : 2)
-    }
-    const { forge, calls } = makeForge([message({ autoMergeRequest: native })])
-    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-      kind: 'applied',
-    })
-    expect(mutations(calls)).toEqual([])
-  })
-  test.each([
-    { commitHeadline: null, commitBody: null },
-    { commitHeadline: null, commitBody: canonical },
-    { commitHeadline: headline, commitBody: null },
-  ])('legacy nullable native overrides are repaired once (%j)', async (overrides) => {
-    const { forge, calls } = makeForge([
-      message({ autoMergeRequest: { ...native, ...overrides } }),
-      inspect(),
-      ...gates,
-      applied('disablePullRequestAutoMerge'),
-      message(),
-      applied('enablePullRequestAutoMerge'),
-      message({ autoMergeRequest: native }),
-      message({ autoMergeRequest: native }),
-    ])
-    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-      kind: 'applied',
-    })
-    const changes = mutations(calls)
-    expect(
-      changes.map((call) =>
-        (call.opts!.body as { query: string }).query.includes('disablePullRequestAutoMerge')
-          ? 'disable'
-          : 'enable',
-      ),
-    ).toEqual(['disable', 'enable'])
-    expect((changes[1]!.opts!.body as { variables: unknown }).variables).toEqual({
-      pullRequestId: 'PR_42',
-      mergeMethod: 'SQUASH',
-      expectedHeadOid: 'head-42',
-      commitHeadline: headline,
-      commitBody: canonical,
-    })
-    const before = calls.length
-    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-      kind: 'applied',
-    })
-    expect(calls).toHaveLength(before + 1)
-    expect(mutations(calls)).toHaveLength(2)
+    const readback = calls.slice(calls.indexOf(graphqlCalls(calls)[0]!) + 1)[0]!
+    expect(`${readback.method} ${readback.path}`).toBe('GET repos/acme/app/pulls/42')
+    expect(readback.opts?.headers?.['If-None-Match']).toBeUndefined()
   })
 
-  test('nullable overrides after enable remain unconfirmed rather than being acknowledged', async () => {
-    const { forge } = makeForge([
-      message(),
-      inspect(false),
-      ...gates,
-      applied('enablePullRequestAutoMerge'),
-      message({ autoMergeRequest: { ...native, commitHeadline: null, commitBody: null } }),
-    ])
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-    ).toMatchObject({
+  test.each([
+    ['unset overrides', armed(null, null)],
+    ['unset title', armed(null)],
+    ['unset message', armed(headline, null)],
+    ['an old GraphQL-derived title', armed('Server title — unchanged (#42) — old')],
+    ['an old GraphQL-derived body', armed(headline, 'Old body\n\nAutobuild-Build: stable-build\n')],
+    ['a merge method', { ...armed(), merge_method: 'merge' }],
+  ])('a legacy request with %s is repaired once and then settles', async (_name, request) => {
+    const { forge, calls, fake } = fakeGitHub()
+    fake.pr.auto_merge = request
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toEqual({ kind: 'applied' })
+    expect(mutationKinds(calls)).toEqual(['disable', 'enable'])
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toEqual({ kind: 'applied' })
+    expect(mutationKinds(calls)).toEqual(['disable', 'enable'])
+  })
+
+  test.each([
+    [
+      'trims the final newline',
+      (title: string, message: string) => armed(title, message.trimEnd()),
+    ],
+    [
+      'stores CRLF',
+      (title: string, message: string) => armed(title, message.replaceAll('\n', '\r\n')),
+    ],
+  ])('a provider that %s settles without oscillating across ticks', async (_name, armedAs) => {
+    const { forge, calls, fake } = fakeGitHub({ armedAs })
+    fake.pr.auto_merge = armed('Old title (#42)')
+    for (let tick = 0; tick < 3; tick++)
+      await forge.withReadScope(async () => {
+        await forge.getPrState('/ws', 42)
+        expect(
+          await forge.setAutoMerge('/absent', 42, true, {
+            ...identity,
+            baseBranch: 'main',
+            canApply: async () => {
+              if (tick > 0) throw new Error('quiet poll refreshed consent')
+              return true
+            },
+          }),
+        ).toEqual({ kind: 'applied' })
+      })
+    expect(mutationKinds(calls)).toEqual(['disable', 'enable'])
+  })
+
+  test('unset overrides after enable remain unconfirmed rather than being acknowledged', async () => {
+    const { forge, fake } = fakeGitHub({ armedAs: () => armed(null, null) })
+    fake.pr.mergeable_state = 'blocked'
+    fake.gated = true
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toMatchObject({
       kind: 'deferred',
       reason: { code: 'unproven-gate-state', detail: expect.stringContaining('not confirmed') },
     })
@@ -1834,181 +1980,206 @@ describe('GitHub stable build identity', () => {
 
   test('cancellation during repair prevents re-enable', async () => {
     let guards = 0
-    const { forge, calls } = makeForge([
-      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
-      inspect(),
-      ...gates,
-      applied('disablePullRequestAutoMerge'),
-      message(),
-    ])
+    const { forge, calls, fake } = fakeGitHub()
+    fake.pr.auto_merge = armed(headline, 'old')
     expect(
       await forge.setAutoMerge('/absent', 42, true, {
-        buildSlug: 'stable-build',
+        ...identity,
         canApply: async () => ++guards === 1,
       }),
     ).toEqual({ kind: 'deferred' })
-    expect(mutations(calls)).toHaveLength(1)
-    expect(JSON.stringify(mutations(calls))).toContain('disablePullRequestAutoMerge')
-  })
-  test.each(['new-head', 'head-42'])(
-    'head race or merged PR after disable never re-enables (%s)',
-    async (head) => {
-      const { forge, calls } = makeForge([
-        message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
-        inspect(),
-        ...gates,
-        applied('disablePullRequestAutoMerge'),
-        message({ headRefOid: head, state: head === 'head-42' ? 'MERGED' : 'OPEN' }),
-      ])
-      expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-        kind: 'deferred',
-      })
-      expect(mutations(calls)).toHaveLength(1)
-    },
-  )
-  test('head movement during resolution and failed repair cannot acknowledge', async () => {
-    const changed = makeForge([message({ headRefOid: 'new-head' }), inspect(), ...gates])
-    expect(
-      await changed.forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-    ).toEqual({ kind: 'deferred' })
-    expect(mutations(changed.calls)).toEqual([])
-    const failed = makeForge([
-      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
-      inspect(),
-      ...gates,
-      { status: 403, json: { message: 'repair denied' } },
-    ])
-    expect(
-      await failed.forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-    ).toMatchObject({ kind: 'deferred', reason: { code: 'unproven-gate-state' } })
-  })
-  test('merge queues defer identity-aware landing without bypass or mutation', async () => {
-    const { forge, calls } = makeForge([
-      message(),
-      inspect(),
-      { json: { protected: false } },
-      { json: [{ type: 'merge_queue', parameters: {} }] },
-    ])
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-    ).toMatchObject({
-      kind: 'deferred',
-      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('merge queues') },
-    })
-    expect(mutations(calls)).toEqual([])
-  })
-  test('provider trimming a final newline confirms enable and stays a single-query no-op on later polls', async () => {
-    const trimmed = { ...native, commitBody: canonical.trimEnd() }
-    const { forge, calls } = makeForge([
-      message(),
-      inspect(false),
-      ...gates,
-      applied('enablePullRequestAutoMerge'),
-      message({ autoMergeRequest: trimmed }),
-      message({ autoMergeRequest: trimmed }),
-    ])
-    const canApply = async () => true
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build', canApply }),
-    ).toEqual({ kind: 'applied' })
-    const before = calls.length
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, {
-        buildSlug: 'stable-build',
-        canApply: async () => {
-          throw new Error('quiet poll refreshed consent')
-        },
-      }),
-    ).toEqual({ kind: 'applied' })
-    expect(calls.slice(before).map((call) => `${call.method} ${call.path}`)).toEqual([
-      'POST graphql',
-    ])
-    expect(mutations(calls)).toHaveLength(1)
+    expect(mutationKinds(calls)).toEqual(['disable'])
   })
 
-  test('classic protection queues defer native and direct landings, even with an existing matching request', async () => {
-    for (const request of [null, native]) {
-      const { forge, calls } = makeForge([
-        message({ autoMergeRequest: request }, { id: 'classic-queue' }),
-      ])
-      expect(
-        await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-      ).toMatchObject({
+  test.each([
+    ['a head race', (fake: FakeGitHub) => (fake.pr.head = { ...fake.pr.head, sha: 'new-head' })],
+    [
+      'a merge',
+      (fake: FakeGitHub) => {
+        fake.pr.state = 'closed'
+        fake.pr.merged = true
+        fake.pr.merge_commit_sha = 'merged-sha'
+      },
+    ],
+    ['a retarget', (fake: FakeGitHub) => (fake.pr.base = { ...fake.pr.base, ref: 'release' })],
+  ])('%s after disable never re-enables', async (_name, afterDisable) => {
+    const { forge, calls, fake } = fakeGitHub({ afterDisable })
+    fake.pr.auto_merge = armed(headline, 'old')
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toEqual({ kind: 'deferred' })
+    expect(mutationKinds(calls)).toEqual(['disable'])
+  })
+
+  test('a failed repair cannot acknowledge', async () => {
+    const { forge, fake } = fakeGitHub({ graphqlStatus: 403 })
+    fake.pr.auto_merge = armed(headline, 'old')
+    expect(await forge.setAutoMerge('/absent', 42, true, identity)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state' },
+    })
+  })
+
+  test('merge queues defer enable and repair and refuse direct squash; a matching quiet poll stays applied', async () => {
+    const queue = [{ type: 'merge_queue', parameters: {} }]
+    for (const request of [null, armed(headline, 'old')]) {
+      const { forge, calls, fake } = fakeGitHub({ rules: queue })
+      fake.pr.auto_merge = request
+      fake.pr.mergeable_state = 'blocked'
+      fake.gated = true
+      expect(await forge.setAutoMerge('/absent', 42, true, identity)).toMatchObject({
         kind: 'deferred',
         reason: { code: 'unproven-gate-state', detail: expect.stringContaining('merge queues') },
       })
-      expect(calls).toHaveLength(1)
-      expect((calls[0]!.opts!.body as { query: string }).query).toContain(
-        'mergeQueue(branch: $branch)',
-      )
-      expect(mutations(calls)).toHaveLength(0)
+      expect(graphqlCalls(calls)).toEqual([])
     }
-    const { forge, calls } = makeForge([message({}, { id: 'classic-queue' })])
-    await expect(
-      forge.squashMerge('/absent', 42, 'head-42', { buildSlug: 'stable-build' }),
-    ).rejects.toThrow('merge queues')
-    expect(calls).toHaveLength(1)
-  })
-
-  test('queue inspection follows the actual PR base rather than a default or stale hint', async () => {
-    const { forge, calls } = makeForge([
-      message({ baseRefName: 'release', autoMergeRequest: native }),
-      message({ baseRefName: 'release', autoMergeRequest: native }, { id: 'release-queue' }),
-    ])
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, {
-        buildSlug: 'stable-build',
-        baseBranch: 'main',
-      }),
-    ).toMatchObject({ kind: 'deferred' })
-    expect((calls[1]!.opts!.body as { variables: { branch: string } }).variables.branch).toBe(
-      'release',
+    const direct = fakeGitHub({ rules: queue })
+    await expect(direct.forge.squashMerge('/absent', 42, 'head-42', identity)).rejects.toThrow(
+      'merge queues',
     )
-    expect(mutations(calls)).toHaveLength(0)
-  })
-
-  test('a verified nondefault branch hint keeps unchanged maintenance to one query', async () => {
-    const { forge, calls } = makeForge([
-      message({ baseRefName: 'release', autoMergeRequest: native }),
-    ])
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, {
-        buildSlug: 'stable-build',
-        baseBranch: 'release',
-      }),
-    ).toEqual({ kind: 'applied' })
-    expect(calls).toHaveLength(1)
-    expect((calls[0]!.opts!.body as { variables: { branch: string } }).variables.branch).toBe(
-      'release',
-    )
-  })
-
-  test('retargeting during repair never enables with obsolete gate inspection', async () => {
-    const { forge, calls } = makeForge([
-      message({ autoMergeRequest: { ...native, commitBody: 'old' } }),
-      inspect(),
-      ...gates,
-      applied('disablePullRequestAutoMerge'),
-      message({ baseRefName: 'release' }),
-      message({ baseRefName: 'release' }),
-    ])
-    expect(await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' })).toEqual({
-      kind: 'deferred',
+    expect(mergeCalls(direct.calls)).toEqual([])
+    // By design the quiet poll of an already-matching request does not read
+    // rules; every mutating path above does.
+    const quiet = fakeGitHub({ rules: queue })
+    quiet.fake.pr.auto_merge = armed()
+    expect(await quiet.forge.setAutoMerge('/absent', 42, true, identity)).toEqual({
+      kind: 'applied',
     })
-    expect(mutations(calls)).toHaveLength(1)
+    expect(quiet.calls.some((call) => call.path.includes('/rules/'))).toBe(false)
   })
 
-  test('unknown queue evidence fails closed', async () => {
-    const response = message({ autoMergeRequest: native })
-    const unknown = {
-      ...response,
-      json: { data: { repository: { ...response.json.data.repository, mergeQueue: undefined } } },
+  test.each(['squash_merge_commit_title', 'squash_merge_commit_message'])(
+    'a repository response without %s fails closed',
+    async (field) => {
+      const native = fakeGitHub()
+      delete native.fake.repo[field]
+      native.fake.pr.mergeable_state = 'blocked'
+      native.fake.gated = true
+      expect(await native.forge.setAutoMerge('/absent', 42, true, identity)).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state', detail: expect.stringContaining('contents:write') },
+      })
+      expect(graphqlCalls(native.calls)).toEqual([])
+      const direct = fakeGitHub()
+      delete direct.fake.repo[field]
+      await expect(direct.forge.squashMerge('/absent', 42, 'head-42', identity)).rejects.toThrow(
+        field,
+      )
+      expect(mergeCalls(direct.calls)).toEqual([])
+    },
+  )
+
+  test('a commit list that does not end at the PR head never merges', async () => {
+    const { forge, calls, fake } = fakeGitHub()
+    fake.repo.squash_merge_commit_message = 'COMMIT_MESSAGES'
+    fake.commits = [fake.commits[0]!, { sha: 'other', commit: { message: 'Other' } }]
+    await expect(forge.squashMerge('/absent', 42, 'head-42', identity)).rejects.toThrow('retry')
+    expect(mergeCalls(calls)).toEqual([])
+  })
+
+  describe('commit-set cache', () => {
+    const commitReads = (calls: ApiCall[]) =>
+      calls.filter((call) => call.path === 'repos/acme/app/pulls/42/commits').length
+    const tick = (forge: GitHubForge) =>
+      forge.withReadScope(async () => {
+        await forge.getPrState('/ws', 42)
+        return forge.setAutoMerge('/absent', 42, true, { ...identity, baseBranch: 'main' })
+      })
+
+    test.each([true, false])(
+      'a base advance that absorbs a commit invalidates the cache (base sha moves: %s)',
+      async (baseShaMoves) => {
+        const { forge, calls, fake } = fakeGitHub()
+        fake.repo.squash_merge_commit_title = 'COMMIT_OR_PR_TITLE'
+        fake.repo.squash_merge_commit_message = 'COMMIT_MESSAGES'
+        fake.pr.auto_merge = armed(
+          headline,
+          '* First commit\n\nFirst body\n\n* Second commit\n\nAutobuild-Build: stable-build\n',
+        )
+        expect(await tick(forge)).toEqual({ kind: 'applied' })
+        expect(commitReads(calls)).toBe(1)
+        expect(await tick(forge)).toEqual({ kind: 'applied' })
+        expect(commitReads(calls)).toBe(1)
+        // Another PR merged the first commit into main.
+        fake.commits = fake.commits.slice(1)
+        fake.pr.commits = 1
+        if (baseShaMoves) fake.pr.base = { ...fake.pr.base, sha: 'base-2' }
+        expect(await tick(forge)).toEqual({ kind: 'applied' })
+        expect(commitReads(calls)).toBe(2)
+        expect(mutationKinds(calls)).toEqual(['disable', 'enable'])
+        expect(enableVariables(calls)).toMatchObject({
+          commitHeadline: 'Second commit (#42)',
+          commitBody: 'Autobuild-Build: stable-build\n',
+        })
+      },
+    )
+  })
+
+  describe('more than 250 commits', () => {
+    const many = Array.from({ length: 251 }, (_, index) => ({
+      sha: index === 250 ? 'head-42' : `c${index}`,
+      commit: { message: `Commit ${index}` },
+    }))
+    const large = () => {
+      const github = fakeGitHub()
+      github.fake.commits = many.map((commit) => structuredClone(commit))
+      github.fake.pr.commits = 251
+      github.fake.repo.squash_merge_commit_message = 'COMMIT_MESSAGES'
+      return github
     }
-    const { forge, calls } = makeForge([unknown])
-    expect(
-      await forge.setAutoMerge('/absent', 42, true, { buildSlug: 'stable-build' }),
-    ).toMatchObject({ kind: 'deferred', reason: { code: 'unproven-gate-state' } })
-    expect(calls).toHaveLength(1)
+
+    test('pages the compare through every commit and caches the result', async () => {
+      const { forge, calls } = large()
+      await forge.squashMerge('/absent', 42, 'head-42', identity)
+      expect(calls.some((call) => call.path.endsWith('/pulls/42/commits'))).toBe(false)
+      const compares = calls.filter((call) => call.path.includes('/compare/'))
+      expect(compares.map((call) => call.path)).toEqual(
+        Array(3).fill('repos/acme/app/compare/main...head-42'),
+      )
+      expect(compares.map((call) => call.opts?.query)).toEqual(
+        [1, 2, 3].map((page) => ({ per_page: '100', page: String(page) })),
+      )
+      expect(mergeCalls(calls)[0]?.opts?.body).toMatchObject({
+        commit_message: `${many.map((c) => `* ${c.commit.message}`).join('\n\n')}\n\nAutobuild-Build: stable-build\n`,
+      })
+      await forge.squashMerge('/absent', 42, 'head-42', identity)
+      expect(calls.filter((call) => call.path.includes('/compare/'))).toHaveLength(3)
+    })
+
+    test.each([
+      ['total disagrees with the PR', (fake: FakeGitHub) => (fake.pr.commits = 252)],
+      ['a short page', (fake: FakeGitHub) => fake.commits.splice(150, 1)],
+      [
+        'a missing head',
+        (fake: FakeGitHub) => (fake.commits[250] = { sha: 'c250', commit: { message: 'x' } }),
+      ],
+    ])('%s fails closed', async (_name, change) => {
+      const direct = large()
+      change(direct.fake)
+      if (_name === 'a short page') direct.fake.pr.commits = 251
+      await expect(direct.forge.squashMerge('/absent', 42, 'head-42', identity)).rejects.toThrow(
+        'retry',
+      )
+      expect(mergeCalls(direct.calls)).toEqual([])
+      const native = large()
+      change(native.fake)
+      native.fake.pr.mergeable_state = 'blocked'
+      native.fake.gated = true
+      expect(await native.forge.setAutoMerge('/absent', 42, true, identity)).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state' },
+      })
+      expect(graphqlCalls(native.calls)).toEqual([])
+    })
+
+    test('a total that changes between pages fails closed', async () => {
+      const { forge, calls, fake } = large()
+      let pages = 0
+      const real = fake.commits
+      Object.defineProperty(fake, 'commits', {
+        get: () => (++pages > 1 && pages < 5 ? [...real, real[0]!] : real),
+      })
+      await expect(forge.squashMerge('/absent', 42, 'head-42', identity)).rejects.toThrow('retry')
+      expect(mergeCalls(calls)).toEqual([])
+    })
   })
 
   test('commit evidence and paginated reachable history are checkout-less and uncached', async () => {
@@ -2782,6 +2953,86 @@ describe('tick observations', () => {
     },
   )
 
+  // Criterion: a pending landing whose PR has not changed costs no more per
+  // tick than before. The pre-change baseline was 2 requests per build per
+  // tick: the conditional PR poll plus one GraphQL squash-message query.
+  test('an armed matching landing revalidates with two conditional REST reads per quiet tick', async () => {
+    const { forge, calls, fake } = fakeGitHub()
+    fake.repo.squash_merge_commit_title = 'COMMIT_OR_PR_TITLE'
+    fake.repo.squash_merge_commit_message = 'COMMIT_MESSAGES'
+    fake.pr.auto_merge = {
+      merge_method: 'squash',
+      commit_title: 'Server title — unchanged (#42)',
+      commit_message:
+        '* First commit\n\nFirst body\n\n* Second commit\n\nAutobuild-Build: stable-build\n',
+    }
+    const outcomes: (string | undefined)[] = []
+    forge.observeRequests((ctx) => outcomes.push(ctx.outcome))
+    const perTick: ApiCall[][] = []
+    for (let tick = 0; tick < 3; tick++) {
+      const before = calls.length
+      await forge.withReadScope(async () => {
+        expect(await forge.getPrState('/ws', 42)).toMatchObject({ nativeAutoMerge: true })
+        expect(
+          await forge.setAutoMerge('/ws', 42, true, {
+            buildSlug: 'stable-build',
+            baseBranch: 'main',
+          }),
+        ).toEqual({ kind: 'applied' })
+      })
+      perTick.push(calls.slice(before))
+    }
+    expect(perTick[0]!.map((call) => call.path)).toEqual([
+      'repos/acme/app/pulls/42',
+      'repos/acme/app',
+      'repos/acme/app/pulls/42/commits',
+    ])
+    for (const quiet of perTick.slice(1)) {
+      expect(quiet.map((call) => call.path)).toEqual(['repos/acme/app/pulls/42', 'repos/acme/app'])
+      for (const call of quiet) expect(call.opts?.headers?.['If-None-Match']).toBeDefined()
+    }
+    expect(outcomes.slice(3)).toEqual(Array(4).fill('restNotModified'))
+    expect(outcomes).not.toContain('graphql')
+  })
+
+  test('builds in one tick share the repository settings read', async () => {
+    const { forge, calls, fake } = fakeGitHub()
+    const matching = {
+      merge_method: 'squash',
+      commit_title: 'Server title — unchanged (#42)',
+      commit_message: `${fake.pr.body}Autobuild-Build: stable-build\n`,
+    }
+    fake.pr.auto_merge = matching
+    fake.others = {
+      43: {
+        ...structuredClone(fake.pr),
+        number: 43,
+        node_id: 'PR_43',
+        auto_merge: { ...matching, commit_title: 'Server title — unchanged (#43)' },
+      },
+    }
+    for (let tick = 0; tick < 2; tick++) {
+      const before = calls.length
+      await forge.withReadScope(async () => {
+        for (const number of [42, 43]) {
+          await forge.getPrState('/ws', number)
+          expect(
+            await forge.setAutoMerge('/ws', number, true, {
+              buildSlug: 'stable-build',
+              baseBranch: 'main',
+            }),
+          ).toEqual({ kind: 'applied' })
+        }
+      })
+      expect(calls.slice(before).map((call) => call.path)).toEqual([
+        'repos/acme/app/pulls/42',
+        'repos/acme/app',
+        'repos/acme/app/pulls/43',
+      ])
+    }
+    expect(graphqlCalls(calls)).toEqual([])
+  })
+
   test('concurrent reads share promises; separate scopes and outside operations do not', async () => {
     let calls = 0
     const forge = new GitHubForge({
@@ -2950,6 +3201,12 @@ test('wire outcomes distinguish REST HTTP errors, 304, GraphQL errors and networ
       if (attempt === 2) return { status: 304, headers: {} as Record<string, string> }
       if (path === 'graphql') throw new Error('network down')
       if (attempt === 3) throw new GitHubApiError(500, 'failed')
+      if (path.endsWith('/pulls/1'))
+        return {
+          status: 200,
+          headers: {} as Record<string, string>,
+          json: { node_id: 'PR_1', auto_merge: {} },
+        }
       throw new Error('network down')
     },
   })
@@ -2959,10 +3216,15 @@ test('wire outcomes distinguish REST HTTP errors, 304, GraphQL errors and networ
   await forge.remoteBranchSha('main')
   await expect(forge.remoteBranchSha('main')).rejects.toThrow()
   await expect(forge.remoteBranchSha('main')).rejects.toThrow()
-  await expect(forge.setAutoMerge('/ws', 1, true, { buildSlug: 'build' })).resolves.toMatchObject({
-    kind: 'deferred',
-  })
-  expect(outcomes).toEqual(['restPrimary', 'restNotModified', 'restPrimary', undefined, 'graphql'])
+  await expect(forge.setAutoMerge('/ws', 1, false)).rejects.toThrow()
+  expect(outcomes).toEqual([
+    'restPrimary',
+    'restNotModified',
+    'restPrimary',
+    undefined,
+    'restPrimary',
+    'graphql',
+  ])
 })
 
 test.each(['pushBranch', 'rewrite', 'kernelRewrite'] as const)(
@@ -3008,12 +3270,13 @@ test.each(['pushBranch', 'rewrite', 'kernelRewrite'] as const)(
   },
 )
 
-test('GraphQL query variables containing mutation do not invalidate an observation epoch', async () => {
+test('landing reads with mutation in their inputs do not invalidate an observation epoch', async () => {
   let branches = 0
   const forge = new GitHubForge({
     repository: 'acme/app',
     transport: async (_method, path) => {
-      if (path === 'graphql') throw new Error('query unavailable')
+      if (path === 'graphql') throw new Error('landing reads must not use GraphQL')
+      if (!path.includes('mutation-branch')) throw new Error('landing read unavailable')
       branches++
       return { status: 200, headers: {}, json: { commit: { sha: 'head' } } }
     },

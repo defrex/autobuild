@@ -22,6 +22,13 @@ import {
 } from '../../kernel/issue-keywords'
 import { ForgeRejection, NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
+import {
+  GitHubSquashMessageSetting,
+  GitHubSquashTitleSetting,
+  githubSquashDefaults,
+  needsCommitMessages,
+  sameArmedMessage,
+} from './github-squash-message'
 /**
  * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
  * REST API through an injectable transport seam. All remote access is
@@ -41,7 +48,9 @@ import { findSummaryMarker } from './summary-marker'
  *
  * Native auto-merge is the one operation GitHub exposes only through its
  * GraphQL schema (no REST route exists), so its enable/disable mutations
- * travel over the same transport to `POST /graphql`.
+ * travel over the same transport to `POST /graphql`. Those mutations are the
+ * landing path's only GraphQL: every landing read, including the squash
+ * message derivation and the armed request's identity check, is REST.
  *
  * Repository coordinates (owner/name) resolve lazily and memoized: explicit
  * constructor option → `AB_REPOSITORY` (normalized) → `git remote get-url
@@ -196,7 +205,50 @@ const restAutoMergeView = z
   })
   .passthrough()
 
-const restRepositoryAutoMerge = z.object({ allow_auto_merge: z.boolean() }).passthrough()
+/** The landing path's PR facts, re-parsed from the same representation the
+ * `getPrState` poll fetched. `auto_merge` carries the armed request's
+ * method and message overrides (null when GitHub left them unset). */
+const restLandingPr = z
+  .object({
+    state: z.enum(['open', 'closed']),
+    merged: z.boolean(),
+    node_id: z.string().min(1),
+    title: z.string(),
+    body: z.string().nullable(),
+    commits: z.number().int().nonnegative(),
+    head: z.object({ sha: z.string().min(1), ref: z.string().min(1) }).passthrough(),
+    base: z.object({ ref: z.string().min(1), sha: z.string().min(1) }).passthrough(),
+    auto_merge: z
+      .object({
+        merge_method: z.string(),
+        commit_title: z.string().nullable(),
+        commit_message: z.string().nullable(),
+      })
+      .passthrough()
+      .nullable(),
+  })
+  .passthrough()
+type LandingView = z.infer<typeof restLandingPr>
+const landingOpen = (view: LandingView): boolean => view.state === 'open' && !view.merged
+
+/** One shared repository read: auto-merge permission and the squash
+ * settings the landing message derives from. Fields are validated where used. */
+const restRepository = z
+  .object({
+    allow_auto_merge: z.boolean().optional(),
+    squash_merge_commit_title: z.string().optional(),
+    squash_merge_commit_message: z.string().optional(),
+  })
+  .passthrough()
+
+const restCommitMessages = z.array(
+  z
+    .object({ sha: z.string().min(1), commit: z.object({ message: z.string() }).passthrough() })
+    .passthrough(),
+)
+const restCompareCommits = z
+  .object({ total_commits: z.number().int().nonnegative(), commits: restCommitMessages })
+  .passthrough()
 
 const nodeComparison = z.object({
   base_commit: z.object({ sha: z.string().min(1) }),
@@ -387,42 +439,6 @@ const ENABLE_AUTO_MERGE_MUTATION = `
   }
 `
 
-const SQUASH_MESSAGE_QUERY = `
-  query ($owner: String!, $name: String!, $number: Int!, $branch: String) {
-    repository(owner: $owner, name: $name) {
-      defaultBranchRef { name }
-      mergeQueue(branch: $branch) { id }
-      pullRequest(number: $number) {
-        id headRefOid state baseRefName
-        viewerMergeHeadlineText(mergeType: SQUASH)
-        viewerMergeBodyText(mergeType: SQUASH)
-        autoMergeRequest { commitHeadline commitBody mergeMethod }
-      }
-    }
-  }
-`
-const squashMessageData = z.object({
-  repository: z.object({
-    defaultBranchRef: z.object({ name: z.string().min(1) }).nullable(),
-    mergeQueue: z.object({ id: z.string().min(1) }).nullable(),
-    pullRequest: z.object({
-      baseRefName: z.string().min(1),
-      id: z.string().min(1),
-      headRefOid: z.string().min(1),
-      state: z.enum(['OPEN', 'MERGED', 'CLOSED']),
-      viewerMergeHeadlineText: z.string(),
-      viewerMergeBodyText: z.string(),
-      autoMergeRequest: z
-        .object({
-          // Legacy native requests leave overrides unset; GitHub returns null.
-          commitHeadline: z.string().nullable(),
-          commitBody: z.string().nullable(),
-          mergeMethod: z.string(),
-        })
-        .nullable(),
-    }),
-  }),
-})
 const ENABLE_IDENTITY_AUTO_MERGE_MUTATION = `
   mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!,
             $expectedHeadOid: GitObjectID!, $commitHeadline: String!, $commitBody: String!) {
@@ -1465,7 +1481,11 @@ export class GitHubForge implements Forge {
     let classicGate: boolean | undefined
     let classicError: string | undefined
     try {
-      const branch = await this.request('GET', branchPath)
+      // Scope-local only: a direct squash re-checks the gate the same tick's
+      // enable inspection just read, without repeating the requests.
+      const branch = await this.memo(`gate-branch:${baseRefName}`, () =>
+        this.request('GET', branchPath),
+      )
       const view = branch.json as Record<string, unknown> | undefined
       if (view?.protected === false) {
         // The branch view's own flag proves classic protection absent even
@@ -1495,24 +1515,37 @@ export class GitHubForge implements Forge {
     let planLimited = false
     let rulesPagesRead = 0
     try {
-      const parsed: import('zod').infer<typeof restRulesetRules> = []
       // Exhaust effective rules, including organization rules. A truncated
       // first page cannot prove absence, even for a bypass-capable token.
-      for (let page = 1; ; page++) {
-        if (page > 1000) throw new Error('ruleset pagination did not terminate')
-        const rules = await this.request(
-          'GET',
-          `${repoPath}/rules/branches/${encodeURIComponent(baseRefName)}`,
-          { query: { per_page: '100', page: String(page) } },
-        )
-        if (rules.status !== 200) throw new Error('incomplete ruleset response')
-        const batch = this.parse(restRulesetRules, rules, 'ruleset probe')
-        rulesPagesRead++
-        parsed.push(...batch)
-        const more = rules.headers.link?.includes('rel="next"') === true
-        if (batch.length < 100 && !more) break
-        if (batch.length === 0) throw new Error('incomplete ruleset pagination')
-      }
+      // Scope-local like the branch read above; the outcome carries how many
+      // pages succeeded so a memoized failure classifies identically.
+      const outcome = await this.memo(`rules:${baseRefName}`, async () => {
+        const rules: import('zod').infer<typeof restRulesetRules> = []
+        let pagesRead = 0
+        try {
+          for (let page = 1; ; page++) {
+            if (page > 1000) throw new Error('ruleset pagination did not terminate')
+            const response = await this.request(
+              'GET',
+              `${repoPath}/rules/branches/${encodeURIComponent(baseRefName)}`,
+              { query: { per_page: '100', page: String(page) } },
+            )
+            if (response.status !== 200) throw new Error('incomplete ruleset response')
+            const batch = this.parse(restRulesetRules, response, 'ruleset probe')
+            pagesRead++
+            rules.push(...batch)
+            const more = response.headers.link?.includes('rel="next"') === true
+            if (batch.length < 100 && !more) break
+            if (batch.length === 0) throw new Error('incomplete ruleset pagination')
+          }
+          return { rules, pagesRead }
+        } catch (error) {
+          return { error, pagesRead }
+        }
+      })
+      rulesPagesRead = outcome.pagesRead
+      if ('error' in outcome) throw outcome.error
+      const parsed = outcome.rules
       if (requireIdentity && parsed.some((rule) => rule.type === 'merge_queue')) {
         return unproven(
           'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
@@ -1584,17 +1617,26 @@ export class GitHubForge implements Forge {
   private async inspectAutoMergeView(
     repoPath: string,
     number: number,
+    initial?: LandingView,
   ): Promise<{
     view: z.infer<typeof restAutoMergeView>
     mergeState: MergeStateStatus
     requeries: number
     waitedMs: number
   }> {
-    const view = await this.getJson(
-      restAutoMergeView,
-      `${repoPath}/pulls/${number}`,
-      `PR #${number} auto-merge inspection`,
-    )
+    const parsedInitial = initial === undefined ? undefined : restAutoMergeView.safeParse(initial)
+    if (parsedInitial?.success === false) {
+      throw new Error(
+        `unexpected GitHub response for PR #${number} auto-merge inspection: ${parsedInitial.error.message}`,
+      )
+    }
+    const view =
+      parsedInitial?.data ??
+      (await this.getJson(
+        restAutoMergeView,
+        `${repoPath}/pulls/${number}`,
+        `PR #${number} auto-merge inspection`,
+      ))
     let current = view
     let requeries = 0
     let waitedMs = 0
@@ -1658,22 +1700,32 @@ export class GitHubForge implements Forge {
     try {
       const { owner, name } = await this.requireCoordinates()
       const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-      // A matching native request needs only this authoritative read, even
-      // after a dispatcher restart. Consent is refreshed only before mutations.
-      const message =
-        options === undefined ? undefined : await this.squashMessage(number, options.baseBranch)
-      if (message !== undefined && options !== undefined) {
-        if (message.state !== 'OPEN') return { kind: 'deferred' }
-        if (await this.identityMessageMatches(message, options)) return { kind: 'applied' }
+      // A matching native request needs only the PR representation the poll
+      // already read and the shared repository settings, even after a
+      // dispatcher restart. Consent is refreshed only before mutations. Merge
+      // queues are re-checked by every mutating path, not on this quiet poll.
+      const landing = options === undefined ? undefined : await this.landingView(number)
+      if (landing !== undefined && options !== undefined) {
+        if (!landingOpen(landing)) return { kind: 'deferred' }
+        if (options.baseBranch !== undefined && landing.base.ref !== options.baseBranch)
+          return {
+            kind: 'deferred',
+            reason: {
+              code: 'unproven-gate-state',
+              detail: `GitHub PR #${number} base ${landing.base.ref} differs from the build's base ${options.baseBranch}`,
+            },
+          }
+        if (await this.identityMessageMatches(number, landing, options)) return { kind: 'applied' }
       }
       const { view, mergeState, requeries, waitedMs } = await this.inspectAutoMergeView(
         repoPath,
         number,
+        landing,
       )
       if (view.auto_merge !== null && options === undefined) return { kind: 'applied' }
       if (
-        message !== undefined &&
-        (message.headRefOid !== view.head.sha || message.baseRefName !== view.base.ref)
+        landing !== undefined &&
+        (landing.head.sha !== view.head.sha || landing.base.ref !== view.base.ref)
       )
         return { kind: 'deferred' }
 
@@ -1685,11 +1737,9 @@ export class GitHubForge implements Forge {
           : classifyAutoMergeEnable(mergeState, gate.presence)
       switch (disposition.kind) {
         case 'native': {
-          const repository = await this.getJson(
-            restRepositoryAutoMerge,
-            repoPath,
-            'repository auto-merge read',
-          )
+          const repository = await this.repositorySettings()
+          if (typeof repository.allow_auto_merge !== 'boolean')
+            throw new Error('unexpected GitHub response for repository auto-merge read')
           if (!repository.allow_auto_merge) {
             return {
               kind: 'deferred',
@@ -1700,7 +1750,7 @@ export class GitHubForge implements Forge {
             }
           }
           if (options !== undefined)
-            return await this.applyIdentityAutoMerge(number, view.head.sha, options, message!)
+            return await this.applyIdentityAutoMerge(number, view.head.sha, options, landing!)
           await this.graphql(
             'enablePullRequestAutoMerge',
             enableAutoMergeData,
@@ -1780,69 +1830,169 @@ export class GitHubForge implements Forge {
     }
   }
 
-  private async squashMessage(number: number, branch?: string) {
+  /** The PR as the landing path sees it. By default this is the
+   * representation the same tick's `getPrState` poll already fetched (shared
+   * memo and ETag). `fresh` bypasses the tick memo with its own conditional
+   * read, for post-mutation readback and the direct squash; mutations clear
+   * validators, so a readback after one is an unconditional 200. */
+  private async landingView(number: number, fresh = false): Promise<LandingView> {
     const { owner, name } = await this.requireCoordinates()
-    // The default branch is the usual base. A supplied hint covers other bases
-    // in one query; always verify it against the PR, including after retargeting.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const data = await this.graphql('squashMessage', squashMessageData, SQUASH_MESSAGE_QUERY, {
-        owner,
-        name,
-        number,
-        branch: branch ?? null,
-      })
-      const message = data.repository.pullRequest
-      const inspectedBranch = branch ?? data.repository.defaultBranchRef?.name
-      if (inspectedBranch !== message.baseRefName) {
-        branch = message.baseRefName
-        continue
-      }
-      if (data.repository.mergeQueue !== null) {
-        throw new Error(
-          'GitHub merge queues ignore squash message overrides; merge through a human or change the queue policy to preserve Autobuild-Build identity',
-        )
-      }
-      return message
+    const path = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
+    const raw = fresh
+      ? await this.revalidateResource(restPrState, path, `PR #${number} landing read`)
+      : await this.prView(number, path)
+    const parsed = restLandingPr.safeParse(raw)
+    if (!parsed.success) {
+      throw new Error(
+        `unexpected GitHub response for PR #${number} landing read: ${parsed.error.message}`,
+      )
     }
-    throw new Error(
-      'GitHub PR base changed during squash-message and merge-queue inspection; retry',
+    return parsed.data
+  }
+
+  /** Conditional, and shared by every build in a tick scope. */
+  private async repositorySettings(): Promise<z.infer<typeof restRepository>> {
+    const { owner, name } = await this.requireCoordinates()
+    return this.revalidate(
+      restRepository,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      'repository settings read',
+    )
+  }
+
+  /** The PR's commit messages in chronological order, cached under the PR's
+   * commit-set identity. A PR's commit list is BASE..HEAD, so a fixed head
+   * is not enough: a base advance that absorbs head commits changes the
+   * PR's `commits` count (and `base.sha`), which misses the cache. A
+   * same-count base rewrite with an unchanged `base.sha` is an accepted
+   * residual risk; guarding it would need a base read on every poll. */
+  private readonly commitMessageCache = new Map<string, string[]>()
+
+  private async prCommitMessages(number: number, view: LandingView): Promise<string[]> {
+    const count = view.commits
+    const key = `${number}:${view.head.sha}:${view.base.ref}:${view.base.sha}:${count}`
+    const cached = this.commitMessageCache.get(key)
+    if (cached !== undefined && cached.length === count) return cached
+    const { owner, name } = await this.requireCoordinates()
+    const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    const raced = (detail: string) =>
+      new Error(`GitHub PR #${number} head or base changed during commit read (${detail}); retry`)
+    const listed: { sha: string; message: string }[] = []
+    const pages = Math.ceil(count / 100)
+    if (count <= 250) {
+      // GitHub caps this listing at 250 commits.
+      for (let page = 1; page <= pages; page++) {
+        const response = await this.request('GET', `${repoPath}/pulls/${number}/commits`, {
+          query: { per_page: '100', page: String(page) },
+        })
+        const batch = this.parse(restCommitMessages, response, `PR #${number} commit list`)
+        listed.push(...batch.map((entry) => ({ sha: entry.sha, message: entry.commit.message })))
+      }
+      if (listed.length !== count || listed.at(-1)?.sha !== view.head.sha)
+        throw raced(`listed ${listed.length} of ${count} commits ending at ${listed.at(-1)?.sha}`)
+    } else {
+      // Past the listing cap, the paginated compare returns every commit.
+      const comparePath = `${repoPath}/compare/${encodeURIComponent(view.base.ref)}...${view.head.sha}`
+      let total: number | undefined
+      for (let page = 1; total === undefined || listed.length < total; page++) {
+        if (page > pages + 1) throw raced('compare pagination did not terminate')
+        const response = await this.request('GET', comparePath, {
+          query: { per_page: '100', page: String(page) },
+        })
+        const batch = this.parse(restCompareCommits, response, `PR #${number} commit compare`)
+        if (total !== undefined && batch.total_commits !== total)
+          throw raced(`compare total changed from ${total} to ${batch.total_commits}`)
+        total = batch.total_commits
+        if (total !== count)
+          throw raced(`compare reports ${total} commits where the PR reports ${count}`)
+        if (batch.commits.length === 0 && listed.length < total)
+          throw raced(`compare page ${page} was empty after ${listed.length} of ${total}`)
+        listed.push(
+          ...batch.commits.map((entry) => ({ sha: entry.sha, message: entry.commit.message })),
+        )
+        if (batch.commits.length < 100 && listed.length < total)
+          throw raced(`compare page ${page} was short after ${listed.length} of ${total}`)
+      }
+      if (listed.length !== total || !listed.some((entry) => entry.sha === view.head.sha))
+        throw raced(`compare listed ${listed.length} of ${total} commits without the PR head`)
+    }
+    const messages = listed.map((entry) => entry.message)
+    this.commitMessageCache.delete(key)
+    this.commitMessageCache.set(key, messages)
+    while (this.commitMessageCache.size > REPRESENTATION_CACHE_CAP) {
+      this.commitMessageCache.delete(this.commitMessageCache.keys().next().value!)
+    }
+    return messages
+  }
+
+  /** The squash headline and body this build lands with: GitHub's squash
+   * settings applied to the PR, then the shared identity composition. */
+  private async expectedLanding(
+    number: number,
+    view: LandingView,
+    options: BuildLandingOptions,
+  ): Promise<{ headline: string; body: string }> {
+    const repository = await this.repositorySettings()
+    const titleSetting = repository.squash_merge_commit_title
+    const messageSetting = repository.squash_merge_commit_message
+    if (titleSetting === undefined || messageSetting === undefined) {
+      throw new Error(
+        `GitHub repository response omits ${titleSetting === undefined ? 'squash_merge_commit_title' : 'squash_merge_commit_message'}; ` +
+          'GitHub shows merge settings only to tokens with contents:write',
+      )
+    }
+    const title = GitHubSquashTitleSetting.safeParse(titleSetting)
+    const message = GitHubSquashMessageSetting.safeParse(messageSetting)
+    const commits =
+      title.success &&
+      message.success &&
+      needsCommitMessages(title.data, message.data, view.commits)
+        ? await this.prCommitMessages(number, view)
+        : []
+    return this.landingSquashMessage(
+      githubSquashDefaults({
+        titleSetting,
+        messageSetting,
+        number,
+        title: view.title,
+        body: view.body,
+        commits,
+      }),
+      options,
     )
   }
 
   /** The landed squash headline and body. Writers and the identity
    * comparison share this one composition, so they cannot diverge. */
   private async landingSquashMessage(
-    view: z.infer<typeof squashMessageData>['repository']['pullRequest'],
+    defaults: { headline: string; body: string },
     options: BuildLandingOptions,
   ): Promise<{ headline: string; body: string }> {
     const links = options.issueLinks ?? []
     if (links.length === 0)
       return {
-        headline: view.viewerMergeHeadlineText,
-        body: landingMessage(view.viewerMergeBodyText, options.buildSlug, links),
+        headline: defaults.headline,
+        body: landingMessage(defaults.body, options.buildSlug, links),
       }
     const { owner, name } = await this.requireCoordinates()
     const repository = `${owner}/${name}`
     return {
-      headline: neutralizeClosingReferences(view.viewerMergeHeadlineText, links, { repository }),
-      body: landingMessage(view.viewerMergeBodyText, options.buildSlug, links, { repository }),
+      headline: neutralizeClosingReferences(defaults.headline, links, { repository }),
+      body: landingMessage(defaults.body, options.buildSlug, links, { repository }),
     }
   }
 
   private async identityMessageMatches(
-    view: z.infer<typeof squashMessageData>['repository']['pullRequest'],
+    number: number,
+    view: LandingView,
     options: BuildLandingOptions,
   ): Promise<boolean> {
-    if (
-      view.autoMergeRequest === null ||
-      view.autoMergeRequest.mergeMethod !== 'SQUASH' ||
-      view.autoMergeRequest.commitBody === null
-    )
-      return false
-    const expected = await this.landingSquashMessage(view, options)
-    return (
-      view.autoMergeRequest.commitHeadline === expected.headline &&
-      view.autoMergeRequest.commitBody.trimEnd() === expected.body.trimEnd()
+    const armed = view.auto_merge
+    if (armed === null || armed.merge_method !== 'squash') return false
+    if (armed.commit_title === null || armed.commit_message === null) return false
+    return sameArmedMessage(
+      { title: armed.commit_title, message: armed.commit_message },
+      await this.expectedLanding(number, view, options),
     )
   }
 
@@ -1850,48 +2000,48 @@ export class GitHubForge implements Forge {
     number: number,
     expectedHead: string,
     options: BuildLandingOptions,
-    message: z.infer<typeof squashMessageData>['repository']['pullRequest'],
+    view: LandingView,
   ): Promise<AutoMergeResult> {
-    const expectedBase = message.baseRefName
-    const matches = (view: typeof message): Promise<boolean> =>
-      this.identityMessageMatches(view, options)
-    if (message.state !== 'OPEN' || message.headRefOid !== expectedHead) return { kind: 'deferred' }
-    if (await matches(message)) return { kind: 'applied' }
+    const expectedBase = view.base.ref
+    const matches = (current: LandingView): Promise<boolean> =>
+      this.identityMessageMatches(number, current, options)
+    if (!landingOpen(view) || view.head.sha !== expectedHead) return { kind: 'deferred' }
+    if (await matches(view)) return { kind: 'applied' }
     if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
-    if (message.autoMergeRequest !== null) {
+    if (view.auto_merge !== null) {
       await this.graphql(
         'disablePullRequestAutoMerge',
         disableAutoMergeData,
         DISABLE_AUTO_MERGE_MUTATION,
-        { pullRequestId: message.id },
+        { pullRequestId: view.node_id },
       )
-      message = await this.squashMessage(number, message.baseRefName)
+      view = await this.landingView(number, true)
       if (
-        message.state !== 'OPEN' ||
-        message.headRefOid !== expectedHead ||
-        message.baseRefName !== expectedBase ||
-        message.autoMergeRequest !== null
+        !landingOpen(view) ||
+        view.head.sha !== expectedHead ||
+        view.base.ref !== expectedBase ||
+        view.auto_merge !== null
       )
         return { kind: 'deferred' }
     }
     if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
-    const landing = await this.landingSquashMessage(message, options)
+    const landing = await this.expectedLanding(number, view, options)
     await this.graphql(
       'enablePullRequestAutoMerge',
       enableAutoMergeData,
       ENABLE_IDENTITY_AUTO_MERGE_MUTATION,
       {
-        pullRequestId: message.id,
+        pullRequestId: view.node_id,
         mergeMethod: 'SQUASH',
-        expectedHeadOid: message.headRefOid,
+        expectedHeadOid: view.head.sha,
         commitHeadline: landing.headline,
         commitBody: landing.body,
       },
     )
-    const after = await this.squashMessage(number, message.baseRefName)
-    return after.state === 'OPEN' &&
-      after.headRefOid === message.headRefOid &&
-      after.baseRefName === expectedBase &&
+    const after = await this.landingView(number, true)
+    return landingOpen(after) &&
+      after.head.sha === view.head.sha &&
+      after.base.ref === expectedBase &&
       (await matches(after))
       ? { kind: 'applied' }
       : {
@@ -1946,18 +2096,23 @@ export class GitHubForge implements Forge {
     options?: BuildLandingOptions,
   ): Promise<void> {
     const { owner, name } = await this.requireCoordinates()
-    const message =
-      options === undefined ? undefined : await this.squashMessage(number, options.baseBranch)
-    if (
-      message !== undefined &&
-      (message.state !== 'OPEN' || message.headRefOid !== expectedHeadSha)
-    ) {
-      throw new Error('GitHub squash message head changed; retry inspection')
+    let landing: { headline: string; body: string } | undefined
+    if (options !== undefined) {
+      const view = await this.landingView(number, true)
+      if (!landingOpen(view) || view.head.sha !== expectedHeadSha) {
+        throw new Error('GitHub squash message head changed; retry inspection')
+      }
+      if (options.baseBranch !== undefined && view.base.ref !== options.baseBranch) {
+        throw new Error(
+          `GitHub PR #${number} base ${view.base.ref} differs from the build's base ${options.baseBranch}; retry inspection`,
+        )
+      }
+      // The dispatcher squashes only after inspection returned `ungated`; this
+      // re-checks merge queues, which ignore message overrides.
+      const gate = await this.mergeGatePresence(view.base.ref, true)
+      if (gate.kind === 'deferred') throw new Error(gate.reason.detail)
+      landing = await this.expectedLanding(number, view, options)
     }
-    const landing =
-      message !== undefined && options !== undefined
-        ? await this.landingSquashMessage(message, options)
-        : undefined
     await this.request(
       'PUT',
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
