@@ -835,6 +835,19 @@ function baseBranchOf(events: CurrentBuildFacts, config: Config): string {
   return events.baseBranch ?? config.baseBranch
 }
 
+/** An open optimization node whose latest spec revision has not had its
+ * objective accepted yet. Read from reduced state alone: zero added reads. */
+export function objectiveAcceptancePending(state: BuildState): boolean {
+  return (
+    state.kind === 'node' &&
+    state.nodeOpened !== undefined &&
+    state.optimization !== undefined &&
+    state.status !== 'done' &&
+    state.status !== 'aborted' &&
+    (state.specRev ?? 0) > state.optimization.accepted.specRev
+  )
+}
+
 function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
   const meta = deposited[0]
   if (!meta) throw new Error('spec deposit produced no artifact meta')
@@ -858,19 +871,6 @@ function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
  *   engine's business; the janitor is not gated, so abort and discard keep
  *   settling while the repository is at rest.
  */
-/** An open optimization node whose latest spec revision has not had its
- * objective accepted yet. Read from reduced state alone: zero added reads. */
-export function objectiveAcceptancePending(state: BuildState): boolean {
-  return (
-    state.kind === 'node' &&
-    state.nodeOpened !== undefined &&
-    state.optimization !== undefined &&
-    state.status !== 'done' &&
-    state.status !== 'aborted' &&
-    (state.specRev ?? 0) > state.optimization.accepted.specRev
-  )
-}
-
 export function heldByRepositoryPause(state: BuildState, paused: boolean): boolean {
   return paused && state.status === 'queued'
 }
@@ -6630,12 +6630,11 @@ export class Dispatcher {
           const authored = await this.deps.authorSpec(ticket)
           // An authored spec never gains the marker the ticket did not carry.
           if (authored !== null && objectiveBlocks(authored).length === 0) {
-            const candidate = specConformance(authored)
-            if (candidate.conforms) {
-              conformance = candidate
+            conformance = specConformance(authored)
+            if (conformance.conforms) {
               body = authored
               authoredSession = this.deps.ids('s')
-            } else conformance = candidate
+            }
           }
         }
         if (!conformance.conforms) {
@@ -6949,13 +6948,13 @@ export class Dispatcher {
   }
 
   /** The objective a recorded spec revision declares: undefined for a plain
-   * node, a thrown refusal for a spec that cannot open as either kind. One
-   * artifact read. */
+   * node or no recorded spec, a thrown refusal for a spec that cannot open as
+   * either kind. One artifact read. */
   private async specObjective(
     slug: string,
     rev: number | undefined,
   ): Promise<Objective | undefined> {
-    if (rev === undefined) throw new Error('node has no recorded spec')
+    if (rev === undefined) return undefined
     const artifact = await this.store.getArtifact(slug, 'spec', rev)
     if (artifact === null) throw new Error(`spec revision ${rev} is unreadable`)
     const parsed = parseObjective(new TextDecoder().decode(artifact.content))
