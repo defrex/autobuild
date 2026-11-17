@@ -1,11 +1,13 @@
 import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bunExec } from './github'
 import { gitRewrite } from './git-rewrite'
 import type { Exec } from '../workspace/git-worktree'
+import { ForgeFailure, isForgeFailure } from '../forge-failure'
+import { ForgeRequestDeferred } from '../forge-request-context'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -307,6 +309,147 @@ test('transport uses exact leases and refuses namespace policy errors before rep
   expect(commands.some((cmd) => cmd.some((arg) => arg.startsWith('refs/heads/')))).toBe(false)
 })
 
+describe('refused archive push falls back to the supplied ref creation', () => {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  const refusal = 'remote: pushes of anything other than a branch are not allowed'
+  function harness(options: {
+    push?: { exitCode: number; stderr: string }
+    readback?: () => string | null
+    before?: string | null
+    fallback?: (ref: string, sha: string) => Promise<void>
+  }) {
+    const commands: string[][] = []
+    const calls: [string, string][] = []
+    let published = false
+    const capability = gitRewrite(
+      async (cmd) => {
+        commands.push(cmd)
+        if (cmd[1] === 'push')
+          return { stdout: '', ...(options.push ?? { exitCode: 1, stderr: refusal }) }
+        if (cmd[1] === 'ls-remote') {
+          const pushed = commands.some((c) => c[1] === 'push')
+          const actual = pushed
+            ? options.readback
+              ? options.readback()
+              : published
+                ? sha
+                : null
+            : (options.before ?? null)
+          return { exitCode: 0, stdout: actual ? `${actual}\t${ref}\n` : '', stderr: '' }
+        }
+        return { exitCode: 0, stdout: '', stderr: '' }
+      },
+      false,
+      async () => {
+        throw new Error('missing-object creation must not run for a local commit')
+      },
+      async (r, s) => {
+        calls.push([r, s])
+        if (options.fallback) return options.fallback(r, s)
+        published = true
+      },
+    )
+    return {
+      run: () => capability.archive({ workspacePath: '/ws', sha, ref }),
+      commands,
+      calls,
+    }
+  }
+
+  test('refused push then REST success publishes the identical ref', async () => {
+    const h = harness({})
+    await h.run()
+    expect(h.calls).toEqual([[ref, sha]])
+    const written = [...h.commands.flat(), ...h.calls.flat()]
+    expect(written.some((arg) => /refs\/(?:heads|tags)\//.test(arg))).toBe(false)
+  })
+
+  test('refused push then REST failure names both refusals', async () => {
+    const h = harness({
+      fallback: async () => {
+        throw new Error('policy')
+      },
+    })
+    const failure = await h.run().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const message = (failure as Error).message
+    for (const part of [
+      `archive publication rejected for ${ref} at ${sha}: git push refused (`,
+      refusal,
+      'GitHub REST ref creation failed (policy)',
+      'enable refs/autobuild/archive/ publication before branch rewrites',
+    ])
+      expect(message).toContain(part)
+  })
+
+  test('refused push then unconfirmed readback is rejected', async () => {
+    const h = harness({ fallback: async () => {} })
+    const failure = (await h.run().then(
+      () => undefined,
+      (error: unknown) => error,
+    )) as Error
+    expect(failure.message).toContain('git push refused')
+    expect(failure.message).toContain('did not confirm publication')
+  })
+
+  test('refused push then a different readback SHA is an immutable archive', async () => {
+    const other = 'b'.repeat(40)
+    const h = harness({ readback: () => other })
+    await expect(h.run()).rejects.toThrow(
+      `immutable archive ${ref} names ${other}, expected ${sha}`,
+    )
+  })
+
+  test('pre-existing different archive runs neither transport', async () => {
+    const other = 'b'.repeat(40)
+    const h = harness({ before: other })
+    await expect(h.run()).rejects.toThrow(`immutable archive ${ref} names ${other}`)
+    expect(h.commands.some((c) => c[1] === 'push')).toBe(false)
+    expect(h.calls).toEqual([])
+  })
+
+  test('transient push failure stays transient and never falls back', async () => {
+    const h = harness({ push: { exitCode: 128, stderr: 'fatal: HTTP 503 Service Unavailable' } })
+    const failure = await h.run().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(isForgeFailure(failure)).toBe(true)
+    expect(h.calls).toEqual([])
+  })
+
+  test('transient REST failure after a refusal keeps its class', async () => {
+    for (const failure of [
+      new ForgeFailure('unavailable', { kind: 'transient', retry: 'retryable' }),
+      new ForgeRequestDeferred('deferred'),
+    ]) {
+      const h = harness({
+        fallback: async () => {
+          throw failure
+        },
+      })
+      await expect(h.run()).rejects.toBe(failure)
+    }
+  })
+
+  test('successful push never calls the fallback', async () => {
+    let pushed = false
+    const h = harness({
+      push: { exitCode: 0, stderr: '' },
+      readback: () => {
+        pushed = true
+        return sha
+      },
+    })
+    await h.run()
+    expect(pushed).toBe(true)
+    expect(h.calls).toEqual([])
+  })
+})
+
 for (const diagnostic of [
   'fatal: unable to access: The requested URL returned error: 503',
   'fatal: HTTP 502 Bad Gateway',
@@ -367,6 +510,9 @@ for (const after of [null, 'a'.repeat(40), 'b'.repeat(40)]) {
       )
       const result = capability.archive({ workspacePath: '/ws', sha, ref })
       if (after === sha) await result
+      // A different archive SHA is immutable, whatever the write transport reported.
+      else if (after)
+        await expect(result).rejects.toThrow(`immutable archive ${ref} names ${after}`)
       else await expect(result).rejects.toBe(failure)
       expect(fetched).toBe(after === sha)
     }
