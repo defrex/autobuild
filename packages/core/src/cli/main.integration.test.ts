@@ -924,6 +924,41 @@ describe('runCli — sessionless build controls', () => {
     await local.close()
   })
 
+  test('abort records a destination and reason, and refuses an unknown destination before any write', async () => {
+    const storeRef = join(tmp, 'abort-destination-store')
+    await seedControlStore(storeRef, {})
+    const refused = controlDeps(storeRef)
+    expect(await runCli(['abort', slug, '--to', 'backlog'], refused)).toBe(1)
+    expect(refused.err.join('\n')).toContain('--to must be one of: triage, ready')
+    let local = openLocalStore(storeRef)
+    const before = (await local.getEvents(slug)).length
+    await local.close()
+    const d = controlDeps(storeRef)
+    expect(await runCli(['abort', slug, '--to', 'ready', '--reason', 'waiting on T-2'], d)).toBe(0)
+    expect(d.out).toEqual([`build ${slug}: abort requested; ticket returns to ready`])
+    local = openLocalStore(storeRef)
+    const events = await local.getEvents(slug)
+    expect(events).toHaveLength(before + 1)
+    expect(events.at(-1)).toMatchObject({
+      type: 'build.abort-requested',
+      payload: { to: 'ready', reason: 'waiting on T-2' },
+    })
+    await local.close()
+    // An identical repeat is the same request; a different one is refused.
+    const repeat = controlDeps(storeRef)
+    expect(
+      await runCli(['abort', slug, '--to', 'ready', '--reason', 'waiting on T-2'], repeat),
+    ).toBe(0)
+    const different = controlDeps(storeRef)
+    expect(await runCli(['abort', slug], different)).toBe(1)
+    expect(different.err.join('\n')).toContain(
+      'already has an abort request returning its ticket to ready',
+    )
+    local = openLocalStore(storeRef)
+    expect(await local.getEvents(slug)).toHaveLength(before + 1)
+    await local.close()
+  })
+
   test('answer with no text selects retry', async () => {
     const storeRef = join(tmp, 'retry-store')
     await seedControlStore(storeRef, { escalations: ['esc-retry'] })
@@ -1659,7 +1694,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     // Splitting abort out of the shared case block left its grammar intact.
     const abort = bulkDeps(storeRef)
     expect(await runCli(['abort', 'a-running'], abort)).toBe(0)
-    expect(abort.out).toEqual(['build a-running: abort requested'])
+    expect(abort.out).toEqual(['build a-running: abort requested; ticket returns to triage'])
   })
 
   test('--store beats AB_STORE for the repository-wide form too', async () => {

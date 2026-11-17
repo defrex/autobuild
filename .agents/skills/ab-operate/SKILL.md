@@ -118,7 +118,7 @@ Credential/process changes remain subject to the Boundaries below.
 `ab watch --operator --json` is the standing monitor. Keep its default filter: every
 record calls for action. It reports failed node verification, build escalations, persistent janitor failures and their escalations, merge decisions,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
-restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket-source and forge degradation past reset (15 minutes
+restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket hand-backs (`ticket.handed-back`), ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), forge rate limits outside the dispatcher's credential
 (`forge.credential-limited`), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
@@ -268,8 +268,9 @@ that appear after you arm. Finishing the initially queued set is no reason to st
    alive and keep discovering work until the human ends or hands off the role.
 
 Use `ab wait` and named unflagged watches only as separate diagnostics. They
-cannot replace the registered monitor or its cursor. In MCP, use the existing
-registry monitoring tools; operator presence is not exposed there, and its
+cannot replace the registered monitor or its cursor. In MCP, poll
+`repository.events` for repository attention and `builds.events` for each build;
+operator presence is not exposed there, and its
 `repository.status` marks presence `unavailable` rather than absent.
 
 ### Inspect
@@ -305,8 +306,15 @@ Read events with a cursor or a small `--events` count; logs are long.
   session where supported; remote or unsupported sessions rerun fresh, with a
   reason recorded in session.resume-fallback. Without a live agent (including
   check-only verify), pause still takes effect at the next boundary.
-- `ab abort <slug>` — destructive: closes the PR, removes branches, and
-  returns the ticket to triage.
+- `ab abort <slug> [--to triage|ready] [--reason <text>]` — destructive:
+  closes the PR, removes branches, and hands the ticket back to triage by
+  default. To free a build's slot while it waits on other work, use
+  `--to ready`: the ticket goes straight to ready with its blockers kept and
+  redispatches once they merge, so it needs no second move. A ticket that no
+  longer conforms to the spec standard falls back to triage, and the comment
+  lists what is missing. `--reason` is quoted in the hand-back comment.
+  Cleanup is asynchronous: act on the `ticket.handed-back` repository event,
+  not on `build.aborted` or the build leaving `ab builds`.
 - `ab hold <slug>` — persistently hold a merge and revoke earlier consent.
 - `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
   survives restacks and verification; use hold to withdraw it when work changes.
@@ -405,13 +413,22 @@ Your tools are the operator registry. The read-only ones are always safe:
 - `builds.artifact` — one artifact's bytes, base64-encoded.
 - `repository.status` — the repository's derived status. Its `operator.presence`
   is `unavailable`: it does not load presence, so it is not evidence of absence.
+- `repository.events` — your repository attention watch: the repository journal
+  after a `cursor`, with an optional bounded `waitSeconds` (at most 30). Its
+  default `attention` filter returns exactly the repository records
+  `ab watch --operator` reports, such as `ticket.handed-back`; `filter: "all"`
+  returns every event. Omit the cursor once to get a baseline, then pass back
+  the returned cursor, which advances past filtered events; follow it while
+  `hasMore` is true. On `code: "cursor-too-old"`, re-baseline and reconcile
+  `repository.status`. Build attention comes from `builds.events`.
 - `harvest.status` — the observation workflow's current state.
 
 The mutating ones carry the human's authority — prefer the narrowest
 that does the job, and say what you are doing before you do it:
 
 - `builds.control` — pause, resume, abort, or discard a build. `abort` and
-  `discard` are destructive to in-flight work.
+  `discard` are destructive to in-flight work. `abort` accepts `to`
+  (`triage`, the default, or `ready`) and a `reason`, as `ab abort` does.
 - `builds.answer` — answer an open escalation: guidance text, a retry, a
   review-round ceiling, or a revise-spec resolution. Eligible idle collecting or
   verification-failed nodes accept body/ticket spec revision without an escalation;
@@ -502,6 +519,16 @@ Treat every default-watch record as a call to act:
   assuming it sits in Doing. Decide whether to leave it finished or cancelled,
   or return it to Ready for another attempt. Each abandonment reports once;
   history does not replay.
+- Ticket hand-back (`ticket.handed-back`): the dispatcher returned a claimed or
+  ready ticket other than as completion, and the move is already committed.
+  `cause` is `abort`, `spec-bounce`, `preparation-failed`, `pr-closed` or
+  `discard`; `state` and `role` say where it went, `requested` the role an abort
+  asked for when it fell back, `missing` the spec-standard parts, and `reason`
+  the operator's text. An abort to ready needs nothing more. For triage, groom
+  the ticket and move it on when intended; for a spec bounce, fix the missing
+  parts first. Moving the ticket as soon as the record arrives is safe: no later
+  dispatcher write for the same hand-back overrides it. Each hand-back reports
+  once.
 
 Do not re-derive history the build's events already tell you; read events
 with a cursor and keep it short.

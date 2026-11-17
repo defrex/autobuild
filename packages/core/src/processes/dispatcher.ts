@@ -190,7 +190,9 @@ import type { Config } from '../config/schema'
 import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
-import type { EventPayload, PinnedAsset } from '../events/payloads'
+import type { AbortDestination, EventPayload, PinnedAsset } from '../events/payloads'
+import type { RepositoryEventPayload } from '../events/repository'
+import { handbackIdentity } from '../kernel/ticket-handbacks'
 import type { IdSource } from '../ids'
 import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import type { AutoMergeDefaultFact } from '../kernel/auto-merge-default'
@@ -1277,6 +1279,8 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
+    await this.settleHandbacks()
+    if (this.outOfBudget(opts)) return report
     await this.recoverDispatches(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused, opts)
@@ -1446,6 +1450,104 @@ export class Dispatcher {
       this.deps.tickets.name,
       record.slug,
     ).id
+  }
+
+  /** The ticket ref a hand-back actually moved: its current id. */
+  private async handbackTicket(record: BuildRecord): Promise<TicketRef> {
+    return { ...record.ticket!, id: await this.currentTicketId(record) }
+  }
+
+  /** Report a build's committed ticket hand-back once. The journal view is
+   * refreshed first, so a report whose append committed but whose
+   * acknowledgement was lost is seen and never repeated. */
+  private async reportBuildHandback(
+    slug: string,
+    payload: RepositoryEventPayload<'ticket.handed-back'>,
+  ): Promise<void> {
+    await this.store.ensureRepo(this.deps.repo)
+    await this.store.refreshJournal()
+    if (this.store.repositoryFacts().handbacks[handbackIdentity(slug)] !== undefined) return
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload,
+    })
+  }
+
+  /** Prune a completed build's hand-back identity. Best effort: a failure is
+   * retried by `settleHandbacks` on a later tick. */
+  private async settleBuildHandback(slug: string): Promise<void> {
+    try {
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'ticket.handback-settled',
+        payload: { build: slug },
+      })
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+    }
+  }
+
+  /** Settle reported build hand-backs whose build is complete (or gone).
+   * Zero reads and appends while no hand-back is open. */
+  private async settleHandbacks(): Promise<void> {
+    const open = Object.keys(this.store.repositoryFacts().handbacks)
+    if (open.length === 0) return
+    const digests = new Map(
+      (await this.repoBuildDigests(true)).map(({ record, digest }) => [record.slug, digest]),
+    )
+    for (const identity of open) {
+      const slug = identity.slice('build:'.length)
+      const digest = digests.get(slug)
+      if (digest === undefined || digest.terminal === 'done') await this.settleBuildHandback(slug)
+    }
+  }
+
+  /** Report a preparation attempt's committed hand-back once. */
+  private async reportPreparationHandback(
+    attempt: TicketPreparation,
+    payload: RepositoryEventPayload<'ticket.handed-back'>,
+  ): Promise<void> {
+    await this.store.refreshJournal()
+    if (this.store.repositoryFacts().preparation[attempt.attempt]?.reported) return
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload,
+    })
+  }
+
+  /** Return a build's ticket once for a closed PR or a discard, behind the
+   * `build.ticket-returned` checkpoint, then report the hand-back. */
+  private async returnBuildTicket(
+    record: BuildRecord,
+    events: CurrentBuildFacts,
+    cause: 'pr-closed' | 'discard',
+    role: AbortDestination,
+    comment: (state: string) => string,
+  ): Promise<void> {
+    if (record.ticket === undefined) return
+    let checkpoint = events.latestTicketReturned
+    if (!events.seenTypes.includes('build.ticket-returned')) {
+      const state = role === 'ready' ? this.deps.config.tickets.readyState : this.triageState()
+      const id = await this.currentTicketId(record)
+      await this.deps.tickets.transition(id, state)
+      await this.deps.tickets.comment(id, comment(state))
+      checkpoint = await this.store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'build.ticket-returned',
+        payload: { ticket: record.ticket, state, cause, role },
+      } satisfies EventWrite<'build.ticket-returned'>)
+    }
+    if (checkpoint === undefined)
+      throw new Error(`build ${record.slug} lost its ticket-returned checkpoint`)
+    await this.reportBuildHandback(record.slug, {
+      ticket: await this.handbackTicket(record),
+      build: record.slug,
+      cause,
+      state: checkpoint.payload.state,
+      role: checkpoint.payload.role ?? role,
+    })
   }
 
   private async activeTicketIdentities(refs: TicketRef[], listed: Ticket[]): Promise<Set<string>> {
@@ -3473,26 +3575,76 @@ export class Dispatcher {
     if (record.ticket !== undefined && !has('abort.ticket-returned')) {
       const label = 'autobuild:aborted'
       try {
-        const current = await tickets.get(await this.currentTicketId(record))
+        const id = await this.currentTicketId(record)
+        const current = await tickets.get(id)
         if (current === null) throw new Error(`ticket no longer exists in ${tickets.name}`)
+        // Labels are a union-only update, so blockedBy is never touched.
         if (!current.labels.includes(label)) {
-          await tickets.update(await this.currentTicketId(record), {
+          await tickets.update(id, {
             labels: [...current.labels, label],
           })
         }
+        const requested = events.latestAbort?.payload.to ?? 'triage'
+        const reason = events.latestAbort?.payload.reason?.trim() || undefined
+        const missing =
+          requested === 'ready' ? specConformance(current.body).missing : ([] as string[])
+        const role: AbortDestination =
+          requested === 'ready' && missing.length === 0 ? 'ready' : 'triage'
         const triageState = this.triageState()
-        await tickets.transition(await this.currentTicketId(record), triageState)
+        const state = role === 'ready' ? this.deps.config.tickets.readyState : triageState
+        // The one ticket move: straight to the destination, never via triage.
+        await tickets.transition(id, state)
         await tickets.comment(
-          await this.currentTicketId(record),
-          `build ${record.slug} aborted — returned to ${triageState}`,
+          id,
+          (missing.length > 0
+            ? `build ${record.slug} aborted — returned to ${state} instead of ${this.deps.config.tickets.readyState}: ` +
+              'the ticket does not conform to the spec standard (.agents/skills/ab-guide/references/spec-standard.md).\n' +
+              `Missing: ${missing.join('; ')}.`
+            : `build ${record.slug} aborted — returned to ${state}`) +
+            (reason !== undefined ? `\nReason: ${reason}` : ''),
         )
         await append({
           actor: DISPATCHER,
           type: 'abort.ticket-returned',
-          payload: { ticket: record.ticket, state: triageState, label },
+          payload: {
+            ticket: record.ticket,
+            state,
+            label,
+            role,
+            ...(requested !== role ? { requested } : {}),
+            ...(reason !== undefined ? { reason: reason.slice(0, 2000) } : {}),
+            ...(missing.length > 0 ? { missing } : {}),
+          },
         })
       } catch (error) {
         fail('ticket handback', `${tickets.name} ticket ${record.ticket.id}`, error)
+        return
+      }
+    }
+
+    // Reported from the checkpoint, never a re-read of the ticket, so a
+    // retry reports exactly what the committed move did.
+    if (record.ticket !== undefined) {
+      try {
+        const returned = events.latestTicketReturned
+        if (returned?.type !== 'abort.ticket-returned')
+          throw new Error('abort.ticket-returned checkpoint is not readable')
+        const checkpoint = returned.payload
+        const role: AbortDestination =
+          checkpoint.role ??
+          (checkpoint.state === this.deps.config.tickets.readyState ? 'ready' : 'triage')
+        await this.reportBuildHandback(record.slug, {
+          ticket: await this.handbackTicket(record),
+          build: record.slug,
+          cause: 'abort',
+          state: checkpoint.state,
+          role,
+          ...(checkpoint.requested !== undefined ? { requested: checkpoint.requested } : {}),
+          ...(checkpoint.reason !== undefined ? { reason: checkpoint.reason } : {}),
+          ...(checkpoint.missing !== undefined ? { missing: checkpoint.missing } : {}),
+        })
+      } catch (error) {
+        fail('hand-back report', `build ${record.slug}`, error)
         return
       }
     }
@@ -3502,6 +3654,7 @@ export class Dispatcher {
       type: 'build.completed',
       payload: { outcome: 'abandoned' },
     })
+    if (record.ticket !== undefined) await this.settleBuildHandback(record.slug)
     await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
   }
@@ -3515,26 +3668,23 @@ export class Dispatcher {
     report: TickReport,
   ): Promise<void> {
     const store = this.store
-    const { tickets } = this.deps
     await this.releaseWorkspace(record.slug, events, 'discard')
     if (record.lease !== undefined) {
       await store.releaseLease(record.slug, record.lease.holder)
     }
-    if (record.ticket !== undefined) {
-      await tickets.transition(
-        await this.currentTicketId(record),
-        this.deps.config.tickets.readyState,
-      )
-      await tickets.comment(
-        await this.currentTicketId(record),
-        `build ${record.slug} was discarded during dispatch — returned to ${this.deps.config.tickets.readyState}`,
-      )
-    }
+    await this.returnBuildTicket(
+      record,
+      events,
+      'discard',
+      'ready',
+      (state) => `build ${record.slug} was discarded during dispatch — returned to ${state}`,
+    )
     await store.append(record.slug, {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'discarded' },
     } satisfies EventWrite<'build.completed'>)
+    if (record.ticket !== undefined) await this.settleBuildHandback(record.slug)
     report.discarded += 1
   }
 
@@ -4316,19 +4466,20 @@ export class Dispatcher {
           } satisfies EventWrite<'pr.closed'>)
         }
         await this.releaseWorkspace(record.slug, events)
-        if (record.ticket) {
-          const triageState = this.triageState()
-          await tickets.transition(await this.currentTicketId(record), triageState)
-          await tickets.comment(
-            await this.currentTicketId(record),
-            `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${triageState}`,
-          )
-        }
+        await this.returnBuildTicket(
+          record,
+          events,
+          'pr-closed',
+          'triage',
+          (state) =>
+            `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${state}`,
+        )
         await store.append(record.slug, {
           actor: DISPATCHER,
           type: 'build.completed',
           payload: { outcome: 'closed-unmerged' },
         } satisfies EventWrite<'build.completed'>)
+        if (record.ticket) await this.settleBuildHandback(record.slug)
         await this.reclaimPrAttachments(record.slug, events)
         report.closed += 1
         return
@@ -5721,6 +5872,16 @@ export class Dispatcher {
             `Creation outcome unknown: the build store allocates canonical slugs and this attempt recorded no creation key, so a build created under an unrecorded slug cannot be ruled out; ticket unchanged. Inspect the repository's builds for ticket ${attempt.ticket.id} before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
           )
       }
+      // A committed `ticket.handed-back` whose acknowledgement or resolution
+      // was lost means the hand-back already happened, and a watcher may have
+      // moved the ticket since. Resolve without touching the ticket.
+      const handback = attempt.handback ?? attempt.readyState
+      await this.store.refreshJournal()
+      if (this.store.repositoryFacts().preparation[attempt.attempt]?.reported)
+        return await this.preparationResolved(
+          attempt,
+          handback === attempt.readyState ? 'handed-back' : 'bounced',
+        )
       const ref = resolveTicketRef(
         this.store.repositoryFacts().ticketMigrations,
         attempt.ticket,
@@ -5736,8 +5897,22 @@ export class Dispatcher {
           'Ticket state is unavailable; ticket unchanged. Inspect the provider record before manually retrying.',
         )
       const state = (value: string) => value.toLowerCase()
-      const handback = attempt.handback ?? attempt.readyState
+      // Only a confirmed claim left Ready; an unconfirmed one that stayed
+      // Ready was never handed back and gets no report.
+      const reportHandback = async (): Promise<void> => {
+        if (!attempt.claimed) return
+        const ready = handback === attempt.readyState
+        await this.reportPreparationHandback(attempt, {
+          ticket: ref,
+          attempt: attempt.attempt,
+          cause: ready ? 'preparation-failed' : 'spec-bounce',
+          state: handback,
+          role: ready ? 'ready' : 'triage',
+          ...(attempt.missing && attempt.missing.length > 0 ? { missing: attempt.missing } : {}),
+        })
+      }
       if (state(ticket.state) === state(handback)) {
+        await reportHandback()
         await this.preparationResolved(
           attempt,
           handback === attempt.readyState ? 'handed-back' : 'bounced',
@@ -5755,6 +5930,7 @@ export class Dispatcher {
           `Confirmed claim but ticket externally changed to state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
         )
       await this.deps.tickets.transition(ref.id, handback)
+      await reportHandback()
       await this.preparationResolved(
         attempt,
         handback === attempt.readyState ? 'handed-back' : 'bounced',
@@ -6172,13 +6348,29 @@ export class Dispatcher {
         }
         if (!conformance.conforms) {
           attempt.handback = this.triageState()
+          const missing = conformance.missing.length > 0 ? conformance.missing : undefined
+          if (missing) attempt.missing = missing
           await store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'ticket-preparation.handback-selected',
-            payload: { attempt: attempt.attempt, ticket: attempt.ticket, state: attempt.handback },
+            payload: {
+              attempt: attempt.attempt,
+              ticket: attempt.ticket,
+              state: attempt.handback,
+              ...(missing ? { missing } : {}),
+            },
           })
           stage = 'bounce'
           await this.bounce(ticket, conformance.missing)
+          stage = 'handback-report'
+          await this.reportPreparationHandback(attempt, {
+            ticket: ticket.ref,
+            attempt: attempt.attempt,
+            cause: 'spec-bounce',
+            state: attempt.handback,
+            role: 'triage',
+            ...(missing ? { missing } : {}),
+          })
           await this.preparationResolved(attempt, 'bounced')
           report.bounced += 1
           report.queued -= 1

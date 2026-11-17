@@ -100,6 +100,7 @@ export const executionProgress = {
   'abort.remote-branch-deleted': 'progress',
   'abort.local-branch-deleted': 'progress',
   'abort.ticket-returned': 'progress',
+  'build.ticket-returned': 'progress',
   'dispatch.failed': 'failure',
   'dispatch.comment-posted': 'bookkeeping',
   'build.pause-requested': 'progress',
