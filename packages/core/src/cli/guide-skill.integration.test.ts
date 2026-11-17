@@ -26,6 +26,7 @@ import {
   landingRuleSchema,
   imageHostSchema,
   orchestratorSchema,
+  hookSchema,
   prSchema,
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
@@ -92,6 +93,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   // Derived like the strict-shape entries above: a schema field added without
   // a matching guide row fails the coverage loop rather than passing silently.
   orchestrator: Object.keys(orchestratorSchema.shape),
+  hooks: Object.keys(hookSchema.shape),
 }
 
 /** The guide text under a level-three heading, up to the next one. */

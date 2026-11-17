@@ -61,6 +61,9 @@ import { issueTicketGrant, ticketGrantRequest } from '../ports/tickets/grants'
 import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
 import { isRemoteStoreRef } from './repo-state'
+import { HookSupervisor, type HookInvoke } from '../processes/hooks'
+import { commandHookInvoker } from '../processes/hook-command'
+import { watchSelection } from './watch'
 import { projectToken } from './project-credentials'
 import {
   readLaunchFence,
@@ -98,7 +101,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import semver from 'semver'
-import { parseConfig } from '../config/load'
+import { ConfigError, parseConfig } from '../config/load'
 import {
   composeBuildConfig,
   DISPATCHER_CONFIG_ARTIFACT,
@@ -520,6 +523,26 @@ export interface DispatchOpts {
    * dispatch never consult them. */
   availableReleaseProbe?: AvailableReleaseProbe
   upgradeNoticeScheduler?: UpgradeNoticeScheduler
+  /** False when this dispatcher cannot run repository-configured local
+   * commands (the hosted dispatcher): a configured command hook is then a
+   * config error at startup and on reload, never silently ignored. */
+  localCommands?: false
+  /** Test seam for configured hook delivery; defaults to running the hook's
+   * command (`processes/hook-command.ts`). */
+  invokeHook?: HookInvoke
+}
+
+/** Reject command hooks on a dispatcher that cannot run local commands. */
+export function assertHooksRunnable(
+  config: Config,
+  opts: Pick<DispatchOpts, 'localCommands'>,
+): void {
+  if (opts.localCommands !== false) return
+  for (const [name, hook] of Object.entries(config.hooks ?? {}))
+    if (hook.command !== undefined)
+      throw new ConfigError(
+        `autobuild.toml: [hooks.${name}] is a command hook, which needs a dispatcher that can run local commands; the hosted dispatcher cannot — remove it or dispatch locally`,
+      )
 }
 
 /** setTimeout that also resolves the moment ANY stop signal aborts, so OS
@@ -3867,6 +3890,70 @@ class DispatchLoop {
     if (!this.dashboard) this.opts.stdout(line)
   }
 
+  private hooks: HookSupervisor | undefined
+
+  private hookSupervisor(): HookSupervisor {
+    this.hooks ??= new HookSupervisor({
+      store: this.wiring.store,
+      repo: this.repoIdentity,
+      storeRef: this.wiring.storeRef,
+      checkout: this.opts.targetRepo,
+      clock: () => this.wiring.clock(),
+      invoke:
+        this.opts.invokeHook ??
+        commandHookInvoker({ checkout: this.opts.targetRepo, env: this.opts.env }),
+      warn: (line) => this.warn(line),
+      appendRepo: (event) => this.repoView.appendRepo(this.repoIdentity, event),
+      intervalMs: watchSelection(this.wiring.storeRef).intervalMs,
+    })
+    return this.hooks
+  }
+
+  /**
+   * Configured hooks run only while this loop holds repository authority and
+   * is not yielding or retiring; they run outside the tick serialization, and
+   * nothing reads their outcome. Reloads apply here, after each tick's
+   * config refresh.
+   */
+  private async syncHooks(): Promise<void> {
+    try {
+      const hooks = this.currentConfig().config.hooks ?? {}
+      if (
+        this.opts.localCommands !== false &&
+        this.holdsRepoAuthority() &&
+        !this.yieldPending &&
+        this.retirement === undefined &&
+        !this.watchStopped
+      ) {
+        if (this.hooks === undefined && Object.keys(hooks).length === 0) return
+        await this.hookSupervisor().reconcile(hooks)
+      } else await this.stopHooks()
+    } catch (error) {
+      this.warn(`hooks: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private async stopHooks(): Promise<void> {
+    const hooks = this.hooks
+    this.hooks = undefined
+    await hooks?.stop()
+  }
+
+  private async drainHooksOnce(): Promise<void> {
+    const hooks = this.currentConfig().config.hooks ?? {}
+    if (
+      this.opts.localCommands === false ||
+      Object.keys(hooks).length === 0 ||
+      !this.holdsRepoAuthority()
+    )
+      return
+    try {
+      await this.hookSupervisor().drainOnce(hooks)
+    } catch (error) {
+      this.warn(`hooks: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private warn(line: string): void {
     if (this.presentationReleased) return
     if (this.dashboard) this.setWarning(line)
@@ -4646,6 +4733,8 @@ class DispatchLoop {
     this.cutoverRequested = true
     // Suspend local harvest durably before transferring repository authority.
     await this.stopLocalHarvest()
+    // Hooks resume from durable progress under the successor.
+    await this.stopHooks()
     // A hosted launch can still be provisioning when yield is requested.
     // Keep joining that continuation and detach as soon as its handle exists.
     while (this.harvestInFlight) {
@@ -5119,8 +5208,11 @@ class DispatchLoop {
         if (!initialPrinted && !settledPrinted) {
           this.printReport(emptyTickReport())
         }
+        // One delivery pass per configured hook; the next invocation retries.
+        if (!this.pastDeadline()) await this.drainHooksOnce()
       } finally {
         this.localHarvestShutdown.abort()
+        await this.stopHooks()
         await this.stopBuildExecutions()
         await this.stopLocalHarvest()
         await this.stopHostedHarvest()
@@ -5167,6 +5259,7 @@ class DispatchLoop {
           }
         }
         this.triageSampler?.poke()
+        await this.syncHooks()
         if (this.watchStopped || this.superseded) break
         await sleep(failed || this.pendingTickFailure ? Math.max(intervalMs, 1000) : intervalMs)
       }
@@ -5176,6 +5269,7 @@ class DispatchLoop {
     } finally {
       this.localHarvestShutdown.abort()
       await this.upgradeController?.stop()
+      await this.stopHooks()
       if (this.retirement) {
         await this.retireGeneration()
       } else {
@@ -5573,6 +5667,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // both modes, so passing it as `packageRoot` is behavior-preserving; the
   // installation candidate (AUT-517) and the disk-first EROFS gate (AUT-587)
   // are unchanged.
+  assertHooksRunnable(config, resolvedOpts)
   const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo, {
     packageRoot: state.checkout,
     onNotice: (line) => resolvedOpts.stderr(line),
@@ -5668,6 +5763,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     (next) => {
       assertReadyAssigneeAccepted(next.tickets, wiring.tickets)
       assertCreateAssigneeAccepted(next.tickets, wiring.tickets)
+      assertHooksRunnable(next, resolvedOpts)
     },
   )
 

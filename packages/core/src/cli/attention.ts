@@ -62,6 +62,9 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
     case 'dispatcher.runtime-rolled-back':
     case 'dispatcher.upgrade-failed':
     case 'dispatcher.kernel-git-unavailable':
+    case 'hook.failing':
+    case 'hook.recovered':
+    case 'hook.skipped':
     case 'forge.credential-limited':
     case 'ticket.handed-back':
       return true
