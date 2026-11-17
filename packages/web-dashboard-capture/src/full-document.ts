@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -125,10 +126,14 @@ type Reply = {
   errorText?: string
 }
 
-/** Request ownership is local to one socket: every terminal path clears its timers. */
+/**
+ * Request ownership is local to one socket: every terminal path clears its
+ * timers. Protocol events (a `method` and no `id`) go to `onEvent`.
+ */
 export function debuggerRequests(
   ws: Pick<WebSocket, 'send' | 'onclose' | 'onerror' | 'onmessage'>,
   timeout: () => number,
+  onEvent?: (method: string, params: Record<string, unknown>) => void,
 ) {
   let sequence = 0
   let failure: Error | undefined
@@ -146,6 +151,10 @@ export function debuggerRequests(
   ws.onmessage = (event) => {
     try {
       const reply = JSON.parse(String(event.data))
+      if (reply.id === undefined && typeof reply.method === 'string') {
+        onEvent?.(reply.method, reply.params ?? {})
+        return
+      }
       const request = pending.get(reply.id)
       if (!request) return
       pending.delete(reply.id)
@@ -187,15 +196,24 @@ export function debuggerRequests(
   return { send, close: () => fail(Error('Chromium capture ended')) }
 }
 
-/** One bounded browser lifetime; callers own fresh profiles and retries. */
-export async function fullDocumentScreenshot(
+interface ChromiumPage {
+  send: ReturnType<typeof debuggerRequests>['send']
+  evaluate: (expression: string) => Promise<unknown>
+  /** Throws when the browser exited or the lifetime deadline passed. */
+  assertLive: () => void
+}
+
+/**
+ * One bounded browser lifetime: spawn, attach to a fresh target, run `use`, and
+ * reap. Callers own fresh profiles and retries. `onEvent` receives every
+ * protocol event the target emits once the debugger is attached.
+ */
+async function withChromiumPage<T>(
   chromium: string,
-  url: string,
-  pngPath: string,
-  width: number,
-  height: number,
-  profile: string,
-) {
+  { width, height, profile }: { width: number; height: number; profile: string },
+  use: (page: ChromiumPage) => Promise<T>,
+  onEvent?: (method: string, params: Record<string, unknown>) => void,
+): Promise<T> {
   const proc = Bun.spawn(
     [
       chromium,
@@ -255,10 +273,14 @@ export async function fullDocumentScreenshot(
         reject(Error('Chromium debugger connection failed'))
       }
     })
-    protocol = debuggerRequests(ws, () => {
-      assertLive()
-      return Math.min(10_000, deadline - Date.now())
-    })
+    protocol = debuggerRequests(
+      ws,
+      () => {
+        assertLive()
+        return Math.min(10_000, deadline - Date.now())
+      },
+      onEvent,
+    )
     const send = protocol.send
     const evaluate = async (expression: string) => {
       const reply = await send('Runtime.evaluate', {
@@ -270,78 +292,252 @@ export async function fullDocumentScreenshot(
         throw Error(`Chromium evaluation failed: ${JSON.stringify(reply.exceptionDetails)}`)
       return reply.result?.value
     }
-    await send('Emulation.setDeviceMetricsOverride', {
-      width,
-      height,
-      deviceScaleFactor: 1,
-      mobile: false,
-    })
-    // Match CLI foreground-page behavior, including native input autofocus.
-    await send('Page.bringToFront')
-    // Native form controls can retain fallback glyphs from their first layout.
-    // Reload with both packaged faces cached before measuring or capturing.
-    for (let load = 0; load < 2; load++) {
-      if (load === 1) {
-        await evaluate('document.documentElement.dataset.captureReload = "true"')
-        await send('Page.reload')
-      } else {
-        const navigation = await send('Page.navigate', { url })
-        if (navigation.errorText) throw Error(navigation.errorText)
-      }
-      while (
-        !(await evaluate(
-          `location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !document.documentElement.dataset.captureReload`,
-        ))
-      ) {
-        assertLive()
-        await Bun.sleep(50)
-      }
-      await evaluate(
-        `(async () => { await document.fonts.ready; for (const face of ['ANSI sans', 'ANSI mono']) { const loaded = await document.fonts.load('16px "' + face + '"'); if (!loaded.length || loaded.some(f => f.status !== 'loaded')) throw Error('Missing packaged font: ' + face); } await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); return true; })()`,
-      )
-    }
-    const confirmations = (await evaluate(confirmationPreparationExpression)) as unknown[]
-    const metrics = await send('Page.getLayoutMetrics')
-    // Confirmation frames are viewport captures because modals are viewport presentations.
-    const clip = documentClip(
-      width,
-      height,
-      confirmations.length ? height : metrics.cssContentSize?.height,
-    )
-    const shot = await send('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: confirmations.length === 0,
-      clip,
-    })
-    const png = screenshotBytes(shot.data, width, clip.height)
-    if (confirmations.length) {
-      // Compare the actual pixels with the same modal over an undimmed page.
-      await evaluate(
-        `(() => { const style = document.createElement('style'); style.id = 'capture-transparent-backdrop'; style.textContent = 'dialog.confirm-dialog::backdrop { background: transparent !important }'; document.head.append(style); })()`,
-      )
-      let undimmed: Reply
-      try {
-        undimmed = await send('Page.captureScreenshot', {
-          format: 'png',
-          fromSurface: true,
-          captureBeyondViewport: false,
-          clip,
-        })
-      } finally {
-        await evaluate(`document.getElementById('capture-transparent-backdrop').remove()`)
-      }
-      screenshotBytes(undimmed.data, width, height)
-      await evaluate(
-        `(${assertConfirmationPixels.toString()})(${JSON.stringify(shot.data)}, ${JSON.stringify(undimmed.data)})`,
-      )
-    }
-    await writeFile(pngPath, png)
-    return { width, height: clip.height, confirmations }
+    return await use({ send, evaluate, assertLive })
   } finally {
     protocol?.close()
     socket?.close()
     proc.kill()
     await proc.exited
   }
+}
+
+/** One bounded browser lifetime; callers own fresh profiles and retries. */
+export async function fullDocumentScreenshot(
+  chromium: string,
+  url: string,
+  pngPath: string,
+  width: number,
+  height: number,
+  profile: string,
+) {
+  return withChromiumPage(
+    chromium,
+    { width, height, profile },
+    async ({ send, evaluate, assertLive }) => {
+      await send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      })
+      // Match CLI foreground-page behavior, including native input autofocus.
+      await send('Page.bringToFront')
+      // Native form controls can retain fallback glyphs from their first layout.
+      // Reload with both packaged faces cached before measuring or capturing.
+      for (let load = 0; load < 2; load++) {
+        if (load === 1) {
+          await evaluate('document.documentElement.dataset.captureReload = "true"')
+          await send('Page.reload')
+        } else {
+          const navigation = await send('Page.navigate', { url })
+          if (navigation.errorText) throw Error(navigation.errorText)
+        }
+        while (
+          !(await evaluate(
+            `location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && !document.documentElement.dataset.captureReload`,
+          ))
+        ) {
+          assertLive()
+          await Bun.sleep(50)
+        }
+        await evaluate(
+          `(async () => { await document.fonts.ready; for (const face of ['ANSI sans', 'ANSI mono']) { const loaded = await document.fonts.load('16px "' + face + '"'); if (!loaded.length || loaded.some(f => f.status !== 'loaded')) throw Error('Missing packaged font: ' + face); } await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); return true; })()`,
+        )
+      }
+      const confirmations = (await evaluate(confirmationPreparationExpression)) as unknown[]
+      const metrics = await send('Page.getLayoutMetrics')
+      // Confirmation frames are viewport captures because modals are viewport presentations.
+      const clip = documentClip(
+        width,
+        height,
+        confirmations.length ? height : metrics.cssContentSize?.height,
+      )
+      const shot = await send('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: confirmations.length === 0,
+        clip,
+      })
+      const png = screenshotBytes(shot.data, width, clip.height)
+      if (confirmations.length) {
+        // Compare the actual pixels with the same modal over an undimmed page.
+        await evaluate(
+          `(() => { const style = document.createElement('style'); style.id = 'capture-transparent-backdrop'; style.textContent = 'dialog.confirm-dialog::backdrop { background: transparent !important }'; document.head.append(style); })()`,
+        )
+        let undimmed: Reply
+        try {
+          undimmed = await send('Page.captureScreenshot', {
+            format: 'png',
+            fromSurface: true,
+            captureBeyondViewport: false,
+            clip,
+          })
+        } finally {
+          await evaluate(`document.getElementById('capture-transparent-backdrop').remove()`)
+        }
+        screenshotBytes(undimmed.data, width, height)
+        await evaluate(
+          `(${assertConfirmationPixels.toString()})(${JSON.stringify(shot.data)}, ${JSON.stringify(undimmed.data)})`,
+        )
+      }
+      await writeFile(pngPath, png)
+      return { width, height: clip.height, confirmations }
+    },
+  )
+}
+
+/**
+ * Locate a Chromium-family binary: `CHROMIUM_BIN` or `CHROME_BIN` first, then
+ * common install paths, then PATH. Undefined when none exists.
+ */
+export function chromiumBinary(
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+  which: (name: string) => string | undefined | null = (name) => Bun.which(name),
+): string | undefined {
+  const configured = [env.CHROMIUM_BIN, env.CHROME_BIN].filter(
+    (value): value is string => typeof value === 'string' && value.length > 0,
+  )
+  for (const candidate of configured) if (exists(candidate)) return candidate
+  const installed = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ]
+  for (const candidate of installed) if (exists(candidate)) return candidate
+  for (const name of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
+    const found = which(name)
+    if (found) return found
+  }
+  return undefined
+}
+
+/** An uncaught exception or unhandled rejection the page raised and never revoked. */
+export interface ClientException {
+  exceptionId: number
+  text: string
+  description?: string
+  url?: string
+  lineNumber?: number
+  columnNumber?: number
+}
+
+/** What `client-harness.tsx` publishes as `globalThis.__autobuildHarness`. */
+export interface ClientHarnessState {
+  mounted: boolean
+  settled: boolean
+  rendered: boolean
+  /** `METHOD path?query` requests with no fixture response. */
+  unserved: string[]
+  requests: string[]
+}
+
+export interface ClientLoadResult {
+  exceptions: ClientException[]
+  harness?: ClientHarnessState
+  /** Set when the harness never settled within the bound. */
+  timeout?: string
+}
+
+/**
+ * Load a client harness page in Chromium and report every browser error it
+ * raised while loading: module evaluation, first render, effects and their
+ * rejections. Waits for the harness to settle, then one macrotask and two
+ * frames more so late rejections arrive before judging.
+ */
+export async function loadClientPage(
+  chromium: string,
+  url: string,
+  profile: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<ClientLoadResult> {
+  const exceptions = new Map<number, ClientException>()
+  const onEvent = (method: string, params: Record<string, unknown>) => {
+    if (method === 'Runtime.exceptionThrown') {
+      const details = params.exceptionDetails as {
+        exceptionId: number
+        text: string
+        url?: string
+        lineNumber?: number
+        columnNumber?: number
+        exception?: { description?: string; value?: unknown }
+      }
+      exceptions.set(details.exceptionId, {
+        exceptionId: details.exceptionId,
+        text: details.text,
+        description:
+          details.exception?.description ??
+          (details.exception?.value === undefined ? undefined : String(details.exception.value)),
+        url: details.url,
+        lineNumber: details.lineNumber,
+        columnNumber: details.columnNumber,
+      })
+    }
+    // A rejection handled after the fact is not an unhandled rejection.
+    if (method === 'Runtime.exceptionRevoked') exceptions.delete(params.exceptionId as number)
+  }
+  return withChromiumPage(
+    chromium,
+    { width: 1280, height: 900, profile },
+    async ({ send, evaluate, assertLive }) => {
+      await send('Runtime.enable')
+      const navigation = await send('Page.navigate', { url })
+      if (navigation.errorText) throw Error(navigation.errorText)
+      const state = () =>
+        evaluate(
+          "({ harness: globalThis.__autobuildHarness ?? null, complete: document.readyState === 'complete' })",
+        ) as Promise<{ harness: ClientHarnessState | null; complete: boolean }>
+      const bound = Date.now() + (opts.timeoutMs ?? 20_000)
+      let current = await state()
+      let harness = current.harness
+      let timeout: string | undefined
+      // A page that failed before mounting never settles; stop shortly after.
+      let failedAt: number | undefined
+      while (!harness?.settled) {
+        assertLive()
+        if (current.complete && !harness?.mounted && (exceptions.size > 0 || !harness)) {
+          failedAt ??= Date.now()
+          if (Date.now() - failedAt >= 500) break
+        } else failedAt = undefined
+        if (Date.now() >= bound) {
+          timeout = `harness did not settle: ${JSON.stringify(harness)}`
+          break
+        }
+        await Bun.sleep(50)
+        current = await state()
+        harness = current.harness
+      }
+      await evaluate(
+        'new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 0))',
+      )
+      harness = (await state()).harness ?? harness
+      return {
+        exceptions: [...exceptions.values()],
+        harness: harness ?? undefined,
+        ...(timeout ? { timeout } : {}),
+      }
+    },
+    onEvent,
+  )
+}
+
+/** One line per load failure: browser exceptions first, then harness findings. */
+export function clientLoadErrors(result: ClientLoadResult): string[] {
+  const errors = result.exceptions.map((exception) => {
+    const detail = exception.description?.split('\n')[0]
+    const where = exception.url
+      ? ` (${exception.url}:${(exception.lineNumber ?? 0) + 1}:${(exception.columnNumber ?? 0) + 1})`
+      : ''
+    return `${exception.text}${detail && !exception.text.includes(detail) ? ` ${detail}` : ''}${where}`
+  })
+  const harness = result.harness
+  if (result.timeout) errors.push(result.timeout)
+  else if (!harness?.mounted) errors.push('the page never mounted')
+  else if (!harness.rendered) errors.push('the page rendered nothing')
+  for (const request of harness?.unserved ?? [])
+    errors.push(`unserved request ${request}: add a fixture response for it`)
+  return errors
 }

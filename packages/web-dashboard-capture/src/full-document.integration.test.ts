@@ -86,3 +86,65 @@ test('early browser exit is reported and reaped before another attempt', async (
     await rm(profile, { recursive: true, force: true })
   }
 })
+
+test('debugger requests forward protocol events and still resolve replies', async () => {
+  const { debuggerRequests } = await import('./full-document')
+  const ws = {
+    send: (_data: string) => {},
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+  } as unknown as WebSocket
+  const events: [string, Record<string, unknown>][] = []
+  const protocol = debuggerRequests(
+    ws,
+    () => 100,
+    (method, params) => events.push([method, params]),
+  )
+  const reply = protocol.send('Runtime.enable')
+  ws.onmessage?.call(ws, {
+    data: JSON.stringify({
+      method: 'Runtime.exceptionThrown',
+      params: { exceptionDetails: { exceptionId: 1, text: 'Uncaught' } },
+    }),
+  } as MessageEvent)
+  ws.onmessage?.call(ws, { data: JSON.stringify({ id: 1, result: {} }) } as MessageEvent)
+  await expect(reply).resolves.toEqual({})
+  expect(events).toEqual([
+    ['Runtime.exceptionThrown', { exceptionDetails: { exceptionId: 1, text: 'Uncaught' } }],
+  ])
+  protocol.close()
+})
+
+test('client load errors name each exception and harness failure on one line', async () => {
+  const { clientLoadErrors } = await import('./full-document')
+  const harness = { mounted: true, settled: true, rendered: true, unserved: [], requests: [] }
+  expect(
+    clientLoadErrors({
+      exceptions: [
+        {
+          exceptionId: 1,
+          text: 'Uncaught',
+          description: 'ReferenceError: Bun is not defined\n    at index.js:4:5',
+          url: 'file:///out/index.js',
+          lineNumber: 3,
+          columnNumber: 4,
+        },
+      ],
+      harness: { ...harness, mounted: false, settled: false },
+    }),
+  ).toEqual([
+    'Uncaught ReferenceError: Bun is not defined (file:///out/index.js:4:5)',
+    'the page never mounted',
+  ])
+  expect(clientLoadErrors({ exceptions: [], harness })).toEqual([])
+  expect(
+    clientLoadErrors({
+      exceptions: [],
+      harness: { ...harness, rendered: false, unserved: ['GET /x'] },
+    }),
+  ).toEqual(['the page rendered nothing', 'unserved request GET /x: add a fixture response for it'])
+  expect(clientLoadErrors({ exceptions: [], timeout: 'harness did not settle: null' })).toEqual([
+    'harness did not settle: null',
+  ])
+})
