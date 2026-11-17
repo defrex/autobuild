@@ -462,6 +462,9 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
               deferral: 'own-build-read',
             }
             break
+          // A ticket wait's escalation (`wait.entered`) is deliberately not
+          // registered: ending a wait is not a failure retry, so its answer
+          // re-arms no budget.
           case 'escalation.raised':
             acc.raised[event.payload.id] = {
               phase: event.payload.phase,
@@ -3776,7 +3779,7 @@ export class BuildRunner {
         (event) =>
           spec.isTerminal(event) ||
           isPublicationBoundary(event, spec, session) ||
-          (event.type === 'escalation.raised' &&
+          ((event.type === 'escalation.raised' || event.type === 'wait.requested') &&
             event.actor.kind === 'agent' &&
             event.actor.session === session),
       )
@@ -4098,7 +4101,7 @@ export class BuildRunner {
       (event) =>
         spec.isTerminal(event) ||
         isPublicationBoundary(event, spec, session) ||
-        (event.type === 'escalation.raised' &&
+        ((event.type === 'escalation.raised' || event.type === 'wait.requested') &&
           event.actor.kind === 'agent' &&
           event.actor.session === session),
     )

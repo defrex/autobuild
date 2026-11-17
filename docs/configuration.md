@@ -443,7 +443,7 @@ any table header.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision; it is admitted ahead of new claims when it must run again. Unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).
+**Description:** Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of new claims when it must run again. Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).
 
 **Constraints:** safe integer; > 0
 
@@ -3891,10 +3891,11 @@ action. Check the gates in this order:
    same source. This includes harvest proposals filed directly into the ready
    state. Plain dispatch output reports unresolved ids and cycles.
 6. **Capacity:** every unfinished build for this repository—including paused
-   and blocked builds—uses a slot. A build that has finished its pipeline and
-   waits for a merge decision holds none, but one that must re-verify or
-   reconcile is admitted ahead of new claims and reserves a slot while it
-   waits. Inspect `ab repository status`, `ab builds --queued` and
+   builds and builds blocked on a question—uses a slot. A build that has
+   finished its pipeline and waits for a merge decision holds none, and neither
+   does a build waiting on other tickets. One that must re-verify or reconcile,
+   or whose ticket wait ended, is admitted ahead of new claims and reserves a
+   slot while it waits. Inspect `ab repository status`, `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.
 7. **Duplicate work:** a ready ticket already represented by an active build is
    deliberately excluded from the queue.

@@ -628,6 +628,136 @@ describe('buildContext — finalize (§8.3: spec, plan, verify reports)', () => 
   })
 })
 
+describe('buildContext — ticket waits against older guidance (SPEC §11 "Ticket waits")', () => {
+  async function answer(id: string, phase: 'finalize', text: string) {
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id, phase, source: 'agent', question: `${id}?` },
+    })
+    await store.append(BUILD, {
+      actor: humanActor('aron'),
+      type: 'escalation.answered',
+      payload: { id, answer: text, resolution: 'guidance' },
+    })
+  }
+
+  async function requestWait(id: string, phase: 'finalize' | 'code-review', round = 1) {
+    await store.append(BUILD, {
+      actor: agent(phase),
+      type: 'wait.requested',
+      payload: { id, phase, round, tickets: ['T-B'], reason: 'needs T-B first' },
+    })
+  }
+
+  async function enterWait(id: string, escalation: string) {
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'wait.entered',
+      payload: {
+        id,
+        escalation,
+        tickets: [{ source: 'local', id: 'T-B' }],
+        reason: 'needs T-B first',
+        question: 'Waiting on T-B',
+      },
+    })
+  }
+
+  async function refuseWait(id: string) {
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'wait.refused',
+      payload: { id, cause: 'completed', tickets: ['T-B'], message: 'T-B is done; continue' },
+    })
+  }
+
+  async function finalizeGuidance() {
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'finalize', round: 1 }),
+      workspacePath: workspace,
+    })
+    return { manifest, guidance: JSON.parse(await abFile('guidance.json')) }
+  }
+
+  test('a refusal after older finalize guidance replaces it', async () => {
+    await seedPlanApproved()
+    await answer('esc_old', 'finalize', 'old guidance')
+    await requestWait('wait_1', 'finalize')
+    await refuseWait('wait_1')
+
+    const { manifest, guidance } = await finalizeGuidance()
+    expect(guidance).toMatchObject({
+      escalation: 'wait_1',
+      answer: expect.stringContaining('Your wait on T-B was refused'),
+      wait: { id: 'wait_1', outcome: 'refused', tickets: ['T-B'] },
+    })
+    expect(manifest.feedback).toEqual({
+      guidance: { escalation: 'wait_1', answer: guidance.answer },
+    })
+  })
+
+  test('a wait ended by a retry answer after older finalize guidance replaces it', async () => {
+    await seedPlanApproved()
+    await answer('esc_old', 'finalize', 'old guidance')
+    await requestWait('wait_1', 'finalize')
+    await enterWait('wait_1', 'esc_wait')
+    await store.append(BUILD, {
+      actor: humanActor('aron'),
+      type: 'escalation.answered',
+      payload: { id: 'esc_wait', answer: 'retry', resolution: 'retry' },
+    })
+
+    const { guidance } = await finalizeGuidance()
+    expect(guidance).toMatchObject({
+      escalation: 'esc_wait',
+      answer: expect.stringContaining('Your wait on T-B ended (operator)'),
+      wait: { id: 'wait_1', outcome: 'ended', tickets: ['T-B'] },
+    })
+  })
+
+  test('finalize guidance answered after the wait ended keeps precedence', async () => {
+    await seedPlanApproved()
+    await requestWait('wait_1', 'finalize')
+    await refuseWait('wait_1')
+    await answer('esc_new', 'finalize', 'new guidance')
+
+    const { guidance } = await finalizeGuidance()
+    expect(guidance).toEqual({ escalation: 'esc_new', answer: 'new guidance' })
+  })
+
+  test('a refusal after an earlier answered wait in the same review round replaces it', async () => {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, { actor: KERNEL, type: 'code-review.started', payload: { round: 1 } })
+    await requestWait('wait_1', 'code-review')
+    await enterWait('wait_1', 'esc_wait')
+    await store.append(BUILD, {
+      actor: humanActor('aron'),
+      type: 'escalation.answered',
+      payload: { id: 'esc_wait', answer: 'T-B landed', resolution: 'guidance' },
+    })
+    await requestWait('wait_2', 'code-review')
+    await refuseWait('wait_2')
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 1 }),
+      workspacePath: workspace,
+    })
+    const guidance = JSON.parse(await abFile('guidance.json'))
+    expect(guidance).toMatchObject({
+      escalation: 'wait_2',
+      answer: expect.stringContaining('Your wait on T-B was refused'),
+      wait: { id: 'wait_2', outcome: 'refused' },
+    })
+    expect(manifest.feedback).toEqual({
+      guidance: { escalation: 'wait_2', answer: guidance.answer },
+    })
+  })
+})
+
 describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start)', () => {
   test('materializes the fresh reconcile.started base instead of the detection snapshot', async () => {
     await seedPlanApproved()
