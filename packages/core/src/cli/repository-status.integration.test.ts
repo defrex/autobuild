@@ -93,6 +93,7 @@ describe('ab repository status', () => {
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       upgradeStatus: {},
       publications: [],
+      hooks: [],
     })
     expect(getRepoStateEvents).toBe(0)
     expect(await store.getRepo(REPO)).toBeNull()
@@ -128,6 +129,7 @@ describe('ab repository status', () => {
         upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
         upgradeStatus: {},
         publications: [],
+        hooks: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)
     }
@@ -309,11 +311,15 @@ describeStoreOpeningContract('ab repository status', {
 })
 
 /** The operator query matches the CLI everywhere except operator presence,
- * which only the CLI loads; the query marks it unavailable. */
+ * which only the CLI loads (the query marks it unavailable), and configured
+ * hooks, which only the CLI lists. */
 function expectQueryParity(query: RepositoryStatus, cli: RepositoryStatus): void {
   expect(cli.operator.presence).toBe('loaded')
   expect(query.operator).toEqual({ presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE })
-  expect({ ...query, operator: null }).toEqual({ ...cli, operator: null })
+  expect(cli.hooks).toEqual([])
+  expect(query.hooks).toBeUndefined()
+  const { hooks: _cliHooks, ...listed } = cli
+  expect({ ...query, operator: null }).toEqual({ ...listed, operator: null })
 }
 
 test('status and operator queries resolve a hidden holder with live heartbeat attribution', async () => {
