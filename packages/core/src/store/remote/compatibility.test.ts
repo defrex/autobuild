@@ -518,7 +518,9 @@ for (const release of matrixReleases)
         value: projected.value,
       })
       const served = JSON.stringify(projected.value)
-      expect(served, reducer).not.toMatch(/"(headPaths|resolved)":/)
+      if (catalogDeclares(catalog, 'headPaths'))
+        expect(served, reducer).toMatch(/"(headPaths|resolved)":/)
+      else expect(served, reducer).not.toMatch(/"(headPaths|resolved)":/)
       checked++
     }
     expect(checked).toBeGreaterThan(0)
@@ -578,7 +580,8 @@ for (const release of matrixReleases)
       const served = JSON.stringify(projected.value, (key, value) =>
         key === 'pollingActivity' ? undefined : value,
       )
-      expect(served, reducer).not.toMatch(added)
+      if (catalogDeclares(catalog, 'within')) expect(served, reducer).toMatch(added)
+      else expect(served, reducer).not.toMatch(added)
       checked++
     }
     expect(checked).toBeGreaterThan(0)
@@ -650,7 +653,8 @@ for (const release of matrixReleases)
         const served = JSON.stringify(projected.value, (key, value) =>
           key === 'pollingActivity' ? undefined : value,
         )
-        expect(served, reducer).not.toMatch(added)
+        if (catalogDeclares(catalog, 'previousHead')) expect(served, reducer).toMatch(added)
+        else expect(served, reducer).not.toMatch(added)
         checked++
       }
     expect(checked).toBeGreaterThan(0)
