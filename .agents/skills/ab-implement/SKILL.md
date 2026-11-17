@@ -70,7 +70,7 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    request; fix the failure and retry in the same session. In a remote workspace it records one publication
    request and parks while the dispatcher publishes and records completion;
    **do not run `ab done` again** after that success message. It is your only
-   terminal command besides `ab escalate`. If it reports a validation error,
+   terminal command besides `ab escalate` and `ab wait-on`. If it reports a validation error,
    fix what it names and run it again.
 
    An empty contribution is refused: when HEAD has no commits over the
@@ -137,6 +137,20 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
   ```
   ab escalate "…the question…" --refs src/whatever.ts
   ```
+
+- **Wait for another ticket instead of escalating.** If the build cannot
+  proceed until another ticket merges — the plan needs code that ticket owns
+  and it has not landed — commit your work first (the worktree must be clean;
+  the command publishes your commits), then end the session with:
+
+  ```
+  ab wait-on <ticket-id>... --reason "…what this change needs from them…"
+  ```
+
+  The build parks without holding a slot. When every named ticket completes,
+  the dispatcher ends the wait and implement resumes at the same round, on the
+  target's current head, with a `wait` block in `$AB_CONTEXT_DIR/guidance.json`.
+  Escalate as before for anything else.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.

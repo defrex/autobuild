@@ -94,13 +94,16 @@ entering the ordinary post-reconcile verification cycle directly.
 ## Waiting on other tickets
 
 If the resolution needs work from other tickets that has not landed, end the
-session with `ab wait-on <ticket-id>... --reason <text>`. The build parks. When
+session with `ab wait-on <ticket-id>... --reason <text>` instead of
+escalating. The build parks without a slot, and the wait ends by itself when
+every named ticket completes. When
 the wait ends and the target branch has moved, and no resolution of this
 replay was deposited for publication, the kernel abandons this replay,
 including any resolution you have not deposited with `ab done`, and prepares a
 fresh replay onto the target's current head, which you then resolve. If the
 target has not moved, you resume this same replay with its conflicts as you
-left them.
+left them. Escalate as before for anything that is not waiting on another
+ticket to merge.
 
 ## When not to resolve
 
