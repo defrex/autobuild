@@ -9,18 +9,48 @@ predicates are ANDed, omissions are wildcards, and the first match wins.
 | `from` | `leaf` or `node` |
 | `into` | `root`, any `node`, or an exact destination node ticket id |
 | `label` | An exact, case-sensitive source ticket label |
+| `paths` | At least one changed path matches a selector |
+| `within` | Every changed path matches a selector, and at least one path changed |
 
 Blank destinations and labels are invalid. With no match, leaves use auto and
 nodes consent. Destination means the frozen effective destination, not mutable
 source metadata. Successful source reads supply labels at readiness; unavailable
 data defers the decision rather than pretending labels are empty.
 
+### Changed paths
+
+`paths` and `within` take the same selectors as `[verify.<step>].paths`:
+positive, repository-relative, case-sensitive globs with `*`, `?` and
+whole-segment `**`. An invalid selector is rejected when the configuration
+loads, naming its rule, such as `merge[1].paths[0]`. The changed paths are the
+ones the candidate head changes against its merge base with the destination,
+as the build recorded when it produced that head. A rename counts both paths
+and a deletion counts its path. Each candidate head is decided on its own
+paths, and `landing.decided` records the paths the matched rule's selectors
+matched: the first 20, sorted, with a total.
+
+Evaluation never guesses a change. When it reaches a rule with a path
+predicate and the candidate head's paths are not recorded, the decision is
+deferred, recorded once and shown in `ab build status`; it is never evaluated
+as an empty change. Only heads a build publishes are recorded, so a head
+pushed to the branch outside a build stays deferred until the build publishes
+a recorded head. A recorded empty change matches neither predicate. Rules
+without path predicates decide without the fact.
+
+First match still wins, so **protective rules belong first**: put a `paths`
+rule that holds sensitive files ahead of any `within` rule that releases the
+rest. See [Protected paths](#protected-paths).
+
 A leaf is ready after verification and finalize on a current base; a node must
 be complete and verified at its exact head and parent. `landing.decided` retains
 that candidate, labels, mode and the full matched rule/index or explicit default.
 Editing configuration does not revise that decision. A replacement candidate
-gets a fresh decision. Policy is live dispatcher configuration, separate from
-the pinned execution pipeline.
+gets a fresh decision, evaluated on its own changed paths, and that decision
+governs. A reconcile or restack head can therefore match a different rule: a
+documentation change that merged automatically waits for consent once its new
+head touches a protected file. Native auto-merge armed under the old decision
+is cancelled before the new head is published. Policy is live dispatcher
+configuration, separate from the pinned execution pipeline.
 
 `ab hold <slug>` suppresses merge and revokes consent, even before readiness.
 `ab merge <slug>` requires readiness, clears hold and consents to this merge
@@ -103,6 +133,33 @@ Any source carrying exactly `review` matches rule 1. Other nodes match rule 2;
 other leaves match rule 3. `Review` does not match `review`. Moving the catch-all
 to the front would shadow both safeguards and automatically authorize nodes too.
 Authorization never bypasses verification, checks, protection or merge gates.
+
+### Protected paths
+
+```toml
+baseBranch = "main"
+
+[[merge]]
+paths = ["autobuild.toml", ".agents/**", "SPEC.md", "docs/policy/**"]
+mode = "consent"
+
+[[merge]]
+within = ["docs/**", "README.md"]
+mode = "auto"
+
+[[merge]]
+mode = "consent"
+
+[tickets]
+source = "file"
+readyState = "ready"
+```
+
+Rule 1 holds any change that touches a protected file, whatever else it
+changes. Rule 2 merges changes confined to documentation automatically. Every
+other change matches rule 3 and waits for consent. Protective rules belong
+first: placed after rule 2, a documentation change under `docs/policy/**` would
+match rule 2 and merge automatically.
 
 ## Merge methods
 

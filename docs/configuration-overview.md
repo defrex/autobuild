@@ -203,7 +203,7 @@ advisory and does not revoke a still-valid credential.
 ## Admission and merge
 
 - **Tickets.** `[tickets]` sets the source and readiness criteria for admitting work.
-- **Merge.** Ordered, first-match `[[merge]]` rules on source and destination select automatic merge or explicit consent. See [Integrating related work](integration-overview.md#policy-authorizes-merge) for matching and defaults, [Working with your operator agent](operating.md) for consent and hold commands.
+- **Merge.** Ordered, first-match `[[merge]]` rules on source, destination, label and changed paths select automatic merge or explicit consent. See [Integrating related work](integration-overview.md#policy-authorizes-merge) for matching and defaults, [Working with your operator agent](operating.md) for consent and hold commands.
 - **Reloads.** Build execution configuration is pinned; dispatcher policy and role settings reload live.
 - **Secrets** stay out of committed TOML.
 

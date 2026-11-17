@@ -25,6 +25,7 @@ const observations = new Set([
   'target.moved',
   'node.inventory',
   'landing.decided',
+  'landing.deferred',
   'node.parent-rejected',
 ])
 
@@ -45,14 +46,20 @@ export function advancePollingActivity(activity: Record<string, string>, event: 
 
 export function nodeActivityKey(
   state: Pick<BuildState, 'pollingActivity'>,
-  children: readonly { slug: string; state: Pick<BuildState, 'pollingActivity'> }[],
+  children: readonly {
+    slug: string
+    state: Pick<BuildState, 'pollingActivity'>
+  }[],
 ): string {
   return createHash('sha256')
     .update(
       canonical({
         own: state.pollingActivity,
         children: children
-          .map(({ slug, state: child }) => ({ slug, activity: child.pollingActivity }))
+          .map(({ slug, state: child }) => ({
+            slug,
+            activity: child.pollingActivity,
+          }))
           .sort((a, b) => a.slug.localeCompare(b.slug)),
       }),
     )
@@ -63,7 +70,10 @@ export function nodeActivityKey(
  * plan/review/verification event that keeps GitHub observation active. */
 export function nodeTicketObservationKey(
   state: Pick<BuildState, 'pollingActivity'>,
-  children: readonly { slug: string; state: Pick<BuildState, 'pollingActivity'> }[],
+  children: readonly {
+    slug: string
+    state: Pick<BuildState, 'pollingActivity'>
+  }[],
 ): string {
   const select = (activity: BuildState['pollingActivity'], types: readonly string[]) =>
     Object.fromEntries(

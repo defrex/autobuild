@@ -1,4 +1,4 @@
-import { verifyPathGlobError } from '../config/schema'
+import { compilePathSelectors } from '../config/path-selectors'
 
 /**
  * Pure verify-applicability rule. `always` is explicit rather than represented
@@ -27,24 +27,14 @@ export function evaluateVerifyApplicability(
 ): VerifyApplicabilityResult {
   if (rule.kind === 'always') return { applies: true }
 
-  // Parsed Config is the normal caller and has already validated these. Keep
-  // this exported pure seam fail-closed for direct callers too: Bun.Glob is
-  // never asked to interpret syntax outside the documented subset.
-  for (const path of rule.paths) {
-    const error = verifyPathGlobError(path)
-    if (error !== undefined) {
-      throw new Error(
-        `invalid [verify.${rule.step}].paths selector ${JSON.stringify(path)}: ${error}`,
-      )
-    }
-  }
-
-  const globs = rule.paths.map((path) => new Bun.Glob(path))
-  for (const changedPath of changedPaths) {
-    for (const glob of globs) {
-      if (glob.match(changedPath)) return { applies: true }
-    }
-  }
+  // Parsed Config is the normal caller and has already validated these. The
+  // compiler stays fail-closed for direct callers too.
+  const matches = compilePathSelectors(
+    rule.paths,
+    (path, error) =>
+      `invalid [verify.${rule.step}].paths selector ${JSON.stringify(path)}: ${error}`,
+  )
+  if (changedPaths.some(matches)) return { applies: true }
   return {
     applies: false,
     reason: pathExclusionReason(rule.step, rule.paths),

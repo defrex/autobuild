@@ -7,6 +7,8 @@ export interface LandingState {
   nativeEnablePending?: number
   forgeMerge?: EventPayload<'landing.forge-merged'>
   decision?: EventPayload<'landing.decided'> & { seq: number }
+  /** The newest candidate whose decision waits for its recorded changed paths. */
+  deferral?: EventPayload<'landing.deferred'> & { seq: number }
   command?: {
     kind: 'hold' | 'land'
     seq: number
@@ -29,11 +31,16 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
         delete state.acknowledgedSeq
       }
       delete state.decision
+      delete state.deferral
       delete state.native
       break
     case 'landing.decided':
       delete state.applicationFailure
+      delete state.deferral
       state.decision = { ...event.payload, seq: event.seq }
+      break
+    case 'landing.deferred':
+      state.deferral = { ...event.payload, seq: event.seq }
       break
     case 'build.hold-requested':
       delete state.applicationFailure
@@ -56,7 +63,10 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
     case 'pr.auto-merge-enabled':
     case 'pr.auto-merge-disabled':
       // Historical provider acknowledgements remain applied-state evidence.
-      state.native = { enabled: event.type === 'pr.auto-merge-enabled', seq: event.seq }
+      state.native = {
+        enabled: event.type === 'pr.auto-merge-enabled',
+        seq: event.seq,
+      }
       if (
         event.type === 'pr.auto-merge-disabled' &&
         event.payload.commandSeq === state.command?.seq
