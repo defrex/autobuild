@@ -12,6 +12,7 @@ import {
   ticketSourceHealthEventPayloadSchemas,
   dispatcherSettingEventPayloadSchemas,
   dispatcherStatusEventPayloadSchemas,
+  hookEventPayloadSchemas,
   harvestEventPayloadSchemas,
   orchestratorSandboxEventPayloadSchemas,
 } from '../events/repository'
@@ -74,6 +75,8 @@ export const REPOSITORY_RUN_SCOPED_EVENT_TYPES: readonly RepositoryEventType[] =
       !REPOSITORY_STATE_EVENT_TYPES.includes(type as RepositoryEventType),
   ),
   'dispatcher.config-reloaded',
+  // Hook delivery health is attention only: no state reducer consumes it.
+  ...Object.keys(hookEventPayloadSchemas),
 ] as RepositoryEventType[]
 
 const STATE_TYPES = new Set<string>(REPOSITORY_STATE_EVENT_TYPES)

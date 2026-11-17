@@ -3694,3 +3694,339 @@ export async function repositoryEventsReadBudget() {
   expect(counter.rows).toBe(0)
   return pages
 }
+
+/**
+ * Configured hooks (`processes/hooks.ts`) cost the same at every growth
+ * setting: journal length, this repository's historical terminal builds,
+ * foreign-repository builds and records already delivered. With two active
+ * builds and fixed new work, it measures
+ *
+ * 1. idle intervals — exactly one `getRepoChangePosition` per interval for
+ *    every hook together, zero event rows and zero reduced reads;
+ * 2. a changed pass — only the new rows;
+ * 3. a fresh process resuming over the same store, discovering a build from
+ *    the journal;
+ * 4. a build announced, escalated and finished between two passes, which is
+ *    delivered and then retires;
+ * 5. a long non-matching interval followed by graceful and crashed resumes,
+ *    which read none of the old interval; and
+ * 6. a brand-new hook's first initialization while a preparation is in flight.
+ *
+ * No measured path lists builds; only (6) reads the repository's digests.
+ */
+export async function hookReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { manualClock } = await import('./fixed')
+  const { HookSupervisor } = await import('../processes/hooks')
+  const repo = '/budget/hooks'
+  const storeRef = '/budget/hooks.store'
+  const settings = [
+    { journal: 100, history: 3, foreign: 0, delivered: 0 },
+    { journal: 100_000, history: 1_000, foreign: 1_000, delivered: 50 },
+  ]
+  type Store = InstanceType<typeof MemoryBuildStore>
+  const ticket = (attempt: string) => ({ source: 'fake', id: `T-${attempt}` })
+  const announce = async (store: Store, slug: string, attempt: string, events = 1) => {
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt, ticket: ticket(attempt), readyState: 'ready', claimedState: 'claimed' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt, ticket: ticket(attempt), slug },
+    })
+    await store.createBuild({ slug, repo })
+    for (let i = 0; i < events; i++) await attach(store, slug)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt, ticket: ticket(attempt), outcome: 'owned' },
+    })
+  }
+  const attach = (store: Store, slug: string) =>
+    store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i', host: 'h', resumedFromSeq: 0 },
+    })
+  const escalate = (store: Store, slug: string, id: string) =>
+    store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id, phase: 'implement', round: 1, source: 'agent', question: 'q?' },
+    })
+  const finish = (store: Store, slug: string) =>
+    store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+  const filler = (store: Store) =>
+    store.appendRepo(repo, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  const supervisorFor = (
+    store: Store,
+    clock: ReturnType<typeof manualClock>,
+    delivered: string[],
+  ) =>
+    new HookSupervisor({
+      store,
+      repo,
+      storeRef,
+      checkout: repo,
+      clock,
+      invoke: async (_hook, line) => {
+        delivered.push(JSON.parse(line).id)
+        return { ok: true }
+      },
+      warn: (line) => {
+        throw new Error(`unexpected hook warning: ${line}`)
+      },
+      appendRepo: (event) => store.appendRepo(repo, event),
+      intervalMs: 1000,
+      interval: (signal) =>
+        new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
+      backoff: async () => {},
+    })
+  const hooks = {
+    notify: { command: 'true', timeoutSeconds: 30 },
+    selective: { command: 'true', timeoutSeconds: 30, events: ['escalation.*', 'hook.*'] },
+  }
+  const quiet = { quiet: { command: 'true', timeoutSeconds: 30, events: ['pr.merged'] } }
+  const pulse = async (supervisor: InstanceType<typeof HookSupervisor>) => {
+    await settle()
+    await supervisor.pulse()
+    await settle()
+  }
+  const listing = (vector: Record<string, number>) => [
+    vector.listBuilds ?? 0,
+    vector.listBuildsForRepo ?? 0,
+    vector.getRepoBuildDigests ?? 0,
+  ]
+  const measured: unknown[] = []
+  for (const setting of settings) {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    for (let i = 0; i < setting.foreign; i++)
+      await store.createBuild({ slug: `foreign-${i}`, repo: '/budget/foreign' })
+    for (let i = 0; i < setting.history; i++) {
+      await announce(store, `history-${i}`, `h${i}`)
+      await finish(store, `history-${i}`)
+    }
+    const seeded = setting.history * 6
+    for (let i = seeded; i < setting.journal; i++) await filler(store)
+    await announce(store, 'active-a', 'aa')
+    await announce(store, 'active-b', 'ab')
+    // Canonical repository values exist before any hook runs, as they do
+    // under a running dispatcher; reducing them is not hook cost.
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    await readBuildDigests(store, repo)
+
+    const delivered: string[] = []
+    let supervisor = supervisorFor(store, clock, delivered)
+    await supervisor.reconcile(hooks)
+    await pulse(supervisor)
+    for (let i = 0; i < setting.delivered; i++) await escalate(store, 'active-a', `warm-${i}`)
+    await pulse(supervisor)
+    await pulse(supervisor)
+    expect(delivered).toHaveLength(2 * setting.delivered)
+
+    // 1. Idle intervals.
+    let rows = memoryRepositoryReadCounter(store, repo)
+    let requests = memoryStoreRequestCounter(store)
+    for (let i = 0; i < 5; i++) await pulse(supervisor)
+    const idle = {
+      rows: rows.rows,
+      buildRows: rows.buildRows,
+      reducedCalls: rows.reducedCalls,
+      requests: requests.vector(),
+    }
+    expect(idle).toEqual({
+      rows: 0,
+      buildRows: 0,
+      reducedCalls: 0,
+      requests: { getRepoChangePosition: 5 },
+    })
+    requests.restore()
+
+    // 2. A changed pass with fixed new work.
+    const newWork = async (slug: string, attempt: string) => {
+      await escalate(store, 'active-a', `${attempt}-escalation`)
+      await filler(store)
+      await announce(store, slug, attempt, 3)
+    }
+    const deliveredBefore = delivered.length
+    await newWork('new-c', 'nc')
+    rows = memoryRepositoryReadCounter(store, repo)
+    requests = memoryStoreRequestCounter(store)
+    await pulse(supervisor)
+    await pulse(supervisor)
+    const changed = {
+      rows: rows.rows,
+      bySlug: Object.fromEntries(rows.buildRowsBySlug),
+      requests: requests.vector(),
+    }
+    expect(delivered.slice(deliveredBefore)).toHaveLength(2)
+    // Each new row is read once per hook, plus once by the shared reduced
+    // value's incremental advance.
+    expect(changed.bySlug).toEqual({ 'active-a': 3, 'new-c': 9 })
+    expect(listing(changed.requests)).toEqual([0, 0, 0])
+    requests.restore()
+
+    // 3. A fresh process discovers the same work from the journal.
+    await supervisor.stop()
+    await newWork('new-d', 'nd')
+    rows = memoryRepositoryReadCounter(store, repo)
+    requests = memoryStoreRequestCounter(store)
+    supervisor = supervisorFor(store, clock, delivered)
+    await supervisor.reconcile(hooks)
+    await pulse(supervisor)
+    const fresh = {
+      rows: rows.rows,
+      bySlug: Object.fromEntries(rows.buildRowsBySlug),
+      requests: requests.vector(),
+    }
+    expect(listing(fresh.requests)).toEqual([0, 0, 0])
+    expect(fresh.bySlug['new-d']).toBe(9)
+    expect(Object.keys(fresh.bySlug).filter((slug) => slug.startsWith('history-'))).toEqual([])
+    requests.restore()
+
+    // 4. Announced, escalated and finished between two passes.
+    const beforeQuick = delivered.length
+    await announce(store, 'quick', 'q')
+    await escalate(store, 'quick', 'quick-escalation')
+    await finish(store, 'quick')
+    await pulse(supervisor)
+    await pulse(supervisor)
+    expect(delivered.slice(beforeQuick)).toEqual(['build:quick:2', 'build:quick:2'])
+    rows = memoryRepositoryReadCounter(store, repo)
+    for (let i = 0; i < 3; i++) await pulse(supervisor)
+    expect(rows.buildRowsBySlug.get('quick') ?? 0).toBe(0)
+    expect(rows.rows + rows.buildRows).toBe(0)
+    await supervisor.stop()
+
+    // 5. A long non-matching interval, then graceful and crashed resumes.
+    const longDelivered: string[] = []
+    let selective = supervisorFor(store, clock, longDelivered)
+    await selective.reconcile(quiet)
+    await pulse(selective)
+    const interval = Math.min(setting.journal, 20_000)
+    for (let done = 0; done < interval; done += 500) {
+      for (let i = 0; i < 500; i++) await filler(store)
+      for (let i = 0; i < Math.ceil(setting.history / (interval / 500)); i++) {
+        const slug = `interval-${done}-${i}`
+        await announce(store, slug, `i${done}-${i}`)
+        await finish(store, slug)
+      }
+      clock.advance(1000)
+      await pulse(selective)
+    }
+    clock.advance(30_000)
+    await filler(store)
+    await pulse(selective)
+    // Crash: abandon without a graceful stop; at most the tail after the
+    // last checkpoint replays.
+    const crashTail = 3
+    for (let i = 0; i < crashTail; i++) await filler(store)
+    await pulse(selective)
+    const resume = async () => {
+      // The running dispatcher keeps the canonical repository values current;
+      // their shared incremental advance is not hook cost.
+      await readRepositoryFacts(store, repo)
+      await readRepositoryAttention(store, repo)
+      rows = memoryRepositoryReadCounter(store, repo)
+      requests = memoryStoreRequestCounter(store)
+      const next = supervisorFor(store, clock, longDelivered)
+      await next.reconcile(quiet)
+      await pulse(next)
+      const cost = {
+        rows: rows.rows,
+        buildRows: rows.buildRows,
+        requests: requests.vector(),
+      }
+      requests.restore()
+      return { next, cost }
+    }
+    const crashed = await resume()
+    expect(crashed.cost.rows).toBeLessThanOrEqual(crashTail + 1)
+    expect(crashed.cost.buildRows).toBe(0)
+    expect(listing(crashed.cost.requests)).toEqual([0, 0, 0])
+    await crashed.next.stop()
+    selective = crashed.next
+    const graceful = await resume()
+    expect(graceful.cost.rows).toBe(0)
+    expect(graceful.cost.buildRows).toBe(0)
+    await graceful.next.stop()
+    expect(longDelivered).toEqual([])
+
+    // 6. A brand-new hook initializes while a preparation is in flight.
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: {
+        attempt: 'np',
+        ticket: ticket('np'),
+        readyState: 'ready',
+        claimedState: 'claimed',
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt: 'np', ticket: ticket('np'), slug: 'pending' },
+    })
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    rows = memoryRepositoryReadCounter(store, repo)
+    requests = memoryStoreRequestCounter(store)
+    const firstDelivered: string[] = []
+    const brandNew = supervisorFor(store, clock, firstDelivered)
+    await brandNew.reconcile({ brandNew: hooks.notify })
+    await pulse(brandNew)
+    const initialization = {
+      rows: rows.rows,
+      buildRows: rows.buildRows,
+      requests: requests.vector(),
+    }
+    requests.restore()
+    expect(listing(initialization.requests)).toEqual([0, 0, 1])
+    await store.createBuild({ slug: 'pending', repo })
+    await escalate(store, 'pending', 'pending-escalation')
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt: 'np', ticket: ticket('np'), outcome: 'owned' },
+    })
+    await pulse(brandNew)
+    expect(firstDelivered).toEqual(['build:pending:1'])
+    expect(
+      (await store.getRepoEvents(repo)).filter((event) => event.type === 'hook.skipped'),
+    ).toEqual([])
+    await brandNew.stop()
+
+    measured.push({
+      changed: { rows: changed.rows, requests: changed.requests },
+      fresh: { rows: fresh.rows, requests: fresh.requests },
+      crashed: crashed.cost,
+      graceful: graceful.cost,
+      initialization: {
+        rows: initialization.rows,
+        buildRows: initialization.buildRows,
+        // The one digest batch read is constant in calls; its internal
+        // per-build reductions are not event rows.
+        requests: initialization.requests,
+      },
+    })
+  }
+  expect(measured[1]).toEqual(measured[0])
+}

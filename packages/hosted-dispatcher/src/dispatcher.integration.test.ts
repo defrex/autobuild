@@ -252,6 +252,8 @@ describe('createHostedDispatcher', () => {
       expect(call.repository).toBe(summary.repositories[index]!.repository)
       expect(call.once).toBe(true)
       expect(call.plain).toBe(true)
+      // Hosted dispatchers cannot run configured command hooks.
+      expect(call.localCommands).toBe(false)
       expect(call.deadlineAt).toBe(summary.deadlineAt)
       expect(call.kernelRunId).toMatch(/^hosted-dispatcher-/)
       expect(call.env?.AB_STORE).toBe('https://hosted.example.test')

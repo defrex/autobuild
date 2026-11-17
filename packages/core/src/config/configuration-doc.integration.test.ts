@@ -405,6 +405,7 @@ const TABLE_HEADINGS: Record<string, string> = {
   policy: '`[policy]`',
   tickets: '`[tickets]`',
   orchestrator: '`[orchestrator]`',
+  hooks: '`[hooks]`',
 }
 
 function tableSection(table: string): string | undefined {
@@ -689,6 +690,7 @@ describe('configuration strictness summaries', () => {
     const expectedSurfaces = [
       '[accounts]',
       '[commands]',
+      '[hooks]',
       '[roles]',
       '[profiles]',
       '[profiles.<name>.roles]',

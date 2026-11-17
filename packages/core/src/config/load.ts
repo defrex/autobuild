@@ -70,6 +70,20 @@ function describeIssue(issue: z.core.$ZodIssue): string {
   return `  ${formatPath(path)}: ${message}`
 }
 
+/** The hook a redefinition error points at, when the offending line is a
+ * `[hooks.<name>]` header; other syntax errors keep the generic message. */
+function duplicateHookName(text: string, error: TomlError): string | undefined {
+  if (!error.message.includes('redefine')) return undefined
+  const line = text.split(/\r?\n/)[error.line - 1]
+  const match =
+    line === undefined
+      ? null
+      : /^\s*\[\s*hooks\s*\.\s*("[^"]*"|'[^']*'|[A-Za-z0-9_-]+)\s*\]/.exec(line)
+  if (match === null) return undefined
+  const name = match[1]!
+  return name.startsWith('"') || name.startsWith("'") ? name.slice(1, -1) : name
+}
+
 /**
  * Parse and validate autobuild.toml text. Deprecated spellings are reported
  * through `warn` after validation succeeds; invalid text throws first. The
@@ -89,6 +103,11 @@ export function parseConfig(
     table = parseToml(tomlText)
   } catch (error) {
     if (error instanceof TomlError) {
+      const hook = duplicateHookName(tomlText, error)
+      if (hook !== undefined)
+        throw new ConfigError(
+          `${source}: duplicate hook name ${JSON.stringify(hook)} — declare each [hooks.<name>] table once`,
+        )
       throw new ConfigError(`${source}: TOML syntax error: ${error.message}`)
     }
     throw error

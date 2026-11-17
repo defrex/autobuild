@@ -258,7 +258,7 @@ Changing the store requires restarting dispatch.
 
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
-command references are errors. The open maps are `[accounts]`, `[commands]`, `[roles]`,
+command references are errors. The open maps are `[accounts]`, `[commands]`, `[hooks]`, `[roles]`,
 `[profiles]`, `[profiles.<name>.roles]`, `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
@@ -322,7 +322,7 @@ the branch head never carried the file — the deposit records the source
 provenance declines to attribute them to any commit. **Deployment-owned** sections — `[accounts]`, `[roles]`
 (runtime, model, account, args, alternates, per-role `sessionBudgetSeconds`),
 `[profiles]` and `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
-`capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
+`capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `hooks`) configure the
 dispatcher itself and are never interpreted by the build runner.
 
 Consequently, an accepted base-branch reload re-deposits only the
@@ -385,6 +385,7 @@ These fields hot-reload:
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[profiles]` | Next agent session of a build that selected the profile; builds without it are unaffected. A build's selected profile name never changes after claim. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
+| `[hooks]` | After the next dispatcher tick: an added hook starts at its baseline, a removed one stops, and a changed one resumes from its saved progress. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
@@ -3567,6 +3568,154 @@ receive no credential. The dispatcher retains idle settlement but never
 constructs a turn runner. Tools stay gated by `[orchestrator].enabled` and the
 registry's closed-table filtering; external harnesses own approvals.
 
+## `[hooks]`
+
+A hook is a named, observe-only consumer of the same records `ab watch --json`
+prints. The lease-holding local dispatcher delivers each record that matches a
+hook's filter to the hook's command, one record per invocation, so tooling can
+react to escalations, merges awaiting consent, or tickets handed back without
+keeping its own `ab watch` process alive. A hook cannot change any build's state,
+phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
+`[[merge]]`.
+
+<!-- configuration-reference:hooks -->
+
+#### `hooks`
+
+**TOML key:** `hooks`
+
+- **Type:** `table`
+- **Default:** `{}`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named observe-only hooks: the local dispatcher delivers each matching watch record to a command, in order and at least once.
+
+**Constraints:** Entry names: nonempty
+
+#### `hooks.<name>`
+
+**TOML key:** `hooks.<name>`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named observe-only hook delivered matching watch records by the local dispatcher.
+
+**Constraints:** Hook names use ASCII letters, digits, ., _ and -. A command is required. The hosted dispatcher rejects command hooks.
+
+#### `hooks.<name>.command`
+
+**TOML key:** `hooks.<name>.command`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success.
+
+**Constraints:** hook command must be nonblank
+
+#### `hooks.<name>.events`
+
+**TOML key:** `hooks.<name>.events`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Event globs with `ab watch --event` grammar, validated against the build and repository catalogs. Absent means the default attention filter of `ab watch`.
+
+**Constraints:** minimum length 1; Each item: event globs must be nonblank
+
+#### `hooks.<name>.timeoutSeconds`
+
+**TOML key:** `hooks.<name>.timeoutSeconds`
+
+- **Type:** `number`
+- **Default:** `30`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Seconds one invocation may run before it is killed and counted as a failure.
+
+**Constraints:** safe integer; > 0; ≤ 3600
+
+<!-- configuration-reference:/hooks -->
+
+<!-- config-fragment -->
+```toml
+[hooks.notify]
+command = "./tools/notify.sh"
+
+[hooks.audit]
+command = "cat >> .autobuild/audit.jsonl"
+events = ["escalation.*", "ticket.handed-back", "hook.*"]
+timeoutSeconds = 10
+```
+
+**Names and validation.** Hook names use ASCII letters, digits, `.`, `_` and
+`-`. Each `[hooks.<name>]` table is declared once and needs a `command`. Each
+`events` entry uses the `ab watch --event` grammar and must match an event type
+in the build or repository catalog, or `dispatcher.lost`; a glob that matches
+nothing is rejected. Every error names the hook, at startup and on reload.
+
+**Default filter.** A hook without `events` receives exactly `ab watch`'s default
+attention set: the build attention events, conflicted restacks, the derived
+`build.consent-ready` and `build.merge-decision` observations, repository
+attention including `hook.failing`, `hook.recovered` and `hook.skipped`, the
+derived persistent-failure observations, and `dispatcher.lost`. Supplying
+`events` replaces that set entirely, as `--event` does.
+
+**The record.** The command runs with `sh -c` from the repository checkout. Its
+stdin carries one record as a single JSON line, identical to the line `ab watch
+--json` prints for the same event under the same filter, including derived
+records. The environment is the dispatcher's, without build or session
+identity variables, plus `AB_HOOK=<name>`.
+
+```json
+{"id":"build:add-login-7f3a:12","build":"add-login-7f3a","event":{"build":"add-login-7f3a","seq":12,"type":"escalation.raised","payload":{"id":"esc_4","question":"Which auth store?"},"…":"…"},"state":{"status":"blocked","phase":"implement","…":"…"},"cursor":"v1.…"}
+```
+
+`id` is the record's stable identity: `build:<slug>:<seq>` for a build event,
+`repo:<seq>` for a repository event, `<observation type>:<identity>` for a derived
+observation, and `dispatcher.lost:<run>`. `cursor` is the hook's position after
+the record and is a valid `ab watch --since` cursor.
+
+**Delivery guarantee.** Exit status 0 within `timeoutSeconds` is success;
+anything else, including a timeout, is failure, and the command's whole process
+group is killed. Each hook receives its records in order, one invocation at a
+time: a record is not delivered until the previous one succeeded. Delivery is
+at least once — a consumer can see a record again after a restart or a failed
+attempt — so deduplicate by `id`. Each hook has its own loop outside the
+dispatch tick; one hook's failures or slowness never delay another hook, a tick,
+or a build.
+
+**Progress.** Each hook's position is durable, keyed by its name, and survives
+dispatcher restarts, hot upgrades and config reloads: delivery resumes after the
+last successful record. Changing a hook's command or filter resumes from its
+saved position. A hook with a new name starts when it is first loaded and does
+not replay history, so renaming a hook starts it fresh; re-adding a removed name
+resumes where it stopped. If a hook falls so far behind that its undelivered
+history can no longer be read, it resumes from the current position and records
+`hook.skipped` with the skipped ranges. `ab dispatch --once` makes one delivery
+pass per hook and stops at the first failure; the next invocation retries.
+
+**Failures and status.** A failed delivery is retried with increasing delay, up
+to one minute between attempts. After five minutes of continuous failure the
+dispatcher records `hook.failing` with the hook name and latest error, once per
+failure episode; the first later success records `hook.recovered`. `ab
+repository status` lists each configured hook with its last successful delivery,
+its pending backlog or "caught up", and whether it is failing.
+
+**Hosted dispatchers.** Command hooks need a dispatcher that can run local
+commands. The hosted dispatcher rejects a configured command hook as a config
+error naming the hook; it is never silently ignored.
+
 ## Complete example
 
 The following deliberately exercises every fixed table and both verify/finalize
@@ -3658,6 +3807,11 @@ createState = "Triage"
 triageState = "Triage"
 proposalState = "Triage"
 dir = "tickets"
+
+[hooks.notify]
+command = "./tools/notify.sh"
+events = ["escalation.*", "ticket.handed-back"]
+timeoutSeconds = 10
 ```
 
 This repository's [`autobuild.toml`](../autobuild.toml) is another worked

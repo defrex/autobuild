@@ -307,6 +307,14 @@ The default watch reports actionable conditions only:
   line names the process whose GitHub request was rate-limited outside the
   dispatcher's credential (unauthenticated, with why, or on that process's own
   credential) and its reset; dispatcher forge work continues.
+- Repository `hook.failing`, `hook.recovered` and `hook.skipped`: a configured
+  hook (`[hooks]`) has failed continuously for five minutes (once per episode,
+  naming the latest error and the record `id` it is stuck on), has delivered
+  again after a reported episode, or resumed past history it could no longer
+  read (with the skipped stream ranges) or a build announcement it could not
+  resolve. Inspect `ab repository status`, fix the hook command or
+  configuration, and treat a skipped range as records the hook's consumer never
+  received.
 - Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic
   preparation recovery stopped and left the ticket unchanged. The line names the
   ticket, attempt and recorded reason; the payload's `claimed` says whether the

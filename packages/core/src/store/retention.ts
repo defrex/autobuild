@@ -19,7 +19,8 @@
  * The rule is count-based, not age-based: revision sequences already order by
  * deposit recency, so recency is preserved without a clock in the decision,
  * the boundary is deterministic, and an age rule would still only ever fire on
- * a deposit (there is no sweeper). Events and journal entries are never
+ * a deposit (there is no sweeper). Hook progress kinds (`hook-progress.*`)
+ * follow the same rule. Events and journal entries are never
  * pruned — historical payloads may reference a revision that no longer
  * resolves; the current run's snapshot is always among the newest deposits.
  */
@@ -65,6 +66,18 @@ export const OPERATOR_RETENTION_REPO_KINDS = [OPERATOR_NOTES_REPO_KIND] as const
  */
 export const DISPATCHER_RETENTION_BUILD_KINDS = ['build-runner-effective-config'] as const
 
+/**
+ * Configured hook progress (`processes/hooks.ts`): one repository artifact
+ * kind per hook name, `hook-progress.<name>`, holding the hook's durable safe
+ * point. Written once per successful delivery, so it is retention-managed
+ * under the same deposit-time bound; only the latest revision is ever read.
+ */
+export const HOOK_PROGRESS_KIND_PREFIX = 'hook-progress.'
+
+export function hookProgressKind(name: string): string {
+  return `${HOOK_PROGRESS_KIND_PREFIX}${name}`
+}
+
 /** Default bound: the newest 200 revisions of each retention-managed kind survive. */
 export const DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS = 200
 
@@ -73,7 +86,8 @@ export function isRetentionManagedKind(kind: string): boolean {
   return (
     (DISPATCHER_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
     (OPERATOR_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
-    (DISPATCHER_RETENTION_BUILD_KINDS as readonly string[]).includes(kind)
+    (DISPATCHER_RETENTION_BUILD_KINDS as readonly string[]).includes(kind) ||
+    kind.startsWith(HOOK_PROGRESS_KIND_PREFIX)
   )
 }
 
