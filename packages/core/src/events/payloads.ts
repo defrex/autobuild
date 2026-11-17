@@ -71,6 +71,10 @@ export const waitRefusalCauseSchema = z.enum([
 export type WaitRefusalCause = z.infer<typeof waitRefusalCauseSchema>
 export const waitEndCauseSchema = z.enum(['operator', 'automatic'])
 export type WaitEndCause = z.infer<typeof waitEndCauseSchema>
+/** How a reduced ticket wait ended: a `wait.ended` cause, or `unresolvable`
+ * when the dispatcher raised `policy/wait-unresolvable` because a waited
+ * ticket was rejected or deleted. Reduced-only: no event payload carries it. */
+export type ReducedWaitEndCause = WaitEndCause | 'unresolvable'
 
 export const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
 const targetLineageSchema = z
@@ -1652,7 +1656,10 @@ export const eventPayloadSchemas = {
   }),
   /** Entering a ticket wait. The source ticket's `blockedBy` already lists
    * every ticket; `escalation` identifies the wait's escalation, which an
-   * operator answers to end the wait early. A waiting leaf holds no slot. */
+   * operator answers to end the wait early. The dispatcher ends it with
+   * `wait.ended {cause: automatic}` once every ticket completes, or raises
+   * `policy/wait-unresolvable` when one is rejected or deleted. A waiting
+   * leaf holds no slot. */
   'wait.entered': z.strictObject({
     id: z.string().min(1),
     escalation: z.string().min(1),
@@ -1660,9 +1667,10 @@ export const eventPayloadSchemas = {
     reason: z.string().trim().min(1),
     question: z.string().min(1),
   }),
-  /** A ticket wait ended without an operator answer: `automatic` when its
-   * blockers completed, `operator` from an operator surface that ends the
-   * wait without answering. An answer to the wait's escalation also ends it. */
+  /** A ticket wait ended without an operator answer: `automatic`, written by
+   * the dispatcher on the first tick after every waited ticket completed;
+   * `operator` from an operator surface that ends the wait without
+   * answering. An answer to the wait's escalation also ends it. */
   'wait.ended': z.strictObject({
     id: z.string().min(1),
     cause: waitEndCauseSchema,

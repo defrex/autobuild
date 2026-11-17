@@ -64,6 +64,10 @@ is authoritative feedback for this attempt and the PR description must act on
 it, while the spec remains the contract this phase is measured against — if the
 two cannot both be satisfied, escalate instead of guessing. Finalize has no
 review round of its own, so guidance is the only feedback it ever receives.
+If finalize cannot proceed until another ticket merges, end the session with
+`ab wait-on <ticket-id>... --reason "…"` instead of escalating: the build parks
+without a slot and finalize resumes when every named ticket completes. Escalate
+as before for anything else.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.

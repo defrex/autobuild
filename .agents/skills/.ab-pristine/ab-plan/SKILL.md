@@ -167,6 +167,21 @@ has no `feedback` field; plan from the spec.
 On any round that proceeds rather than escalates, deposit a fresh
 `ab artifact put plan` — revisions accumulate; never edit history.
 
+## Waiting on other tickets
+
+If the build cannot proceed until another ticket merges — the plan depends on
+code that ticket owns and it has not landed — do not escalate. End the session
+with:
+
+```
+ab wait-on <ticket-id>... --reason "…what this plan needs from them…"
+```
+
+The build parks without holding a slot. When every named ticket completes,
+the dispatcher ends the wait and this phase resumes at the same round, on the
+target's current head, with a `wait` block in `$AB_CONTEXT_DIR/guidance.json` naming
+what you waited on. Escalate as before for anything else.
+
 ## If the spec is the problem
 
 If the spec is contradictory, unbuildable, or wrong — do not plan around it.
@@ -176,8 +191,8 @@ Park the build for external judgment from the operator agent or a human:
 ab escalate "…the question, concretely…" --refs "$AB_CONTEXT_DIR/spec.md"
 ```
 
-This is also a terminal command; use exactly one of `ab done` or
-`ab escalate` per session.
+This is also a terminal command; use exactly one of `ab done`,
+`ab escalate` or `ab wait-on` per session.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.

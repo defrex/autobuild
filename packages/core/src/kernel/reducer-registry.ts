@@ -63,7 +63,7 @@ import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openTickReducer } from '../processes/tick-state'
 import { dashboardFactsReducer } from '../cli/dashboard/facts'
-import { buildDigestReducer } from '../store/digest'
+import { buildDigestReducer, type DigestEventRow } from '../store/digest'
 import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-state-events'
 import { sessionReducer } from '../store/session-reducer'
 import { pinnedAssetsReducer } from '../store/ticket-assets'
@@ -304,6 +304,23 @@ function digestNodeTargetsOf(event: { type: string; payload: unknown }): {
   return nodeTargets.length ? { nodeTargets } : {}
 }
 
+/** The ticket-wait slice of one event row the build digest folds. */
+function digestTicketWaitOf(
+  event: Parameters<ValueCatalogEntry['adapt']>[0][number],
+): Pick<DigestEventRow, 'waitId' | 'escalation' | 'waitTickets' | 'policyCause'> {
+  if (event.type === 'wait.entered')
+    return {
+      waitId: event.payload.id,
+      escalation: event.payload.escalation,
+      waitTickets: event.payload.tickets,
+    }
+  if (event.type === 'wait.ended') return { waitId: event.payload.id }
+  if (event.type === 'escalation.answered') return { escalation: event.payload.id }
+  if (event.type === 'escalation.raised' && event.payload.policyCause !== undefined)
+    return { policyCause: event.payload.policyCause }
+  return {}
+}
+
 export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
   Object.entries(REGISTERED).map(([name, entry]) => [
     name,
@@ -342,6 +359,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                     'instance' in event.payload
                       ? { instance: event.payload.instance }
                       : {}),
+                    ...digestTicketWaitOf(event),
                   }))
                 : events,
             create: parameterized[name]?.create ?? (() => entry.reducer),

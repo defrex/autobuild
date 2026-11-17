@@ -99,9 +99,15 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   declaring phase re-runs with the refusal as its guidance. Accepted, the ids
   join the build ticket's `blockedBy`, the build is blocked on an escalation
   whose question begins `Waiting on`, and it holds no slot while keeping its
-  branch, workspace and completed phase work. Completing the named tickets
-  does not end the wait: answering that escalation does, and the wait ends
-  with cause `operator`. The build then takes a slot
+  branch, workspace and completed phase work. The dispatcher ends the wait
+  (cause `automatic`) on its first tick after every named ticket completes;
+  while any is still open the wait stays in place. A named ticket that is
+  rejected or deleted can never complete: the dispatcher instead raises an
+  ordinary policy escalation, `wait-unresolvable`, naming the ticket and why.
+  It ends the wait (cause `unresolvable`), shows in the default attention
+  filter, and its answer resumes the declaring phase like a wait answer. An
+  operator may still end a wait early by answering its escalation (cause
+  `operator`). The build then takes a slot
   ahead of new ticket claims. If its target moved, it first restacks onto the
   target's current head (published work is replayed as one change, and a
   conflict reconciles first; with nothing published, the branch fast-forwards
@@ -1356,8 +1362,8 @@ own-build-read deferral and its answer resets no phase failures; reconcile no-pr
 while `round` remains occurrence scope. Answering a runner-failure cause re-arms
 only its matching phase and round. The phase-level `verify-failure-limit` cause
 explicitly re-arms all rounds for its verify target, while
-`reconcile-no-progress`, `publication-retry-limit` and the setup-only cause reset
-no phase-runner failures.
+`reconcile-no-progress`, `publication-retry-limit`, `wait-unresolvable` and the
+setup-only cause reset no phase-runner failures.
 The closed cause map forces every future policy condition to choose one of these
 semantics instead of inheriting behavior from a missing `round`. Runner failures
 while checking progress or refreshing the base therefore remain counted after a
@@ -2546,8 +2552,10 @@ newest is eligible: it durably supersedes older answers, which do not resurface
 after the winner is delivered. Destinations remain independent, and a new
 answer recorded after an earlier delivery is eligible for the next appropriate
 run. `finalize` and `reconcile` receive their own answers on their next attempt.
-An answer to a ticket wait's escalation, with any resolution, ends the wait,
-and the phase that declared it resumes at the same round or attempt once it
+An answer to a ticket wait's escalation, with any resolution, ends the wait
+early; the dispatcher ends it on its own once every waited ticket completes,
+or raises a `wait-unresolvable` escalation, whose answer routes the same way,
+when one is rejected or deleted. Either way the phase that declared it resumes at the same round or attempt once it
 holds a slot, on a checkout restacked onto the target's current head when the
 target moved; a reviewer's wait resumes that review round and never feeds the
 next producer. Its `$AB_CONTEXT_DIR/guidance.json` carries a `wait` block
