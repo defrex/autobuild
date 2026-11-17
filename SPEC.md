@@ -2397,8 +2397,8 @@ Answering `phase-attempt-limit` or `non-retryable-phase-failure` re-arms only
 the matching phase and `round`; a missing round cannot broaden either cause.
 `review-round-limit` retains the same matching-round effect.
 `verify-failure-limit` is the explicit phase-level case and re-arms every
-phase-runner failure round for its verify target. `reconcile-no-progress` and
-`setup-failure-limit` have no phase-runner failure-budget effect (setup's own
+phase-runner failure round for its verify target. `reconcile-no-progress`,
+`setup-failure-limit` and `wait-unresolvable` have no phase-runner failure-budget effect (setup's own
 answer/retry accounting remains separate). Agent and stall raises, and
 cause-less historical policy raises, retain the legacy shape rule: a matching
 round resets that round and an absent round resets all rounds for the target.
@@ -2470,12 +2470,49 @@ whose only open escalation is its wait, and which has no runner working, holds
 no capacity slot and keeps its branch, workspace and completed phase work
 (§12 "What holds a slot"). A wait ends at its first end fact: an
 `escalation.answered` on its escalation with any resolution (cause
-`operator`), or `wait.ended {id, cause, message}`, whose `cause` is
+`operator`), `wait.ended {id, cause, message}`, whose `cause` is
 `automatic` when its blockers completed or `operator` when an operator surface
-ends it without answering. `wait.ended` closes the escalation as `guidance`
+ends it without answering, or the dispatcher's unresolvable raise below (cause
+`unresolvable`). `wait.ended` closes the escalation as `guidance`
 with its message as the answer; an end for an unknown, already ended or
 superseded wait is ignored. Answering a wait never resets a phase-failure
 budget.
+
+The dispatcher ends waits itself. The build digest carries `ticketWait {id,
+escalation, tickets}` exactly while an entered wait is open: set by
+`wait.entered`, cleared by a matching `wait.ended`, by an answer to its
+escalation, or by a `wait-unresolvable` raise. Once per tick, before the lease
+sweep's per-build pass and whether or not the repository is paused, the
+dispatcher collects the open waits of nonterminal work builds from the digests
+the tick already read, resolves each ref through the repository's ticket
+migrations, and reads the union of their ids in one batched
+`dependencyStates` call with the rejected-role overlay (§12). No open wait
+means no call, and the stage reads no event rows. Per wait:
+
+- every ticket exists, is resolved and is not rejected: `wait.ended {id,
+  cause: automatic, message}`, appended conditionally on the build's reduced
+  `lastSeq`, ends the wait on the tick after the last ticket completes;
+- any ticket is rejected or no longer exists: one `escalation.raised {source:
+  policy, policyCause: wait-unresolvable, phase, round, question, refs}` with
+  the wait's phase and round, the offending ids as `refs`, and a question
+  naming each ticket and why it can never complete;
+- otherwise some ticket is still pending, and the wait stays in place. A
+  partially completed wait is never released.
+
+The reducer reads a `wait-unresolvable` raise against an open wait as its end:
+`wait.ended` becomes `{cause: unresolvable, seq, message: question}`, the
+wait's own escalation closes as answered `guidance` with the question as its
+answer, and the new escalation carries the wait's `wait: {id}` marker. The
+build is `blocked` on an ordinary policy escalation, in the default attention
+filter, and holds its slot. Because the digest clears on the raise it is never
+raised twice. Its answer routes and delivers like a wait answer: a reviewer
+resumes the same review round, the session's `guidance.json` carries the
+`wait` block, and after the answer the ended wait requests its resume slot; a
+`revise-spec` answer waits for the revision and `abort` aborts. A raise against
+a wait that is not open records an ordinary escalation. A source failure writes
+nothing, reports a diagnostic and is retried on the next tick. Hosted clients
+read `ticketWait` from the digest wire answer; an older service that omits it
+yields no automatic release, and operators still end waits by answering.
 
 An ended wait requests a `resume` slot and is admitted before new ticket
 claims, as a parked finished build is; a `revise-spec` answer instead waits for
@@ -2515,7 +2552,8 @@ verifier at the same step and attempt, and finalize or reconcile. Guidance
 reaches the session through its usual carrier, and its
 `$AB_CONTEXT_DIR/guidance.json` gains a `wait` block — `{id, tickets, reason,
 outcome: refused | ended, cause, message}` — whenever the guidance is the
-wait's refusal or answer, or when the wait ended without guidance text. A
+wait's refusal or answer (including the answer to its `wait-unresolvable`
+escalation), or when the wait ended without guidance text. A
 review phase's wait resumes that review round and never feeds the next
 producer. `ab build status` shows a requested, open, or ended-but-not-resumed
 wait and the tickets it names. Node builds cannot declare waits.
@@ -2526,11 +2564,12 @@ outcome?}`, where `publication` is `{branch, base, sha, published, requestSeq?,
 lost?}`, and
 `outcome` is `{kind: entered, seq}` or `{kind: refused, cause, tickets,
 message, seq}`, and `wait {id, escalation, session, phase, round, tickets,
-reason, enteredSeq, enteredAt, ended?: {cause, seq, message}, resumedSeq?}`.
+reason, enteredSeq, enteredAt, ended?: {cause: operator | automatic |
+unresolvable, seq, message}, resumedSeq?}`.
 Each holds only the latest request or entered wait. `resumedSeq` is the first
 `session.started`, `spec.revised`, wait-resume `restack.prepared` or
 `restack.advanced` after the end; from then on the build holds a slot again. Open and answered escalation records carry `wait: {id}` as the
-wait marker.
+wait marker, including the `wait-unresolvable` escalation that ended the wait.
 
 ## 12. The outer loop
 
@@ -2726,7 +2765,9 @@ mid-build and never used as artifact storage.** Dispatch reads the ticket
 while an interrupted dispatch still lacks its imported spec. After import, the
 build never reads the tracker again. The one mid-build consultation is the
 dispatcher's, not the build's: validating a declared ticket wait resolves its
-ids and records them in the build ticket's `blockedBy` (§11 "Ticket waits").
+ids and records them in the build ticket's `blockedBy`, and while waits are
+open one batched dependency read per tick checks whether their tickets
+completed (§11 "Ticket waits").
 Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
@@ -3552,7 +3593,7 @@ with illustrative members:
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
-| Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}` |
+| Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled` |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3742,8 +3783,10 @@ runner is attached; it does not acquire a leaf pipeline.
 lastEvent}`. `blocked` ≡ an open escalation: an `escalation.raised` (or the
 escalation a `phase.deferral-escalated` or `wait.entered` opens) without a
 matching `escalation.answered`, matched by id; a ticket wait's escalation also
-closes on `wait.ended`. `waitRequest` and `wait` project the latest ticket-wait
-request and entered wait (§11 "Ticket waits"). `reviewRoundCeilings` projects valid
+closes on `wait.ended` and on a `wait-unresolvable` raise. `waitRequest` and
+`wait` project the latest ticket-wait request and entered wait (§11 "Ticket
+waits"); `wait.ended?: {cause: operator | automatic | unresolvable, seq,
+message}` is the wait's first end. `reviewRoundCeilings` projects valid
 review-limit answers independently for the plan and code loops after the latest
 `spec.revised`; status and dashboard surfaces expose any projected values.
 `paused` ≡ a `build.paused` without a later `build.resumed`, and takes

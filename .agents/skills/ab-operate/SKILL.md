@@ -301,7 +301,8 @@ Read events with a cursor or a small `--events` count; logs are long.
   Active work, pause, pending controls and merge intent refuse revision. Leaves
   require an escalation and restart from plan after any unfinished reconcile
   resumes under the revised spec and its publication is confirmed. Answering a
-  ticket wait's escalation is what ends the wait (see ticket wait attention). Run
+  ticket wait's escalation ends the wait early; the dispatcher ends it when its
+  tickets complete (see ticket wait attention). Run
   `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
@@ -441,7 +442,8 @@ that does the job, and say what you are doing before you do it:
   the caller supplies the amended body for ticket origin. The node recollects and
   verifies; leaves require an escalation and restart from plan after any unfinished reconcile
   resumes under the revised spec and its publication is confirmed. Answering a
-  ticket wait's escalation is what ends the wait.
+  ticket wait's escalation ends the wait early; the dispatcher ends it when its
+  tickets complete.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
@@ -681,9 +683,11 @@ a red blocker; its escalation question begins `Waiting on`. Its agent declared w
 the named tickets complete, and the dispatcher recorded them in the build
 ticket's `blockedBy`. It holds no capacity slot and keeps its branch and
 workspace; `ab build status` shows a `waiting on:` line naming the tickets.
-Drive the named tickets, then answer the waiting build: completing them does
-not end the wait by itself. Answer sooner when the needed work landed another
-way or the wait is mistaken. Any answer ends the wait; the build then takes a
+Drive the named tickets to completion: the dispatcher ends the wait on its
+first tick after every named ticket completes, with no answer needed, and a
+wait with some tickets still open stays in place. Answer sooner only when the
+needed work landed another way or the wait is mistaken; any answer ends the
+wait early. Either way the build then takes a
 slot ahead of new ticket claims. If its target moved, it first restacks onto the
 target's current head, so the resumed phase sees the merged blockers;
 `ab build status` shows a `restack:` line with trigger `wait-resume`, and a
@@ -693,6 +697,15 @@ dispatcher accepts a request, the build keeps its slot and `ab build status`
 reports the wait as requested. A wait declared in `implement` first publishes
 the build's commits; if that publication is lost, the wait is refused
 (`publication-lost`) and implement re-runs with the refusal as guidance.
+
+A waited ticket that is rejected or deleted can never complete. The dispatcher
+then ends the wait with an ordinary red policy escalation, `wait-unresolvable`,
+in the default attention filter, whose question names each such ticket and why.
+Answer it with guidance to resume the declaring phase without that ticket
+(the session is again told what it waited on), with `--revise-spec` when the
+spec has to change, or abort the build. Do not leave it waiting for the ticket
+to come back: moving the ticket out of the rejected state later does not
+re-enter the wait.
 
 Entering and leaving a wait (`wait.entered`, `wait.ended`, and the
 `escalation.answered` that ends a wait) are routine, not default-watch

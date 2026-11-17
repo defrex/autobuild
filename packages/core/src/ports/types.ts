@@ -389,8 +389,9 @@ export interface TicketSource {
   /**
    * Dependency-graph nodes for `ids`. The result covers EVERY requested id, in
    * request order; a missing id comes back `{exists: false, resolved: false,
-   * blockedBy: []}`. Read at ticket creation and at dispatch time only — both
-   * are initiation, so §13's "never consulted mid-build" is untouched.
+   * blockedBy: []}`. Read at ticket creation, at dispatch time, and by the
+   * dispatcher for open ticket waits — one batched call per tick while any
+   * wait is open, the one mid-build consultation §13 allows.
    */
   dependencyStates(ids: string[]): Promise<DependencyState[]>
   /**

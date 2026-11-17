@@ -1,4 +1,4 @@
-import type { WaitEndCause } from '../events/payloads'
+import type { ReducedWaitEndCause } from '../events/payloads'
 import type { AnsweredEscalation, BuildState } from './reducer'
 import type { LogIndex } from './log-index'
 import { leafBaseInUse } from './leaf-restack-state'
@@ -9,8 +9,11 @@ import { leafBaseInUse } from './leaf-restack-state'
  * The declaration (`wait.requested`) is the session's terminal; the
  * dispatcher validates it against the ticket source and answers with
  * `wait.entered` or `wait.refused`. An entered wait opens an escalation that
- * an operator answer, or `wait.ended`, closes. A leaf waiting on tickets
- * holds no capacity slot and keeps its workspace, branch and phase work.
+ * an operator answer, `wait.ended` (operator, or automatic once every waited
+ * ticket completes), or the dispatcher's `policy/wait-unresolvable` raise
+ * (a waited ticket was rejected or deleted) closes. A leaf waiting on
+ * tickets holds no capacity slot and keeps its workspace, branch and phase
+ * work.
  *
  * Every helper here reads reduced state only, so per-tick callers cost the
  * same at any log length.
@@ -56,13 +59,80 @@ export function waitParked(state: BuildState): boolean {
 }
 
 /** The wait ended and the build may take a slot to resume its declaring
- * phase. A `revise-spec` answer keeps it parked until the revision lands. */
+ * phase. A `revise-spec` answer, to the wait's escalation or to the
+ * unresolvable raise that ended it, keeps it parked until the revision
+ * lands. */
 export function waitResumeDue(state: BuildState): boolean {
   const wait = state.wait
   if (!waitParked(state) || wait?.ended === undefined) return false
   return !state.answeredEscalations.some(
-    (escalation) => escalation.id === wait.escalation && escalation.resolution === 'revise-spec',
+    (escalation) =>
+      (escalation.id === wait.escalation || escalation.wait?.id === wait.id) &&
+      escalation.resolution === 'revise-spec',
   )
+}
+
+/** One waited ticket as the dispatcher's batched dependency read reports
+ * it, after the rejected-role overlay. */
+export interface WaitedTicketState {
+  exists: boolean
+  resolved: boolean
+  rejected?: boolean
+  state?: string
+}
+
+/** A waited ticket that can never complete. */
+export interface UnresolvableWaitTicket {
+  id: string
+  why: 'rejected' | 'missing'
+  state?: string
+}
+
+/** What an open wait's tickets say now: every one completed, or some can
+ * never complete. Undefined while any is still pending; a ticket the read
+ * did not report counts as pending. Rejected or missing wins over pending. */
+export function ticketWaitRelease(
+  tickets: readonly string[],
+  nodes: ReadonlyMap<string, WaitedTicketState>,
+): { kind: 'complete' } | { kind: 'unresolvable'; tickets: UnresolvableWaitTicket[] } | undefined {
+  const offenders: UnresolvableWaitTicket[] = []
+  let pending = false
+  for (const id of tickets) {
+    const node = nodes.get(id)
+    if (node === undefined) pending = true
+    else if (!node.exists) offenders.push({ id, why: 'missing' })
+    else if (node.rejected === true)
+      offenders.push({
+        id,
+        why: 'rejected',
+        ...(node.state !== undefined ? { state: node.state } : {}),
+      })
+    else if (!node.resolved) pending = true
+  }
+  if (offenders.length > 0) return { kind: 'unresolvable', tickets: offenders }
+  return pending ? undefined : { kind: 'complete' }
+}
+
+/** The automatic `wait.ended` message. */
+export function waitReleasedText(tickets: readonly string[]): string {
+  return `all waited tickets completed: ${tickets.join(', ')}`
+}
+
+/** The question of the `policy/wait-unresolvable` escalation: names each
+ * offending ticket, why it can never complete, and what to answer. */
+export function waitUnresolvableQuestion(
+  tickets: readonly string[],
+  offenders: readonly UnresolvableWaitTicket[],
+  source: string,
+): string {
+  const why = offenders
+    .map((ticket) =>
+      ticket.why === 'rejected'
+        ? `${ticket.id} was rejected${ticket.state !== undefined ? ` (state "${ticket.state}")` : ''}`
+        : `${ticket.id} no longer exists in the ${source} ticket source`,
+    )
+    .join('; ')
+  return `Waiting on ${tickets.join(', ')} can never end: ${why}. Answer with guidance to resume the declaring phase without it, revise the spec, or abort.`
 }
 
 type WaitResumeLog = Pick<LogIndex, 'restack' | 'openReconcile' | 'lastReconcileCompleted'>
@@ -197,7 +267,7 @@ export type TicketWaitStatus =
       escalation: string
       tickets: string[]
       reason: string
-      cause: WaitEndCause
+      cause: ReducedWaitEndCause
     }
 
 export function ticketWaitStatus(state: BuildState): TicketWaitStatus | undefined {

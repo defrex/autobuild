@@ -18060,7 +18060,174 @@ describe('dispatcher — ticket waits', () => {
     ])
   })
 
-  test('once a request is decided, later ticks make no wait ticket-source call', async () => {
+  /** Enter the seeded wait and return its escalation id. */
+  async function enterWait(h: Harness, tickets = ['B']): Promise<string> {
+    await seedWaiter(h, tickets)
+    await h.dispatcher.tick()
+    const entered = (await waitEvents(h)).find((event) => event.type === 'wait.entered')
+    expect(entered).toBeDefined()
+    return (entered!.payload as { escalation: string }).escalation
+  }
+
+  const unresolvableRaises = async (h: Harness) =>
+    (await h.store.getEvents(WAITER)).filter(
+      (event) =>
+        event.type === 'escalation.raised' &&
+        (event.payload as { policyCause?: string }).policyCause === 'wait-unresolvable',
+    )
+
+  test('every waited ticket completing ends the wait within one tick, ahead of new claims', async () => {
+    const h = waitHarness()
+    await enterWait(h)
+    await h.tickets.transition('B', 'Done')
+    h.tickets.add(readyTicket('D'))
+    h.clock.advance(10_000)
+    await h.dispatcher.tick()
+    const ended = (await waitEvents(h)).find((event) => event.type === 'wait.ended')
+    expect(ended?.actor).toEqual(DISPATCHER)
+    expect(ended?.payload).toMatchObject({
+      id: 'wait_1',
+      cause: 'automatic',
+      message: 'all waited tickets completed: B',
+    })
+    // Capacity 1: the resuming leaf takes the slot ahead of D.
+    expect(h.launches).toContain(WAITER)
+    expect(h.tickets.claims).not.toContain('D')
+    const state = (await readBuildFacts(h.store, WAITER)).value.state
+    expect(state.wait?.ended?.cause).toBe('automatic')
+    expect(state.openEscalations).toEqual([])
+  })
+
+  test('a partially completed wait stays in place', async () => {
+    const h = waitHarness([readyTicket('C', { state: 'Backlog' })])
+    await enterWait(h, ['B', 'C'])
+    await h.tickets.transition('B', 'Done')
+    for (let tick = 0; tick < 3; tick++) {
+      h.clock.advance(10_000)
+      await h.dispatcher.tick()
+    }
+    expect((await waitEvents(h)).map((event) => event.type)).toEqual([
+      'wait.requested',
+      'wait.entered',
+    ])
+    expect(await unresolvableRaises(h)).toEqual([])
+    expect((await readBuildFacts(h.store, WAITER)).value.state.status).toBe('blocked')
+  })
+
+  for (const [name, settle, why] of [
+    [
+      'rejected',
+      (h: Harness) => h.tickets.transition('B', 'Canceled'),
+      'B was rejected (state "Canceled")',
+    ],
+    [
+      'deleted',
+      async (h: Harness) => h.tickets.remove('B'),
+      'B no longer exists in the fake ticket source',
+    ],
+  ] as const) {
+    test(`a ${name} waited ticket raises one ordinary escalation; its answer resumes the phase`, async () => {
+      const h = waitHarness(
+        [],
+        'capacity = 1\n[tickets]\nsource = "file"\nrejectedState = "Canceled"\n',
+      )
+      const waitEscalation = await enterWait(h)
+      await settle(h)
+      h.tickets.add(readyTicket('D'))
+      for (let tick = 0; tick < 3; tick++) {
+        h.clock.advance(10_000)
+        await h.dispatcher.tick()
+      }
+      const raises = await unresolvableRaises(h)
+      expect(raises).toHaveLength(1)
+      expect(raises[0]?.actor).toEqual(DISPATCHER)
+      expect(raises[0]?.payload).toMatchObject({
+        phase: 'plan',
+        round: 1,
+        source: 'policy',
+        refs: ['B'],
+        question: expect.stringContaining(why),
+      })
+      expect((await waitEvents(h)).map((event) => event.type)).not.toContain('wait.ended')
+      const state = (await readBuildFacts(h.store, WAITER)).value.state
+      expect(state.status).toBe('blocked')
+      expect(state.wait?.ended?.cause).toBe('unresolvable')
+      expect(state.openEscalations.map((escalation) => escalation.id)).toEqual([
+        (raises[0]!.payload as { id: string }).id,
+      ])
+      expect(state.answeredEscalations.map((escalation) => escalation.id)).toEqual([waitEscalation])
+      // The blocked build holds the only slot: D is not claimed.
+      expect(h.tickets.claims).not.toContain('D')
+      await h.store.append(WAITER, {
+        actor: humanActor('aron'),
+        type: 'escalation.answered',
+        payload: {
+          id: (raises[0]!.payload as { id: string }).id,
+          answer: 'proceed without B',
+          resolution: 'guidance',
+        },
+      })
+      h.clock.advance(10_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toContain(WAITER)
+      expect(await unresolvableRaises(h)).toHaveLength(1)
+    })
+  }
+
+  test('a dependency-read failure writes nothing, reports once and releases next tick', async () => {
+    let failing = false
+    const h = harness({
+      toml: 'capacity = 1\n',
+      tickets: [readyTicket('A', { state: 'In Progress' }), readyTicket('B', { state: 'Backlog' })],
+      wrapTickets(source) {
+        const states = source.dependencyStates.bind(source)
+        source.dependencyStates = async (ids) => {
+          if (failing && ids.includes('B')) throw new Error('source offline')
+          return states(ids)
+        }
+        return source
+      },
+    })
+    await enterWait(h)
+    failing = true
+    await h.tickets.transition('B', 'Done')
+    h.clock.advance(10_000)
+    const report = await h.dispatcher.tick()
+    expect(report.janitorDiagnostics).toContainEqual('ticket waits not checked — source offline')
+    expect((await waitEvents(h)).map((event) => event.type)).not.toContain('wait.ended')
+    failing = false
+    h.clock.advance(10_000)
+    await h.dispatcher.tick()
+    expect((await waitEvents(h)).at(-1)).toMatchObject({
+      type: 'wait.ended',
+      payload: { cause: 'automatic' },
+    })
+  })
+
+  test('two waiting builds share one batched dependency read per tick', async () => {
+    const h = waitHarness([
+      readyTicket('E', { state: 'In Progress' }),
+      readyTicket('C', { state: 'Backlog' }),
+    ])
+    await seedWaiter(h)
+    await seedBuild(h, { slug: 'waits-on-c', ticketId: 'E' })
+    await h.store.append('waits-on-c', {
+      actor: agentActor('plan', 's_c'),
+      type: 'wait.requested',
+      payload: { id: 'wait_c', phase: 'plan', round: 1, tickets: ['C', 'B'], reason: 'r' },
+    })
+    await h.dispatcher.tick()
+    const before = h.tickets.dependencyQueries.length
+    h.clock.advance(10_000)
+    await h.dispatcher.tick()
+    const waitQueries = h.tickets.dependencyQueries
+      .slice(before)
+      .filter((ids) => ids.includes('B') || ids.includes('C'))
+    expect(waitQueries).toHaveLength(1)
+    expect([...waitQueries[0]!].sort()).toEqual(['B', 'C'])
+  })
+
+  test('once a request is decided, later ticks make one batched release read and no other wait call', async () => {
     const reads: string[] = []
     const h = harness({
       toml: 'capacity = 1\n',
@@ -18085,9 +18252,9 @@ describe('dispatcher — ticket waits', () => {
       await h.dispatcher.tick()
     }
     // The janitor's own target observation reads the build's ticket; the
-    // decided wait reads nothing more.
+    // open wait costs one batched release read per tick and nothing more.
     expect(reads.filter((id) => id !== 'A')).toEqual([])
-    expect(h.tickets.dependencyQueries).toHaveLength(dependencyQueries)
+    expect(h.tickets.dependencyQueries.slice(dependencyQueries)).toEqual([['B'], ['B']])
     expect(h.tickets.blockerAdds).toHaveLength(blockerAdds)
   })
 
@@ -18102,6 +18269,7 @@ describe('dispatcher — ticket waits', () => {
       readyTicket('B', { state: 'Backlog' }),
     ])
     let waitCalls = 0
+    let releaseBatches = 0
     const get = source.get.bind(source)
     source.get = async (id) => {
       if (id === 'B') waitCalls++
@@ -18109,7 +18277,8 @@ describe('dispatcher — ticket waits', () => {
     }
     const states = source.dependencyStates.bind(source)
     source.dependencyStates = async (ids) => {
-      waitCalls++
+      if (ids.includes('B')) releaseBatches++
+      else waitCalls++
       return states(ids)
     }
     const addBlocker = source.addBlocker.bind(source)
@@ -18147,6 +18316,7 @@ describe('dispatcher — ticket waits', () => {
       slugs: ['waiter-open', 'waiter-ended', 'waiter-publishing'],
       dispatcher: () => make().dispatcher,
       waitCalls: () => waitCalls,
+      releaseBatches: () => releaseBatches,
       advance: () => clock.advance(60_000),
       // The status surfaces an operator polls show the wait at the same bound.
       surfaces: async () => {

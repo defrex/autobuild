@@ -103,6 +103,11 @@ export class FakeTicketSource implements TicketSource {
     this.tickets.set(ticket.ref.id, cloneTicket(ticket, this.doneState))
   }
 
+  /** Delete a ticket from the source, as a tracker deletion would. */
+  remove(id: string): void {
+    this.tickets.delete(id)
+  }
+
   async listReady(criteria: {
     labels?: string[]
     state?: string

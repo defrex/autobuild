@@ -90,7 +90,15 @@ import {
   slotRequest,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
-import { pendingWaitRequest, waitParked, waitResumeDue } from '../kernel/ticket-wait'
+import {
+  openTicketWait,
+  pendingWaitRequest,
+  ticketWaitRelease,
+  waitParked,
+  waitReleasedText,
+  waitResumeDue,
+  waitUnresolvableQuestion,
+} from '../kernel/ticket-wait'
 import { changeBlockers } from '../ports/tickets/operations'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import { landingPolicyIdentity } from '../kernel/landing-policy-identity'
@@ -232,7 +240,14 @@ import {
   nodeIssueLinksSyncPending,
 } from '../kernel/node-issue-links'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
-import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
+import type {
+  ArtifactMeta,
+  BuildDigest,
+  BuildDigestTicketWait,
+  BuildRecord,
+  BuildStore,
+  Clock,
+} from '../store/types'
 import { creationBuildSlug } from '../kernel/build-creation'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
@@ -5572,9 +5587,106 @@ export class Dispatcher {
         reason: request.reason,
         question:
           `Waiting on ${names} to complete: ${request.reason}. ` +
-          `Answer to end the wait early; ${request.phase} resumes with the answer.`,
+          `The wait ends when they all complete; answer to end it early, and ${request.phase} resumes with the answer.`,
       },
     })
+  }
+
+  /**
+   * End open ticket waits whose tickets settled (SPEC §11 "Ticket waits").
+   * Every waited ticket completed: `wait.ended {cause: automatic}`, and the
+   * build resumes ahead of new claims. Any waited ticket rejected (the
+   * configured rejected role) or deleted: one `policy/wait-unresolvable`
+   * escalation naming it, which the reducer reads as the wait's end. A wait
+   * with tickets still pending stays in place.
+   *
+   * Runs once per tick from the lease sweep, before its per-build pass,
+   * whether or not the repository is paused or accepting new work.
+   *
+   * Per-tick cost: the open waits come from the digests the sweep already
+   * read (`ticketWait`), so no store read is added. With no open wait it
+   * makes no call; otherwise one batched `dependencyStates` over the unique
+   * waited ids. A build's reduced `buildFacts` is read only when the stage
+   * is about to write for it — once per wait end. A source failure writes
+   * nothing and the waits are checked again next tick.
+   */
+  private async releaseTicketWaits(
+    entries: readonly { record: BuildRecord; digest: BuildDigest }[],
+    report: TickReport,
+    opts: TickOpts,
+  ): Promise<void> {
+    const tickets = this.deps.tickets
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    const waiting: { record: BuildRecord; wait: BuildDigestTicketWait; ids: string[] }[] = []
+    for (const { record, digest } of entries) {
+      const wait = digest.ticketWait
+      if (digest.terminal !== undefined || digest.kind === 'node' || wait === undefined) continue
+      try {
+        const ids = wait.tickets.map(
+          (ref) => resolveTicketRef(migrations, ref, tickets.name, record.slug).id,
+        )
+        waiting.push({ record, wait, ids })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        report.janitorFailed += 1
+        report.janitorDiagnostics.push(
+          `build ${record.slug}: ticket wait ${wait.id} not checked — ${message}`,
+        )
+      }
+    }
+    if (waiting.length === 0 || this.outOfBudget(opts)) return
+    const nodes = new Map<string, DependencyNode>()
+    try {
+      const rejectedState = this.rejectedState()
+      const states = await tickets.dependencyStates([...new Set(waiting.flatMap(({ ids }) => ids))])
+      for (const state of states) nodes.set(state.id, markRejected(state, rejectedState))
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      report.janitorFailed += 1
+      report.janitorDiagnostics.push(`ticket waits not checked — ${message}`)
+      return
+    }
+    for (const { record, wait, ids } of waiting) {
+      const release = ticketWaitRelease(ids, nodes)
+      if (release === undefined) continue
+      if (this.outOfBudget(opts)) return
+      try {
+        const { state } = await this.store.buildFacts(record.slug)
+        const open = openTicketWait(state)
+        if (open?.id !== wait.id) continue
+        // A stale append is skipped; the next tick decides again.
+        if (release.kind === 'complete')
+          await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+            actor: DISPATCHER,
+            type: 'wait.ended',
+            payload: { id: open.id, cause: 'automatic', message: waitReleasedText(ids) },
+          })
+        else
+          await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+            actor: DISPATCHER,
+            type: 'escalation.raised',
+            payload: {
+              id: this.deps.ids('esc'),
+              phase: open.phase,
+              round: open.round,
+              source: 'policy',
+              policyCause: 'wait-unresolvable',
+              question: waitUnresolvableQuestion(ids, release.tickets, tickets.name),
+              refs: release.tickets.map((ticket) => ticket.id),
+            },
+          })
+      } catch (error) {
+        rethrowAuthorityLapse(error)
+        const message =
+          error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+        report.janitorFailed += 1
+        report.janitorDiagnostics.push(
+          `build ${record.slug}: ticket wait ${wait.id} not released — ${message}`,
+        )
+      }
+    }
   }
 
   // ── d. Lease sweep (SPEC §15.6-C) ──────────────────────────────────────────
@@ -5609,9 +5721,11 @@ export class Dispatcher {
     opts: TickOpts = {},
   ): Promise<void> {
     const now = this.deps.clock().getTime()
+    const entries = await this.repoBuildDigests()
+    await this.releaseTicketWaits(entries, report, opts)
     // Terminal builds are filtered on the digest before the lease and TTL
     // checks, so a zero TTL cannot fall through to a log read.
-    for (const { record, digest } of await this.repoBuildDigests()) {
+    for (const { record, digest } of entries) {
       if (digest.terminal !== undefined) continue
       // Budget gate: the sweep re-attaches runners per expired build.
       if (this.outOfBudget(opts)) break
