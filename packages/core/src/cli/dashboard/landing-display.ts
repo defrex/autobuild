@@ -99,6 +99,10 @@ export const mergeVocabulary = {
   label: 'merge',
   merged: 'merged',
   consent: 'Merge awaits consent. Merge releases this build; Hold keeps it waiting.',
+  /** Landing by polling because the forge cannot arm native auto-merge. */
+  polling: 'polling',
+  /** Settled: a human merges the PR on the forge. */
+  humanMerge: 'awaits a human merge',
 } as const
 
 export function mergeSummary(build: {
@@ -111,7 +115,11 @@ export function mergeSummary(build: {
       ? 'held'
       : landing?.decision?.mode === 'consent' && landing.command?.kind !== 'land'
         ? 'awaiting consent'
-        : build.autoMerge
+        : build.autoMerge === 'polling'
+          ? mergeVocabulary.polling
+          : build.autoMerge === 'human-merge'
+            ? mergeVocabulary.humanMerge
+            : build.autoMerge
   return `${mergeVocabulary.label} ${status}`
 }
 export function mergedChildren(merged: number, total: number): string {

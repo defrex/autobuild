@@ -36,6 +36,7 @@ import { reduceBuild } from '../../kernel/reducer'
 import type { Config } from '../../config/schema'
 import type { Finding, Phase } from '../../ontology'
 import { verifyPhase } from '../../ontology'
+import { mergeSummary } from './landing-display'
 import { steppingClock } from '../../testing/fixed'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
@@ -1846,6 +1847,74 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
       ]),
     )
     expect(stepFor(enabled, 'merge')?.reason).toBeUndefined()
+  })
+
+  test('a fallback landing route names itself on the row, the merge step and the blockers', () => {
+    const candidate = { head: 'sha-r1', parent: 'base', cycle: '1' }
+    const decided = [
+      ...throughPr,
+      ev('landing.decided', {
+        candidate,
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'auto',
+        rule: { default: true },
+      }),
+    ]
+    const decisionSeq = decided.length
+    const polling = [
+      ...decided,
+      ev('landing.polling-selected', {
+        candidate,
+        decisionSeq,
+        detail: 'GitHub GraphQL is unavailable',
+      }),
+    ]
+    const pollingRow = project(toLog(polling))
+    const pollingReason =
+      'Landing by polling because GitHub GraphQL is unavailable — Autobuild merges PR #7 when ' +
+      'GitHub reports it clear to merge; this needs a running dispatcher'
+    expect(pollingRow.autoMerge).toBe('polling')
+    expect(mergeSummary(pollingRow)).toBe('merge polling')
+    expect(stepFor(pollingRow, 'merge')?.reason).toBe(pollingReason)
+    expect(pollingRow.blockers).toEqual([pollingReason])
+
+    const settled = project(
+      toLog([
+        ...polling,
+        ev('landing.human-merge-required', {
+          candidate,
+          decisionSeq,
+          cause: 'merge-refused',
+          detail: 'Pull Request is not mergeable',
+        }),
+      ]),
+    )
+    const humanReason =
+      'Awaiting a human merge — GitHub refused the merge: "Pull Request is not mergeable"; ' +
+      'merge PR #7 on GitHub'
+    expect(settled.autoMerge).toBe('human-merge')
+    expect(mergeSummary(settled)).toBe('merge awaits a human merge')
+    expect(stepFor(settled, 'merge')?.reason).toBe(humanReason)
+    expect(settled.blockers).toEqual([humanReason])
+
+    // A new decision for a new candidate retires the route.
+    const redecided = project(
+      toLog([
+        ...polling,
+        ev('landing.decided', {
+          candidate: { ...candidate, head: 'sha-r2' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'auto',
+          rule: { default: true },
+        }),
+      ]),
+    )
+    expect(redecided.autoMerge).toBe('requested')
+    expect(redecided.blockers).toEqual([])
   })
 
   test('an awaiting-PR deferral surfaces its complete forge-agnostic provider detail', () => {

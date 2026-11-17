@@ -1346,6 +1346,11 @@ describe('renderDashboard: emphasis', () => {
     expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mmerge requested')
     expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mmerge enabled')
     expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mmerge cancelling')
+    // The fallback routes: polling is in progress, a human merge needs action.
+    expect(colored(build({ autoMerge: 'polling' }))).toContain('\x1b[36mmerge polling')
+    expect(colored(build({ autoMerge: 'human-merge' }))).toContain(
+      '\x1b[33mmerge awaits a human merge',
+    )
     const offRow = colored(build({ autoMerge: 'off' }))
       .split('\n')
       .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
