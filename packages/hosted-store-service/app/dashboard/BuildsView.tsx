@@ -148,6 +148,7 @@ function statusTone(status: DashboardBuild['status'] | DashboardHarvest['status'
     case 'suspended':
     case 'cleaning':
     case 'escalated':
+    case 'waiting':
       return 'warn'
     case 'blocked':
     case 'aborting':
@@ -584,6 +585,12 @@ function BuildRow({
           {row.alert.text}
         </p>
       )}
+      {!row.integrationRow && row.wait && (
+        <p className="sub integration-alert warn" role="status">
+          <span aria-hidden>! </span>
+          {row.wait.text}
+        </p>
+      )}
       {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
       )}
@@ -597,6 +604,13 @@ function BuildRow({
         <p className="sub">
           <Link className="word answer-link" href={href}>
             answer escalation
+          </Link>
+        </p>
+      )}
+      {!row.integrationRow && row.status === 'waiting' && row.wait && (
+        <p className="sub">
+          <Link className="word answer-link" href={href}>
+            end wait early
           </Link>
         </p>
       )}
@@ -697,6 +711,56 @@ export function BuildPageView(props: BuildPageViewProps) {
     )
   }
   const answering = answerStep?.slug === row.slug
+  // The answer step and composer shared by the escalation and the wait
+  // regions: answering a wait ends it early.
+  const answerControls = (question: string) => (
+    <>
+      {answering && answerStep && (
+        <>
+          <BlockedAnswerStep
+            blocker={question}
+            input={answerStep.input}
+            pending={answerPending}
+            onInput={props.onAnswerStepInput}
+            onSubmit={props.onSubmitAnswerStep}
+            onCancel={props.onCancelAnswerStep}
+          />
+          <div
+            className="controls actions"
+            role="toolbar"
+            aria-label={`Controls for ${row.slug}`}
+            onKeyDown={(event) => handleRowControlKey(event, props.onCancelAnswerStep)}
+          >
+            <button
+              type="button"
+              className="btn primary action"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`SUBMIT answer for ${row.slug}`}
+              onClick={props.onSubmitAnswerStep}
+            >
+              SUBMIT
+            </button>
+            <button
+              type="button"
+              className="word action"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`CANCEL answer for ${row.slug}`}
+              onClick={props.onCancelAnswerStep}
+            >
+              CANCEL
+            </button>
+          </div>
+        </>
+      )}
+      {!answering && (
+        <AnswerComposer
+          build={row}
+          busy={pending !== undefined || answerPending}
+          onAnswer={props.onAnswer}
+        />
+      )}
+    </>
+  )
   return (
     <DashboardSurface>
       <article className="build-page" aria-label={row.slug}>
@@ -731,51 +795,27 @@ export function BuildPageView(props: BuildPageViewProps) {
             <p className="why">
               The build stopped to ask a person. Your answer resumes it from where it paused.
             </p>
-            {answering && answerStep && (
-              <>
-                <BlockedAnswerStep
-                  blocker={row.blockers[0] ?? ''}
-                  input={answerStep.input}
-                  pending={answerPending}
-                  onInput={props.onAnswerStepInput}
-                  onSubmit={props.onSubmitAnswerStep}
-                  onCancel={props.onCancelAnswerStep}
-                />
-                <div
-                  className="controls actions"
-                  role="toolbar"
-                  aria-label={`Controls for ${row.slug}`}
-                  onKeyDown={(event) => handleRowControlKey(event, props.onCancelAnswerStep)}
-                >
-                  <button
-                    type="button"
-                    className="btn primary action"
-                    disabled={pending !== undefined || answerPending}
-                    aria-label={`SUBMIT answer for ${row.slug}`}
-                    onClick={props.onSubmitAnswerStep}
-                  >
-                    SUBMIT
-                  </button>
-                  <button
-                    type="button"
-                    className="word action"
-                    disabled={pending !== undefined || answerPending}
-                    aria-label={`CANCEL answer for ${row.slug}`}
-                    onClick={props.onCancelAnswerStep}
-                  >
-                    CANCEL
-                  </button>
-                </div>
-              </>
-            )}
-            {!answering && (
-              <AnswerComposer
-                build={row}
-                busy={pending !== undefined || answerPending}
-                onAnswer={props.onAnswer}
-              />
-            )}
+            {answerControls(row.blockers[0] ?? '')}
           </section>
+        )}
+        {!row.integrationRow && row.status === 'waiting' && row.wait && (
+          <section className="signoff wait" aria-label={`Ticket wait for ${row.slug}`}>
+            <p className="q">! {row.wait.text}</p>
+            <p className="since">
+              since <time dateTime={row.wait.since}>{row.wait.since}</time>
+            </p>
+            <p className="why">
+              This build is waiting on other tickets and holds no slot. Answering ends the wait
+              early; the phase that declared it resumes with your answer.
+            </p>
+            {answerControls(row.wait.question)}
+          </section>
+        )}
+        {!row.integrationRow && row.status !== 'waiting' && row.wait && (
+          <p className="sub integration-alert warn" role="status">
+            <span aria-hidden>! </span>
+            {row.wait.text}
+          </p>
         )}
         {!row.integrationRow &&
           row.status !== 'blocked' &&

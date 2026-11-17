@@ -548,7 +548,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.list',
     'List one repository’s builds, newest first, with effective status derived from the build log.',
     buildListInput,
-    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, and durable-event progress.',
+    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, durable-event progress, and any ticket wait (`wait` with its state and tickets; `waitOnly` when the wait is the only open escalation).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildListInput>
       return listOperatorBuilds({
