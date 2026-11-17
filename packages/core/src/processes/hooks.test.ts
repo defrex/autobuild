@@ -539,6 +539,101 @@ describe('configured hooks', () => {
     await h.supervisor.stop()
   })
 
+  describe('recovery append outage', () => {
+    /** A store whose `hook.recovered` appends throw while `down` is set. */
+    function recoveryOutage(store: BuildStore): {
+      store: BuildStore
+      down: { value: boolean }
+      tries: { value: number }
+    } {
+      const down = { value: true }
+      const tries = { value: 0 }
+      const wrapped = new Proxy(store, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          if (typeof value !== 'function') return value
+          return async (...args: unknown[]) => {
+            if (
+              property === 'appendRepo' &&
+              (args[1] as RepositoryEventWrite).type === 'hook.recovered'
+            ) {
+              tries.value += 1
+              if (down.value) throw new Error('journal unavailable')
+            }
+            return (value as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        },
+      }) as BuildStore
+      return { store: wrapped, down, tries }
+    }
+
+    /** Baseline the hook, then mark a reported failure episode in its progress. */
+    async function seedReportedEpisode(store: BuildStore): Promise<void> {
+      await harness(store).supervisor.drainOnce({ notify: NOTIFY })
+      const progress = await progressOf(store)
+      await store.putRepoArtifact(REPO, {
+        kind: hookProgressKind('notify'),
+        content: JSON.stringify({
+          ...progress,
+          failing: { since: progress.updatedAt, attempts: 11, error: 'boom', reported: true },
+        }),
+      })
+    }
+
+    test('the recovery obligation survives a restart and is reported without rerunning the command', async () => {
+      const store = await newStore()
+      await store.createBuild({ slug: 'b', repo: REPO })
+      await seedReportedEpisode(store)
+      await escalate(store, 'b')
+      const outage = recoveryOutage(store)
+      const first = harness(outage.store)
+      await first.supervisor.drainOnce({ notify: NOTIFY })
+      expect(ids(first, 'notify')).toEqual(['build:b:1'])
+      expect(outage.tries.value).toBeGreaterThan(0)
+      expect(await repoEvents(store, 'hook.recovered')).toEqual([])
+      const durable = await progressOf(store)
+      expect(durable.delivered).toBe(1)
+      expect(durable.failing).toBeUndefined()
+      expect(durable.recovery).toMatchObject({ attempts: 11 })
+      outage.down.value = false
+      const second = harness(outage.store)
+      await second.supervisor.drainOnce({ notify: NOTIFY })
+      const recovered = await repoEvents(store, 'hook.recovered')
+      expect(recovered).toHaveLength(1)
+      // build:b:1 is not rerun; the recovery is itself attention for the hook.
+      expect(ids(second, 'notify')).not.toContain('build:b:1')
+      expect(recovered[0]!.payload).toMatchObject({ hook: 'notify', attempts: 11 })
+      expect((await progressOf(store)).recovery).toBeUndefined()
+    })
+
+    test('a running hook retries the recovery report with backoff while idle', async () => {
+      const store = await newStore()
+      await store.createBuild({ slug: 'b', repo: REPO })
+      await seedReportedEpisode(store)
+      const outage = recoveryOutage(store)
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const h = harness(outage.store, manualClock(), { holdBackoff: held })
+      await h.supervisor.reconcile({ notify: NOTIFY })
+      await h.pulse()
+      await escalate(store, 'b')
+      await h.pulse()
+      expect(ids(h, 'notify')).toEqual(['build:b:1'])
+      expect(await repoEvents(store, 'hook.recovered')).toEqual([])
+      expect(h.backoffs.length).toBeGreaterThan(0)
+      outage.down.value = false
+      release()
+      await h.pulse()
+      expect(await repoEvents(store, 'hook.recovered')).toHaveLength(1)
+      expect((await progressOf(store)).recovery).toBeUndefined()
+      const recoveredSeq = (await repoEvents(store, 'hook.recovered'))[0]!.seq
+      expect(ids(h, 'notify')).toEqual(['build:b:1', `repo:${recoveredSeq}`])
+      await h.supervisor.stop()
+    })
+  })
+
   test('a fresh supervisor resumes after the last success and redelivers only the in-flight record', async () => {
     const store = await newStore()
     await store.createBuild({ slug: 'b', repo: REPO })

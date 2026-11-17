@@ -61,6 +61,13 @@ export const hookProgressSchema = z.strictObject({
       reported: z.boolean(),
     })
     .optional(),
+  /** A reported failure episode whose `hook.recovered` is not yet recorded. */
+  recovery: z
+    .strictObject({
+      since: z.iso.datetime(),
+      attempts: z.number().int().min(1),
+    })
+    .optional(),
   updatedAt: z.iso.datetime(),
 })
 export type HookProgress = z.infer<typeof hookProgressSchema>
@@ -259,6 +266,7 @@ class HookWorker {
   private written: HookProgress | undefined
   private lastWriteAt = 0
   private writes: Promise<void> = Promise.resolve()
+  private recoveryFailures = 0
 
   constructor(
     private readonly supervisor: HookSupervisor,
@@ -465,6 +473,7 @@ class HookWorker {
         : {}),
       pending: 0,
       ...(progress?.failing !== undefined ? { failing: progress.failing } : {}),
+      ...(progress?.recovery !== undefined ? { recovery: progress.recovery } : {}),
       updatedAt: now,
     }
     await this.deps.store.putRepoArtifact(this.deps.repo, {
@@ -548,6 +557,41 @@ class HookWorker {
     })
   }
 
+  /** Waits for a queued record, or a backoff before retrying the recovery report. */
+  private async waitForRecordOrRetry(signal: AbortSignal): Promise<void> {
+    const woken = new AbortController()
+    const both = AbortSignal.any([signal, woken.signal])
+    await Promise.race([
+      this.waitForRecord(both),
+      this.sleepBackoff(Math.max(1, this.recoveryFailures), both),
+    ])
+    woken.abort()
+  }
+
+  /**
+   * Record the outstanding `hook.recovered`, if any, and clear the durable
+   * obligation. Resolves false while the append fails; the command is never
+   * rerun to retry it.
+   */
+  private async reportRecovery(): Promise<boolean> {
+    const recovery = this.state?.recovery
+    if (recovery === undefined) return true
+    const recorded = await this.append({
+      actor: DISPATCHER,
+      type: 'hook.recovered',
+      payload: { hook: this.name, since: recovery.since, attempts: recovery.attempts },
+    })
+    if (!recorded) {
+      this.recoveryFailures += 1
+      return false
+    }
+    this.recoveryFailures = 0
+    const { recovery: _reported, ...rest } = this.state!
+    this.state = rest
+    await this.persist()
+    return true
+  }
+
   private async deliver(signal: AbortSignal, session: AbortController): Promise<void> {
     const hook = { name: this.name, config: this.config }
     let passEnded = this.mode === 'watch'
@@ -560,13 +604,16 @@ class HookWorker {
       })
     }
     while (!signal.aborted) {
+      await this.reportRecovery()
       const head = this.queue[0]
       if (head === undefined) {
         if (this.mode === 'once' && passEnded) {
           session.abort()
           return
         }
-        await this.waitForRecord(signal)
+        if (this.mode === 'watch' && this.state?.recovery !== undefined)
+          await this.waitForRecordOrRetry(signal)
+        else await this.waitForRecord(signal)
         continue
       }
       if (this.state === undefined) {
@@ -623,13 +670,12 @@ class HookWorker {
       lastSuccessAt: this.now().toISOString(),
       lastDeliveredId: record.id,
       pending: this.queue.length,
+      // The episode's recovery is an obligation persisted with the success
+      // and reported by the delivery loop until `hook.recovered` lands.
+      ...(failing?.reported === true
+        ? { recovery: { since: failing.since, attempts: failing.attempts } }
+        : {}),
     }
-    if (failing?.reported === true)
-      await this.append({
-        actor: DISPATCHER,
-        type: 'hook.recovered',
-        payload: { hook: this.name, since: failing.since, attempts: failing.attempts },
-      })
     let attempts = 0
     while (!(await this.persist())) {
       attempts += 1
@@ -653,7 +699,9 @@ class HookWorker {
       this.deps.warn(`hook ${this.name}: delivery of ${record.id} failed (${message}); retrying`)
     if (
       !failing.reported &&
-      now.getTime() - Date.parse(failing.since) >= HOOK_FAILING_ATTENTION_MS
+      now.getTime() - Date.parse(failing.since) >= HOOK_FAILING_ATTENTION_MS &&
+      // A new episode is reported only after the previous one's recovery.
+      (await this.reportRecovery())
     ) {
       if (
         await this.append({
