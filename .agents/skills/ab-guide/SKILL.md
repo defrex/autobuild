@@ -2372,7 +2372,9 @@ dispatcher records an immutable decision when each candidate becomes ready.
 No rules means leaf auto / node consent. There is no claim-time default
 seeding or fan-out over existing builds. `ab merge <slug>` supplies consent to
 that merge and frozen destination; it survives replacement heads until hold
-or completion. `--head <sha>` refuses with `head-mismatch`, recording nothing,
+or completion, except that consent given under a rule with `paths` or `within`
+predicates is revoked (`landing.consent-revoked`) when a reconcile's own edits
+touch a file those predicates match. `--head <sha>` refuses with `head-mismatch`, recording nothing,
 unless `<sha>` is the current candidate head. `ab hold <slug>` suppresses policy and withdraws consent.
 The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
 are retired and return actionable errors; use merge rules and hold/merge.
@@ -2799,6 +2801,10 @@ The default watch reports actionable conditions only:
   is required. A read deferral asks for CLI/store repair before retry or guidance.
   A `build.janitor-escalated` escalation needs no answer to recover; a bare
   retry answer only brings the next attempt forward.
+- Build `landing.consent-revoked`: a reconcile's own edits touched files
+  protected by the `paths` or `within` rule the merge consent was given under.
+  It names the matched files and the previous and new heads; the build returns
+  to the consent queue and needs fresh consent for its new head.
 - Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and

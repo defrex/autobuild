@@ -54,14 +54,19 @@ configuration, separate from the pinned execution pipeline.
 
 `ab hold <slug>` suppresses merge and revokes consent, even before readiness.
 `ab merge <slug>` requires readiness, clears hold and consents to this merge
-into its destination. Consent survives head replacement, restacking, verification
-and re-finalization until hold or completion; it approves the merge rather than
-an immutable diff. Accepted node reparenting revokes it.
+into its destination. Consent survives head replacement, clean restacking,
+verification and re-finalization until hold or completion; it approves the merge
+rather than an immutable diff. Consent given under a rule with `paths` or
+`within` predicates is revoked when a reconcile's own edits (its recorded
+resolution) touch a file those predicates match: `landing.consent-revoked`
+raises default attention naming the files and both heads, and the build returns
+to the consent queue for its new head. Accepted node reparenting also revokes
+consent.
 `ab merge <slug> --head <sha>` binds consent to the head the reviewer saw: it
 refuses with `head-mismatch`, recording nothing, unless `<sha>` (full or at
 least seven characters) is the current candidate head. Build status and the
 consent queue show the current candidate head beside the head consent was
-given at; consent survival is unchanged. Commands and receipts
+given at; `--head` does not change survival. Commands and receipts
 are sequence-correlated: hold acknowledgement confirms native cancellation;
 merge acknowledgement does not claim gates passed. MCP/operator tools offer the
 same actions; the terminal uses `l`/`o`. These controls record durable actions; merge consent does not mean the merge gates have passed.
@@ -160,6 +165,11 @@ changes. Rule 2 merges changes confined to documentation automatically. Every
 other change matches rule 3 and waits for consent. Protective rules belong
 first: placed after rule 2, a documentation change under `docs/policy/**` would
 match rule 2 and merge automatically.
+
+Consent given under rule 1 lasts only while the reviewed protected change does.
+A clean restack keeps it, and so does a reconcile that resolves conflicts
+without editing a protected file. A reconcile whose resolution edits a protected
+file revokes it, and the new head needs fresh consent.
 
 ## Merge methods
 

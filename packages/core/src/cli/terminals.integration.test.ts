@@ -1956,6 +1956,84 @@ describe('ab done — reconcile', () => {
       resolution: { paths: ['extra.ts', 'feature.ts'] },
     })
   })
+  describe('protected merge consent', () => {
+    async function consentUnder(paths: string[]) {
+      const decided = await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: oldHead, parent: target, cycle: '1' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { index: 0, snapshot: { paths, mode: 'consent' } },
+          paths: { total: 1, preview: ['feature.ts'] },
+        },
+      })
+      return store.append(BUILD, {
+        actor: humanActor('operator'),
+        type: 'build.land-requested',
+        payload: { decisionSeq: decided.seq },
+      })
+    }
+    async function resolve() {
+      await writeFile(join(workspace, 'feature.ts'), 'resolved work\n')
+      await runGit(['add', '-A'], workspace)
+      await runGit([...GIT_ID, 'commit', '--amend', '--no-edit', '-q'], workspace)
+      return runGit(['rev-parse', 'HEAD'], workspace)
+    }
+    const revocations = async () =>
+      (await store.getEvents(BUILD)).filter((e) => e.type === 'landing.consent-revoked')
+
+    test('a resolution editing a protected file revokes consent before the publication intent', async () => {
+      const consent = await consentUnder(['feature.ts'])
+      const head = await resolve()
+      await done(deps, { notes: await stash('protected.md', 'Resolved') })
+      const types = await eventTypes()
+      expect(types.filter((type) => type === 'landing.consent-revoked')).toHaveLength(1)
+      expect(types.indexOf('landing.consent-revoked')).toBeLessThan(
+        types.indexOf('reconcile.publish-intended'),
+      )
+      expect((await revocations())[0]!.payload).toEqual({
+        commandSeq: consent.seq,
+        source: 'reconcile',
+        rule: { index: 0, snapshot: { paths: ['feature.ts'], mode: 'consent' } },
+        previousHead: oldHead,
+        head,
+        consentedHead: oldHead,
+        paths: { total: 1, preview: ['feature.ts'] },
+      })
+      expect((await readBuildFacts(store, BUILD)).value.state.landing?.command).toBeUndefined()
+    })
+    test('a retried completion after the revocation appends none', async () => {
+      const consent = await consentUnder(['feature.ts'])
+      const head = await resolve()
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'landing.consent-revoked',
+        payload: {
+          commandSeq: consent.seq,
+          source: 'reconcile',
+          rule: { index: 0, snapshot: { paths: ['feature.ts'], mode: 'consent' } },
+          previousHead: oldHead,
+          head,
+          paths: { total: 1, preview: ['feature.ts'] },
+        },
+      })
+      await done(deps, { notes: await stash('retried.md', 'Resolved') })
+      expect(await revocations()).toHaveLength(1)
+    })
+    test('a resolution touching no protected file keeps consent', async () => {
+      const consent = await consentUnder(['autobuild.toml'])
+      await resolve()
+      await done(deps, { notes: await stash('unprotected.md', 'Resolved') })
+      expect(await revocations()).toHaveLength(0)
+      expect((await readBuildFacts(store, BUILD)).value.state.landing?.command?.seq).toBe(
+        consent.seq,
+      )
+    })
+  })
   test('remote reconcile requests trusted guarded publication', async () => {
     await store.append(BUILD, {
       actor: KERNEL,

@@ -174,6 +174,19 @@ const landingDeferred = z.strictObject({
   rule: landingRuleRef,
   policy: z.string().min(1),
 })
+/** Consent given under a path-predicate rule, revoked because a reconcile's
+ * own edits touched files those predicates match. `paths` holds the matched
+ * resolution paths: sorted, the first `LANDING_MATCHED_PATHS_PREVIEW` plus a
+ * total. */
+const landingConsentRevoked = z.strictObject({
+  commandSeq: z.number().int().positive(),
+  source: z.enum(['reconcile', 'node-rewrite']),
+  rule: landingRuleRef,
+  previousHead: z.string().min(1),
+  head: z.string().min(1),
+  consentedHead: z.string().min(1).optional(),
+  paths: pathPreview(LANDING_MATCHED_PATHS_PREVIEW),
+})
 const nodeParent = z.strictObject({
   target: z.strictObject({ ticket: ticketRefSchema, build: z.string().min(1) }).nullable(),
   branch: z.string().min(1),
@@ -1083,6 +1096,7 @@ export const eventPayloadSchemas = {
   }),
   'landing.decided': landingDecision,
   'landing.deferred': landingDeferred,
+  'landing.consent-revoked': landingConsentRevoked,
   'build.hold-requested': empty,
   'build.land-requested': z.strictObject({
     decisionSeq: z.number().int().positive(),

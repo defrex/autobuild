@@ -193,6 +193,66 @@ describe('durable landing state', () => {
     })
   })
 
+  test('consent captures a path-predicate rule; a matching revocation clears only that consent', () => {
+    const protectedRule = { index: 0, snapshot: { paths: ['autobuild.toml'], mode: 'consent' } }
+    const pathDecided = (seq: number, head: string, rule: object = protectedRule) =>
+      event(seq, {
+        actor: KERNEL,
+        type: 'landing.decided',
+        payload: {
+          ...decision,
+          candidate: { ...candidate, head },
+          rule,
+          ...('index' in rule ? { paths: { total: 1, preview: ['autobuild.toml'] } } : {}),
+        } as never,
+      })
+    const consent = (seq: number, decisionSeq: number) =>
+      event(seq, {
+        actor: humanActor('operator'),
+        type: 'build.land-requested',
+        payload: { decisionSeq },
+      })
+    const revoked = (seq: number, commandSeq: number) =>
+      event(seq, {
+        actor: KERNEL,
+        type: 'landing.consent-revoked',
+        payload: {
+          commandSeq,
+          source: 'reconcile',
+          rule: protectedRule as never,
+          previousHead: 'head',
+          head: 'next',
+          paths: { total: 1, preview: ['autobuild.toml'] },
+        },
+      })
+    const log = [pathDecided(1, 'head'), consent(2, 1), ack(3, 2)]
+    expect(buildReducer.reduce(log).landing?.command).toEqual({
+      kind: 'land',
+      seq: 2,
+      decisionSeq: 1,
+      head: 'head',
+      rule: protectedRule as never,
+    })
+    // Rules without path predicates and the default capture nothing.
+    for (const rule of [{ index: 0, snapshot: { mode: 'consent' } }, { default: true }])
+      expect(
+        buildReducer.reduce([pathDecided(1, 'head', rule), consent(2, 1)]).landing?.command?.rule,
+      ).toBeUndefined()
+    log.push(pathDecided(4, 'next'), revoked(5, 2))
+    const revokedState = buildReducer.reduce(log).landing
+    expect(revokedState?.command).toBeUndefined()
+    expect(revokedState?.acknowledgedSeq).toBeUndefined()
+    expect(landingAuthorized(revokedState)).toBe(false)
+    log.push(consent(6, 4))
+    expect(landingAuthorized(buildReducer.reduce(log).landing)).toBe(true)
+    // A stale revocation never clears a later hold or a fresh consent.
+    expect(buildReducer.reduce([...log, revoked(7, 2)]).landing?.command?.seq).toBe(6)
+    expect(
+      buildReducer.reduce([pathDecided(1, 'head'), consent(2, 1), hold(3), revoked(4, 2)]).landing
+        ?.command,
+    ).toEqual({ kind: 'hold', seq: 3 })
+  })
+
   test('latest command wins; holds survive candidate changes and stale acknowledgements', () => {
     const log = [hold(1), decided(2), land(3), hold(4), ack(5, 3), decided(6)]
     const state = buildReducer.reduce(log).landing

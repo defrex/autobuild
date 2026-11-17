@@ -8,13 +8,14 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { EventWrite } from '../events/catalog'
-import { DISPATCHER, KERNEL, agentActor, type Actor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor, type Actor } from '../events/envelope'
 import type { EventPayload, EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import { decideNextFromFacts, type Decision } from '../kernel/engine'
 import { headPathsWrite, HEAD_PATHS_ARTIFACT } from '../kernel/head-paths'
 import { suspendNativeLanding } from '../kernel/landing-publication'
-import { landRefusalReason } from '../kernel/landing-readiness'
+import { awaitsConsent, landRefusalReason } from '../kernel/landing-readiness'
+import { consentRevocation } from '../kernel/consent-revocation'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -423,5 +424,121 @@ describe('merge rules match the paths a candidate head changes', () => {
     await h.tick()
     await h.tick()
     expect(reads.filter((kind) => kind === HEAD_PATHS_ARTIFACT)).toHaveLength(1)
+  })
+})
+
+/** A replacement head produced by a resolver (reconcile) or a clean restack:
+ * the kernel records its paths, and a reconcile's resolution decides
+ * revocation exactly as `ab done` for reconcile does. */
+async function replaceHead(
+  h: Harness,
+  source: 'reconcile' | 'restack',
+  paths: string[],
+  resolution?: string[],
+) {
+  const previous = (await readBuildFacts(h.store, SLUG)).value.state.pr!.headSha
+  await h.moveTarget(nextSha())
+  expect(await drive(h)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+  const head = (await readBuildFacts(h.store, SLUG)).value.state.pr!.headSha
+  expect(head).not.toBe(previous)
+  const { artifacts, makeEvent } = headPathsWrite(
+    {
+      version: 1,
+      head,
+      destination: BASE,
+      mergeBase: BASE,
+      paths: [...paths].sort(),
+      ...(resolution === undefined ? {} : { resolution: { paths: [...resolution].sort() } }),
+    },
+    source,
+    KERNEL,
+  )
+  await h.store.appendWithArtifacts(SLUG, artifacts, makeEvent)
+  const revocation = consentRevocation((await readBuildFacts(h.store, SLUG)).value.state.landing, {
+    source: 'reconcile',
+    previousHead: previous,
+    head,
+    resolution: resolution ?? [],
+  })
+  if (revocation) await h.append('landing.consent-revoked', revocation)
+  return { previous, head }
+}
+
+const consent = async (h: Harness) => {
+  const decision = (await readBuildFacts(h.store, SLUG)).value.state.landing!.decision!
+  await h.append('build.land-requested', { decisionSeq: decision.seq }, humanActor('operator'))
+}
+const nativeEnables = (h: Harness) => h.forge.autoMergeCalls.filter((c) => c.enabled).length
+
+describe('protected consent and reconcile edits (GitHub #942)', () => {
+  /** A protected head decided as consent, consented, and not yet applied. */
+  async function consented(config: Config = CONFIG) {
+    const h = harness(config)
+    await greenLeaf(h, ['autobuild.toml'])
+    await h.tick()
+    expect(await ofType(h, 'landing.decided')).toMatchObject([{ mode: 'consent' }])
+    expect(nativeEnables(h)).toBe(0)
+    await consent(h)
+    return h
+  }
+
+  test('a reconcile editing a protected file revokes consent until fresh consent', async () => {
+    const h = await consented()
+    const { previous, head } = await replaceHead(
+      h,
+      'reconcile',
+      ['autobuild.toml', 'src/x.ts'],
+      ['autobuild.toml', 'src/x.ts'],
+    )
+    expect(await ofType(h, 'landing.consent-revoked')).toMatchObject([
+      {
+        source: 'reconcile',
+        rule: { index: 0 },
+        previousHead: previous,
+        head,
+        consentedHead: PR_HEAD,
+        paths: { total: 1, preview: ['autobuild.toml'] },
+      },
+    ])
+    await h.tick()
+    expect(await ofType(h, 'landing.decided')).toMatchObject([
+      { mode: 'consent' },
+      { candidate: { head }, mode: 'consent', rule: { index: 0 } },
+    ])
+    expect(nativeEnables(h)).toBe(0)
+    let { facts } = await statusOf(h)
+    expect(facts.state.landing?.command).toBeUndefined()
+    expect(awaitsConsent(facts.state, facts.log.restack)).toBe(true)
+
+    await consent(h)
+    await h.tick()
+    expect(nativeEnables(h)).toBe(1)
+    ;({ facts } = await statusOf(h))
+    expect(facts.state.landing?.command).toMatchObject({ kind: 'land', head })
+  })
+
+  for (const item of [
+    { name: 'a clean restack', source: 'restack' as const, resolution: undefined },
+    {
+      name: 'a reconcile editing only unprotected files',
+      source: 'reconcile' as const,
+      resolution: ['src/x.ts'],
+    },
+  ])
+    test(`consent survives ${item.name}`, async () => {
+      const h = await consented()
+      await replaceHead(h, item.source, ['autobuild.toml', 'src/x.ts'], item.resolution)
+      expect(await ofType(h, 'landing.consent-revoked')).toHaveLength(0)
+      await h.tick()
+      expect(await ofType(h, 'landing.decided')).toHaveLength(2)
+      expect(nativeEnables(h)).toBe(1)
+    })
+
+  test('consent under a rule without path predicates survives any reconcile', async () => {
+    const h = await consented(parseConfig(`${PIPELINE}\n[[merge]]\nmode = "consent"\n`))
+    await replaceHead(h, 'reconcile', ['autobuild.toml'], ['autobuild.toml'])
+    expect(await ofType(h, 'landing.consent-revoked')).toHaveLength(0)
+    await h.tick()
+    expect(nativeEnables(h)).toBe(1)
   })
 })
