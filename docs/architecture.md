@@ -882,13 +882,19 @@ or reporting failure.
 **Stable build identity.** The forge merge seam accepts optional build identity at operation time. Both
 built-in adapters preserve their squash message and normalize a final
 `Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub
-adapter reads the viewer's squash headline/body and head in one GraphQL query;
-it never reconstructs server defaults from repository settings. The janitor
+adapter derives the squash headline/body from the PR and the repository's
+`squash_merge_commit_title` and `squash_merge_commit_message` settings
+(`packages/core/src/ports/forge/github-squash-message.ts`), all read over REST;
+GraphQL carries only the native enable and disable mutations. The janitor
 maintains native request message freshness after acknowledgement. A matching
-request costs one GraphQL freshness query and no extra consent or pipeline read;
-full gate inspection and refreshed durable consent/engine eligibility precede
-any repair. Body comparison tolerates provider trimming of trailing whitespace
-while preserving the complete headline, body content, and squash method.
+request costs the PR representation the poll already read plus one conditional
+repository read shared by every build in the tick; a PR's commit messages are
+read once per commit set. It needs no extra consent or pipeline read and no
+merge-queue read; full gate inspection, including the queue check, and
+refreshed durable consent/engine eligibility precede any repair. Comparison
+normalizes line endings and tolerates provider trimming of surrounding
+headline whitespace and trailing body whitespace while preserving the
+headline, body content, and squash method.
 `packages/core/src/kernel/issue-keywords.ts` composes a build's sealed issue
 links into `Closes #N` / `Refs #N` lines, neutralizes closing keywords aimed at
 `refs` issues, and places the keyword paragraph before the trailer block; a
