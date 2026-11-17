@@ -112,6 +112,8 @@ const oracle = {
         return e.type === 'reconcile.completed' && reconcileHead(e.payload) === p.sha
       if (p.operation === 'finalize')
         return e.type === 'finalize.completed' && e.payload.pr.headSha === p.sha
+      if (p.operation === 'wait')
+        return e.type === 'wait.published' && e.payload.id === p.id && e.payload.sha === p.sha
       return (
         e.type === 'finalize.step-completed' &&
         e.payload.step === p.step &&
@@ -223,7 +225,7 @@ function generated(seed: number): AbEvent[] {
 
 describe('publicationStateReducer', () => {
   test('version includes durable publication retry episodes', () => {
-    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(7)
+    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(8)
   })
 
   test('counterexample: an irrelevant event between workspace facts is a scan barrier', () => {

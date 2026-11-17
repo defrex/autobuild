@@ -97,6 +97,8 @@ export function makeDeps(opts: {
   env: CliEnv
   workspacePath?: string
   forge?: FakeForge
+  /** Scripted command runner for IO-free unit tests; defaults to spawning. */
+  exec?: CliDeps['exec']
 }): TestDeps {
   const out: string[] = []
   const err: string[] = []
@@ -106,7 +108,7 @@ export function makeDeps(opts: {
     env: opts.env,
     workspacePath: opts.workspacePath ?? '/nonexistent-workspace',
     forge,
-    exec: spawnExec,
+    exec: opts.exec ?? spawnExec,
     ids: sequentialIds(),
     clock: steppingClock(),
     stdout: (line) => out.push(line),
