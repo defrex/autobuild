@@ -182,9 +182,36 @@ merge; uncertainty is recorded as unfenced and requires immutable merged-tree
 audit. A mismatch raises operator attention without rewriting the shared parent.
 Pending audits survive completion and retry until settled.
 
-Root leaf native auto-merge is used behind a real merge-blocking gate. An
-authoritatively ungated root permits an inspected-head guarded direct squash;
-unknown gate state defers. Node targets instead require authoritative proof of
+Root leaves land by one of three routes. Behind a real merge-blocking gate,
+Autobuild arms GitHub-native auto-merge. An authoritatively ungated root
+permits an inspected-head guarded direct squash; unknown gate state defers.
+When GitHub GraphQL is unavailable to the dispatcher, as from Claude Code on
+the web, whose GitHub proxy refuses GraphQL, native auto-merge cannot be
+armed, so a gated root leaf lands by polling. On each dispatcher tick
+Autobuild checks whether GitHub reports the PR clear to merge (`clean`,
+`unstable` or `has_hooks`, and mergeable) at the verified head. It then reads
+that state again, rechecks consent, and squashes guarded on that head. It
+never relies on GitHub refusing a premature merge, so a credential that could
+bypass branch protection never merges a blocked PR. Rows show
+`merge polling`. Polling lands only while a dispatcher runs, so native
+auto-merge stays the route wherever GraphQL works: it lands even after the
+dispatcher stops.
+
+A polling landing settles once into awaiting a human merge, shown as
+`merge awaits a human merge`, and Autobuild makes no further landing attempt
+for that candidate when either holds: GitHub exposes a merge queue for the
+base over REST (a ruleset merge-queue rule, or merge-queue merges GitHub
+reports for the base branch), or GitHub refuses the guarded squash of a PR it
+had just reported clear, in which case its refusal message is shown. A squash
+request cannot enter a merge queue. A human merges the PR on GitHub, and
+Autobuild records that like any human forge merge. A classic
+branch-protection merge queue that GitHub does not expose over REST and has
+never recorded a merge-queue merge cannot be detected. A PR GitHub keeps
+reporting blocked there stays `merge polling` and never merges. In
+GraphQL-blocked environments, use a ruleset merge queue or merge such PRs by
+hand.
+
+Node targets instead require authoritative proof of
 an ungated destination, cancel native auto-merge and serialize the guarded push.
 Gated or unproven node destinations stay open with actionable diagnostics.
 A push alone is not evidence of merge: a node-target merge is recorded only
@@ -201,9 +228,13 @@ its squash method and identity message. Each eligible poll re-reads an armed
 request and repairs it when PR edits or a human arm left it stale. On GitHub
 the expected headline and body come from the PR and the repository's squash
 title and message settings, with the build trailer and issue-link handling on
-top. Landing reads use REST; GraphQL only arms or disarms native auto-merge.
-Quiet polls do not re-check merge queues; native enable, repair and direct
-merge do. This bounded
+top. Landing reads use REST; GraphQL only arms or disarms native auto-merge,
+after one read-only availability probe per dispatcher process. A GraphQL
+refusal is remembered for 30 minutes, so a blocked environment sends at most
+one GraphQL request per process in that window, and none on a quiet polling
+tick. Quiet polls do not re-check merge queues; native enable, repair and
+direct merge do, and the polling route checks merge-queue activity when it
+first selects polling and again whenever GitHub reports the PR clear. This bounded
 model requires replacement-head checks to take far longer than a poll interval. It
 has no durable native-effect reservation. Human forge merges record whether a
 hold was overridden; possible stale-enable merges raise operator attention.
