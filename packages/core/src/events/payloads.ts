@@ -17,7 +17,12 @@ import { nativeSessionHandleSchema } from './native-session'
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
-import { HEAD_PATHS_ARTIFACT, HEAD_PATHS_PREVIEW, HEAD_PATHS_SOURCES } from './head-paths-limits'
+import {
+  HEAD_PATHS_ARTIFACT,
+  HEAD_PATHS_PREVIEW,
+  HEAD_PATHS_SOURCES,
+  LANDING_MATCHED_PATHS_PREVIEW,
+} from './head-paths-limits'
 import {
   artifactRefSchema,
   buildOutcomeSchema,
@@ -73,7 +78,13 @@ const targetLineageSchema = z
       node: z.string().min(1),
       from: gitOid,
       receipts: z
-        .array(z.strictObject({ id: z.string().min(1), previous: gitOid, head: gitOid }))
+        .array(
+          z.strictObject({
+            id: z.string().min(1),
+            previous: gitOid,
+            head: gitOid,
+          }),
+        )
         .min(1)
         .max(64),
     }),
@@ -108,6 +119,37 @@ export const landingCandidateSchema = z.strictObject({
   parent: z.string().min(1),
   cycle: z.string().min(1),
 })
+/** A bounded path summary: the exact count plus the sorted, unique first
+ * `max` paths. The complete set lives in the `head-paths` artifact. */
+function pathPreview(max: number) {
+  return z
+    .strictObject({
+      total: z.number().int().nonnegative(),
+      preview: z.array(z.string().min(1)).max(max),
+    })
+    .superRefine(({ total, preview }, ctx) => {
+      if (preview.length !== Math.min(total, max))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['preview'],
+          message: `preview must hold exactly min(total, ${max}) paths`,
+        })
+      for (let index = 1; index < preview.length; index++)
+        if (!(preview[index - 1]! < preview[index]!)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['preview', index],
+            message: 'preview paths must be sorted and unique',
+          })
+          break
+        }
+    })
+}
+
+const landingRuleRef = z.strictObject({
+  index: z.number().int().nonnegative(),
+  snapshot: landingRuleSchema,
+})
 const landingDecision = z.strictObject({
   candidate: landingCandidateSchema,
   from: z.enum(['leaf', 'node']),
@@ -117,10 +159,20 @@ const landingDecision = z.strictObject({
   ]),
   labels: z.array(z.string()),
   mode: z.enum(['auto', 'consent']),
-  rule: z.union([
-    z.strictObject({ index: z.number().int().nonnegative(), snapshot: landingRuleSchema }),
-    z.strictObject({ default: z.literal(true) }),
-  ]),
+  rule: z.union([landingRuleRef, z.strictObject({ default: z.literal(true) })]),
+  /** Path-predicate rules only: the changed paths the rule's selectors
+   * matched, sorted, the first `LANDING_MATCHED_PATHS_PREVIEW` plus a total. */
+  paths: pathPreview(LANDING_MATCHED_PATHS_PREVIEW).optional(),
+})
+/** A landing decision the dispatcher could not make yet: evaluation reached a
+ * path-predicate rule and the candidate head's changed paths are not
+ * recorded. `policy` is the evaluated `[[merge]]` rules' identity, so an
+ * edited policy re-evaluates once. Never treated as an empty change. */
+const landingDeferred = z.strictObject({
+  candidate: landingCandidateSchema,
+  reason: z.enum(['paths-unrecorded']),
+  rule: landingRuleRef,
+  policy: z.string().min(1),
 })
 const nodeParent = z.strictObject({
   target: z.strictObject({ ticket: ticketRefSchema, build: z.string().min(1) }).nullable(),
@@ -133,30 +185,7 @@ const parentChange = z.strictObject({
   revision: z.string(),
 })
 
-/** A bounded path summary: the exact count plus the sorted, unique first
- * `HEAD_PATHS_PREVIEW` paths. The complete set lives in the artifact. */
-const headPathsPreview = z
-  .strictObject({
-    total: z.number().int().nonnegative(),
-    preview: z.array(z.string().min(1)).max(HEAD_PATHS_PREVIEW),
-  })
-  .superRefine(({ total, preview }, ctx) => {
-    if (preview.length !== Math.min(total, HEAD_PATHS_PREVIEW))
-      ctx.addIssue({
-        code: 'custom',
-        path: ['preview'],
-        message: `preview must hold exactly min(total, ${HEAD_PATHS_PREVIEW}) paths`,
-      })
-    for (let index = 1; index < preview.length; index++)
-      if (!(preview[index - 1]! < preview[index]!)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['preview', index],
-          message: 'preview paths must be sorted and unique',
-        })
-        break
-      }
-  })
+const headPathsPreview = pathPreview(HEAD_PATHS_PREVIEW)
 const headPathsRecorded = z
   .strictObject({
     source: z.enum(HEAD_PATHS_SOURCES),
@@ -174,9 +203,16 @@ const headPathsRecorded = z
     }),
   })
   .superRefine((payload, ctx) => {
-    const summary = headPathsPreview.safeParse({ total: payload.total, preview: payload.preview })
+    const summary = headPathsPreview.safeParse({
+      total: payload.total,
+      preview: payload.preview,
+    })
     for (const issue of summary.error?.issues ?? [])
-      ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
+      ctx.addIssue({
+        code: 'custom',
+        path: issue.path,
+        message: issue.message,
+      })
   })
 
 const empty = z.strictObject({})
@@ -469,9 +505,15 @@ export const eventPayloadSchemas = {
   }),
   'node.parent-requested': parentChange,
   'node.parent-accepted': parentChange,
-  'node.parent-pr-retargeted': z.strictObject({ id: z.string().min(1), base: z.string().min(1) }),
+  'node.parent-pr-retargeted': z.strictObject({
+    id: z.string().min(1),
+    base: z.string().min(1),
+  }),
   'node.parent-completed': z.strictObject({ id: z.string().min(1) }),
-  'node.parent-cancelled': z.strictObject({ id: z.string().min(1), reason: z.string() }),
+  'node.parent-cancelled': z.strictObject({
+    id: z.string().min(1),
+    reason: z.string(),
+  }),
   'node.parent-rejection-cleared': z.strictObject({
     revision: z.string(),
     target: z.string().nullable(),
@@ -528,7 +570,10 @@ export const eventPayloadSchemas = {
     index: z.number().int().nonnegative(),
     base: z.string().min(1),
   }),
-  'node.publish-intended': z.strictObject({ id: z.string().min(1), head: z.string().min(1) }),
+  'node.publish-intended': z.strictObject({
+    id: z.string().min(1),
+    head: z.string().min(1),
+  }),
   'node.rewritten': z.strictObject({
     id: z.string().min(1),
     previous: z.string().min(1),
@@ -568,7 +613,12 @@ export const eventPayloadSchemas = {
   'node.issue-links-published': z.strictObject({
     pr: z.number().int().positive(),
     issueLinks: z
-      .array(z.strictObject({ issue: issueNumber, intent: z.enum(['closes', 'refs']) }))
+      .array(
+        z.strictObject({
+          issue: issueNumber,
+          intent: z.enum(['closes', 'refs']),
+        }),
+      )
       .superRefine(refineUniqueIssues),
   }),
   'node.inventory': z.strictObject({
@@ -578,7 +628,10 @@ export const eventPayloadSchemas = {
     contributions: z.array(z.string()).optional(),
     foreign: z.array(z.string()),
   }),
-  'integration.abandoned': z.strictObject({ id: z.string().min(1), reason: z.string().min(1) }),
+  'integration.abandoned': z.strictObject({
+    id: z.string().min(1),
+    reason: z.string().min(1),
+  }),
   'integration.observed': z.strictObject({
     membershipSource: z.string().optional(),
     openChildren: z.array(z.string()),
@@ -701,7 +754,12 @@ export const eventPayloadSchemas = {
     /** Preserved branch heads not restored over the branch: already
      * contained, or superseded by a recorded rewrite in the bounded record. */
     restorationSkipped: z
-      .array(z.strictObject({ sha: gitOid, reason: z.enum(['contained', 'superseded']) }))
+      .array(
+        z.strictObject({
+          sha: gitOid,
+          reason: z.enum(['contained', 'superseded']),
+        }),
+      )
       .min(1)
       .optional(),
   }),
@@ -986,9 +1044,14 @@ export const eventPayloadSchemas = {
     after: z.iso.datetime(),
   }),
   'landing.decided': landingDecision,
+  'landing.deferred': landingDeferred,
   'build.hold-requested': empty,
-  'build.land-requested': z.strictObject({ decisionSeq: z.number().int().positive() }),
-  'landing.command-acknowledged': z.strictObject({ commandSeq: z.number().int().positive() }),
+  'build.land-requested': z.strictObject({
+    decisionSeq: z.number().int().positive(),
+  }),
+  'landing.command-acknowledged': z.strictObject({
+    commandSeq: z.number().int().positive(),
+  }),
   'landing.native-enable-started': empty,
   'landing.forge-merged': z.strictObject({
     classification: z.enum(['human', 'possible-stale-enable']),
@@ -1033,7 +1096,10 @@ export const eventPayloadSchemas = {
     }),
     z.strictObject({
       artifact: artifactRefSchema,
-      operator: z.strictObject({ user: z.string().min(1), via: viaSchema.optional() }),
+      operator: z.strictObject({
+        user: z.string().min(1),
+        via: viaSchema.optional(),
+      }),
       assets: z.array(pinnedAssetSchema).optional(),
     }),
   ]),
@@ -1234,7 +1300,10 @@ export const eventPayloadSchemas = {
     headSha: gitOid.optional(),
     restackId: z.string().min(1).optional(),
     failed: z.array(
-      z.strictObject({ step: z.string().min(1), report: artifactRefSchema.optional() }),
+      z.strictObject({
+        step: z.string().min(1),
+        report: artifactRefSchema.optional(),
+      }),
     ),
     cancelled: z.array(
       z.strictObject({
@@ -1373,8 +1442,15 @@ export const eventPayloadSchemas = {
     archives: z.array(archiveEntry),
   }),
   'reconcile.completed': z.union([
-    z.strictObject({ mergeCommit: z.string().min(1), artifact: artifactRefSchema }),
-    z.strictObject({ headSha: gitOid, rewriteId: z.string().min(1), artifact: artifactRefSchema }),
+    z.strictObject({
+      mergeCommit: z.string().min(1),
+      artifact: artifactRefSchema,
+    }),
+    z.strictObject({
+      headSha: gitOid,
+      rewriteId: z.string().min(1),
+      artifact: artifactRefSchema,
+    }),
   ]),
 
   /** The paths a produced candidate head changes against its merge base with

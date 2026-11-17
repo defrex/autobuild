@@ -59,7 +59,11 @@ import {
   parseEffectiveBuildConfig,
   readEffectivePipeline,
 } from '../processes/build-execution-state'
-import { leafLandingCandidate, leafLandingUndecidedReason } from '../kernel/landing-readiness'
+import {
+  landingDeferralReason,
+  leafLandingCandidate,
+  leafLandingUndecidedReason,
+} from '../kernel/landing-readiness'
 import { sameLandingCandidate } from '../kernel/landing-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
@@ -171,13 +175,20 @@ export type BuildDecisionProjection =
        * or cannot be read: the dispatcher then withholds every decision. */
       pipelineUnreadable?: string
     }
-  | { kind: 'repository-completion'; prState: Extract<PrLifecycle, 'merged' | 'closed'> }
+  | {
+      kind: 'repository-completion'
+      prState: Extract<PrLifecycle, 'merged' | 'closed'>
+    }
   | { kind: 'parked'; reason: string }
   | { kind: 'runner-work' }
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
-  nodePolling?: { mode: 'active' | 'idle'; intervalSeconds: number; lastChecked?: string }
+  nodePolling?: {
+    mode: 'active' | 'idle'
+    intervalSeconds: number
+    lastChecked?: string
+  }
   runnerAttaches: import('../kernel/read-facts').RunnerAttach[]
   tree?: TreeProjection
   /** Immutable policy provenance and durable command/native application state. */
@@ -188,6 +199,9 @@ export interface BuildDetail extends BuildSummary {
   /** Why an open-PR leaf parked at awaiting-pr has no landing decision for its
    * current candidate. */
   landingUndecided?: string
+  /** Why an open-PR node's current integration candidate has no landing
+   * decision: a recorded deferral for unrecorded changed paths. */
+  landingDeferred?: string
   /** The build's effective auto-merge display state (off, requested, enabled,
    * cancelling) — the same projection the dashboards render, so `--json` and
    * the text agree and `waiting: on PR` can say why it is waiting. */
@@ -219,7 +233,9 @@ export interface BuildDetail extends BuildSummary {
   /** Latest provider execution and current lifecycle failure. Full history is
    * available with --events. */
   execution?: EventPayload<'execution.started'> & { seq: number }
-  infrastructureFailure?: EventPayload<'infrastructure.failed'> & { seq: number }
+  infrastructureFailure?: EventPayload<'infrastructure.failed'> & {
+    seq: number
+  }
   cleanupPending: boolean
   verify: VerifyProgress
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
@@ -305,7 +321,10 @@ export function summarizeFrom(
       : {}),
     ...(state.kind === 'node' ? { integrationState: state.integration } : {}),
     ...(state.kind === 'node'
-      ? { nodeRestack: state.nodeRestack, handPushedCommits: projectHandPushed(state.nodeRestack) }
+      ? {
+          nodeRestack: state.nodeRestack,
+          handPushedCommits: projectHandPushed(state.nodeRestack),
+        }
       : {}),
     // record.ticket is a TicketRef already carrying id/title/url — no artifact
     // read and no ticket-provider call (live ticket state is out of scope).
@@ -378,6 +397,16 @@ export function detail(
   )
 }
 
+/** A node's integration candidate whose decision is deferred, from reduced state. */
+function nodeLandingDeferred(state: BuildState): { landingDeferred?: string } {
+  const cycle = state.integration?.cycle
+  if (state.kind !== 'node' || state.prState !== 'open' || !cycle) return {}
+  const candidate = { head: cycle.head, parent: cycle.parent, cycle: cycle.id }
+  if (sameLandingCandidate(candidate, state.landing?.decision?.candidate)) return {}
+  const reason = landingDeferralReason(state, candidate)
+  return reason === undefined ? {} : { landingDeferred: reason }
+}
+
 export function detailFromFacts(
   record: BuildRecord,
   facts: Pick<BuildFacts, 'state' | 'open'> &
@@ -394,7 +423,10 @@ export function detailFromFacts(
   if (streams !== undefined) {
     for (const record of streams) {
       if (record.scope.kind !== 'build') continue
-      streamStatus.set(record.label, { stream: record.id, status: record.status })
+      streamStatus.set(record.label, {
+        stream: record.id,
+        status: record.status,
+      })
     }
   }
   const summary = summarizeFrom(record, state, now)
@@ -439,6 +471,7 @@ export function detailFromFacts(
           ),
         }
       : {}),
+    ...nodeLandingDeferred(state),
     ...(state.verifyStage.superseded.length
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
@@ -834,6 +867,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   } else if (d.decision?.kind === 'unavailable') {
     lines.push(`  decision: unavailable — ${d.decision.diagnostic}`)
   }
+  if (d.landingDeferred !== undefined) lines.push(`  landing:  undecided — ${d.landingDeferred}`)
 
   if (d.execution !== undefined) {
     lines.push(

@@ -38,8 +38,9 @@ still need the presence evidence described above and in
 
 Read the consuming repository's `autobuild.toml` and evaluate its effective
 [merge policy](merge-policy.md) for the actual ticket kinds, destinations and
-labels. Ordered `[[merge]]` rules use the first match; `from`, `into` and `label`
-predicates are ANDed, with omitted predicates acting as wildcards. Without a
+labels. Ordered `[[merge]]` rules use the first match; `from`, `into`, `label`,
+`paths` and `within` predicates are ANDed, with omitted predicates acting as
+wildcards. `paths` and `within` match the paths the candidate head changes. Without a
 match, leaves default to auto and nodes to consent. Explain the resulting merge
 and consent flow to the human in plain terms. Ask when grooming does not make the
 destination choice clear. This decision is separate from workflow-state placement
