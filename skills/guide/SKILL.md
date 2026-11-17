@@ -91,7 +91,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **Ticket waits.** A work build that cannot proceed until other tickets
   complete parks without a slot. A phase agent ends its session with
   `ab wait-on <ticket-id>... --reason <text>`, a terminal that needs no
-  ticket credential. The dispatcher checks the ids on its next tick, while the
+  ticket credential. In `implement` it requires a clean worktree and first
+  publishes the build's commits; a failed local push writes nothing, and a
+  lost remote publication refuses the wait. The dispatcher checks the ids on its next tick, while the
   build keeps its slot: an unknown id, the build's own ticket or an already
   completed ticket is refused, nothing is written to the ticket, and the
   declaring phase re-runs with the refusal as its guidance. Accepted, the ids
@@ -100,8 +102,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   branch, workspace and completed phase work. Completing the named tickets
   does not end the wait: answering that escalation does, and the wait ends
   with cause `operator`. The build then takes a slot
-  ahead of new ticket claims and the declaring phase re-runs at the same round
-  or attempt. `ab build status` shows a `waiting on:` line naming the tickets.
+  ahead of new ticket claims. If its target moved, it first restacks onto the
+  target's current head (published work is replayed as one change, and a
+  conflict reconciles first; an unpublished branch just fast-forwards), so the
+  resumed phase sees the merged blockers; an unchanged target resumes without
+  a restack. The declaring phase then re-runs at the same round or attempt. `ab build status` shows a `waiting on:` line naming the tickets.
   Node builds cannot declare waits.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
@@ -150,7 +155,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   content-producing step commits selected files locally and finishes clean;
   the runner pushes the exact descendant SHA and confirms forge readback before recording success.
 - **Restacking and epilogue.** The kernel replays one net leaf change at verify
-  entry and when its destination moves while awaiting merge. Clean replay
+  entry, when a ticket wait ends and its destination moved, and when its
+  destination moves while awaiting merge. Clean replay
   starts no agent; conflicts enter `reconcile`, then verification. The leaf
   terminates **merged** or **closed**. Transient leaf publication failures park
   on a durable six-retry schedule, independently of agent phase attempts.
@@ -416,7 +422,7 @@ The distinctions that change an administrator's answer:
   pending request and leave the same session retryable. A push
   happens at the implement terminal boundary or after the runner validates a
   successful content-producing finalize post-step. History rewrites (reconcile,
-  leaf verify-entry and waiting restacks, and node restacks on demand; see
+  leaf verify-entry, wait-resume and waiting restacks, and node restacks on demand; see
   [restacking](references/restacking.md)) replace a branch only with an exact
   expected-head guard after archiving every recorded Git tip under
   `refs/autobuild/archive/<slug>/<sha>`.
@@ -2507,7 +2513,8 @@ answer recorded after an earlier delivery is eligible for the next appropriate
 run. `finalize` and `reconcile` receive their own answers on their next attempt.
 An answer to a ticket wait's escalation, with any resolution, ends the wait,
 and the phase that declared it resumes at the same round or attempt once it
-holds a slot; a reviewer's wait resumes that review round and never feeds the
+holds a slot, on a checkout restacked onto the target's current head when the
+target moved; a reviewer's wait resumes that review round and never feeds the
 next producer. Its `$AB_CONTEXT_DIR/guidance.json` carries a `wait` block
 (`id`, `tickets`, `reason`, `outcome` `ended` or `refused`, `cause`,
 `message`), even after a bare retry or a `wait.ended`, which leave a one-line
