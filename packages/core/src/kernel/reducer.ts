@@ -570,9 +570,11 @@ export interface BuildAcc {
   openEscalations: OpenEscalation[]
   answeredEscalations: AnsweredEscalation[]
   waitRequest?: WaitRequestState
-  /** seq of each `publication.requested {operation: 'wait'}` by wait id,
-   * awaiting the `wait.requested` that follows it. */
-  waitPublicationRequests?: Record<string, number>
+  /** Each `publication.requested {operation: 'wait'}` by wait id, awaiting
+   * the `wait.requested` that follows it. The dispatcher may settle the
+   * request before the declaration lands, so an early `wait.published` sha
+   * or `publication.lost` is held here and folded into the declaration. */
+  waitPublicationRequests?: Record<string, { seq: number; publishedSha?: string; lost?: true }>
   wait?: TicketWaitState
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
@@ -941,23 +943,39 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         if (event.payload.operation === 'wait')
           acc.waitPublicationRequests = {
             ...acc.waitPublicationRequests,
-            [event.payload.id]: event.seq,
+            [event.payload.id]: { seq: event.seq },
           }
         break
-      case 'publication.lost':
-        if (
-          event.payload.operation === 'wait' &&
-          acc.waitRequest?.publication?.requestSeq === event.payload.request
-        )
+      case 'publication.lost': {
+        if (event.payload.operation !== 'wait') break
+        if (acc.waitRequest?.publication?.requestSeq === event.payload.request) {
           acc.waitRequest.publication.lost = true
-        break
-      case 'wait.published':
-        if (
-          acc.waitRequest?.id === event.payload.id &&
-          acc.waitRequest.publication?.sha === event.payload.sha
+          break
+        }
+        const pending = Object.entries(acc.waitPublicationRequests ?? {}).find(
+          ([, request]) => request.seq === event.payload.request,
         )
-          acc.waitRequest.publication.published = true
+        if (pending !== undefined)
+          acc.waitPublicationRequests = {
+            ...acc.waitPublicationRequests,
+            [pending[0]]: { ...pending[1], lost: true },
+          }
         break
+      }
+      case 'wait.published': {
+        if (acc.waitRequest?.id === event.payload.id) {
+          if (acc.waitRequest.publication?.sha === event.payload.sha)
+            acc.waitRequest.publication.published = true
+          break
+        }
+        const pending = acc.waitPublicationRequests?.[event.payload.id]
+        if (pending !== undefined)
+          acc.waitPublicationRequests = {
+            ...acc.waitPublicationRequests,
+            [event.payload.id]: { ...pending, publishedSha: event.payload.sha },
+          }
+        break
+      }
       // Inert loss fact (AUT-328): the dispatcher released a workspace with a
       // pending publication. Recovery runs through the existing
       // abandoned-publication flow (abandonedPublicationPending), which re-runs
@@ -1457,11 +1475,13 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         }
         if (event.payload.publication !== undefined) {
           const { settlement, ...publication } = event.payload.publication
-          const requestSeq = acc.waitPublicationRequests?.[event.payload.id]
+          const request =
+            settlement === 'requested' ? acc.waitPublicationRequests?.[event.payload.id] : undefined
           acc.waitRequest.publication = {
             ...publication,
-            published: settlement === 'published',
-            ...(settlement === 'requested' && requestSeq !== undefined ? { requestSeq } : {}),
+            published: settlement === 'published' || request?.publishedSha === publication.sha,
+            ...(request !== undefined ? { requestSeq: request.seq } : {}),
+            ...(request?.lost ? { lost: true as const } : {}),
           }
         }
         delete acc.waitPublicationRequests

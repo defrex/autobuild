@@ -939,6 +939,65 @@ describe('wait-resume restack', () => {
     expect(reduce(local).waitRequest?.publication?.published).toBe(true)
   })
 
+  test('implement wait publication settled before its declaration is retained', () => {
+    const publication = { branch: 'ab/a', base: BASE, sha: HEAD }
+    const prelude = [
+      ...oidPrelude(),
+      ev(
+        'publication.requested',
+        { operation: 'wait', id: 'wait_1', ...publication },
+        agent('s_impl'),
+      ),
+    ]
+    const requestSeq = seqOf(prelude, prelude.at(-1)!)
+    const declared = ev(
+      'wait.requested',
+      {
+        id: 'wait_1',
+        phase: 'implement',
+        round: 1,
+        tickets: ['B'],
+        reason: 'needs B',
+        publication: { ...publication, settlement: 'requested' },
+      },
+      agent('s_impl'),
+    )
+    const published = reduce([
+      ...prelude,
+      ev('wait.published', { id: 'wait_1', sha: HEAD }),
+      declared,
+    ])
+    expect(published.waitRequest?.publication).toEqual({
+      ...publication,
+      published: true,
+      requestSeq,
+    })
+    const lost = reduce([
+      ...prelude,
+      ev('publication.lost', {
+        request: requestSeq,
+        operation: 'wait',
+        reason: 'workspace released',
+        branch: publication.branch,
+        sha: publication.sha,
+      }),
+      declared,
+    ])
+    expect(lost.waitRequest?.publication).toEqual({
+      ...publication,
+      published: false,
+      requestSeq,
+      lost: true,
+    })
+    // A settlement for another wait id, or another sha, does not publish this one.
+    const foreign = reduce([
+      ...prelude,
+      ev('wait.published', { id: 'wait_2', sha: HEAD }),
+      declared,
+    ])
+    expect(foreign.waitRequest?.publication?.published).toBe(false)
+  })
+
   test('without a fast-forward the restacked base is the last completion, else the provision', () => {
     const index = logIndexReducer.reduce(toLog(approvedThroughCode()))
     expect(leafRestackedBase(index.restack)).toBe(BASE)
