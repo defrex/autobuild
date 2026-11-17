@@ -12,6 +12,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { controlBuild } from '../cli/build-control'
+import { normalizeVerifyCompletion } from '../events/payloads'
 import {
   GIT_ID,
   commitAll,
@@ -241,7 +242,7 @@ test('a reconcile wait is superseded when the target moved and replays onto it',
   // Initial verification runs every configured step after the replay.
   const reconciledAt = ofType(events, 'reconcile.completed').at(-1)!.seq
   const verified = ofType(events, 'verify.completed').filter((e) => e.seq > reconciledAt)
-  expect(verified.map((e) => e.payload.outcome)).not.toContain('skipped')
+  expect(verified.map((e) => normalizeVerifyCompletion(e.payload).outcome)).not.toContain('skipped')
   expect(verified.length).toBeGreaterThan(0)
 }, 120_000)
 

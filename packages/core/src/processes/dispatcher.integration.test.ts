@@ -17603,7 +17603,7 @@ describe('dispatcher — ticket waits', () => {
         },
       })
     const h = make()
-    const { request, publication } = await seedPublishingWaiter(h)
+    const { publication } = await seedPublishingWaiter(h)
     await h.dispatcher.tick()
     expect((await waitEvents(h)).map((event) => event.type)).toEqual(['wait.requested'])
     expect(reads).not.toContain('B')
