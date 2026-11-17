@@ -7219,6 +7219,7 @@
     "$.readinessChangeSeq: undefined",
     "$.reclaimed: array",
     "$.terminal: string",
+    "$.ticketWait: undefined",
     "$: object"
   ],
   "sandboxStates": [
