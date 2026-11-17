@@ -5,11 +5,51 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { DISPATCHER } from '../events/envelope'
+import type { Exec } from '../ports/workspace/git-worktree'
+import { FakeForge } from '../ports/forge/fake'
 import type { MemoryBuildStore } from '../store/memory'
 import { escalate, waitOn } from './terminals'
-import { BUILD, makeDeps, makeEnv, seedStore } from './testkit'
+import { BRANCH, BUILD, makeDeps, makeEnv, seedStore } from './testkit'
 
 let store: MemoryBuildStore
+
+const BASE = 'a'.repeat(40)
+const HEAD = 'b'.repeat(40)
+
+/** Scripted git for an implement declaration: `status` output and HEAD. */
+function git(opts: { head?: string; status?: string } = {}): Exec & { calls: string[][] } {
+  const calls: string[][] = []
+  const exec = async (cmd: string[]) => {
+    calls.push(cmd)
+    const ok = (stdout: string) => ({ stdout, stderr: '', exitCode: 0 })
+    switch (cmd[1]) {
+      case 'status':
+        return ok(opts.status ?? '')
+      case 'rev-parse':
+        return ok(`${opts.head ?? BASE}\n`)
+      case 'merge-base':
+      case 'rev-list':
+        return ok('')
+      default:
+        throw new Error(`unexpected command: ${cmd.join(' ')}`)
+    }
+  }
+  return Object.assign(exec, { calls })
+}
+
+async function provision(remote = false) {
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: remote ? 'vercel-sandbox' : 'worktree',
+      ref: '/ws/build',
+      branch: BRANCH,
+      base: { source: 'remote', sha: BASE },
+      ...(remote ? { remote: true } : {}),
+    },
+  })
+}
 
 beforeEach(async () => {
   store = await seedStore()
@@ -19,7 +59,8 @@ afterEach(async () => {
   await store.close()
 })
 
-const deps = () => makeDeps({ store, env: makeEnv({ phase: 'implement', round: 2 }) })
+const deps = (exec: Exec = git(), forge?: FakeForge) =>
+  makeDeps({ store, env: makeEnv({ phase: 'implement', round: 2 }), exec, forge })
 const eventCount = async () => (await store.getEvents(BUILD)).length
 
 describe('ab wait-on', () => {
@@ -57,6 +98,7 @@ describe('ab wait-on', () => {
   })
 
   test('a declaration appends one wait.requested and is the session terminal', async () => {
+    await provision()
     const event = await waitOn(deps(), {
       tickets: [' ENG-7', 'ENG-8'],
       reason: ' needs the ENG-7 schema ',
@@ -174,6 +216,76 @@ describe('ab wait-on', () => {
         'wait_c',
         'wait_d',
       ])
+    })
+  })
+
+  describe('implement publishes its commits first', () => {
+    test('a dirty worktree is refused and writes nothing', async () => {
+      await provision()
+      const before = await eventCount()
+      await expect(
+        waitOn(deps(git({ status: ' M src/a.ts' })), { tickets: ['ENG-7'], reason: 'r' }),
+      ).rejects.toThrow(/'ab wait-on' in implement requires a clean worktree/)
+      expect(await eventCount()).toBe(before)
+    })
+
+    test('a local workspace pushes before declaring', async () => {
+      await provision()
+      const forge = new FakeForge()
+      const event = await waitOn(deps(git({ head: HEAD }), forge), {
+        tickets: ['ENG-7'],
+        reason: 'r',
+      })
+      expect(forge.pushes).toEqual([{ workspacePath: '/nonexistent-workspace', branch: BRANCH }])
+      expect(event.payload.publication).toEqual({
+        branch: BRANCH,
+        base: BASE,
+        sha: HEAD,
+        settlement: 'published',
+      })
+    })
+
+    test('a failed push writes nothing', async () => {
+      await provision()
+      const forge = new FakeForge()
+      forge.pushBranch = async () => {
+        throw new Error('push rejected')
+      }
+      const before = await eventCount()
+      await expect(
+        waitOn(deps(git({ head: HEAD }), forge), { tickets: ['ENG-7'], reason: 'r' }),
+      ).rejects.toThrow(/push rejected/)
+      expect(await eventCount()).toBe(before)
+    })
+
+    test('a remote workspace requests publication, then declares', async () => {
+      await provision(true)
+      const forge = new FakeForge()
+      await waitOn(deps(git({ head: HEAD }), forge), { tickets: ['ENG-7'], reason: 'r' })
+      expect(forge.pushes).toEqual([])
+      const tail = (await store.getEvents(BUILD)).slice(-2)
+      expect(tail.map((event) => [event.type, event.payload])).toEqual([
+        [
+          'publication.requested',
+          { operation: 'wait', id: 'wait_1', branch: BRANCH, sha: HEAD, base: BASE },
+        ],
+        [
+          'wait.requested',
+          expect.objectContaining({
+            id: 'wait_1',
+            publication: { branch: BRANCH, base: BASE, sha: HEAD, settlement: 'requested' },
+          }),
+        ],
+      ])
+    })
+
+    test('other phases run no git', async () => {
+      const exec = git()
+      await waitOn(makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }), exec }), {
+        tickets: ['ENG-7'],
+        reason: 'r',
+      })
+      expect(exec.calls).toEqual([])
     })
   })
 })

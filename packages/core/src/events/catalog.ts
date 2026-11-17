@@ -69,6 +69,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'restack.rewritten': ['kernel', 'dispatcher'],
   'restack.contended': ['kernel', 'dispatcher'],
   'restack.completed': ['kernel', 'dispatcher'],
+  'restack.advanced': ['kernel'],
   'integration.abandoned': ['kernel', 'dispatcher'],
   'integration.observed': ['kernel', 'dispatcher'],
   'integration.prepared': ['kernel', 'dispatcher'],
@@ -200,6 +201,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.publish-intended': ['kernel'],
   'reconcile.rewritten': ['kernel', 'dispatcher'],
   'reconcile.completed': ['agent', 'dispatcher', 'kernel'],
+  'reconcile.superseded': ['kernel'],
 
   'issue-link.downgraded': ['agent'],
   'issue-links.sealed': ['kernel'],
@@ -218,6 +220,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'wait.refused': ['dispatcher'],
   'wait.entered': ['dispatcher'],
   'wait.ended': ['dispatcher', 'kernel', 'human'],
+  'wait.published': ['dispatcher'],
 }
 
 /**

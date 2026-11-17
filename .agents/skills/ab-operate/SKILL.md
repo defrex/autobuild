@@ -677,9 +677,15 @@ workspace; `ab build status` shows a `waiting on:` line naming the tickets.
 Drive the named tickets, then answer the waiting build: completing them does
 not end the wait by itself. Answer sooner when the needed work landed another
 way or the wait is mistaken. Any answer ends the wait; the build then takes a
-slot ahead of new ticket claims and the phase that declared the wait resumes,
-told what it waited on. Until the dispatcher accepts a request, the build keeps
-its slot and `ab build status` reports the wait as requested.
+slot ahead of new ticket claims. If its target moved, it first restacks onto the
+target's current head, so the resumed phase sees the merged blockers;
+`ab build status` shows a `restack:` line with trigger `wait-resume`, and a
+conflicting restack shows as `reconcile` before the phase resumes. The phase
+that declared the wait then resumes, told what it waited on. Until the
+dispatcher accepts a request, the build keeps its slot and `ab build status`
+reports the wait as requested. A wait declared in `implement` first publishes
+the build's commits; if that publication is lost, the wait is refused
+(`publication-lost`) and implement re-runs with the refusal as guidance.
 
 Entering and leaving a wait (`wait.entered`, `wait.ended`, and the
 `escalation.answered` that ends a wait) are routine, not default-watch
