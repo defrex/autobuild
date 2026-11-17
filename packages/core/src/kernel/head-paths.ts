@@ -372,7 +372,12 @@ export async function recordHeadPaths(
   },
 ): Promise<
   | { recorded: 'existing'; record: HeadPathsSummary }
-  | { recorded: 'appended'; event: EventEnvelope<'head.paths-recorded'> }
+  | {
+      recorded: 'appended'
+      event: EventEnvelope<'head.paths-recorded'>
+      /** The complete sets just deposited, so callers never re-read them. */
+      facts: HeadPathsArtifact
+    }
   | null
 > {
   const state = input.state ?? (await readBuildFacts(deps.store, deps.slug)).value.state
@@ -389,5 +394,8 @@ export async function recordHeadPaths(
         ? deps.store.appendWithArtifacts(deps.slug, items, make)
         : deps.store.appendWithArtifactsIfCurrent(deps.slug, input.expectedSeq, items, make))
   const deposited = await deposit(artifacts, makeEvent)
-  return deposited === null ? null : { recorded: 'appended', event: deposited.event }
+  return deposited === null ? null : { recorded: 'appended', event: deposited.event, facts }
 }
+
+/** A non-null `recordHeadPaths` result. */
+export type RecordedHeadPaths = NonNullable<Awaited<ReturnType<typeof recordHeadPaths>>>

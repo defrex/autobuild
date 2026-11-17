@@ -128,6 +128,7 @@ export const BUILD_ATTENTION_EVENTS = [
   'integration.landed',
   'integration.verification-failed',
   'node.item-conflicted',
+  'landing.consent-revoked',
 ] as const satisfies readonly EventType[]
 
 // ── Glob compilation and matching ────────────────────────────────────────────
@@ -453,6 +454,13 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'landing.consent-revoked': {
+      const p = event.payload
+      const more = p.paths.total - p.paths.preview.length
+      return singleLine(
+        `Merge consent revoked for ${event.build}: reconcile edited files protected by merge[${p.rule.index}] (${p.paths.preview.join(', ')}${more > 0 ? `, +${more} more` : ''}); head ${p.previousHead} → ${p.head}; re-review and run ab merge ${event.build}`,
+      )
+    }
     case 'target.rewritten':
       return `Upstream rewrite on ${event.payload.branch}: ${event.payload.previousSha} → ${event.payload.sha}; automatic adoption withheld`
     case 'verify.cancelled':

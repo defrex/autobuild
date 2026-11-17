@@ -9,7 +9,17 @@ import {
   readTerminalGuard,
   type CurrentBuildFacts,
 } from '../store/reduced-reads'
-import { leafLandingBase, recordHeadPaths, type HeadPathsInput } from '../kernel/head-paths'
+import {
+  leafLandingBase,
+  recordHeadPaths,
+  type HeadPathsInput,
+  type RecordedHeadPaths,
+} from '../kernel/head-paths'
+import {
+  consentRevocation,
+  resolutionPathsFor,
+  revocableConsent,
+} from '../kernel/consent-revocation'
 import { prIssueLinksForForge } from '../kernel/issue-keywords'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
@@ -247,8 +257,8 @@ async function recordTerminalHeadPaths(
   deps: TerminalDeps,
   events: CurrentBuildFacts,
   input: HeadPathsInput,
-): Promise<void> {
-  await recordHeadPaths(
+): Promise<RecordedHeadPaths> {
+  const recorded = await recordHeadPaths(
     {
       store: deps.store,
       slug: deps.env.build,
@@ -262,6 +272,9 @@ async function recordTerminalHeadPaths(
       deposit: (artifacts, makeEvent) => terminalDeposit(deps, artifacts, makeEvent),
     },
   )
+  // The terminal deposit retries until it lands; it never misses.
+  if (recorded === null) throw new Error('head path deposit missed its guarded boundary')
+  return recorded
 }
 
 function refOf(meta: ArtifactMeta | undefined): ArtifactRef {
@@ -597,7 +610,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       await retainReplay(restack, head, transaction.targetBase)
       const conflicted =
         events.reconcileReplay?.id === transaction.id && events.reconcileReplay.conflicted
-      await recordTerminalHeadPaths(deps, events, {
+      const recorded = await recordTerminalHeadPaths(deps, events, {
         source: 'reconcile',
         head,
         destination: transaction.targetBase,
@@ -610,6 +623,22 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
           },
         ],
       })
+      // Protected consent lapses when this resolution edited protected files.
+      // Once the revocation folds the consent is gone, so a retry adds none.
+      const revocation =
+        revocableConsent(events.state.landing) &&
+        consentRevocation(events.state.landing, {
+          source: 'reconcile',
+          previousHead: transaction.oldHead,
+          head,
+          resolution: await resolutionPathsFor(deps.store, env.build, recorded),
+        })
+      if (revocation)
+        await terminalDeposit(deps, [], () => ({
+          actor: KERNEL,
+          type: 'landing.consent-revoked',
+          payload: revocation,
+        }))
       const { event: intended } = await terminalDeposit(
         deps,
         [{ kind: 'reconcile-notes', content: notes }],

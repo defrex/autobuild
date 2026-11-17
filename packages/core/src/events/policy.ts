@@ -19,6 +19,8 @@ export const buildEventPolicy = {
   'landing.decided': 'decisive',
   // A reader that ignores a deferral only evaluates the candidate again.
   'landing.deferred': 'advisory',
+  // Decisive: a reader that ignored it would merge on revoked consent.
+  'landing.consent-revoked': 'decisive',
   'build.hold-requested': 'decisive',
   'build.land-requested': 'decisive',
   'landing.command-acknowledged': 'decisive',
