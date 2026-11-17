@@ -375,6 +375,8 @@ describe('layered CLI help catalog', () => {
         'terminal command',
         'without holding',
         'ab answer',
+        'restacks onto its target',
+        'clean worktree',
       ],
       harvest: [
         'harvest status',
