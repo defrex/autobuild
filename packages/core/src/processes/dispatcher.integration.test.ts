@@ -15,6 +15,7 @@ import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
 import { epilogueLeaf } from '../kernel/dispatch-capacity'
 import { listOperatorBuilds } from '../operator/query'
+import { projectBuildFromFacts } from '../cli/dashboard/model'
 import { publicationPending } from './publication-state'
 import { RepoViewStore } from './repo-view'
 import {
@@ -17692,6 +17693,28 @@ describe('dispatcher — ticket waits', () => {
       dispatcher: () => make().dispatcher,
       waitCalls: () => waitCalls,
       advance: () => clock.advance(60_000),
+      // The status surfaces an operator polls show the wait at the same bound.
+      surfaces: async () => {
+        const summaries = await listOperatorBuilds({
+          store,
+          repo: REPO,
+          scope: 'active',
+          now: clock(),
+        })
+        const open = summaries.find((summary) => summary.slug === 'waiter-open')
+        expect(open?.wait?.state).toBe('waiting')
+        expect(open?.waitOnly).toBe(true)
+        const record = (await store.listBuilds()).find((build) => build.slug === 'waiter-open')!
+        const facts = (await readBuildFacts(store, 'waiter-open')).value
+        const row = projectBuildFromFacts(
+          record,
+          facts.state,
+          facts,
+          parseConfig(withReadyState('capacity = 1\n')),
+        )
+        expect(row?.status).toBe('waiting')
+        expect(row?.wait?.tickets).toEqual(['B'])
+      },
     })
     const final = (await readBuildFacts(store, 'waiter-ended')).value.state
     expect(final.wait?.ended?.cause).toBe('operator')

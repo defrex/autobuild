@@ -101,7 +101,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   does not end the wait: answering that escalation does, and the wait ends
   with cause `operator`. The build then takes a slot
   ahead of new ticket claims and the declaring phase re-runs at the same round
-  or attempt. `ab build status` shows a `waiting on:` line naming the tickets.
+  or attempt. `ab build status` shows a `waiting on:` line naming the tickets,
+  and `ab builds` and both dashboards show the build as `waiting` on them.
   Node builds cannot declare waits.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
@@ -2194,7 +2195,10 @@ steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
 A work build that finished its pipeline and must re-verify or reconcile, or
 whose ticket wait ended (`resume`), shows the same slot-wait alert on its row,
-and `ab builds` appends it to the phase.
+and `ab builds` appends it to the phase. A build whose only open escalation is
+its open ticket wait shows `WAITING` and a yellow (amber on the web)
+`waiting on <ids> — <reason>` line, distinct from a red `BLOCKED` question;
+`r` / RESUME answers the wait and ends it early.
 
 
 On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame that fills the

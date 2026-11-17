@@ -92,7 +92,7 @@ Ground is the page; ink carries primary reading; slack carries secondary text an
 
 **The Two Grounds Rule.** Light and dark are equal supported grounds. Use the matching palette as a whole; never transplant an ink from the other ground.
 
-**The Color Is State Rule.** Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. Status and step words carry meaning alongside color.
+**The Color Is State Rule.** Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. A build waiting on other tickets is held work, so it is amber rather than red. Status and step words carry meaning alongside color.
 
 Every state ink meets 4.5:1 on its matching ground. Ink, slack and red also meet 4.5:1 on well and red wash. These tested pairs are not permission to combine arbitrary colors and surfaces: light amber fails on the well and belongs only on ground. Primary controls use ground text on ink, or on teal for hover, in both palettes. Structural rules need not carry text contrast.
 
@@ -146,7 +146,7 @@ Under the masthead, one ruled line carries the view tabs on the left and the rep
 
 ### Build rows, progress and detail
 
-A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the right. The slug and PR/auto-merge facts form a secondary register, then the wrapping step list. Step timing keeps the terminal duration format: `38s`, `4m12s`, `1h04m07s`. Legend marks repeat the green, teal, amber and slack mapping while explaining it in plain sans. Rows never expand in place: the title links to the build's own page, which repeats the row's identity and meta line with its action buttons beneath, then carries the escalation answer, merge consent, facts, pipeline and, last, the build's ticket rendered from its body. A blocked row keeps its red question and links to that page to answer; merge consent stays on the row as well. Answering has exclusive controls on the page; abort confirms in the confirmation dialog.
+A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the right. The slug and PR/auto-merge facts form a secondary register, then the wrapping step list. Step timing keeps the terminal duration format: `38s`, `4m12s`, `1h04m07s`. Legend marks repeat the green, teal, amber and slack mapping while explaining it in plain sans. Rows never expand in place: the title links to the build's own page, which repeats the row's identity and meta line with its action buttons beneath, then carries the escalation answer, merge consent, facts, pipeline and, last, the build's ticket rendered from its body. A blocked row keeps its red question and links to that page to answer; merge consent stays on the row as well. A waiting row shows WAITING in amber with an amber line naming the tickets it waits on, never a red question, and links to its page, where an amber sign-off region on the plain ground answers the wait to end it early. Answering has exclusive controls on the page; abort confirms in the confirmation dialog.
 
 ### Ticket lists and pages
 

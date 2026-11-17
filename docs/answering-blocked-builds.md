@@ -56,7 +56,10 @@ refusal as guidance.
 Once accepted, the build's escalation question begins `Waiting on`,
 `ab build status <slug>` shows a `waiting on:` line naming the tickets, its
 ticket lists those tickets in `blockedBy`, and the build holds no capacity
-slot. Completing the named tickets does not end the wait: an answer does,
+slot. `ab builds` and both dashboards show it as `waiting` on those tickets
+rather than as a blocked question; in `ab builds --json` its `status` stays
+`blocked` and a `wait` field names the tickets. On either dashboard, `r` or
+RESUME on a waiting build answers it. Completing the named tickets does not end the wait: an answer does,
 whether the blockers have completed or the work landed another way.
 `ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, the build
 takes the next free slot ahead of new ticket claims, and the phase that
