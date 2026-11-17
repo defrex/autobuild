@@ -1,5 +1,18 @@
-import { evaluateLandingPolicy } from '../../kernel/landing-policy'
+import { candidateHeadPaths } from '../../kernel/head-paths-state'
+import { evaluateLandingPolicy, type LandingPaths } from '../../kernel/landing-policy'
 import type { BuildState } from '../../kernel/reducer'
+
+/** The candidate's already-reduced changed paths; never an artifact read. */
+function candidatePaths(state: BuildState): LandingPaths {
+  const answer = candidateHeadPaths(state)
+  return answer.recorded
+    ? {
+        recorded: true,
+        complete: answer.record.total === answer.record.preview.length,
+        paths: answer.record.preview,
+      }
+    : { recorded: false }
+}
 
 export function landingPolicyDisplay(landing: BuildState['landing']): string {
   if (landing?.command?.kind === 'hold') return 'held'
@@ -18,6 +31,11 @@ export function nodeLandingPolicyDisplay(
     ? { kind: 'node' as const, ticket: state.target.ticket.id }
     : { kind: 'root' as const }
   const input = { from: 'node' as const, into, labels: [] as string[] }
+  const paths = candidatePaths(state)
+  const mode = (labels: string[]) => {
+    const result = evaluateLandingPolicy(rules, { ...input, labels }, paths)
+    return 'deferred' in result ? 'policy pending' : result.mode
+  }
   const excluded = new Set<string>()
   const modes = new Set<string>()
   for (const rule of rules) {
@@ -31,15 +49,19 @@ export function nodeLandingPolicyDisplay(
       continue
     if (rule.label) {
       if (excluded.has(rule.label)) continue
-      modes.add(evaluateLandingPolicy(rules, { ...input, labels: [rule.label] }).mode)
+      modes.add(mode([rule.label]))
       excluded.add(rule.label)
     } else {
-      modes.add(evaluateLandingPolicy(rules, input).mode)
-      return modes.size === 1 ? ([...modes][0] as 'auto' | 'consent') : 'policy pending'
+      modes.add(mode([]))
+      return modes.size === 1
+        ? ([...modes][0] as 'auto' | 'consent' | 'policy pending')
+        : 'policy pending'
     }
   }
-  modes.add(evaluateLandingPolicy(rules, input).mode)
-  return modes.size === 1 ? ([...modes][0] as 'auto' | 'consent') : 'policy pending'
+  modes.add(mode([]))
+  return modes.size === 1
+    ? ([...modes][0] as 'auto' | 'consent' | 'policy pending')
+    : 'policy pending'
 }
 
 /** Explain the durable rule when available; unknown labels must not invent a match. */
@@ -55,12 +77,14 @@ export function nodeLandingRuleDisplay(
   const into = state.target
     ? { kind: 'node' as const, ticket: state.target.ticket.id }
     : { kind: 'root' as const }
+  const paths = candidatePaths(state)
   const candidates = [
-    evaluateLandingPolicy(rules, { from: 'node', into, labels: [] }),
+    evaluateLandingPolicy(rules, { from: 'node', into, labels: [] }, paths),
     ...rules
       .filter((r) => r.label)
-      .map((r) => evaluateLandingPolicy(rules, { from: 'node', into, labels: [r.label!] })),
+      .map((r) => evaluateLandingPolicy(rules, { from: 'node', into, labels: [r.label!] }, paths)),
   ]
+  if (candidates.some((c) => 'deferred' in c)) return 'rule pending changed paths'
   const unique = new Map(candidates.map((c) => [JSON.stringify(c.rule), c.rule]))
   if (unique.size !== 1) return 'rule pending ticket labels'
   const rule = [...unique.values()][0]!

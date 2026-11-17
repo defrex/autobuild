@@ -19,6 +19,7 @@ export const executionProgress = {
   'build.janitor-recovered': 'bookkeeping',
   'landing.application-failed': 'failure',
   'landing.decided': 'progress',
+  'landing.deferred': 'bookkeeping',
   'build.hold-requested': 'progress',
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',
@@ -182,13 +183,22 @@ interface Accumulator {
 
 export const executionNoProgressReducer = defineReducer({
   version: 6,
-  initial: (): Accumulator => ({ active: null, count: 0, open: [], latest: null }),
+  initial: (): Accumulator => ({
+    active: null,
+    count: 0,
+    open: [],
+    latest: null,
+  }),
   fold(acc, events: readonly AbEvent[]) {
     for (const event of events) {
       if (event.type === 'execution.started') {
         // An abandoned start breaks the consecutive completed-execution streak.
         if (acc.active !== null) acc.count = 0
-        acc.active = { instance: event.payload.instance, seq: event.seq, eligible: true }
+        acc.active = {
+          instance: event.payload.instance,
+          seq: event.seq,
+          eligible: true,
+        }
       } else if (event.type === 'execution.ended') {
         if (acc.active?.instance !== event.payload.instance) continue
         const clean = event.payload.outcome === 'completed' && event.payload.exitCode === 0
