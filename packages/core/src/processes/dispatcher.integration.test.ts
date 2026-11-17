@@ -16902,7 +16902,8 @@ test('head path facts cost the landing poll no git, artifact or event-row reads'
   const { headPathsWrite } = await import('../kernel/head-paths')
   const head = 'f'.repeat(40)
   // Path rules: a recorded head beyond the preview reads its complete paths
-  // once while warming up and is decided; an unrecorded head defers once.
+  // once while warming up and is decided under the protected rule, whose
+  // consent a reconcile then revokes; an unrecorded head defers once.
   const pathRules = `
 [[merge]]
 paths = ["autobuild.toml"]
@@ -16938,7 +16939,10 @@ mode = "consent"
             head,
             destination: 'e'.repeat(40),
             mergeBase: 'e'.repeat(40),
-            paths: Array.from({ length: 150 }, (_, i) => `src/f${String(i).padStart(3, '0')}.ts`),
+            paths: [
+              'autobuild.toml',
+              ...Array.from({ length: 149 }, (_, i) => `src/f${String(i).padStart(3, '0')}.ts`),
+            ],
           },
           'finalize',
           KERNEL,
@@ -16959,7 +16963,9 @@ mode = "consent"
           recorded,
           ...(toml === undefined
             ? {}
-            : { warm: recorded ? ('landing.decided' as const) : ('landing.deferred' as const) }),
+            : recorded
+              ? { warm: 'landing.decided' as const, revokedConsent: true as const }
+              : { warm: 'landing.deferred' as const }),
           advance: (ms) => h.clock.advance(ms),
           git: () => git,
           tick: () =>

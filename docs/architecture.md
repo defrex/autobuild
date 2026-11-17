@@ -1840,7 +1840,11 @@ The pure evaluator in `kernel/landing-policy.ts` chooses the first matching
 head's recorded path facts (`kernel/head-paths-state.ts`), never git, and a
 reached path rule without recorded paths returns a deferral.
 `kernel/landing-state.ts` reduces immutable candidate decisions, deferrals and
-persistent hold/merge commands. The dispatcher owns readiness,
+persistent hold/merge commands, keeping the path-predicate rule a consent was
+given under. `kernel/consent-revocation.ts` matches a reconcile's recorded
+resolution against that rule and appends `landing.consent-revoked` at the two
+places a resolution is recorded: leaf reconcile completion (`cli/terminals.ts`)
+and the node rewrite (`kernel/node-restack-transaction.ts`). The dispatcher owns readiness,
 ticket label sampling and native-state convergence. `kernel/landing-publication.ts`
 confirms native cancellation at local and trusted remote head-publication seams.
 Node merges retain the existing writer serialization and gate proof.

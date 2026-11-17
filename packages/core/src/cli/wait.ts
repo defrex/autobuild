@@ -518,6 +518,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           event.type === 'integration.landed' ||
           event.type === 'integration.verification-failed' ||
           event.type === 'node.item-conflicted' ||
+          event.type === 'landing.consent-revoked' ||
           (event.type === 'restack.replayed' && event.payload.conflicted)
         )
           return conditions

@@ -369,7 +369,7 @@ test('unrecognized source catalogs preserve canonical fields and event facts', (
 })
 
 import { MemoryBuildStore } from '../memory'
-import { DISPATCHER, KERNEL } from '../../events/envelope'
+import { DISPATCHER, humanActor, KERNEL } from '../../events/envelope'
 
 for (const release of matrixReleases)
   test(`published ${release.version}: new latest-event discriminants are omitted only from optional display fields, including nested state`, async () => {
@@ -581,6 +581,78 @@ for (const release of matrixReleases)
       expect(served, reducer).not.toMatch(added)
       checked++
     }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+for (const release of matrixReleases)
+  test(`published ${release.version}: protected consent rules and revocations project away`, async () => {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    const store = new MemoryBuildStore()
+    const rule = { index: 0, snapshot: { paths: ['autobuild.toml'], mode: 'consent' as const } }
+    const decide = (head: string) => ({
+      actor: DISPATCHER,
+      type: 'landing.decided' as const,
+      payload: {
+        candidate: { head, parent: 'b'.repeat(40), cycle: '1' },
+        from: 'leaf' as const,
+        into: { kind: 'root' as const },
+        labels: [],
+        mode: 'consent' as const,
+        rule,
+        paths: { total: 1, preview: ['autobuild.toml'] },
+      },
+    })
+    // One build keeps protected consent; the other has it revoked.
+    for (const slug of ['released-consent-rule', 'released-consent-revoked']) {
+      await store.createBuild({ slug, repo: 'repo' })
+      const decided = await store.append(slug, decide('a'.repeat(40)))
+      const consent = await store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.land-requested',
+        payload: { decisionSeq: decided.seq },
+      })
+      if (slug === 'released-consent-revoked')
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'landing.consent-revoked',
+          payload: {
+            commandSeq: consent.seq,
+            source: 'reconcile',
+            rule,
+            previousHead: 'a'.repeat(40),
+            head: 'c'.repeat(40),
+            consentedHead: 'a'.repeat(40),
+            paths: { total: 1, preview: ['autobuild.toml'] },
+          },
+        })
+    }
+    const added = /"command":\{[^{}]*"rule":|"previousHead":/
+    let checked = 0
+    for (const slug of ['released-consent-rule', 'released-consent-revoked'])
+      for (const reducer of ['build', 'buildReadFacts', 'buildStreamSeed']) {
+        if (!Object.hasOwn(catalog.versions, reducer)) continue
+        const answer = await store.getReducerValue({ kind: 'build', slug }, { reducer })
+        expect(JSON.stringify(answer.value)).toMatch(added)
+        const projected = reducerValueForClient(
+          {
+            version: release.version,
+            projects: release.projects ?? false,
+            catalogIdentity: release.catalogIdentity,
+          },
+          reducer,
+          answer,
+          matrixReleases,
+        )
+        expect(projected.version, reducer).toBe(catalog.versions[reducer]!)
+        expect(projectReducerValue(reducer, projected.value, catalog), reducer).toEqual({
+          value: projected.value,
+        })
+        const served = JSON.stringify(projected.value, (key, value) =>
+          key === 'pollingActivity' ? undefined : value,
+        )
+        expect(served, reducer).not.toMatch(added)
+        checked++
+      }
     expect(checked).toBeGreaterThan(0)
   })
 
