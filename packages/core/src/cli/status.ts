@@ -11,6 +11,7 @@ import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
 import { ticketWaitStatus, ticketWaitText, type TicketWaitStatus } from '../kernel/ticket-wait'
+import type { LeafRestackState } from '../kernel/leaf-restack-state'
 import { landingRestackDue } from '../kernel/engine'
 import type { BuildFacts } from '../processes/repo-view'
 /**
@@ -176,6 +177,29 @@ export type BuildDecisionProjection =
   | { kind: 'runner-work' }
   | { kind: 'unavailable'; diagnostic: string }
 
+export interface LeafRestackStatus {
+  trigger: 'verify-entry' | 'awaiting-landing' | 'wait-resume'
+  state: 'replaying' | 'conflicted' | 'completed' | 'advanced'
+  onto: string
+}
+
+/** The open restack, else the newer of the last completed restack and the
+ * last wait-resume fast-forward. Reduced state only. */
+export function leafRestackStatus(restack: LeafRestackState): LeafRestackStatus | undefined {
+  const { active, advanced, completed } = restack
+  if (active !== undefined)
+    return {
+      trigger: active.trigger,
+      state: restack.replay?.conflicted ? 'conflicted' : 'replaying',
+      onto: active.targetBase,
+    }
+  if (advanced !== undefined && (restack.advancedAt ?? 0) > (restack.completedAt ?? 0))
+    return { trigger: advanced.trigger, state: 'advanced', onto: advanced.to }
+  if (completed !== undefined)
+    return { trigger: completed.trigger, state: 'completed', onto: completed.targetBase }
+  return undefined
+}
+
 export interface BuildDetail extends BuildSummary {
   nodePolling?: { mode: 'active' | 'idle'; intervalSeconds: number; lastChecked?: string }
   runnerAttaches: import('../kernel/read-facts').RunnerAttach[]
@@ -197,6 +221,9 @@ export interface BuildDetail extends BuildSummary {
   /** The build's ticket wait while it is requested, open, or ended and not
    * yet resumed (SPEC §11 "Ticket waits"); omitted otherwise. */
   wait?: TicketWaitStatus
+  /** A work build's open or latest restack: why it ran (its trigger), the
+   * target base it moves onto, and where it stands. */
+  restack?: LeafRestackStatus
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Frozen forge issue links with effective intent; omitted when none. */
@@ -444,6 +471,9 @@ export function detailFromFacts(
       : {}),
     openEscalations: state.openEscalations,
     ...(ticketWaitStatus(state) !== undefined ? { wait: ticketWaitStatus(state) } : {}),
+    ...(state.kind !== 'node' && facts.log && leafRestackStatus(facts.log.restack)
+      ? { restack: leafRestackStatus(facts.log.restack) }
+      : {}),
     ...(state.issueLinks.length > 0
       ? {
           issueLinks: state.issueLinks,
@@ -818,6 +848,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       d.wait.state === 'waiting'
         ? `  waiting on: ${safeStatusText(ticketWaitText(d.wait))}`
         : `  waiting:  ${safeStatusText(ticketWaitText(d.wait))}`,
+    )
+  if (d.restack !== undefined)
+    lines.push(
+      `  restack:  ${d.restack.trigger} onto ${d.restack.onto.slice(0, 7)} — ${d.restack.state}`,
     )
   if (d.decision?.kind === 'awaiting-pr') {
     // The deferral reason (a durable observation about WHY consent could not

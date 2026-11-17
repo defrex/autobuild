@@ -183,6 +183,9 @@ export interface LogIndex {
   /** Most recent completed reconcile, paired with the latest same-occurrence
    * start so crash retries use the base that actually completed. */
   lastReconcileCompleted?: ReconcileCompletionRecord
+  /** The reconcile occurrence started and neither completed nor superseded,
+   * and whether its resolution already recorded a publish intent. */
+  openReconcile?: ReconcileStartRecord & { intended: boolean }
   /** Explicit authoritative observation for the current repeat conflict. */
   lastConflictProgressCheck?: ReconcileProgressRecord
   /** Distinct completed attempts observed still conflicted at the same base.
@@ -196,7 +199,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 11
+export const LOG_INDEX_REDUCER_VERSION = 12
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
@@ -245,6 +248,7 @@ export interface LogIndexAcc {
   conflictSeqs: number[]
   conflictReconcileStarted?: { attempt: number }
   activeReconcileStart?: ReconcileStartRecord
+  activeReconcileIntended?: boolean
   reconcileStarts: ReconcileStartRecord[]
   reconcileCompletions: ReconcileCompletionRecord[]
   reconcileProgressChecks: ReconcileProgressRecord[]
@@ -454,6 +458,7 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
         const start = { seq: event.seq, ...event.payload }
         acc.reconcileStarts.push(start)
         acc.activeReconcileStart = start
+        delete acc.activeReconcileIntended
         if (acc.lastConflict !== undefined && event.seq > acc.lastConflict.seq) {
           acc.conflictReconcileStarted = { attempt: event.payload.attempt }
         }
@@ -467,6 +472,19 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
             completedSeq: event.seq,
           })
           delete acc.activeReconcileStart
+        }
+        delete acc.activeReconcileIntended
+        delete acc.conflictReconcileStarted
+        break
+      case 'reconcile.publish-intended':
+        if (acc.activeReconcileStart?.attempt === event.payload.attempt)
+          acc.activeReconcileIntended = true
+        break
+      case 'reconcile.superseded':
+        // An abandoned occurrence completes nothing; the next attempt starts fresh.
+        if (acc.activeReconcileStart?.attempt === event.payload.attempt) {
+          delete acc.activeReconcileStart
+          delete acc.activeReconcileIntended
         }
         delete acc.conflictReconcileStarted
         break
@@ -671,6 +689,14 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     lastConflict,
     conflictReconcileStarted: acc.conflictReconcileStarted,
     lastReconcileCompleted,
+    ...(acc.activeReconcileStart === undefined
+      ? {}
+      : {
+          openReconcile: {
+            ...acc.activeReconcileStart,
+            intended: acc.activeReconcileIntended === true,
+          },
+        }),
     lastConflictProgressCheck,
     reconcileNoProgressCount,
     guidanceDeliveries: [...acc.guidanceDeliveries],

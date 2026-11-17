@@ -89,7 +89,7 @@ import {
   slotRequest,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
-import { pendingWaitRequest, waitParked } from '../kernel/ticket-wait'
+import { pendingWaitRequest, waitParked, waitResumeDue } from '../kernel/ticket-wait'
 import { changeBlockers } from '../ports/tickets/operations'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
@@ -1832,7 +1832,12 @@ export class Dispatcher {
       this.workspaceOwner(facts.workspace)?.recovery !== undefined
     )
       return 'already-active'
-    if (facts.log.restack.target === undefined && facts.lastCreated !== undefined) {
+    // A build leaving a ticket wait decides its resume restack against a
+    // fresh observation: one forge read per wait end, no event rows.
+    if (
+      (facts.log.restack.target === undefined || waitResumeDue(facts.state)) &&
+      facts.lastCreated !== undefined
+    ) {
       const branch = facts.lastCreated.payload.baseBranch
       await this.observeTarget(slug, branch, undefined, report)
     }
@@ -5355,7 +5360,8 @@ export class Dispatcher {
    * Only a build whose digest marks a pending request (`waitPending`) is read
    * further — one reduced `buildFacts` read plus its ticket-source calls. A
    * request is pending for one tick per declaration, plus retries after a
-   * source failure.
+   * source failure, plus the ticks its remote commit publication takes to
+   * settle (no ticket calls while it does).
    */
   private async serviceWaitRequests(record: BuildRecord, report: TickReport): Promise<void> {
     const { state } = await this.store.buildFacts(record.slug)
@@ -5390,6 +5396,20 @@ export class Dispatcher {
         type: 'wait.refused',
         payload: { id: request.id, cause, tickets, message },
       })
+    }
+    // An implement declaration's commits are published before the wait is
+    // entered. Until the settlement stage records `wait.published` the
+    // request stays pending; a recorded loss refuses it.
+    const publication = request.publication
+    if (publication !== undefined && !publication.published) {
+      if (publication.lost)
+        return refuse(
+          'publication-lost',
+          request.tickets,
+          "publishing this build's commits before the wait failed: the publication was lost, " +
+            'so your local commits were not published; continue, or declare the wait again',
+        )
+      return
     }
     const tickets = this.deps.tickets
     if (!record.ticket)

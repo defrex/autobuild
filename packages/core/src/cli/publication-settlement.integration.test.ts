@@ -1420,3 +1420,40 @@ test('a failed retry write propagates without recording loss or releasing the wo
     ),
   ).toBe(false)
 })
+
+describe('settlePendingPublication: ticket-wait commits', () => {
+  const waitRequest = (h: Awaited<ReturnType<typeof seed>>) =>
+    h.store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: { operation: 'wait', id: 'wait_1', branch: BRANCH, sha: SHA, base: BASE },
+    })
+
+  test('publishes the exact head once and completes it with wait.published', async () => {
+    const h = await seed()
+    await waitRequest(h)
+    await settlePendingPublication(h.deps, SLUG)
+    await settlePendingPublication(h.deps, SLUG)
+    expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
+    const done = (await h.store.getEvents(SLUG)).filter((e) => e.type === 'wait.published')
+    expect(done.map((e) => [e.actor, e.payload])).toEqual([
+      [DISPATCHER, { id: 'wait_1', sha: SHA }],
+    ])
+  })
+
+  test('an abandoned unpublished wait request is recorded lost', async () => {
+    const h = await seed()
+    const requested = await waitRequest(h)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-1', reason: 'replacement' },
+    })
+    h.deps.publication = { isPublished: async () => false, publish: async () => {} }
+    await settlePendingPublication(h.deps, SLUG)
+    const lost = (await h.store.getEvents(SLUG)).filter((e) => e.type === 'publication.lost')
+    expect(lost.map((e) => e.payload)).toEqual([
+      expect.objectContaining({ request: requested.seq, operation: 'wait', sha: SHA }),
+    ])
+  })
+})
