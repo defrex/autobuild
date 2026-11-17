@@ -387,6 +387,65 @@ describe('agent tool registry contract', () => {
     expect(missing.status).toBe(404)
   })
 
+  test('optimization.revise records a revision and refuses builds without an objective', async () => {
+    const world = await seedWorld()
+    await world.store.createBuild({ slug: 'opt', repo, branch: 'ab-node/opt' })
+    await world.store.append('opt', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: 'OPT' }, kind: 'node', baseBranch: 'main' },
+    })
+    await world.store.append('opt', {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: {
+          purpose: 'faster',
+          metric: {
+            kind: 'command',
+            command: 'bun bench.ts',
+            direction: 'minimize',
+            samples: 3,
+            harness: ['bench/**'],
+          },
+          target: { epsilon: { absolute: 2 } },
+          budget: { maxAttempts: 5 },
+          stop: { mode: 'abort' },
+          proposer: { concurrency: 1 },
+        },
+        revision: 1,
+        harnessPin: 'a'.repeat(40),
+        specRev: 0,
+      },
+    })
+    const tool = await toolFor(world)('optimization.revise', {
+      repo,
+      slug: 'opt',
+      threshold: 30,
+      epsilon: { relative: 0.05 },
+    })
+    expectEqual(tool, {
+      slug: 'opt',
+      revision: 2,
+      changes: { threshold: 30, epsilon: { relative: 0.05 } },
+    })
+    const events = await world.store.getEvents('opt')
+    expect(events.at(-1)).toMatchObject({
+      type: 'optimization.objective-revised',
+      actor: { kind: 'human' },
+      payload: { revision: 2 },
+    })
+    const error = await toolFor(world)('optimization.revise', {
+      repo,
+      slug: 'demo',
+      plateau: 3,
+    }).catch((error) => error)
+    expect(error).toBeInstanceOf(RegistryError)
+    expect((error as RegistryError).body.kind).toBe('conflict')
+    const empty = await toolFor(world)('optimization.revise', { repo, slug: 'opt' }).catch((e) => e)
+    expect((empty as RegistryError).body.kind).toBe('validation')
+  })
+
   test('builds.control matches the control route for an accepted command', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
@@ -1151,6 +1210,7 @@ describe('agent tool registry contract', () => {
     // One minimal valid input per mutator.
     const inputs: Record<string, unknown> = {
       'builds.restack': { repo, slug: 'demo' },
+      'optimization.revise': { repo, slug: 'demo', threshold: 30 },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
       'repository.forge_clear': { repo, forge: 'github', reason: 'override' },

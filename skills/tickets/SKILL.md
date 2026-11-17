@@ -31,6 +31,22 @@ and [revision restrictions](../ab-guide/references/integration-tree.md#operator-
 Open children keep the node incomplete, including triage, backlog and ready
 children; a rejected child does not. Completed nodes close admission.
 
+**Optimization nodes.** A node becomes an optimization node only when its spec
+carries exactly one fenced block whose info string is exactly
+`autobuild-objective`. A heading named "Objective", a plain `toml` block, a block
+nested inside another fence, or prose describing an objective never counts. Two
+blocks, a block that fails to parse or validate, an objective with no budget
+limit, or a ticket source with no rejected role refuse the opening and name the
+reason; the node never opens as a plain node instead. A work ticket carrying the
+block is refused at dispatch. A spec revision of an open optimization node may
+change the objective but cannot add or remove the block, and a plain node never
+gains one. The marker rules and the objective schema are in
+[optimization nodes](../ab-guide/references/optimization-nodes.md).
+
+To groom an optimization node, follow the
+[grooming guidance](../ab-guide/references/optimization-nodes.md#grooming-an-optimization-node)
+for writing the purpose and choosing the harness, ε and budget.
+
 For node lifecycle, target validation and source-specific storage, read
 [nodes and targets](../ab-guide/references/integration-tree.md). When filing
 related work, follow the shared
