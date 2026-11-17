@@ -74,7 +74,7 @@ sequence positions behind its head. If a cursor is too old, re-arm without
 recover the unavailable historical gap; status reconciliation does not restore
 one-off events from that gap.
 
-- **Default filter:** actionable attention only, such as escalations and ready merges awaiting consent. Add `--event` globs for routine lifecycle events.
+- **Default filter:** actionable attention only, such as escalations and ready merges awaiting consent. Add `--event` globs for routine lifecycle events. Ticket waits beginning and ending are routine: follow them with `--event 'wait.*' --event escalation.answered`.
 - **Starts now:** a fresh watch ignores history, so check current status too.
 - **Resumable:** pass the opaque cursor from the JSON output back with `--since` to receive events recorded while away within the hosted window described above. The final JSON line always carries one.
 - **Duration:** 30 minutes by default; `--timeout 0` keeps it open.

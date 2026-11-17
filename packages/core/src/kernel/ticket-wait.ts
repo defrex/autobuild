@@ -180,14 +180,56 @@ export function ticketWaitStatus(state: BuildState): TicketWaitStatus | undefine
   return undefined
 }
 
-/** One status line for a ticket wait, without the label. */
-export function ticketWaitText(wait: TicketWaitStatus): string {
+/** The shared wording every status surface uses for an open wait: the
+ * dashboards, `ab builds` and `ab watch` all render this phrase. */
+export function waitingOnText(tickets: readonly string[]): string {
+  return `waiting on ${tickets.join(', ')}`
+}
+
+/** `waitingOnText` with the declared reason, as one row line. */
+export function waitingOnLine(tickets: readonly string[], reason: string): string {
+  return `${waitingOnText(tickets)} — ${reason}`
+}
+
+/** Watch-stream line for `wait.requested`. */
+export function waitRequestedText(tickets: readonly string[], reason: string): string {
+  return `wait requested on ${tickets.join(', ')}: ${reason}`
+}
+
+/** Watch-stream line for `wait.refused`. */
+export function waitRefusedText(
+  tickets: readonly string[],
+  cause: string,
+  message: string,
+): string {
+  const on = tickets.length > 0 ? ` on ${tickets.join(', ')}` : ''
+  return `wait${on} refused (${cause}): ${message}`
+}
+
+/** Watch-stream line for a wait leaving: `wait.ended`, or the operator
+ * answer that ended it. `tickets` is undefined when the reduced wait is not
+ * the one that ended; the line then names the wait id. */
+export function waitEndedText(
+  wait: { id: string; tickets?: readonly string[] },
+  cause: string,
+  message: string,
+): string {
+  const subject =
+    wait.tickets !== undefined && wait.tickets.length > 0
+      ? `wait on ${wait.tickets.join(', ')}`
+      : `wait ${wait.id}`
+  return `${subject} ended (${cause}): ${message}`
+}
+
+/** One status line for a ticket wait, without the label. `slug` names the
+ * build `ab answer` takes to end an open wait early. */
+export function ticketWaitText(wait: TicketWaitStatus, slug: string): string {
   const tickets = wait.tickets.join(', ')
   switch (wait.state) {
     case 'requested':
       return `wait requested on ${tickets}: awaiting dispatcher check`
     case 'waiting':
-      return `${tickets} — ${wait.reason} (since ${wait.since}; end early with ab answer ${wait.escalation})`
+      return `${tickets} — ${wait.reason} (since ${wait.since}; end early with ab answer ${slug})`
     case 'ended':
       return `wait on ${tickets} ended (${wait.cause}); resume waiting for a slot`
   }

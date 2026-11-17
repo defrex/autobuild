@@ -465,7 +465,8 @@ textarea,
 .status[data-status="pausing"],
 .status[data-status="suspended"],
 .status[data-status="cleaning"],
-.status[data-status="escalated"] {
+.status[data-status="escalated"],
+.status[data-status="waiting"] {
   color: var(--amber);
 }
 .steps {
@@ -548,6 +549,19 @@ textarea,
   color: var(--amber);
   border-color: var(--amber);
   background: var(--ground);
+}
+/* A ticket wait is held work, not a blocker: amber on the plain ground. */
+.signoff.wait {
+  border-color: var(--amber);
+  background: var(--ground);
+}
+.signoff.wait .q {
+  color: var(--amber);
+}
+.signoff.wait .since {
+  color: var(--slack);
+  font-family: var(--mono);
+  font-size: 0.93em;
 }
 .detail {
   display: grid;
@@ -651,6 +665,9 @@ textarea {
 }
 .signoff:not(.landing) .btn:disabled {
   background: var(--red-wash);
+}
+.signoff.wait .btn:disabled {
+  background: var(--ground);
 }
 .detail pre.block,
 .markdown pre.block {

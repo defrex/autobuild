@@ -284,6 +284,7 @@ const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status']
   suspended: 'yellow',
   resuming: 'cyan',
   blocked: 'red',
+  waiting: 'yellow',
   aborting: 'red',
   cleaning: 'yellow',
   escalated: 'yellow',
@@ -474,6 +475,11 @@ function renderBuild(
   if (build.alert)
     for (const line of wrappedText(build.alert.text, Math.max(1, width - 4), ''))
       lines.push(paint(`  ! ${line}`, build.alert.tone, color))
+  // A ticket wait is held work, not a blocker: one yellow line naming the
+  // tickets, never a red question preview.
+  if (build.wait)
+    for (const line of wrappedText(build.wait.text, Math.max(1, width - 4), ''))
+      lines.push(paint(`  ! ${line}`, 'yellow', color))
   // Setup failures and blocker questions are dense-list previews. Their model
   // strings remain untouched; newline-aware wrapping and capping happen only
   // at this presentation seam.
@@ -890,6 +896,19 @@ function detailBody(
       'The r field records guidance, or a bare retry when empty.',
       `CLI only: ab answer ${build.slug} --dismiss`,
       `CLI only: ab answer ${build.slug} --revise-spec <file>`,
+    ]) {
+      body.push(...wrappedText(note, width, '  ').map((line) => paint(line, 'dim', color)))
+    }
+  }
+  if (build.wait !== undefined) {
+    body.push('', paint('Waiting', 'bold', color))
+    body.push(
+      ...wrapDisplay(build.wait.text, width, '  ').map((line) => paint(line, 'yellow', color)),
+    )
+    body.push(...wrappedText(`since ${build.wait.since}`, width, '  '))
+    for (const note of [
+      'r answers the wait and ends it early',
+      `CLI only: ab answer ${build.slug} [text]`,
     ]) {
       body.push(...wrappedText(note, width, '  ').map((line) => paint(line, 'dim', color)))
     }
@@ -1453,7 +1472,13 @@ export function resumePanel(
   // frame did not grant — which is what makes every `fieldWidth` below at
   // least 1 without a clamp.
   if (width <= 0) return []
-  const questions = model.builds.find((candidate) => candidate.slug === prompt.slug)?.blockers ?? []
+  const build = model.builds.find((candidate) => candidate.slug === prompt.slug)
+  // Answering a waiting build answers its wait's question, shown in the wait's
+  // yellow beside any red blockers.
+  const questions: Array<{ text: string; tone: 'red' | 'yellow' }> = [
+    ...(build?.blockers ?? []).map((text) => ({ text, tone: 'red' as const })),
+    ...(build?.wait ? [{ text: build.wait.question, tone: 'yellow' as const }] : []),
+  ]
 
   const title = truncate(
     paint(paint(`Resume ${displayText(prompt.slug)}`, 'cyan', color), 'bold', color),
@@ -1467,10 +1492,10 @@ export function resumePanel(
   // notice accounts for.
   const questionRows: string[] = []
   for (const question of questions) {
-    const wrapped = wrapDisplay(question, width - 4)
+    const wrapped = wrapDisplay(question.text, width - 4)
     for (const [index, line] of wrapped.entries()) {
       questionRows.push(
-        truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, 'red', color), width),
+        truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, question.tone, color), width),
       )
     }
   }
