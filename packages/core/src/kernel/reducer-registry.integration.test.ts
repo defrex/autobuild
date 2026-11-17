@@ -714,7 +714,7 @@ describe('reducer registry', () => {
         "build": 34,
         "buildDelegation": 1,
         "buildDigest": 11,
-        "buildReadFacts": 87,
+        "buildReadFacts": 88,
         "buildStreamSeed": 49,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
