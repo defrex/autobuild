@@ -40,6 +40,7 @@ export const buildEventPolicy = {
   'restack.rewritten': 'decisive',
   'restack.contended': 'decisive',
   'restack.completed': 'decisive',
+  'restack.advanced': 'decisive',
   'integration.abandoned': 'decisive',
   'integration.observed': 'decisive',
   'integration.prepared': 'decisive',
@@ -162,6 +163,7 @@ export const buildEventPolicy = {
   'reconcile.publish-intended': 'decisive',
   'reconcile.rewritten': 'decisive',
   'reconcile.completed': 'decisive',
+  'reconcile.superseded': 'decisive',
   'issue-link.downgraded': 'decisive',
   'issue-links.sealed': 'decisive',
   'observation.recorded': 'advisory',
@@ -176,6 +178,7 @@ export const buildEventPolicy = {
   'wait.refused': 'decisive',
   'wait.entered': 'decisive',
   'wait.ended': 'decisive',
+  'wait.published': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
   'dispatcher.placement-set': 'advisory',

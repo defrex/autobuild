@@ -233,7 +233,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 7 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 8 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -438,10 +438,23 @@ export const buildReadFactsReducer = defineReducer({
         event.type === 'reconcile.contended' ||
         event.type === 'reconcile.publish-intended' ||
         event.type === 'reconcile.rewritten' ||
+        event.type === 'reconcile.superseded' ||
         event.type === 'workspace.provisioned' ||
         event.type === 'phase.failed'
       )
         acc.reconcileHistory.push(event)
+      // A superseded occurrence's replay is abandoned, never resumed.
+      if (
+        event.type === 'reconcile.superseded' &&
+        acc.reconcileTransaction !== undefined &&
+        (acc.reconcileTransaction.attempt === event.payload.attempt ||
+          (event.payload.restackId !== undefined &&
+            (acc.reconcileTransaction.id === event.payload.restackId ||
+              acc.reconcileTransaction.restackId === event.payload.restackId)))
+      ) {
+        delete acc.reconcileTransaction
+        delete acc.reconcileReplay
+      }
       if (event.type === 'reconcile.prepared') {
         acc.reconcileTransaction = event.payload
         delete acc.reconcileReplay

@@ -715,7 +715,17 @@ request against the ticket source, adds `blockedBy`, and appends `wait.entered`
 or `wait.refused`. `kernel/ticket-wait.ts` holds the reduced-state predicates
 the engine, capacity, `ab context` and `ab build status` share: a pending
 request decides `wait ticket-wait`, an entered wait parks the leaf without a
-slot, and an ended one requests a `resume` slot.
+slot, and an ended one requests a `resume` slot. An implement declaration
+publishes first: `waitOn` pushes locally before the fact, or deposits
+`publication.requested {operation: wait}` that `cli/publication-settlement.ts`
+completes with `wait.published`; `serviceWaitRequest` enters the wait only
+after that. `waitResumeRestackCycle` in the same module is the engine's
+wait-resume restack predicate, decided ahead of the plan and code loops against
+`leafBaseInUse` (`kernel/leaf-restack-state.ts`), which target observation
+shares. The runner's `restack()` replays published work through the guarded
+automatic restack, fast-forwards an unpublished branch (`advanceWaitResume`,
+`restack.advanced`), and first supersedes a reconcile occurrence whose session
+waited (`supersedeReconcile`, `reconcile.superseded`).
 The runner refreshes after workspace mutation and before constructing members;
 concurrent siblings settle before another stage is selected. Recovery and
 readiness compose live deployment settings onto the captured artifact revision.

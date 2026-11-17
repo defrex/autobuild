@@ -5,7 +5,7 @@ import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import { detail, renderDetail } from './status'
 
-async function waiting(stage: 'requested' | 'waiting' | 'ended') {
+async function waiting(stage: 'requested' | 'waiting' | 'ended' | 'restacked') {
   const store = new MemoryBuildStore({ clock: steppingClock() })
   const record = await store.createBuild({ slug: 'waits', repo: '/repo' })
   await store.append(record.slug, {
@@ -33,12 +33,31 @@ async function waiting(stage: 'requested' | 'waiting' | 'ended') {
         question: 'Waiting on B, C to complete: needs B.',
       },
     })
-  if (stage === 'ended')
+  if (stage === 'ended' || stage === 'restacked')
     await store.append(record.slug, {
       actor: humanActor('aron'),
       type: 'escalation.answered',
       payload: { id: 'esc_w', answer: 'B landed', resolution: 'guidance' },
     })
+  if (stage === 'restacked') {
+    const moved = await store.append(record.slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: '2'.repeat(40) },
+    })
+    await store.append(record.slug, {
+      actor: { kind: 'kernel' },
+      type: 'restack.advanced',
+      payload: {
+        trigger: 'wait-resume',
+        cycle: moved.seq - 1,
+        observation: moved.seq,
+        branch: 'ab/waits',
+        from: '1'.repeat(40),
+        to: '2'.repeat(40),
+      },
+    })
+  }
   const now = new Date('2026-11-16T00:00:00Z')
   const shown = detail(record, await store.getEvents(record.slug), now)
   return { shown, lines: renderDetail(shown, now) }
@@ -67,4 +86,11 @@ test('an ended wait waits for a slot to resume', async () => {
   const { shown, lines } = await waiting('ended')
   expect(shown.wait).toMatchObject({ state: 'ended', cause: 'operator' })
   expect(lines).toContain('  waiting:  wait on B, C ended (operator); resume waiting for a slot')
+})
+
+test('a wait-resume restack shows why it ran', async () => {
+  const { shown, lines } = await waiting('restacked')
+  expect(shown.restack).toEqual({ trigger: 'wait-resume', state: 'advanced', onto: '2'.repeat(40) })
+  expect(lines).toContain('  restack:  wait-resume onto 2222222 — advanced')
+  expect(shown.wait).toBeUndefined()
 })

@@ -49,8 +49,8 @@ type Guidance = {
 }
 
 /** Implement declares a wait on `tickets` when it has no guidance yet, and
- * records every guidance.json it is given. */
-function waitingHandlers(tickets: string[], seen: Guidance[]) {
+ * records every guidance.json it is given and the HEAD it resumed on. */
+function waitingHandlers(tickets: string[], seen: Guidance[], heads: string[] = []) {
   const handlers = happyHandlers()
   const implement = handlers.implement!
   handlers.implement = async (cli) => {
@@ -61,6 +61,7 @@ function waitingHandlers(tickets: string[], seen: Guidance[]) {
       return
     }
     seen.push(JSON.parse(await Bun.file(path).text()) as Guidance)
+    heads.push((await git(['rev-parse', 'HEAD'], cli.ws)).trim())
     await implement(cli)
   }
   return handlers
@@ -68,8 +69,9 @@ function waitingHandlers(tickets: string[], seen: Guidance[]) {
 
 test('a waiting build frees its slot, keeps its work, and resumes ahead of new claims', async () => {
   const seen: Guidance[] = []
+  const heads: string[] = []
   const h = await makeHarness({
-    handlers: waitingHandlers(['T-B'], seen),
+    handlers: waitingHandlers(['T-B'], seen, heads),
     tickets: [
       readyTicket('T-A'),
       readyTicket('T-B', { state: 'Backlog' }),
@@ -105,6 +107,9 @@ test('a waiting build frees its slot, keeps its work, and resumes ahead of new c
   ).join('\n')
   expect(status).toContain('waiting on: T-B — needs the B schema to land first')
 
+  // T-B's change lands on the target while T-A waits.
+  const blocker = await h.advanceRemote({ 'blocker.txt': 'T-B schema\n' }, 'Land T-B')
+
   // An operator ends the wait early through the shared answer path.
   await controlBuild({
     store: h.store,
@@ -134,6 +139,15 @@ test('a waiting build frees its slot, keeps its work, and resumes ahead of new c
   expect(resumed.prState).toBe('open')
   const implementStarts = ofType(await h.events(a), 'implement.started')
   expect(implementStarts.map((event) => event.payload.round)).toEqual([1, 1])
+  // T-A had published nothing, so the resume fast-forwarded it onto the
+  // target, and the resumed implement session's checkout holds T-B's commit.
+  const advanced = ofType(await h.events(a), 'restack.advanced')
+  expect(advanced.map((event) => [event.payload.trigger, event.payload.to])).toEqual([
+    ['wait-resume', blocker],
+  ])
+  expect(heads).toEqual([blocker])
+  const completed = ofType(await h.events(a), 'implement.completed')
+  expect(completed.at(-1)?.payload.commits.base).toBe(blocker)
   expect(seen).toEqual([
     expect.objectContaining({
       answer: 'T-B landed; continue',
