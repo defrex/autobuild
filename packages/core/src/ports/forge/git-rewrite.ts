@@ -15,11 +15,15 @@ function branchRef(branch: string): string {
 }
 
 /** Git transport and shared-database implementations share validation, but local-git
- * never consults a remote, even when the repository happens to have one. */
+ * never consults a remote, even when the repository happens to have one.
+ * `refusedArchive` is called only when a remote git push of an archive ref exits
+ * non-zero without a transient classification; it must create exactly that ref
+ * at that SHA, and the same exact readback still decides publication. */
 export function gitRewrite(
   exec: Exec,
   local: boolean,
   createArchive?: (ref: string, sha: string) => Promise<void>,
+  refusedArchive?: (ref: string, sha: string) => Promise<void>,
 ): ForgeRewrite {
   async function git(cwd: string, args: string[], allowFailure = false) {
     const network = !local && ['push', 'fetch', 'ls-remote'].includes(args[0] ?? '')
@@ -141,6 +145,8 @@ export function gitRewrite(
           .exitCode !== 0
       if (existing === null) {
         let failure: unknown
+        // A refused push hands the same ref to the fallback; both refusals are reported.
+        let refusal: string | undefined
         try {
           if (missing) {
             if (!createArchive)
@@ -159,7 +165,19 @@ export function gitRewrite(
                   ],
               true,
             )
-            if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout)
+            if (result.exitCode !== 0) {
+              if (local || !refusedArchive) throw new Error(result.stderr || result.stdout)
+              refusal = result.stderr || result.stdout
+              try {
+                await refusedArchive(input.ref, input.sha)
+              } catch (rest) {
+                if (isForgeFailure(rest) || rest instanceof ForgeRequestDeferred) throw rest
+                throw new Error(
+                  `git push refused (${refusal.trim()}); GitHub REST ref creation failed (${rest instanceof Error ? rest.message : String(rest)})`,
+                  { cause: rest },
+                )
+              }
+            }
           }
         } catch (error) {
           failure = error
@@ -172,10 +190,23 @@ export function gitRewrite(
           if (isForgeFailure(failure) || failure instanceof ForgeRequestDeferred) throw failure
           throw error
         }
+        if (confirmed !== null && confirmed !== input.sha)
+          throw new Error(
+            `immutable archive ${input.ref} names ${confirmed}, expected ${input.sha}`,
+            { cause: failure },
+          )
         if (confirmed !== input.sha) {
           if (isForgeFailure(failure) || failure instanceof ForgeRequestDeferred) throw failure
+          const detail =
+            failure !== undefined
+              ? refusal !== undefined && failure instanceof Error
+                ? failure.message
+                : String(failure)
+              : refusal !== undefined
+                ? `git push refused (${refusal.trim()}); GitHub REST ref creation was acknowledged but exact readback did not confirm publication`
+                : 'exact readback did not confirm publication'
           throw new Error(
-            `archive publication rejected for ${input.ref} at ${input.sha}: ${String(failure ?? 'exact readback did not confirm publication')}; enable refs/autobuild/archive/ publication before branch rewrites`,
+            `archive publication rejected for ${input.ref} at ${input.sha}: ${detail}; enable refs/autobuild/archive/ publication before branch rewrites`,
             { cause: failure },
           )
         }
