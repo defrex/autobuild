@@ -330,6 +330,23 @@ dependency that is installed outside that root fails the build by name.
    and assign projects to it. See
    [organization management](https://github.com/defrex/autobuild/blob/main/docs/operator-api.md#organization-management-browser).
 
+## Browser errors
+
+Uncaught errors and unhandled promise rejections in the operator app's
+browser code are written to the service's runtime log (on Vercel, the
+function logs). This includes errors thrown while a script is still loading,
+before the app renders. Filter on `"type":"autobuild.browser-error"`. Each
+line carries `kind`, `message`, `stack`, `path` (without query or fragment),
+`userAgent`, `deployment` (the deployment that served the page) and
+`serverDeployment`.
+
+A page load reports each distinct message once and at most 5 reports in
+total. The `POST /client-errors` endpoint needs no session and reads no
+database rows. It rejects bodies over 16 KiB and truncates long fields. Stacks
+point into `/_next/static/chunks/`; each chunk's trailing `sourceMappingURL`
+comment names its published source map in the same directory. For grouping, alerting or retention,
+attach a log drain of your choice.
+
 ## Upgrading
 
 Bump every `@defrex/*` pin to the same new release, run `bun install`, commit
