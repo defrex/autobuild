@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v1.8.0 — 2026-11-17
+
+This release makes builds that depend on other tickets much smoother. Waiting builds now park without holding capacity, are restacked before their declaring phase resumes, and are released automatically when their blockers complete, and these waits now appear across status surfaces and watch streams. Merge safety is also tighter: consent is bound to the exact head the operator reviewed, merge rules match the paths a change actually touches, and consent is revoked when a reconcile edits protected files. Every ready leaf now gets a landing decision, and abort can return tickets to ready while reporting completed hand-backs.
+
+- [#954](https://github.com/defrex/autobuild/pull/954) — Release waiting builds automatically when their blockers complete
+- [#953](https://github.com/defrex/autobuild/pull/953) — Revoke merge consent when reconciles edit protected files
+- [#952](https://github.com/defrex/autobuild/pull/952) — Show build waits across status surfaces and watch streams
+- [#951](https://github.com/defrex/autobuild/pull/951) — Restack waiting builds before resuming their declaring phase
+- [#950](https://github.com/defrex/autobuild/pull/950) — Match merge rules on the paths a change touches
+- [#949](https://github.com/defrex/autobuild/pull/949) — Park builds waiting on tickets without holding capacity
+- [#948](https://github.com/defrex/autobuild/pull/948) — Record the paths each candidate head changes
+- [#947](https://github.com/defrex/autobuild/pull/947) — Let abort return tickets to ready and report completed hand-backs
+- [#946](https://github.com/defrex/autobuild/pull/946) — Bind merge consent to the head the operator reviewed
+- [#945](https://github.com/defrex/autobuild/pull/945) — Give every ready leaf a landing decision
+
 ## v1.7.0 — 2026-11-13
 
 This release adds label-selected role profiles, letting individual tickets choose how they are executed. GitHub ticket handling is tighter throughout: tickets are now assigned at creation with assignees exposed, ready issues lacking an assignee are reported, rate limits are isolated by credential scope, and newest-ticket paging is defined as newest filed first. Reliability improves as well, with hosted ticket preparations recovering after lost creation responses, scenario dispatch leases staying valid across stepping-clock passes, and feed checkpoints no longer carrying redundant dashboard history. The account-menu disclosure also now renders with a supported packaged font.
