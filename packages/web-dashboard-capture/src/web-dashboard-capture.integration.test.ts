@@ -767,14 +767,18 @@ test('report uses actual image dimensions and packaged font bindings', async () 
         width: 390,
         height: 4567,
         ground: 'dark',
+        page: '/',
         htmlPath: '/frames/long.html',
         pngPath: '/frames/long.png',
       },
     ],
     '/chromium',
     '/frames',
+    [{ route: '/', component: 'dashboard/DashboardClient.tsx', clientModules: [], errors: [] }],
   )
   expect(text).toContain('390×4567')
+  expect(text).toContain('## Client load')
+  expect(text).toContain('`/` (dashboard/DashboardClient.tsx): loaded without browser errors')
   expect(text).toContain(
     'packaged Atkinson Hyperlegible Next and JetBrains Mono files bound through FONT_FILES',
   )
