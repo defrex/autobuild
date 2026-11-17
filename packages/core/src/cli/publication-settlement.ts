@@ -395,6 +395,16 @@ export async function settlePendingPublication(
     })
     return
   }
+  if (request.payload.operation === 'wait') {
+    // The wait's declaration follows its request; the dispatcher enters the
+    // wait only after this completion fact.
+    await deps.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'wait.published',
+      payload: { id: request.payload.id, sha: request.payload.sha },
+    })
+    return
+  }
 
   const description = await deps.store.getArtifact(
     slug,
