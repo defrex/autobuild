@@ -13,7 +13,7 @@ import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-fac
 import { historicalBuildState, historicalRepositoryAttention } from './historical-build-state'
 import { readDispatcherRunFacts } from '../store/reduced-reads'
 import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
-import type { BuildStore, RepositoryRecord } from '../store/types'
+import type { BuildDigest, BuildStore, RepositoryRecord } from '../store/types'
 import { readRepositoryFacts, readPersistedBuildDigests } from '../store/reduced-reads'
 import { isWorkDigest } from '../processes/repo-view'
 import { creationBuildSlug } from '../kernel/build-creation'
@@ -852,7 +852,7 @@ async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed
     const streams: Record<string, number> = { [REPO_STREAM_KEY]: b }
     const deliveredAttention: string[] = []
     for (const [slug, digest] of digests) {
-      if (announced.has(slug) || !isWorkDigest(digest)) continue
+      if (announced.has(slug) || !hasWork(digest)) continue
       const seed = await readBuildStreamSeed(store, slug)
       streams[slug] = seed.cursor
       for (const pr of seed.value.mergeAttentionPrs)
@@ -869,6 +869,13 @@ async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed
       preparing: Object.fromEntries(preparing),
     })
   }
+}
+
+/** A build with work left — the dispatcher's own rule: nonterminal, aborted
+ * awaiting cleanup, unreclaimed, an open execution, or a pending integration
+ * audit. A feed tracks these; a settled terminal build retires. */
+function hasWork(digest: Omit<BuildDigest, 'slug'>): boolean {
+  return isWorkDigest(digest) || digest.integrationAuditPending === true
 }
 
 function unresolvedAnnouncement(attempt: string): string {
@@ -1440,7 +1447,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             const digest = (
               await readPersistedBuildDigests(store, repo, [{ ...record, repo }])
             ).get(stream.slug)
-            if (digest?.reclaimPending === true || digest?.executionOpen === true) continue
+            if (digest === undefined || hasWork(digest)) continue
           }
           streams.delete(stream.slug)
           delete positions[stream.slug]

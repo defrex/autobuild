@@ -53,8 +53,14 @@ async function attach(store: BuildStore, slug: string): Promise<void> {
   })
 }
 
+/** Abort and clean up: a settled terminal build. */
 async function abort(store: BuildStore, slug: string): Promise<void> {
   await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'abandoned' },
+  })
 }
 
 const ticketOf = (attempt: string) => ({ source: 'file', id: `T-${attempt}` })
@@ -1004,3 +1010,8 @@ describe('configured hooks', () => {
     expect(await repoEvents(store, 'hook.recovered')).toHaveLength(1)
   })
 })
+
+test('hook delivery read cost does not grow with history, builds or deliveries', async () => {
+  const { hookReadBudget } = await import('../testing/reduced-read-budget')
+  await hookReadBudget()
+}, 120_000)
