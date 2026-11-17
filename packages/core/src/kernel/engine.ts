@@ -1030,7 +1030,13 @@ function guidanceDestination(
     return 'other'
   if (phase === 'plan' || phase === 'plan-review') return 'plan'
   if (phase === 'implement' || phase === 'code-review') return 'code'
+  // A ticket wait's escalations, including the dispatcher's unresolvable
+  // raise that ended one, resume the verify step that declared it.
   if (isVerifyPhase(phase))
-    return source === 'agent' || escalation.deferral === 'own-build-read' ? phase : 'code'
+    return source === 'agent' ||
+      escalation.deferral === 'own-build-read' ||
+      escalation.wait !== undefined
+      ? phase
+      : 'code'
   return 'other'
 }

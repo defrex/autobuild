@@ -10,6 +10,7 @@ import type { AbEvent } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild } from '../kernel/reducer'
+import { REDUCERS } from '../kernel/reducer-registry'
 import { checkIncremental } from '../kernel/incremental-contract'
 import { openExecution } from '../processes/execution-settlement'
 import {
@@ -313,7 +314,7 @@ describe('reduceBuildDigest node targets', () => {
   })
 
   test('the version bump re-reduces saved digests that predate node targets', () => {
-    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(12)
+    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(13)
   })
 
   test('collects every named node as a sorted unique set that only grows', () => {
@@ -330,5 +331,83 @@ describe('reduceBuildDigest node targets', () => {
   test('digestNodeTargets fails typed on an answer without the field', () => {
     expect(digestNodeTargets({ slug: 'b', nodeTargets: ['n'] })).toEqual(['n'])
     expect(() => digestNodeTargets({ slug: 'old' })).toThrow(BuildDigestCapabilityError)
+  })
+})
+
+describe('reduceBuildDigest ticket wait', () => {
+  const tickets = [{ source: 'linear', id: 'AUT-2' }]
+  const entered = (seq: number, id = 'w1', escalation = 'esc_w1'): DigestEventRow => ({
+    ...event('wait.entered', seq),
+    waitId: id,
+    escalation,
+    waitTickets: tickets,
+  })
+  const open = { id: 'w1', escalation: 'esc_w1', tickets }
+
+  test('wait.entered opens it until a matching end, answer, or unresolvable raise', () => {
+    const requested = event('wait.requested', 1)
+    const enteredLog = [requested, entered(2)]
+    expect(reduceBuildDigest(enteredLog).ticketWait).toEqual(open)
+    expect(reduceBuildDigest(enteredLog).waitPending).toBeUndefined()
+    const ended = [...enteredLog, { ...event('wait.ended', 3), waitId: 'w1' }]
+    expect(reduceBuildDigest(ended).ticketWait).toBeUndefined()
+    const answered = [...enteredLog, { ...event('escalation.answered', 3), escalation: 'esc_w1' }]
+    expect(reduceBuildDigest(answered).ticketWait).toBeUndefined()
+    const raised: DigestEventRow[] = [
+      ...enteredLog,
+      { ...event('escalation.raised', 3), policyCause: 'wait-unresolvable' },
+    ]
+    expect(reduceBuildDigest(raised).ticketWait).toBeUndefined()
+  })
+
+  test('unrelated answers, raises and ends keep it open', () => {
+    const log: DigestEventRow[] = [
+      event('wait.requested', 1),
+      entered(2),
+      { ...event('escalation.answered', 3), escalation: 'esc_other' },
+      { ...event('wait.ended', 4), waitId: 'w0' },
+      { ...event('escalation.raised', 5), policyCause: 'execution-no-progress' },
+      event('escalation.raised', 6),
+    ]
+    expect(reduceBuildDigest(log).ticketWait).toEqual(open)
+  })
+
+  test('a later wait replaces an ended one', () => {
+    const log: DigestEventRow[] = [
+      entered(1),
+      { ...event('wait.ended', 2), waitId: 'w1' },
+      entered(3, 'w2', 'esc_w2'),
+    ]
+    expect(reduceBuildDigest(log).ticketWait).toEqual({ id: 'w2', escalation: 'esc_w2', tickets })
+  })
+
+  test('the registered value read projects only the ticket-wait fields it folds', () => {
+    const adapt = REDUCERS.buildDigest!.valueRead as { adapt: (events: AbEvent[]) => unknown[] }
+    const envelope = (seq: number, type: AbEvent['type'], payload: object) =>
+      ({ build: 'b', seq, ts: event(type, seq).ts, actor: DISPATCHER, type, payload }) as AbEvent
+    const rows = adapt.adapt([
+      envelope(1, 'wait.entered', {
+        id: 'w1',
+        escalation: 'esc_w1',
+        tickets,
+        reason: 'r',
+        question: 'q',
+      }),
+      envelope(2, 'escalation.raised', {
+        id: 'esc_2',
+        phase: 'plan',
+        source: 'policy',
+        policyCause: 'wait-unresolvable',
+        question: 'q',
+      }),
+      envelope(3, 'escalation.answered', { id: 'esc_2', answer: 'a', resolution: 'guidance' }),
+      envelope(4, 'wait.ended', { id: 'w1', cause: 'automatic', message: 'm' }),
+    ])
+    expect(rows).toEqual([
+      { ...event('wait.entered', 1), waitId: 'w1', escalation: 'esc_w1', waitTickets: tickets },
+      { ...event('escalation.raised', 2), policyCause: 'wait-unresolvable' },
+      { ...event('escalation.answered', 3), escalation: 'esc_2' },
+      { ...event('wait.ended', 4), waitId: 'w1' },
+    ])
   })
 })
