@@ -354,3 +354,8 @@ describe('optimization ledger', () => {
     expect(relative.entries[0]!.nearMiss).toBe(true)
   })
 })
+
+test('the stop and admission inputs and the ledger have bounded read cost', async () => {
+  const { optimizationReadBudget } = await import('../testing/reduced-read-budget')
+  await optimizationReadBudget()
+}, 120_000)
