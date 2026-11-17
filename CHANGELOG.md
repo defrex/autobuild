@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.8.1 — 2026-11-17
+
+This patch release fixes a regression from #951 that made the web dashboard and settings pages crash in the browser with a "Bun is not defined" error. Both pages load normally again.
+
 - Fix the web dashboard and settings pages crashing in the browser with "Bun is not defined", a regression from [#951](https://github.com/defrex/autobuild/pull/951)
 
 ## v1.8.0 — 2026-11-17

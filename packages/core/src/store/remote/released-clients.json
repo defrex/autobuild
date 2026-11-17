@@ -99,5 +99,16 @@
     "provenance": {
       "tag": "v1.8.0"
     }
+  },
+  {
+    "version": "1.8.1",
+    "publishedAt": "2026-11-17T15:33:07.950Z",
+    "protocol": "7",
+    "contract": "1.8.0.json",
+    "projects": true,
+    "catalogIdentity": "9ba078909b9323a4d0044adacfc3fb005381bb07ca05acaf058e12c0c37da8fb",
+    "provenance": {
+      "tag": "v1.8.1"
+    }
   }
 ]
