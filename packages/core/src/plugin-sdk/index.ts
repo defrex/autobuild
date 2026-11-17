@@ -179,9 +179,15 @@ export {
   withIssueKeywords,
 } from '../kernel/issue-keywords'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
-export { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
+export {
+  ForgeFailure,
+  ForgeRejection,
+  isForgeFailure,
+  isForgeRejection,
+} from '../ports/forge-failure'
 export type {
   ForgeFailureDetails,
+  ForgeRejectionDetails,
   ForgeRequestContext,
   ForgeRequestObserver,
 } from '../ports/forge-failure'

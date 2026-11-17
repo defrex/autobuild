@@ -376,9 +376,9 @@ function renderBuild(
     const autoColor: ColorName =
       build.autoMerge === 'enabled'
         ? 'green'
-        : build.autoMerge === 'requested'
+        : build.autoMerge === 'requested' || build.autoMerge === 'polling'
           ? 'cyan'
-          : build.autoMerge === 'cancelling'
+          : build.autoMerge === 'cancelling' || build.autoMerge === 'human-merge'
             ? 'yellow'
             : 'dim'
     if (build.kind !== 'integration') rightTokens.push(paint(mergeSummary(build), autoColor, color))

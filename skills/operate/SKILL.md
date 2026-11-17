@@ -336,6 +336,11 @@ Read events with a cursor or a small `--events` count; logs are long.
   landing, though a node's completeness check may save an
   `integration.observed` diagnostic; re-read status and act on the stated
   reason.
+- `merge polling` on a build means GitHub GraphQL is unavailable to the
+  dispatcher, so Autobuild merges the PR itself once GitHub reports it clear to
+  merge. It lands only while a dispatcher runs and needs no action. A PR that
+  stays `merge polling` while GitHub reports it blocked on a base with a
+  classic-protection merge queue never lands by itself: ask a human to merge it.
 - `ab merge <slug> --head <sha>` — bind consent to the head you reviewed. It
   records consent only when `<sha>` (full or at least seven characters) is the
   build's current candidate head; otherwise it refuses with code
@@ -499,6 +504,12 @@ Treat every default-watch record as a call to act:
   or hold it. The build is back in the consent queue until you do.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
+  When the reason begins `Awaiting a human merge`, Autobuild cannot land the PR
+  itself: GitHub GraphQL is unavailable and the base requires a merge queue, or
+  GitHub refused the guarded merge. Tell a human to merge the PR on GitHub,
+  through its merge queue when it has one, and relay GitHub's refusal message
+  from the reason. Autobuild makes no further attempts and records the merge
+  when it happens.
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
   the reported blocker.
 - Automatic upgrade failure: inspect repository status for the target, provenance

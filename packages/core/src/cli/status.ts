@@ -73,7 +73,7 @@ import {
 import { sameLandingCandidate } from '../kernel/landing-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
-import { currentAutoMergeDeferralFrom } from '../kernel/auto-merge'
+import { currentLandingWaitReasonFrom } from '../kernel/auto-merge'
 import { autoMergeDisplay, effectiveStatus, type AutoMergeDisplay } from './dashboard/model'
 import { decideNextFromFacts } from '../kernel/engine'
 import {
@@ -1177,7 +1177,7 @@ function decideFromConfig(facts: BuildFacts, config: Config): BuildDecisionProje
   const decision = decideNextFromFacts(facts.state, facts.log, config)
   if (decision.kind !== 'wait') return { kind: 'runner-work' }
   if (decision.reason !== 'awaiting-pr') return { kind: 'parked', reason: decision.reason }
-  const reason = currentAutoMergeDeferralFrom(facts.deferral, facts.state)
+  const reason = currentLandingWaitReasonFrom(facts.deferral, facts.state)
   return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
 }
 

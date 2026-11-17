@@ -3586,7 +3586,7 @@ with illustrative members:
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.abort-requested {reason?, to?}` → `build.aborted`; `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
-| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied` |
+| Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -4280,7 +4280,12 @@ squash title and message settings, read over REST, and lands with an expected
 head guard. Native auto-merge messages are checked against that derivation on
 eligible polls even after consent acknowledgement, and repaired through
 consent-guarded disable/enable. Landing reads use REST only; GraphQL carries
-just the native enable and disable mutations. Repeated polling covers later
+just the native enable and disable mutations, preceded by one read-only
+availability probe per forge instance. A GraphQL refusal that says GraphQL is
+unavailable (HTTP 403 from an environment such as Claude Code on the web's
+GitHub proxy) is its own condition, distinct from rate limits, transient
+failures and permission errors; it suppresses further GraphQL from that
+process for 30 minutes and never drives forge cooldown. Repeated polling covers later
 head or metadata changes; it cannot make a future push atomic with an already
 armed native merge. Merge queues ignore message overrides, so identity-aware
 kernel merge defers with `unproven-gate-state` rather than bypassing the queue;
@@ -4399,7 +4404,30 @@ gates and the serialized node-writer publication rules remain authoritative.
 **Merge gates are never bypassed.** Merge authorization comes from recorded
 policy or explicit consent. For root-target leaves, whenever the base branch has
 any real merge-blocking gate, authorization is applied as GitHub-native auto-merge, so the
-forge's own checks decide when the PR merges. Only when the forge
+forge's own checks decide when the PR merges. When GitHub GraphQL is unavailable,
+native auto-merge cannot be armed and the root leaf lands by polling instead
+(`landing.polling-selected`, once per candidate, decision and command). On a
+tick where GitHub reports the PR clear to merge (`clean`, `unstable` or
+`has_hooks`, with `mergeable` true) at the verified candidate head, the
+dispatcher rechecks consent and calls a guarded squash that re-reads that state
+fresh at the exact head, rechecks consent immediately before the merge request,
+and sends the head guard. Every other state, including `blocked`, `behind`,
+`dirty`, `unknown`, `draft` and any unrecognized value, never merges, so the
+gate is never bypassed even by a credential that could; Autobuild never relies
+on the forge refusing a premature merge. A quiet polling tick costs one
+conditional PR read, no GraphQL, queue or consent read, and appends nothing.
+The landing settles once as awaiting a human merge
+(`landing.human-merge-required`) when GitHub exposes a merge queue for the base
+over REST (a ruleset `merge_queue` rule, or `merge_queue_merge` activity GitHub
+reports for the base branch, checked on the candidate's first evaluation and
+before every merge) or refuses the guarded squash of a PR it had just reported
+clear; the refusal message is recorded and shown. A settled landing makes no
+further landing call for that candidate; a human merge on the forge is recorded
+like any other. A classic-protection merge queue that GitHub does not expose
+over REST and that has no recorded activity cannot be detected: a PR GitHub
+keeps reporting blocked there stays polling and never merges. Polling lands
+only while a dispatcher runs, so native auto-merge stays primary wherever
+GraphQL works. Only when the forge
 authoritatively reports no gate may the janitor perform a normal,
 head-guarded squash itself — never admin, force, or rebase — and only after
 all verification and finalize work is complete. GitHub's exact documented

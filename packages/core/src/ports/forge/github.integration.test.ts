@@ -1,6 +1,7 @@
 import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
+  GITHUB_GRAPHQL_RECHECK_MS,
   GitHubForge,
   MERGEABILITY_RETRY_DELAYS_MS,
   parseRepoCoordinates,
@@ -14,7 +15,7 @@ import {
 } from './github-transport'
 import { ForgeFailure, isForgeFailure, isForgeRejection } from '../forge-failure'
 import { ForgeRequestDeferred } from '../forge-request-context'
-import { NoCommitsBetweenBranchesError } from '../types'
+import { isForgeMergeQueueRejection, NoCommitsBetweenBranchesError } from '../types'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -1611,7 +1612,18 @@ interface FakeGitHub {
   /** Runs before each PR read is answered, with the 1-based read count. */
   beforePrRead?: (fake: FakeGitHub, read: number) => void
   graphqlStatus?: number
+  /** Refuse every GraphQL request as Claude Code's GitHub proxy does. */
+  graphqlUnavailable?: boolean
+  /** The base branch's merge-queue activity page, or an error status. */
+  activity?: unknown[] | number
+  /** Refuse the merge request with this status and message. */
+  mergeError?: { status: number; message: string }
+  /** A successful merge request closes the PR as merged. */
+  mergeLands?: boolean
 }
+
+const PROXY_REFUSAL =
+  'GitHub GraphQL is not available from Claude Code sessions. Use the REST API instead.'
 
 const fakePr = (): FakeGitHub['pr'] => ({
   number: 42,
@@ -1632,7 +1644,7 @@ const fakePr = (): FakeGitHub['pr'] => ({
 /** A stateful REST GitHub for the landing path: conditional PR and
  * repository reads (ETag per representation), commit listing and compare
  * pagination, gate reads, the GraphQL auto-merge mutations, and the merge. */
-function fakeGitHub(overrides: Partial<FakeGitHub> = {}) {
+function fakeGitHub(overrides: Partial<FakeGitHub> = {}, config: { now?: () => number } = {}) {
   const fake: FakeGitHub = {
     pr: fakePr(),
     repo: {
@@ -1700,10 +1712,27 @@ function fakeGitHub(overrides: Partial<FakeGitHub> = {}) {
       }
     if (path.startsWith('repos/acme/app/rules/branches/'))
       return { status: 200, headers: {}, json: fake.rules }
-    if (route === 'PUT repos/acme/app/pulls/42/merge') return { status: 200, headers: {}, json: {} }
+    if (route === 'GET repos/acme/app/activity') {
+      if (typeof fake.activity === 'number')
+        throw new GitHubApiError(fake.activity, 'activity unavailable')
+      return { status: 200, headers: {}, json: fake.activity ?? [] }
+    }
+    if (route === 'PUT repos/acme/app/pulls/42/merge') {
+      if (fake.mergeError !== undefined)
+        throw new GitHubApiError(fake.mergeError.status, fake.mergeError.message, {
+          message: fake.mergeError.message,
+        })
+      if (fake.mergeLands)
+        fake.pr = { ...fake.pr, state: 'closed', merged: true, merge_commit_sha: 'squash-42' }
+      return { status: 200, headers: {}, json: {} }
+    }
     if (route === 'POST graphql') {
       if (fake.graphqlStatus !== undefined)
         throw new GitHubApiError(fake.graphqlStatus, 'mutation denied')
+      if (fake.graphqlUnavailable)
+        throw new GitHubApiError(403, PROXY_REFUSAL, { message: PROXY_REFUSAL })
+      if ((opts!.body as { query: string }).query.includes('rateLimit'))
+        return { status: 200, headers: {}, json: { data: { rateLimit: { cost: 1 } } } }
       const { query, variables } = opts!.body as {
         query: string
         variables: { commitHeadline: string; commitBody: string }
@@ -1727,11 +1756,17 @@ function fakeGitHub(overrides: Partial<FakeGitHub> = {}) {
     transport,
     repository: 'acme/app',
     mergeabilityRetryDelaysMs: [0, 0],
+    ...(config.now !== undefined ? { now: config.now } : {}),
   })
-  return { forge, calls, fake }
+  return { forge, calls, fake, transport }
 }
 
-const graphqlCalls = (calls: ApiCall[]) => calls.filter((call) => call.path === 'graphql')
+const isProbe = (call: ApiCall) =>
+  call.path === 'graphql' && (call.opts!.body as { query: string }).query.includes('rateLimit')
+/** GraphQL mutations; the availability probe is counted by {@link probeCalls}. */
+const graphqlCalls = (calls: ApiCall[]) =>
+  calls.filter((call) => call.path === 'graphql' && !isProbe(call))
+const probeCalls = (calls: ApiCall[]) => calls.filter(isProbe)
 const mutationKinds = (calls: ApiCall[]) =>
   graphqlCalls(calls).map((call) =>
     (call.opts!.body as { query: string }).query.includes('disablePullRequestAutoMerge')
@@ -3533,4 +3568,265 @@ test('exact ancestry comparisons share one wire read within a dispatcher scope',
     expect(await forge.isCommitAncestor(a, b)).toBe(true)
   })
   expect(calls).toHaveLength(1)
+})
+
+describe('GitHub landing when GraphQL is unavailable', () => {
+  const identity = { buildSlug: 'polling-build' }
+  const activityCalls = (calls: ApiCall[]) =>
+    calls.filter((call) => call.path === 'repos/acme/app/activity')
+  /** A gated PR in a GraphQL-blocked environment, at the given REST state. */
+  const blocked = (state = 'blocked', overrides: Partial<FakeGitHub> = {}) => {
+    let now = Date.parse('2026-11-17T00:00:00Z')
+    const github = fakeGitHub(
+      { gated: true, graphqlUnavailable: true, ...overrides },
+      { now: () => now },
+    )
+    github.fake.pr.mergeable_state = state
+    return { ...github, advance: (ms: number) => (now += ms) }
+  }
+  /** One dispatcher tick: the janitor poll, then the landing inspection. */
+  const tick = (forge: GitHubForge, polling = false) =>
+    forge.withReadScope(async () => {
+      await forge.getPrState('/absent', 42)
+      return forge.setAutoMerge('/absent', 42, true, {
+        ...identity,
+        ...(polling ? { polling } : {}),
+      })
+    })
+
+  test('a blocked gated PR polls after one probe; quiet polls cost one conditional read', async () => {
+    const { forge, calls, fake, transport } = blocked()
+    expect(await tick(forge)).toEqual({
+      kind: 'polling',
+      headSha: 'head-42',
+      clear: false,
+      detail: "GitHub GraphQL is unavailable; PR #42 reports mergeable_state 'BLOCKED'",
+    })
+    expect(probeCalls(calls)).toHaveLength(1)
+    expect(graphqlCalls(calls)).toEqual([])
+    expect(activityCalls(calls)).toHaveLength(1)
+    expect(activityCalls(calls)[0]!.opts?.query).toEqual({
+      ref: 'refs/heads/main',
+      activity_type: 'merge_queue_merge',
+      per_page: '1',
+    })
+
+    for (const quiet of [forge, new GitHubForge({ transport, repository: 'acme/app' })]) {
+      const before = calls.length
+      expect(await tick(quiet, true)).toMatchObject({ kind: 'polling', clear: false })
+      // One PR read (a 304 on the warm instance, a 200 on a fresh process);
+      // no gate, activity, repository or GraphQL request.
+      expect(paths(calls.slice(before))).toEqual(['GET repos/acme/app/pulls/42'])
+    }
+    expect(fake.pr.auto_merge).toBe(null)
+  })
+
+  test('availability is rechecked at most once per window, and only on a full evaluation', async () => {
+    const { forge, calls, fake, advance } = blocked()
+    await tick(forge)
+    fake.pr.mergeable_state = 'clean'
+    // Inside the window the clear tick's full path reuses the refusal.
+    expect(await tick(forge, true)).toMatchObject({ kind: 'polling', clear: true })
+    expect(probeCalls(calls)).toHaveLength(1)
+    advance(GITHUB_GRAPHQL_RECHECK_MS)
+    expect(await tick(forge, true)).toMatchObject({ kind: 'polling', clear: true })
+    expect(probeCalls(calls)).toHaveLength(2)
+    // The second refusal suppresses probes for the next window.
+    await tick(forge, true)
+    advance(GITHUB_GRAPHQL_RECHECK_MS - 1)
+    await tick(forge, true)
+    expect(probeCalls(calls)).toHaveLength(2)
+  })
+
+  test('a transient probe failure re-throws and leaves no suppression window', async () => {
+    const { forge, calls, fake } = blocked('blocked', { graphqlStatus: 502 })
+    const failure = await tick(forge).catch((error: unknown) => error)
+    expect(isForgeFailure(failure)).toBe(true)
+    delete fake.graphqlStatus
+    expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: false })
+    expect(probeCalls(calls)).toHaveLength(2)
+  })
+
+  test.each(['clean', 'unstable', 'has_hooks'])(
+    "'%s' is clear with one activity read",
+    async (state) => {
+      const { forge, calls } = blocked(state)
+      expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: true, headSha: 'head-42' })
+      expect(activityCalls(calls)).toHaveLength(1)
+    },
+  )
+
+  test.each(['blocked', 'behind', 'dirty', 'unknown', 'draft'])(
+    "'%s' is never clear, and a quiet poll reads no activity",
+    async (state) => {
+      const { forge, calls } = blocked(state)
+      const first = await tick(forge)
+      expect(first).not.toMatchObject({ clear: true })
+      // Every full-path evaluation reaches the queue check, whatever the state.
+      expect(activityCalls(calls)).toHaveLength(1)
+      const before = calls.length
+      expect(await tick(forge, true)).toMatchObject({ kind: 'polling', clear: false })
+      expect(activityCalls(calls.slice(before))).toEqual([])
+      expect(mergeCalls(calls)).toEqual([])
+    },
+  )
+
+  test('a clean PR that GitHub does not report mergeable is not clear', async () => {
+    const { forge, fake } = blocked('clean')
+    fake.pr.mergeable = null
+    expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: false })
+  })
+
+  test.each(['clean', 'unstable', 'has_hooks', 'blocked', 'behind', 'unknown', 'dirty', 'draft'])(
+    "recorded merge-queue activity settles a '%s' PR on its first evaluation",
+    async (state) => {
+      // Classic required checks, no ruleset merge_queue rule.
+      const { forge, calls } = blocked(state, {
+        activity: [{ id: 1, activity_type: 'merge_queue_merge', ref: 'refs/heads/main' }],
+      })
+      expect(await tick(forge)).toEqual({
+        kind: 'human-merge',
+        cause: 'merge-queue-activity',
+        detail: 'GitHub GraphQL is unavailable and GitHub reports merge-queue merges on main',
+      })
+      expect(mergeCalls(calls)).toEqual([])
+      expect(graphqlCalls(calls)).toEqual([])
+      expect(probeCalls(calls)).toHaveLength(1)
+    },
+  )
+
+  test.each([403, 404, 422])('an activity %i is no evidence', async (status) => {
+    const { forge } = blocked('clean', { activity: status })
+    expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: true })
+  })
+
+  test('an activity 502 propagates as a ForgeFailure', async () => {
+    const { forge } = blocked('clean', { activity: 502 })
+    expect(isForgeFailure(await tick(forge).catch((error: unknown) => error))).toBe(true)
+  })
+
+  test('a ruleset merge queue settles; with GraphQL available it still defers', async () => {
+    const rules = [{ type: 'merge_queue', ruleset_id: 1 }]
+    const { forge, calls } = blocked('clean', { rules })
+    expect(await tick(forge)).toEqual({
+      kind: 'human-merge',
+      cause: 'merge-queue-rule',
+      detail: 'GitHub GraphQL is unavailable and main requires its merge queue (ruleset)',
+    })
+    expect(mergeCalls(calls)).toEqual([])
+    const working = blocked('clean', { rules, graphqlUnavailable: false })
+    expect(await tick(working.forge)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('merge queues') },
+    })
+  })
+
+  test('where GraphQL works, one probe precedes the first native application only', async () => {
+    const { forge, calls, fake } = blocked('clean', { graphqlUnavailable: false })
+    expect(await tick(forge)).toEqual({ kind: 'applied' })
+    expect(probeCalls(calls)).toHaveLength(1)
+    fake.pr.auto_merge = null
+    expect(await tick(forge)).toEqual({ kind: 'applied' })
+    expect(probeCalls(calls)).toHaveLength(1)
+    expect(mutationKinds(calls)).toEqual(['enable', 'enable'])
+  })
+
+  test('a refused enable mutation defers quietly and routes the next tick to polling', async () => {
+    const { forge, calls, fake } = blocked('clean', { graphqlUnavailable: false })
+    expect(await tick(forge)).toEqual({ kind: 'applied' })
+    fake.pr.auto_merge = null
+    fake.graphqlUnavailable = true
+    // No reason: nothing for an operator to act on, so no observation.
+    expect(await tick(forge)).toEqual({ kind: 'deferred' })
+    const before = calls.length
+    expect(await tick(forge)).toMatchObject({ kind: 'polling', clear: true })
+    expect(graphqlCalls(calls.slice(before))).toEqual([])
+    expect(probeCalls(calls.slice(before))).toEqual([])
+  })
+
+  describe('squashMerge requireClearState', () => {
+    const squash = (forge: GitHubForge, canApply?: () => Promise<boolean>) =>
+      forge.squashMerge('/absent', 42, 'head-42', {
+        ...identity,
+        baseBranch: 'main',
+        requireClearState: true,
+        ...(canApply ? { canApply } : {}),
+      })
+
+    test('a clear PR merges at the verified head after consent', async () => {
+      const { forge, calls, fake } = blocked('clean', { mergeLands: true })
+      let consulted = 0
+      await squash(forge, async () => {
+        consulted++
+        return true
+      })
+      expect(consulted).toBe(1)
+      expect(mergeCalls(calls)).toHaveLength(1)
+      expect(mergeCalls(calls)[0]!.opts?.body).toMatchObject({
+        merge_method: 'squash',
+        sha: 'head-42',
+      })
+      expect(fake.pr.merged).toBe(true)
+    })
+
+    test('a fresh blocked read never merges, even where the PUT would succeed', async () => {
+      const { forge, calls } = blocked('blocked', { mergeLands: true })
+      const error = await squash(forge).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Error)
+      expect(isForgeRejection(error)).toBe(false)
+      expect((error as Error).message).toContain('no longer reports PR #42 clear')
+      expect(mergeCalls(calls)).toEqual([])
+    })
+
+    test('revoked consent sends no merge request', async () => {
+      const { forge, calls } = blocked('clean')
+      await squash(forge, async () => false)
+      expect(mergeCalls(calls)).toEqual([])
+    })
+
+    test('merge-queue activity is a merge-queue rejection with no merge request', async () => {
+      const { forge, calls } = blocked('clean', {
+        activity: [{ activity_type: 'merge_queue_merge' }],
+      })
+      const error = await squash(forge).catch((caught: unknown) => caught)
+      expect(isForgeMergeQueueRejection(error)).toBe(true)
+      expect(mergeCalls(calls)).toEqual([])
+    })
+
+    test.each([
+      [405, 'Pull Request is not mergeable'],
+      [422, 'Required status check "ci" is expected.'],
+      [403, 'Merging is blocked by repository rules'],
+    ])("a %i refusal is a ForgeRejection carrying GitHub's message", async (status, message) => {
+      const { forge } = blocked('clean', { mergeError: { status, message } })
+      const error = await squash(forge).catch((caught: unknown) => caught)
+      expect(isForgeRejection(error)).toBe(true)
+      expect(error).toMatchObject({ status, forgeMessage: message })
+      expect(isForgeMergeQueueRejection(error)).toBe(false)
+    })
+
+    test('a moved head (409) stays a hard error and a 502 stays a ForgeFailure', async () => {
+      const moved = blocked('clean', {
+        mergeError: { status: 409, message: 'Head branch was modified' },
+      })
+      const conflict = await squash(moved.forge).catch((caught: unknown) => caught)
+      expect(isForgeRejection(conflict)).toBe(false)
+      expect(conflict).toBeInstanceOf(GitHubApiError)
+      const flaky = blocked('clean', { mergeError: { status: 502, message: 'Bad gateway' } })
+      expect(isForgeFailure(await squash(flaky.forge).catch((caught: unknown) => caught))).toBe(
+        true,
+      )
+    })
+
+    test('without requireClearState a refusal is unchanged', async () => {
+      const { forge } = fakeGitHub({
+        mergeError: { status: 405, message: 'Pull Request is not mergeable' },
+      })
+      const error = await forge
+        .squashMerge('/absent', 42, 'head-42', { ...identity, baseBranch: 'main' })
+        .catch((caught: unknown) => caught)
+      expect(isForgeRejection(error)).toBe(false)
+      expect(error).toBeInstanceOf(GitHubApiError)
+    })
+  })
 })

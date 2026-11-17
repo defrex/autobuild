@@ -5,7 +5,7 @@ import {
   neutralizeClosingReferences,
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
-import type { BuildLandingOptions } from '../types'
+import { ForgeMergeQueueRejection, type BuildLandingOptions } from '../types'
 import { ForgeRejection } from '../forge-failure'
 import { findSummaryMarker } from './summary-marker'
 /**
@@ -15,6 +15,7 @@ import { findSummaryMarker } from './summary-marker'
  */
 import {
   classifyAutoMergeEnable,
+  MERGE_CLEAR_STATES,
   type MergeGatePresence,
   type MergeStateStatus,
 } from '../../kernel/auto-merge'
@@ -227,6 +228,18 @@ export class FakeForge implements Forge {
   readonly identityReads: number[] = []
   private readonly nativeDeferrals = new Map<number, AutoMergeDeferralReason>()
   private readonly squashErrors = new Map<number, string>()
+  /** GraphQL availability, modelled like GitHubForge's per-instance memo:
+   * one simulated probe while unknown, none once decided. */
+  private graphqlUnavailable = false
+  private graphqlDecided = false
+  /** Simulated GraphQL requests: availability probes and native mutations. */
+  graphqlRequests = 0
+  /** Polls answered by the polling route's fast path alone. */
+  pollingFastPath = 0
+  /** Simulated merge-queue activity reads. */
+  activityReads = 0
+  private readonly mergeQueues = new Map<number, 'rule' | 'activity'>()
+  private readonly mergeRefusals = new Map<number, string>()
   private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
   private readonly attachmentUploadErrors: string[] = []
   private readonly attachmentReclaimErrors: string[] = []
@@ -398,6 +411,48 @@ export class FakeForge implements Forge {
   clearNativeAutoMergeError(number: number): void {
     this.assertPr(number)
     this.nativeDeferrals.delete(number)
+  }
+
+  /** Model an environment whose GitHub GraphQL is refused (or restored).
+   * Resets the availability memo, so the next full evaluation probes. */
+  setGraphqlUnavailable(on = true): void {
+    this.graphqlUnavailable = on
+    this.graphqlDecided = false
+  }
+
+  private graphqlAvailable(): boolean {
+    if (!this.graphqlDecided) {
+      this.graphqlRequests += 1
+      this.graphqlDecided = true
+    }
+    return !this.graphqlUnavailable
+  }
+
+  /** Seed a REST-visible merge queue on the PR's base: a ruleset rule or
+   * recorded merge-queue activity. */
+  setMergeQueue(number: number, evidence: 'rule' | 'activity'): void {
+    this.assertPr(number)
+    this.mergeQueues.set(number, evidence)
+  }
+
+  /** Make a `requireClearState` squash be refused at the merge request. */
+  setMergeRefusal(number: number, message: string): void {
+    this.assertPr(number)
+    this.mergeRefusals.set(number, message)
+  }
+
+  private mergeClear(number: number): boolean {
+    const state = this.prs.get(number)
+    return (
+      state?.state === 'open' &&
+      state.mergeable === true &&
+      MERGE_CLEAR_STATES.has(this.mergeStates.get(number) ?? 'UNKNOWN')
+    )
+  }
+
+  private queueActivity(number: number): boolean {
+    this.activityReads += 1
+    return this.mergeQueues.get(number) === 'activity'
   }
 
   /** Simulate a guarded direct-squash command failure. */
@@ -719,15 +774,59 @@ export class FakeForge implements Forge {
       return { kind: 'applied' }
     }
 
+    const mergeState = this.mergeStates.get(number) ?? 'UNKNOWN'
+    if (enabled && options?.polling === true && !this.mergeClear(number)) {
+      this.pollingFastPath += 1
+      return {
+        kind: 'polling',
+        headSha: this.headShas.get(number)!,
+        clear: false,
+        detail: `Fake GraphQL is unavailable; PR #${number} reports ${mergeState}`,
+      }
+    }
     const gate = this.gates.get(number) ?? this.defaultGatePresence
+    if (
+      options !== undefined &&
+      this.mergeQueues.get(number) === 'rule' &&
+      typeof gate !== 'object' &&
+      !this.graphqlAvailable()
+    ) {
+      this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+      return {
+        kind: 'human-merge',
+        cause: 'merge-queue-rule',
+        detail: 'Fake GraphQL is unavailable and the base requires its merge queue (ruleset)',
+      }
+    }
     if (typeof gate === 'object') {
       this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
       return { kind: 'deferred', reason: gate }
     }
-    const mergeState = this.mergeStates.get(number) ?? 'UNKNOWN'
     const disposition = classifyAutoMergeEnable(mergeState, gate)
+    if (
+      options !== undefined &&
+      disposition.kind !== 'direct' &&
+      !this.graphqlAvailable() &&
+      this.queueActivity(number)
+    ) {
+      this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+      return {
+        kind: 'human-merge',
+        cause: 'merge-queue-activity',
+        detail: 'Fake GraphQL is unavailable and the base reports merge-queue merges',
+      }
+    }
     switch (disposition.kind) {
       case 'native': {
+        if (options !== undefined && !this.graphqlAvailable()) {
+          this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+          return {
+            kind: 'polling',
+            headSha: this.headShas.get(number)!,
+            clear: this.mergeClear(number),
+            detail: `Fake GraphQL is unavailable; PR #${number} reports ${mergeState}`,
+          }
+        }
         const reason = this.nativeDeferrals.get(number)
         if (reason !== undefined) {
           this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
@@ -735,6 +834,7 @@ export class FakeForge implements Forge {
         }
         if (options?.canApply !== undefined && !(await options.canApply()))
           return { kind: 'deferred' }
+        if (options !== undefined) this.graphqlRequests += 1
         this.autoMerge.set(number, true)
         const armed = options && this.expectedIdentity(number, options)
         if (armed) this.armed.set(number, armed)
@@ -820,12 +920,32 @@ export class FakeForge implements Forge {
     }
     const gate = this.gates.get(number) ?? this.defaultGatePresence
     if (typeof gate === 'object') throw new Error(gate.detail)
-    if (gate !== 'absent') {
-      throw new Error(`FakeForge: PR #${number} is protected by a merge-blocking gate`)
-    }
-    const disposition = classifyAutoMergeEnable(this.mergeStates.get(number) ?? 'UNKNOWN', gate)
-    if (disposition.kind !== 'direct') {
-      throw new Error(`FakeForge: PR #${number} is no longer direct-merge eligible`)
+    if (options?.requireClearState === true) {
+      // The polling route's gated squash: clear state, queue evidence, then
+      // consent immediately before the merge request.
+      if (!this.mergeClear(number))
+        throw new Error(`FakeForge: PR #${number} is no longer reported clear to merge`)
+      if (this.queueActivity(number))
+        throw new ForgeMergeQueueRejection('Fake base reports merge-queue merges', {
+          forge: 'Fake',
+          forgeMessage: 'Fake base reports merge-queue merges',
+        })
+      if (options.canApply !== undefined && !(await options.canApply())) return
+      const refusal = this.mergeRefusals.get(number)
+      if (refusal !== undefined)
+        throw new ForgeRejection(`Fake refused to merge PR #${number}: ${refusal}`, {
+          forge: 'Fake',
+          status: 405,
+          forgeMessage: refusal,
+        })
+    } else {
+      if (gate !== 'absent') {
+        throw new Error(`FakeForge: PR #${number} is protected by a merge-blocking gate`)
+      }
+      const disposition = classifyAutoMergeEnable(this.mergeStates.get(number) ?? 'UNKNOWN', gate)
+      if (disposition.kind !== 'direct') {
+        throw new Error(`FakeForge: PR #${number} is no longer direct-merge eligible`)
+      }
     }
 
     this.squashMergeCalls.push({

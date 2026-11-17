@@ -1119,6 +1119,28 @@ export const eventPayloadSchemas = {
     commandSeq: z.number().int().positive(),
   }),
   'landing.native-enable-started': empty,
+  /** The landing cannot be armed natively (forge GraphQL is unavailable), so
+   * the dispatcher lands it by polling: it squashes on a tick where the
+   * forge reports the PR clear at the candidate head. Once per candidate,
+   * decision and command. */
+  'landing.polling-selected': z.strictObject({
+    candidate: landingCandidateSchema,
+    decisionSeq: z.number().int().positive(),
+    commandSeq: z.number().int().positive().optional(),
+    detail: z.string().min(1),
+  }),
+  /** The landing settled into awaiting a human merge: it cannot be armed
+   * natively and the base requires a merge queue, or the forge refused the
+   * guarded squash of a PR it had reported clear. No further landing calls
+   * for this candidate, decision and command. */
+  'landing.human-merge-required': z.strictObject({
+    candidate: landingCandidateSchema,
+    decisionSeq: z.number().int().positive(),
+    commandSeq: z.number().int().positive().optional(),
+    cause: z.enum(['merge-queue-rule', 'merge-queue-activity', 'merge-refused']),
+    /** Why; for `merge-refused`, the forge's refusal message verbatim. */
+    detail: z.string().min(1),
+  }),
   'landing.forge-merged': z.strictObject({
     classification: z.enum(['human', 'possible-stale-enable']),
     overrodeHold: z.boolean(),

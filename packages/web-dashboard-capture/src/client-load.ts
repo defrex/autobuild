@@ -494,6 +494,7 @@ const FRAME_PAGES: readonly (readonly [string, string])[] = [
   ['builds-mixed-paused-', '/build/[slug]'],
   ['builds-auto-merge-on-', '/build/[slug]'],
   ['builds-parked-no-consent-', '/build/[slug]'],
+  ['builds-merge-human-', '/build/[slug]'],
   ['builds-post-reconcile-policy-', '/build/[slug]'],
   ['builds-mixed-detail-', '/build/[slug]'],
   ['builds-mixed-answer-', '/build/[slug]'],

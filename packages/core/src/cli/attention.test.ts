@@ -278,3 +278,60 @@ test('buffered start uses actual time and a quiet recovery resets continuous fai
   projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 8, 17_000))
   expect(projection.pending(at(600_000))).toEqual([])
 })
+
+test('a landing awaiting a human merge is merge attention for every cause; polling is not', async () => {
+  const candidate = { head: 'aaa', parent: 'base', cycle: '1' }
+  for (const [cause, detail, expected] of [
+    [
+      'merge-queue-rule',
+      'main requires its merge queue (ruleset)',
+      'main requires its merge queue',
+    ],
+    ['merge-queue-activity', 'GitHub reports merge-queue merges on main', 'merge-queue merges'],
+    [
+      'merge-refused',
+      'Pull Request is not mergeable',
+      'GitHub refused the merge: "Pull Request is not mergeable"',
+    ],
+  ] as const) {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.createBuild({ slug: 'b', repo: 'repo' })
+    const read = async () => mergeDecision(await store.getEvents('b'), clock())
+    await store.append('b', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://example.com/pr/1', headSha: 'aaa' } },
+    })
+    const decided = await store.append('b', {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate,
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'auto',
+        rule: { default: true },
+      },
+    })
+    await store.append('b', {
+      actor: DISPATCHER,
+      type: 'landing.polling-selected',
+      payload: { candidate, decisionSeq: decided.seq, detail: 'GitHub GraphQL is unavailable' },
+    })
+    expect(await read()).toBeNull()
+    await store.append('b', {
+      actor: DISPATCHER,
+      type: 'landing.human-merge-required',
+      payload: { candidate, decisionSeq: decided.seq, cause, detail },
+    })
+    const decision = await read()
+    expect(decision).toMatchObject({ type: 'build.merge-decision', pr: { number: 1 } })
+    expect(decision!.reason).toStartWith('Awaiting a human merge — ')
+    expect(decision!.reason).toContain(expected)
+    expect(decision!.reason).toEndWith('merge PR #1 on GitHub')
+    await store.append('b', { actor: DISPATCHER, type: 'pr.merged', payload: { sha: 'squash' } })
+    expect(await read()).toBeNull()
+  }
+})

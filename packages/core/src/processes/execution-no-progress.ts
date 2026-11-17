@@ -25,6 +25,8 @@ export const executionProgress = {
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',
   'landing.native-enable-started': 'bookkeeping',
+  'landing.polling-selected': 'bookkeeping',
+  'landing.human-merge-required': 'bookkeeping',
   'landing.forge-merged': 'progress',
   'landing.native-applied': 'bookkeeping',
   'target.distance': 'bookkeeping',

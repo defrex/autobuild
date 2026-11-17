@@ -297,8 +297,9 @@ The default watch reports actionable conditions only:
   signal for a ready consent or held merge, including first repository-wide
   discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
   Unready and stale candidates stay silent. `build.merge-decision` remains for
-  current actionable merge-gate deferrals and unsafe forge outcomes, once per
-  build/PR; it does not duplicate consent or hold attention.
+  current actionable merge-gate deferrals, landings awaiting a human merge, and
+  unsafe forge outcomes, once per build/PR; it does not duplicate consent or
+  hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`,
