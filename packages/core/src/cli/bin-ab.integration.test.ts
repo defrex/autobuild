@@ -655,6 +655,7 @@ test('repository status reads paused and unpaused stores without changing either
     upgradeStatus: {},
     upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
     publications: [],
+    hooks: [],
   })
   expect(pausedResult).toMatchObject({ code: 0, stderr: '' })
   expect(JSON.parse(pausedResult.stdout)).toEqual({
@@ -674,6 +675,7 @@ test('repository status reads paused and unpaused stores without changing either
     upgradeStatus: {},
     upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
     publications: [],
+    hooks: [],
   })
 
   const reopenedUnpaused = openLocalStore(unpausedPath)
