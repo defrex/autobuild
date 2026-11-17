@@ -719,12 +719,14 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
         ? 'Usage: ab hold <slug> [--store <ref>]'
         : 'Usage: ab merge <slug> [--head <sha>] [--store <ref>]',
       '',
-      'Merge consent survives restacks and verification; hold persists until merge.',
+      'Merge consent survives clean restacks and verification; hold persists until merge.',
+      'Consent given under a [[merge]] rule with paths or within is revoked when a reconcile',
+      'edits a file the rule protects (landing.consent-revoked); the build needs fresh consent.',
       'These sessionless controls never bypass merge gates.',
       ...(name === 'merge'
         ? [
             '--head refuses, recording nothing, unless <sha> (full or ≥7-character prefix)',
-            "is the build's current candidate head; consent still survives later restacks.",
+            "is the build's current candidate head; consent still survives later clean restacks.",
           ]
         : []),
     ]),

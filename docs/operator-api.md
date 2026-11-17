@@ -290,8 +290,10 @@ The default watch reports actionable conditions only:
 - `build.janitor-escalated`: a build's janitor failure episode outlasted `policy.janitorFailureEscalationSeconds` and raised one escalation naming the operation, last error, attempt count and episode start. The janitor keeps retrying; a successful attempt closes the escalation, and a bare retry answer attempts on the next tick.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
-- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`, or
-  conflicted `restack.replayed` events. `build.consent-ready` is the single
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`,
+  `landing.consent-revoked` (protected merge consent revoked by a reconcile's
+  edits, naming the matched files and both heads), or conflicted
+  `restack.replayed` events. `build.consent-ready` is the single
   signal for a ready consent or held merge, including first repository-wide
   discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.
   Unready and stale candidates stay silent. `build.merge-decision` remains for
@@ -406,7 +408,9 @@ to CLI, HTTP and MCP alike; unsupported sources refuse even explicit defaults
 or clears before changing other fields. Dispatch routing is unchanged.
 
 HTTP merge controls retain the wire actions `land` and `hold` with acknowledged durable state. Merge
-requires readiness and survives restacks; hold persists until merge. Repository
+requires readiness and survives clean restacks, except that a reconcile editing
+files protected by the consent rule's `paths` or `within` predicates revokes it;
+hold persists until merge. Repository
 auto-merge settings are retired; configure ordered `[[merge]]` rules.
 
 Default attention includes `build.janitor-failing`, `build.janitor-escalated` and

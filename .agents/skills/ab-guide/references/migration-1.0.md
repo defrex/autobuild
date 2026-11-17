@@ -52,8 +52,10 @@ Execution pipeline configuration stays owned by the build and is re-pinned
 from its checkout at each verify cycle; live dispatcher
 merge policy is separate. A recorded readiness decision retains its rule
 snapshot despite configuration edits; a new candidate receives a new decision.
-Explicit consent persists through replay and re-verification until hold or
-completion, except accepted node reparenting revokes it.
+Explicit consent persists through clean replay and re-verification until hold
+or completion, except accepted node reparenting revokes it, and a reconcile
+whose own edits touch files protected by the consent rule's `paths` or `within`
+predicates revokes it.
 
 ## The reversed rebase ban
 
