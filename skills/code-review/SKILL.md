@@ -52,6 +52,14 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/code-review.md"
    ```
 
+   If you cannot judge the change until another ticket merges — it depends on
+   code that ticket owns and has not landed — end the session with
+   `ab wait-on <ticket-id>... --reason "…"` instead of a verdict or an
+   escalation. The build parks without a slot; when every named ticket
+   completes, this same review round resumes on the target's current head,
+   with a `wait` block in `$AB_CONTEXT_DIR/guidance.json`. Escalate as before for
+   anything else.
+
 ## Writing findings
 
 Same schema as every review (the CLI validates and stamps ids): `severity`

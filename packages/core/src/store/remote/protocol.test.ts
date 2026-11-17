@@ -7,7 +7,7 @@ describe('build digest wire schema', () => {
       slug: 'b',
       observations: [],
       nodeTargets: [],
-      waitPending: true,
+      waitPending: true as const,
       ticketWait: {
         id: 'w1',
         escalation: 'esc_w1',

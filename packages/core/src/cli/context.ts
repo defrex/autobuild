@@ -512,11 +512,11 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   const waitIds = new Set([
     wait?.id,
     wait && state.wait?.escalation,
-    ...(wait === undefined
-      ? []
-      : state.answeredEscalations
-          .filter((escalation) => escalation.wait?.id === state.wait?.id)
-          .map((escalation) => escalation.id)),
+    ...(wait?.outcome === 'ended'
+      ? state.answeredEscalations
+          .filter((escalation) => escalation.wait?.id === wait.id)
+          .map((escalation) => escalation.id)
+      : []),
   ])
   // seq of the refusal or end the wait block reports, and of the answer
   // behind the guidance.json written so far: only a strictly newer answer

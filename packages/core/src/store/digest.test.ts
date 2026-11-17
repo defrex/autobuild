@@ -382,7 +382,9 @@ describe('reduceBuildDigest ticket wait', () => {
   })
 
   test('the registered value read projects only the ticket-wait fields it folds', () => {
-    const adapt = REDUCERS.buildDigest!.valueRead as { adapt: (events: AbEvent[]) => unknown[] }
+    const adapt = REDUCERS.buildDigest!.valueRead as unknown as {
+      adapt: (events: AbEvent[]) => unknown[]
+    }
     const envelope = (seq: number, type: AbEvent['type'], payload: object) =>
       ({ build: 'b', seq, ts: event(type, seq).ts, actor: DISPATCHER, type, payload }) as AbEvent
     const rows = adapt.adapt([
