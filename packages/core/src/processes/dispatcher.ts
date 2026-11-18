@@ -4633,7 +4633,8 @@ export class Dispatcher {
         // it, so a newly ready child reaches its first request.
         let measured: { candidate: string; baseline: string } | undefined
         let closure: Awaited<ReturnType<NonNullable<Forge['closePr']>>> | undefined
-        if (!recoverLanding && (await store.buildFacts(target.slug)).state.optimization) {
+        const optimized = (await store.buildFacts(target.slug)).state.optimization !== undefined
+        if (!recoverLanding && optimized) {
           const gate = await this.optimizationLandingGate(
             record,
             target.slug,
@@ -4645,7 +4646,15 @@ export class Dispatcher {
           else closure = gate.result
         }
         if (closure === undefined) {
-          const pair = measured
+          // Recovery of a reserved landing still publishes only a pair the
+          // current gate lands: a revised epsilon or ruler since the
+          // reservation makes the writer abandon it rather than publish, and
+          // the next poll measures or settles it. A write that already
+          // happened is recovered by readback before this check runs.
+          const pair =
+            recoverLanding && optimized && reservation
+              ? { candidate: reservation.parent, baseline: reservation.expected }
+              : measured
           const preflight = recoverLanding
             ? undefined
             : await preflightNodeLanding(

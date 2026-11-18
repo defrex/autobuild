@@ -200,6 +200,47 @@ test('an improved attempt requests its first measurement, then lands only on its
   }
 }, 30_000)
 
+test('an interrupted landing recovers only while its measurement still qualifies', async (makeHarness) => {
+  const { h, node } = await setup(makeHarness as never, ['A1'])
+  try {
+    await tick(h)
+    const child = await slugOf(h, 'A1')
+    await toPr(h, child)
+    await tick(h)
+    await measure(h, child, 3)
+    const nodeHead = await git(['rev-parse', node.branch!], h.origin)
+    // Fail the destination write after the reservation, before publication.
+    const rewrite = h.forgeAdapter.kernelRewrite ?? h.forgeAdapter.rewrite!
+    Object.defineProperty(h.forgeAdapter, 'rewrite', { value: rewrite, configurable: true })
+    const replace = rewrite.replace.bind(rewrite)
+    rewrite.replace = async () => {
+      throw new Error('injected failure before publication')
+    }
+    await tick(h)
+    expect((await stateOf(h, node.slug)).nodeRestack?.active?.source).toBe(child)
+    rewrite.replace = replace
+    // Epsilon rises past the measured delta while the landing is reserved.
+    await h.store.append(node.slug, {
+      actor: humanActor('operator'),
+      type: 'optimization.objective-revised',
+      payload: { revision: 2, changes: { epsilon: { absolute: 10 } } },
+    })
+    await tick(h)
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(nodeHead)
+    expect((await stateOf(h, node.slug)).nodeRestack?.active).toBeUndefined()
+    expect(
+      ofType(await h.events(node.slug), 'node.writer-settled').map((e) => e.payload.outcome),
+    ).toEqual(['abandoned'])
+    await tick(h)
+    const state = await stateOf(h, child)
+    expect(state.prState).toBe('closed')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(nodeHead)
+    expect((await settled(h, node.slug)).map((s) => s.outcome)).toEqual(['no-improvement'])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
 test('a sibling landing makes a measurement stale: the attempt restacks and measures again', async (makeHarness) => {
   const { h, node } = await setup(makeHarness as never, ['A1', 'A2'])
   try {

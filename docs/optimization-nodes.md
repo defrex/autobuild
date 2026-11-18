@@ -266,6 +266,9 @@ on that measured node head.
   measurement no longer applies. The child restacks and a new measurement is
   requested. A clean restack keeps verification; it never keeps a measurement.
   The node writer is never held while a measurement runs.
+  A landing interrupted after its writer reservation publishes on recovery only
+  while that pair still passes the gate; after a revision it does not pass, the
+  reservation is abandoned.
 - **Attempts must improve.** An attempt lands when its delta is at least ε. A
   smaller delta settles it `no-improvement`: its PR closes without merging and
   no further implement round runs.

@@ -3419,6 +3419,10 @@ observed node head. The node writer is never held during a measurement, and its
 guarded merge is guarded on the measured baseline: under the writer
 reservation, the destination snapshot must equal the measured baseline and the
 source snapshot the measured candidate, or the landing is refused and retried.
+A reservation recovered after an interrupted landing publishes only while its
+reserved pair still passes the gate under the current objective; otherwise the
+writer abandons the reservation and the next poll measures or settles the
+child. A write that already happened is recovered by readback, never undone.
 
 The dispatcher classifies a result from its recorded `delta` and the effective
 ε (relative ε is scaled by |baseline median|); the recorded `decision` is
