@@ -2,7 +2,7 @@ import { readBuildPage } from '../store/event-reads'
 import { abortDestinationSchema } from '../events/payloads'
 import { readRepositoryAttentionPage } from './repository-events'
 import { requestNodeRestack } from './restack'
-import { reviseObjective } from './optimization'
+import { reviseObjective, stopObjective } from './optimization'
 import { objectiveEpsilonSchema } from '../objective'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
@@ -269,6 +269,17 @@ const objectiveReviseInput = z
       Object.values(changes).some((value) => value !== undefined),
     'revise at least one field',
   )
+
+const objectiveStopInput = z.strictObject({
+  repo: repoField,
+  slug: slugField,
+  mode: z
+    .enum(['abort', 'drain'])
+    .optional()
+    .describe(
+      'Override the objective’s stop mode for this stop; omitted, the objective’s mode applies.',
+    ),
+})
 
 const buildEventsInput = z.strictObject({
   repo: repoField,
@@ -705,6 +716,23 @@ export const TOOLS: readonly ToolEntry[] = [
         repo,
         slug,
         changes,
+        user: attributed(ctx),
+        ...(ctx.via ? { via: ctx.via } : {}),
+      })
+    },
+  ),
+  defineTool(
+    'optimization.stop',
+    'Stop a running optimization node. Abort cancels queued attempts and aborts running ones, and all of them settle as stopped; drain cancels queued attempts and lets running ones finish and face the landing gate. Without mode the objective’s stop mode applies (abort by default). No proposer runs after a stop, and a stop is final. Stopping is not merge consent: land with builds.control merge once the node is complete. Refuses work builds, plain nodes, terminal nodes and a node that has already stopped.',
+    objectiveStopInput,
+    '{slug, cause, mode}: the recorded stop.',
+    async (raw, ctx) => {
+      const { repo, slug, mode } = raw as z.infer<typeof objectiveStopInput>
+      return stopObjective({
+        store: ctx.store,
+        repo,
+        slug,
+        ...(mode !== undefined ? { mode } : {}),
         user: attributed(ctx),
         ...(ctx.via ? { via: ctx.via } : {}),
       })
