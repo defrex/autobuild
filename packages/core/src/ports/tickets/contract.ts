@@ -83,7 +83,8 @@ export interface TicketSourceContractHarness {
   afterCreate?: (ticket: Ticket, idempotencyKey: string) => Promise<void> | void
   cleanup?: () => Promise<void>
   /** Minimum spacing between creates for this source to record distinct
-   * filing times; defaults to 5 ms. */
+   * filing times; defaults to 5 ms. `0` declares that the source records
+   * filing order without a clock (insertion order), so no wait is needed. */
   filingIntervalMs?: number
   /** Links a source reports on every ticket without being asked, such as a
    * GitHub issue's own `closes` link. They are expected beside the written
@@ -249,7 +250,8 @@ export function describeTicketSourceContract(
         // n1, u2, n3, u4, n5 in filing order; u2 and u4 are urgent.
         const filed: string[] = []
         for (let i = 1; i <= 5; i++) {
-          if (i > 1) await Bun.sleep(harness.filingIntervalMs ?? 5)
+          const interval = harness.filingIntervalMs ?? 5
+          if (i > 1 && interval > 0) await Bun.sleep(interval)
           const urgent = i % 2 === 0
           const ticket = await createTracked(
             harness,

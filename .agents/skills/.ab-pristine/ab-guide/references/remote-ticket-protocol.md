@@ -172,6 +172,7 @@ The operation names and `input` values are:
 | `state-counts` | `{names: string[]}` (1–16) | `{name, tickets}[]` for the names that resolve |
 | `list-ready` | `{labels?: string[], state?: string}` | `TicketListing` |
 | `list-targeting` | `{nodeId: string}` | `TicketListing` of every state |
+| `list-page` | `{criteria: {labels?, state?}, page: {limit, offset?, order?}}` | `TicketPageListing` (`{tickets, diagnostics, total}`) |
 | `get` | `{id}` | `Ticket \| null` |
 | `claim` | `{id}` | `{claimed: boolean}` |
 | `comment` | `{id, body}` | `{ok: true}` |
@@ -426,7 +427,7 @@ response, including errors, carries `x-autobuild-ticket-priority: 1`.
 
 `list-ready` returns urgent tickets first, then normal ones, each class in filing
 order, for every client. Ordering happens within the existing listing; it adds no
-per-ticket reads.
+per-ticket reads. `list-ready` stays exhaustive; paged reads use `list-page`.
 
 A service whose backing source cannot store priority refuses a write naming
 `urgent` with `409 { "kind": "conflict", "code": "priority-unsupported" }` before
@@ -434,3 +435,39 @@ anything is written. A service predating priority refuses the unknown field with
 `400` validation error and no capability header. Clients report both as
 `TicketPriorityUnsupported`. Current clients omit `normal` on create, so a plain
 create still works against such a service.
+
+## Paged listing
+
+`list-page` answers one window of the tickets matching `criteria`, from the
+backing source's native paging. `limit` and `offset` are nonnegative integers;
+`offset` defaults to 0. `order` is `oldest` (the default), which is dispatch
+order: urgent first, then normal, each in filing order. `newest` is newest filed
+first, regardless of urgency. Offset and limit apply after ordering, so
+consecutive windows traverse the listing with no omissions or duplicates.
+`total` counts every match before slicing, also for a zero limit or an offset
+past the end. The service returns the page in the order the source answered;
+it does not re-sort it urgent-first. Cost follows the window, not the project's
+ticket count.
+
+A backing source without native paging answers `409` with
+`code: "paging-unsupported"`. The service never slices a full listing instead.
+`list-page` is an operator listing: it requires project or owner authority, and
+ticket grants and harvest delegations receive `403`.
+
+Every `/tickets/*` response, including errors, carries
+`x-autobuild-ticket-paging: 1`. A current client declares `listPage` only after
+a response from the service has carried that header. It settles the decision on
+the response that already finishes source construction (the policy sync or the
+targeted-listing probe), with no extra probe. An ok response without the header
+means the service predates the operation. Against such a service the client
+never declares `listPage`, and paged operator listings read `list-ready` and
+slice it, as for any source without native paging. A `list-page` request that the
+service later refuses with `404` or `400` and no header, or answers with
+`paging-unsupported`, or answers with a page that contradicts the request (more
+tickets than `limit`, a window beyond `total`, or a malformed body), fails with
+`HostedTicketPagingError`. There is no fallback within that call. After a
+refusal without the header, the client stops declaring `listPage`, so the next
+listing takes the `list-ready` path by that explicit decision.
+
+The capability is additive. It does not change the remote BuildStore protocol
+version, and released clients, which never send `list-page`, are unaffected.
