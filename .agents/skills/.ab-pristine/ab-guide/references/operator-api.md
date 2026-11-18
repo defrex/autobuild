@@ -359,11 +359,16 @@ have `repo` and null build/state. Source observations also report
 
 Every record carries a cursor, including timer-only records. Resuming suppresses
 delivered merge decisions and persistence episodes even when stream positions
-did not advance. Old v1 cursors remain valid inside the hosted 1,000-position resume window: historical eligible merge
+did not advance. A merge decision still due at the cursor, because the watch
+stopped on its event before observing it, is delivered once on resume, before
+the later events. Old v1 cursors remain valid inside the hosted 1,000-position resume window: historical eligible merge
 decisions are treated as consumed; active overdue repository episodes may
 report because old watches had no persistence notification. Fresh attachment
 silently baselines historical direct events and merge decisions, but retains
-active repository timers. Reconcile existing conditions through status after
+active repository timers. A no-slug watch follows each build announced in the
+journal after its position from the build's first event; cursors carry
+creations still in preparation, and a cursor from an earlier release, which
+carries none, baselines a build whose creation was selected before it. Reconcile existing conditions through status after
 arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
