@@ -911,11 +911,21 @@ export class RemoteBuildStore implements BuildStore {
   async getStreamSeed(scope: SnapshotScope, cursor: number): Promise<ReducerValue> {
     validateEventCursor(cursor)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
-    const value = await this.requestJson(
+    // The same projection and catalog headers as named values, so the server
+    // answers a source checkout canonically rather than projecting it onto the
+    // last release's contract.
+    const response = await this.raw(
       'GET',
       `${root}/stream-seed?cursor=${cursor}`,
-      reducerValueSchema,
+      undefined,
+      undefined,
+      {
+        [REDUCER_VALUE_PROJECTION_HEADER]: '1',
+        [CATALOG_IDENTITY_HEADER]: REDUCER_VALUE_CONTRACT_IDENTITY,
+      },
     )
+    if (!response.ok) throw await this.toError(response)
+    const value = reducerValueSchema.parse(await response.json())
     const request = { reducer: scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention' }
     const { reducer } = resolveReducerValue(scope, request)
     if (value.version !== reducer.version || diagnoseReducerValue(request.reducer, value.value))
