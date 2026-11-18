@@ -360,6 +360,34 @@ export const buildDigestWireSchema = z.object({
       tickets: z.array(ticketRefSchema).max(WAIT_TICKET_LIMIT),
     })
     .optional(),
+  // Additive optimization signal on node digests; an older service omits it,
+  // and its clients' proposer stage and attempt creation hold then fail
+  // closed with a typed capability error rather than reading each node.
+  optimization: z
+    .union([
+      z.literal(false),
+      z.object({
+        stopped: z.literal(true).optional(),
+        measured: z.literal(true).optional(),
+        inFlight: z.number().int().nonnegative(),
+        concurrency: z.number().int().nonnegative(),
+        attemptRoom: z.number().int().nonnegative().optional(),
+        emptyProposals: z.number().int().nonnegative(),
+        openedAt: z.string().min(1),
+        maxHours: z.number().positive().optional(),
+        proposal: z
+          .object({
+            request: z.string().min(1),
+            deposited: z
+              .object({ ids: z.array(z.string().min(1)), at: z.string().min(1) })
+              .optional(),
+          })
+          .optional(),
+        wakeSeq: z.number().int().positive().optional(),
+        deferredSeq: z.number().int().positive().optional(),
+      }),
+    ])
+    .optional(),
 })
 export const buildDigestListSchema = z.array(buildDigestWireSchema)
 

@@ -106,6 +106,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'optimization.objective-revised': ['human'],
   'optimization.baseline-measured': ['kernel', 'dispatcher'],
   'optimization.proposal-requested': ['dispatcher'],
+  'optimization.proposal-deferred': ['dispatcher'],
+  'optimization.proposal-withdrawn': ['dispatcher'],
   'optimization.attempts-proposed': ['dispatcher'],
   'attempt.measurement-requested': ['dispatcher', 'kernel'],
   'attempt.measured': ['kernel', 'dispatcher'],
@@ -214,6 +216,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.rewritten': ['kernel', 'dispatcher'],
   'reconcile.completed': ['agent', 'dispatcher', 'kernel'],
   'reconcile.superseded': ['kernel'],
+  'propose.started': ['kernel'],
+  'propose.completed': ['agent'],
 
   'issue-link.downgraded': ['agent'],
   'issue-links.sealed': ['kernel'],
