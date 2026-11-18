@@ -30,10 +30,13 @@ import {
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_CAPABILITY,
   TICKET_TARGETING_PROBE_NODE,
+  TICKET_PAGING_HEADER,
+  TICKET_PAGING_CAPABILITY,
   dependencyStatesWireSchema,
   successWireSchema,
   ticketStateCountsWireSchema,
   ticketListingWireSchema,
+  ticketPageWireSchema,
   ticketWireSchema,
 } from './remote-protocol'
 import {
@@ -42,7 +45,12 @@ import {
   publishedTicketPolicy,
   type HostedTicketPolicy,
 } from './remote-protocol'
-import { HostedTicketSource, hostedTicketPolicy, type HostedTicketFetch } from './remote'
+import {
+  HostedTicketPagingError,
+  HostedTicketSource,
+  hostedTicketPolicy,
+  type HostedTicketFetch,
+} from './remote'
 import type { TicketSource } from '../types'
 import { ticketsSchema } from '../../config/schema'
 
@@ -191,6 +199,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-dependency-state': '1',
         'x-autobuild-ticket-policy-roles': '1',
         'x-autobuild-ticket-targeting': '1',
+        'x-autobuild-ticket-paging': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -826,5 +835,104 @@ describe('hosted targeted listing negotiation', () => {
       'ticket source does not support targeted listing',
     )
     expect(source.listTargeting).toBeDefined()
+  })
+})
+
+describe('hosted native paging negotiation', () => {
+  const ECHO = { [TICKET_PAGING_HEADER]: TICKET_PAGING_CAPABILITY }
+  const NO_ROUTE = errorBodySchema.parse({ error: 'no route', kind: 'not-found' })
+  const page = (tickets: unknown[], total: number) =>
+    ticketPageWireSchema.parse({ tickets, diagnostics: [], total })
+
+  async function pagingSource(responses: CannedResponse[]) {
+    const made = makeSource([{ body: OK, headers: ECHO }, ...responses])
+    await made.source.comment('ENG-1', 'settle')
+    expect(made.source.listPage).toBeDefined()
+    made.calls.length = 0
+    return made
+  }
+
+  test('a fresh source declares no paging and has made no request', () => {
+    const { source, calls } = makeSource([])
+    expect(source.listPage).toBeUndefined()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('an ok response without the echo leaves paging undeclared', async () => {
+    const { source } = makeSource([{ body: OK }])
+    await source.comment('ENG-1', 'x')
+    expect(source.listPage).toBeUndefined()
+  })
+
+  test('a declared page posts criteria and window and projects the hosted identity', async () => {
+    const { source, calls } = await pagingSource([{ body: page([TICKET], 7), headers: ECHO }])
+    expect(source.listPage).toBe(source.listPage)
+    const listing = await source.listPage!(
+      { labels: ['autobuild'], state: 'Ready' },
+      { limit: 1, offset: 2, order: 'newest' },
+    )
+    expect(calls.map((call) => call.url)).toEqual(['https://tickets.example/tickets/list-page'])
+    expect(calls[0]!.body).toEqual({
+      context: CONTEXT,
+      input: {
+        criteria: { labels: ['autobuild'], state: 'Ready' },
+        page: { limit: 1, offset: 2, order: 'newest' },
+      },
+    })
+    expect(hostedTicketRequestSchemas['list-page'].parse(calls[0]!.body).input.page.limit).toBe(1)
+    expect(listing.total).toBe(7)
+    expect(listing.tickets.map((ticket) => ticket.ref.source)).toEqual(['hosted'])
+  })
+
+  test.each([404, 400])(
+    'a declared page refused %i without the echo fails typed, with no listing fallback',
+    async (status) => {
+      const { source, calls } = await pagingSource([{ status, body: NO_ROUTE }])
+      const list = source.listPage!
+      const error = await rejectionOf(list({}, { limit: 2 }))
+      expect(error).toBeInstanceOf(HostedTicketPagingError)
+      expect((error as HostedTicketPagingError).code).toBe('service-predates')
+      expect(source.listPage).toBeUndefined()
+      expect(calls.map((call) => call.url)).toEqual(['https://tickets.example/tickets/list-page'])
+    },
+  )
+
+  test('a paging-unsupported answer fails typed and keeps paging declared', async () => {
+    const { source } = await pagingSource([
+      {
+        status: 409,
+        body: {
+          kind: 'conflict',
+          error: 'ticket source does not support paged listing',
+          code: 'paging-unsupported',
+        },
+        headers: ECHO,
+      },
+    ])
+    const error = await rejectionOf(source.listPage!({}, { limit: 2 }))
+    expect(error).toBeInstanceOf(HostedTicketPagingError)
+    expect((error as HostedTicketPagingError).code).toBe('paging-unsupported')
+    expect(error.message).toBe('ticket source does not support paged listing')
+    expect(source.listPage).toBeDefined()
+  })
+
+  test.each([
+    ['more tickets than the limit', page([TICKET, TICKET], 5), { limit: 1 }],
+    ['a total smaller than the window', page([TICKET], 2), { limit: 1, offset: 2 }],
+    ['no total', ticketListingWireSchema.parse({ tickets: [], diagnostics: [] }), { limit: 1 }],
+  ] as const)('an answer with %s fails as an invalid page', async (_name, body, window) => {
+    const { source, calls } = await pagingSource([{ body, headers: ECHO }])
+    const error = await rejectionOf(source.listPage!({}, window))
+    expect(error).toBeInstanceOf(HostedTicketPagingError)
+    expect((error as HostedTicketPagingError).code).toBe('invalid-page')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('an assignee gate is refused without a request', async () => {
+    const { source, calls } = await pagingSource([])
+    expect((await rejectionOf(source.listPage!({ assignee: 'me' }, { limit: 1 }))).message).toBe(
+      'the hosted ticket source does not support an assignee gate',
+    )
+    expect(calls).toHaveLength(0)
   })
 })

@@ -43,6 +43,8 @@ import {
   TICKET_POLICY_ROLES_CAPABILITY,
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_CAPABILITY,
+  TICKET_PAGING_HEADER,
+  TICKET_PAGING_CAPABILITY,
   projectTicketPolicy,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
@@ -326,6 +328,20 @@ export function createTicketServer(options: TicketServerOptions): {
         const listing = await source.listTargeting(input.nodeId)
         return json(200, { ...listing, tickets: urgentFirst(listing.tickets).map(ticketResponse) })
       }
+      case 'list-page': {
+        // The source's native window only; never a sliced full listing, which
+        // would hide the unbounded read this operation exists to avoid. The page
+        // arrives ordered, and `newest` is not urgent-first, so it is not resorted.
+        const { input } = hostedTicketRequestSchemas['list-page'].parse(raw)
+        if (!source.listPage)
+          return json(409, {
+            kind: 'conflict',
+            error: 'ticket source does not support paged listing',
+            code: 'paging-unsupported',
+          })
+        const page = await source.listPage(input.criteria, input.page)
+        return json(200, { ...page, tickets: page.tickets.map(ticketResponse) })
+      }
       case 'get': {
         const request = hostedTicketRequestSchemas.get.parse(raw)
         return json(200, ticketResponse(await source.get(request.input.id)))
@@ -581,8 +597,9 @@ export function createTicketServer(options: TicketServerOptions): {
   }
   return {
     // Every ticket response, failures included, advertises issue-link,
-    // priority, policy-role and targeted-listing support so a current client
-    // can recognize an older server's strict-schema refusal or missing route.
+    // priority, policy-role, targeted-listing and paged-listing support so a
+    // current client can recognize an older server's strict-schema refusal or
+    // missing route.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
@@ -590,6 +607,7 @@ export function createTicketServer(options: TicketServerOptions): {
       headers.set(TICKET_PRIORITY_HEADER, TICKET_PRIORITY_CAPABILITY)
       headers.set(TICKET_POLICY_ROLES_HEADER, TICKET_POLICY_ROLES_CAPABILITY)
       headers.set(TICKET_TARGETING_HEADER, TICKET_TARGETING_CAPABILITY)
+      headers.set(TICKET_PAGING_HEADER, TICKET_PAGING_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })
     },
   }
