@@ -141,6 +141,7 @@ export const executionProgress = {
   'plan-review.verdict': 'progress',
   'implement.started': 'progress',
   'implement.completed': 'progress',
+  'implement.declined': 'progress',
   'code-review.started': 'progress',
   'code-review.verdict': 'progress',
   'verify.reconcile-policy-captured': 'progress',

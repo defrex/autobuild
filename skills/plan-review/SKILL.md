@@ -48,6 +48,17 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
      unjustified omission or addition like any other plan defect. Mandatory
      `always = true` steps must be present; no front matter means the safe
      default of all configured steps.
+   - **Optimization attempts** — when the manifest has an `attempt` block,
+     read the attempt's `objective.md` (the block's `path`) and judge the plan
+     against the purpose, not only the score it expects. Measurements the
+     implementer reports in its own notes, a prior round's included, and
+     numbers the plan cites or promises are claims, not the gate: the kernel
+     measures before anything lands, so a predicted good number is no reason
+     to approve. A plan that changes what the test measures, overfits the
+     eval, special-cases the benchmark or regresses behavior the purpose
+     protects is a blocking finding whatever number it promises, as is a
+     planned harness edit. Flag drift from the strategy the attempt's spec
+     gives it.
 3. Write your review notes to `$AB_CONTEXT_DIR/plan-review.md`, then deliver exactly one
    verdict:
 

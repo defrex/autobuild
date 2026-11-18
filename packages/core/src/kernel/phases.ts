@@ -66,6 +66,9 @@ export interface PhaseSpec {
   startedEvent: EventType
   terminal: 'done' | 'verdict'
   terminalEvent: EventType
+  /** A second fact the same terminal command may record instead: an
+   * optimization attempt's `ab done --no-improvement` (RFC 0005 §6.2). */
+  declineEvent?: EventType
   /**
    * Artifact kind the terminal requires deposited (D5). For agent-verify
    * steps the report kind is per-step (`verify-report:<step>`) and required
@@ -115,6 +118,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     startedEvent: 'implement.started',
     terminal: 'done',
     terminalEvent: 'implement.completed',
+    declineEvent: 'implement.declined',
     requiredArtifact: 'implement-notes',
     requiresCleanWorktree: true,
     plumbing: 'push-branch',
@@ -201,6 +205,11 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
 
 export function phaseSpecFor(phase: Phase): PhaseSpec {
   return isVerifyPhase(phase) ? PHASE_SPECS.verify : PHASE_SPECS[phase]
+}
+
+/** Whether `event` is a fact that ends a session of this phase. */
+export function isPhaseTerminalEvent(spec: PhaseSpec, event: { type: EventType }): boolean {
+  return event.type === spec.terminalEvent || event.type === spec.declineEvent
 }
 
 /** Every phase ends with exactly one terminal command (D5); `escalate` is
