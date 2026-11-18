@@ -307,6 +307,19 @@ function digestNodeTargetsOf(event: { type: string; payload: unknown }): {
   return nodeTargets.length ? { nodeTargets } : {}
 }
 
+/** The attempt-settlement slice of one event row the build digest folds. */
+function digestAttemptOf(
+  event: Parameters<ValueCatalogEntry['adapt']>[0][number],
+): Pick<DigestEventRow, 'attemptProposal' | 'attemptOutcome'> {
+  if (event.type === 'attempt.settled')
+    return {
+      attemptProposal: event.payload.attempt.proposal,
+      attemptOutcome: event.payload.outcome,
+    }
+  if (event.type === 'attempt.ticket-rejected') return { attemptProposal: event.payload.proposal }
+  return {}
+}
+
 /** The ticket-wait slice of one event row the build digest folds. */
 function digestTicketWaitOf(
   event: Parameters<ValueCatalogEntry['adapt']>[0][number],
@@ -363,6 +376,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                       ? { instance: event.payload.instance }
                       : {}),
                     ...digestTicketWaitOf(event),
+                    ...digestAttemptOf(event),
                   }))
                 : events,
             create: parameterized[name]?.create ?? (() => entry.reducer),

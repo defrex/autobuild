@@ -321,7 +321,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   longer conforms to the spec standard falls back to triage, and the comment
   lists what is missing. `--reason` is quoted in the hand-back comment.
   Cleanup is asynchronous: act on the `ticket.handed-back` repository event,
-  not on `build.aborted` or the build leaving `ab builds`.
+  not on `build.aborted` or the build leaving `ab builds`. Aborting an
+  optimization attempt is different: it settles `aborted` and its node moves the
+  ticket to the rejected role, so no hand-back is reported and `--to` has no
+  effect.
 - `ab hold <slug>` — persistently hold a merge and revoke earlier consent.
 - `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
   survives clean restacks and verification; use hold to withdraw it when work
