@@ -101,6 +101,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'integration-detail-ready-node',
     'integration-wide',
     'integration-narrow',
+    'optimization-node-wide',
+    'optimization-node-detail',
     'post-reconcile-policy',
     'verify-stages-wide',
     'headline-happy-wide',
@@ -194,6 +196,53 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Forge rebase')
       expect(frame.text).toContain('Allow squash merging')
       expect(frame.text).toContain('Allow rebase merging')
+    } else if (frame.id.startsWith('optimization-node-')) {
+      expect(
+        frame.model.builds.find((build) => build.slug === 'optimize-search-latency')?.objectiveRow,
+      ).toEqual({
+        metric: 'command',
+        direction: 'minimize',
+        starting: 50,
+        current: 44,
+        threshold: 35,
+        noise: 1.6,
+        attempts: { filed: 4, accepted: 1, rejected: 1, running: 2 },
+        budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-07-15T06:10:00.000Z' },
+      })
+      const lines = frame.text.split('\n')
+      const first = lines.findIndex((line) =>
+        line.includes(frame.id.endsWith('wide') ? 'objective 50' : 'Objective'),
+      )
+      const last = lines.findIndex((line) => line.includes('6.0/24 hours'))
+      expect(first).toBeGreaterThan(-1)
+      expect(last).toBeGreaterThan(first)
+      const objective = lines.slice(first, last + 1)
+      for (const line of objective) expect(line).not.toContain('~')
+      if (frame.id.endsWith('wide')) {
+        expect(objective[0]).toBe(
+          '   objective 50 → 44 (minimize) · threshold 35 · noise ±1.6 · attempts 1 accepted · 1 rejected · 2 running · budget 4/60 attempts ·',
+        )
+      } else {
+        expect(frame.text).toContain('Build  optimize-search-latency')
+      }
+      const joined = objective.join(' ')
+      let at = 0
+      for (const term of [
+        'objective',
+        '50 → 44',
+        '(minimize)',
+        'threshold 35',
+        'noise ±1.6',
+        '1 accepted',
+        '1 rejected',
+        '2 running',
+        'budget 4/60 attempts',
+        '6.0/24 hours',
+      ]) {
+        const next = joined.indexOf(term, at)
+        expect(next).toBeGreaterThanOrEqual(at)
+        at = next + term.length
+      }
     } else if (frame.id.startsWith('integration-detail-')) {
       expect(frame.text).toContain('Verification')
       expect(frame.text).toContain('Merge')
@@ -303,6 +352,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       !frame.id.startsWith('handoff-') &&
       frame.id !== 'parked-slot-wait-wide' &&
       frame.id !== 'ticket-wait-detail' &&
+      frame.id !== 'optimization-node-detail' &&
       !frame.id.startsWith('rollback-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-') &&
