@@ -2860,7 +2860,11 @@ Both are optional and have no default: `backlogState` and `rejectedState` unset
 means the role does not exist, and a state that merely shares the role's name
 holds no role. Neither may share its native state with the ready, claimed, done,
 triage or proposal role, or with each other. The dispatcher never claims from,
-moves into, or files harvest proposals into either. A ticket in the rejected
+moves into, or files harvest proposals into either, with one exception: it
+moves the ticket of an optimization attempt that settles with any outcome other
+than `accepted` into the rejected role (§13.1.1), including an attempt an
+operator aborts, which never returns to triage. Tickets that are not attempts
+never move there automatically. A ticket in the rejected
 state never resolves a blocker, and a rejected child no longer keeps its node
 incomplete; a backlog child still does, as triage and ready children do. Moving
 a ticket out of the rejected state restores ordinary behavior. Agents and
@@ -3138,7 +3142,8 @@ Human forge merges are an explicit escape hatch, even while incomplete, paused
 or unverified. The janitor records human provenance and whether the actual merged
 head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
-triage (or ready, when the abort asks for it); children already claimed retain
+triage (or ready, when the abort asks for it); an optimization attempt's ticket
+goes to the rejected role instead (§13.1.1). Children already claimed retain
 their frozen base. Nested nodes work.
 A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
@@ -3555,10 +3560,72 @@ authoritative (`packages/core/src/kernel/measurement.ts` for the math,
   `attempt.sampled` reference a `measurement-samples` artifact with the raw
   per-sample values, deposited with the fact.
 
-When to request a measurement, whether it lets an attempt merge, proposing
-attempts, judge panels, settlement into the rejected role, and stopping and
-completion are designed in RFC 0005 §5–§9. The facts they record are
-catalogued in §15.3 and their derived state in §15.5.
+**Landing gate.** Passing verify and finalize is necessary but no longer
+sufficient for a child of an optimization node: it lands only with a measurement
+(RFC 0005 §6.3, §6.4). Readiness to land is decided as for any node-target
+child, independently of measurement. A ready child then needs a result that
+applies: the latest `attempt.measured` answering the child's latest
+`attempt.measurement-requested`, whose `candidate` is exactly the child's
+candidate head, whose `baseline` is exactly the node head it lands on, whose
+`harnessPin` is the accepted pin, and whose `revision` is at least the ruler
+revision. A restack changes the candidate and a sibling landing moves the node
+head, so either makes a result stale by construction and the dispatcher records
+a new request on the child's log. A clean restack keeps verification; it never
+keeps a measurement. A request is recorded only once the candidate sits on the
+observed node head. The node writer is never held during a measurement, and its
+guarded merge is guarded on the measured baseline: under the writer
+reservation, the destination snapshot must equal the measured baseline and the
+source snapshot the measured candidate, or the landing is refused and retried.
+A reservation recovered after an interrupted landing publishes only while its
+reserved pair still passes the gate under the current objective; otherwise the
+writer abandons the reservation and the next poll measures or settles the
+child. A write that already happened is recovered by readback, never undone.
+
+The dispatcher classifies a result from its recorded `delta` and the effective
+ε (relative ε is scaled by |baseline median|); the recorded `decision` is
+informational. An attempt lands when `delta` ≥ ε. Otherwise it settles
+`no-improvement`, its PR closes without merging, and no further implement
+round runs. Any other child lands when `delta` ≥ −ε; a regressing child raises
+one kernel escalation `landing-regressed-<request>` naming both medians, the
+delta and ε, and an answer requests a fresh measurement. Such children never
+settle and count toward neither budget nor plateau.
+
+An attempt whose candidate head changes a harness path escalates instead of
+being measured: one kernel escalation `landing-harness-<head>` names the matched
+paths, and that head is never measured, even after an answer. The check reads
+the head's recorded changed paths; a head without them waits, as a deferred
+merge decision does.
+
+**Turn.** An attempt whose latest request was overtaken three consecutive
+times (three requests whose baseline differed from the previous request's)
+holds the node's next turn while it is open, not paused, aborted or closed, and
+has no open escalation other than a janitor one. While another child holds the
+turn, a candidate neither requests a measurement nor lands. When several
+qualify, the first in proposal order holds it.
+
+**Settlement.** Every attempt settles exactly once, on the node's log, by the
+dispatcher path that ends it: `accepted` when it merges, with the measurement
+of the merged head; `no-improvement` at the gate; `aborted` when an operator
+aborts it or a human closes its PR without merging. `declined` is recorded when an implementer declines as described above;
+`stopped` is recorded by the stopping rules (RFC 0005 §9). The
+write is conditional on the node log and the attempt still being in flight.
+Each settlement other than `accepted` leaves a pending rejection in the node's
+digest. Once the attempt has no build or its build is done, the node's janitor
+poll moves the ticket to the rejected role, comments the outcome, and records
+`attempt.ticket-rejected {proposal, ticket, state}`. Until then the attempt's
+own terminal paths skip their triage hand-back, so its ticket never reaches
+triage. A merged attempt's ticket moves to done as for any child. A merge
+without a measurement of the merged head (a forge-side human merge) records a
+followup and leaves the attempt in flight for an operator.
+
+| Outcome | Ticket role |
+|---|---|
+| `accepted` | done |
+| `no-improvement`, `declined`, `stopped`, `aborted` | rejected |
+
+Proposing attempts, judge panels, and stopping and completion are designed in
+RFC 0005 §5, §8 and §9. The facts they record are catalogued in §15.3 and their
+derived state in §15.5.
 
 
 
@@ -3872,7 +3939,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3890,7 +3957,11 @@ idempotent and the three `abort.*` facts checkpoint projections across crashes;
 `abort.ticket-returned` records the destination, the requested role, the reason
 and the missing parts, so a retry reports exactly what the committed move did
 and never writes the ticket again. Missing Forge capabilities or outages leave
-the remainder due on the next tick.
+the remainder due on the next tick. An optimization attempt is the exception:
+its cleanup settles it `aborted` on the node's log and skips the label, the
+move, the `abort.ticket-returned` checkpoint and the hand-back report, because
+its node's sweep moves the ticket to the rejected role (§13.1.1). A closed
+attempt PR likewise records no `build.ticket-returned`.
 
 Every dispatcher hand-back of a claimed or ready ticket other than completion —
 abort, spec-standard bounce, preparation recovery returning a confirmed claim,
@@ -4086,8 +4157,11 @@ an optimization node's own log, absent until the first
   `{proposal, ticket}`, whose length is the running count; `plateau`, the
   consecutive `no-improvement` or `declined` settlements since the last
   `accepted` (`stopped` and `aborted` leave it unchanged); `emptyProposals`,
-  consecutive proposals with no attempts; and `stopped {cause, mode, at}` from
-  the first `optimization.stopped`.
+  consecutive proposals with no attempts; `rejections`, the settled attempts
+  other than `accepted` whose ticket has not moved to the rejected role, as
+  `{proposal, ticket, build?, outcome}`, added only for an attempt that was in
+  flight and removed by `attempt.ticket-rejected`; and `stopped {cause, mode,
+  at}` from the first `optimization.stopped`.
 
 Pure selectors over the digest take the current time. Elapsed hours run from
 `openedAt`. Stop eligibility is computed per cause: threshold when `current` has
@@ -4095,7 +4169,11 @@ reached `target.threshold` in the objective's direction (a panel compares its
 win rate, which it maximizes); plateau when `plateau` ≥ `stop.plateau.attempts`;
 budget when `filed` ≥ `maxAttempts` or elapsed hours ≥ `maxHours`. Admission
 reports whether the node stopped, the attempts the budget still allows (none
-without `maxAttempts`), and the concurrency slots no in-flight attempt holds.
+without `maxAttempts`), and the concurrency slots held neither by an in-flight
+attempt nor by a pending rejection. A tracker that keeps refusing the move
+therefore stalls proposals rather than accumulating pending rejections, and
+`inFlight` plus `rejections` never exceeds the concurrency through new
+proposals.
 Attempt identity (§13.1.1) is a lookup in `inFlight` by normalized ticket ref;
 settled attempts are in the ledger.
 
@@ -4134,8 +4212,22 @@ proposal, dropped once the attempt settles, and the objective facts supply the
 ε in effect. A near miss is a `no-improvement` settlement with
 0 < `delta` < ε; a relative ε is ε × |baseline|.
 
+**Landing measurement.** Build state embeds `landingMeasurement` for a child
+of an optimization node, absent until its first request: the latest
+`attempt.measurement-requested`, the `attempt.measured` answering it (a result
+for an older request is history), and `overtakes`, the requests whose baseline
+differed from the previous request's.
+
+**Pending rejections in the build digest.** The repository build digest folds
+`attempt.settled` and `attempt.ticket-rejected` into `rejectionsPending`, set
+while a node has a pending rejection. Like a pending attachment reclaim, it is a
+post-terminal duty: a completed node with pending rejections stays in the
+janitor's work set until the moves commit, and a settlement recorded on an
+already completed node re-arms it through the node's incrementally advanced
+digest, with no repository scan.
+
 **Optimization read cost.** The digest's size does not grow with settled
-attempts: admission caps `inFlight` at the objective's concurrency, and
+attempts: admission caps `inFlight` plus `rejections` at the objective's concurrency, and
 settled attempts leave only counters. The dispatcher, the dashboards, status
 and watch read it from the build state they already reduce, so the stop and
 admission inputs and the objective row cost the same at 10 and 10,000
@@ -4629,6 +4721,8 @@ completion. This evidence does not change reduction or display semantics.
 
 A node-target child merge instead fast-forwards its already canonical
 single-change commit, preserving exactly one terminal source-build identity.
+A child of an optimization node first passes the measurement landing gate
+(§13.1.1), and its guarded fast-forward is guarded on the measured baseline.
 The guarded destination write is authoritative once confirmed: the durable
 merge receipt, carrying the candidate SHA and identity, is recorded only after
 exact authoritative readback of the destination shows that candidate, or from

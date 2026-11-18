@@ -540,6 +540,7 @@ function measuringNode(slug: string): CapacityBuild {
     rulerRevision: 1,
     attempts: { filed: 0, accepted: 0, rejected: 0 },
     inFlight: [],
+    rejections: [],
     plateau: 0,
     emptyProposals: 0,
   }

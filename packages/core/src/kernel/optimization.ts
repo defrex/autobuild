@@ -26,6 +26,20 @@ export interface InFlightAttempt {
   ticket: TicketRef
 }
 
+/** A settled, non-accepted attempt whose ticket the dispatcher has not yet
+ * moved to the rejected role (SPEC §13). Settlement transfers an attempt from
+ * `inFlight` to here, and admission counts both lists against concurrency, so
+ * `inFlight.length + rejections.length` never exceeds `proposer.concurrency`
+ * through new proposals. An entry exists only between settlement and the
+ * move's `attempt.ticket-rejected`. */
+export interface PendingRejection {
+  proposal: string
+  ticket: TicketRef
+  /** The attempt's build, when it was ever claimed. */
+  build?: string
+  outcome: Exclude<AttemptOutcome, 'accepted'>
+}
+
 export interface OptimizationValue {
   value: number
   spread: number
@@ -66,6 +80,8 @@ export interface OptimizationState {
   }
   /** Proposed attempts that have not settled; `inFlight.length` are running. */
   inFlight: InFlightAttempt[]
+  /** Settled, non-accepted attempts whose ticket move is still pending. */
+  rejections: PendingRejection[]
   /** Consecutive `no-improvement` or `declined` settlements since the last
    * `accepted`. `stopped` and `aborted` leave it unchanged. */
   plateau: number
@@ -89,7 +105,11 @@ function better(objective: Objective, a: number | undefined, b: number): number 
 
 /** Whether `event` is a node-log fact the digest folds. */
 export function isOptimizationEvent(event: Pick<AbEvent, 'type'>): boolean {
-  return event.type.startsWith('optimization.') || event.type === 'attempt.settled'
+  return (
+    event.type.startsWith('optimization.') ||
+    event.type === 'attempt.settled' ||
+    event.type === 'attempt.ticket-rejected'
+  )
 }
 
 function startRuler(state: OptimizationState, revision: number) {
@@ -120,6 +140,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
           rulerRevision: event.payload.revision,
           attempts: { filed: 0, accepted: 0, rejected: 0 },
           inFlight: [],
+          rejections: [],
           plateau: 0,
           emptyProposals: 0,
         }
@@ -172,7 +193,21 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         break
       case 'attempt.settled': {
         const { attempt, outcome, measurement } = event.payload
+        const wasInFlight = state.inFlight.some((entry) => entry.proposal === attempt.proposal)
         state.inFlight = state.inFlight.filter((entry) => entry.proposal !== attempt.proposal)
+        // Only a transfer out of `inFlight` adds a pending rejection, so
+        // settlement never grows the two lists' combined length.
+        if (
+          outcome !== 'accepted' &&
+          wasInFlight &&
+          !state.rejections.some((entry) => entry.proposal === attempt.proposal)
+        )
+          state.rejections.push({
+            proposal: attempt.proposal,
+            ticket: structuredClone(attempt.ticket),
+            ...(attempt.build !== undefined ? { build: attempt.build } : {}),
+            outcome,
+          })
         if (outcome === 'accepted') {
           state.attempts.accepted += 1
           state.plateau = 0
@@ -193,6 +228,11 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
       case 'optimization.stopped':
         state.stopped ??= { ...event.payload, at: event.ts }
         break
+      case 'attempt.ticket-rejected':
+        state.rejections = state.rejections.filter(
+          (entry) => entry.proposal !== event.payload.proposal,
+        )
+        break
     }
   }
   return state
@@ -206,7 +246,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 1,
+  version: 2,
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
@@ -260,7 +300,10 @@ export interface OptimizationAdmission {
   stopped: boolean
   /** Attempts the budget still allows; null without an attempts budget. */
   attemptRoom: number | null
-  /** Concurrency slots not held by an in-flight attempt. */
+  /** Concurrency slots held neither by an in-flight attempt nor by a settled
+   * attempt whose rejected-role move is pending. A tracker that keeps
+   * refusing the move therefore stalls proposals instead of accumulating
+   * pending rejections. */
   slots: number
 }
 
@@ -269,7 +312,10 @@ export function optimizationAdmission(state: OptimizationState, _now: Date): Opt
   return {
     stopped: state.stopped !== undefined,
     attemptRoom: max === undefined ? null : Math.max(0, max - state.attempts.filed),
-    slots: Math.max(0, state.objective.proposer.concurrency - state.inFlight.length),
+    slots: Math.max(
+      0,
+      state.objective.proposer.concurrency - state.inFlight.length - state.rejections.length,
+    ),
   }
 }
 
@@ -292,6 +338,18 @@ export function optimizationAttempt(
   if (state === undefined) return undefined
   const wanted = key(ticket)
   return state.inFlight.find((attempt) => key(attempt.ticket) === wanted)
+}
+
+/** The pending rejection for `ticket`: a settled attempt whose ticket has not
+ * yet moved to the rejected role. */
+export function optimizationRejection(
+  state: OptimizationState | undefined,
+  ticket: TicketRef,
+  key: (ref: TicketRef) => string = ticketKey,
+): PendingRejection | undefined {
+  if (state === undefined) return undefined
+  const wanted = key(ticket)
+  return state.rejections.find((entry) => key(entry.ticket) === wanted)
 }
 
 export interface LedgerEntry {

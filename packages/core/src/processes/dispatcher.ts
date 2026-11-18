@@ -43,7 +43,6 @@ import {
   nodeTicketObservationKey,
 } from '../kernel/node-polling'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
-import { optimizationAttempt } from '../kernel/optimization'
 import { ticketScanDeferredByJournal, ticketScanSchedule } from './ticket-scan-schedule'
 import {
   resolveTicketRef,
@@ -150,6 +149,27 @@ import {
   type PresenceWitness,
 } from '../kernel/change-presence'
 import { landIntoNode, settleClosedNode, preflightNodeLanding } from '../kernel/node-landing'
+import {
+  landingMeasurementGate,
+  harnessEscalationId,
+  measurementThreshold,
+  regressionEscalationId,
+  selectTurnHolder,
+  settlementMeasurement,
+  type AttemptStatus,
+  type LandingGateVerdict,
+  type TurnCandidate,
+} from '../kernel/landing-measurement'
+import {
+  optimizationAttempt,
+  optimizationRejection,
+  type InFlightAttempt,
+  type PendingRejection,
+} from '../kernel/optimization'
+import { settleAttempt } from '../kernel/attempt-settlement'
+import { candidateHead } from '../kernel/head-paths-state'
+import { compilePathSelectors } from '../config/path-selectors'
+import { moveTicketToRole } from '../ports/tickets/operations'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1150,6 +1170,11 @@ export class Dispatcher {
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+  /** Per tick: the janitor's work listing, and the nonterminal children of
+   * each node indexed from it on the first landing turn that needs them. The
+   * landing gate reads its turn candidates here, never from a new listing. */
+  private janitorEntries?: { record: BuildRecord; digest: BuildDigest }[]
+  private nodeChildren?: Map<string, BuildRecord[]>
   /** Set once kernel Git proved unable to run this tick; later node work in
    * the same tick defers on it without spawning again. */
   private kernelGitUnavailable?: KernelGitUnavailable
@@ -1214,6 +1239,8 @@ export class Dispatcher {
     this.kernelGitUnavailable = undefined
     this.tickAbandonments = []
     this.availabilityEntries = undefined
+    this.janitorEntries = undefined
+    this.nodeChildren = undefined
     this.availabilityLandings = undefined
     this.availabilityLandingKey = undefined
     const builds = new Map<string, number>()
@@ -2539,6 +2566,8 @@ export class Dispatcher {
     const entries = (await this.repoBuildDigests()).filter(
       ({ digest }) => isWorkDigest(digest) || digest.integrationAuditPending === true,
     )
+    this.janitorEntries = entries
+    this.nodeChildren = undefined
     // Receipt reporting requires no forge call, capacity or workspace. Recover
     // every episode before the transport-budget and janitor-backoff gates.
     for (const { record, digest } of entries) {
@@ -2595,6 +2624,24 @@ export class Dispatcher {
             (await this.acceptRevisedObjective(record, state, report))
           )
             state = (await this.store.buildFacts(record.slug)).state
+          // An optimization node's pending rejected-role moves are a
+          // post-terminal duty, like attachment reclaim: they run for open,
+          // aborted and completed nodes alike, ahead of every early return.
+          // Control commands go first, so a tracker refusing the move never
+          // blocks an abort.
+          if (state.kind === 'node' && state.optimization?.rejections.length && !controlDue) {
+            operation = 'attempt rejection'
+            attempted = true
+            if (await this.sweepAttemptRejections(record.slug, state))
+              state = (await this.store.buildFacts(record.slug)).state
+            // A completed node polled only for this duty has nothing else due.
+            if (
+              state.status === 'done' &&
+              digest.reclaimPending !== true &&
+              digest.integrationAuditPending !== true
+            )
+              return
+          }
           const executionLeaseLive = this.hasLiveExecutionLease(record)
           attempted = !executionLeaseLive
           // Raw history, read at most once and only by a branch that acts on it:
@@ -3540,6 +3587,379 @@ export class Dispatcher {
     } satisfies EventWrite<'node.issue-links-recorded'>)
   }
 
+  // ── Optimization attempts (SPEC §15.7, RFC 0005 §6.3–§7.5) ─────────────────
+
+  /** The child's attempt identity on its optimization node, under the
+   * repository's ticket-migration identity: in flight, settled with its
+   * rejected-role move pending, or not an attempt. */
+  private attemptOf(
+    node: Pick<BuildState, 'optimization'>,
+    record: Pick<BuildRecord, 'ticket' | 'slug'>,
+  ): { status: AttemptStatus; attempt?: InFlightAttempt | PendingRejection } {
+    if (node.optimization === undefined || record.ticket === undefined) return { status: 'none' }
+    const key = this.attemptKey()
+    const inFlight = optimizationAttempt(node.optimization, record.ticket, key)
+    if (inFlight) return { status: 'in-flight', attempt: inFlight }
+    const rejection = optimizationRejection(node.optimization, record.ticket, key)
+    if (rejection) return { status: 'settled', attempt: rejection }
+    return { status: 'none' }
+  }
+
+  private attemptKey(): (ref: TicketRef) => string {
+    const identity = migrationIdentity(
+      this.store.repositoryFacts().ticketMigrations,
+      this.deps.tickets.name,
+    )
+    return (ref) => identity(ref)
+  }
+
+  /** The nonterminal children of `nodeSlug` in this tick's janitor listing,
+   * indexed once per tick. Attempts ride in the work set while nonterminal,
+   * and a build created later in the tick has never been overtaken, so it
+   * cannot hold the turn. */
+  private childrenOf(nodeSlug: string): BuildRecord[] {
+    const entries = this.janitorEntries
+    if (entries === undefined)
+      throw new Error('the landing turn reads the janitor listing; run it inside the janitor')
+    if (this.nodeChildren === undefined) {
+      const index = new Map<string, BuildRecord[]>()
+      for (const { record, digest } of entries) {
+        if (digest.terminal !== undefined || record.ticket === undefined) continue
+        for (const target of digestNodeTargets(digest)) {
+          const children = index.get(target)
+          if (children) children.push(record)
+          else index.set(target, [record])
+        }
+      }
+      this.nodeChildren = index
+    }
+    return this.nodeChildren.get(nodeSlug) ?? []
+  }
+
+  /** The gate's verdict for one child of an optimization node, from the
+   * child's and the node's reduced facts. The turn costs at most one reduced
+   * read per other in-flight attempt, and only for a would-be request or
+   * landing; its candidates come from the tick's janitor listing, so it never
+   * lists the repository. */
+  private async landingVerdict(
+    record: BuildRecord,
+    nodeSlug: string,
+  ): Promise<{
+    verdict: LandingGateVerdict
+    state: BuildState
+    node: BuildState
+    status: AttemptStatus
+    attempt?: InFlightAttempt | PendingRejection
+    candidate?: string
+    nodeHead?: string
+  }> {
+    const facts = await this.store.buildFacts(record.slug)
+    const state = facts.state
+    const node = (await this.store.buildFacts(nodeSlug)).state
+    const digest = node.optimization!
+    const { status, attempt } = this.attemptOf(node, record)
+    const candidate = candidateHead(state)
+    // The head the child would land on, once its candidate sits on it: a
+    // measurement against any other base would be stale before it lands.
+    const parent =
+      state.kind === 'node'
+        ? state.integration?.cycle?.parent
+        : (facts.log.restack.completed?.targetBase ?? facts.log.restack.initialBase)
+    const observed =
+      state.kind === 'node' ? state.nodeRestack?.observedParent?.sha : facts.log.restack.target?.sha
+    const nodeHead = observed !== undefined && observed === parent ? observed : undefined
+    const lm = state.landingMeasurement
+    const input = {
+      digest,
+      attempt: status,
+      lm,
+      candidate,
+      nodeHead,
+      self: record.slug,
+      regressionAnswered:
+        lm?.request !== undefined &&
+        state.answeredEscalations.some((e) => e.id === regressionEscalationId(lm.request!.id)),
+    }
+    let verdict = landingMeasurementGate(input)
+    if (verdict === 'land' || verdict === 'request') {
+      const key = this.attemptKey()
+      const self = record.ticket && key(record.ticket)
+      if (digest.inFlight.some((entry) => key(entry.ticket) !== self)) {
+        const wanted = new Set(digest.inFlight.map((entry) => key(entry.ticket)))
+        const candidates: TurnCandidate[] =
+          record.ticket !== undefined ? [{ slug: record.slug, ticket: record.ticket, state }] : []
+        for (const other of this.childrenOf(nodeSlug)) {
+          if (other.slug === record.slug || !wanted.has(key(other.ticket!))) continue
+          const otherState = (await this.store.buildFacts(other.slug)).state
+          if (otherState.target?.build !== nodeSlug) continue
+          candidates.push({ slug: other.slug, ticket: other.ticket!, state: otherState })
+        }
+        verdict = landingMeasurementGate({
+          ...input,
+          turn: selectTurnHolder(digest, candidates, key),
+        })
+      }
+    }
+    return { verdict, state, node, status, attempt, candidate, nodeHead }
+  }
+
+  /** Raise one kernel escalation on a child at landing, deduplicated by id
+   * against open and answered escalations. */
+  private async raiseLandingEscalation(
+    slug: string,
+    state: BuildState,
+    id: string,
+    question: string,
+  ): Promise<void> {
+    if (
+      state.openEscalations.some((e) => e.id === id) ||
+      state.answeredEscalations.some((e) => e.id === id)
+    )
+      return
+    await this.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id, phase: 'finalize', source: 'agent', question: question.slice(0, 8000) },
+    } satisfies EventWrite<'escalation.raised'>)
+  }
+
+  /**
+   * The measurement landing gate for a ready, authorized child of an
+   * optimization node (SPEC §15.7). Returns the measured pair when the child
+   * may land now; otherwise it did this poll's one action (request a
+   * measurement, escalate, settle and close) or waits, and returns a reason
+   * the caller stops on. The node writer lease is never held here.
+   */
+  private async optimizationLandingGate(
+    record: BuildRecord,
+    nodeSlug: string,
+    workspacePath: string,
+    pr: number,
+  ): Promise<
+    | { kind: 'land'; measured: { candidate: string; baseline: string } }
+    | { kind: 'wait' }
+    | { kind: 'closed'; result: Awaited<ReturnType<NonNullable<Forge['closePr']>>> }
+  > {
+    const gate = await this.landingVerdict(record, nodeSlug)
+    const { verdict, state, node, attempt, candidate, nodeHead } = gate
+    const digest = node.optimization!
+    switch (verdict) {
+      case 'land':
+        return { kind: 'land', measured: { candidate: candidate!, baseline: nodeHead! } }
+      case 'request': {
+        if (gate.status === 'in-flight') {
+          const harnessId = harnessEscalationId(candidate!)
+          // An answered harness escalation still never measures this head.
+          if (
+            state.openEscalations.some((e) => e.id === harnessId) ||
+            state.answeredEscalations.some((e) => e.id === harnessId)
+          )
+            return { kind: 'wait' }
+          const recorded = headPathsFor(state, candidate)
+          // Wait for the head's recorded paths, as `landing.deferred` does.
+          if (!recorded.recorded) return { kind: 'wait' }
+          const paths =
+            recorded.record.total > recorded.record.preview.length
+              ? (await readHeadPaths(this.store, record.slug, recorded.record)).paths
+              : recorded.record.preview
+          const matches = compilePathSelectors(digest.objective.metric.harness)
+          const edited = paths.filter((path) => matches(path))
+          if (edited.length > 0) {
+            await this.raiseLandingEscalation(
+              record.slug,
+              state,
+              harnessId,
+              `Attempt head ${candidate} changes ${edited.length} harness path(s) of optimization node ${nodeSlug}: ${edited.slice(0, 20).join(', ')}${edited.length > 20 ? ', …' : ''}. An attempt may not change how it is measured, so this candidate will not be measured or landed. Revise the attempt without the harness edit, or abort it.`,
+            )
+            return { kind: 'wait' }
+          }
+        }
+        await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+          actor: DISPATCHER,
+          type: 'attempt.measurement-requested',
+          payload: {
+            id: this.deps.ids('measure'),
+            node: nodeSlug,
+            candidate: candidate!,
+            baseline: nodeHead!,
+            harnessPin: digest.accepted.harnessPin,
+            revision: digest.revision,
+            ...(digest.objective.metric.kind === 'command'
+              ? { metric: digest.objective.metric }
+              : {}),
+          },
+        })
+        return { kind: 'wait' }
+      }
+      case 'regressed': {
+        const result = state.landingMeasurement!.result!
+        const medians = result.medians
+          ? `baseline median ${result.medians.baseline}, candidate median ${result.medians.candidate}`
+          : `win rate ${result.winRate}`
+        await this.raiseLandingEscalation(
+          record.slug,
+          state,
+          regressionEscalationId(result.request),
+          `Child ${record.slug} regresses optimization node ${nodeSlug}'s metric beyond epsilon: ${medians}, delta ${result.delta}, epsilon ${measurementThreshold(digest.objective, result)} (measured ${candidate} on ${nodeHead}). It will not land. Answer to measure it again, or abort it.`,
+        )
+        return { kind: 'wait' }
+      }
+      case 'no-improvement': {
+        const result = state.landingMeasurement!.result!
+        await settleAttempt(
+          this.store,
+          nodeSlug,
+          { proposal: attempt!.proposal, ticket: attempt!.ticket, build: record.slug },
+          'no-improvement',
+          settlementMeasurement(result),
+        )
+        return this.closeSettledAttempt(record, workspacePath, pr)
+      }
+      case 'settled':
+        return this.closeSettledAttempt(record, workspacePath, pr)
+      case 'pending':
+      case 'wait-turn':
+      case 'stale':
+        return { kind: 'wait' }
+    }
+  }
+
+  /** Settle a merged attempt `accepted` with the measurement of the head
+   * that landed. Without one (a forge-side human merge bypassed the gate)
+   * it records a followup and leaves the attempt in flight for an operator. */
+  private async settleMergedAttempt(
+    record: BuildRecord,
+    state: BuildState,
+    sha: string,
+  ): Promise<void> {
+    const attempt = await this.terminalAttempt(record, state)
+    if (attempt.status !== 'in-flight') return
+    const result = state.landingMeasurement?.result
+    if (result === undefined || result.candidate !== sha) {
+      await this.store.append(record.slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: {
+          id: this.deps.ids('obs'),
+          kind: 'followup',
+          summary: `Attempt ${attempt.attempt!.proposal} merged as ${sha} without a landing measurement of that head, so it cannot settle as accepted. It keeps its concurrency slot on node ${attempt.node} until an operator acts.`,
+          refs: [sha],
+        },
+      })
+      return
+    }
+    await settleAttempt(
+      this.store,
+      attempt.node,
+      { proposal: attempt.attempt!.proposal, ticket: attempt.attempt!.ticket, build: record.slug },
+      'accepted',
+      settlementMeasurement(result),
+    )
+  }
+
+  /** Close a settled attempt's PR without merging. The `closed` epilogue
+   * then completes the build; no implement round follows. */
+  private async closeSettledAttempt(
+    record: BuildRecord,
+    workspacePath: string,
+    pr: number,
+  ): Promise<{ kind: 'closed'; result: Awaited<ReturnType<NonNullable<Forge['closePr']>>> }> {
+    const closePr = this.deps.forge.closePr
+    if (closePr === undefined)
+      throw new Error(
+        `selected forge "${this.deps.forge.name}" does not implement closePr; upgrade its plugin`,
+      )
+    const result = await closePr.call(this.deps.forge, workspacePath, pr)
+    if (
+      result.state === 'closed' &&
+      (await this.store.buildFacts(record.slug)).state.prState !== 'closed'
+    )
+      await this.store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'pr.closed',
+        payload: {},
+      } satisfies EventWrite<'pr.closed'>)
+    return { kind: 'closed', result }
+  }
+
+  /** Whether the pair measured for landing is still the gate's `land` pair:
+   * the publication-time check inside the node writer, separate from the
+   * measurement-independent readiness that admits the gate. */
+  private async measuredPairCurrent(
+    record: BuildRecord,
+    nodeSlug: string,
+    pair: { candidate: string; baseline: string },
+  ): Promise<boolean> {
+    await this.store.refreshBuild(record.slug)
+    await this.store.refreshBuild(nodeSlug)
+    const gate = await this.landingVerdict(record, nodeSlug)
+    return (
+      gate.verdict === 'land' &&
+      gate.candidate === pair.candidate &&
+      gate.nodeHead === pair.baseline
+    )
+  }
+
+  /** The attempt status of a child at one of its terminal paths, from its
+   * node's reduced facts: one read, not recurring. */
+  private async terminalAttempt(
+    record: BuildRecord,
+    state: Pick<BuildState, 'target'>,
+  ): Promise<{
+    node: string
+    status: AttemptStatus
+    attempt?: InFlightAttempt | PendingRejection
+  }> {
+    if (state.target === undefined) return { node: '', status: 'none' }
+    const node = (await this.store.buildFacts(state.target.build)).state
+    return { node: state.target.build, ...this.attemptOf(node, record) }
+  }
+
+  /**
+   * Move each settled, non-accepted attempt's ticket to the rejected role
+   * (SPEC §13): the one owner of that move. An entry waits until its attempt
+   * build is done, so no terminal path can hand the ticket back to triage
+   * afterwards. Zero reads while nothing is pending; otherwise at most one
+   * reduced read per entry, which admission bounds by the node's
+   * concurrency. Never lists the repository.
+   */
+  private async sweepAttemptRejections(slug: string, state: BuildState): Promise<boolean> {
+    const pending = state.optimization?.rejections ?? []
+    if (pending.length === 0) return false
+    if (this.deps.config.tickets.rejectedState === undefined) return false
+    let moved = false
+    for (const entry of pending) {
+      if (entry.build !== undefined && (await this.store.getBuild(entry.build)) !== null) {
+        const build = (await this.store.buildFacts(entry.build)).state
+        if (build.status !== 'done') continue
+      }
+      const id = resolveTicketRef(
+        this.store.repositoryFacts().ticketMigrations,
+        entry.ticket,
+        this.deps.tickets.name,
+        entry.build,
+      ).id
+      const ticket = await moveTicketToRole(
+        this.deps.tickets,
+        this.deps.config.tickets,
+        id,
+        'rejected',
+      )
+      const rejected = ticket.state ?? this.deps.config.tickets.rejectedState
+      await this.deps.tickets.comment(
+        id,
+        `attempt ${entry.proposal} settled as ${entry.outcome}; moved to ${rejected}`,
+      )
+      await this.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'attempt.ticket-rejected',
+        payload: { proposal: entry.proposal, ticket: entry.ticket, state: rejected },
+      } satisfies EventWrite<'attempt.ticket-rejected'>)
+      moved = true
+    }
+    return moved
+  }
+
   private async cleanupAborted(
     record: BuildRecord,
     events: CurrentBuildFacts,
@@ -3730,7 +4150,32 @@ export class Dispatcher {
       }
     }
 
-    if (record.ticket !== undefined && !has('abort.ticket-returned')) {
+    // An aborted attempt settles `aborted`; its node's sweep moves the ticket
+    // to the rejected role, so none of the triage hand-back below applies.
+    const attempt = await this.terminalAttempt(record, events.state)
+    if (attempt.status === 'in-flight')
+      try {
+        if (events.state.prState === 'merged' && events.state.mergedSha)
+          await this.settleMergedAttempt(record, events.state, events.state.mergedSha)
+        else
+          await settleAttempt(
+            store,
+            attempt.node,
+            {
+              proposal: attempt.attempt!.proposal,
+              ticket: attempt.attempt!.ticket,
+              build: record.slug,
+            },
+            'aborted',
+            undefined,
+            events.latestAbort?.payload.reason?.trim() || undefined,
+          )
+      } catch (error) {
+        fail('attempt settlement', `build ${record.slug}`, error)
+      }
+    const handback = record.ticket !== undefined && attempt.status === 'none'
+
+    if (handback && record.ticket !== undefined && !has('abort.ticket-returned')) {
       const label = 'autobuild:aborted'
       try {
         const id = await this.currentTicketId(record)
@@ -3782,7 +4227,7 @@ export class Dispatcher {
 
     // Reported from the checkpoint, never a re-read of the ticket, so a
     // retry reports exactly what the committed move did.
-    if (record.ticket !== undefined) {
+    if (handback) {
       try {
         const returned = events.latestTicketReturned
         if (returned?.type !== 'abort.ticket-returned')
@@ -3812,7 +4257,7 @@ export class Dispatcher {
       type: 'build.completed',
       payload: { outcome: 'abandoned' },
     })
-    if (record.ticket !== undefined) await this.settleBuildHandback(record.slug)
+    if (handback) await this.settleBuildHandback(record.slug)
     await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
   }
@@ -3822,7 +4267,7 @@ export class Dispatcher {
    * workspace and lease, then complete the build unmerged. The completion is
    * last, so a crash anywhere earlier retries on the next tick; an attempt no
    * longer in flight was already settled and is not settled again. The
-   * ticket stays where dispatch left it. */
+   * node rejection sweep moves the ticket after completion. */
   private async settleDeclinedAttempt(record: BuildRecord, events: CurrentBuildFacts) {
     const store = this.store
     const declined = events.state.declined!
@@ -3837,15 +4282,14 @@ export class Dispatcher {
       key(ref, record.slug),
     )
     if (attempt !== undefined)
-      await store.append(target.build, {
-        actor: DISPATCHER,
-        type: 'attempt.settled',
-        payload: {
-          attempt: { proposal: attempt.proposal, ticket: attempt.ticket, build: record.slug },
-          outcome: 'declined',
-          note: declined.reason,
-        },
-      } satisfies EventWrite<'attempt.settled'>)
+      await settleAttempt(
+        store,
+        target.build,
+        { proposal: attempt.proposal, ticket: attempt.ticket, build: record.slug },
+        'declined',
+        undefined,
+        declined.reason,
+      )
     if (record.lease !== undefined) await store.releaseLease(record.slug, record.lease.holder)
     await this.releaseWorkspace(record.slug, events)
     await store.append(record.slug, {
@@ -4331,55 +4775,92 @@ export class Dispatcher {
             })
           return
         }
-        const preflight = recoverLanding
-          ? undefined
-          : await preflightNodeLanding(
-              this.kernelForge(),
-              workspacePath,
-              pr.number,
-              record.branch,
-              target.branch,
-            )
-        const reason =
-          preflight ??
-          (await this.withKernelRepository((kernelPath) =>
-            landIntoNode({
-              store,
-              forge: this.kernelForge(),
-              exec: forge.kernelExec ?? this.deps.exec,
-              workspacePath: kernelPath,
-              slug: record.slug,
-              node: target.slug,
-              branch: record.branch!,
-              destination: target.branch!,
-              pr: pr.number,
-              holder: this.deps.ids('node-writer'),
-              id: this.deps.ids('node-landing').replaceAll('_', '-'),
-              ...(integration
-                ? {
-                    stack: {
-                      head: state.integration!.cycle!.head,
-                      parent: state.integration!.cycle!.parent,
-                      cycle: state.integration!.cycle!.id,
-                    },
-                  }
-                : {}),
-              eligible: canApply,
-            }),
-          ))
-        if (reason && commandSeq !== undefined)
-          await recordAutoMergeDeferralObservation(
-            store,
-            record.slug,
-            reason,
+        // A child of an optimization node also needs a fresh, decisive
+        // measurement of its exact pair. Readiness above stays independent of
+        // it, so a newly ready child reaches its first request.
+        let measured: { candidate: string; baseline: string } | undefined
+        let closure: Awaited<ReturnType<NonNullable<Forge['closePr']>>> | undefined
+        const optimized = (await store.buildFacts(target.slug)).state.optimization !== undefined
+        if (!recoverLanding && optimized) {
+          const gate = await this.optimizationLandingGate(
+            record,
+            target.slug,
+            workspacePath,
             pr.number,
-            commandSeq,
-            this.deps.ids('obs'),
           )
-        if ((await store.buildFacts(target.slug)).state.nodeRestack?.active?.source === record.slug)
-          return
+          if (gate.kind === 'wait') return
+          if (gate.kind === 'land') measured = gate.measured
+          else closure = gate.result
+        }
+        if (closure === undefined) {
+          // Recovery of a reserved landing still publishes only a pair the
+          // current gate lands: a revised epsilon or ruler since the
+          // reservation makes the writer abandon it rather than publish, and
+          // the next poll measures or settles it. A write that already
+          // happened is recovered by readback before this check runs.
+          const pair =
+            recoverLanding && optimized && reservation
+              ? { candidate: reservation.parent, baseline: reservation.expected }
+              : measured
+          const preflight = recoverLanding
+            ? undefined
+            : await preflightNodeLanding(
+                this.kernelForge(),
+                workspacePath,
+                pr.number,
+                record.branch,
+                target.branch,
+              )
+          const reason =
+            preflight ??
+            (await this.withKernelRepository((kernelPath) =>
+              landIntoNode({
+                store,
+                forge: this.kernelForge(),
+                exec: forge.kernelExec ?? this.deps.exec,
+                workspacePath: kernelPath,
+                slug: record.slug,
+                node: target.slug,
+                branch: record.branch!,
+                destination: target.branch!,
+                pr: pr.number,
+                holder: this.deps.ids('node-writer'),
+                id: this.deps.ids('node-landing').replaceAll('_', '-'),
+                ...(integration
+                  ? {
+                      stack: {
+                        head: state.integration!.cycle!.head,
+                        parent: state.integration!.cycle!.parent,
+                        cycle: state.integration!.cycle!.id,
+                      },
+                    }
+                  : {}),
+                ...(pair !== undefined ? { measured: pair } : {}),
+                eligible:
+                  pair === undefined
+                    ? canApply
+                    : async () =>
+                        (await canApply()) &&
+                        (await this.measuredPairCurrent(record, target.slug, pair)),
+              }),
+            ))
+          if (reason && commandSeq !== undefined)
+            await recordAutoMergeDeferralObservation(
+              store,
+              record.slug,
+              reason,
+              pr.number,
+              commandSeq,
+              this.deps.ids('obs'),
+            )
+          if (
+            (await store.buildFacts(target.slug)).state.nodeRestack?.active?.source === record.slug
+          )
+            return
+        }
         await store.refreshBuild(record.slug)
         state = (await store.buildFacts(record.slug)).state
+        if (closure !== undefined) prState = closure
         if (state.prState === 'merged') {
           if (state.mergedSha) prState = { state: 'merged', sha: state.mergedSha }
         }
@@ -4757,6 +5238,9 @@ export class Dispatcher {
         // Before the child can become terminal, so a complete node already
         // folds every landed child's links; the node log dedupes a retry.
         await this.recordNodeIssueLinks(record.slug)
+        // A merged attempt settles `accepted` with the measurement of the
+        // head that landed, before the build can become terminal.
+        if (nodeTarget) await this.settleMergedAttempt(record, state, prState.sha)
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
           await tickets.transition(await this.currentTicketId(record), this.doneState)
@@ -4786,20 +5270,39 @@ export class Dispatcher {
           } satisfies EventWrite<'pr.closed'>)
         }
         await this.releaseWorkspace(record.slug, events)
-        await this.returnBuildTicket(
-          record,
-          events,
-          'pr-closed',
-          'triage',
-          (state) =>
-            `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${state}`,
-        )
+        // A closed attempt goes to the rejected role through its node's
+        // sweep, never back to triage. One a human closed settles `aborted`.
+        const attempt = nodeTarget
+          ? await this.terminalAttempt(record, state)
+          : { node: '', status: 'none' as const }
+        if (attempt.status === 'in-flight')
+          await settleAttempt(
+            store,
+            attempt.node,
+            {
+              proposal: attempt.attempt!.proposal,
+              ticket: attempt.attempt!.ticket,
+              build: record.slug,
+            },
+            'aborted',
+            undefined,
+            `PR ${pr.url} closed without merging`,
+          )
+        if (attempt.status === 'none')
+          await this.returnBuildTicket(
+            record,
+            events,
+            'pr-closed',
+            'triage',
+            (state) =>
+              `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${state}`,
+          )
         await store.append(record.slug, {
           actor: DISPATCHER,
           type: 'build.completed',
           payload: { outcome: 'closed-unmerged' },
         } satisfies EventWrite<'build.completed'>)
-        if (record.ticket) await this.settleBuildHandback(record.slug)
+        if (record.ticket && attempt.status === 'none') await this.settleBuildHandback(record.slug)
         await this.reclaimPrAttachments(record.slug, events)
         report.closed += 1
         return

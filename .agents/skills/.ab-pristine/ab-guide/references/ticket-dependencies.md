@@ -58,6 +58,11 @@ the ticket ready.
 ## Already-claimed work
 
 Adding blockers does not stop a build already claimed from an earlier listing.
+This recipe applies to ordinary tickets. Aborting an
+[optimization attempt](optimization-nodes.md#landing-and-settlement) settles it
+`aborted` and its node moves the ticket to rejected, whatever `--to` says, and
+no `ticket.handed-back` event follows; wait for the node's
+`attempt.ticket-rejected` instead.
 When the human authorizes restarting premature work and the blocker set is
 already right, request `ab abort <slug> --to ready`: cleanup moves the ticket
 straight back to ready with its blockers kept, so no second move is needed.

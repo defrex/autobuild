@@ -1098,7 +1098,14 @@ back to triage and records the requested role and missing parts. The
 `abort.ticket-returned` checkpoint commits the move and comment, then the
 repository `ticket.handed-back` report is appended before abandoned completion;
 once that report exists the dispatcher writes nothing more to the ticket, so it
-is the safe boundary for a subsequent ticket move. Forge close/delete operations are
+is the safe boundary for a subsequent ticket move. An optimization attempt
+is the exception: cleanup settles it `aborted` on the node's log (or settles a
+merged attempt as a merge), skips the label, ticket move, comment,
+`abort.ticket-returned` checkpoint and `ticket.handed-back` report whatever
+the requested destination, and appends abandoned completion. The node's
+rejection sweep later moves the ticket to `tickets.rejectedState` and records
+`attempt.ticket-rejected` ([landing and
+settlement](optimization-nodes.md#landing-and-settlement)). Forge close/delete operations are
 optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.
 AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit

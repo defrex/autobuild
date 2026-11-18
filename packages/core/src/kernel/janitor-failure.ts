@@ -28,6 +28,7 @@ export type JanitorOperation =
   | 'decline settlement'
   | 'target observation'
   | 'PR check'
+  | 'attempt rejection'
 
 /** A build's janitor attempt is due: no episode, an answered escalation asked
  * for a retry, or the backoff has elapsed. */

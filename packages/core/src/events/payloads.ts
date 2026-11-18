@@ -630,6 +630,13 @@ const optimizationPayloadSchemas = {
     cause: optimizationStopCauseSchema,
     mode: optimizationStopModeSchema,
   }),
+  /** A settled, non-accepted attempt's ticket was moved to the rejected role
+   * (SPEC §13). Removes the node digest's pending rejection. */
+  'attempt.ticket-rejected': z.strictObject({
+    proposal: z.string().min(1),
+    ticket: ticketRefSchema,
+    state: z.string().min(1),
+  }),
 } as const
 
 export const eventPayloadSchemas = {
