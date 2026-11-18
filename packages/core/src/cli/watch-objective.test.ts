@@ -14,7 +14,13 @@ test('a node record carries the objective as of its own timestamp', () => {
   const objective = objectiveSummary(state, new Date(event.ts))!
   expect(record.state?.objective).toEqual(objective)
   expect(projectRecord(event, state, 'cursor')).toEqual(record)
-  expect(objective.attempts).toEqual({ filed: 3, accepted: 1, rejected: 0, running: 2 })
+  expect(objective.attempts).toEqual({
+    filed: 3,
+    accepted: 1,
+    rejected: 0,
+    unmeasured: 0,
+    running: 2,
+  })
   expect(renderWatchLine(event, state)).toEndWith(
     `  — ${objectiveSegments(objective, objective.elapsedHours).join(' · ')}`,
   )

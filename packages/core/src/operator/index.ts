@@ -145,6 +145,7 @@ export { readTicketTree, getOperatorTicketTree } from './tickets'
 export { requestNodeRestack } from './restack'
 export {
   reviseObjective,
+  settleUnmeasuredAttempt,
   showObjective,
   stopObjective,
   objectiveView,

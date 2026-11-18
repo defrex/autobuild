@@ -48,7 +48,7 @@ describe('optimization digest', () => {
     expect(state.starting).toEqual({ value: 50, spread: 1.6, head: 'a'.repeat(40) })
     expect(state.current).toBe(44)
     expect(state.best).toBe(44)
-    expect(state.attempts).toEqual({ filed: 4, accepted: 1, rejected: 3 })
+    expect(state.attempts).toEqual({ filed: 4, accepted: 1, rejected: 3, unmeasured: 0 })
     expect(state.inFlight).toEqual([])
     expect(state.plateau).toBe(2)
     expect(state.emptyProposals).toBe(0)
@@ -115,7 +115,7 @@ describe('optimization digest', () => {
     builder.settle('f', 'declined')
     const state = digest(builder)
     expect(state.plateau).toBe(1)
-    expect(state.attempts).toEqual({ filed: 6, accepted: 1, rejected: 5 })
+    expect(state.attempts).toEqual({ filed: 6, accepted: 1, rejected: 5, unmeasured: 0 })
   })
 
   test('running attempts are the unsettled proposals', () => {
@@ -410,20 +410,162 @@ describe('pending rejections', () => {
           )
       } else if (roll < 0.7 && state.inFlight.length > 0) {
         const attempt = state.inFlight[Math.floor(random() * state.inFlight.length)]!
-        const outcomes = ['declined', 'stopped', 'aborted', 'accepted'] as const
+        const outcomes = [
+          'declined',
+          'stopped',
+          'aborted',
+          'accepted',
+          'merged-unmeasured',
+        ] as const
         const outcome = outcomes[Math.floor(random() * outcomes.length)]!
-        builder.settle(
-          attempt.proposal,
-          outcome,
-          outcome === 'accepted'
-            ? { revision: 1, baseline: 50, candidate: 40, delta: 10 }
-            : undefined,
-        )
+        if (outcome === 'merged-unmeasured' && attempt.unmeasuredMerge === undefined)
+          builder.markUnmeasured(attempt.proposal, 'absent')
+        else
+          builder.settle(
+            attempt.proposal,
+            outcome,
+            outcome === 'accepted'
+              ? { revision: 1, baseline: 50, candidate: 40, delta: 10 }
+              : undefined,
+            undefined,
+            outcome === 'merged-unmeasured'
+              ? { policy: 'release-unmeasured' }
+              : outcome === 'declined'
+                ? { branch: `ab/attempt-${attempt.proposal}` }
+                : {},
+          )
       } else if (roll < 0.8 && state.rejections.length > 0) {
         // A move that succeeds; the remaining rolls model a tracker refusing it.
-        builder.ticketRejected(state.rejections[0]!.proposal)
+        const entry = state.rejections[0]!
+        if (entry.branch !== undefined) builder.branchCleanup(entry.proposal, entry.branch)
+        else builder.ticketRejected(entry.proposal)
+      } else if (roll < 0.85 && state.rejections.some((entry) => entry.branch !== undefined)) {
+        const entry = state.rejections.find((rejection) => rejection.branch !== undefined)!
+        builder.branchCleanup(entry.proposal, entry.branch!, `failed at step ${step}`)
       }
     }
+  })
+})
+
+describe('unmeasured merges', () => {
+  const marked = () =>
+    new OptimizationLogBuilder()
+      .accept(commandObjective({ proposer: { concurrency: 2 } }), 1)
+      .baseline(1, 50, 1.6)
+      .propose('r', ['a', 'b'])
+      .markUnmeasured('a', 'stale-head', undefined, 'c'.repeat(40))
+
+  test('the marker folds onto the in-flight entry, which keeps its slot', () => {
+    const state = digest(marked())
+    expect(state.inFlight[0]!.unmeasuredMerge).toEqual({
+      build: 'attempt-a',
+      sha: 'd'.repeat(40),
+      reason: 'stale-head',
+      measuredCandidate: 'c'.repeat(40),
+      at: state.inFlight[0]!.unmeasuredMerge!.at,
+    })
+    expect(optimizationAdmission(state, at(0)).slots).toBe(0)
+  })
+
+  test('a repeated marker is ignored, and a marker for a settled attempt adds nothing', () => {
+    const state = digest(
+      marked().markUnmeasured('a', 'absent').settle('b', 'stopped').markUnmeasured('b', 'absent'),
+    )
+    expect(state.inFlight).toHaveLength(1)
+    expect(state.inFlight[0]!.unmeasuredMerge!.reason).toBe('stale-head')
+  })
+
+  test('merged-unmeasured releases the slot once and moves no value', () => {
+    const before = digest(marked())
+    const builder = marked().settle('a', 'merged-unmeasured', undefined, undefined, {
+      policy: 'release-unmeasured',
+      mergedSha: 'd'.repeat(40),
+    })
+    const state = digest(builder)
+    expect(state.inFlight.map((attempt) => attempt.proposal)).toEqual(['b'])
+    expect(state.rejections).toEqual([])
+    expect(state.attempts).toEqual({ ...before.attempts, unmeasured: 1 })
+    expect([state.current, state.best, state.plateau]).toEqual([
+      before.current,
+      before.best,
+      before.plateau,
+    ])
+    expect(optimizationAdmission(state, at(0)).slots).toBe(1)
+    // A duplicate settlement for the same proposal counts nothing again.
+    builder.settle('a', 'merged-unmeasured', undefined, undefined, {
+      policy: 'release-unmeasured',
+    })
+    expect(digest(builder).attempts.unmeasured).toBe(1)
+  })
+
+  test('the ledger records it without a measurement or a near miss', () => {
+    const ledger = optimizationLedgerReducer.reduce(
+      marked().settle('a', 'merged-unmeasured', undefined, 'released', {
+        policy: 'release-unmeasured',
+        mergedSha: 'd'.repeat(40),
+      }).events,
+    )
+    const entry = ledger.entries[0]!
+    expect(entry).toMatchObject({
+      proposal: 'a',
+      outcome: 'merged-unmeasured',
+      mergedSha: 'd'.repeat(40),
+      policy: 'release-unmeasured',
+      note: 'released',
+    })
+    expect([entry.delta, entry.baseline, entry.candidate, entry.nearMiss]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
+  test('a stopped node names unmeasured merges apart from running attempts', () => {
+    const state = digest(marked().stop('operator', 'drain'))
+    expect(optimizationCompletionBlocker({ optimization: state })).toBe(
+      'attempts still in flight: T-b; merged without a landing measurement, awaiting operator settlement: T-a',
+    )
+  })
+})
+
+describe('branch cleanup obligations', () => {
+  const settled = () =>
+    new OptimizationLogBuilder()
+      .accept(commandObjective(), 1)
+      .propose('r', ['a', 'b'])
+      .settle('a', 'declined', undefined, undefined, { branch: 'ab/attempt-a' })
+      .settle('b', 'declined')
+
+  test('a published settlement carries its branch into the pending rejection', () => {
+    const state = digest(settled())
+    expect(state.rejections.map((entry) => [entry.proposal, entry.branch])).toEqual([
+      ['a', 'ab/attempt-a'],
+      ['b', undefined],
+    ])
+  })
+
+  test('a failure records its error; a deletion clears the obligation', () => {
+    const builder = settled().branchCleanup('a', 'ab/attempt-a', 'forge down')
+    expect(digest(builder).rejections[0]).toMatchObject({
+      branch: 'ab/attempt-a',
+      branchCleanupError: 'forge down',
+    })
+    builder.branchCleanup('a', 'ab/attempt-a')
+    const entry = digest(builder).rejections[0]!
+    expect(entry.branch).toBeUndefined()
+    expect(entry.branchCleanupError).toBeUndefined()
+    // The pending rejection stays until its ticket moves.
+    expect(entry.proposal).toBe('a')
+  })
+
+  test('facts naming another branch or proposal change nothing', () => {
+    const state = digest(
+      settled().branchCleanup('a', 'ab/other').branchCleanup('b', 'ab/attempt-a', 'x'),
+    )
+    expect(state.rejections[0]).toMatchObject({ branch: 'ab/attempt-a' })
+    expect(state.rejections[0]!.branchCleanupError).toBeUndefined()
+    expect(state.rejections[1]!.branchCleanupError).toBeUndefined()
   })
 })
 

@@ -10,9 +10,17 @@ import { buildVocabulary } from './dashboard/model'
 import {
   objectiveSegments,
   objectiveSummary,
+  pendingCleanupText,
+  unmeasuredMergeText,
   type ObjectiveSummary,
 } from './dashboard/objective-row'
 import { readBuildDigests } from '../store/reduced-reads'
+import {
+  optimizationPendingCleanups,
+  optimizationUnmeasuredMerges,
+  type PendingCleanupView,
+  type UnmeasuredMergeView,
+} from '../kernel/optimization'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
 import {
@@ -230,6 +238,12 @@ export function leafRestackStatus(restack: LeafRestackState): LeafRestackStatus 
 }
 
 export interface BuildDetail extends BuildSummary {
+  /** An optimization node's attempts merged without a landing measurement,
+   * each holding its slot until an operator settles it. Omitted when none. */
+  unmeasuredMerges?: UnmeasuredMergeView[]
+  /** An optimization node's settled attempts whose build branch awaits
+   * deletion. Omitted when none. */
+  pendingCleanups?: PendingCleanupView[]
   nodePolling?: {
     mode: 'active' | 'idle'
     intervalSeconds: number
@@ -461,6 +475,19 @@ function nodeLandingDeferred(state: BuildState): { landingDeferred?: string } {
   return reason === undefined ? {} : { landingDeferred: reason }
 }
 
+/** An optimization node's slot-holding conditions, from its reduced digest. */
+function optimizationDetail(
+  state: BuildState,
+): Pick<BuildDetail, 'unmeasuredMerges' | 'pendingCleanups'> {
+  if (state.kind !== 'node' || state.optimization === undefined) return {}
+  const unmeasuredMerges = optimizationUnmeasuredMerges(state.optimization)
+  const pendingCleanups = optimizationPendingCleanups(state.optimization)
+  return {
+    ...(unmeasuredMerges.length > 0 ? { unmeasuredMerges } : {}),
+    ...(pendingCleanups.length > 0 ? { pendingCleanups } : {}),
+  }
+}
+
 export function detailFromFacts(
   record: BuildRecord,
   facts: Pick<BuildFacts, 'state' | 'open'> &
@@ -526,6 +553,7 @@ export function detailFromFacts(
         }
       : {}),
     ...nodeLandingDeferred(state),
+    ...optimizationDetail(state),
     ...(state.verifyStage.superseded.length
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
@@ -807,6 +835,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     if (d.objective !== undefined)
       for (const segment of objectiveSegments(d.objective, d.objective.elapsedHours))
         lines.push(`    ${segment}`)
+    for (const merge of d.unmeasuredMerges ?? []) lines.push(`    ${unmeasuredMergeText(merge)}`)
+    for (const cleanup of d.pendingCleanups ?? []) lines.push(`    ${pendingCleanupText(cleanup)}`)
   }
   if (d.nodeRestack) {
     const node = d.nodeRestack

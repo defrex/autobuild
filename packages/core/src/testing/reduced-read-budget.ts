@@ -4635,6 +4635,7 @@ export async function optimizationReadBudget(): Promise<void> {
     optimizationStopEligibility,
   } = await import('../kernel/optimization')
   const { enforceOptimizationStop } = await import('../processes/optimization-stop')
+  const { reconcileMergedAttempts } = await import('../processes/optimization-merges')
   const { readBuildDigests, readOptimizationLedger } = await import('../store/reduced-reads')
   const { readAttemptContext } = await import('../cli/attempt')
   const { objectiveSummary } = await import('../cli/dashboard/objective-row')
@@ -4656,6 +4657,10 @@ export async function optimizationReadBudget(): Promise<void> {
     poll: Record<string, number>
     objectiveRow: number
     stopVector: Record<string, number>
+    slotPoll: Record<string, number>
+    slotDigest: number
+    reconcileFirst: Record<string, number>
+    reconcileIdle: Record<string, number>
   }[] = []
   for (const attempts of [10, 10_000]) {
     const store = new MemoryBuildStore()
@@ -4879,6 +4884,83 @@ export async function optimizationReadBudget(): Promise<void> {
       expect(operator.detail.objective).toEqual(objectiveSummary(state, now))
       expect(operator.dashboardRow?.objectiveRow).toEqual(polled!.objectiveRow!)
 
+      // 1d. Slot-holding conditions ride on the same digest: an unmeasured
+      // merge marked on an in-flight attempt, and a settled attempt's branch
+      // obligation. The marker costs exactly its own node row; the poll and
+      // the operator detail then read zero event rows and no attempt log.
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: 'cleanup',
+          proposals: [
+            {
+              id: 'p-clean',
+              ticket: { source: 'fake', id: 'CLEAN' },
+              title: 'Clean',
+              strategy: 'clean',
+            },
+          ],
+        },
+      })
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: {
+            proposal: 'p-clean',
+            ticket: { source: 'fake', id: 'CLEAN' },
+            build: 'clean-child',
+            branch: 'ab/clean-child',
+          },
+          outcome: 'declined',
+        },
+      })
+      await readBuildFacts(store, node)
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.merged-unmeasured',
+        payload: {
+          proposal: 'p-live',
+          ticket: live,
+          build: 'live-child',
+          sha: sha(9),
+          reason: 'absent',
+        },
+      })
+      rows.reset()
+      const slotState = (await readBuildFacts(store, node)).value.state
+      expect(rows.buildRowsBySlug.get(node)).toBe(1)
+      expect(rows.buildRows).toBe(1)
+      await dashboard.refresh()
+      rows.reset()
+      requests.reset()
+      const slotRow = (await dashboard.refresh()).builds.find((build) => build.slug === node)
+      const slotPoll = requests.vector()
+      expect(rows.buildRows).toBe(0)
+      expect(slotRow?.objectiveRow?.unmeasuredMerges).toBe(1)
+      await getOperatorBuild({ store: nodeOnly, repo, slug: node, now })
+      rows.reset()
+      const slotDetail = (await getOperatorBuild({ store: nodeOnly, repo, slug: node, now })).detail
+      expect(rows.buildRows).toBe(0)
+      expect(slotDetail.unmeasuredMerges?.map((merge) => merge.proposal)).toEqual(['p-live'])
+      expect(slotDetail.pendingCleanups).toEqual([
+        { proposal: 'p-clean', build: 'clean-child', branch: 'ab/clean-child' },
+      ])
+      const slotDigest = JSON.stringify(slotState.optimization).length
+      expect(attemptRows()).toEqual([])
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.ticket-rejected',
+        payload: {
+          proposal: 'p-clean',
+          ticket: { source: 'fake', id: 'CLEAN' },
+          state: 'Rejected',
+        },
+      })
+      await readBuildFacts(store, node)
+      await readOptimizationLedger(store, node)
+
       // 2. Idle reads read zero event rows.
       rows.reset()
       for (let i = 0; i < 5; i++) {
@@ -4906,18 +4988,18 @@ export async function optimizationReadBudget(): Promise<void> {
       })
       rows.reset()
       const advanced = (await readBuildFacts(store, node)).value.state.optimization!
-      expect(advanced.attempts.filed).toBe(attempts + 3)
+      expect(advanced.attempts.filed).toBe(attempts + 4)
       expect(rows.buildRowsBySlug.get(node)).toBe(1)
 
       // 4. The ledger advances with only the new node row, also through a
       // fresh repository view over the same store.
       rows.reset()
       const ledger = (await readOptimizationLedger(store, node)).value
-      expect(ledger.entries).toHaveLength(attempts + 1)
+      expect(ledger.entries).toHaveLength(attempts + 2)
       expect(rows.buildRowsBySlug.get(node)).toBe(1)
       rows.reset()
       const view = new RepoViewStore(store, { repo })
-      expect((await readOptimizationLedger(view, node)).value.entries).toHaveLength(attempts + 1)
+      expect((await readOptimizationLedger(view, node)).value.entries).toHaveLength(attempts + 2)
       expect(rows.buildRows).toBe(0)
 
       // 6. No attempt log was read at any point.
@@ -5024,6 +5106,83 @@ export async function optimizationReadBudget(): Promise<void> {
       expect(rows.buildRows).toBe(0)
       // One saved reduced value per non-terminal attempt build, nothing else.
       expect(idle.vector).toEqual({ getReducerValue: settled.inFlight.length - 1 })
+
+      // 8. Reconciliation of a merged attempt no settlement or marker
+      // recorded (an upgrade from before the marker): the first tick reads
+      // that one child's reduced value and writes the marker; every later
+      // tick is a pure scan of the listing it already has, with zero store
+      // requests. Unmerged and aborted attempts are never read.
+      const mergedTicket = { source: 'fake', id: 'MERGED' }
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: 'merged',
+          proposals: [{ id: 'p-merged', ticket: mergedTicket, title: 'M', strategy: 'm' }],
+        },
+      })
+      await store.createBuild({
+        slug: 'merged-child',
+        repo,
+        branch: 'ab/merged-child',
+        ticket: mergedTicket,
+      })
+      await store.append('merged-child', {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo,
+          ticket: mergedTicket,
+          baseBranch: 'ab-node/opt-node',
+          target: { ticket: { source: 'fake', id: 'NODE' }, build: node },
+        },
+      })
+      await store.append('merged-child', {
+        actor: DISPATCHER,
+        type: 'pr.opened',
+        payload: { pr: { number: 9, url: 'https://forge/9', headSha: sha(9) } },
+      })
+      await store.append('merged-child', {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: sha(9) },
+      })
+      await store.append('merged-child', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      await readBuildFacts(store, 'merged-child')
+      const reconcileTick = async () => {
+        const builds = await listing()
+        const before = (await readBuildFacts(store, node)).value.state
+        rows.reset()
+        requests.restore()
+        const counted = memoryStoreRequestCounter(store)
+        const wrote = await reconcileMergedAttempts(
+          deps,
+          builds.find((b) => b.record.slug === node)!.record,
+          before,
+          builds,
+        )
+        const cost = { wrote, vector: counted.vector(), rows: rows.buildRows }
+        counted.restore()
+        return cost
+      }
+      const first = await reconcileTick()
+      expect(first.wrote).toBe(true)
+      expect(first.rows).toBe(0)
+      const reconciled = (await readBuildFacts(store, node)).value.state.optimization!
+      expect(
+        reconciled.inFlight.find((a) => a.proposal === 'p-merged')?.unmeasuredMerge,
+      ).toMatchObject({
+        build: 'merged-child',
+        sha: sha(9),
+        reason: 'absent',
+      })
+      const reconcileIdle = await reconcileTick()
+      expect(reconcileIdle).toEqual({ wrote: false, vector: {}, rows: 0 })
+      expect((await reconcileTick()).vector).toEqual({})
       measured.push({
         vector,
         digest: digestSize,
@@ -5032,12 +5191,20 @@ export async function optimizationReadBudget(): Promise<void> {
         poll: pollVector,
         objectiveRow: JSON.stringify(polled!.objectiveRow).length,
         stopVector: idle.vector,
+        slotPoll,
+        slotDigest,
+        reconcileFirst: first.vector,
+        reconcileIdle: reconcileIdle.vector,
       })
     } finally {
       requests.restore()
     }
   }
   expect(measured[1]!.stopVector).toEqual(measured[0]!.stopVector)
+  expect(measured[1]!.slotPoll).toEqual(measured[0]!.slotPoll)
+  expect(Math.abs(measured[1]!.slotDigest - measured[0]!.slotDigest)).toBeLessThanOrEqual(16)
+  expect(measured[1]!.reconcileFirst).toEqual(measured[0]!.reconcileFirst)
+  expect(measured[1]!.reconcileIdle).toEqual(measured[0]!.reconcileIdle)
   expect(measured[1]!.vector).toEqual(measured[0]!.vector)
   expect(measured[1]!.attempt).toEqual(measured[0]!.attempt)
   expect(measured[1]!.migrated).toEqual(measured[0]!.migrated)
@@ -5166,6 +5333,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     await settle('p0', live[0]!, 'attempt-0', 'declined')
     await settle('p1', live[1]!, 'attempt-1', 'aborted')
 
+    const forge = new FakeForge()
     const dispatcher = () =>
       new Dispatcher({
         store,
@@ -5175,7 +5343,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
           mode: 'logical',
           base: { source: 'remote', sha },
         }),
-        forge: new FakeForge(),
+        forge,
         config,
         repo,
         exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
@@ -5192,15 +5360,22 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     await nodeState()
     for (let i = 0; i < concurrency; i++) await readBuildFacts(store, `attempt-${i}`)
     await readBuildDigests(store, repo)
+    const nodeRecord = (await store.getBuild(node))!
     const rows = memoryRepositoryReadCounter(store, repo)
     const requests = memoryStoreRequestCounter(store)
-    const measured: Record<string, Record<string, number>[]> = { refused: [], gate: [] }
+    const measured: Record<string, Record<string, number>[]> = {
+      refused: [],
+      gate: [],
+      cleanup: [],
+    }
     try {
       // 1. Nothing pending: zero requests.
       const idle = { ...(await nodeState()) }
       idle.optimization = { ...idle.optimization!, rejections: [] }
       requests.reset()
-      expect(await call<boolean>(dispatcher(), 'sweepAttemptRejections', node, idle)).toBe(false)
+      expect(await call<boolean>(dispatcher(), 'sweepAttemptRejections', nodeRecord, idle)).toBe(
+        false,
+      )
       expect(requests.vector()).toEqual({})
 
       // 2. A refusing tracker: constant cost, bounded entries, no slot.
@@ -5214,9 +5389,9 @@ export async function optimizationLandingReadBudget(): Promise<void> {
         expect(optimizationAdmission(state.optimization!, new Date()).slots).toBe(0)
         rows.reset()
         requests.reset()
-        await expect(call(dispatcher(), 'sweepAttemptRejections', node, state)).rejects.toThrow(
-          'tracker refused the move',
-        )
+        await expect(
+          call(dispatcher(), 'sweepAttemptRejections', nodeRecord, state),
+        ).rejects.toThrow('tracker refused the move')
         const vector = requests.vector()
         expect(vector.listBuilds).toBeUndefined()
         expect(vector.getRepoBuildDigests).toBeUndefined()
@@ -5230,7 +5405,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       // for its build to finish.
       tickets.transition = transition
       expect(
-        await call<boolean>(dispatcher(), 'sweepAttemptRejections', node, await nodeState()),
+        await call<boolean>(dispatcher(), 'sweepAttemptRejections', nodeRecord, await nodeState()),
       ).toBe(true)
       let state = await nodeState()
       expect(state.optimization!.rejections.map((entry) => entry.proposal)).toEqual(['p1'])
@@ -5317,7 +5492,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       // work set, and a late settlement re-arms it incrementally.
       await completed(node)
       await completed('attempt-1')
-      await call(dispatcher(), 'sweepAttemptRejections', node, await nodeState())
+      await call(dispatcher(), 'sweepAttemptRejections', nodeRecord, await nodeState())
       state = await nodeState()
       expect(state.optimization!.rejections).toEqual([])
       rows.reset()
@@ -5332,6 +5507,52 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       expect(isWorkDigest(digest)).toBe(true)
       expect(rows.buildRowsBySlug.get(node)).toBe(1)
       expect(rows.buildRows).toBe(1)
+
+      // 6. A declined attempt that published: its branch obligation is one
+      // forge delete per poll while failing, with the same request vector
+      // each poll and one failure fact per distinct error; then the delete
+      // and the move clear it. No listing, digest or event-row read.
+      const cleanupTicket = await propose('p4')
+      await created('attempt-4', undefined, node, cleanupTicket)
+      await completed('attempt-4')
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: {
+            proposal: 'p4',
+            ticket: cleanupTicket,
+            build: 'attempt-4',
+            branch: 'ab/attempt-4',
+          },
+          outcome: 'declined',
+        },
+      })
+      for (let poll = 0; poll < 3; poll++) forge.failNextDeleteBranch('forge refused the delete')
+      const failures = async () =>
+        (await store.getEvents(node)).filter((e) => e.type === 'attempt.branch-cleanup-failed')
+      for (let poll = 0; poll < 3; poll++) {
+        const current = await nodeState()
+        rows.reset()
+        requests.reset()
+        await call(dispatcher(), 'sweepAttemptRejections', nodeRecord, current)
+        const vector = requests.vector()
+        expect(vector.listBuilds).toBeUndefined()
+        expect(vector.getRepoBuildDigests).toBeUndefined()
+        expect(rows.buildRows).toBe(0)
+        expect(rows.buildFactsCalls).toBeLessThanOrEqual(concurrency)
+        // The first poll records the failure; the next ones repeat only the delete.
+        if (poll > 0) measured.cleanup!.push(vector)
+      }
+      expect(new Set(measured.cleanup!.map((v) => JSON.stringify(v))).size).toBe(1)
+      expect(await failures()).toHaveLength(1)
+      expect(forge.deleteBranchCalls.map((c) => c.branch)).toEqual(Array(3).fill('ab/attempt-4'))
+      expect((await tickets.get(cleanupTicket.id))?.state).not.toBe('Rejected')
+      await call(dispatcher(), 'sweepAttemptRejections', nodeRecord, await nodeState())
+      state = await nodeState()
+      expect(state.optimization!.rejections.map((entry) => entry.proposal)).toEqual(['p2'])
+      expect((await tickets.get(cleanupTicket.id))?.state).toBe('Rejected')
+      expect(forge.deleteBranchCalls.map((c) => c.branch)).toEqual(Array(4).fill('ab/attempt-4'))
     } finally {
       requests.restore()
     }

@@ -469,8 +469,24 @@ export const attemptOutcomeSchema = z.enum([
   'declined',
   'stopped',
   'aborted',
+  'merged-unmeasured',
 ])
 export type AttemptOutcome = z.infer<typeof attemptOutcomeSchema>
+/** How an operator settles an attempt that merged without a landing
+ * measurement of its merged head (SPEC §15.7). `release-unmeasured` releases
+ * its slot and records the measurement as absent; it never advances a value. */
+export const unmeasuredSettlementPolicySchema = z.enum(['release-unmeasured'])
+export type UnmeasuredSettlementPolicy = z.infer<typeof unmeasuredSettlementPolicySchema>
+/** Why a merged attempt's head has no valid landing measurement: none was
+ * recorded, the recorded one measured another candidate, the latest request
+ * belonged to another node, or the merged head itself was never recorded. */
+export const unmeasuredMergeReasonSchema = z.enum([
+  'absent',
+  'stale-head',
+  'unrelated',
+  'unresolvable',
+])
+export type UnmeasuredMergeReason = z.infer<typeof unmeasuredMergeReasonSchema>
 export const optimizationStopCauseSchema = z.enum([
   'threshold',
   'plateau',
@@ -609,6 +625,9 @@ const optimizationPayloadSchemas = {
         proposal: z.string().min(1),
         ticket: ticketRefSchema,
         build: z.string().min(1).optional(),
+        /** A declined or no-improvement attempt's published build branch:
+         * the remote branch the node's sweep must delete (SPEC §15.7). */
+        branch: z.string().min(1).optional(),
       }),
       outcome: attemptOutcomeSchema,
       measurement: z
@@ -619,6 +638,10 @@ const optimizationPayloadSchemas = {
           delta,
         })
         .optional(),
+      /** `merged-unmeasured` only: the operator's settlement policy. */
+      policy: unmeasuredSettlementPolicySchema.optional(),
+      /** `merged-unmeasured` only: the merged head, when it was recorded. */
+      mergedSha: sha.optional(),
       note: z.string().max(4000).optional(),
     })
     .refine(
@@ -626,6 +649,38 @@ const optimizationPayloadSchemas = {
         (settled.outcome !== 'accepted' && settled.outcome !== 'no-improvement') ||
         settled.measurement !== undefined,
       'an accepted or no-improvement settlement requires its measurement',
+    )
+    .refine(
+      (settled) =>
+        settled.outcome === 'merged-unmeasured'
+          ? settled.policy !== undefined && settled.measurement === undefined
+          : settled.policy === undefined && settled.mergedSha === undefined,
+      'a merged-unmeasured settlement requires a policy and no measurement; policy and mergedSha belong to it alone',
+    )
+    .refine(
+      (settled) =>
+        settled.attempt.branch === undefined ||
+        settled.outcome === 'declined' ||
+        settled.outcome === 'no-improvement',
+      'only a declined or no-improvement settlement carries a branch to clean up',
+    ),
+  /** An attempt merged without a valid landing measurement of its merged
+   * head. It stays in flight, holding its slot, until an operator settles it
+   * `merged-unmeasured` (SPEC §15.7). `sha` is absent only for
+   * `unresolvable`, when the child recorded no merged head. */
+  'attempt.merged-unmeasured': z
+    .strictObject({
+      proposal: z.string().min(1),
+      ticket: ticketRefSchema,
+      build: z.string().min(1),
+      sha: sha.optional(),
+      reason: unmeasuredMergeReasonSchema,
+      /** `stale-head`: the candidate the recorded measurement measured. */
+      measuredCandidate: sha.optional(),
+    })
+    .refine(
+      (marked) => (marked.sha === undefined) === (marked.reason === 'unresolvable'),
+      'only an unresolvable merge omits its merged head',
     ),
   'optimization.stopped': z.strictObject({
     cause: optimizationStopCauseSchema,
@@ -637,6 +692,23 @@ const optimizationPayloadSchemas = {
     proposal: z.string().min(1),
     ticket: ticketRefSchema,
     state: z.string().min(1),
+  }),
+  /** A settled attempt's published build branch was deleted from the forge,
+   * or was already absent. Clears the pending rejection's cleanup obligation. */
+  'attempt.branch-deleted': z.strictObject({
+    proposal: z.string().min(1),
+    build: z.string().min(1),
+    branch: z.string().min(1),
+  }),
+  /** Deleting a settled attempt's build branch failed or was refused by a
+   * guard. The obligation stays pending and is retried; the settlement is
+   * unchanged. Recorded only when the error differs from the last one. */
+  'attempt.branch-cleanup-failed': z.strictObject({
+    proposal: z.string().min(1),
+    /** Absent only when the settlement named no attempt build. */
+    build: z.string().min(1).optional(),
+    branch: z.string().min(1),
+    error: z.string().min(1).max(2000),
   }),
 } as const
 

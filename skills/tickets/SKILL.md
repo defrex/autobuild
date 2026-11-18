@@ -85,8 +85,8 @@ dispatcher never moves tickets into it and never dispatches from it unless
 The optional backlog and rejected roles are directories too, named by
 `[tickets].backlogState` and `rejectedState` (`ab init` writes `backlog` and
 `rejected`); the dispatcher never claims from or moves into them, with one
-exception: an optimization attempt that settles other than `accepted`,
-including an aborted one, moves into the rejected role.
+exception: an optimization attempt that settles `no-improvement`, `declined`,
+`stopped` or `aborted` moves into the rejected role.
 
 ```
 .autobuild/tickets/
@@ -275,8 +275,9 @@ node incomplete. Moving it back to triage, backlog or ready restores ordinary
 behavior with no other step.
 
 The dispatcher moves a ticket here in exactly one case: an attempt of an
-optimization node that settles with any outcome other than `accepted`
-(no-improvement, declined, stopped or aborted). The node comments the outcome
+optimization node that settles no-improvement, declined, stopped or aborted.
+An accepted attempt, or a merged one an operator settled `merged-unmeasured`,
+is done. The node comments the outcome
 on the ticket. Every other ticket reaches this role only when an agent or a
 human moves it. See
 [landing and settlement](../ab-guide/references/optimization-nodes.md#landing-and-settlement).
