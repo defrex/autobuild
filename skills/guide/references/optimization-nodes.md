@@ -300,45 +300,82 @@ the pin lacks is absent. The skill is copied from the harness pin's
 `.agents/skills/ab-judge/SKILL.md`, so a candidate cannot rewrite its own
 judges' instructions. The variants are checked out from private Git material
 outside the roots, and that material is deleted before any judge starts.
-The runner refuses to start a judge whose root is inside the workspace or
-inside any Git repository, and fails the run with that cause. Point `TMPDIR`
-outside any repository.
+
+**Protected locations.** The workspace, its checkout, its Git common directory,
+the main checkout that owns that directory, and a local store are protected
+locations. Before writing anything, the runner refuses a temporary directory
+at or under one of them. It checks each judge root again after preparing it.
+Git discovery from the scratch location runs across filesystem boundaries, and
+only a clean "not a git repository" counts as outside. Any other result, such
+as a dubious-ownership error, fails the run. A failed check names the cause,
+not the path. Point `TMPDIR` outside any repository.
 
 **What a judge can learn.** Nothing Autobuild gives a judge reveals which
-variant is the candidate: not its context, its environment, its labels, the
-location or names of its variant trees, its store credential, nor any Git
-metadata reachable from its working directory. Nothing under the judge's
-root links back to the repository it was prepared from. The guarantee covers
-these Autobuild-provided channels. A judge process that deliberately reads the
-repository or the store from outside its root crosses the shared trust
-boundary of unconfined local agent sessions.
+variant is the candidate or where it came from. That covers its context, its
+environment, its labels, the location and names of its variant trees, its
+store credential, any Git metadata reachable from its working directory, its
+`ab` command and that command's process arguments. Nothing under the judge's
+root links back to the repository it was prepared from, and no value Autobuild
+supplies names a protected location.
+
+- The judge's inherited environment is scrubbed: every value that names a
+  protected location is dropped, such as `INIT_CWD` or `npm_package_json`, and
+  so is every `PATH` entry under one. This can also drop a provider variable
+  whose value points inside the repository. Keep runtime credentials and tools
+  outside it.
+- The judge's `ab` is a self-contained, judge-only launcher written beside the
+  roots in the temporary directory. It is not a path into the Autobuild
+  installation. It runs `ab judge context` and `ab judge prefer` and refuses
+  every other command. Its content names no protected location and no
+  installation path, and it runs as `bun <launcher> judge …`.
+- If the `bun` interpreter or the judge runtime's executable resolves only at
+  or under a protected location, for example only in the repository's
+  `node_modules/.bin`, the run fails before any judge starts. Install both
+  outside the repository. A runtime that would load Autobuild files from a
+  protected location by path fails the judge's start the same way: the `pi`
+  runtime does this with its bridge extension when Autobuild is installed
+  inside the repository.
+
+The guarantee covers what Autobuild supplies. A judge process that
+deliberately searches the filesystem outside its root, for example through
+`/proc`, the home directory or a scan for repositories, crosses the shared
+trust boundary of unconfined local agent sessions. Autobuild does not claim a
+general sandbox.
 
 **The order is recorded where judges cannot read it.** The kernel records each
 judge's order in `panel.judge-started` before the session starts. No judge
-channel reads the log: the judge's environment carries `AB_STORE`, `AB_JUDGE`
-(`<build>:<panel>:<judge>`), `AB_SESSION`, `AB_CONTEXT_DIR` and, for a remote
-store, a `build-judge` credential in `AB_TOKEN`. It carries no `AB_BUILD`, no
-`AB_PHASE`, no inherited `AB_*` or `GIT_*` value and no `PWD`. The credential
-is write-only. It can append exactly one `panel.preferred` for its own panel,
-judge and session while the session is open, and every read is refused. Any
-read command run with `AB_JUDGE` set fails.
+channel reads the log. The judge's environment carries `AB_JUDGE`
+(`<build>:<panel>:<judge>`), `AB_SESSION` and `AB_CONTEXT_DIR`. Only with a
+remote store does it also carry `AB_STORE` and a `build-judge` credential in
+`AB_TOKEN`. It carries no `AB_BUILD`, no `AB_PHASE`, no inherited `AB_*` or
+`GIT_*` value and no `PWD`. A judge never learns a local store's path. The
+remote credential is write-only: it can append exactly one `panel.preferred`
+for its own panel, judge and session while the session is open, and every read
+is refused. Any read command run with `AB_JUDGE` set fails.
 
 **The terminal.** A judge runs `ab judge context`, which writes `purpose.md`,
 `rubric.md` and `context.json` from its brief and reads no store. It compares
 `A/` and `B/` and ends with exactly one
 `ab judge prefer <A|B|tie> --reason "<paragraph>"`. The reason must not be
-blank, and a second call is refused. After the turn, the kernel records
-`panel.judged` with the judge's index, its order, the preference and the
-reason.
+blank, and a second call is refused. With a remote store, the preference is
+appended over the write-only credential. The server checks the session and
+appends in one conditional step, so two concurrent calls from one session
+record at most one preference, and the other is refused. With a local store,
+`ab judge prefer` saves the preference once to `preference.json` in the
+judge's context directory, and a second or concurrent call is refused. The
+runner commits that file as the judge's `panel.preferred` when the turn ends,
+with the same atomic check. After the turn, the kernel records `panel.judged`
+with the judge's index, its order, the preference and the reason.
 
 **Win rate.** A judge who prefers the candidate scores 1, a tie scores 0.5 and
 a preference for the baseline scores 0. The win rate is the mean over the
 recorded judgments, so ties count as half.
 
 **Resumption.** A run resumed after a crash or restart keeps every recorded
-judgment. A judge whose preference was saved before the crash is completed
-from that preference and its recorded order without a new session. A dangling
-session is closed as `reclaimed`. Only judges with no recorded preference run
+judgment. A dangling session is closed as `reclaimed`. A preference a local
+judge saved before the crash is committed first, while its session is still
+open. A judge whose preference was recorded is completed from that preference
+and its recorded order without a new session. Only judges with no recorded preference run
 again, each with a freshly drawn order.
 
 **Failures.** A judge's turn that ends without a preference (`no-terminal`),
@@ -347,8 +384,12 @@ failure. After two counted failures for one judge, the run fails and names the
 judge and its last outcome. A shutdown records `interrupted`, which does not
 count. A run that cannot prepare its variants fails with the Git output tail.
 A variant holding a committed symlink that resolves outside its judge root
-fails the run before any judge starts, naming the link.
-Every judge root is removed when the run ends.
+fails the run before any judge starts, naming the link. A temporary directory
+in a protected location, an interpreter or runtime executable found only
+inside one, and a launcher that would name one also fail the run before any
+judge starts. A local judge's saved preference that is malformed, or names
+another judge or session, ends that judge as `no-terminal` with the reason.
+Every judge root and the launcher directory are removed when the run ends.
 
 ## Events
 
