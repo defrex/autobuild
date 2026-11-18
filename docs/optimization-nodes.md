@@ -204,6 +204,7 @@ build `optimization node`.
 | `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision |
 | `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
+| `implement.declined` | attempt | round, reason, artifact? (agent) |
 | `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
 | `optimization.stopped` | node | cause, mode |
 
@@ -246,7 +247,75 @@ scaled by the baseline's magnitude).
 A build is an attempt of a node exactly when its ticket was created from a
 recorded proposal of that node (`optimization.attempts-proposed`). Children
 filed any other way, for example a repair child, are not attempts and count
-toward neither the budget nor the plateau.
+toward neither the budget nor the plateau. The proposal's ticket and the
+build's ticket are compared through any recorded ticket-source migration, so a
+proposal recorded before a migration still matches its child. When that
+continuity cannot be resolved, the command refuses with `cannot resolve
+optimization attempt identity for build <slug>: …` rather than treating the
+build as an ordinary child.
+
+An attempt keeps the ordinary work grammar: plan, plan review, implement, code
+review, verify and finalize.
+
+### Attempt context
+
+In every phase of an attempt, `ab context` writes a derived `objective.md` and
+adds an `attempt` block to the manifest. Reviewers need the purpose as much as
+the implementer does. The document names the node and the objective revision
+and gives:
+
+- the purpose, verbatim;
+- the measurement: the command, its direction and samples, or a panel's judges
+  and rubric;
+- the harness selectors, with a note that the harness is pinned and `ab done`
+  refuses any change to it;
+- ε, the threshold if any, and the node's current value ("not measured yet"
+  before a baseline), with the best and starting values when present.
+
+The manifest block is
+`{node, proposal, revision, purpose, metric: {kind, command?, direction?,
+samples?, judges?, rubric?}, harness, current?, path}`, where `path` is the
+workspace-relative `objective.md`.
+
+### Harness edits are refused
+
+The harness is the ruler. In an attempt's implement phase, `ab done` compares
+the net contribution (`base..head`, renames as delete plus add) with
+`metric.harness`. A change to a matching path is refused before anything is
+deposited or published, as other invalid deposits are, so no event is written
+and code review never sees it:
+
+```text
+publication rejected: an optimization attempt must not change its harness (the measurement's ruler):
+  bench/search/run.ts
+Revert these paths to the contribution base, commit, then retry 'ab done'.
+```
+
+Only the net diff counts: a harness edit reverted in a later commit changes
+nothing the ruler measures. Children that are not attempts are not checked.
+
+### Declining
+
+When a strategy finds no real gain, the implementer declines:
+
+```sh
+ab done --no-improvement "<what was tried and why it did not help>" [--notes <file>]
+```
+
+It records `implement.declined {round, reason, artifact?}`, with the notes as
+`implement-notes` when `--notes` is given. The reason is trimmed and must be 1
+to 4000 characters. Declining needs no commits and no clean worktree, and it
+publishes nothing. No review, verification, finalize or measurement follows.
+The dispatcher then appends `attempt.settled {outcome: declined, note}` to the
+node with the reason as the note, releases the attempt's workspace, and
+completes the build `closed-unmerged`. A declined settlement enters the ledger
+the proposer reads and advances the plateau counter.
+
+Declining is a successful outcome: a specific reason tells the proposer what
+not to try again. The flag is refused outside implement (`'--no-improvement'
+is only valid in implement of an optimization attempt`) and in a build that is
+not an attempt (`ab done --no-improvement is only for optimization attempts:
+build <slug> is not an attempt of an optimization node`).
 
 ## Grooming an optimization node
 

@@ -112,7 +112,7 @@ import type { IdSource } from '../ids'
 import { decideNextFromFacts, type Decision } from '../kernel/engine'
 import { defineReducer } from '../kernel/incremental'
 import { continuesVerifyCycle } from '../kernel/pr-summary'
-import { PHASE_SPECS } from '../kernel/phases'
+import { isPhaseTerminalEvent, PHASE_SPECS } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
 import {
@@ -1871,7 +1871,7 @@ export class BuildRunner {
               await readBuildFacts(store, slug)
             ).value.state.verifyStage.failures.find((f) => f.seq === decision.verifyStageFailure),
           }),
-      isTerminal: (event) => event.type === spec.terminalEvent && roundMatches(event, round),
+      isTerminal: (event) => isPhaseTerminalEvent(spec, event) && roundMatches(event, round),
     })
     if (phase === 'reconcile') await this.settleLocalReconcile()
   }
