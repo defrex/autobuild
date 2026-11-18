@@ -8,6 +8,7 @@
  * `appendJudgePreference`, which makes the check and the write one atomic
  * step.
  */
+import { z } from 'zod'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import type { BuildDelegationFacts } from '../kernel/service-facts'
 import { delegationFactKey } from '../kernel/service-facts'
@@ -142,3 +143,19 @@ export async function appendJudgePreference<
   }
   throw new JudgePreferenceContentionError(attempts)
 }
+
+/** A local judge's saved preference (`$AB_CONTEXT_DIR/preference.json`): the
+ * judge holds no store, so `ab judge prefer` writes this once and the runner,
+ * which holds the store, commits it through `appendJudgePreference`. */
+export const judgePreferenceOutboxSchema = z
+  .object({
+    panel: z.string().min(1),
+    judge: z.number().int().min(1),
+    session: z.string().min(1),
+    preference: z.enum(['A', 'B', 'tie']),
+    reason: z.string().refine((reason) => reason.trim() !== '', 'reason is blank'),
+  })
+  .strict()
+export type JudgePreferenceOutbox = z.infer<typeof judgePreferenceOutboxSchema>
+/** The largest outbox the runner reads. */
+export const JUDGE_PREFERENCE_OUTBOX_BYTES = 64 * 1024

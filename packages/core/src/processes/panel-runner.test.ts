@@ -6,7 +6,11 @@ import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import {
   TMPDIR_PROBE,
   checkJudgeRoot,
+  checkJudgeExecutables,
   ESCAPING_LINKS_PROBE,
+  EXECUTABLE_PROBE,
+  insideProtected,
+  REAL_ENTRY_PROBE,
   JUDGE_SKILL_INSTALLS,
   NEUTRAL_ATTRIBUTES,
   PINNED_JUDGE_SKILL,
@@ -43,8 +47,14 @@ function scriptedExec(opts: {
   calls: Call[]
   tmp?: string
   workspace?: string
+  /** `rev-parse --show-toplevel --git-common-dir` output lines. */
+  repository?: [string, string]
   pinnedSkill?: boolean
   rootIsRepository?: boolean
+  /** Discovery's stderr when it fails (default: not a git repository). */
+  discoveryError?: string
+  /** Where each executable resolves: [found, real]; absent = not found. */
+  executables?: Record<string, [string, string] | null>
   escapingLinks?: string
   failCheckout?: boolean
   onLaunchCheck?: () => void
@@ -53,12 +63,28 @@ function scriptedExec(opts: {
     opts.calls.push({ cmd, ...(cwd !== undefined ? { cwd } : {}), ...(env ? { env } : {}) })
     if (cmd[0] === 'sh' && cmd[2] === TMPDIR_PROBE) return ok(`${opts.tmp ?? '/tmp/t'}\n`)
     if (cmd[0] === 'sh' && cmd[2] === 'cd "$1" && pwd -P') return ok(`${cmd[4]}\n`)
+    if (cmd[0] === 'sh' && cmd[2] === REAL_ENTRY_PROBE) return ok(`${cmd[4]}\n`)
     if (cmd[0] === 'sh' && cmd[2] === ESCAPING_LINKS_PROBE) return ok(opts.escapingLinks ?? '')
+    if (cmd[0] === 'sh' && cmd[2] === EXECUTABLE_PROBE) {
+      const name = cmd[5]!
+      const found =
+        opts.executables && name in opts.executables
+          ? opts.executables[name]
+          : [`/usr/bin/${name}`, `/usr/bin/${name}`]
+      return found ? ok(`${found.join('\n')}\n`) : { stdout: '', stderr: '', exitCode: 3 }
+    }
     if (cmd[0] !== 'git') return ok()
     const sub = cmd.find((part) => !part.startsWith('-') && part !== 'git' && !part.includes('='))
+    if (sub === 'rev-parse' && cmd.includes('--show-toplevel'))
+      return ok(`${(opts.repository ?? ['/ws', '/ws/.git']).join('\n')}\n`)
     if (sub === 'rev-parse' && cmd.includes('--git-common-dir')) return ok('/ws/.git\n')
     if (sub === 'rev-parse' && cmd.includes('--git-dir'))
-      return opts.rootIsRepository ? ok('.git\n') : fail('not a git repository')
+      return opts.rootIsRepository
+        ? ok('.git\n')
+        : fail(
+            opts.discoveryError ??
+              'fatal: not a git repository (or any of the parent directories): .git',
+          )
     if (sub === 'ls-tree') return ok(TREES[cmd.at(-1)!] ?? '')
     if (sub === 'cat-file' && cmd[2] === 'blob')
       return opts.pinnedSkill === false ? fail('path does not exist') : ok('pinned skill\n')
@@ -67,8 +93,16 @@ function scriptedExec(opts: {
   }
 }
 
+const LAUNCHER = '#!/usr/bin/env bun\nconsole.log("judge")\n'
+
 function deps(exec: Exec, ambientEnv: Record<string, string> = {}): PanelDeps {
-  return { exec, ambientEnv, distributionSkill: async () => 'distribution skill\n' }
+  return {
+    exec,
+    ambientEnv,
+    distributionSkill: async () => 'distribution skill\n',
+    judgeLauncher: async () => LAUNCHER,
+    distributionRoot: '/opt/autobuild',
+  }
 }
 
 const INPUT: PanelRunInput = {
@@ -89,11 +123,16 @@ function hooks(
   log: PanelLogBuilder,
   launch: (judge: number, order: PanelOrder, root: string, session: string) => Promise<string>,
   random: () => number = () => 0.25,
-): PanelLoopHooks & { launched: Array<{ judge: number; order: PanelOrder; root: string }> } {
+): PanelLoopHooks & {
+  launched: Array<{ judge: number; order: PanelOrder; root: string; binDir: string }>
+  reclaimed: Array<{ judge: number; session: string; root: string }>
+} {
   let next = 100
-  const launched: Array<{ judge: number; order: PanelOrder; root: string }> = []
+  const launched: Array<{ judge: number; order: PanelOrder; root: string; binDir: string }> = []
+  const reclaimed: Array<{ judge: number; session: string; root: string }> = []
   return {
     launched,
+    reclaimed,
     async read(): Promise<PanelRunState> {
       let run: PanelRunState | undefined
       for (const event of log.events) run = advancePanel(run, event)
@@ -102,11 +141,12 @@ function hooks(
     async complete(judged: EventPayload<'panel.judged'>) {
       log.judged(judged.judge, judged.session, judged.order, judged.preference, judged.reason)
     },
-    async reclaim(judge, session) {
+    async reclaim(judge, session, root) {
+      reclaimed.push({ judge, session, root })
       log.ended(judge, session, 'reclaimed')
     },
-    async launch(judge, order, root) {
-      launched.push({ judge, order, root })
+    async launch(judge, order, root, judgeLaunch) {
+      launched.push({ judge, order, root, binDir: judgeLaunch.binDir })
       next += 1
       const session = `s_${next}`
       log.judgeStarted(judge, session, order)
@@ -177,7 +217,7 @@ describe('panel materialization', () => {
     const final = calls.at(-1)!
     expect(final.cmd[0]).toBe('rm')
     expect(final.cmd.slice(2).every((path) => path.startsWith('/tmp/t/autobuild-'))).toBe(true)
-    expect(final.cmd).toHaveLength(2 + 1 + INPUT.judges)
+    expect(final.cmd).toHaveLength(2 + 2 + INPUT.judges)
   })
 
   test('the pin side skips the overlay; another side removes and restores harness paths', async () => {
@@ -288,7 +328,7 @@ describe('panel materialization', () => {
       expect((result as { reason: string }).reason).toContain('point TMPDIR outside any repository')
       expect(h.launched).toEqual([])
     }
-    expect(await checkJudgeRoot(deps(scriptedExec({ calls: [] })), '/tmp/t/r', '/ws')).toBe(
+    expect(await checkJudgeRoot(deps(scriptedExec({ calls: [] })), '/tmp/t/r', ['/ws'])).toBe(
       undefined,
     )
   })
@@ -311,7 +351,7 @@ describe('panel materialization', () => {
       await checkJudgeRoot(
         deps(scriptedExec({ calls: [], escapingLinks: '/tmp/t/r/A/source\n' })),
         '/tmp/t/r',
-        '/ws',
+        ['/ws'],
       ),
     ).toBe('a variant holds symlinks that resolve outside its judge root: A/source')
   })
@@ -332,6 +372,139 @@ describe('panel materialization', () => {
     })
     expect(h.launched).toEqual([])
     expect(calls.at(-1)!.cmd[0]).toBe('rm')
+  })
+})
+
+describe('protected locations', () => {
+  const materialWrites = (calls: Call[]) =>
+    calls.filter(
+      (call) =>
+        (call.cmd[0] === 'git' && call.cmd.includes('init')) ||
+        call.env?.AB_FILE_CONTENT !== undefined ||
+        (call.cmd[0] === 'mkdir' && call.cmd.some((part) => part.includes('autobuild-'))),
+    )
+
+  test("a scratch base in a linked worktree's common directory, its main checkout or the store is refused before any material", async () => {
+    const linked = { ...INPUT, workspacePath: '/wt', judges: 1 }
+    for (const [tmp, localStore] of [
+      ['/main/.git/tmp', undefined],
+      ['/main/tmp', undefined],
+      ['/state/store/tmp', '/state/store'],
+    ] as const) {
+      const calls: Call[] = []
+      const exec = scriptedExec({ calls, tmp, repository: ['/wt', '/main/.git'] })
+      const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+      const h = hooks(log, async () => 'A')
+      const result = await runPanelJudges(
+        deps(exec),
+        { ...linked, ...(localStore !== undefined ? { localStore } : {}) },
+        h,
+      )
+      expect(result).toMatchObject({ kind: 'failed' })
+      const reason = (result as { reason: string }).reason
+      expect(reason).toContain('point TMPDIR outside any repository')
+      expect(reason).not.toContain(tmp)
+      expect(materialWrites(calls)).toEqual([])
+      expect(h.launched).toEqual([])
+    }
+  })
+
+  test('discovery fails closed: only "not a git repository" counts as outside', async () => {
+    const calls: Call[] = []
+    const exec = scriptedExec({
+      calls,
+      discoveryError: "fatal: detected dubious ownership in repository at '/tmp/t'",
+    })
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    const result = await runPanelJudges(deps(exec), { ...INPUT, judges: 1 }, h)
+    expect((result as { reason: string }).reason).toContain('could not be proven to be outside')
+    expect(materialWrites(calls)).toEqual([])
+
+    const clean: Call[] = []
+    await runPanelJudges(
+      deps(scriptedExec({ calls: clean })),
+      { ...INPUT, judges: 1 },
+      hooks(new PanelLogBuilder().started(panelStarted({ judges: 1 })), async () => 'A'),
+    )
+    const probes = clean.filter((call) => call.cmd.includes('--git-dir'))
+    expect(probes.length).toBeGreaterThanOrEqual(2)
+    for (const probe of probes) expect(probe.env?.GIT_DISCOVERY_ACROSS_FILESYSTEM).toBe('1')
+  })
+
+  test('the launcher is written beside the roots, passed to every launch and removed', async () => {
+    const calls: Call[] = []
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 2 }))
+    const h = hooks(log, async () => 'A')
+    await runPanelJudges(deps(scriptedExec({ calls })), INPUT, h)
+    const write = calls.find((call) => call.env?.AB_FILE_CONTENT === LAUNCHER)!
+    const launcher = write.cmd[4]!
+    expect(launcher).toMatch(/^\/tmp\/t\/autobuild-judge-bin-[0-9a-f]{16}\/ab$/)
+    const binDir = launcher.slice(0, -'/ab'.length)
+    expect(calls.some((call) => call.cmd.join(' ') === `chmod 0755 ${launcher}`)).toBe(true)
+    for (const { root, binDir: launched } of h.launched) {
+      expect(launched).toBe(binDir)
+      expect(binDir.startsWith(`${root}/`)).toBe(false)
+    }
+    expect(calls.at(-1)!.cmd).toContain(binDir)
+  })
+
+  test('launcher text naming a protected location or the distribution is refused', async () => {
+    for (const named of ['/ws/.git', '/opt/autobuild']) {
+      const calls: Call[] = []
+      const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+      const h = hooks(log, async () => 'A')
+      const result = await runPanelJudges(
+        { ...deps(scriptedExec({ calls })), judgeLauncher: async () => `import "${named}/x"` },
+        { ...INPUT, judges: 1 },
+        h,
+      )
+      expect((result as { reason: string }).reason).toContain('judge launcher names')
+      expect(h.launched).toEqual([])
+    }
+  })
+
+  test('an interpreter or runtime resolving only inside a protected location, or missing, is refused', async () => {
+    const launch = { hide: ['/ws', '/ws/.git'], binDir: '/tmp/t/autobuild-judge-bin-x' }
+    const check = (executables: Record<string, [string, string] | null>) =>
+      checkJudgeExecutables(
+        deps(scriptedExec({ calls: [], executables })),
+        ['bun', 'claude'],
+        launch,
+      )
+    expect(await check({})).toBeUndefined()
+    expect(
+      await check({ bun: ['/ws/node_modules/.bin/bun', '/ws/node_modules/bun/bin/bun'] }),
+    ).toContain("the judge's bun executable resolves only inside a protected location")
+    // A link outside that resolves into the repository is refused too.
+    expect(
+      await check({ claude: ['/usr/local/bin/claude', '/ws/node_modules/claude/cli.js'] }),
+    ).toContain("the judge's claude executable resolves only inside a protected location")
+    expect(await check({ claude: null })).toContain("the judge's claude executable was not found")
+    // The probe searches the judge's filtered PATH.
+    const calls: Call[] = []
+    await checkJudgeExecutables(
+      deps(scriptedExec({ calls }), { PATH: '/ws/node_modules/.bin:/usr/bin' }),
+      ['bun'],
+      launch,
+    )
+    expect(calls[0]!.cmd[4]).toBe(`${launch.binDir}:/usr/bin`)
+
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    const result = await runPanelJudges(
+      deps(scriptedExec({ calls: [], executables: { pi: ['/ws/bin/pi', '/ws/bin/pi'] } })),
+      { ...INPUT, judges: 1, runtimeExecutable: 'pi' },
+      h,
+    )
+    expect((result as { reason: string }).reason).toContain("the judge's pi executable")
+    expect(h.launched).toEqual([])
+  })
+
+  test('insideProtected matches a location and what is under it, not a sibling', () => {
+    expect(insideProtected('/ws', ['/ws'])).toBe('/ws')
+    expect(insideProtected('/ws/.git/x', ['/a', '/ws/.git'])).toBe('/ws/.git')
+    expect(insideProtected('/ws-other', ['/ws'])).toBeUndefined()
   })
 })
 
@@ -366,6 +539,21 @@ describe('the panel loop', () => {
       [3, 's_101', 'candidate-first', 'tie'],
     ])
     expect((result as { winRate: number }).winRate).toBe(0.5)
+    // Reclaim gets each crashed session's deterministic root, before the saved
+    // preference is completed, so a preference imported then completes too.
+    expect(h.reclaimed.map(({ judge, session }) => [judge, session])).toEqual([
+      [2, 's_2'],
+      [3, 's_3'],
+    ])
+    expect(h.reclaimed[0]!.root).toMatch(/^\/tmp\/t\/autobuild-judge-[0-9a-f]{16}$/)
+    const reclaimedAt = log.events.findIndex(
+      (event) => event.type === 'panel.judge-ended' && event.payload.session === 's_2',
+    )
+    const completedAt = log.events.findIndex(
+      (event) => event.type === 'panel.judged' && event.payload.session === 's_2',
+    )
+    expect(reclaimedAt).toBeGreaterThan(-1)
+    expect(reclaimedAt).toBeLessThan(completedAt)
     const ended = log.events.filter((event) => event.type === 'panel.judge-ended')
     expect(
       ended.slice(1, 3).map((event) => [event.payload.session, event.payload.outcome]),

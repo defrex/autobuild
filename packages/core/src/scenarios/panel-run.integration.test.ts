@@ -2,14 +2,25 @@
  * End-to-end proof of one judge panel run (SPEC §13.1.1) over a real Git
  * repository, the real materializer and `BuildRunner.runPanel`, and a fake
  * agent runtime whose judges drive the real `ab judge context` and
- * `ab judge prefer` through their write-only store handle.
+ * `ab judge prefer`. The store is local, so a judge holds no store: its
+ * preference goes to its outbox and the runner commits it.
  */
 // Load the reducer registry first: build-runner's import cycle otherwise reaches
 // a reducer before it is initialized when this file runs alone.
 import '../kernel/reducer-registry'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readdir, readFile, readlink, symlink, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { runCli } from '../cli/main'
@@ -23,7 +34,8 @@ import { FakeForge } from '../ports/forge/fake'
 import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { JUDGE_REFUSED_MEMBERS, scopeLocalStoreToJudgeSession } from '../store/phase-session'
+import { distributionRoot } from '../distribution'
+import { bundleJudgeLauncher } from '../processes/judge-launcher'
 import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import { temporaryDirectories } from '../testing/temp-directories'
@@ -72,6 +84,8 @@ async function write(root: string, path: string, content: string | Buffer): Prom
 interface Repo {
   workspace: string
   commonDir: string
+  /** The local store's path, inside the checkout as `.autobuild` is. */
+  store: string
   pin: string
   baseline: string
   candidate: string
@@ -115,7 +129,9 @@ async function repository(): Promise<Repo> {
   const commonDir = (
     await git(workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   ).trim()
-  return { workspace, commonDir, pin, baseline, candidate }
+  const store = join(workspace, '.autobuild')
+  await mkdir(store)
+  return { workspace: await realpath(workspace), commonDir, store, pin, baseline, candidate }
 }
 
 async function walk(root: string): Promise<string[]> {
@@ -141,28 +157,46 @@ type Handler = (
   cli: (argv: string[]) => Promise<number>,
 ) => Promise<void> | void
 
-function judges(store: MemoryBuildStore, handler: Handler): ScriptedAgentRunner {
-  return new ScriptedAgentRunner({
+/** Judges that run the real CLI with only their session environment: no
+ * store, so `ab judge prefer` saves to the outbox. */
+function judges(handler: Handler, executable?: string): ScriptedAgentRunner {
+  const runner = new ScriptedAgentRunner({
     script: async (ctx) => {
       const env = resolveJudgeCliEnv(ctx.opts.env)
-      const scoped = scopeLocalStoreToJudgeSession(store, {
-        build: env.build,
-        panel: env.panel,
-        judge: env.judge,
-        session: env.session,
-      })
       const cli = (argv: string[]) =>
         runCli(argv, {
           workspacePath: ctx.opts.workspacePath,
           stdout: () => undefined,
           stderr: () => undefined,
-          store: scoped,
           judgeEnv: env,
         })
       await handler(ctx, env.judge, cli)
       return defaultTurnResult()
     },
   })
+  if (executable !== undefined) Object.assign(runner, { executable })
+  return runner
+}
+
+/** Run a command the way a judge's agent would: through a shell, with the
+ * session's own environment, in its root. */
+async function judgeShell(
+  ctx: ScriptContext,
+  script: string,
+  path = ctx.opts.env.PATH!,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const proc = Bun.spawn(['sh', '-c', script], {
+    cwd: ctx.opts.workspacePath,
+    env: { ...ctx.opts.env, PATH: path },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { stdout, stderr, code }
 }
 
 async function seeded(): Promise<MemoryBuildStore> {
@@ -183,8 +217,13 @@ function runnerFor(
   tmp: string,
   random: () => number,
   generation = 1,
+  alive: () => boolean = () => true,
 ) {
-  const exec: Exec = (cmd, opts) => spawnExec(cmd, { ...opts, env: { ...opts.env, TMPDIR: tmp } })
+  // A dead process runs nothing, so it cleans nothing up either.
+  const exec: Exec = (cmd, opts) =>
+    alive()
+      ? spawnExec(cmd, { ...opts, env: { ...opts.env, TMPDIR: tmp } })
+      : Promise.reject(new Error('process crashed'))
   return new BuildRunner({
     store: (store as MemoryBuildStore).scopeBuild(SLUG),
     config: parseConfig(
@@ -198,6 +237,7 @@ function runnerFor(
     timeoutSignal: () => new AbortController().signal,
     random,
     judgeSkill: async () => 'distribution skill\n',
+    judgeLauncher: bundleJudgeLauncher,
     forge: new FakeForge(),
     // Each runner process draws distinct ids, as production's random ids do.
     ids: (
@@ -207,7 +247,7 @@ function runnerFor(
     clock: steppingClock(),
     instance: 'runner-1',
     host: 'test',
-    sessionEnv: { AB_STORE: join(tmp, 'store-unused') },
+    sessionEnv: { AB_STORE: repo.store },
     runtimeIdentity: {
       version: '0.0.0-test',
       commit: 'unknown',
@@ -230,6 +270,8 @@ function request(repo: Repo, judges: number): PanelRequest {
 }
 
 const panelEvents = (events: AbEvent[]) => events.filter((event) => event.type.startsWith('panel.'))
+const before3Preferred = (events: AbEvent[]) =>
+  events.some((event) => event.type === 'panel.preferred' && event.payload.judge === 3)
 const HARNESS = ['evals/rubric.md', 'evals/fixture.txt', 'evals/stamp.txt', 'evals/run.sh']
 
 describe('a judge panel run', () => {
@@ -245,7 +287,7 @@ describe('a judge panel run', () => {
       release = done
     })
     const preferences = ['A', 'B', 'tie'] as const
-    const agent = judges(store, async (ctx, judge, cli) => {
+    const agent = judges(async (ctx, judge, cli) => {
       const root = ctx.opts.workspacePath
       started += 1
       if (started === 3) release()
@@ -289,23 +331,38 @@ describe('a judge panel run', () => {
         expect(existsSync(join(root, label, 'evals/extra.md'))).toBe(false)
       }
 
-      // The judge's environment and store handle reveal nothing.
+      // The judge's environment names no protected location: not the
+      // workspace, its Git directory, the store or the distribution.
       const env = JSON.stringify(ctx.opts.env)
-      for (const forbidden of [repo.workspace, ...shas]) expect(env).not.toContain(forbidden)
+      for (const forbidden of [repo.workspace, repo.commonDir, repo.store, ...shas])
+        expect(env).not.toContain(forbidden)
       expect(ctx.opts.env.AB_BUILD).toBeUndefined()
       expect(ctx.opts.env.AB_PHASE).toBeUndefined()
-      const judgeStore = scopeLocalStoreToJudgeSession(store, {
-        build: SLUG,
-        panel: 'panel-1',
-        judge,
-        session: ctx.opts.env.AB_SESSION!,
-      })
-      for (const { name } of JUDGE_REFUSED_MEMBERS.filter((member) => member.kind === 'read')) {
-        const method = (judgeStore as unknown as Record<string, (...args: unknown[]) => unknown>)[
-          name
-        ]!
-        await expect(async () => method.call(judgeStore, SLUG)).toThrow('no read authority')
-      }
+      expect(ctx.opts.env.AB_STORE).toBeUndefined()
+      expect(ctx.opts.env.AB_TOKEN).toBeUndefined()
+      const path = ctx.opts.env.PATH!.split(':')
+      expect(path[0]).toMatch(/\/autobuild-judge-bin-[0-9a-f]{16}$/)
+      expect(path.some((entry) => entry.startsWith(distributionRoot()))).toBe(false)
+
+      // `ab` is the scratch launcher: its content names nothing protected,
+      // and its process runs as `bun <launcher> judge …`. A `bun` shim after
+      // the launcher directory records the interpreter's argv.
+      const shim = await directory(join(tmpdir(), 'ab-panel-shim-'))
+      const argvLog = join(shim, `argv-${judge}`)
+      const realBun = Bun.which('bun')!
+      await writeFile(
+        join(shim, 'bun'),
+        `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\nexec '${realBun}' "$@"\n`,
+      )
+      await chmod(join(shim, 'bun'), 0o755)
+      const located = await judgeShell(ctx, 'command -v ab')
+      expect(located.stdout.trim()).toBe(`${path[0]}/ab`)
+      const launcher = await readFile(located.stdout.trim(), 'utf8')
+      for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
+        expect(launcher).not.toContain(forbidden)
+      const refused = await judgeShell(ctx, 'ab status')
+      expect(refused.code).toBe(2)
+      expect(refused.stderr).toContain("a judge session may run only 'ab judge context'")
 
       expect(await cli(['judge', 'context'])).toBe(0)
       const contextDir = join(root, '.ab/judge')
@@ -322,15 +379,18 @@ describe('a judge panel run', () => {
         bDoc: await readFile(join(root, 'B/doc.md'), 'utf8'),
         context,
       })
-      expect(
-        await cli([
-          'judge',
-          'prefer',
-          preferences[judge - 1]!,
-          '--reason',
-          `judge ${judge}: the rubric's clarity criterion decides it`,
-        ]),
-      ).toBe(0)
+      const prefer = await judgeShell(
+        ctx,
+        `ab judge prefer ${preferences[judge - 1]!} --reason "judge ${judge}: the rubric's clarity criterion decides it"`,
+        [path[0], shim, ...path.slice(1)].join(':'),
+      )
+      expect(prefer.stderr).toBe('')
+      expect(prefer.code).toBe(0)
+      const argv = (await readFile(argvLog, 'utf8')).trim().split('\n')
+      expect(argv.slice(0, 3)).toEqual([`${path[0]}/ab`, 'judge', 'prefer'])
+      for (const part of argv)
+        for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
+          expect(part).not.toContain(forbidden)
     })
     const random = [0.1, 0.9, 0.4]
     const result: PanelResult = await runnerFor(
@@ -374,14 +434,73 @@ describe('a judge panel run', () => {
     const store = await seeded()
     const inside = join(repo.workspace, '.scratch')
     await mkdir(inside)
-    const agent = judges(store, () => {
+    const agent = judges(() => {
       throw new Error('no judge may start')
     })
     const result = await runnerFor(store, repo, agent, inside, () => 0.1).runPanel(request(repo, 2))
     expect(result).toMatchObject({ kind: 'failed' })
-    expect((result as { reason: string }).reason).toContain('judge root is inside the workspace')
+    expect((result as { reason: string }).reason).toContain(
+      'the judge scratch base is inside the repository',
+    )
     expect(agent.sessions.size).toBe(0)
     expect((await readdir(inside)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+  })
+
+  test("a linked worktree with TMPDIR inside the main repository's Git directory writes nothing there", async () => {
+    const repo = await repository()
+    const worktree = join(await directory(join(tmpdir(), 'ab-panel-wt-')), 'wt')
+    await git(repo.workspace, 'worktree', 'add', '-q', '--detach', worktree, repo.candidate)
+    const linked = { ...repo, workspace: await realpath(worktree) }
+    const store = await seeded()
+    const inside = join(repo.commonDir, 'scratch')
+    await mkdir(inside)
+    const agent = judges(() => {
+      throw new Error('no judge may start')
+    })
+    const result = await runnerFor(store, linked, agent, inside, () => 0.1).runPanel(
+      request(linked, 1),
+    )
+    expect(result).toMatchObject({ kind: 'failed' })
+    const reason = (result as { reason: string }).reason
+    expect(reason).toContain('the judge scratch base is inside the repository')
+    expect(reason).not.toContain(inside)
+    expect(agent.sessions.size).toBe(0)
+    // No material (and so no alternates path) was written under `.git`.
+    expect(await readdir(inside)).toEqual([])
+    expect(
+      panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
+    ).toBe(false)
+  })
+
+  test('a runtime executable found only inside the repository fails before any session', async () => {
+    const repo = await repository()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    const bin = join(repo.workspace, 'node_modules', '.bin')
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, 'fake-judge-runtime'), '#!/bin/sh\nexit 0\n')
+    await chmod(join(bin, 'fake-judge-runtime'), 0o755)
+    const agent = judges(() => {
+      throw new Error('no judge may start')
+    }, 'fake-judge-runtime')
+    const previous = process.env.PATH
+    process.env.PATH = `${bin}:${previous ?? ''}`
+    let result: PanelResult
+    try {
+      result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel(request(repo, 1))
+    } finally {
+      process.env.PATH = previous
+    }
+    expect(result).toEqual({
+      kind: 'failed',
+      reason:
+        "the judge's fake-judge-runtime executable was not found outside the repository; install it outside any repository",
+    })
+    expect(agent.sessions.size).toBe(0)
+    expect(
+      panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
+    ).toBe(false)
+    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
   })
 
   test('a committed symlink out of the judge root fails the run before any session', async () => {
@@ -392,7 +511,7 @@ describe('a judge panel run', () => {
     const candidate = (await git(repo.workspace, 'rev-parse', 'HEAD')).trim()
     const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
     const store = await seeded()
-    const agent = judges(store, () => {
+    const agent = judges(() => {
       throw new Error('no judge may start')
     })
     const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel({
@@ -408,15 +527,16 @@ describe('a judge panel run', () => {
     expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
   })
 
-  test('a crash after a saved preference resumes without rerunning that judge', async () => {
+  test('a crash after a saved preference commits it at reclaim without rerunning that judge', async () => {
     const repo = await repository()
     const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
     const store = await seeded()
     // The first runner dies right after judge 3's real `ab judge prefer`
-    // returns: every later write of that runner fails, as a dead process's
-    // would, so judge 3 has a preference and no judgment.
+    // saves its outbox: every later write and command of that runner fails,
+    // as a dead process's would, so judge 3's preference exists only in its
+    // root.
     let crashed = false
-    let judgedCount = 0
+    let endedCount = 0
     let twoJudged!: () => void
     const firstTwo = new Promise<void>((done) => {
       twoJudged = done
@@ -433,9 +553,10 @@ describe('a judge panel run', () => {
         return async (...args: unknown[]) => {
           if (crashed) throw new Error('process crashed')
           const out = await method.apply(target, args)
-          if ((args[1] as { type?: string } | undefined)?.type === 'panel.judged') {
-            judgedCount += 1
-            if (judgedCount === 2) twoJudged()
+          const written = out as { type?: string; event?: { type?: string } } | null
+          if ((written?.event?.type ?? written?.type) === 'panel.judge-ended') {
+            endedCount += 1
+            if (endedCount === 2) twoJudged()
           }
           return out
         }
@@ -443,7 +564,7 @@ describe('a judge panel run', () => {
     })
     const dyingStore = { ...store, scopeBuild: () => dying } as unknown as MemoryBuildStore
     Object.setPrototypeOf(dyingStore, Object.getPrototypeOf(store))
-    const first = judges(store, async (_ctx, judge, cli) => {
+    const first = judges(async (_ctx, judge, cli) => {
       if (judge === 4) {
         fourthStarted()
         await new Promise(() => undefined)
@@ -459,8 +580,17 @@ describe('a judge panel run', () => {
     })
     const random = [0.1, 0.9, 0.9, 0.1]
     await expect(
-      runnerFor(dyingStore, repo, first, tmp, () => random.shift()!).runPanel(request(repo, 4)),
+      runnerFor(
+        dyingStore,
+        repo,
+        first,
+        tmp,
+        () => random.shift()!,
+        1,
+        () => !crashed,
+      ).runPanel(request(repo, 4)),
     ).rejects.toThrow('process crashed')
+    expect(before3Preferred(await store.getEvents(SLUG))).toBe(false)
 
     const before = panelEvents(await store.getEvents(SLUG))
     const judgedBefore = before
@@ -471,7 +601,7 @@ describe('a judge panel run', () => {
       (event) => event.type === 'panel.judge-started' && event.payload.judge === 3,
     ) as AbEvent & { type: 'panel.judge-started' }
 
-    const second = judges(store, async (_ctx, judge, cli) => {
+    const second = judges(async (_ctx, judge, cli) => {
       expect(judge).toBe(4)
       expect(await cli(['judge', 'prefer', 'tie', '--reason', 'equally clear'])).toBe(0)
     })
@@ -490,6 +620,22 @@ describe('a judge panel run', () => {
       order: third.payload.order,
       preference: 'B',
     })
+    // The saved preference was committed as the judge, before its reclaim.
+    const preferred3 = after.findIndex(
+      (event) => event.type === 'panel.preferred' && event.payload.judge === 3,
+    )
+    const reclaimed3 = after.findIndex(
+      (event) =>
+        event.type === 'panel.judge-ended' &&
+        event.payload.session === third.payload.session &&
+        event.payload.outcome === 'reclaimed',
+    )
+    expect(after[preferred3]?.actor).toEqual({
+      kind: 'agent',
+      role: 'judge',
+      session: third.payload.session,
+    })
+    expect(preferred3).toBeLessThan(reclaimed3)
     const recorded = (result as { judgments: Array<{ judge: number; preference: string }> })
       .judgments
     expect(recorded.slice(0, 2)).toEqual(judgedBefore)
