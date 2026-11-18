@@ -199,8 +199,9 @@ anything is deposited or published, so code review never sees it.
 `ab done --no-improvement "<reason>"` declines instead: it needs no commits,
 skips review, verification and measurement, completes the build
 `closed-unmerged`, and the dispatcher settles the attempt `declined` on the
-node with the reason as the ledger note. The flag is refused outside an
-attempt's implement phase. See
+node with the reason as the ledger note. A branch that an earlier implement
+round published is deleted by the node before the ticket moves to rejected.
+The flag is refused outside an attempt's implement phase. See
 [attempts](references/optimization-nodes.md#attempts).
 
 **Judge panels.** A panel objective is measured by a panel of judge sessions
@@ -221,7 +222,13 @@ attempt must improve by at least ε, any other child must not regress by more
 than ε, and an attempt that edits a harness path escalates instead. Each
 attempt settles once. An attempt that does not land, including one an operator
 aborts, has its ticket moved to the rejected role: the one case in which the
-dispatcher moves a ticket there. See
+dispatcher moves a ticket there. A declined or no-improvement attempt's
+published branch is deleted first, and a failed deletion stays pending and
+visible. A human forge merge whose merged head was never measured does not
+count as accepted. The attempt stays in flight, holding its slot, until an
+operator runs `ab objective <node> --settle-unmeasured <attempt> --policy
+release-unmeasured`, which settles it `merged-unmeasured` and moves no value.
+See
 [landing and settlement](references/optimization-nodes.md#landing-and-settlement).
 
 An optimization node stops once: automatically on a threshold, plateau or
@@ -1473,7 +1480,7 @@ state eligible.
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds (unless `ab abort --to ready`), closed-unmerged PRs; an optimization attempt goes to the rejected role instead. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file, hosted and github); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
-| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. An [optimization node](references/optimization-nodes.md) is refused without it, and its attempts that settle other than `accepted` move into it. Same distinctness rule. |
+| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. An [optimization node](references/optimization-nodes.md) is refused without it, and its attempts that settle `no-improvement`, `declined`, `stopped` or `aborted` move into it. Same distinctness rule. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, `hosted` and `github`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -2564,6 +2571,7 @@ to the build's event log and apply the same write-time checks.
 | Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
 | Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected; revised stop rules apply on the next tick. | `optimization.objective-revised` |
 | Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
+| Settle an unmeasured merge | `ab objective <node> --settle-unmeasured <proposal\|build> --policy release-unmeasured [--note <text>] [--json] [--store <ref>]` | CLI/tool request (`optimization.settle-unmeasured`). Only for an attempt listed as an unmeasured merge; releases its slot once, never as accepted. | `attempt.settled {outcome: merged-unmeasured}` |
 | Hold merge | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
