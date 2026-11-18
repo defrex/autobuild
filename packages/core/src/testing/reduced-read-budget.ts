@@ -1603,7 +1603,9 @@ export async function ticketWaitIdleReadBudget(opts: {
  * parked attempt's sampled request with one reduced read of its node, once,
  * and idle ticks afterwards read the node no more often than before any
  * sample, append nothing and read zero historical event rows, at 100 and
- * 100,000 events on every attempt and on the node. `sample` appends a fresh
+ * 100,000 events on every attempt and on the node. The idle tick before any
+ * sample, which also runs proposer admission for the node, reads no history
+ * and the same number of node values at both lengths. `sample` appends a fresh
  * request and its samples to one attempt; `decided` names the fact the
  * dispatcher must have written for it. */
 export async function sampledMeasurementReadBudget(opts: {
@@ -1637,6 +1639,7 @@ export async function sampledMeasurementReadBudget(opts: {
     if (attempts.includes(slug)) attemptWrites++
     return appendIfCurrent(slug, expected, event)
   }) as typeof store.appendIfCurrent
+  const idleReads: number[] = []
   try {
     for (const length of [100, 100_000]) {
       for (const slug of [node, ...attempts]) await seedBuildFiller(store, slug, length)
@@ -1646,18 +1649,25 @@ export async function sampledMeasurementReadBudget(opts: {
       await dispatcher.tick({ acceptNewWork: false })
       opts.advance()
       await dispatcher.tick({ acceptNewWork: false })
-      opts.advance()
-      nodeReads = 0
-      await dispatcher.tick({ acceptNewWork: false })
-      const idleNodeReads = nodeReads
-      // Rows up to here are history; the samples and decisions are the tail.
+      // Rows up to here are history; the idle tick's polling facts, the
+      // samples and the decisions are the tail.
       const restore = [node, ...attempts].map((slug) => {
         const boundary = buildEventRows(store, slug).at(-1)!.seq
         return instrumentBuildRows(store, slug, () => boundary, metrics)
       })
-      const request = `m-${length}`
-      for (const slug of attempts) await opts.sample(slug, request)
       try {
+        // An idle tick before any sample, which runs the node's proposer
+        // admission too, costs the same node reads at every history length
+        // and reads no history.
+        opts.advance()
+        nodeReads = 0
+        metrics.historicalRows = 0
+        await dispatcher.tick({ acceptNewWork: false })
+        const idleNodeReads = nodeReads
+        expect(metrics.historicalRows).toBe(0)
+        idleReads.push(idleNodeReads)
+        const request = `m-${length}`
+        for (const slug of attempts) await opts.sample(slug, request)
         // The deciding tick: one node read per sampled request, once.
         opts.advance()
         nodeReads = 0
@@ -1680,15 +1690,16 @@ export async function sampledMeasurementReadBudget(opts: {
           expect(nodeReads).toBeLessThanOrEqual(idleNodeReads)
           expect(metrics.historicalRows).toBe(0)
         }
+        console.log('sampled measurement read budget', {
+          history: length,
+          attempts: attempts.length,
+          idleNodeReads,
+        })
       } finally {
         for (const undo of restore) undo()
       }
-      console.log('sampled measurement read budget', {
-        history: length,
-        attempts: attempts.length,
-        idleNodeReads,
-      })
     }
+    expect(idleReads[1]).toBe(idleReads[0])
   } finally {
     store.getReducerValue = getReducerValue
     store.append = append
