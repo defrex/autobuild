@@ -86,6 +86,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'optimization.settle-unmeasured': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
   'builds.control': {
     readOnlyHint: false,
     destructiveHint: true,

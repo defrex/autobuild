@@ -472,6 +472,23 @@ nodes and a node that has already stopped, and enforces repository ownership.
 Stopping is not merge consent: once the node completes and verifies, land it
 with `builds.control` merge. The tool has no HTTP route.
 
+### Optimization unmeasured-merge settlement
+
+`optimization.settle-unmeasured` accepts `{repo, slug, attempt, policy,
+note?}`. `attempt` is the proposal id or build slug of an attempt that merged
+without a landing measurement of its merged head, which `builds.get` lists
+under the node's `unmeasuredMerges`. `policy` is required, and its one value
+`release-unmeasured` releases the attempt's concurrency slot while recording
+its measurement as absent. The tool uses the same service as `ab objective
+<node> --settle-unmeasured … --policy …` and records one human `attempt.settled
+{outcome: merged-unmeasured, policy, mergedSha?}`. The receipt contains `slug`,
+`proposal`, `build`, `outcome` and `policy`. The settlement never counts as
+accepted and moves no current, best or plateau value. An unknown policy is a
+validation refusal. The tool refuses non-node builds, nodes with no accepted
+objective, terminal nodes, and an attempt that is not in flight, has not merged
+unmeasured, or whose merged head has a valid measurement. It works on a stopped
+node and enforces repository ownership. The tool has no HTTP route.
+
 ### Node restack request
 
 `builds.restack` accepts `{repo, slug}`. `POST /operator/v1/repos/:repo/builds/:slug/restack`

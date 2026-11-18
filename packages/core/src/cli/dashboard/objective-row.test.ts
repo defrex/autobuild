@@ -66,7 +66,7 @@ test('a command objective projects every field from the digest', () => {
     current: 44,
     threshold: 35,
     noise: 1.6,
-    attempts: { filed: 4, accepted: 1, rejected: 3, running: 0 },
+    attempts: { filed: 4, accepted: 1, rejected: 3, unmeasured: 0, running: 0 },
     budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-11-17T00:00:00.000Z' },
     stopped: { cause: 'plateau', mode: 'drain', at: '2026-11-17T00:00:00.000Z' },
   })
@@ -196,4 +196,24 @@ test('narrow frames wrap large values between fields without truncating any', ()
         at = next + term.length
       }
     }
+})
+
+test('unmeasured merges show only when present, with their held slot', () => {
+  const builder = new OptimizationLogBuilder()
+    .push(created)
+    .accept(commandObjective(), 1)
+    .propose('r', ['a', 'b'])
+  const parts = () => objectiveParts(projectObjectiveRow(reduceBuild(builder.events))!, 0)[1]
+  expect(parts()).toEqual(['attempts 0 accepted', '0 rejected', '2 running'])
+  builder.markUnmeasured('a', 'absent')
+  expect(projectObjectiveRow(reduceBuild(builder.events))!.unmeasuredMerges).toBe(1)
+  expect(parts()).toEqual([
+    'attempts 0 accepted',
+    '0 rejected',
+    '2 running',
+    '1 merged unmeasured (slot held)',
+  ])
+  builder.settle('a', 'merged-unmeasured', undefined, undefined, { policy: 'release-unmeasured' })
+  expect(projectObjectiveRow(reduceBuild(builder.events))!.unmeasuredMerges).toBeUndefined()
+  expect(parts()).toEqual(['attempts 0 accepted', '0 rejected', '1 running', '1 merged unmeasured'])
 })

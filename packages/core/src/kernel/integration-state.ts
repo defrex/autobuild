@@ -50,9 +50,19 @@ export function optimizationCompletionBlocker(
   const optimization = state.optimization
   if (optimization === undefined) return undefined
   if (optimization.stopped === undefined) return 'the optimization node has not stopped'
-  if (optimization.inFlight.length > 0)
-    return `attempts still in flight: ${optimization.inFlight.map((attempt) => attempt.ticket.id).join(', ')}`
-  return undefined
+  const unmeasured = optimization.inFlight.filter((attempt) => attempt.unmeasuredMerge)
+  const running = optimization.inFlight.filter((attempt) => !attempt.unmeasuredMerge)
+  const reasons = [
+    ...(running.length > 0
+      ? [`attempts still in flight: ${running.map((attempt) => attempt.ticket.id).join(', ')}`]
+      : []),
+    ...(unmeasured.length > 0
+      ? [
+          `merged without a landing measurement, awaiting operator settlement: ${unmeasured.map((attempt) => attempt.ticket.id).join(', ')}`,
+        ]
+      : []),
+  ]
+  return reasons.length > 0 ? reasons.join('; ') : undefined
 }
 
 /** The node's children are all resolved and contributed, and an

@@ -154,6 +154,7 @@ import {
   measurementThreshold,
   regressionEscalationId,
   selectTurnHolder,
+  mergedAttemptMeasurement,
   settlementMeasurement,
   type AttemptStatus,
   type LandingGateVerdict,
@@ -165,7 +166,11 @@ import {
   type InFlightAttempt,
   type PendingRejection,
 } from '../kernel/optimization'
-import { settleAttempt } from '../kernel/attempt-settlement'
+import {
+  attemptBranchPublished,
+  markUnmeasuredMerge,
+  settleAttempt,
+} from '../kernel/attempt-settlement'
 import { candidateHead } from '../kernel/head-paths-state'
 import { compilePathSelectors } from '../config/path-selectors'
 import { moveTicketToRole } from '../ports/tickets/operations'
@@ -177,6 +182,7 @@ import { hasBuildTrailer } from '../kernel/build-identity'
 import { digestNodeTargets } from '../store/digest'
 import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { enforceOptimizationStop } from './optimization-stop'
+import { reconcileMergedAttempts } from './optimization-merges'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
@@ -2607,22 +2613,20 @@ export class Dispatcher {
               state.landing.command.seq !== state.landing.acknowledgedSeq)
           // Every tick, independent of janitor backoff and idle node polling: an
           // hours budget must fire on a node with no other activity.
-          if (
-            state.optimization !== undefined &&
-            !mixedVersionDeferred(state) &&
-            (await enforceOptimizationStop(
-              {
-                store: this.store,
-                clock: this.deps.clock,
-                migrations: this.store.repositoryFacts().ticketMigrations,
-                ticketSource: this.deps.tickets.name,
-              },
-              record,
-              state,
-              builds,
-            ))
-          )
-            state = (await this.store.buildFacts(record.slug)).state
+          if (state.optimization !== undefined && !mixedVersionDeferred(state)) {
+            const deps = {
+              store: this.store,
+              clock: this.deps.clock,
+              migrations: this.store.repositoryFacts().ticketMigrations,
+              ticketSource: this.deps.tickets.name,
+            }
+            // Merges no settlement or marker recorded first, so a stopped
+            // node's enforcer and completion see them as they are.
+            if (await reconcileMergedAttempts(deps, record, state, builds))
+              state = (await this.store.buildFacts(record.slug)).state
+            if (await enforceOptimizationStop(deps, record, state, builds))
+              state = (await this.store.buildFacts(record.slug)).state
+          }
           // Read the clock only inside an episode, as before episodes could escalate.
           if (!controlDue && previous && !janitorDue(previous, this.deps.clock())) return
           if (mixedVersionDeferred(state)) {
@@ -2644,7 +2648,7 @@ export class Dispatcher {
           if (state.kind === 'node' && state.optimization?.rejections.length && !controlDue) {
             operation = 'attempt rejection'
             attempted = true
-            if (await this.sweepAttemptRejections(record.slug, state))
+            if (await this.sweepAttemptRejections(record, state))
               state = (await this.store.buildFacts(record.slug)).state
             // A completed node polled only for this duty has nothing else due.
             if (
@@ -3821,9 +3825,16 @@ export class Dispatcher {
         await settleAttempt(
           this.store,
           nodeSlug,
-          { proposal: attempt!.proposal, ticket: attempt!.ticket, build: record.slug },
+          {
+            proposal: attempt!.proposal,
+            ticket: attempt!.ticket,
+            build: record.slug,
+            ...(record.branch !== undefined && attemptBranchPublished(state)
+              ? { branch: record.branch }
+              : {}),
+          },
           'no-improvement',
-          settlementMeasurement(result),
+          { measurement: settlementMeasurement(result) },
         )
         return this.closeSettledAttempt(record, workspacePath, pr)
       }
@@ -3837,8 +3848,9 @@ export class Dispatcher {
   }
 
   /** Settle a merged attempt `accepted` with the measurement of the head
-   * that landed. Without one (a forge-side human merge bypassed the gate)
-   * it records a followup and leaves the attempt in flight for an operator. */
+   * that landed. Without one (a forge-side human merge bypassed the gate) it
+   * marks the attempt `attempt.merged-unmeasured` on the node, where it keeps
+   * its slot until an operator settles it, and records one followup. */
   private async settleMergedAttempt(
     record: BuildRecord,
     state: BuildState,
@@ -3846,27 +3858,40 @@ export class Dispatcher {
   ): Promise<void> {
     const attempt = await this.terminalAttempt(record, state)
     if (attempt.status !== 'in-flight') return
-    const result = state.landingMeasurement?.result
-    if (result === undefined || result.candidate !== sha) {
+    const identity = {
+      proposal: attempt.attempt!.proposal,
+      ticket: attempt.attempt!.ticket,
+    }
+    const measured = mergedAttemptMeasurement(state.landingMeasurement, attempt.node, sha)
+    if (measured.kind === 'measured') {
+      await settleAttempt(
+        this.store,
+        attempt.node,
+        { ...identity, build: record.slug },
+        'accepted',
+        { measurement: settlementMeasurement(measured.result) },
+      )
+      return
+    }
+    const marked = await markUnmeasuredMerge(this.store, attempt.node, identity, {
+      build: record.slug,
+      sha,
+      reason: measured.reason,
+      ...(measured.measuredCandidate !== undefined
+        ? { measuredCandidate: measured.measuredCandidate }
+        : {}),
+    })
+    if (marked)
       await this.store.append(record.slug, {
         actor: KERNEL,
         type: 'observation.recorded',
         payload: {
           id: this.deps.ids('obs'),
           kind: 'followup',
-          summary: `Attempt ${attempt.attempt!.proposal} merged as ${sha} without a landing measurement of that head, so it cannot settle as accepted. It keeps its concurrency slot on node ${attempt.node} until an operator acts.`,
+          summary: `Attempt ${identity.proposal} merged as ${sha} without a landing measurement of that head (${measured.reason}), so it cannot settle as accepted. It keeps its concurrency slot on node ${attempt.node} until an operator runs \`ab objective ${attempt.node} --settle-unmeasured ${identity.proposal} --policy release-unmeasured\`.`,
           refs: [sha],
         },
       })
-      return
-    }
-    await settleAttempt(
-      this.store,
-      attempt.node,
-      { proposal: attempt.attempt!.proposal, ticket: attempt.attempt!.ticket, build: record.slug },
-      'accepted',
-      settlementMeasurement(result),
-    )
   }
 
   /** Close a settled attempt's PR without merging. The `closed` epilogue
@@ -3928,23 +3953,47 @@ export class Dispatcher {
   }
 
   /**
-   * Move each settled, non-accepted attempt's ticket to the rejected role
-   * (SPEC §13): the one owner of that move. An entry waits until its attempt
+   * The node-side duties of each settled, non-accepted attempt, once its
+   * build is done: delete a declined or no-improvement attempt's published
+   * build branch (SPEC §15.7), then move its ticket to the rejected role
+   * (SPEC §13), the one owner of that move. An entry waits until its attempt
    * build is done, so no terminal path can hand the ticket back to triage
    * afterwards. Zero reads while nothing is pending; otherwise at most one
-   * reduced read per entry, which admission bounds by the node's
+   * reduced read per entry with work, which admission bounds by the node's
    * concurrency. Never lists the repository.
    */
-  private async sweepAttemptRejections(slug: string, state: BuildState): Promise<boolean> {
-    const pending = state.optimization?.rejections ?? []
+  private async sweepAttemptRejections(record: BuildRecord, state: BuildState): Promise<boolean> {
+    const rejectedState = this.deps.config.tickets.rejectedState
+    // Without a rejected role only a branch obligation is work to do.
+    const pending = (state.optimization?.rejections ?? []).filter(
+      (entry) => entry.branch !== undefined || rejectedState !== undefined,
+    )
     if (pending.length === 0) return false
-    if (this.deps.config.tickets.rejectedState === undefined) return false
-    let moved = false
+    let wrote = false
     for (const entry of pending) {
-      if (entry.build !== undefined && (await this.store.getBuild(entry.build)) !== null) {
-        const build = (await this.store.buildFacts(entry.build)).state
-        if (build.status !== 'done') continue
+      let attemptRecord: BuildRecord | null = null
+      let attemptState: BuildState | undefined
+      if (entry.build !== undefined) {
+        attemptRecord = await this.store.getBuild(entry.build)
+        if (attemptRecord !== null) {
+          attemptState = (await this.store.buildFacts(entry.build)).state
+          if (attemptState.status !== 'done') continue
+        }
       }
+      if (entry.branch !== undefined) {
+        const cleanup = await this.cleanupAttemptBranch(
+          record,
+          state,
+          entry,
+          attemptRecord,
+          attemptState,
+        )
+        if (cleanup !== 'unchanged') wrote = true
+        // The ticket moves only once the obligation is met, so the entry
+        // keeps its slot while cleanup is pending.
+        if (cleanup !== 'deleted') continue
+      }
+      if (rejectedState === undefined) continue
       const id = resolveTicketRef(
         this.store.repositoryFacts().ticketMigrations,
         entry.ticket,
@@ -3957,19 +4006,88 @@ export class Dispatcher {
         id,
         'rejected',
       )
-      const rejected = ticket.state ?? this.deps.config.tickets.rejectedState
+      const rejected = ticket.state ?? rejectedState
       await this.deps.tickets.comment(
         id,
         `attempt ${entry.proposal} settled as ${entry.outcome}; moved to ${rejected}`,
       )
-      await this.store.append(slug, {
+      await this.store.append(record.slug, {
         actor: DISPATCHER,
         type: 'attempt.ticket-rejected',
         payload: { proposal: entry.proposal, ticket: entry.ticket, state: rejected },
       } satisfies EventWrite<'attempt.ticket-rejected'>)
-      moved = true
+      wrote = true
     }
-    return moved
+    return wrote
+  }
+
+  /**
+   * Delete one settled attempt's published build branch and record it, or
+   * record why it could not be deleted. The guards refuse any branch that is
+   * not exactly this done attempt build's own, so cleanup never touches the
+   * node's branch, its base, or another build's contribution. A delete of an
+   * already-absent branch succeeds; a crash before the record repeats it.
+   * A failure is recorded only when its error changed, and the settlement is
+   * never touched, so a retry cannot change the outcome.
+   */
+  private async cleanupAttemptBranch(
+    node: BuildRecord,
+    nodeState: BuildState,
+    entry: PendingRejection,
+    attemptRecord: BuildRecord | null,
+    attemptState: BuildState | undefined,
+  ): Promise<'deleted' | 'failed' | 'unchanged'> {
+    const branch = entry.branch!
+    const refusal =
+      entry.build === undefined
+        ? 'the settlement names no attempt build'
+        : attemptRecord === null || attemptState === undefined
+          ? `attempt build ${entry.build} does not exist`
+          : attemptRecord.branch !== branch
+            ? `branch ${branch} is not attempt build ${entry.build}'s branch`
+            : attemptState.target?.build !== node.slug
+              ? `attempt build ${entry.build} does not target node ${node.slug}`
+              : branch === node.branch ||
+                  branch === nodeState.baseBranch ||
+                  branch === this.deps.config.baseBranch
+                ? `branch ${branch} is the node's own or base branch`
+                : undefined
+    let error = refusal
+    if (error === undefined) {
+      const forge = this.deps.forge
+      try {
+        if (forge.deleteBranch === undefined)
+          throw new Error(
+            `selected forge "${forge.name}" does not implement deleteBranch; upgrade its plugin`,
+          )
+        // Local forges treat workspacePath as a git cwd: pass the physical
+        // checkout, as abort cleanup does. API forges ignore the argument.
+        await forge.deleteBranch.call(forge, this.deps.checkout ?? this.deps.repo, branch)
+        await this.store.append(node.slug, {
+          actor: DISPATCHER,
+          type: 'attempt.branch-deleted',
+          payload: { proposal: entry.proposal, build: entry.build!, branch },
+        } satisfies EventWrite<'attempt.branch-deleted'>)
+        return 'deleted'
+      } catch (caught) {
+        rethrowAuthorityLapse(caught)
+        if (caught instanceof ForgeCooldown) throw caught
+        error = caught instanceof Error || isForgeFailure(caught) ? caught.message : String(caught)
+      }
+    }
+    const recorded = error.slice(0, 2000) || 'branch deletion failed'
+    if (entry.branchCleanupError === recorded) return 'unchanged'
+    await this.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'attempt.branch-cleanup-failed',
+      payload: {
+        proposal: entry.proposal,
+        ...(entry.build !== undefined ? { build: entry.build } : {}),
+        branch,
+        error: recorded,
+      },
+    } satisfies EventWrite<'attempt.branch-cleanup-failed'>)
+    return 'failed'
   }
 
   private async cleanupAborted(
@@ -4182,8 +4300,7 @@ export class Dispatcher {
             events.latestAbort?.payload.origin?.kind === 'optimization-stop'
               ? 'stopped'
               : 'aborted',
-            undefined,
-            events.latestAbort?.payload.reason?.trim() || undefined,
+            { note: events.latestAbort?.payload.reason?.trim() || undefined },
           )
       } catch (error) {
         fail('attempt settlement', `build ${record.slug}`, error)
@@ -4300,10 +4417,16 @@ export class Dispatcher {
       await settleAttempt(
         store,
         target.build,
-        { proposal: attempt.proposal, ticket: attempt.ticket, build: record.slug },
+        {
+          proposal: attempt.proposal,
+          ticket: attempt.ticket,
+          build: record.slug,
+          ...(record.branch !== undefined && attemptBranchPublished(events.state)
+            ? { branch: record.branch }
+            : {}),
+        },
         'declined',
-        undefined,
-        declined.reason,
+        { note: declined.reason },
       )
     if (record.lease !== undefined) await store.releaseLease(record.slug, record.lease.holder)
     await this.releaseWorkspace(record.slug, events)
@@ -5236,8 +5359,7 @@ export class Dispatcher {
               build: record.slug,
             },
             'aborted',
-            undefined,
-            `PR ${pr.url} closed without merging`,
+            { note: `PR ${pr.url} closed without merging` },
           )
         if (attempt.status === 'none')
           await this.returnBuildTicket(

@@ -338,9 +338,23 @@ test('no improvement closes the PR, settles once and moves the ticket to rejecte
     ])
     const digest = reduceBuild(nodeEvents).optimization!
     expect(digest).toMatchObject({ inFlight: [], rejections: [], plateau: 1 })
+    // The published attempt's branch is deleted before the move, and only it.
+    const branch = (await h.store.getBuild(child))!.branch!
+    expect(await settled(h, node.slug)).toEqual([
+      expect.objectContaining({ attempt: expect.objectContaining({ branch }) }),
+    ])
+    expect(ofType(nodeEvents, 'attempt.branch-deleted').map((e) => e.payload)).toEqual([
+      { proposal: 'p-A1', build: child, branch },
+    ])
+    expect(types(nodeEvents).indexOf('attempt.branch-deleted')).toBeLessThan(
+      types(nodeEvents).indexOf('attempt.ticket-rejected'),
+    )
+    expect((await git(['branch', '--list', branch], h.origin)).trim()).toBe('')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(nodeHead)
     // Settled once, across further polls.
     await tick(h)
     expect(await settled(h, node.slug)).toHaveLength(1)
+    expect(ofType(await h.events(node.slug), 'attempt.branch-deleted')).toHaveLength(1)
   } finally {
     await h.cleanup()
   }

@@ -9,6 +9,7 @@ import {
   OBJECTIVE_FLAGS,
   OBJECTIVE_USAGE,
   objectiveChangesFromFlags,
+  objectiveSettleFromFlags,
   objectiveStopFromFlags,
   renderObjective,
 } from './objective'
@@ -116,4 +117,54 @@ test('the ticket tree labels only node tickets carrying exactly one objective bl
     TWO: undefined,
     WORK: undefined,
   })
+})
+
+test('settle flags require an explicit policy and stand alone', () => {
+  const settle = (...argv: string[]) =>
+    objectiveSettleFromFlags(parseArgs(['node', ...argv], OBJECTIVE_FLAGS, OBJECTIVE_USAGE))
+  expect(settle()).toBeUndefined()
+  expect(settle('--settle-unmeasured', 'p1', '--policy', 'release-unmeasured')).toEqual({
+    attempt: 'p1',
+    policy: 'release-unmeasured',
+  })
+  expect(
+    settle('--settle-unmeasured', 'b', '--policy', 'release-unmeasured', '--note', 'why'),
+  ).toEqual({ attempt: 'b', policy: 'release-unmeasured', note: 'why' })
+  expect(() => settle('--settle-unmeasured', 'p1')).toThrow('requires an explicit --policy')
+  expect(() => settle('--policy', 'release-unmeasured')).toThrow(
+    '--policy requires --settle-unmeasured',
+  )
+  expect(() => settle('--note', 'x')).toThrow('--note requires --settle-unmeasured')
+  expect(() =>
+    settle('--settle-unmeasured', 'p1', '--policy', 'release-unmeasured', '--stop'),
+  ).toThrow('cannot be combined with --stop')
+  expect(() =>
+    settle('--settle-unmeasured', 'p1', '--policy', 'release-unmeasured', '--threshold', '3'),
+  ).toThrow('cannot be combined with a revision')
+})
+
+test('unmeasured merges and pending branch cleanups render with why the slot is held', () => {
+  const builder = new OptimizationLogBuilder()
+    .accept(commandObjective(), 1)
+    .propose('r', ['a', 'b', 'c'])
+    .markUnmeasured('a', 'stale-head', 'd'.repeat(40), 'c'.repeat(40))
+    .markUnmeasured('b', 'unresolvable', undefined)
+    .settle('c', 'declined', undefined, undefined, { branch: 'ab/attempt-c' })
+    .branchCleanup('c', 'ab/attempt-c', 'forge down')
+  const lines = renderObjective(
+    objectiveView('node', optimizationReducer.reduce(builder.events)!, new Date()),
+  )
+  expect(lines).toContain(
+    `  unmeasured merge: a (attempt-a) merged ${'d'.repeat(40)}, its landing measurement measured ${'c'.repeat(40)}; holds a concurrency slot until settled with --settle-unmeasured a --policy release-unmeasured`,
+  )
+  expect(lines).toContain(
+    '  unmeasured merge: b (attempt-b) has no recorded merged head, its merged head was never recorded; holds a concurrency slot until settled with --settle-unmeasured b --policy release-unmeasured',
+  )
+  expect(lines).toContain('  branch cleanup pending: ab/attempt-c (attempt-c): forge down')
+  builder.settle('a', 'merged-unmeasured', undefined, undefined, { policy: 'release-unmeasured' })
+  expect(
+    renderObjective(
+      objectiveView('node', optimizationReducer.reduce(builder.events)!, new Date()),
+    ).find((line) => line.startsWith('  attempts:')),
+  ).toBe('  attempts: 3 filed, 0 accepted, 1 rejected, 1 running, 1 merged unmeasured')
 })
