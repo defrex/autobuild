@@ -295,7 +295,9 @@ The default watch reports actionable conditions only:
 
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`,
   `landing.consent-revoked` (protected merge consent revoked by a reconcile's
-  edits, naming the matched files and both heads), or conflicted
+  edits, naming the matched files and both heads),
+  `optimization.noise-exceeded` (an optimization node's ε is below its
+  measured noise, naming both), or conflicted
   `restack.replayed` events. `build.consent-ready` is the single
   signal for a ready consent or held merge, including first repository-wide
   discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.

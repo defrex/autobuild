@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from './envelope'
 import { eventPayloadSchemas, normalizeVerifyCompletion } from './payloads'
+import { buildEventPolicy } from './policy'
 
 function plan(payload: unknown): EventWrite<'plan.completed'> {
   return validateEventWrite({
@@ -1751,4 +1752,150 @@ describe('optimization event protocol', () => {
     )
     expect(Object.keys(eventPayloadSchemas)).toContain('optimization.stopped')
   })
+
+  test('measurement facts carry an optional report and spread', () => {
+    const report = { kind: 'measurement-samples', rev: 0 }
+    expect(
+      valid(
+        'optimization.baseline-measured',
+        { revision: 1, head: sha, harnessPin: sha, samples: 3, median: 41, spread: 1.5, report },
+        KERNEL,
+      ),
+    ).toMatchObject({ payload: { report } })
+    const measured = {
+      request: 'm1',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+      samples: 5,
+      medians: { candidate: 39, baseline: 41 },
+      delta: 2,
+      decision: 'improved',
+    }
+    expect(valid('attempt.measured', { ...measured, spread: 0, report }, KERNEL)).toMatchObject({
+      payload: { spread: 0, report },
+    })
+    invalid('attempt.measured', { ...measured, spread: -0.5 }, KERNEL)
+    invalid('attempt.measured', { ...measured, noise: 1 }, KERNEL)
+  })
+
+  test('a request may name its command metric; samples are a decisive kernel fact', () => {
+    const metric = {
+      kind: 'command',
+      command: 'bun bench.ts',
+      direction: 'minimize',
+      samples: 5,
+      harness: ['bench/**'],
+    }
+    const request = {
+      id: 'm1',
+      node: 'node-slug',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+    }
+    expect(
+      valid('attempt.measurement-requested', { ...request, metric }, DISPATCHER),
+    ).toMatchObject({ payload: { metric } })
+    invalid('attempt.measurement-requested', { ...request, metric: { kind: 'panel' } }, DISPATCHER)
+    const sampled = {
+      request: 'm1',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+      samples: 5,
+      medians: { candidate: 39, baseline: 41 },
+      report: { kind: 'measurement-samples', rev: 0 },
+    }
+    expect(valid('attempt.sampled', sampled, KERNEL)).toMatchObject({ type: 'attempt.sampled' })
+    expect(buildEventPolicy['attempt.sampled']).toBe('decisive')
+    // Samples carry no decision: that is the dispatcher's attempt.measured.
+    invalid('attempt.sampled', { ...sampled, decision: 'improved' }, KERNEL)
+    invalid('attempt.sampled', { ...sampled, delta: 2 }, KERNEL)
+    const { report: _report, ...unreported } = sampled
+    invalid('attempt.sampled', unreported, KERNEL)
+    invalid('attempt.sampled', sampled, DISPATCHER)
+    expect(valid('attempt.measured', { ...measuredFact(), spread: 1 }, DISPATCHER)).toMatchObject({
+      actor: DISPATCHER,
+    })
+  })
+
+  test('the noise check is an advisory kernel fact that allows a zero effective epsilon', () => {
+    const noise = {
+      revision: 1,
+      head: sha,
+      harnessPin: sha,
+      median: 0,
+      spread: 2,
+      epsilon: { relative: 0.05 },
+      effectiveEpsilon: 0,
+    }
+    expect(valid('optimization.noise-exceeded', noise, KERNEL)).toMatchObject({
+      type: 'optimization.noise-exceeded',
+    })
+    expect(buildEventPolicy['optimization.noise-exceeded']).toBe('advisory')
+    invalid('optimization.noise-exceeded', { ...noise, effectiveEpsilon: -1 }, KERNEL)
+    invalid('optimization.noise-exceeded', { ...noise, epsilon: {} }, KERNEL)
+    invalid('optimization.noise-exceeded', { ...noise, extra: true }, KERNEL)
+    invalid('optimization.noise-exceeded', noise, humanActor('ada'))
+  })
+
+  test('a measurement escalation targets measurement with its own policy cause', () => {
+    expect(
+      valid(
+        'escalation.raised',
+        {
+          id: 'esc-1',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'exited 1 (candidate sample 2/5)',
+        },
+        KERNEL,
+      ),
+    ).toMatchObject({ payload: { phase: 'measurement' } })
+    // The dispatcher refuses samples taken under a superseded ruler.
+    expect(
+      valid(
+        'escalation.raised',
+        {
+          id: 'esc-2',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'superseded ruler',
+        },
+        DISPATCHER,
+      ),
+    ).toMatchObject({ actor: DISPATCHER })
+    invalid(
+      'escalation.raised',
+      {
+        id: 'esc-1',
+        phase: 'measuring',
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question: 'q',
+      },
+      KERNEL,
+    )
+  })
 })
+
+function measuredFact() {
+  const sha = 'a'.repeat(40)
+  return {
+    request: 'm1',
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: 1,
+    samples: 5,
+    medians: { candidate: 39, baseline: 41 },
+    delta: 2,
+    decision: 'improved',
+  }
+}

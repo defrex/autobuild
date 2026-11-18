@@ -91,6 +91,11 @@ import {
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
 import {
+  baselineMeasurementDue,
+  decideSampledMeasurement,
+  sampledMeasurement,
+} from '../kernel/measurement'
+import {
   openTicketWait,
   pendingWaitRequest,
   ticketWaitRelease,
@@ -1868,7 +1873,8 @@ export class Dispatcher {
     if (
       launchState.kind === 'node' &&
       !launchState.nodeRestack?.conflict &&
-      !integrationCurrent(launchState)
+      !integrationCurrent(launchState) &&
+      !baselineMeasurementDue(launchState)
     )
       return 'already-active'
     if (launched.has(slug)) return 'already-active'
@@ -3406,7 +3412,9 @@ export class Dispatcher {
       await withForgeRequestContext({ build: record.slug }, async () => {
         try {
           if (!(await this.nodeHasCapacity(record.slug))) return
-          await this.prepareIntegration(record, state, report, launched)
+          if (baselineMeasurementDue(state))
+            await this.prepareBaselineMeasurement(record, report, launched)
+          else await this.prepareIntegration(record, state, report, launched)
         } catch (error) {
           rethrowAuthorityLapse(error)
           report.janitorDiagnostics.push(
@@ -3414,6 +3422,58 @@ export class Dispatcher {
           )
         }
       })
+    }
+    await this.releaseMeasuredNodeWorkspaces(report)
+  }
+
+  /** Provision a workspace for an optimization node's starting measurement
+   * and launch its runner. The measurer fetches the pinned commit itself, so
+   * the workspace's revision does not matter. */
+  private async prepareBaselineMeasurement(
+    record: BuildRecord,
+    report: TickReport,
+    launched: Set<string>,
+  ): Promise<void> {
+    if (!record.branch || !this.accountsAvailable()) return
+    const facts = (await readBuildFacts(this.store, record.slug)).value
+    if (!baselineMeasurementDue(facts.state)) return
+    await this.provisionNodeAndLaunch(record, facts, report, launched)
+  }
+
+  /** Release the workspace an optimization node held for its starting
+   * measurement once nothing else needs it: no measurement due, no
+   * integration cycle, no node restack or reconcile, no runner. Reads reduced
+   * state only; the raw read happens only for a node it releases. */
+  private async releaseMeasuredNodeWorkspaces(report: TickReport): Promise<void> {
+    const now = this.deps.clock()
+    for (const build of await this.capacityBuilds()) {
+      const { record, state } = build
+      if (
+        state.kind !== 'node' ||
+        state.optimization === undefined ||
+        !build.workspace ||
+        build.provisioning ||
+        this.hasLiveExecutionLease(record) ||
+        this.continuations.has(record.slug) ||
+        state.openExecution !== undefined ||
+        baselineMeasurementDue(state) ||
+        state.integration?.cycle !== undefined ||
+        state.integration?.intent !== undefined ||
+        state.nodeRestack?.conflict !== undefined ||
+        state.nodeRestack?.active !== undefined ||
+        state.sessions.open.length > 0 ||
+        now.getTime() - new Date(record.updatedAt).getTime() < this.leaseTtlMs
+      )
+        continue
+      try {
+        const facts = (await readBuildFacts(this.store, record.slug)).value
+        if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
+      } catch (error) {
+        rethrowAuthorityLapse(error)
+        report.janitorDiagnostics.push(
+          `build ${record.slug}: measurement workspace release failed — ${String(error)}`,
+        )
+      }
     }
   }
 
@@ -5786,6 +5846,55 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * Decide a parked attempt's sampled measurement (SPEC §13.1.1). The
+   * attempt's runner holds only its own build, so it records the samples and
+   * the dispatcher records `attempt.measured` against the node's ε and
+   * starting spread as they stand now, or a `policy/measurement-failed`
+   * escalation when the node's ruler or harness pin moved past the request.
+   *
+   * Cost: the sampled-but-undecided check reads the reduced state the sweep
+   * already holds, so a tick with nothing sampled reads nothing more. One
+   * record lookup and one reduced read of the node per sampled request, once:
+   * either append makes the request no longer pending. A lost race is
+   * decided again next tick.
+   */
+  private async recordSampledMeasurement(slug: string, state: BuildState): Promise<void> {
+    const sampled = sampledMeasurement(state)
+    const request = state.attemptMeasurement?.request
+    if (sampled === undefined || request === undefined) return
+    const { seq: _seq, ...requested } = request
+    // A missing node is refused once rather than failing every tick.
+    const decided =
+      (await this.store.getBuild(request.node)) === null
+        ? { refusal: `node ${request.node} does not exist` }
+        : decideSampledMeasurement(
+            (await readBuildFacts(this.store, request.node)).value.state,
+            requested,
+            sampled,
+          )
+    if ('measured' in decided)
+      await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'attempt.measured',
+        payload: decided.measured,
+      })
+    else
+      await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: this.deps.ids('esc'),
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question:
+            `Measurement request ${request.id} was sampled but cannot be decided: ${decided.refusal}. ` +
+            'No result was recorded; the attempt needs a fresh measurement request under the current ruler.',
+        },
+      })
+  }
+
   /** One build's lease-sweep pass; `leaseSweep` contains its failures. */
   private async sweepBuild(
     record: BuildRecord,
@@ -5849,7 +5958,11 @@ export class Dispatcher {
       // The engine reached the end of the pipeline: record it once per
       // settlement key so capacity stops counting the parked build. A lost
       // race is decided again next tick.
-      if (settlementDue(state))
+      // A sampled measurement is decided first: the attempt's landing waits
+      // on it, while settlement only frees capacity and follows next tick.
+      if (sampledMeasurement(state) !== undefined)
+        await this.recordSampledMeasurement(record.slug, state)
+      else if (settlementDue(state))
         await this.store.appendIfCurrent(record.slug, state.lastSeq, {
           actor: DISPATCHER,
           type: 'pipeline.settled',
@@ -5877,7 +5990,9 @@ export class Dispatcher {
     if (
       state.kind === 'node' &&
       (!integrationCurrent(state) || facts.workspace === null) &&
-      decision.kind !== 'wait'
+      decision.kind !== 'wait' &&
+      // An ended or crashed starting measurement re-attaches to its workspace.
+      !(decision.kind === 'measure-baseline' && facts.workspace !== null)
     )
       return // cascade owns node runner admission
     // Raw history, read at most once and only by a branch that acts on it.
@@ -7554,6 +7669,27 @@ export class Dispatcher {
     if (!integrationCurrent(state)) return
     if (!this.accountsAvailable()) return
     const facts = (await readBuildFacts(this.store, record.slug)).value
+    await this.provisionNodeAndLaunch(
+      record,
+      facts,
+      report,
+      launched,
+      state.integration!.cycle!.head,
+    )
+  }
+
+  /** Provision a node's workspace when it has none, then launch its runner. A
+   * recovery-capable provider provisions and launches in its background
+   * continuation instead. */
+  private async provisionNodeAndLaunch(
+    record: BuildRecord,
+    facts: CurrentBuildFacts,
+    report: TickReport,
+    launched: Set<string>,
+    revision?: string,
+  ): Promise<void> {
+    const branch = record.branch
+    if (!branch) return
     if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
       const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
       if (kicked === 'kicked') report.provisioning++
@@ -7564,9 +7700,9 @@ export class Dispatcher {
       try {
         handle = await this.provisionWorkspace(record.slug, {
           repo: this.deps.checkout ?? this.deps.repo,
-          baseBranch: record.branch,
-          branch: record.branch,
-          revision: state.integration!.cycle!.head,
+          baseBranch: branch,
+          branch,
+          ...(revision !== undefined ? { revision } : {}),
         })
       } catch (error) {
         if (await this.holdForMissingAccounts(error)) return

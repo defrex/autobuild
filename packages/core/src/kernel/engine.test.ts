@@ -2685,6 +2685,81 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     expect(decide(throughFinalize)).toEqual(wait('awaiting-pr'))
   })
 
+  const measurementRequest = {
+    id: 'm1',
+    node: 'opt-node',
+    candidate: 'c'.repeat(40),
+    baseline: 'a'.repeat(40),
+    harnessPin: 'a'.repeat(40),
+    revision: 1,
+  }
+
+  test('a parked attempt with an unmeasured request runs the measurement', () => {
+    const requested = [...throughFinalize, ev('attempt.measurement-requested', measurementRequest)]
+    expect(decide(requested)).toEqual({ kind: 'run-measurement', request: measurementRequest })
+    // Sampled, the request is the dispatcher's to decide; the runner parks.
+    expect(
+      decide([
+        ...requested,
+        ev('attempt.sampled', {
+          request: 'm1',
+          candidate: 'c'.repeat(40),
+          baseline: 'a'.repeat(40),
+          harnessPin: 'a'.repeat(40),
+          revision: 1,
+          samples: 3,
+          medians: { baseline: 10, candidate: 8 },
+          report: { kind: 'measurement-samples', rev: 0 },
+        }),
+      ]),
+    ).toEqual(wait('awaiting-pr'))
+    expect(
+      decide([
+        ...requested,
+        ev('attempt.measured', {
+          request: 'm1',
+          candidate: 'c'.repeat(40),
+          baseline: 'a'.repeat(40),
+          harnessPin: 'a'.repeat(40),
+          revision: 1,
+          samples: 3,
+          medians: { baseline: 10, candidate: 8 },
+          delta: 2,
+          decision: 'improved',
+          spread: 0.5,
+        }),
+      ]),
+    ).toEqual(wait('awaiting-pr'))
+  })
+
+  test('a measurement never preempts reconcile, verification or a blocker', () => {
+    const request = ev('attempt.measurement-requested', measurementRequest)
+    expect(
+      decide([...throughFinalize, request, ev('pr.conflicted', { baseSha: 'sha-main-2' })]),
+    ).toMatchObject({ kind: 'run-phase', phase: 'reconcile' })
+    const midPipeline = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      request,
+    ]
+    expect(decide(midPipeline)).toMatchObject({ kind: 'run-check', step: 'types' })
+    expect(
+      decide([
+        ...throughFinalize,
+        request,
+        ev('escalation.raised', {
+          id: 'esc-m',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'exited 1',
+        }),
+      ]),
+    ).toEqual(wait('blocked'))
+  })
+
   test('merged and closed both wait — the janitor completes the build', () => {
     expect(decide([...throughFinalize, ev('pr.merged', { sha: 'sha-squash' })])).toEqual(
       wait('awaiting-pr'),
@@ -4109,5 +4184,92 @@ describe('landingRestackDue', () => {
         },
       }),
     ).toBe(true)
+  })
+})
+
+describe('decideNext: optimization node starting measurement', () => {
+  const pin = 'a'.repeat(40)
+  const objective = {
+    purpose: 'faster search',
+    metric: {
+      kind: 'command' as const,
+      command: 'bun bench.ts',
+      direction: 'minimize' as const,
+      samples: 3,
+      harness: ['bench/**'],
+    },
+    target: { epsilon: { absolute: 1 } },
+    budget: { maxAttempts: 5 },
+    stop: { mode: 'abort' as const },
+    proposer: { concurrency: 1 },
+  }
+  const opened: EventWrite[] = [
+    ev('build.created', {
+      ticket: { source: 'linear', id: 'ENG-7' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      kind: 'node',
+    }),
+    ev('optimization.objective-accepted', { objective, revision: 1, harnessPin: pin, specRev: 0 }),
+    ev('node.opened', { sha: pin }),
+  ]
+
+  test('an opened command node measures its harness pin first', () => {
+    expect(decide(opened)).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
+  })
+
+  test('once measured, the node waits as before', () => {
+    expect(
+      decide([
+        ...opened,
+        ev('optimization.baseline-measured', {
+          revision: 1,
+          head: pin,
+          harnessPin: pin,
+          samples: 3,
+          median: 10,
+          spread: 0.2,
+        }),
+      ]),
+    ).toEqual(wait('awaiting-pr'))
+  })
+
+  test('a blocker, pause or abort outranks the measurement', () => {
+    expect(
+      decide([
+        ...opened,
+        ev('escalation.raised', {
+          id: 'esc-m',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'exited 1',
+        }),
+      ]),
+    ).toEqual(wait('blocked'))
+    expect(decide([...opened, ev('build.abort-requested', {})])).toEqual({
+      kind: 'acknowledge',
+      command: 'abort',
+    })
+    expect(decide([...opened, ev('build.pause-requested', {})])).toEqual({
+      kind: 'acknowledge',
+      command: 'pause',
+    })
+  })
+
+  test('an answered measurement escalation measures again', () => {
+    expect(
+      decide([
+        ...opened,
+        ev('escalation.raised', {
+          id: 'esc-m',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'exited 1',
+        }),
+        ev('escalation.answered', { id: 'esc-m', answer: 'retry', resolution: 'guidance' }),
+      ]),
+    ).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
   })
 })
