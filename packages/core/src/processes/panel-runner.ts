@@ -195,9 +195,12 @@ export async function preparePanelMaterial(
       await run(['git', 'fetch', '--no-tags', 'origin', sha], `fetching ${sha}`, ws)
   }
   const gitDir = `${dir}/git`
+  // `update-index` needs a work tree; this empty one is never checked out to.
+  const workTree = `${dir}/tree`
   await run(['git', 'init', '--bare', '-q', gitDir], 'creating the private Git directory', {
     env: gitEnv(deps),
   })
+  await run(['mkdir', '-p', workTree], 'creating the panel material directory')
   await writeFile(exec, `${gitDir}/objects/info/alternates`, `${common}/objects\n`)
   await writeFile(exec, `${gitDir}/info/attributes`, NEUTRAL_ATTRIBUTES)
 
@@ -212,7 +215,7 @@ export async function preparePanelMaterial(
     const index = `${dir}/index-${counter}`
     indexes[side] = index
     const sha = variants[side]
-    const env = gitEnv(deps, { GIT_DIR: gitDir, GIT_INDEX_FILE: index })
+    const env = gitEnv(deps, { GIT_DIR: gitDir, GIT_INDEX_FILE: index, GIT_WORK_TREE: workTree })
     await run(['git', ...GIT_CONFIG, 'read-tree', sha], `reading the tree of ${sha}`, { env })
     if (sha === variants.harnessPin) continue
     const { restore, remove } = harnessDiff(pinFiles, await tree(sha), variants.harness)
