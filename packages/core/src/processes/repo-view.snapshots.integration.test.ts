@@ -178,6 +178,11 @@ test('expired prior watch owners and abandoned preparations have bounded reads a
   // Seeding 100,000 validated events can exceed Bun's default timeout on shared runners.
 }, 30_000)
 
+test('a no-slug CLI watch follows announced builds with bounded reads at 100 and 100000 events', async () => {
+  const { cliWatchDiscoveryReadBudget } = await import('../testing/reduced-read-budget')
+  await cliWatchDiscoveryReadBudget()
+}, 60_000)
+
 test('hosted exact seeds have one canonical rebuild and gap-proportional warm reads', async () => {
   const { hostedSeedReadBudget } = await import('../testing/reduced-read-budget')
   await hostedSeedReadBudget()
