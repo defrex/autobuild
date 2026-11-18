@@ -1,8 +1,8 @@
 import { readBuildPage } from '../store/event-reads'
-import { abortDestinationSchema } from '../events/payloads'
+import { abortDestinationSchema, unmeasuredSettlementPolicySchema } from '../events/payloads'
 import { readRepositoryAttentionPage } from './repository-events'
 import { requestNodeRestack } from './restack'
-import { reviseObjective, stopObjective } from './optimization'
+import { reviseObjective, settleUnmeasuredAttempt, stopObjective } from './optimization'
 import { objectiveEpsilonSchema } from '../objective'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
@@ -279,6 +279,19 @@ const objectiveStopInput = z.strictObject({
     .describe(
       'Override the objective’s stop mode for this stop; omitted, the objective’s mode applies.',
     ),
+})
+
+const objectiveSettleUnmeasuredInput = z.strictObject({
+  repo: repoField,
+  slug: slugField,
+  attempt: z
+    .string()
+    .min(1)
+    .describe('The unmeasured merged attempt: its proposal id or its build slug.'),
+  policy: unmeasuredSettlementPolicySchema.describe(
+    'The explicit settlement policy. release-unmeasured releases the attempt’s concurrency slot and records its measurement as absent; it never counts as accepted or moves any value.',
+  ),
+  note: z.string().max(4000).optional().describe('A note recorded with the settlement.'),
 })
 
 const buildEventsInput = z.strictObject({
@@ -733,6 +746,21 @@ export const TOOLS: readonly ToolEntry[] = [
         repo,
         slug,
         ...(mode !== undefined ? { mode } : {}),
+        user: attributed(ctx),
+        ...(ctx.via ? { via: ctx.via } : {}),
+      })
+    },
+  ),
+  defineTool(
+    'optimization.settle-unmeasured',
+    'Settle an optimization attempt that merged on the forge without a landing measurement of its merged head. Such an attempt stays in flight, holding a concurrency slot, and optimization progress lists it under unmeasuredMerges. The policy is required: release-unmeasured records the settlement as merged-unmeasured, releasing the slot exactly once without claiming an improvement, moving the current or best value, or touching the plateau. Works on a stopped node. Refuses work builds, plain nodes, terminal nodes, settled or unmerged attempts, and heads with a valid measurement.',
+    objectiveSettleUnmeasuredInput,
+    '{slug, proposal, build, outcome, policy}: the recorded settlement.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof objectiveSettleUnmeasuredInput>
+      return settleUnmeasuredAttempt({
+        store: ctx.store,
+        ...input,
         user: attributed(ctx),
         ...(ctx.via ? { via: ctx.via } : {}),
       })

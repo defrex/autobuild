@@ -1,6 +1,6 @@
 import { validateEventWrite, type AbEvent, type EventWrite } from '../../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
-import type { AttemptOutcome } from '../../events/payloads'
+import type { AttemptOutcome, UnmeasuredMergeReason } from '../../events/payloads'
 import type { CommandMetric, Objective } from '../../objective'
 
 export const OPTIMIZATION_SHA = (char: string) => char.repeat(40)
@@ -230,7 +230,11 @@ export class OptimizationLogBuilder {
     outcome: AttemptOutcome,
     measurement?: { revision: number; baseline: number; candidate: number; delta: number },
     note?: string,
+    extra: Pick<EventWrite<'attempt.settled'>['payload'], 'policy' | 'mergedSha'> & {
+      branch?: string
+    } = {},
   ): this {
+    const { branch, ...rest } = extra
     return this.push({
       actor: DISPATCHER,
       type: 'attempt.settled',
@@ -239,12 +243,50 @@ export class OptimizationLogBuilder {
           proposal,
           ticket: { source: 'file', id: `T-${proposal}` },
           build: `attempt-${proposal}`,
+          ...(branch !== undefined ? { branch } : {}),
         },
         outcome,
         ...(measurement !== undefined ? { measurement } : {}),
+        ...rest,
         ...(note !== undefined ? { note } : {}),
       },
     })
+  }
+
+  /** Record that an in-flight attempt merged without a landing measurement. */
+  markUnmeasured(
+    proposal: string,
+    reason: UnmeasuredMergeReason,
+    sha: string | undefined = OPTIMIZATION_SHA('d'),
+    measuredCandidate?: string,
+  ): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'attempt.merged-unmeasured',
+      payload: {
+        proposal,
+        ticket: { source: 'file', id: `T-${proposal}` },
+        build: `attempt-${proposal}`,
+        ...(sha !== undefined && reason !== 'unresolvable' ? { sha } : {}),
+        reason,
+        ...(measuredCandidate !== undefined ? { measuredCandidate } : {}),
+      },
+    })
+  }
+
+  /** Record a settled attempt's branch deletion, or a failed attempt at it. */
+  branchCleanup(proposal: string, branch: string, error?: string): this {
+    return error === undefined
+      ? this.push({
+          actor: DISPATCHER,
+          type: 'attempt.branch-deleted',
+          payload: { proposal, build: `attempt-${proposal}`, branch },
+        })
+      : this.push({
+          actor: DISPATCHER,
+          type: 'attempt.branch-cleanup-failed',
+          payload: { proposal, build: `attempt-${proposal}`, branch, error },
+        })
   }
 
   /** Record that a settled attempt's ticket moved to the rejected role. */
@@ -397,4 +439,32 @@ export function attemptLandingLog(): AbEvent[] {
         decision: 'improved',
       },
     }).events
+}
+
+/** A node log that reaches the unmeasured-merge and branch-cleanup fields:
+ * a marked in-flight attempt, a released one, and pending and cleared
+ * branch obligations. */
+export function unmeasuredMergeLog(): AbEvent[] {
+  return new OptimizationLogBuilder()
+    .accept(commandObjective(), 1)
+    .baseline(1, 50, 1.6)
+    .propose('r1', ['u1', 'u2', 'u3', 'u4'])
+    .markUnmeasured('u1', 'stale-head', OPTIMIZATION_SHA('d'), OPTIMIZATION_SHA('c'))
+    .markUnmeasured('u2', 'absent')
+    .settle('u2', 'merged-unmeasured', undefined, 'released', {
+      policy: 'release-unmeasured',
+      mergedSha: OPTIMIZATION_SHA('d'),
+    })
+    .settle('u3', 'declined', undefined, 'no gain', { branch: 'ab/attempt-u3' })
+    .branchCleanup('u3', 'ab/attempt-u3', 'forge refused the delete')
+    .settle(
+      'u4',
+      'no-improvement',
+      { revision: 1, baseline: 50, candidate: 49, delta: 1 },
+      'noise',
+      {
+        branch: 'ab/attempt-u4',
+      },
+    )
+    .branchCleanup('u4', 'ab/attempt-u4').events
 }

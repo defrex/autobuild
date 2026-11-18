@@ -3636,18 +3636,57 @@ of the merged head; `no-improvement` at the gate; `aborted` when an operator
 aborts it or a human closes its PR without merging. `declined` is recorded when an implementer declines as described above;
 `stopped` is recorded by the stopping rules (RFC 0005 §9). The
 write is conditional on the node log and the attempt still being in flight.
-Each settlement other than `accepted` leaves a pending rejection in the node's
-digest. Once the attempt has no build or its build is done, the node's janitor
+Each settlement other than `accepted` and `merged-unmeasured` leaves a pending
+rejection in the node's digest. Once the attempt has no build or its build is done, the node's janitor
 poll moves the ticket to the rejected role, comments the outcome, and records
 `attempt.ticket-rejected {proposal, ticket, state}`. Until then the attempt's
 own terminal paths skip their triage hand-back, so its ticket never reaches
-triage. A merged attempt's ticket moves to done as for any child. A merge
-without a measurement of the merged head (a forge-side human merge) records a
-followup and leaves the attempt in flight for an operator.
+triage. A merged attempt's ticket moves to done as for any child.
+
+A merge is `accepted` only with a result for exactly the merged head that
+answers a request of this node. Anything else, typically a forge-side human
+merge, records `attempt.merged-unmeasured {proposal, ticket, build, sha?,
+reason, measuredCandidate?}` on the node, once, with one followup observation on
+the child. The reason is `absent` (no result), `stale-head` (the result
+measured `measuredCandidate`), `unrelated` (the latest request named another
+node) or `unresolvable` (the child recorded no merged head, the only case
+without `sha`). The attempt stays in flight and keeps its concurrency slot;
+`ab objective`, `ab build status <node>` and the objective row name it and say
+why the slot is held. On every node tick the dispatcher also reconciles merges
+that completed with neither record, such as merges from before the marker
+existed. That pass scans the in-flight entries over the tick's build listing,
+reads one merged child's reduced facts once, and writes the marker, or
+`accepted` when that head was measured. An operator releases a marked attempt
+with `ab objective <node> --settle-unmeasured <proposal|build> --policy
+release-unmeasured [--note <text>]` or the operator tool
+`optimization.settle-unmeasured` (input `{repo, slug, attempt, policy,
+note?}`, receipt `{slug, proposal, build, outcome, policy}`). The policy is
+required. `release-unmeasured` records `attempt.settled {outcome:
+merged-unmeasured, policy, mergedSha?}` with a human actor and no
+measurement. It releases the slot exactly once, counts in
+`attempts.unmeasured`, and leaves `current`, `best` and `plateau` unchanged.
+It adds no pending rejection, because the ticket is already done. The action
+works on a stopped node, revalidates the child's merged head, and refuses
+settled, unmerged or unmarked attempts, measured heads and terminal nodes.
+
+A `declined` or `no-improvement` attempt whose build published (it completed
+an implement round or opened a PR) carries its build branch as
+`attempt.branch`. The pending rejection keeps it as a cleanup obligation. Once
+the build is done, the sweep checks the guards first: the branch must be that
+attempt build's own, the build must target this node, and the branch must be
+neither the node's branch nor its base. It then deletes the branch through the
+forge and records `attempt.branch-deleted {proposal, build, branch}`. A branch
+that is already absent counts as deleted, and a crash before the record repeats
+the delete. A refused guard or a failed delete records
+`attempt.branch-cleanup-failed {proposal, build?, branch, error}` once per
+distinct error. The obligation then stays pending and holds the slot, and the
+ticket moves to rejected only after the branch is gone. The settlement itself
+never changes. Cleanup runs even without a configured rejected role.
+Aborted and stopped attempts keep abort cleanup's own branch deletion.
 
 | Outcome | Ticket role |
 |---|---|
-| `accepted` | done |
+| `accepted`, `merged-unmeasured` | done |
 | `no-improvement`, `declined`, `stopped`, `aborted` | rejected |
 
 **Stopping.** An optimization node is done when its number is good enough,
@@ -4091,7 +4130,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
@@ -4304,17 +4343,23 @@ an optimization node's own log, absent until the first
   latest `optimization.progress-measured` win rate under the current ruler,
   else 0.5. `best` is the best value in the objective's direction under the
   current ruler;
-- `attempts {filed, accepted, rejected}`, where `filed` counts proposed tickets
-  and `rejected` counts `no-improvement`, `declined`, `stopped` and `aborted`
-  settlements; `inFlight`, the proposed attempts not yet settled as
-  `{proposal, ticket}`, whose length is the running count; `plateau`, the
+- `attempts {filed, accepted, rejected, unmeasured}`, where `filed` counts
+  proposed tickets, `rejected` counts `no-improvement`, `declined`, `stopped`
+  and `aborted` settlements, and `unmeasured` counts `merged-unmeasured` ones;
+  `inFlight`, the proposed attempts not yet settled as `{proposal, ticket,
+  unmeasuredMerge?}`, whose length is the running count, with
+  `unmeasuredMerge {build, sha?, reason, measuredCandidate?, at}` folded from
+  `attempt.merged-unmeasured`; `plateau`, the
   consecutive `no-improvement` or `declined` settlements since the last
   `accepted` (`stopped` and `aborted` leave it unchanged); `emptyProposals`,
   consecutive proposals with no attempts; `rejections`, the settled attempts
-  other than `accepted` whose ticket has not moved to the rejected role, as
-  `{proposal, ticket, build?, outcome}`, added only for an attempt that was in
-  flight and removed by `attempt.ticket-rejected`; `stopped {cause, mode,
-  at}` from the first `optimization.stopped`; and `stoppedTickets`, the tickets of
+  other than `accepted` and `merged-unmeasured` whose ticket has not moved to
+  the rejected role, as `{proposal, ticket, build?, outcome, branch?,
+  branchCleanupError?}`, added only for an attempt that was in flight and
+  removed by `attempt.ticket-rejected` (`branch` is the settlement's cleanup
+  obligation, cleared by `attempt.branch-deleted`, and `branchCleanupError` the
+  latest `attempt.branch-cleanup-failed`); `stopped {cause, mode, at}` from the
+  first `optimization.stopped`; and `stoppedTickets`, the tickets of
   attempts settled `stopped`, which the dispatch claim gate refuses. Only
   attempts in flight at the stop settle `stopped`, so it is bounded by the
   concurrency.
@@ -4379,7 +4424,8 @@ ledger but never feeds `starting`, `current` or `best`.
 
 **Attempt ledger.** A separate registered build-scoped value folds the node's
 log into one entry per `attempt.settled`: `{seq, proposal, ticket, build?,
-title, strategy, outcome, delta?, baseline?, candidate?, note?, nearMiss?}`.
+title, strategy, outcome, mergedSha?, policy?, delta?, baseline?, candidate?,
+note?, nearMiss?}`; a `merged-unmeasured` entry carries no measurement.
 `optimization.attempts-proposed` supplies the pending title and strategy by
 proposal, dropped once the attempt settles, and the objective facts supply the
 ε in effect. A near miss is a `no-improvement` settlement with
@@ -4393,7 +4439,8 @@ differed from the previous request's.
 
 **Pending rejections in the build digest.** The repository build digest folds
 `attempt.settled` and `attempt.ticket-rejected` into `rejectionsPending`, set
-while a node has a pending rejection. Like a pending attachment reclaim, it is a
+while a node has a pending rejection (`accepted` and `merged-unmeasured`
+settlements add none). Like a pending attachment reclaim, it is a
 post-terminal duty: a completed node with pending rejections stays in the
 janitor's work set until the moves commit, and a settlement recorded on an
 already completed node re-arms it through the node's incrementally advanced
