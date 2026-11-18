@@ -287,11 +287,16 @@ Every attempt settles exactly once, on the node's log:
 
 | How the attempt ends | Outcome | Ticket role |
 |---|---|---|
-| Merged into the node | `accepted` | done |
+| Merged into the node, with a measurement of the merged head | `accepted` | done |
 | Landing measurement shows no improvement | `no-improvement` | rejected |
 | Proposer declines it | `declined` | rejected |
 | Node stops | `stopped` | rejected |
 | Operator abort, or a human closes its PR | `aborted` | rejected |
+
+A human forge merge bypasses the landing gate. When no measurement exists for
+the merged head, the attempt cannot settle `accepted`: the dispatcher records a
+followup observation, and the attempt stays in flight and keeps its concurrency
+slot until your operator agent acts. Its build and ticket still complete.
 
 This is the one case in which the dispatcher moves a ticket into the rejected
 role. Once the attempt's build is done (or it never had one), the node's poll

@@ -179,9 +179,13 @@ own issue; landed child commits keep their own messages.
 
 Human forge merges are an explicit escape hatch, including while incomplete,
 paused or unverified. The janitor records human provenance and whether the actual
-merged head was verified, then completes the ticket. Closing without merge or
-aborting closes admission and returns the ticket to triage (or ready with
-`ab abort --to ready`); already claimed
+merged head was verified, then completes the ticket. A human merge of an
+optimization attempt also skips its landing measurement; when the merged head
+was never measured, the attempt stays in flight and keeps its concurrency slot
+(see [landing and settlement](optimization-nodes.md#landing-and-settlement)).
+Closing without merge or aborting closes admission and returns the ticket to
+triage (or ready with `ab abort --to ready`), except that an optimization
+attempt settles `aborted` and its ticket moves to rejected; already claimed
 children retain their frozen destination.
 
 ### Optimization nodes

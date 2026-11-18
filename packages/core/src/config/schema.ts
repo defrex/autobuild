@@ -982,7 +982,7 @@ documentFields(ticketsInputSchema, {
   doneState: 'Project completion state and merged-ticket transition.',
   createState: 'Default state for newly created tickets when `ab ticket create` omits `--state`.',
   triageState:
-    'State used for spec-gate bounces, aborts (unless `ab abort --to ready` with a ticket that meets the spec standard), and closed-unmerged PRs.',
+    'State used for spec-gate bounces, aborts (unless `ab abort --to ready` with a ticket that meets the spec standard), and closed-unmerged PRs. An optimization attempt never returns here: an abort or closed PR settles it `aborted` and moves its ticket to rejectedState.',
   proposalState:
     'State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.',
   backlogState:
