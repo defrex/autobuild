@@ -21,7 +21,9 @@ import {
 
 const test = scenarioScope({ test: bunTest, afterEach })
 
-const WITH_REJECTED = CONFIG_TOML.replace(
+// The node holds a slot of its own for its starting measurement (AUT-1225),
+// which no runner here records, so two children need a third slot.
+const WITH_REJECTED = CONFIG_TOML.replace('capacity = 2', 'capacity = 3').replace(
   'readyState = "Ready"',
   'readyState = "Ready"\nrejectedState = "Rejected"',
 )
@@ -109,6 +111,27 @@ async function propose(h: E2eHarness, node: string, ids: string[], request = 'r1
 
 const slugOf = async (h: E2eHarness, id: string) =>
   (await h.store.listBuilds()).find((r) => r.ticket?.id === id)!.slug
+
+/** The dispatcher's launches of `slug`; the node relaunches for its starting
+ * measurement on its own schedule, so only a build's own launches count. */
+const launchesOf = (h: E2eHarness, slug: string) =>
+  h.launched.filter((entry) => entry.slug === slug)
+
+/** Tick until `slug` has `count` landing measurement requests, running each
+ * new launch of it to its park point. */
+async function driveToRequest(h: E2eHarness, slug: string, count: number) {
+  let ran = launchesOf(h, slug).length
+  for (let i = 0; i < 6 && (await requests(h, slug)).length < count; i++) {
+    const launches = launchesOf(h, slug)
+    if (launches.length > ran) {
+      ran = launches.length
+      const entry = launches.at(-1)!
+      await entry.runner.run().catch(() => undefined)
+      await h.store.releaseLease(slug, entry.instance)
+    }
+    await tick(h)
+  }
+}
 
 const stateOf = async (h: E2eHarness, slug: string) => reduceBuild(await h.events(slug))
 
@@ -263,12 +286,7 @@ test('a sibling landing makes a measurement stale: the attempt restacks and meas
     const moved = await git(['rev-parse', node.branch!], h.origin)
     expect(moved).not.toBe(stale.baseline)
     // Drive the second attempt until it has restacked and asked again.
-    for (let i = 0; i < 6 && (await requests(h, second)).length < 2; i++) {
-      const entry = h.launched.at(-1)
-      if (entry?.slug === second && (await stateOf(h, second)).sessions.open.length === 0)
-        await h.runLatest().catch(() => undefined)
-      await tick(h)
-    }
+    await driveToRequest(h, second, 2)
     const again = (await requests(h, second)).at(-1)!.payload
     expect(again.baseline).toBe(moved)
     // A restack changed the candidate; a clean restack kept verification.
@@ -294,7 +312,7 @@ test('no improvement closes the PR, settles once and moves the ticket to rejecte
     await tick(h)
     const nodeHead = await git(['rev-parse', node.branch!], h.origin)
     await measure(h, child, 1.9)
-    const launches = h.launched.length
+    const launches = launchesOf(h, child).length
     await tick(h)
     await tick(h)
     const state = await stateOf(h, child)
@@ -309,7 +327,7 @@ test('no improvement closes the PR, settles once and moves the ticket to rejecte
       }),
     ])
     // No further implement round, and never a triage hand-back.
-    expect(h.launched).toHaveLength(launches)
+    expect(launchesOf(h, child)).toHaveLength(launches)
     const childEvents = await h.events(child)
     expect(types(childEvents)).not.toContain('build.ticket-returned')
     expect(ofType(childEvents, 'implement.started')).toHaveLength(1)
@@ -395,12 +413,7 @@ test('a child that is not an attempt lands at non-regression and escalates when 
       type: 'escalation.answered',
       payload: { id: raised!.payload.id, answer: 'measure again', resolution: 'guidance' },
     })
-    for (let i = 0; i < 6 && (await requests(h, worse)).length < 2; i++) {
-      const entry = h.launched.at(-1)
-      if (entry?.slug === worse && (await stateOf(h, worse)).sessions.open.length === 0)
-        await h.runLatest().catch(() => undefined)
-      await tick(h)
-    }
+    await driveToRequest(h, worse, 2)
     expect(await requests(h, worse)).toHaveLength(2)
     expect(ofType(await h.events(worse), 'finalize.started')).toHaveLength(1)
 
@@ -455,13 +468,16 @@ test('an attempt overtaken three times holds the turn: a ready sibling waits beh
     await toPr(h, sibling)
     await tick(h)
     // Recorded history: the node head moved under the holder three times.
+    // Each was measured, so no request is left for the holder's runner.
     const first = (await requests(h, holder))[0]!.payload
-    for (const [i, base] of ['1', '2', '3'].entries())
+    for (const [i, base] of ['1', '2', '3'].entries()) {
       await h.store.append(holder, {
         actor: DISPATCHER,
         type: 'attempt.measurement-requested',
         payload: { ...first, id: `seeded-${i}`, baseline: base.repeat(40) },
       })
+      await measure(h, holder, 3)
+    }
     expect((await stateOf(h, holder)).landingMeasurement?.overtakes).toBe(3)
     await measure(h, sibling, 5)
     await tick(h)
