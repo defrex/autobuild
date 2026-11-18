@@ -272,15 +272,17 @@ describe('a judge panel run', () => {
         '.agents/skills/ab-judge/SKILL.md',
         '.claude/skills/ab-judge/SKILL.md',
       ])
-        expect(await readFile(join(root, install))).toEqual(
-          await blob(repo.workspace, `${repo.pin}:.agents/skills/ab-judge/SKILL.md`),
+        expect((await readFile(join(root, install))).toString('hex')).toBe(
+          (await blob(repo.workspace, `${repo.pin}:.agents/skills/ab-judge/SKILL.md`)).toString(
+            'hex',
+          ),
         )
 
       // Both variants carry the pin's exact harness bytes and modes.
       for (const label of ['A', 'B']) {
         for (const path of HARNESS)
-          expect(await readFile(join(root, label, path))).toEqual(
-            await blob(repo.workspace, `${repo.pin}:${path}`),
+          expect((await readFile(join(root, label, path))).toString('hex')).toBe(
+            (await blob(repo.workspace, `${repo.pin}:${path}`)).toString('hex'),
           )
         expect(((await lstat(join(root, label, 'evals/run.sh'))).mode & 0o111) !== 0).toBe(true)
         expect(await readlink(join(root, label, 'evals/link'))).toBe('fixture.txt')
