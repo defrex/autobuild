@@ -1,3 +1,4 @@
+import { optimizationCompletionBlocker } from '../kernel/optimization'
 import { integrationFailed } from '../kernel/integration-state'
 import {
   candidateHeadMatches,
@@ -603,6 +604,19 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         }
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
+          // Stopping an optimization node is not consent, and consent before
+          // the stop names what is missing.
+          const blocker =
+            current.kind === 'node' ? optimizationCompletionBlocker(current) : undefined
+          if (blocker !== undefined)
+            throw new BuildControlError(
+              'node-incomplete',
+              `Node is incomplete (${blocker}); ${
+                current.optimization?.stopped === undefined
+                  ? `stop it with ab objective ${opts.slug} --stop, then run ab merge once it is ready`
+                  : 'run ab merge once its attempts settle and it is ready'
+              }`,
+            )
           const reason = landRefusalReason(current, facts.log.restack)
           if (reason !== undefined)
             throw new BuildControlError(

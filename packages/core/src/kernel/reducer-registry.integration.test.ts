@@ -882,7 +882,7 @@ describe('reducer registry', () => {
         "openHarvestExecutions": 1,
         "openTick": 1,
         "openWorkspace": 1,
-        "optimization": 1,
+        "optimization": 2,
         "optimizationLedger": 1,
         "pendingPrAttachmentReclaims": 1,
         "phaseFailures": 3,
