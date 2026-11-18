@@ -20,7 +20,9 @@ export function landingPolicyDisplay(landing: BuildState['landing']): string {
 }
 
 /** Prospective display only: absent labels are unknown, never an empty set.
- * Follow reachable first matches; repeated excluded labels are unreachable. */
+ * Follow reachable first matches; an unlabeled rule ends exploration only when
+ * it matches or its changed paths are not yet decidable; repeated excluded
+ * labels are unreachable. */
 export function nodeLandingPolicyDisplay(
   state: BuildState,
   rules: readonly import('../../config/schema').LandingRule[],
@@ -52,6 +54,10 @@ export function nodeLandingPolicyDisplay(
       modes.add(mode([rule.label]))
       excluded.add(rule.label)
     } else {
+      // A default answer means the rule's path predicates fail on the complete
+      // recorded paths, so it is unreachable for every label set.
+      const own = evaluateLandingPolicy([rule], input, paths)
+      if ('default' in own.rule) continue
       modes.add(mode([]))
       return modes.size === 1
         ? ([...modes][0] as 'auto' | 'consent' | 'policy pending')
