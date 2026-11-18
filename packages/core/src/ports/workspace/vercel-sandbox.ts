@@ -20,6 +20,7 @@ import {
 } from '../../config/schema'
 import { distributionStampFor, resolveDistributionArchive } from './distribution-archive'
 import type {
+  ForgeRewrite,
   WorkspaceHandle,
   WorkspaceProvider,
   WorkspaceProvisionResult,
@@ -1234,6 +1235,10 @@ export interface VercelSandboxProviderOptions {
    * the branch does not exist. Default runs `git ls-remote` from `repo` on
    * the host. */
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
+  /** Host-side archive fallback, called only after the guest git transport
+   * refuses an exact archive push. It must create exactly that ref at that SHA,
+   * create-only, and the guest's exact readback still decides publication. */
+  refusedArchive?: (ref: string, sha: string) => Promise<void>
   /** Test seam: the distribution identity stamp the current archive source
    * delivers (package version plus remote-store protocol version plus the
    * sha256 digest of the archive bytes, see `readDistributionIdentityStamp`).
@@ -1400,7 +1405,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
               archiveRef,
             })
             if (available)
-              await gitRewrite(exec, false).archive({
+              await this.archiveTransport(exec).archive({
                 workspacePath: VERCEL_WORKSPACE_PATH,
                 ref: archiveRef,
                 sha: input.sha,
@@ -1428,7 +1433,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
               throw new Error(
                 `preservation could not confirm the checkout at ${VERCEL_WORKSPACE_PATH} (exit ${checkout.exitCode})`,
               )
-            const capability = gitRewrite(exec, false)
+            const capability = this.archiveTransport(exec)
             const remote = await this.remoteBranchHead(input.branch, 'preservation branch')
             const base =
               remote === null
@@ -2926,6 +2931,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo)
   }
 
+  /** Guest git transport whose refused archive pushes fall back to the host. */
+  private archiveTransport(exec: Exec): ForgeRewrite {
+    return gitRewrite(exec, false, undefined, this.options.refusedArchive)
+  }
+
   private async remoteBranchHead(branch: string, _label: string): Promise<string | null> {
     if (this.options.remoteBranchHead !== undefined) {
       const head = (await this.options.remoteBranchHead(branch)) ?? null
@@ -3095,7 +3105,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         { signal: this.operationSignal() },
       )
       if (input.expected !== undefined) {
-        const capability = gitRewrite(async (cmd) => {
+        const capability = this.archiveTransport(async (cmd) => {
           const result = await sandbox.runCommand({
             cmd: cmd[0]!,
             args: cmd.slice(1),
@@ -3110,7 +3120,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             stdout: await result.stdout!(),
             stderr: await result.stderr!(),
           }
-        }, false)
+        })
         for (const archive of input.archives ?? [])
           await capability.archive({ workspacePath: VERCEL_WORKSPACE_PATH, ...archive })
         return await capability.replace({
