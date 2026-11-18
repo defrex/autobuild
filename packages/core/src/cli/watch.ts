@@ -940,6 +940,19 @@ function recordSelection(preparing: Map<string, PreparingBuild>, event: Reposito
   return true
 }
 
+/**
+ * Discovery could not drain the repository journal, so it decided no
+ * membership this pass. Carries the read failure for reporting.
+ */
+class DiscoveryDrainError extends Error {
+  override readonly cause: unknown
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'DiscoveryDrainError'
+    this.cause = cause
+  }
+}
+
 /** Every slug an open preparation may yet create — the candidates
  * `resolveAnnouncedBuild` would check once it resolves. */
 function pendingSlugs(preparing: Map<string, PreparingBuild>, repo: string): Set<string> {
@@ -1430,13 +1443,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * every `createBuild`, so a listed build created after the watch's
        * position is by then either announced (tracked) or still preparing —
        * deferred until its resolution tracks it. Returns whether the journal
-       * was drained, so the pass need not read it again; an undrained journal
-       * leaves the listing to decide alone, as before announcements.
+       * was drained, so the pass need not read it again. A failed drain
+       * decides nothing: it throws `DiscoveryDrainError` before the listing
+       * is consulted, and a later pass retries.
        *
-       * Throws on a failed listing or seed read — never swallows it: the
+       * Throws on a failed listing, drain or seed read — never swallows it: the
        * poll loop's tick catches and reports the failure once on stderr, and
-       * the initial scan turns it into the friendly startup error. Streams discovered before
-       * the throw stay tracked, so the retry neither duplicates nor skips.
+       * the initial scan turns a listing or seed failure into the friendly
+       * startup error (a drain failure is reported and retried). Streams
+       * discovered before the throw stay tracked, so the retry neither
+       * duplicates nor skips.
        */
       const discoverBuilds = async (): Promise<boolean> => {
         const digests = await readBuildDigests(store, repo)
@@ -1448,10 +1464,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             await pollRepository(repositoryStream)
             drained = true
           } catch (error) {
-            // The journal's own poll reports it; discovery degrades to the
-            // listing alone rather than failing the pass or the startup.
+            // Without the journal, a listed build created after the position
+            // is indistinguishable from a pre-existing one, and baselining it
+            // would skip its history for good once its announcement arrives.
+            // Defer every membership decision to a pass that drains.
             if (isTerminalEventReadError(error)) throw error
             if (error instanceof ReducerValueIncompatibilityError) throw error
+            throw new DiscoveryDrainError(error)
           }
         }
         const pending = pendingSlugs(preparing, repo)
@@ -1727,7 +1746,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           } catch (error) {
             if (isTerminalEventReadError(error)) throw error
             allReadsOk = false
-            tickStreak.onFailure(error)
+            tickStreak.onFailure(error instanceof DiscoveryDrainError ? error.cause : error)
           }
         }
         for (const stream of [...streams.values()]) {
@@ -1806,8 +1825,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           await discoverBuilds()
         } catch (error) {
           if (isTerminalEventReadError(error)) throw error
-          const message = error instanceof Error ? error.message : String(error)
-          throw new Error(`could not list builds in this store (${message})`)
+          // An unreadable journal defers membership to the first pass that
+          // drains it; the loop retries, so startup need not fail.
+          if (error instanceof DiscoveryDrainError) tickStreak.onFailure(error.cause)
+          else {
+            const message = error instanceof Error ? error.message : String(error)
+            throw new Error(`could not list builds in this store (${message})`)
+          }
         }
       }
 
@@ -1920,8 +1944,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             step: async (): Promise<void> => {
               // Discovery drains the journal; a named --repository watch polls it.
               const repositoryStream = streams.get(REPO_STREAM_KEY)
-              if (slugs.length === 0) await discoverBuilds()
-              else if (repositoryStream?.kind === 'repo' && !stop)
+              if (slugs.length === 0) {
+                try {
+                  await discoverBuilds()
+                } catch (error) {
+                  throw error instanceof DiscoveryDrainError ? error.cause : error
+                }
+              } else if (repositoryStream?.kind === 'repo' && !stop)
                 await pollRepository(repositoryStream)
               await checkLiveness()
             },

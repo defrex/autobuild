@@ -3773,6 +3773,58 @@ describe('watch announced builds and resumed merge decisions (AUT-1221)', () => 
     expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
   })
 
+  test('a failed journal drain defers discovery; the announced build is delivered once', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    const read = store.getRepoEvents.bind(store)
+    let fail = false
+    store.getRepoEvents = async (...args: Parameters<typeof store.getRepoEvents>) => {
+      if (fail) {
+        fail = false
+        throw new Error('transient journal outage')
+      }
+      return read(...args)
+    }
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++calls !== 1) return
+        await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+        fail = true
+      },
+    })
+    await abWatch({ ...h.base, timeout: '4' })
+    // The failed pass baselined nothing; the next one announced the build
+    // from its first event.
+    expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
+    expect(h.err.join('\n')).toContain('transient journal outage')
+  })
+
+  test('a failed journal drain at startup is reported, not fatal; discovery retries', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    await seedRunningBuild(store, 'old')
+    const read = store.getRepoEvents.bind(store)
+    let failures = 0
+    store.getRepoEvents = async (...args: Parameters<typeof store.getRepoEvents>) => {
+      if (failures < 1) {
+        failures += 1
+        throw new Error('transient journal outage')
+      }
+      return read(...args)
+    }
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++calls === 2) await appendEscalation(store, 'old')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '3' })
+    expect(h.err.join('\n')).toContain('transient journal outage')
+    // The pre-existing build joined on the first draining pass, baselined.
+    expect(records(h.out).map((record) => record.id)).toEqual(['build:old:2'])
+  })
+
   test('discovery defers a listed build still in preparation; it is delivered once', async () => {
     const store = makeStore()
     await store.ensureRepo(REPO)
