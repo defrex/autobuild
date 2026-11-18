@@ -86,22 +86,25 @@ async function setup(
   } as never)
   await h.dispatcher.tick()
   const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'OPT')!
-  if (attempts.length > 0) {
-    const proposals = await Promise.all(
-      attempts.map(async (id) => ({
-        id: `p-${id}`,
-        ticket: (await h.tickets.get(id))!.ref,
-        title: `Change ${id}`,
-        strategy: `strategy ${id}`,
-      })),
-    )
-    await h.store.append(node.slug, {
-      actor: DISPATCHER,
-      type: 'optimization.attempts-proposed',
-      payload: { request: 'r1', proposals },
-    })
-  }
+  if (attempts.length > 0) await propose(h, node.slug, attempts)
   return { h, node }
+}
+
+/** Record the node's proposals naming the tickets `ids`. */
+async function propose(h: E2eHarness, node: string, ids: string[], request = 'r1') {
+  const proposals = await Promise.all(
+    ids.map(async (id) => ({
+      id: `p-${id}`,
+      ticket: (await h.tickets.get(id))!.ref,
+      title: `Change ${id}`,
+      strategy: `strategy ${id}`,
+    })),
+  )
+  await h.store.append(node, {
+    actor: DISPATCHER,
+    type: 'optimization.attempts-proposed',
+    payload: { request, proposals },
+  })
 }
 
 const slugOf = async (h: E2eHarness, id: string) =>
@@ -410,11 +413,15 @@ test('a child that is not an attempt lands at non-regression and escalates when 
 }, 30_000)
 
 test('an attempt that edits a harness path escalates instead of being measured', async (makeHarness) => {
-  const { h } = await setup(makeHarness as never, ['A1'], [], /./)
+  // `ab done` refuses an attempt's harness edit, so this head reaches its PR
+  // while A1 is still an ordinary child; the proposal that makes it an
+  // attempt comes after, and only the landing gate stands in the way.
+  const { h, node } = await setup(makeHarness as never, [], ['A1'], /./)
   try {
     await tick(h)
     const child = await slugOf(h, 'A1')
     await toPr(h, child)
+    await propose(h, node.slug, ['A1'])
     await tick(h)
     await tick(h)
     expect(await requests(h, child)).toEqual([])
