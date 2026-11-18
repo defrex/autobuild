@@ -189,6 +189,20 @@ change the objective but cannot add or remove the block, and a plain node never
 gains one. The marker rules and the objective schema are in
 [optimization nodes](references/optimization-nodes.md).
 
+**Optimization attempts.** A child is an attempt when its ticket came from one
+of the node's recorded proposals; it runs the ordinary work grammar. In every
+phase of an attempt, `ab context` writes a derived `objective.md` and a manifest
+`attempt` block: the purpose, the measurement command or judge panel, the
+harness, ε, any threshold and the node's current value. In implement, `ab done`
+refuses a contribution that changes a harness path, naming each path, before
+anything is deposited or published, so code review never sees it.
+`ab done --no-improvement "<reason>"` declines instead: it needs no commits,
+skips review, verification and measurement, completes the build
+`closed-unmerged`, and the dispatcher settles the attempt `declined` on the
+node with the reason as the ledger note. The flag is refused outside an
+attempt's implement phase. See
+[attempts](references/optimization-nodes.md#attempts).
+
 **Review severity is proportion to the spec.** Both review loops rate a
 finding by what the defect costs against the spec's acceptance criteria and
 the realistic operating conditions of the work under review, not by how

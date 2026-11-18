@@ -45,6 +45,14 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    - **Tests** — do the new tests exercise the seams this change created or
      moved? Would they fail if the change were wrong?
    - **Fit** — matches the codebase's idioms; no needless indirection.
+   - **Optimization attempts** — when the manifest has an `attempt` block,
+     read the attempt's `objective.md` (the block's `path`) and judge the
+     change against the purpose, not only the score. The measurements in
+     implement notes are the implementer's claims, not the gate: the kernel
+     measures before anything lands. A change gaming the spirit of the test,
+     by changing what it measures, overfitting the eval or special-casing the
+     benchmark, is a blocking finding whatever the number did. So is a
+     regression in behavior the purpose protects.
 4. Write `$AB_CONTEXT_DIR/code-review.md`, then exactly one verdict:
 
    ```
