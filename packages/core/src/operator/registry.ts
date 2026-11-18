@@ -615,7 +615,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.list',
     'List one repository’s builds, newest first, with effective status derived from the build log.',
     buildListInput,
-    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, durable-event progress, and any ticket wait (`wait` with its state and tickets; `waitOnly` when the wait is the only open escalation).',
+    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, durable-event progress, any ticket wait (`wait` with its state and tickets; `waitOnly` when the wait is the only open escalation), and an optimization node’s objective progress (`objective`).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildListInput>
       return listOperatorBuilds({
@@ -630,7 +630,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.get',
     'Show detailed state for one build: open escalations, verify progress, PR lifecycle, lease health, and the dashboard row.',
     buildDetailInput,
-    '{detail, dashboardRow}: the full build detail projection and the dashboard row a terminal dashboard would render (null when the build has no dashboard row).',
+    '{detail, dashboardRow}: the full build detail projection and the dashboard row a terminal dashboard would render (null when the build has no dashboard row). An optimization node carries its objective progress as `detail.objective` and `dashboardRow.objectiveRow`.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildDetailInput>
       return getOperatorBuild({

@@ -3,6 +3,7 @@
 import { formatObjective, type ObjectiveChanges } from '../objective'
 import type { ObjectiveView } from '../operator/optimization'
 import { stringFlag, type ParsedArgs } from './args'
+import { objectiveNumber } from './dashboard/objective-row'
 
 export const OBJECTIVE_USAGE =
   'usage: ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] [--json] [--store <ref>]'
@@ -54,7 +55,7 @@ export function objectiveChangesFromFlags(parsed: ParsedArgs): Partial<Objective
   return changes
 }
 
-const value = (n: number | undefined) => (n === undefined ? 'not measured' : String(+n.toFixed(6)))
+const value = (n: number | undefined) => (n === undefined ? 'not measured' : objectiveNumber(n))
 
 export function renderObjective(view: ObjectiveView): string[] {
   const { progress } = view
