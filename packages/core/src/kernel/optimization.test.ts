@@ -13,6 +13,7 @@ import {
   optimizationElapsedHours,
   optimizationLedgerReducer,
   optimizationReducer,
+  optimizationRejection,
   optimizationStopEligibility,
   type OptimizationState,
 } from './optimization'
@@ -300,6 +301,125 @@ describe('optimization selectors', () => {
   })
 })
 
+describe('pending rejections', () => {
+  test('a non-accepted settlement transfers the attempt from inFlight until its ticket moves', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective(), 1)
+      .propose('r', ['a', 'b', 'c'])
+      .settle('a', 'no-improvement', { revision: 1, baseline: 50, candidate: 49.9, delta: 0.1 })
+      .settle('b', 'accepted', { revision: 1, baseline: 50, candidate: 40, delta: 10 })
+    let state = digest(builder)
+    expect(state.inFlight.map((entry) => entry.proposal)).toEqual(['c'])
+    expect(state.rejections).toEqual([
+      {
+        proposal: 'a',
+        ticket: { source: 'file', id: 'T-a' },
+        build: 'attempt-a',
+        outcome: 'no-improvement',
+      },
+    ])
+    expect(optimizationRejection(state, { source: 'file', id: 'T-a' })?.proposal).toBe('a')
+    expect(optimizationRejection(state, { source: 'file', id: 'T-b' })).toBeUndefined()
+    builder.settle('a', 'aborted')
+    expect(digest(builder).rejections).toHaveLength(1)
+    builder.ticketRejected('a')
+    state = digest(builder)
+    expect(state.rejections).toEqual([])
+    expect(optimizationRejection(state, { source: 'file', id: 'T-a' })).toBeUndefined()
+  })
+
+  test('a settlement for a proposal that was not in flight adds no entry', () => {
+    const state = digest(
+      new OptimizationLogBuilder()
+        .accept(commandObjective(), 1)
+        .propose('r', ['a'])
+        .settle('ghost', 'stopped'),
+    )
+    expect(state.rejections).toEqual([])
+    expect(state.inFlight.map((entry) => entry.proposal)).toEqual(['a'])
+  })
+
+  test('every non-accepted outcome is pending, and entries survive a ruler change', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective(), 1)
+      .propose('r', ['a', 'b', 'c', 'd'])
+      .settle('a', 'no-improvement', { revision: 1, baseline: 50, candidate: 50, delta: 0 })
+      .settle('b', 'declined')
+      .settle('c', 'stopped')
+      .settle('d', 'aborted')
+      .accept(
+        commandObjective({
+          metric: {
+            kind: 'command',
+            command: 'bun bench/other.ts',
+            direction: 'minimize',
+            samples: 7,
+            harness: ['bench/search/**'],
+          },
+        }),
+        2,
+      )
+    expect(digest(builder).rejections.map((entry) => entry.outcome)).toEqual([
+      'no-improvement',
+      'declined',
+      'stopped',
+      'aborted',
+    ])
+  })
+
+  test('admission counts pending rejections as occupied slots', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective({ proposer: { concurrency: 2 } }), 1)
+      .propose('r', ['a', 'b'])
+      .settle('a', 'declined')
+    expect(optimizationAdmission(digest(builder), at(0)).slots).toBe(0)
+    builder.ticketRejected('a')
+    expect(optimizationAdmission(digest(builder), at(0)).slots).toBe(1)
+  })
+
+  test('inFlight plus rejections never exceeds concurrency under admission', () => {
+    // A seeded walk over proposals, settlements and delayed or failing moves.
+    let seed = 7
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+      return seed / 2_147_483_648
+    }
+    const concurrency = 3
+    const builder = new OptimizationLogBuilder().accept(
+      commandObjective({ proposer: { concurrency } }),
+      1,
+    )
+    let next = 0
+    for (let step = 0; step < 400; step += 1) {
+      const state = digest(builder)
+      expect(state.inFlight.length + state.rejections.length).toBeLessThanOrEqual(concurrency)
+      const roll = random()
+      if (roll < 0.35) {
+        const slots = optimizationAdmission(state, at(0)).slots
+        if (slots > 0)
+          builder.propose(
+            `r${step}`,
+            Array.from({ length: Math.ceil(random() * slots) }, () => `p${next++}`),
+          )
+      } else if (roll < 0.7 && state.inFlight.length > 0) {
+        const attempt = state.inFlight[Math.floor(random() * state.inFlight.length)]!
+        const outcomes = ['declined', 'stopped', 'aborted', 'accepted'] as const
+        const outcome = outcomes[Math.floor(random() * outcomes.length)]!
+        builder.settle(
+          attempt.proposal,
+          outcome,
+          outcome === 'accepted'
+            ? { revision: 1, baseline: 50, candidate: 40, delta: 10 }
+            : undefined,
+        )
+      } else if (roll < 0.8 && state.rejections.length > 0) {
+        // A move that succeeds; the remaining rolls model a tracker refusing it.
+        builder.ticketRejected(state.rejections[0]!.proposal)
+      }
+    }
+  })
+})
+
 describe('optimization ledger', () => {
   test('one entry per settlement, with strategy, outcome, delta and note', () => {
     const ledger = optimizationLedgerReducer.reduce(optimizationLog())
@@ -358,4 +478,9 @@ describe('optimization ledger', () => {
 test('the stop and admission inputs and the ledger have bounded read cost', async () => {
   const { optimizationReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationReadBudget()
+}, 120_000)
+
+test('the landing gate and the rejected-role sweep have bounded read cost', async () => {
+  const { optimizationLandingReadBudget } = await import('../testing/reduced-read-budget')
+  await optimizationLandingReadBudget()
 }, 120_000)

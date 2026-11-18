@@ -350,6 +350,9 @@ export const buildDigestWireSchema = z.object({
   readinessChangeSeq: z.number().int().positive().optional(),
   reclaimPending: z.literal(true).optional(),
   executionOpen: z.literal(true).optional(),
+  // Additive; an older service omits it, and its clients see no pending
+  // rejection until the service deploys. Clients never read node logs instead.
+  rejectionsPending: z.literal(true).optional(),
   // Additive ticket-wait members; an older service omits both, and its
   // clients then see no pending request and no open wait to release.
   waitPending: z.literal(true).optional(),

@@ -20,6 +20,7 @@ import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { advanceOptimization, isOptimizationEvent, type OptimizationState } from './optimization'
+import { advanceLandingMeasurement, type LandingMeasurementState } from './landing-measurement'
 import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
 import { reconcileRewriteHead } from './reconcile-head'
 /**
@@ -312,6 +313,9 @@ export interface BuildState {
   /** An optimization node's bounded digest (SPEC §15.5). Present exactly
    * when the node's objective was accepted. */
   optimization?: OptimizationState
+  /** A child of an optimization node: its latest landing measurement request
+   * and result (SPEC §15.7). Absent until the first request. */
+  landingMeasurement?: LandingMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -562,6 +566,7 @@ export interface BuildAcc {
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
   optimization?: OptimizationState
+  landingMeasurement?: LandingMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -645,7 +650,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 41
+export const BUILD_REDUCER_VERSION = 42
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -838,6 +843,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     }
     if (isOptimizationEvent(event))
       acc.optimization = advanceOptimization(acc.optimization, [event])
+    if (event.type === 'attempt.measurement-requested' || event.type === 'attempt.measured')
+      acc.landingMeasurement = advanceLandingMeasurement(acc.landingMeasurement, event)
     advanceVerifyStage(acc.verifyStage, event)
     if (event.type === 'verify.cancelled') {
       for (const escalation of [...openEscalations.values(), ...answeredEscalations]) {
@@ -1789,6 +1796,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.headPaths !== undefined ? { headPaths: structuredClone(acc.headPaths) } : {}),
     nodeRestack: acc.nodeRestack,
     ...(acc.optimization !== undefined ? { optimization: structuredClone(acc.optimization) } : {}),
+    ...(acc.landingMeasurement !== undefined
+      ? { landingMeasurement: structuredClone(acc.landingMeasurement) }
+      : {}),
     status,
     ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),
     outcome: acc.outcome,
