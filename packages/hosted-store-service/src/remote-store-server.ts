@@ -30,6 +30,11 @@ import {
   resolveReducerValue,
 } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
+import {
+  judgeLifecycleFacts,
+  judgeWriteRefusal,
+  type BuildDelegationFacts,
+} from '@defrex/autobuild/remote-store'
 import { randomBytes } from 'node:crypto'
 import {
   createMachineAuth,
@@ -682,6 +687,44 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           deny()
       }
     }
+  }
+
+  /**
+   * A `build-judge` grant is write-only (SPEC §13.1.1): it may append exactly
+   * one `panel.preferred` for its own build, panel, judge and session while
+   * that session is open. Every read, including reducer values, artifacts,
+   * streams and build listings, is refused before any other route logic.
+   */
+  async function authorizeJudgeRequest(
+    req: Request,
+    segments: string[],
+    grant: Extract<MachinePrincipal, { kind: 'delegated' }>['delegation'],
+  ): Promise<void> {
+    if (req.method === 'GET' || req.method === 'HEAD')
+      throw new MachineAuthError(403, 'judge credential cannot read')
+    if (
+      req.method !== 'POST' ||
+      segments.length !== 3 ||
+      segments[0] !== 'builds' ||
+      segments[1] !== grant.id ||
+      segments[2] !== 'events'
+    )
+      throw new MachineAuthError(403, 'judge credential may only record its preference')
+    let body: unknown
+    try {
+      body = await req.clone().json()
+    } catch {
+      throw new RequestError(400, 'validation', 'invalid JSON')
+    }
+    const facts = (
+      await store.getReducerValue({ kind: 'build', slug: grant.id }, { reducer: 'buildDelegation' })
+    ).value as unknown as BuildDelegationFacts
+    const refusal = judgeWriteRefusal(
+      { build: grant.id, panel: grant.panel!, judge: grant.judge!, session: grant.session! },
+      body as { type?: unknown; actor?: unknown; payload?: unknown },
+      judgeLifecycleFacts(facts, grant.session!),
+    )
+    if (refusal !== undefined) throw new MachineAuthError(403, refusal)
   }
 
   // Project credentials retain runner authority; delegated phase claims also
@@ -1577,6 +1620,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.join('/') === 'credentials/delegate' && req.method === 'POST') {
       if (!auth || !opts.secret) return fail(404, 'not-found', 'credential issuance unavailable')
       return createDelegationHandler({ store, auth, secret: opts.secret, clock })(req)
+    }
+    if (['repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
+      // Every such route authenticates; a judge grant is decided here first.
+      const caller = await principal(req)
+      if (caller?.kind === 'delegated' && caller.delegation.kind === 'build-judge')
+        await authorizeJudgeRequest(req, segments, caller.delegation)
     }
     if (segments[0] === 'streams') {
       return globalStreamRoute(req, url, segments)
