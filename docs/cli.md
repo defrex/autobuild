@@ -49,9 +49,10 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `verdict` — Complete a review or verification phase.
 - `escalate` — Park the build with a question for external judgment.
 - `wait-on` — Park the build on other tickets without holding a slot; it ends when the tickets complete or an operator answers.
+- `propose` — Complete an optimization node's propose phase with typed proposals, or none with a reason; the dispatcher files them as attempts.
 - `harvest` — Inspect or drive observation harvesting.
 
-Phase commands (`context`, `done`, `verdict`) use runner-scoped session authority: the runner starts phase agents, never your operator agent. See [Skills](skills.md).
+Phase commands (`context`, `done`, `verdict`, `propose`) use runner-scoped session authority: the runner starts phase agents, never your operator agent. See [Skills](skills.md).
 
 
 Permanent hosted data removal is available on the web app's Projects page to
