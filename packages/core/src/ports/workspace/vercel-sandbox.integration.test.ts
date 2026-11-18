@@ -84,6 +84,14 @@ class FakeSandbox implements VercelSandboxHandle {
   bunVersion: string | undefined = VERCEL_BUN_VERSION
   /** The version a pinned `npm install bun@X` actually yields; defaults to X. */
   bunInstallVersion: string | undefined
+  /** The commit the guest checkout's HEAD is on. Creation sets it to the
+   * source revision and `git checkout -B` moves it; a sandbox the test never
+   * created starts at SHA. */
+  head: string | undefined = SHA
+  /** When set, the build branch ref resolves here instead of HEAD. */
+  branchHead: string | undefined
+  /** When set, `git checkout -B` lands HEAD here instead of the named commit. */
+  checkoutLands: string | undefined
   /** Whether the guest holds a git checkout; `undefined` follows the
    * provisioned marker, `false` models a half-provisioned VM. */
   checkout: boolean | undefined
@@ -206,6 +214,19 @@ class FakeSandbox implements VercelSandboxHandle {
       this.distributionVersion = (params.args as string[])![3] as string
       return { exitCode: 0 }
     }
+    if (params.cmd === 'git' && (params.args as string[])?.[0] === 'checkout') {
+      const args = params.args as string[]
+      if (args[1] === '-B') this.head = this.checkoutLands ?? args[3]
+    }
+    if (
+      params.cmd === 'git' &&
+      (params.args as string[])?.[0] === 'rev-parse' &&
+      (params.args as string[])?.[1] === 'HEAD^{commit}'
+    ) {
+      const head = this.head
+      if (head === undefined) return { exitCode: 128, stderr: async () => 'no checkout' }
+      return { exitCode: 0, stdout: async () => `${head}\n${this.branchHead ?? head}\n` }
+    }
     if (params.cmd === 'test' && (params.args as string[])?.[1] === `${VERCEL_WORKSPACE_PATH}/.git`)
       return { exitCode: (this.checkout ?? this.provisioned) ? 0 : 1 }
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
@@ -299,6 +320,8 @@ function harness(
     /** Extra forwarded `environmentVariables` names. */
     forwarded?: string[]
     publishedSha?: string | null | (() => string | null)
+    /** The target branch head `ls-remote refs/heads/main` reports; SHA by default. */
+    mainSha?: string | (() => string)
     existingSha?: string | null
     provisionRuntimes?: boolean
     runtimeReferences?: () => ReturnType<typeof runtimeReferenceFixtures>
@@ -360,6 +383,7 @@ function harness(
       created = true
       creates += 1
       createInput = input
+      sandbox.head = (input.source as { revision?: string } | undefined)?.revision
       snapshotLists.set(input.name, sandbox.snapshots)
       return sandbox
     },
@@ -384,7 +408,11 @@ function harness(
       if (buildBranch) buildBranchLookups += 1
       const sha =
         ref === 'refs/heads/main'
-          ? SHA
+          ? options.mainSha === undefined
+            ? SHA
+            : typeof options.mainSha === 'function'
+              ? options.mainSha()
+              : options.mainSha
           : buildBranch && buildBranchLookups === 1
             ? (options.existingSha ?? null)
             : buildBranch
@@ -686,6 +714,12 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.slice(commandCount)).toEqual([
       { cmd: 'test', args: ['-f', VERCEL_PROVISIONED_MARKER] },
       {
+        cmd: 'git',
+        args: ['rev-parse', 'HEAD^{commit}', 'refs/heads/ab/remote-build^{commit}'],
+        cwd: VERCEL_WORKSPACE_PATH,
+        signal: expect.any(AbortSignal),
+      },
+      {
         cmd: 'cat',
         args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
         signal: expect.any(AbortSignal),
@@ -705,6 +739,78 @@ describe('VercelSandboxProvider', () => {
     expect(await execution.completion).toEqual({ exitCode: 0 })
     await h.provider.release(reused)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('a retried provisioning that reuses a completed sandbox records its checked-out commit, not a target that moved (AUT-1252)', async () => {
+    const before = 'a'.repeat(40)
+    const after = 'b'.repeat(40)
+    let current = before
+    const h = harness({ mainSha: () => current, publishedSha: null })
+    const opts = { repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }
+    // The first attempt completes the sandbox and then fails before any
+    // provisioning fact is recorded; its result is simply discarded.
+    await h.provider.provision(opts)
+    expect(h.sandbox.head).toBe(before)
+    current = after
+    const commandsBefore = h.sandbox.commands.length
+    const stopsBefore = h.sandbox.stops
+
+    const reused = await h.provider.provision(opts)
+
+    expect(h.creates).toBe(1)
+    expect(reused.base).toEqual({ source: 'remote', sha: before })
+    expect(reused.base.sha).toBe(h.sandbox.head!)
+    const since = h.sandbox.commands.slice(commandsBefore)
+    expect(
+      since.findIndex(
+        (command) => command.cmd === 'git' && (command.args as string[])[0] === 'rev-parse',
+      ),
+    ).toBe(1)
+    expect(h.sandbox.stops).toBe(stopsBefore + 1)
+  })
+
+  test('fresh provisioning records the commit it checked out even when the target moves after it is read', async () => {
+    const before = 'a'.repeat(40)
+    const after = 'b'.repeat(40)
+    let reads = 0
+    const h = harness({ mainSha: () => (++reads === 1 ? before : after) })
+
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    expect((h.createInput?.source as { revision: string }).revision).toBe(before)
+    expect(workspace.base).toEqual({ source: 'remote', sha: before })
+    expect(h.sandbox.head).toBe(before)
+  })
+
+  test('a reused sandbox whose HEAD and build branch disagree is cleanup-required', async () => {
+    const h = harness({ publishedSha: null })
+    const opts = { repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }
+    await h.provider.provision(opts)
+    h.sandbox.branchHead = 'c'.repeat(40)
+
+    const reused = h.provider.provision(opts)
+
+    await expect(reused).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+    await expect(reused).rejects.toThrow('disagrees with ab/remote-build')
+  })
+
+  test('fresh checkout that lands off the selected base fails closed', async () => {
+    const h = harness()
+    h.sandbox.checkoutLands = 'c'.repeat(40)
+
+    const provisioned = h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    await expect(provisioned).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
   })
 
   test('reinstalls the distribution on a reused sandbox whose marker version is older', async () => {
@@ -733,6 +839,7 @@ describe('VercelSandboxProvider', () => {
     const refreshed = h.sandbox.commands.slice(commandsBefore)
     expect(refreshed.map((command) => command.cmd)).toEqual([
       'test',
+      'git',
       'cat',
       VERCEL_BUN_EXECUTABLE,
       'mkdir',
@@ -771,6 +878,7 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.writes).toHaveLength(2)
     expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
       'test',
+      'git',
       'cat',
       VERCEL_BUN_EXECUTABLE,
       'mkdir',
@@ -1396,6 +1504,7 @@ describe('VercelSandboxProvider', () => {
     expect(second.stops).toBe(1)
     expect(second.commands.map((command) => command.cmd)).toEqual([
       'sh',
+      'git',
       'git',
       'git',
       'git',
@@ -2338,6 +2447,7 @@ describe('VercelSandboxProvider', () => {
 
     expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
       'test',
+      'git',
       'cat',
       VERCEL_BUN_EXECUTABLE,
       'npm',
