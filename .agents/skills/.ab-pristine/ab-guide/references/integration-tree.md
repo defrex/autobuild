@@ -184,6 +184,48 @@ aborting closes admission and returns the ticket to triage (or ready with
 `ab abort --to ready`); already claimed
 children retain their frozen destination.
 
+### Optimization nodes
+
+A node becomes an optimization node when its spec carries exactly one fenced
+block whose info string is exactly `autobuild-objective`, holding a TOML
+objective: a purpose, a command metric with a direction or a judge panel, a
+harness of path selectors, an epsilon, and a budget of `maxAttempts`,
+`maxHours` or both. A threshold and a plateau are optional; the stop mode
+defaults to `abort` and proposer concurrency to 1. The ticket's kind stays
+`node`; no label or state marks it. A heading named "Objective", a `toml` block,
+prose, inline code, a fence nested inside another fence (a Markdown example of
+the block) and a block inside an HTML comment do not count. See
+[optimization nodes](optimization-nodes.md) for a valid example, the complete
+schema and the scanning rules.
+
+The dispatcher checks the block when it prepares a claimed ticket, before spec
+authoring. Two or more blocks, an invalid block, a missing budget limit, a
+ticket source without `[tickets].rejectedState`
+or a work ticket carrying the block refuse the ticket: it returns to triage
+with a comment naming every reason, and no build is created. A refused node
+never opens as a plain node. Fix the block, or file the ticket with
+`--kind node`, and move it to ready again. An accepted node records its
+objective and pins its harness at the opening commit.
+
+`ab ticket tree` labels an optimization node `[node, optimization]`, and status
+labels its build `optimization node`. `ab objective <node>` shows the effective
+objective and its progress, and its flags revise the stopping, budget and
+epsilon knobs; see [quick revision](optimization-nodes.md#revisions). A quick
+revision is never written back to the ticket, so `ab ticket show` prints the
+effective objective and marks each field that differs from the ticket's block
+`(revised)`, or every field when the ticket's block was removed or made invalid.
+
+Progress is derived from the node's log: starting value and noise spread,
+current and best values, attempts filed, accepted, rejected and running, the
+plateau counter, elapsed hours and attempts against the budget, and stop
+eligibility by threshold, plateau and budget. A child is an attempt only when
+its ticket was created from a recorded proposal of the node; a repair child
+filed by hand counts toward neither budget nor plateau. Rejected attempts are
+no-improvement, declined, stopped and aborted settlements; only no-improvement
+and declined advance the plateau. Stop eligibility is reported, not acted on:
+reading progress never stops the node. See
+[progress](optimization-nodes.md#progress) for the full definitions.
+
 ### Node verification context
 
 In node `verify:*` context, `nodeVerification` in the manifest identifies the
@@ -363,6 +405,9 @@ A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
 spec and its publication is confirmed.
+A revision of an optimization node may change its `autobuild-objective` block
+but cannot remove it, and a revision of a plain node or a leaf cannot add one;
+both refusals record nothing.
 
 
 

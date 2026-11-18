@@ -4506,3 +4506,173 @@ export async function hookReadBudget(): Promise<void> {
   }
   expect(measured[1]).toEqual(measured[0])
 }
+
+/**
+ * Optimization node reads (SPEC §15.5, RFC 0005 §11.2). For a node with 10
+ * and with 10,000 settled attempts, each attempt a build with its own log:
+ *
+ * 1. the stop and admission inputs come from the node's reduced digest in
+ *    BuildState: an identical request vector and a digest of the same size at
+ *    both histories;
+ * 2. idle reads read zero event rows;
+ * 3. one new `attempt.settled` costs exactly its own node row;
+ * 4. the ledger advances with only the new node rows, through the store and
+ *    through a fresh repository view over it; and
+ * 5. no measured read ever touches an attempt build's log.
+ */
+export async function optimizationReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { commandObjective } = await import('../kernel/generators/optimization-log')
+  const { optimizationAdmission, optimizationStopEligibility } = await import(
+    '../kernel/optimization'
+  )
+  const { readOptimizationLedger } = await import('../store/reduced-reads')
+  const repo = '/budget/optimization'
+  const node = 'opt-node'
+  const sha = (n: number) => n.toString(16).padStart(40, '0')
+  const now = new Date('2026-11-18T00:00:00Z')
+  const measured: { vector: Record<string, number>; digest: number }[] = []
+  for (const attempts of [10, 10_000]) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await store.createBuild({ slug: node, repo, branch: 'ab-node/opt-node' })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: 'NODE' }, baseBranch: 'main', kind: 'node' },
+    })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: commandObjective({ budget: { maxAttempts: 20_000 } }),
+        revision: 1,
+        harnessPin: sha(1),
+        specRev: 0,
+      },
+    })
+    await store.append(node, { actor: DISPATCHER, type: 'node.opened', payload: { sha: sha(1) } })
+    await store.append(node, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: { revision: 1, head: sha(1), harnessPin: sha(1), samples: 7, median: 50, spread: 1 },
+    })
+    const proposal = (i: number) => ({
+      id: `p${i}`,
+      ticket: { source: 'fake', id: `A-${i}` },
+      title: `Attempt ${i}`,
+      strategy: `strategy ${i}`,
+    })
+    for (let batch = 0; batch < attempts; batch += 4) {
+      const ids = Array.from({ length: Math.min(4, attempts - batch) }, (_, k) => batch + k)
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: { request: `r${batch}`, proposals: ids.map(proposal) },
+      })
+      for (const i of ids) {
+        const slug = `attempt-${i}`
+        await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { repo, ticket: proposal(i).ticket, baseBranch: 'ab-node/opt-node' },
+        })
+        const accepted = i % 50 === 0
+        const delta = accepted ? 1 : (i % 3) * 0.1
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'attempt.measured',
+          payload: {
+            request: `m${i}`,
+            candidate: sha(i + 2),
+            baseline: sha(1),
+            harnessPin: sha(1),
+            revision: 1,
+            samples: 7,
+            medians: { candidate: 50 - delta, baseline: 50 },
+            delta,
+            decision: accepted ? 'improved' : 'no-improvement',
+          },
+        })
+        await store.append(node, {
+          actor: DISPATCHER,
+          type: 'attempt.settled',
+          payload: {
+            attempt: { proposal: `p${i}`, ticket: proposal(i).ticket, build: slug },
+            outcome: accepted ? 'accepted' : i % 2 ? 'declined' : 'no-improvement',
+            ...(accepted || i % 2 === 0
+              ? { measurement: { revision: 1, baseline: 50, candidate: 50 - delta, delta } }
+              : {}),
+          },
+        })
+      }
+    }
+    // Warm-up: each reduced key is computed once and saved.
+    await readBuildFacts(store, node)
+    await readOptimizationLedger(store, node)
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    const attemptRows = () =>
+      [...rows.buildRowsBySlug].filter(([slug]) => slug.startsWith('attempt-'))
+    try {
+      // 1. The stop and admission inputs: one reduced read, from the digest.
+      const state = (await readBuildFacts(store, node)).value.state
+      const digest = state.optimization!
+      expect(digest.attempts.filed).toBe(attempts)
+      expect(digest.inFlight).toEqual([])
+      optimizationStopEligibility(digest, now)
+      optimizationAdmission(digest, now)
+      measured.push({ vector: requests.vector(), digest: JSON.stringify(digest).length })
+      expect(rows.buildRows).toBe(0)
+
+      // 2. Idle reads read zero event rows.
+      rows.reset()
+      for (let i = 0; i < 5; i++) {
+        const idle = (await readBuildFacts(store, node)).value.state.optimization!
+        optimizationAdmission(idle, now)
+        await readOptimizationLedger(store, node)
+      }
+      expect(rows.buildRows).toBe(0)
+
+      // 3. One new settlement costs exactly its own node row.
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: { request: 'last', proposals: [proposal(attempts)] },
+      })
+      await readBuildFacts(store, node)
+      await readOptimizationLedger(store, node)
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: { proposal: `p${attempts}`, ticket: proposal(attempts).ticket },
+          outcome: 'declined',
+        },
+      })
+      rows.reset()
+      const advanced = (await readBuildFacts(store, node)).value.state.optimization!
+      expect(advanced.attempts.filed).toBe(attempts + 1)
+      expect(rows.buildRowsBySlug.get(node)).toBe(1)
+
+      // 4. The ledger advances with only the new node row, also through a
+      // fresh repository view over the same store.
+      rows.reset()
+      const ledger = (await readOptimizationLedger(store, node)).value
+      expect(ledger.entries).toHaveLength(attempts + 1)
+      expect(rows.buildRowsBySlug.get(node)).toBe(1)
+      rows.reset()
+      const view = new RepoViewStore(store, { repo })
+      expect((await readOptimizationLedger(view, node)).value.entries).toHaveLength(attempts + 1)
+      expect(rows.buildRows).toBe(0)
+
+      // 5. No attempt log was read at any point.
+      expect(attemptRows()).toEqual([])
+    } finally {
+      requests.restore()
+    }
+  }
+  expect(measured[1]!.vector).toEqual(measured[0]!.vector)
+  expect(Math.abs(measured[1]!.digest - measured[0]!.digest)).toBeLessThanOrEqual(16)
+}

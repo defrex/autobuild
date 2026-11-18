@@ -4,6 +4,7 @@ import { validateTicketUpdate } from './update'
 import { refuseUnsupportedIssueLinks } from './issue-links'
 import { refuseUnsupportedPriority, withoutUnsupportedPriority } from './priority'
 import { refuseUnsupportedAssignees } from './assignees'
+import { objectiveBlocks } from '../../objective'
 
 /** Sources without a capability cannot present that capability's fields. */
 export function normalizeTicket(
@@ -171,6 +172,9 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
 
 export interface TicketTreeEntry {
   ticket: Ticket
+  /** A node ticket whose body carries exactly one `autobuild-objective`
+   * block: it opens as an optimization node. A pure body read. */
+  optimization?: true
   children: TicketTreeEntry[]
 }
 export function projectTicketTree(
@@ -178,10 +182,19 @@ export function projectTicketTree(
   root: string,
 ): { root: string; children: TicketTreeEntry[] } {
   const entries = new Map(
-    tickets.map((ticket) => [
-      ticket.ref.id,
-      { ticket: normalizeTicket(ticket), children: [] as TicketTreeEntry[] },
-    ]),
+    tickets.map((ticket): [string, TicketTreeEntry] => {
+      const normalized = normalizeTicket(ticket)
+      return [
+        ticket.ref.id,
+        {
+          ticket: normalized,
+          ...(normalized.kind === 'node' && objectiveBlocks(normalized.body).length === 1
+            ? { optimization: true as const }
+            : {}),
+          children: [],
+        },
+      ]
+    }),
   )
   const children: TicketTreeEntry[] = []
   for (const entry of [...entries.values()].sort((a, b) =>
