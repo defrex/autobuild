@@ -953,7 +953,8 @@ export const ticketsInputSchema = z.strictObject({
     .optional(),
   /** State that holds considered-and-declined work — the rejected role.
    * Optional with no default. A ticket in it never resolves a blocker and
-   * never keeps a node incomplete. */
+   * never keeps a node incomplete. The dispatcher moves a ticket into it only
+   * for an optimization attempt that settles other than `accepted`. */
   rejectedState: z
     .string()
     .min(1)
@@ -987,7 +988,7 @@ documentFields(ticketsInputSchema, {
   backlogState:
     'State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.',
   rejectedState:
-    'State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it.',
+    'State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it, and the dispatcher moves each attempt that settles other than accepted into it.',
   dir: 'Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.',
 })
 documentSchema(ticketsInputSchema, {
@@ -1069,7 +1070,8 @@ const DISPATCHER_ROLES = [
 ] as const
 
 /** The backlog and rejected roles must hold their own states: the dispatcher
- * never claims from, moves into, or files proposals into them, whatever the
+ * never claims from, moves into, or files proposals into them (except that a
+ * settled, non-accepted optimization attempt moves into rejected), whatever the
  * other lifecycle names say, and the two may not share a state. */
 function refuseOptionalRoleOverlap(tickets: TicketsConfig, ctx: z.RefinementCtx): void {
   const names = ticketLifecycle({

@@ -33,6 +33,7 @@ import {
 import { buildRegistry } from '../operator/registry'
 import { expect } from 'bun:test'
 import type { BuildStore } from '../store/types'
+import type { TicketRef } from '../ontology'
 import { KERNEL, DISPATCHER, humanActor } from '../events/envelope'
 import {
   readBuildFacts,
@@ -4264,4 +4265,240 @@ export async function optimizationReadBudget(): Promise<void> {
   }
   expect(measured[1]!.vector).toEqual(measured[0]!.vector)
   expect(Math.abs(measured[1]!.digest - measured[0]!.digest)).toBeLessThanOrEqual(16)
+}
+
+/**
+ * The measurement landing gate and the rejected-role sweep (AUT-1226) have
+ * bounded read cost, at 10 and at 1,000 settled attempts plus 2,000 terminal
+ * builds in the repository, each poll from a fresh dispatcher:
+ *
+ * 1. with no pending rejection, the sweep makes zero store requests;
+ * 2. with pending rejections and a tracker that refuses the move, every poll
+ *    costs the same requests, never lists builds or reads repository digests,
+ *    reads at most `concurrency` build facts and zero event rows; the pending
+ *    entries stay within `concurrency` and admission reports no slot;
+ * 3. once the move succeeds the entry clears and its slot returns;
+ * 4. the gate's input reads (node and child reduced facts) read zero event
+ *    rows while nothing changes, and never list builds;
+ * 5. a completed node without pending rejections leaves the janitor's work
+ *    set; a late settlement re-arms it through its incremental digest, which
+ *    reads only the new row, never the node's history.
+ */
+export async function optimizationLandingReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { commandObjective } = await import('../kernel/generators/optimization-log')
+  const { optimizationAdmission } = await import('../kernel/optimization')
+  const { isWorkDigest } = await import('../processes/repo-view')
+  const repo = '/budget/optimization-landing'
+  const node = 'opt-node'
+  const concurrency = 3
+  const sha = 'a'.repeat(40)
+  const config = parseConfig(
+    '[tickets]\nsource = "file"\nreadyState = "Ready"\nrejectedState = "Rejected"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n',
+  )
+  const vectors: Record<string, Record<string, number>[]>[] = []
+  for (const history of [10, 1_000]) {
+    const store = new MemoryBuildStore()
+    const tickets = new FakeTicketSource()
+    await store.ensureRepo(repo)
+    const created = async (slug: string, kind?: 'node', target?: string) => {
+      await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo,
+          ticket: { source: 'fake', id: slug.toUpperCase() },
+          baseBranch: 'main',
+          ...(kind ? { kind } : {}),
+          ...(target ? { target: { build: target, ticket: { source: 'fake', id: 'NODE' } } } : {}),
+        },
+      })
+    }
+    const completed = (slug: string) =>
+      store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'abandoned' },
+      })
+    for (let i = 0; i < 2 * history; i++) {
+      await created(`old-${i}`)
+      await completed(`old-${i}`)
+    }
+    await created(node, 'node')
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: commandObjective({
+          budget: { maxAttempts: 100_000 },
+          proposer: { concurrency },
+        }),
+        revision: 1,
+        harnessPin: sha,
+        specRev: 0,
+      },
+    })
+    const propose = async (id: string) => {
+      const ticket = await tickets.create({ title: id, body: 'Attempt' })
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: `r-${id}`,
+          proposals: [{ id, ticket: ticket.ref, title: id, strategy: id }],
+        },
+      })
+      return ticket.ref
+    }
+    const settle = (
+      id: string,
+      ticket: TicketRef,
+      build: string,
+      outcome: 'declined' | 'aborted',
+    ) =>
+      store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: { attempt: { proposal: id, ticket, build }, outcome },
+      })
+    // Settled history, every ticket already moved.
+    for (let i = 0; i < history; i++) {
+      const ticket = await propose(`h${i}`)
+      await settle(`h${i}`, ticket, `old-${i}`, 'declined')
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.ticket-rejected',
+        payload: { proposal: `h${i}`, ticket, state: 'Rejected' },
+      })
+    }
+    // Live: two settled attempts whose moves are pending (one build done, one
+    // still cleaning up), and one in flight.
+    const live: TicketRef[] = []
+    for (let i = 0; i < concurrency; i++) {
+      live.push(await propose(`p${i}`))
+      await created(`attempt-${i}`, undefined, node)
+    }
+    await completed('attempt-0')
+    await settle('p0', live[0]!, 'attempt-0', 'declined')
+    await settle('p1', live[1]!, 'attempt-1', 'aborted')
+
+    const dispatcher = () =>
+      new Dispatcher({
+        store,
+        tickets,
+        workspaces: new FakeWorkspaceProvider({
+          root: '/optimization-landing-budget',
+          mode: 'logical',
+          base: { source: 'remote', sha },
+        }),
+        forge: new FakeForge(),
+        config,
+        repo,
+        exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+        launchRunner: async () => {
+          throw new Error('no launches in the optimization landing budget')
+        },
+        ids: sequentialIds(),
+        clock: () => new Date('2026-11-18T00:00:00Z'),
+      })
+    const call = <T>(d: Dispatcher, name: string, ...args: unknown[]): Promise<T> =>
+      (Reflect.get(d, name) as (...a: unknown[]) => Promise<T>).apply(d, args)
+    const nodeState = async () => (await readBuildFacts(store, node)).value.state
+    // Warm-up: each reduced key is computed once and saved.
+    await nodeState()
+    for (let i = 0; i < concurrency; i++) await readBuildFacts(store, `attempt-${i}`)
+    await readBuildDigests(store, repo)
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    const measured: Record<string, Record<string, number>[]> = { refused: [], gate: [] }
+    try {
+      // 1. Nothing pending: zero requests.
+      const idle = { ...(await nodeState()) }
+      idle.optimization = { ...idle.optimization!, rejections: [] }
+      requests.reset()
+      expect(await call<boolean>(dispatcher(), 'sweepAttemptRejections', node, idle)).toBe(false)
+      expect(requests.vector()).toEqual({})
+
+      // 2. A refusing tracker: constant cost, bounded entries, no slot.
+      const transition = tickets.transition.bind(tickets)
+      tickets.transition = async () => {
+        throw new Error('tracker refused the move')
+      }
+      for (let poll = 0; poll < 3; poll++) {
+        const state = await nodeState()
+        expect(state.optimization!.rejections.length).toBeLessThanOrEqual(concurrency)
+        expect(optimizationAdmission(state.optimization!, new Date()).slots).toBe(0)
+        rows.reset()
+        requests.reset()
+        await expect(call(dispatcher(), 'sweepAttemptRejections', node, state)).rejects.toThrow(
+          'tracker refused the move',
+        )
+        const vector = requests.vector()
+        expect(vector.listBuilds).toBeUndefined()
+        expect(vector.getRepoBuildDigests).toBeUndefined()
+        expect(rows.buildFactsCalls).toBeLessThanOrEqual(concurrency)
+        expect(rows.buildRows).toBe(0)
+        measured.refused!.push(vector)
+      }
+      expect(new Set(measured.refused!.map((v) => JSON.stringify(v))).size).toBe(1)
+
+      // 3. The move succeeds: the done attempt's entry clears; the other waits
+      // for its build to finish.
+      tickets.transition = transition
+      expect(
+        await call<boolean>(dispatcher(), 'sweepAttemptRejections', node, await nodeState()),
+      ).toBe(true)
+      let state = await nodeState()
+      expect(state.optimization!.rejections.map((entry) => entry.proposal)).toEqual(['p1'])
+      expect(optimizationAdmission(state.optimization!, new Date()).slots).toBe(1)
+      expect((await tickets.get(live[0]!.id))?.state).toBe('Rejected')
+      expect((await tickets.get(live[1]!.id))?.state).not.toBe('Rejected')
+
+      // 4. The gate's inputs: zero event rows while unchanged, no listing.
+      const record = (await store.getBuild('attempt-2'))!
+      const gate = dispatcher()
+      await call(gate, 'landingVerdict', record, node)
+      for (let poll = 0; poll < 3; poll++) {
+        rows.reset()
+        requests.reset()
+        const verdict = await call<{ verdict: string }>(
+          dispatcher(),
+          'landingVerdict',
+          record,
+          node,
+        )
+        expect(verdict.verdict).toBe('stale')
+        expect(rows.buildRows).toBe(0)
+        const vector = requests.vector()
+        expect(vector.listBuilds).toBeUndefined()
+        measured.gate!.push(vector)
+      }
+
+      // 5. The node completes; its last pending move then clears it from the
+      // work set, and a late settlement re-arms it incrementally.
+      await completed(node)
+      await completed('attempt-1')
+      await call(dispatcher(), 'sweepAttemptRejections', node, await nodeState())
+      state = await nodeState()
+      expect(state.optimization!.rejections).toEqual([])
+      rows.reset()
+      let digest = (await readBuildDigests(store, repo)).get(node)!
+      expect(digest.terminal).toBe('done')
+      expect(digest.rejectionsPending).toBeUndefined()
+      expect(isWorkDigest(digest)).toBe(false)
+      await settle('p2', live[2]!, 'attempt-2', 'aborted')
+      rows.reset()
+      digest = (await readBuildDigests(store, repo)).get(node)!
+      expect(digest.rejectionsPending).toBe(true)
+      expect(isWorkDigest(digest)).toBe(true)
+      expect(rows.buildRowsBySlug.get(node)).toBe(1)
+      expect(rows.buildRows).toBe(1)
+    } finally {
+      requests.restore()
+    }
+    vectors.push(measured)
+    await store.close()
+  }
+  expect(vectors[1]).toEqual(vectors[0]!)
 }
