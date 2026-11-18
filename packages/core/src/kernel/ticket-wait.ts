@@ -1,5 +1,5 @@
 import type { ReducedWaitEndCause } from '../events/payloads'
-import type { AnsweredEscalation, BuildState } from './reducer'
+import type { AnsweredEscalation, BuildState, OpenEscalation } from './reducer'
 import type { LogIndex } from './log-index'
 import { leafBaseInUse } from './leaf-restack-base'
 
@@ -45,6 +45,17 @@ export function openTicketWait(
     state.openEscalations.some((escalation) => escalation.id === wait.escalation)
     ? wait
     : undefined
+}
+
+/** Open escalations that need an operator: every open escalation except an
+ * open ticket wait's own. A wait-only build has none (SPEC §11 "Ticket
+ * waits"). */
+export function actionableEscalations(
+  state: Pick<BuildState, 'status' | 'wait' | 'openEscalations'>,
+): OpenEscalation[] {
+  const open = state.openEscalations ?? []
+  const wait = openTicketWait({ ...state, openEscalations: open })
+  return wait === undefined ? open : open.filter((escalation) => escalation.id !== wait.escalation)
 }
 
 /** A nonterminal leaf parked by a ticket wait: the wait is open, or ended and
