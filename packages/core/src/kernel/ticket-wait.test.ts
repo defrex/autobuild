@@ -1237,37 +1237,144 @@ skill = "custom-screenshot-skill"
   ]
   const guidance = { guidance: { escalation: 'esc_w', answer: 'B landed' } }
 
-  test('a clean resume of a verify wait retains the prior base verification', () => {
+  const runUnit = (attempt: number) => ({
+    kind: 'run-check' as const,
+    step: 'unit',
+    command: 'bun test',
+    attempt,
+  })
+  const passed = (step: string, attempt: number): EventWrite[] => [
+    ev('verify.started', { step, attempt }),
+    ev('verify.completed', { step, attempt, outcome: 'pass' }),
+  ]
+  /** The clean completion's seq: the last event of a resumed fixture. */
+  const completionSeq = (writes: EventWrite[]) => toLog(writes).at(-1)!.seq
+
+  test('a clean resume of a verify wait re-verifies from the first step on the restacked base', () => {
     const log = cleanResume(verifyWait())
-    expect(decide(log)).toEqual({
+    const boundary = completionSeq(log)
+    expect(decide(log)).toEqual(runUnit(2))
+    expect(logIndexReducer.reduce(toLog(log)).waitResumeVerifyBoundary).toBe(boundary)
+    // The reducer's cycle agrees, so a landing decision recorded before the
+    // resume no longer satisfies `landingReady`.
+    expect(reduce(log).verify.cycleSince).toBe(boundary)
+    // The declaring verifier re-runs at the new attempt and still gets the answer.
+    expect(decide([...log, ...passed('unit', 2)])).toEqual({
       kind: 'run-agent-verify',
       step: 'e2e',
       skill: 'ab-verify-e2e',
-      attempt: 1,
+      attempt: 2,
       feedback: guidance,
     })
-  })
-
-  test('a clean resume of a finalize wait finalizes on the prior base verification', () => {
-    expect(decide(cleanResume(finalizeWait()))).toEqual({
+    expect(decide([...log, ...passed('unit', 2), ...passed('e2e', 2)])).toEqual({
       kind: 'run-phase',
       phase: 'finalize',
       round: 1,
     })
-    expect(decideNext(toLog(cleanResume(postStepWait())), finalizeConfig)).toEqual({
+  })
+
+  test('a clean resume of a finalize wait re-verifies before finalizing', () => {
+    const log = cleanResume(finalizeWait())
+    expect(decide(log)).toEqual(runUnit(2))
+    expect(reduce(log).verify.cycleSince).toBe(completionSeq(log))
+    expect(decide([...log, ...passed('unit', 2)])).toMatchObject({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      attempt: 2,
+    })
+    expect(decide([...log, ...passed('unit', 2), ...passed('e2e', 2)])).toEqual({
+      kind: 'run-phase',
+      phase: 'finalize',
+      round: 1,
+    })
+    // A post-step wait re-verifies, then continues the remaining post-steps
+    // without finalizing again.
+    const post = cleanResume(postStepWait())
+    expect(decideNext(toLog(post), finalizeConfig)).toEqual(runUnit(2))
+    expect(
+      decideNext(toLog([...post, ...passed('unit', 2), ...passed('e2e', 2)]), finalizeConfig),
+    ).toEqual({
       kind: 'run-finalize-step',
       step: 'screenshots',
       action: { kind: 'agent', skill: 'custom-screenshot-skill' },
     })
   })
 
-  test('a conflicted resume of a verify wait reconciles, then re-verifies in full', () => {
-    expect(decide(conflictedResume(verifyWait()))).toEqual({
-      kind: 'run-check',
-      step: 'unit',
-      command: 'bun test',
-      attempt: 2,
+  test('a failure in the resumed cycle routes to implement and never finalizes', () => {
+    const report = { kind: 'verify-report:unit', rev: 1 }
+    for (const waited of [verifyWait(), finalizeWait()]) {
+      const failed = [
+        ...cleanResume(waited),
+        ev('verify.started', { step: 'unit', attempt: 2 }),
+        ev('verify.completed', { step: 'unit', attempt: 2, outcome: 'fail', report }),
+      ]
+      expect(decide(failed)).toMatchObject({ kind: 'run-phase', phase: 'implement', round: 2 })
+    }
+    const failed = [
+      ...cleanResume(finalizeWait()),
+      ev('verify.started', { step: 'unit', attempt: 2 }),
+      ev('verify.completed', { step: 'unit', attempt: 2, outcome: 'fail', report }),
+    ]
+    expect(decide(failed)).toEqual({
+      kind: 'run-phase',
+      phase: 'implement',
+      round: 2,
+      feedback: { verify: { step: 'unit', report } },
     })
+  })
+
+  test('an interrupted resumed cycle re-decides the same step and attempt', () => {
+    const log = cleanResume(verifyWait())
+    const boundary = completionSeq(log)
+    const index = logIndexReducer.reduce(toLog(log))
+    // The completion satisfies its own gate: no second restack.
+    expect(index.restack.gates[String(answerSeq(log))]).toBeDefined()
+    expect(index.restack.active).toBeUndefined()
+    expect(decide(log)).toEqual(runUnit(2))
+    const captured = [
+      ...log,
+      ev('verify.config-captured', {
+        cycle: boundary + 1,
+        artifact: { kind: 'verify-cycle-config', rev: 1 },
+        head: RESTACKED,
+        identity: 'config-1',
+        source: { ref: 'branch-head', commit: RESTACKED },
+      }),
+    ]
+    expect(decide(captured)).toEqual(runUnit(2))
+    const crashed = [...captured, ev('verify.started', { step: 'unit', attempt: 2 })]
+    expect(decide(crashed)).toEqual(runUnit(2))
+  })
+
+  test('a conflicted resume of a verify wait reconciles, then re-verifies in full', () => {
+    const log = conflictedResume(verifyWait())
+    expect(decide(log)).toEqual(runUnit(2))
+    const events = toLog(log)
+    expect(events.filter((e) => e.type === 'reconcile.completed')).toHaveLength(1)
+    expect(
+      events.filter((e) => e.type === 'restack.completed' && e.payload.trigger === 'wait-resume'),
+    ).toHaveLength(1)
+    const index = logIndexReducer.reduce(events)
+    // The reconcile completion is the boundary; the restack adds none.
+    expect(index.waitResumeVerifyBoundary).toBe(0)
+    expect(reduce(log).verify.cycleSince).toBe(index.lastReconcileCompletedSeq)
+  })
+
+  test('an implement wait after a verify failure keeps the failure across a clean resume', () => {
+    const report = { kind: 'verify-report:unit', rev: 1 }
+    const waited = [
+      ...approvedThroughCode(),
+      ev('verify.started', { step: 'unit', attempt: 1 }),
+      ev('verify.completed', { step: 'unit', attempt: 1, outcome: 'fail', report }),
+      ev('implement.started', { round: 2, feedback: { verify: { step: 'unit', report } } }),
+      ...waitFrom('implement', 2, 's_impl'),
+    ]
+    const log = cleanResume(waited)
+    const events = toLog(log)
+    const failSeq = events.find((e) => e.type === 'verify.completed')!.seq
+    expect(logIndexReducer.reduce(events).waitResumeVerifyBoundary).toBe(0)
+    expect(reduce(log).verify.cycleSince).toBeLessThan(failSeq)
+    expect(decide(log)).toMatchObject({ kind: 'run-phase', phase: 'implement', round: 2 })
   })
 
   test('a verify wait whose target did not move resumes the same step and attempt', () => {

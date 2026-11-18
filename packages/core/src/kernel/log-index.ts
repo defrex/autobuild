@@ -29,6 +29,7 @@ import {
   type VerifyOutcome,
 } from '../ontology'
 import { defineReducer } from './incremental'
+import { cleanWaitResumeCompletion, waitResumeReverifies } from './ticket-wait'
 
 // ── Raw-log index ────────────────────────────────────────────────────────────
 //
@@ -165,6 +166,11 @@ export interface LogIndex {
    * input: reconciliation changed code, verify re-runs in full (§15.7). */
   verifyConfigBoundary: number
   lastReconcileCompletedSeq: number
+  /** seq of the latest post-restart clean wait-resume `restack.completed`
+   * for a wait declared in verify:* or finalize, else 0 — a verify cycle
+   * boundary: the restacked base re-verifies from the first step (SPEC §11
+   * "Ticket waits"). Deliberately not a replay boundary. */
+  waitResumeVerifyBoundary: number
   /** seq of the latest post-restart `implement.completed` — a verify failure
    * with an implement round after it was already routed (§15.6-A). */
   lastImplementCompletedSeq: number
@@ -199,7 +205,7 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 12
+export const LOG_INDEX_REDUCER_VERSION = 13
 
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
@@ -234,6 +240,7 @@ export type LogIndexCandidate =
   | { kind: 'finalize-step'; seq: number; step: string }
   | { kind: 'reconcile-completed'; seq: number }
   | { kind: 'config-superseded'; seq: number }
+  | { kind: 'wait-resume-restacked'; seq: number; cycle: number }
 
 export interface LogIndexAcc {
   readDeferrals: ReadDeferralsAcc
@@ -252,6 +259,11 @@ export interface LogIndexAcc {
   reconcileStarts: ReconcileStartRecord[]
   reconcileCompletions: ReconcileCompletionRecord[]
   reconcileProgressChecks: ReconcileProgressRecord[]
+  /** The latest agent wait request, settled once refused or entered; the
+   * same guards the build reducer applies to `wait.requested`. */
+  waitRequest?: { id: string; phase: string; settled?: boolean }
+  /** The declaring phase of the latest entered wait. */
+  waitPhase?: string
   /** Post-restart candidates, replayed in `finish` against the final restart. */
   candidates: LogIndexCandidate[]
 }
@@ -476,6 +488,26 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
         delete acc.activeReconcileIntended
         delete acc.conflictReconcileStarted
         break
+      case 'wait.requested':
+        if (event.actor.kind !== 'agent') break
+        acc.waitRequest = { id: event.payload.id, phase: event.payload.phase }
+        break
+      case 'wait.refused':
+        if (acc.waitRequest?.id === event.payload.id) acc.waitRequest.settled = true
+        break
+      case 'wait.entered':
+        if (acc.waitRequest?.id !== event.payload.id || acc.waitRequest.settled) break
+        acc.waitRequest.settled = true
+        acc.waitPhase = acc.waitRequest.phase
+        break
+      case 'restack.completed':
+        if (event.payload.trigger === 'wait-resume' && waitResumeReverifies(acc.waitPhase))
+          acc.candidates.push({
+            kind: 'wait-resume-restacked',
+            seq: event.seq,
+            cycle: event.payload.cycle,
+          })
+        break
       case 'reconcile.publish-intended':
         if (acc.activeReconcileStart?.attempt === event.payload.attempt)
           acc.activeReconcileIntended = true
@@ -524,6 +556,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   let reconcilePolicy: LogIndex['reconcilePolicy']
   let verifyConfigBoundary = 0
   let lastReconcileCompletedSeq = 0
+  let waitResumeVerifyBoundary = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
 
@@ -617,6 +650,15 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
       case 'reconcile-completed':
         lastReconcileCompletedSeq = candidate.seq
         break
+      case 'wait-resume-restacked':
+        if (
+          cleanWaitResumeCompletion(
+            { trigger: 'wait-resume', ...candidate },
+            lastReconcileCompletedSeq,
+          )
+        )
+          waitResumeVerifyBoundary = Math.max(waitResumeVerifyBoundary, candidate.seq)
+        break
     }
   }
 
@@ -683,6 +725,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     reconcilePolicy,
     verifyConfigBoundary,
     lastReconcileCompletedSeq,
+    waitResumeVerifyBoundary,
     lastImplementCompletedSeq,
     finalizeCompleted,
     finalizeStepsDone,

@@ -13,6 +13,7 @@ import { normalizeVerifyCompletion, type EventPayload, type EventType } from '..
 import { verifyPhase, type Feedback } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { checkIncremental, pick, seededRandom, shuffled } from './incremental-contract'
+import { leafTransaction } from './generators/leaf-restack-log'
 import {
   indexLog,
   logIndexReducer,
@@ -57,6 +58,9 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
   const guidanceDeliveries: GuidanceDelivery[] = []
   const pendingGuidanceStarts = new Map<string, { escalation: string; seq: number }>()
   let lastReconcileCompletedSeq = 0
+  let waitResumeVerifyBoundary = 0
+  let waitRequest: { id: string; phase: string; settled: boolean } | undefined
+  let waitPhase: string | undefined
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
   let lastConflict: { seq: number } | undefined
@@ -256,6 +260,31 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
       case 'reconcile.publish-intended':
         if (activeReconcileStart?.attempt === event.payload.attempt) activeReconcileIntended = true
         break
+      case 'wait.requested':
+        if (event.actor.kind === 'agent')
+          waitRequest = { id: event.payload.id, phase: event.payload.phase, settled: false }
+        break
+      case 'wait.refused':
+        if (waitRequest?.id === event.payload.id) waitRequest.settled = true
+        break
+      case 'wait.entered':
+        if (waitRequest?.id === event.payload.id && !waitRequest.settled) {
+          waitRequest.settled = true
+          waitPhase = waitRequest.phase
+        }
+        break
+      case 'restack.completed':
+        // A clean replay after a verify:* or finalize wait: its cycle is the
+        // wait end, never the reconcile completion a conflicted one cites.
+        if (
+          post &&
+          event.payload.trigger === 'wait-resume' &&
+          waitPhase !== undefined &&
+          (waitPhase.startsWith('verify:') || waitPhase === 'finalize') &&
+          event.payload.cycle !== lastReconcileCompletedSeq
+        )
+          waitResumeVerifyBoundary = Math.max(waitResumeVerifyBoundary, event.seq)
+        break
       case 'reconcile.superseded':
         if (activeReconcileStart?.attempt === event.payload.attempt)
           activeReconcileStart = undefined
@@ -326,6 +355,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
     maxVerifyAttemptEver,
     verifyConfigBoundary: 0,
     lastReconcileCompletedSeq,
+    waitResumeVerifyBoundary,
     lastImplementCompletedSeq,
     finalizeCompleted,
     finalizeStepsDone,
@@ -454,6 +484,29 @@ function randomWrite(rand: () => number): EventWrite {
         agent,
       ),
     () => w('observation.recorded', { id: 'o', kind: 'refactor', summary: 's', files: [] }, agent),
+    () =>
+      w('wait.requested', {
+        id: `w${attempt}`,
+        phase: pick(rand, [verifyPhase('e2e'), 'finalize', 'implement']),
+        round,
+        tickets: ['B'],
+        reason: 'r',
+      }),
+    () =>
+      w('wait.entered', {
+        id: `w${attempt}`,
+        escalation: 'e_w',
+        tickets: [{ source: 'file', id: 'B' }],
+        reason: 'r',
+        question: 'q',
+      }),
+    () =>
+      w('restack.completed', {
+        ...leafTransaction,
+        trigger: pick(rand, ['wait-resume', 'verify-entry'] as const),
+        cycle: 1 + Math.floor(rand() * 20),
+        headSha: 'e'.repeat(40),
+      }),
   ]
   return pick(rand, templates)()
 }
@@ -511,6 +564,61 @@ describe('indexLog incremental reducer', () => {
         compare: (a, e) => expect(normalize(a)).toEqual(normalize(e)),
       })
     }
+  })
+
+  test('a clean wait-resume completion after a verify or finalize wait is a cycle boundary', () => {
+    const resumed = (cycle: number) =>
+      w('restack.completed', {
+        ...leafTransaction,
+        trigger: 'wait-resume',
+        cycle,
+        headSha: 'e'.repeat(40),
+      })
+    const waited = (phase: string) => [
+      w('wait.requested', { id: 'w1', phase, round: 1, tickets: ['B'], reason: 'r' }),
+      w('wait.entered', {
+        id: 'w1',
+        escalation: 'e_w',
+        tickets: [{ source: 'file', id: 'B' }],
+        reason: 'r',
+        question: 'q',
+      }),
+      w('wait.ended', { id: 'w1', cause: 'automatic', message: 'm' }),
+    ]
+    const check = (log: AbEvent[], boundary: number) => {
+      expect(indexLog(log).waitResumeVerifyBoundary).toBe(boundary)
+      expect(normalize(indexLog(log))).toEqual(normalize(referenceIndexLog(log)))
+      checkIncremental(logIndexReducer, log, {
+        compare: (a, e) => expect(normalize(a)).toEqual(normalize(e)),
+      })
+    }
+    // Clean: the completion cites the wait end (seq 3).
+    check(makeLog([...waited(verifyPhase('e2e')), resumed(3)]), 4)
+    check(makeLog([...waited('finalize'), resumed(3)]), 4)
+    // Earlier phases need no boundary.
+    check(makeLog([...waited('implement'), resumed(3)]), 0)
+    // Conflicted: the completion cites the reconcile completion (seq 5).
+    check(
+      makeLog([
+        ...waited(verifyPhase('e2e')),
+        w('reconcile.started', { attempt: 1, baseSha: 'm1' }),
+        w('reconcile.completed', {
+          mergeCommit: 'mc',
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        }),
+        resumed(5),
+      ]),
+      0,
+    )
+    // A later spec revision restarts the build and drops the boundary.
+    check(
+      makeLog([
+        ...waited(verifyPhase('e2e')),
+        resumed(3),
+        w('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 1 }, humanActor('a')),
+      ]),
+      0,
+    )
   })
 
   test('repeat-conflict reconcile sequences and guidance deliveries', () => {
