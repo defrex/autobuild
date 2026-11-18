@@ -181,6 +181,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'plan-review.verdict': ['agent'],
   'implement.started': ['kernel'],
   'implement.completed': ['agent', 'dispatcher'],
+  'implement.declined': ['agent'],
   'code-review.started': ['kernel'],
   'code-review.verdict': ['agent'],
 

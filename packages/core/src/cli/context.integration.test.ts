@@ -1943,3 +1943,140 @@ test('restored checkpoint remains visible to its session after successful provis
   expect(manifest.workspaceRecovery).toBeDefined()
   expect(await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')).toContain(sha)
 })
+
+describe('buildContext — optimization attempts (RFC 0005 §6.1)', () => {
+  const NODE = 'opt-node'
+  const TOML = [
+    '[tickets]',
+    'source = "linear"',
+    'teamKey = "ENG"',
+    'readyState = "ready"',
+    '',
+  ].join('\n')
+  const sha = 'a'.repeat(40)
+  const target = { ticket: { source: 'linear', id: 'NODE-1' }, build: NODE }
+
+  async function seedNode(
+    seeded: MemoryBuildStore,
+    opts: { objective?: boolean; proposal?: { source: string; id: string } } = {},
+  ) {
+    const { commandObjective } = await import('../kernel/generators/optimization-log')
+    await seeded.createBuild({ slug: NODE, repo: 'acme/app', branch: 'ab-node/opt-node' })
+    await seeded.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: 'acme/app', ticket: target.ticket, baseBranch: 'main', kind: 'node' },
+    })
+    if (opts.objective === false) return
+    await seeded.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: { objective: commandObjective(), revision: 1, harnessPin: sha, specRev: 0 },
+    })
+    await seeded.append(NODE, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: { revision: 1, head: sha, harnessPin: sha, samples: 7, median: 52.5, spread: 1 },
+    })
+    await seeded.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: 'r1',
+        proposals: [
+          {
+            id: 'p1',
+            ticket: opts.proposal ?? { source: 'linear', id: 'ENG-42' },
+            title: 'Index the catalog',
+            strategy: 'add a trigram index',
+          },
+        ],
+      },
+    })
+  }
+
+  async function attemptStore(opts: Parameters<typeof seedNode>[1] = {}) {
+    await store.close()
+    store = await seedStore({ target })
+    await seedNode(store, opts)
+    await writeFile(join(workspace, 'autobuild.toml'), TOML)
+    return store
+  }
+
+  test('implement and code-review materialize objective.md and the attempt block', async () => {
+    await attemptStore()
+    await seedPlanApproved()
+    for (const phase of ['implement', 'code-review'] as const) {
+      if (phase === 'code-review') await seedImplementRound(1, 'sha-head-1')
+      const manifest = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1 }),
+        workspacePath: workspace,
+      })
+      expect(manifest.attempt).toEqual({
+        node: NODE,
+        proposal: 'p1',
+        revision: 1,
+        purpose: 'p95 latency of the catalog search query',
+        metric: {
+          kind: 'command',
+          command: 'bun bench/search.ts',
+          direction: 'minimize',
+          samples: 7,
+        },
+        harness: ['bench/search/**'],
+        current: 52.5,
+        path: `${manifest.contextDir}/objective.md`,
+      })
+      expect(manifest.materialized['objective.md']).toBe('derived')
+      const objective = await abFile('objective.md')
+      expect(objective).toContain('p95 latency of the catalog search query')
+      expect(objective).toContain('`bun bench/search.ts`')
+      expect(objective).toContain('- current value: 52.5')
+      expect(objective).toContain('`bench/search/**`')
+    }
+  })
+
+  test('a plain node child and a work build get no objective', async () => {
+    await attemptStore({ objective: false })
+    const child = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(child.attempt).toBeUndefined()
+    expect(child.materialized['objective.md']).toBeUndefined()
+
+    await store.close()
+    store = await seedStore()
+    await rm(join(workspace, 'autobuild.toml'))
+    const work = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(work.attempt).toBeUndefined()
+  })
+
+  test('a proposal recorded before a ticket migration still names the attempt', async () => {
+    await attemptStore({ proposal: { source: 'file', id: 'F-7' } })
+    await store.ensureRepo('acme/app')
+    await store.appendRepo('acme/app', {
+      actor: humanActor('operator'),
+      type: 'tickets.migration-recorded',
+      payload: {
+        identity: 'file-to-linear',
+        from: 'file',
+        to: 'linear',
+        mapping: { 'F-7': 'ENG-42' },
+      },
+    })
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.attempt?.proposal).toBe('p1')
+    expect(await abFile('objective.md')).toContain('## Purpose')
+  })
+})
