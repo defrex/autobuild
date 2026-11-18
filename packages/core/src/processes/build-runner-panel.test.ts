@@ -7,6 +7,7 @@ import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import type { Decision } from '../kernel/engine'
+import type { PanelMetric } from '../objective'
 import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
 import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
@@ -368,12 +369,12 @@ describe('BuildRunner.runPanel', () => {
 })
 
 describe('a panel attempt measurement', () => {
-  const metric = {
+  const metric: PanelMetric = {
     kind: 'panel',
     judges: 2,
     rubric: 'evals/rubric.md',
     harness: ['evals/**'],
-  } as const
+  }
 
   async function request(
     store: MemoryBuildStore,

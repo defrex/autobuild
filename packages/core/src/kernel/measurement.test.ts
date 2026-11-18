@@ -28,6 +28,7 @@ import {
   unmeasurable,
 } from './measurement'
 import { panelWinRate } from './panel'
+import type { PanelMetric } from '../objective'
 import { reduceBuild } from './reducer'
 
 function node(): OptimizationLogBuilder {
@@ -450,7 +451,7 @@ describe('decideSampledMeasurement', () => {
 })
 
 describe('panel acceptance', () => {
-  const metric = panelObjective().metric
+  const metric = panelObjective().metric as PanelMetric
   const request = {
     id: 'm1',
     node: 'opt-node',
@@ -570,7 +571,7 @@ describe('panel acceptance', () => {
 })
 
 describe('attemptPanelId', () => {
-  const metric = panelObjective().metric
+  const metric = panelObjective().metric as PanelMetric
   const requested = () => attempt().requestMeasurement('m1', 'opt-node', 1, undefined, metric)
   const escalate = (log: OptimizationLogBuilder, id: string, phase: 'measurement' | 'implement') =>
     log.push({

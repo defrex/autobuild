@@ -1,7 +1,7 @@
 import { validateEventWrite, type AbEvent, type EventWrite } from '../../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
 import type { AttemptOutcome } from '../../events/payloads'
-import type { Objective, ObjectiveMetric } from '../../objective'
+import type { CommandMetric, Objective, ObjectiveMetric } from '../../objective'
 
 export const OPTIMIZATION_SHA = (char: string) => char.repeat(40)
 
