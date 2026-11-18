@@ -460,6 +460,11 @@
     "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
     "cursor": true
   },
+  "packages/core/src/cli/watch.ts::abWatch/body/initializeRepository::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Once per no-slug watch start: the journal window between the persisted repository-facts cursor and the persisted attention cursor, both read just before; never fetches the log from the start.",
+    "cursor": true
+  },
   "packages/core/src/cli/watch.ts::abWatch/body/pollBuild::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
