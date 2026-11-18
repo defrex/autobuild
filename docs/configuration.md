@@ -3244,7 +3244,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it, and the dispatcher moves each attempt that settles other than accepted into it.
+**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it, and the dispatcher moves each attempt that settles no-improvement, declined, stopped or aborted into it.
 
 **Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default, but required to open an optimization node; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
 

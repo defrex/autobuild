@@ -7,7 +7,13 @@
  * delta, so neither ever reads an attempt's log.
  */
 import type { AbEvent } from '../events/catalog'
-import type { AttemptOutcome, EventPayload, OptimizationStopCause } from '../events/payloads'
+import type {
+  AttemptOutcome,
+  EventPayload,
+  OptimizationStopCause,
+  UnmeasuredMergeReason,
+  UnmeasuredSettlementPolicy,
+} from '../events/payloads'
 import {
   applyObjectiveRevisions,
   objectiveRulerChanged,
@@ -26,6 +32,19 @@ import type { BuildState } from './reducer'
 export interface InFlightAttempt {
   proposal: string
   ticket: TicketRef
+  /** The attempt merged without a valid landing measurement of its merged
+   * head. It keeps its slot until an operator settles it `merged-unmeasured`. */
+  unmeasuredMerge?: UnmeasuredMerge
+}
+
+/** An in-flight attempt's merge that no landing measurement covers. */
+export interface UnmeasuredMerge {
+  build: string
+  /** The merged head; absent only when `reason` is `unresolvable`. */
+  sha?: string
+  reason: UnmeasuredMergeReason
+  measuredCandidate?: string
+  at: string
 }
 
 /** A settled, non-accepted attempt whose ticket the dispatcher has not yet
@@ -39,7 +58,13 @@ export interface PendingRejection {
   ticket: TicketRef
   /** The attempt's build, when it was ever claimed. */
   build?: string
-  outcome: Exclude<AttemptOutcome, 'accepted'>
+  outcome: Exclude<AttemptOutcome, 'accepted' | 'merged-unmeasured'>
+  /** The attempt's published build branch, still to be deleted from the
+   * forge: the durable cleanup obligation of a declined or no-improvement
+   * settlement. Cleared by `attempt.branch-deleted`. */
+  branch?: string
+  /** The latest failed deletion of `branch`, until it succeeds. */
+  branchCleanupError?: string
 }
 
 export interface OptimizationValue {
@@ -79,6 +104,9 @@ export interface OptimizationState {
     accepted: number
     /** Settled as no-improvement, declined, stopped or aborted. */
     rejected: number
+    /** Merged without a landing measurement and released by an operator:
+     * neither accepted nor rejected. */
+    unmeasured: number
   }
   /** Proposed attempts that have not settled; `inFlight.length` are running. */
   inFlight: InFlightAttempt[]
@@ -114,7 +142,10 @@ export function isOptimizationEvent(event: Pick<AbEvent, 'type'>): boolean {
   return (
     event.type.startsWith('optimization.') ||
     event.type === 'attempt.settled' ||
-    event.type === 'attempt.ticket-rejected'
+    event.type === 'attempt.ticket-rejected' ||
+    event.type === 'attempt.merged-unmeasured' ||
+    event.type === 'attempt.branch-deleted' ||
+    event.type === 'attempt.branch-cleanup-failed'
   )
 }
 
@@ -144,7 +175,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
           revision: event.payload.revision,
           revisedFields: [],
           rulerRevision: event.payload.revision,
-          attempts: { filed: 0, accepted: 0, rejected: 0 },
+          attempts: { filed: 0, accepted: 0, rejected: 0, unmeasured: 0 },
           inFlight: [],
           rejections: [],
           plateau: 0,
@@ -201,6 +232,12 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         const { attempt, outcome, measurement } = event.payload
         const wasInFlight = state.inFlight.some((entry) => entry.proposal === attempt.proposal)
         state.inFlight = state.inFlight.filter((entry) => entry.proposal !== attempt.proposal)
+        if (outcome === 'merged-unmeasured') {
+          // The code merged and its ticket is done: release the slot and
+          // count it, but record no value, no plateau step, no rejection.
+          if (wasInFlight) state.attempts.unmeasured += 1
+          break
+        }
         // Only a transfer out of `inFlight` adds a pending rejection, so
         // settlement never grows the two lists' combined length.
         if (
@@ -213,6 +250,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
             ticket: structuredClone(attempt.ticket),
             ...(attempt.build !== undefined ? { build: attempt.build } : {}),
             outcome,
+            ...(attempt.branch !== undefined ? { branch: attempt.branch } : {}),
           })
         if (outcome === 'accepted') {
           state.attempts.accepted += 1
@@ -246,6 +284,33 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
           (entry) => entry.proposal !== event.payload.proposal,
         )
         break
+      case 'attempt.merged-unmeasured': {
+        const entry = state.inFlight.find((attempt) => attempt.proposal === event.payload.proposal)
+        if (entry === undefined || entry.unmeasuredMerge !== undefined) break
+        const { build, sha, reason, measuredCandidate } = event.payload
+        entry.unmeasuredMerge = {
+          build,
+          ...(sha !== undefined ? { sha } : {}),
+          reason,
+          ...(measuredCandidate !== undefined ? { measuredCandidate } : {}),
+          at: event.ts,
+        }
+        break
+      }
+      case 'attempt.branch-deleted':
+      case 'attempt.branch-cleanup-failed': {
+        const entry = state.rejections.find(
+          (rejection) =>
+            rejection.proposal === event.payload.proposal &&
+            rejection.branch === event.payload.branch,
+        )
+        if (entry === undefined) break
+        if (event.type === 'attempt.branch-deleted') {
+          delete entry.branch
+          delete entry.branchCleanupError
+        } else entry.branchCleanupError = event.payload.error
+        break
+      }
     }
   }
   return state
@@ -259,7 +324,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 3,
+  version: 4,
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
@@ -452,6 +517,63 @@ export function optimizationRejection(
   return state.rejections.find((entry) => key(entry.ticket) === wanted)
 }
 
+/** An in-flight attempt merged without a landing measurement, as the status
+ * surfaces list it. */
+export interface UnmeasuredMergeView {
+  proposal: string
+  ticket: string
+  build: string
+  /** Absent only for an `unresolvable` merge. */
+  sha?: string
+  reason: UnmeasuredMergeReason
+  measuredCandidate?: string
+}
+
+/** A settled attempt whose published build branch still awaits deletion. */
+export interface PendingCleanupView {
+  proposal: string
+  build?: string
+  branch: string
+  /** The latest failed deletion, when one was recorded. */
+  error?: string
+}
+
+/** The in-flight attempts holding a slot as unmeasured merges. */
+export function optimizationUnmeasuredMerges(state: OptimizationState): UnmeasuredMergeView[] {
+  return state.inFlight.flatMap(({ proposal, ticket, unmeasuredMerge: merge }) =>
+    merge === undefined
+      ? []
+      : [
+          {
+            proposal,
+            ticket: ticket.id,
+            build: merge.build,
+            ...(merge.sha !== undefined ? { sha: merge.sha } : {}),
+            reason: merge.reason,
+            ...(merge.measuredCandidate !== undefined
+              ? { measuredCandidate: merge.measuredCandidate }
+              : {}),
+          },
+        ],
+  )
+}
+
+/** The pending rejections that still carry a branch cleanup obligation. */
+export function optimizationPendingCleanups(state: OptimizationState): PendingCleanupView[] {
+  return state.rejections.flatMap(({ proposal, build, branch, branchCleanupError }) =>
+    branch === undefined
+      ? []
+      : [
+          {
+            proposal,
+            ...(build !== undefined ? { build } : {}),
+            branch,
+            ...(branchCleanupError !== undefined ? { error: branchCleanupError } : {}),
+          },
+        ],
+  )
+}
+
 export interface LedgerEntry {
   seq: number
   proposal: string
@@ -460,6 +582,10 @@ export interface LedgerEntry {
   title: string
   strategy: string
   outcome: AttemptOutcome
+  /** `merged-unmeasured`: the merged head, when recorded, and the policy that
+   * released it. Such an entry carries no measurement. */
+  mergedSha?: string
+  policy?: UnmeasuredSettlementPolicy
   delta?: number
   baseline?: number
   candidate?: number
@@ -499,7 +625,7 @@ export const optimizationLedgerReducer = defineReducer<
   AbEvent,
   OptimizationLedger
 >({
-  version: 1,
+  version: 2,
   initial: () => ({ pending: {}, entries: [] }),
   fold(acc, events) {
     for (const event of events) {
@@ -516,7 +642,7 @@ export const optimizationLedgerReducer = defineReducer<
             acc.pending[proposal.id] = { title: proposal.title, strategy: proposal.strategy }
           break
         case 'attempt.settled': {
-          const { attempt, outcome, measurement, note } = event.payload
+          const { attempt, outcome, measurement, note, mergedSha, policy } = event.payload
           const pending = acc.pending[attempt.proposal]
           delete acc.pending[attempt.proposal]
           const entry: LedgerEntry = {
@@ -527,6 +653,8 @@ export const optimizationLedgerReducer = defineReducer<
             title: pending?.title ?? attempt.ticket.title ?? attempt.ticket.id,
             strategy: pending?.strategy ?? '',
             outcome,
+            ...(mergedSha !== undefined ? { mergedSha } : {}),
+            ...(policy !== undefined ? { policy } : {}),
             ...(measurement !== undefined
               ? {
                   delta: measurement.delta,

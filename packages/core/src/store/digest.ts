@@ -210,6 +210,7 @@ export const buildDigestReducer: IncrementalReducer<
           proposal !== undefined &&
           event.attemptOutcome !== undefined &&
           event.attemptOutcome !== 'accepted' &&
+          event.attemptOutcome !== 'merged-unmeasured' &&
           !acc.pendingRejections?.includes(proposal)
         )
           acc.pendingRejections = [...(acc.pendingRejections ?? []), proposal]

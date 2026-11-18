@@ -10,7 +10,7 @@
  * stale by construction. Verification is a separate fact and survives both.
  */
 import type { AbEvent } from '../events/catalog'
-import type { EventPayload } from '../events/payloads'
+import type { EventPayload, UnmeasuredMergeReason } from '../events/payloads'
 import type { Objective } from '../objective'
 import type { TicketRef } from '../ontology'
 import type { OptimizationState } from './optimization'
@@ -205,6 +205,36 @@ export function landingMeasurementGate(input: LandingGateInput): LandingGateVerd
   if (lm?.request !== undefined && forPair(digest, lm.request, candidate, nodeHead))
     return 'pending'
   return 'request'
+}
+
+/** Whether a merged attempt's head was measured for landing on its node. */
+export type MergedAttemptMeasurement =
+  | { kind: 'measured'; result: MeasurementResult }
+  | {
+      kind: 'unmeasured'
+      reason: Exclude<UnmeasuredMergeReason, 'unresolvable'>
+      /** `stale-head`: the candidate the recorded result measured. */
+      measuredCandidate?: string
+    }
+
+/**
+ * Classify the landing measurement of an attempt that merged as `sha` into
+ * `node` (SPEC §15.7). Only a result for exactly that head, answering a
+ * request of that node, is a measurement the attempt may settle `accepted`
+ * with; anything else is unmeasured, never inferred.
+ */
+export function mergedAttemptMeasurement(
+  lm: LandingMeasurementState | undefined,
+  node: string,
+  sha: string,
+): MergedAttemptMeasurement {
+  const result = lm?.result
+  if (lm?.request !== undefined && lm.request.node !== node)
+    return { kind: 'unmeasured', reason: 'unrelated' }
+  if (result === undefined) return { kind: 'unmeasured', reason: 'absent' }
+  if (result.candidate !== sha)
+    return { kind: 'unmeasured', reason: 'stale-head', measuredCandidate: result.candidate }
+  return { kind: 'measured', result }
 }
 
 /** The numbers `attempt.settled` records for a measured settlement. A panel's
