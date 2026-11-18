@@ -974,28 +974,6 @@ export const REPOSITORY_EVENT_TYPES = Object.keys(
   repositoryEventPayloadSchemas,
 ) as RepositoryEventType[]
 
-/** Repository attention followed by `ab watch` with no slugs or explicit
- * `--repository`. Historical session wakes also used this catalog. */
-export const REPOSITORY_ATTENTION_EVENTS = [
-  'account.credentials-unavailable',
-  'account.credentials-recovered',
-  'harvest.escalated',
-  'harvest.failed',
-  'dispatcher.forge-degraded',
-  'dispatcher.forge-recovered',
-  'forge.credential-limited',
-  'dispatcher.kernel-git-unavailable',
-  'dispatcher.kernel-git-recovered',
-  'hook.failing',
-  'hook.recovered',
-  'hook.skipped',
-  'dispatcher.ticket-source-degraded',
-  'dispatcher.ticket-source-recovered',
-  'dispatcher.tick-failed',
-  'dispatcher.config-rejected',
-  'dispatcher.forge-readiness-failed',
-  'dispatcher.harvest-runner-failed',
-] as const satisfies readonly RepositoryEventType[]
 export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
   (typeof repositoryEventPayloadSchemas)[T]
 >

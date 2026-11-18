@@ -99,7 +99,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   declaring phase re-runs with the refusal as its guidance. Accepted, the ids
   join the build ticket's `blockedBy`, the build is blocked on an escalation
   whose question begins `Waiting on`, and it holds no slot while keeping its
-  branch, workspace and completed phase work. The dispatcher ends the wait
+  branch, workspace and completed phase work. That escalation alone is not
+  attention: `ab wait --for attention` and default `ab watch` stay quiet,
+  while status surfaces show the wait. The dispatcher ends the wait
   (cause `automatic`) on its first tick after every named ticket completes;
   while any is still open the wait stays in place. A named ticket that is
   rejected or deleted can never complete: the dispatcher instead raises an
@@ -3074,7 +3076,7 @@ vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `abo
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
-`attention` (current failed node verification, an open escalation, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
+`attention` (current failed node verification, an open escalation other than a ticket wait's own, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
 globs in supply order — and the record names what matched.
@@ -3085,8 +3087,8 @@ means an open escalation exactly as everywhere else. In the manner of `kubectl
 wait`, a condition that already holds when the command starts returns
 immediately with that build's latest event (`--since` does not suppress this);
 otherwise the first later event whose reduction produces it ends the wait.
-`attention` is also a current-state condition: current failed node verification, existing janitor failure attention, an already open escalation or
-merge decision returns immediately, including with `--since`. Merge matches
+`attention` is also a current-state condition: current failed node verification, existing janitor failure attention, an already open escalation other than a
+ticket wait's own, or merge decision returns immediately, including with `--since`. Merge matches
 use the same observation as watch. During replay, only new failed-node verification or escalation events
 or undelivered eligible merge decisions satisfy attention. `--event` conditions
 fire only on new events or a cursor-resumed backlog.
