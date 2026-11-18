@@ -254,7 +254,8 @@ test('drain mode lets a running attempt finish and cancels a queued one', async 
   const handlers = happyHandlers()
   const h = await makeHarness({
     localGitForge: true,
-    configToml: WITH_REJECTED,
+    // The node holds a slot for its starting measurement; both attempts need one too.
+    configToml: WITH_REJECTED.replace('capacity = 2', 'capacity = 3'),
     handlers: {
       ...handlers,
       plan: async (cli) => {
