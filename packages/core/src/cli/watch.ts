@@ -55,6 +55,12 @@ import { landingFallbackReason } from '../kernel/landing-state'
  * events still advance their stream's position, so a resume never rescans or
  * redelivers them.
  *
+ * Membership without slugs: builds that exist at attachment are baselined at
+ * their current maximum; a build announced in the repository journal after
+ * the watch's position replays from its first event, including one created
+ * while no watch ran after a resumed cursor. Cursors carry the creations still
+ * in preparation so an announcement straddling the position resolves.
+ *
  * Output carries no ANSI, ever, in either form (§16).
  */
 import type { AbEvent } from '../events/catalog'
@@ -169,13 +175,14 @@ interface CursorPayload {
   /** Per-stream watch position: build slug → seq, `#repo` → seq. */
   deliveredAttention?: string[]
   lostRuns?: string[]
-  /** Hook feeds only: build announcements still in preparation at this
-   * position, attempt → the slug and creation key `creation-selected` named. */
+  /** No-slug watches and hook feeds: build announcements still in preparation
+   * at this position, attempt → the slug and creation key `creation-selected`
+   * named. */
   preparing?: Record<string, PreparingBuild>
   streams: Record<string, number>
 }
 
-/** A selected build creation not yet resolved, as the hook feed tracks it. */
+/** A selected build creation not yet resolved, as a no-slug watch tracks it. */
 export interface PreparingBuild {
   slug: string
   creationKey?: string
@@ -859,14 +866,8 @@ async function feedBaselineCursor(context: WatchFeed['context'], feed: WatchFeed
     const window = b > cf0 ? await store.getRepoEvents(repo, cf0) : []
     for (const event of window) {
       if (event.seq > b) break
-      if (event.type === 'ticket-preparation.creation-selected') {
-        preparing.set(event.payload.attempt, {
-          slug: event.payload.slug,
-          ...(event.payload.creationKey !== undefined
-            ? { creationKey: event.payload.creationKey }
-            : {}),
-        })
-      } else if (event.type === 'ticket-preparation.resolved') {
+      if (recordSelection(preparing, event)) continue
+      if (event.type === 'ticket-preparation.resolved') {
         const entry = preparing.get(event.payload.attempt)
         if (event.payload.outcome === 'owned') {
           const slug =
@@ -928,6 +929,42 @@ async function resolveAnnouncedBuild(
   return found.length === 1 ? found[0] : undefined
 }
 
+/** Open the preparation a `creation-selected` event names; true when it did.
+ * Shared by every walk over the journal's build announcements. */
+function recordSelection(preparing: Map<string, PreparingBuild>, event: RepositoryEvent): boolean {
+  if (event.type !== 'ticket-preparation.creation-selected') return false
+  preparing.set(event.payload.attempt, {
+    slug: event.payload.slug,
+    ...(event.payload.creationKey !== undefined ? { creationKey: event.payload.creationKey } : {}),
+  })
+  return true
+}
+
+/**
+ * Discovery could not drain the repository journal, so it decided no
+ * membership this pass. Carries the read failure for reporting.
+ */
+class DiscoveryDrainError extends Error {
+  override readonly cause: unknown
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'DiscoveryDrainError'
+    this.cause = cause
+  }
+}
+
+/** Every slug an open preparation may yet create — the candidates
+ * `resolveAnnouncedBuild` would check once it resolves. */
+function pendingSlugs(preparing: Map<string, PreparingBuild>, repo: string): Set<string> {
+  const pending = new Set<string>()
+  for (const entry of preparing.values()) {
+    pending.add(entry.slug)
+    if (entry.creationKey !== undefined)
+      pending.add(creationBuildSlug(repo, entry.slug, entry.creationKey))
+  }
+  return pending
+}
+
 interface BuildStream {
   kind: 'build'
   slug: string
@@ -973,6 +1010,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
   const slugs = [...(opts.slugs ?? [])]
   const repository = opts.repository === true
   const followRepository = repository || slugs.length === 0
+  // No named slugs: membership is the repository's builds, so the watch
+  // follows the journal's build announcements (a feed is always discovering).
+  const discovering = slugs.length === 0
 
   const timeoutMs =
     opts.timeout !== undefined
@@ -1099,8 +1139,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         runner?.requestStop()
       }
 
-      // Feed only: selected creations not yet resolved, so an announcement
-      // whose selection lies behind a resumed position still resolves.
+      // Discovering watches: selected creations not yet resolved, so an
+      // announcement whose selection lies behind the watch's position (a
+      // resumed cursor, or attachment) still resolves.
       const preparing = new Map<string, PreparingBuild>(
         Object.entries(resumedCursor?.preparing ?? {}),
       )
@@ -1113,7 +1154,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           ...(operator ? { operator: { id: operator.id, startedAt: operator.startedAt } } : {}),
           lostRuns: [...lostRuns],
           deliveredAttention: [...deliveredAttention],
-          ...(feed !== undefined ? { preparing: Object.fromEntries(preparing) } : {}),
+          ...(discovering ? { preparing: Object.fromEntries(preparing) } : {}),
         })
       /** Feed backpressure: a full consumer queue ends this pass early; the
        * unprocessed events stay in their stream's backlog for the next one. */
@@ -1331,6 +1372,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
 
       /**
+       * Streams still replaying their backlog in `trackBuild`. A remote watch
+       * registers a stream before the replay's read resolves, so a concurrent
+       * launch (discovery's `launchPending`) must not start polling it from
+       * the same position: both readers would deliver the backlog.
+       */
+      const replaying = new Set<string>()
+      /** Remote only: starts a stream's poll task once its replay finished. */
+      let launchTracked: ((stream: Stream) => void) | undefined
+
+      /**
        * Register a build stream over the full event prefix. `resumeSeq` (a
        * cursor position) additionally emits every matching event after it —
        * the backlog that landed while no watch was running. A baseline (the
@@ -1361,21 +1412,32 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         positions[slug] = stream.lastSeq
         if (resumeSeq === undefined || resumedCursor?.deliveredAttention === undefined)
           baselineMerge(slug, seed)
+        // A stop between an event record and its merge-gate observation (a
+        // tripped --count, a restart) leaves the observation outstanding at
+        // the resumed position: deliver it there, before the backlog, as an
+        // uninterrupted watch would have. The identity deduplicates it.
+        if (resumeSeq !== undefined) checkMergeDecision(stream, buildReducer.finish(seed.build))
         if (resumeSeq !== undefined) {
-          const backlog = await readBuildRange(store, slug, resumeSeq)
-          for (const [index, event] of backlog.entries()) {
-            if (halted()) {
-              if (!stop) stream.backlog = backlog.slice(index)
-              break
+          replaying.add(slug)
+          try {
+            const backlog = await readBuildRange(store, slug, resumeSeq)
+            for (const [index, event] of backlog.entries()) {
+              if (halted()) {
+                if (!stop) stream.backlog = backlog.slice(index)
+                break
+              }
+              processBuildEvent(stream, event)
             }
-            processBuildEvent(stream, event)
+          } finally {
+            replaying.delete(slug)
           }
         }
         checkConsent(stream)
-        // A restart between an event record and its merge-gate observation
-        // must not lose the observation; the identity deduplicates it.
-        if (feed !== undefined && resumeSeq !== undefined)
+        // A backlog cut short by backpressure stopped before its last event's
+        // check; the identity deduplicates one already delivered.
+        if (resumeSeq !== undefined)
           checkMergeDecision(stream, buildReducer.finish(stream.seed.build))
+        if (streams.get(slug) === stream) launchTracked?.(stream)
         return true
       }
 
@@ -1383,20 +1445,55 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const retired = new Set<string>()
 
       /**
-       * No-slug membership: every nonterminal build of this repository joins
-       * the watch, baselined at its current maximum so no history replays. A
-       * build discovered while nonterminal stays tracked even after it turns
-       * terminal. Cursor-resumed and named streams are never re-baselined.
+       * No-slug membership. A build announced in the journal after the
+       * watch's repository position was created after it and joins through
+       * `announce` from its first event. Every other nonterminal build of
+       * this repository — one that existed at attachment, or carries no
+       * announcement — joins here, baselined at its current maximum so no
+       * history replays. A build discovered while nonterminal stays tracked
+       * even after it turns terminal. Cursor-resumed and named streams are
+       * never re-baselined.
        *
-       * Throws on a failed read — never swallows it: the poll loop's tick
-       * catches and reports the failure once on stderr, and the initial scan
-       * turns it into the friendly startup error. Streams discovered before
-       * the throw stay tracked, so the retry neither duplicates nor skips.
+       * The order closes the race with announcements: list first, then drain
+       * the journal to its tail, then decide. `creation-selected` precedes
+       * every `createBuild`, so a listed build created after the watch's
+       * position is by then either announced (tracked) or still preparing —
+       * deferred until its resolution tracks it. Returns whether the journal
+       * was drained, so the pass need not read it again. A failed drain
+       * decides nothing: it throws `DiscoveryDrainError` before the listing
+       * is consulted, and a later pass retries.
+       *
+       * Throws on a failed listing, drain or seed read — never swallows it: the
+       * poll loop's tick catches and reports the failure once on stderr, and
+       * the initial scan turns a listing or seed failure into the friendly
+       * startup error (a drain failure is reported and retried). Streams
+       * discovered before the throw stay tracked, so the retry neither
+       * duplicates nor skips.
        */
-      const discoverBuilds = async (): Promise<void> => {
+      const discoverBuilds = async (): Promise<boolean> => {
         const digests = await readBuildDigests(store, repo)
-        for (const record of (await store.listBuilds()).filter(mine)) {
+        const listed = (await store.listBuilds()).filter(mine)
+        const repositoryStream = streams.get(REPO_STREAM_KEY)
+        let drained = false
+        if (repositoryStream?.kind === 'repo' && !stop) {
+          try {
+            await pollRepository(repositoryStream)
+            drained = true
+          } catch (error) {
+            // Without the journal, a listed build created after the position
+            // is indistinguishable from a pre-existing one, and baselining it
+            // would skip its history for good once its announcement arrives.
+            // Defer every membership decision to a pass that drains.
+            if (isTerminalEventReadError(error)) throw error
+            if (error instanceof ReducerValueIncompatibilityError) throw error
+            throw new DiscoveryDrainError(error)
+          }
+        }
+        const pending = pendingSlugs(preparing, repo)
+        for (const record of listed) {
+          if (stop) break
           if (streams.has(record.slug) || retired.has(record.slug)) continue
+          if (pending.has(record.slug)) continue
           const digest = digests.get(record.slug)
           if (digest !== undefined && digest.terminal !== undefined) continue
           const current = await readBuildStreamSeed(store, record.slug)
@@ -1420,38 +1517,35 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           baselineMerge(record.slug, current.value)
           positions[record.slug] = stream.lastSeq
           checkConsent(stream)
-          if (stop) break
         }
+        return drained
       }
 
       /**
-       * Feed discovery, run for every repository event before it is
-       * processed, so the journal position passes an announcement only once
-       * its build is tracked. A build resolved `owned` after this feed's
-       * position replays from seq 0 whatever its status now; one announced
-       * before it is in the cursor already or was drained and retired.
-       * Depends on ticket preparation journaling around every createBuild.
+       * Announcement discovery, run in a discovering watch for every
+       * repository event before it is processed, so the journal position
+       * passes an announcement only once its build is tracked. A build
+       * resolved `owned` after this watch's position replays from seq 0
+       * whatever its status now; one announced before it is in the cursor
+       * already, was baselined at attachment, or (feed) was drained and
+       * retired. Depends on ticket preparation journaling around every
+       * createBuild. An announcement the CLI cannot resolve — its selection
+       * predates a cursor that carried no open preparations — is left to
+       * discovery's baseline; a feed reports it.
        */
       const announce = async (event: RepositoryEvent): Promise<void> => {
-        if (feed === undefined) return
-        if (event.type === 'ticket-preparation.creation-selected') {
-          preparing.set(event.payload.attempt, {
-            slug: event.payload.slug,
-            ...(event.payload.creationKey !== undefined
-              ? { creationKey: event.payload.creationKey }
-              : {}),
-          })
-          return
-        }
+        if (!discovering) return
+        if (recordSelection(preparing, event)) return
         if (event.type !== 'ticket-preparation.resolved') return
         const { attempt } = event.payload
         if (event.payload.outcome === 'owned') {
           const entry = preparing.get(attempt)
           const slug =
             entry === undefined ? undefined : await resolveAnnouncedBuild(store, repo, entry)
-          if (slug === undefined) await feed.unresolved(unresolvedAnnouncement(attempt))
+          if (slug === undefined) await feed?.unresolved(unresolvedAnnouncement(attempt))
           else if (!streams.has(slug) && !retired.has(slug)) {
-            if (!(await trackBuild(slug, 0))) await feed.unresolved(unresolvedAnnouncement(attempt))
+            if (!(await trackBuild(slug, 0)))
+              await feed?.unresolved(unresolvedAnnouncement(attempt))
           }
         }
         preparing.delete(attempt)
@@ -1499,6 +1593,56 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           lostRuns.delete(run)
       }
 
+      /**
+       * Position the repository stream: at the cursor when resuming, else at
+       * the journal tail with the served attention value. A fresh
+       * discovering CLI watch also seeds the open preparations at that
+       * baseline — repository facts `P0` at `Cf0`, read BEFORE attention at
+       * `B`, then the window `(Cf0, B]` — so a creation selected before
+       * attachment and resolved after it still joins from its first event.
+       */
+      const initializeRepository = async (stream: RepositoryStream): Promise<number> => {
+        const resumeSeq = sinceStreams[REPO_STREAM_KEY]
+        if (resumeSeq !== undefined && store.getStreamSeed)
+          await store.getStreamSeed({ kind: 'repo', repo }, resumeSeq)
+        const seedPreparing = resumeSeq === undefined && discovering && feed === undefined
+        for (;;) {
+          const facts = seedPreparing ? await readRepositoryFacts(store, repo) : undefined
+          const current = await readRepositoryAttention(store, repo)
+          const baseline = resumeSeq ?? current.cursor
+          // Both are served at the tail and the journal only grows; a reversed
+          // pair is re-read rather than walked.
+          if (facts !== undefined && baseline < facts.cursor) continue
+          if (facts !== undefined) {
+            preparing.clear()
+            for (const [attempt, held] of Object.entries(facts.value.preparation))
+              if (held.slug !== undefined)
+                preparing.set(attempt, {
+                  slug: held.slug,
+                  ...(held.creationKey !== undefined ? { creationKey: held.creationKey } : {}),
+                })
+            // Resolutions in the window precede the baseline: bookkeeping only.
+            const window =
+              baseline > facts.cursor ? await store.getRepoEvents(repo, facts.cursor) : []
+            for (const event of window) {
+              if (event.seq > baseline) break
+              if (recordSelection(preparing, event)) continue
+              if (event.type === 'ticket-preparation.resolved')
+                preparing.delete(event.payload.attempt)
+            }
+          }
+          const seed =
+            resumeSeq === undefined
+              ? current.value
+              : await historicalRepositoryAttention(store, repo, resumeSeq, current)
+          repositoryAttention = new RepositoryAttention(seed)
+          stream.lastSeq = baseline
+          positions[REPO_STREAM_KEY] = baseline
+          attentionInitialized = true
+          return baseline
+        }
+      }
+
       const trackRepository = async (): Promise<boolean> => {
         const resumeSeq = sinceStreams[REPO_STREAM_KEY]
         const stream: RepositoryStream = { kind: 'repo', lastSeq: resumeSeq ?? 0, backlog: [] }
@@ -1506,18 +1650,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         positions[REPO_STREAM_KEY] = stream.lastSeq
         try {
           if ((await store.getRepo(repo)) !== null) {
-            if (resumeSeq !== undefined && store.getStreamSeed)
-              await store.getStreamSeed({ kind: 'repo', repo }, resumeSeq)
-            const current = await readRepositoryAttention(store, repo)
-            const baseline = resumeSeq ?? current.cursor
-            const seed =
-              resumeSeq === undefined
-                ? current.value
-                : await historicalRepositoryAttention(store, repo, resumeSeq, current)
-            repositoryAttention = new RepositoryAttention(seed)
-            attentionInitialized = true
-            stream.lastSeq = baseline
-            positions[REPO_STREAM_KEY] = baseline
+            const baseline = await initializeRepository(stream)
             if (resumeSeq !== undefined) {
               const backlog = await store.getRepoEvents(repo, baseline)
               for (const [index, event] of backlog.entries()) {
@@ -1525,7 +1658,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
                   if (!stop) stream.backlog = backlog.slice(index)
                   break
                 }
-                if (feed !== undefined) await announce(event)
+                await announce(event)
                 processRepositoryEvent(stream, event)
               }
             }
@@ -1572,19 +1705,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         if ((await store.getRepo(repo)) === null) return true
         if (!attentionInitialized) {
           repositoryInitialization ??= (async () => {
-            const resumeSeq = sinceStreams[REPO_STREAM_KEY]
-            if (resumeSeq !== undefined && store.getStreamSeed)
-              await store.getStreamSeed({ kind: 'repo', repo }, resumeSeq)
-            const current = await readRepositoryAttention(store, repo)
-            const baseline = resumeSeq ?? current.cursor
-            const seed =
-              resumeSeq === undefined
-                ? current.value
-                : await historicalRepositoryAttention(store, repo, resumeSeq, current)
-            repositoryAttention = new RepositoryAttention(seed)
-            stream.lastSeq = baseline
-            positions[REPO_STREAM_KEY] = baseline
-            attentionInitialized = true
+            await initializeRepository(stream)
           })()
           try {
             await repositoryInitialization
@@ -1606,7 +1727,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               break
             }
             if (event.seq <= stream.lastSeq) continue
-            if (feed !== undefined) await announce(event)
+            await announce(event)
             processRepositoryEvent(stream, event)
           }
           if (!stop) checkPersistence()
@@ -1633,18 +1754,21 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
 
       const tick = async (): Promise<boolean> => {
         let allReadsOk = true
+        // Discovery drains the journal itself; the pass does not read it twice.
+        let drained = false
         if (slugs.length === 0 && feed === undefined) {
           try {
-            await discoverBuilds()
+            drained = await discoverBuilds()
           } catch (error) {
             if (isTerminalEventReadError(error)) throw error
             allReadsOk = false
-            tickStreak.onFailure(error)
+            tickStreak.onFailure(error instanceof DiscoveryDrainError ? error.cause : error)
           }
         }
         for (const stream of [...streams.values()]) {
           if (stop) return allReadsOk
           if (feed !== undefined && halted()) break
+          if (drained && stream.kind === 'repo') continue
           try {
             if (stream.kind === 'build') await pollBuild(stream)
             else await pollRepository(stream)
@@ -1717,8 +1841,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           await discoverBuilds()
         } catch (error) {
           if (isTerminalEventReadError(error)) throw error
-          const message = error instanceof Error ? error.message : String(error)
-          throw new Error(`could not list builds in this store (${message})`)
+          // An unreadable journal defers membership to the first pass that
+          // drains it; the loop retries, so startup need not fail.
+          if (error instanceof DiscoveryDrainError) tickStreak.onFailure(error.cause)
+          else {
+            const message = error instanceof Error ? error.message : String(error)
+            throw new Error(`could not list builds in this store (${message})`)
+          }
         }
       }
 
@@ -1809,6 +1938,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         runner = remoteRunner
 
         const launch = (stream: Stream): void => {
+          // trackBuild launches it once the replay has delivered the backlog.
+          if (stream.kind === 'build' && replaying.has(stream.slug)) return
           const key = stream.kind === 'build' ? stream.slug : REPO_STREAM_KEY
           remoteRunner.launch(
             key,
@@ -1824,14 +1955,22 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // the in-flight held reads and wakes the gap sleeps.
         opts.signal?.addEventListener('abort', requestStop, { once: true })
 
+        if (!shouldStop) launchTracked = launch
         for (const stream of streams.values()) if (!shouldStop) launch(stream)
 
         if ((slugs.length === 0 || followRepository) && !shouldStop) {
           void remoteRunner.runDiscovery({
             step: async (): Promise<void> => {
-              if (slugs.length === 0) await discoverBuilds()
+              // Discovery drains the journal; a named --repository watch polls it.
               const repositoryStream = streams.get(REPO_STREAM_KEY)
-              if (repositoryStream?.kind === 'repo' && !stop) await pollRepository(repositoryStream)
+              if (slugs.length === 0) {
+                try {
+                  await discoverBuilds()
+                } catch (error) {
+                  throw error instanceof DiscoveryDrainError ? error.cause : error
+                }
+              } else if (repositoryStream?.kind === 'repo' && !stop)
+                await pollRepository(repositoryStream)
               await checkLiveness()
             },
             // Unconditional, after the catch — exactly where the inline

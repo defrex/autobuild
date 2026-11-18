@@ -2868,8 +2868,9 @@ operator-only read (ambient phase identity fails closed).
 **`ab watch [<slug>...] [--repository] [--operator] [--event <glob>]... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**
 streams matching events as they land instead of answering once. With no slug it
-follows every nonterminal build in the repository — a build created while the
-watch runs joins it without a restart — and naming one or more slugs watches
+follows every nonterminal build in the repository — builds that exist when it
+attaches are baselined, and a build created while the watch runs joins it
+without a restart, from its first event — and naming one or more slugs watches
 exactly those builds, ending the watch when all of them reach a terminal status.
 With no slugs the repository journal is included; named watches add it with
 `--repository`.
@@ -2959,11 +2960,16 @@ have `repo` and null build/state. Source observations also report
 
 Every record carries a cursor, including timer-only records. Resuming suppresses
 delivered merge decisions and persistence episodes even when stream positions
-did not advance. Old v1 cursors remain valid: historical eligible merge
+did not advance. A merge decision still due at the cursor, because the watch
+stopped on its event before observing it, is delivered once on resume, before
+the later events. Old v1 cursors remain valid: historical eligible merge
 decisions are treated as consumed; active overdue repository episodes may
 report because old watches had no persistence notification. Fresh attachment
 silently baselines historical direct events and merge decisions, but retains
-active repository timers. Reconcile existing conditions through status after
+active repository timers. A no-slug watch follows each build announced in the
+journal after its position from the build's first event; cursors carry
+creations still in preparation, and a cursor from an earlier release, which
+carries none, baselines a build whose creation was selected before it. Reconcile existing conditions through status after
 arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
@@ -2981,8 +2987,9 @@ record is one plain human-readable line. On every exit the last `--json` line
 is a bare `{"cursor": …}` object reflecting the final position even when no
 record matched. Cursors are opaque; resume with `--since <cursor>` and every
 matching event after that cursor is delivered exactly once, in per-stream
-sequence order — including events that landed while no watch was running. A
-cursor from a different repository or store is rejected.
+sequence order — including events that landed while no watch was running and,
+with no slugs, events of builds created after that cursor. A cursor from a
+different repository or store is rejected.
 
 
 Dispatcher liveness is also visible through `ab repository status --json`:
