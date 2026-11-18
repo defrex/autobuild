@@ -2370,7 +2370,7 @@ finalize post-steps both route by their logical step name. The verify step's
 configured skill name remains a deprecated alias for existing configurations
 and will be removed in a future release. Repository judgments use `harvest` and
 `harvest-review`; each judge session of an optimization objective's judge panel
-uses `judge`; `slug` and `upgrade` configure tool-free one-shot judgments.
+uses `judge`, including its `alternates`; `slug` and `upgrade` configure tool-free one-shot judgments.
 Arbitrary additional role keys are accepted, but only a name selected by one of
 these routes affects a session.
 

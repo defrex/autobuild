@@ -111,6 +111,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'mixed-narrow',
     'unicode-transcript',
     'native-sessions',
+    'judge-sessions',
+    'judge-sessions-narrow',
     'session-live',
     'session-closed',
     'resume-prompt',
@@ -318,6 +320,35 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('suspended cause pause')
       expect(frame.text).toContain('fresh session: workspace-not-local-git-worktree')
       expect(frame.text).toContain('resumed cause pause continued from s_interrupted')
+    } else if (frame.id.startsWith('judge-sessions')) {
+      const detail = frame.model.builds.find((build) => build.slug === 'plan-blocked-dashboard')!
+      expect(
+        detail.sessions?.map((session) => [
+          session.role,
+          session.phase,
+          session.runtime,
+          session.status,
+          session.stream,
+          session.streamStatus,
+        ]),
+      ).toEqual([
+        ['implement', 'implement', 'pi', 'ended', undefined, 'closed'],
+        ['judge', 'judge:panel-1:1', 'codex', 'ended', 'st_judge_1a', 'closed'],
+        ['judge', 'judge:panel-1:1', 'claude', 'ended', 'st_judge_1b', 'closed'],
+        ['judge', 'judge:panel-1:2', 'codex', 'ended', 'st_judge_2', 'closed'],
+        ['judge', 'judge:panel-1:3', 'codex', 'open', 'st_judge_3', 'open'],
+      ])
+      const flat = frame.text.replace(/\s+/g, ' ')
+      const primary = flat.indexOf('judge phase judge:panel-1:1 runtime codex')
+      const alternate = flat.indexOf('judge phase judge:panel-1:1 runtime claude')
+      expect(primary).toBeGreaterThanOrEqual(0)
+      expect(alternate).toBeGreaterThan(primary)
+      expect(flat).toContain('stream st_judge_3 (open)')
+      const serialized = JSON.stringify(detail.sessions)
+      for (const side of ['candidate-first', 'baseline-first', 'candidate']) {
+        expect(frame.text).not.toContain(side)
+        expect(serialized).not.toContain(side)
+      }
     } else if (frame.id === 'verify-stages-wide') {
       expect(
         frame.model.builds[0]!.steps.filter((step) => step.state === 'current').map(
