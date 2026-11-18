@@ -99,6 +99,8 @@ test.each([
       policy: NetworkPolicy = 'allow-all'
       provisioned = false
       deleted = false
+      /** The commit the guest checkout is on, moved by `checkout -B`. */
+      head = BASE
       /** Simulated `/opt/autobuild/.distribution-version` marker content. */
       distributionVersion: string | undefined
       /** The version the guest's provisioned Bun reports. */
@@ -141,6 +143,10 @@ test.each([
         }
         if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
         if (params.cmd === 'touch') this.provisioned = true
+        const git = params.cmd === 'git' ? ((params.args as string[] | undefined) ?? []) : []
+        if (git[0] === 'checkout' && git[1] === '-B') this.head = git[3]!
+        if (git[0] === 'rev-parse' && git.includes('HEAD^{commit}'))
+          return { exitCode: 0, stdout: async () => `${this.head}\n${this.head}\n` }
         if (
           params.cmd === 'cat' &&
           (params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER
@@ -652,6 +658,8 @@ for (const upgrading of [false, true])
       readonly name = 'autobuild-detached'
       provisioned = false
       deleted = false
+      /** The commit the guest checkout is on, moved by `checkout -B`. */
+      head = BASE
       /** Simulated `/opt/autobuild/.distribution-version` marker content. */
       distributionVersion: string | undefined
       /** The version the guest's provisioned Bun reports. */
@@ -726,6 +734,10 @@ for (const upgrading of [false, true])
         }
         if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
         if (params.cmd === 'touch') this.provisioned = true
+        const git = params.cmd === 'git' ? ((params.args as string[] | undefined) ?? []) : []
+        if (git[0] === 'checkout' && git[1] === '-B') this.head = git[3]!
+        if (git[0] === 'rev-parse' && git.includes('HEAD^{commit}'))
+          return { exitCode: 0, stdout: async () => `${this.head}\n${this.head}\n` }
         if (
           params.cmd === 'cat' &&
           (params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER
@@ -1601,12 +1613,16 @@ test('a half-provisioned sandbox whose clone lacks the base is released without 
   const healthy = (name: string) => {
     let provisioned = false
     let distribution: string | undefined
+    let head = BASE
     return handle(name, async (params) => {
       const args = params.args ?? []
       if (params.cmd === VERCEL_BUN_EXECUTABLE && args[0] === '--version')
         return output(0, `${VERCEL_BUN_VERSION}\n`)
       if (params.cmd === 'test') return output(provisioned ? 0 : 1)
       if (params.cmd === 'touch') provisioned = true
+      if (params.cmd === 'git' && args[0] === 'checkout' && args[1] === '-B') head = args[3]!
+      if (params.cmd === 'git' && args[0] === 'rev-parse' && args.includes('HEAD^{commit}'))
+        return output(0, `${head}\n${head}\n`)
       if (params.cmd === 'cat' && args[0] === VERCEL_DISTRIBUTION_VERSION_MARKER)
         return distribution === undefined ? output(1) : output(0, distribution)
       if (params.cmd === 'sh' && args[4] === VERCEL_DISTRIBUTION_VERSION_MARKER)
