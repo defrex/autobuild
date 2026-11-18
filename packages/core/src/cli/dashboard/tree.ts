@@ -22,6 +22,7 @@ export const treeVocabulary = {
   queue: 'queue',
   work: 'work',
   integrationKind: 'integration',
+  optimizationKind: 'optimization node',
   branch: 'branch',
   children: 'children',
   verify: 'verify',

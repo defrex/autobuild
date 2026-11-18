@@ -176,6 +176,9 @@ A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
 spec and its publication is confirmed.
+A revision of an optimization node may change its `autobuild-objective` block
+but cannot remove it, and a revision of a plain node or a leaf cannot add one;
+both refusals record nothing.
 
 ## The registry's protocol face: `POST …/tools/{tool}`
 
@@ -432,6 +435,19 @@ Only the dispatcher's own classified limits record that degradation. Status
 also lists active `forgeCredentialLimits`: limits on unauthenticated requests or
 seen by build runners and phase sessions, each naming the process, which never
 pause repository forge work.
+
+### Optimization objective revision
+
+`optimization.revise` accepts `{repo, slug, threshold?, epsilon?, maxAttempts?,
+maxHours?, plateau?, stopMode?, concurrency?}` with at least one change.
+`epsilon` is `{absolute}` or `{relative}`, and `stopMode` is `abort` or `drain`.
+It uses the same service as `ab objective <node>` with flags and records one
+human `optimization.objective-revised` fact carrying the changes and the next
+objective revision. The receipt contains `slug`, `revision` and `changes`.
+It refuses non-node builds, nodes with no accepted objective and terminal
+nodes, and changes that leave the effective objective invalid; it enforces
+repository ownership. Running attempts are unaffected. The metric, harness and
+purpose change only through a node spec revision. The tool has no HTTP route.
 
 ### Node restack request
 

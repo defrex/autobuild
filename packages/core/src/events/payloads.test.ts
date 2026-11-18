@@ -1553,3 +1553,202 @@ test('hand-back checkpoints round-trip, and a legacy abort checkpoint still vali
     }).payload,
   ).toEqual({ ticket, state: 'Ready', cause: 'discard', role: 'ready' })
 })
+
+describe('optimization event protocol', () => {
+  const objective = {
+    purpose: 'faster search',
+    metric: {
+      kind: 'command',
+      command: 'bun bench.ts',
+      direction: 'minimize',
+      samples: 3,
+      harness: ['bench/**'],
+    },
+    target: { epsilon: { absolute: 2 } },
+    budget: { maxAttempts: 5 },
+    stop: { mode: 'abort' },
+    proposer: { concurrency: 1 },
+  }
+  const ticket = { source: 'local', id: 'T-1' }
+  const sha = 'a'.repeat(40)
+  const valid = (type: string, payload: unknown, actor: unknown = DISPATCHER) =>
+    validateEventWrite({ actor, type, payload } as never)
+  const invalid = (type: string, payload: unknown, actor: unknown = DISPATCHER) =>
+    expect(() => valid(type, payload, actor)).toThrow()
+
+  test('every optimization event validates its strict payload', () => {
+    const cases: [string, unknown, unknown, unknown?][] = [
+      [
+        'optimization.objective-accepted',
+        { objective, revision: 1, harnessPin: sha, specRev: 0 },
+        { objective: { ...objective, budget: {} }, revision: 1, harnessPin: sha, specRev: 0 },
+      ],
+      [
+        'optimization.objective-revised',
+        { changes: { threshold: 30, epsilon: { relative: 0.05 } }, revision: 2 },
+        { changes: {}, revision: 2 },
+        humanActor('ada'),
+      ],
+      [
+        'optimization.baseline-measured',
+        { revision: 1, head: sha, harnessPin: sha, samples: 3, median: 41, spread: 1.5 },
+        { revision: 1, head: sha, harnessPin: sha, samples: 3, median: 41, spread: -1 },
+        KERNEL,
+      ],
+      [
+        'optimization.proposal-requested',
+        { id: 'p1', head: sha, room: 2, budgetUsed: { attempts: 3, hours: 1.5 } },
+        { id: 'p1', head: sha, room: -1, budgetUsed: { attempts: 3, hours: 1.5 } },
+      ],
+      [
+        'optimization.attempts-proposed',
+        {
+          request: 'p1',
+          proposals: [{ id: 'a1', ticket, title: 'Cache plans', strategy: 'cache query plans' }],
+        },
+        { request: 'p1', proposals: [] },
+      ],
+      [
+        'attempt.measurement-requested',
+        {
+          id: 'm1',
+          node: 'node-slug',
+          candidate: sha,
+          baseline: sha,
+          harnessPin: sha,
+          revision: 1,
+        },
+        {
+          id: 'm1',
+          node: 'node-slug',
+          candidate: sha,
+          baseline: sha,
+          harnessPin: sha,
+          revision: 0,
+        },
+      ],
+      [
+        'attempt.measured',
+        {
+          request: 'm1',
+          candidate: sha,
+          baseline: sha,
+          harnessPin: sha,
+          revision: 1,
+          samples: 3,
+          medians: { candidate: 38, baseline: 41 },
+          delta: 3,
+          decision: 'improved',
+        },
+        {
+          request: 'm1',
+          candidate: sha,
+          baseline: sha,
+          harnessPin: sha,
+          revision: 1,
+          samples: 3,
+          medians: { candidate: 38, baseline: 41 },
+          winRate: 0.7,
+          delta: 3,
+          decision: 'improved',
+        },
+        KERNEL,
+      ],
+      [
+        'optimization.progress-measured',
+        { revision: 1, head: sha, start: sha, winRate: 0.7, judges: 5 },
+        { revision: 1, head: sha, start: sha, winRate: 1.2, judges: 5 },
+        KERNEL,
+      ],
+      [
+        'attempt.settled',
+        {
+          attempt: { proposal: 'a1', ticket, build: 'attempt-slug' },
+          outcome: 'no-improvement',
+          measurement: { revision: 1, baseline: 41, candidate: 40.5, delta: 0.5 },
+          note: 'within noise',
+        },
+        { attempt: { proposal: 'a1', ticket }, outcome: 'accepted' },
+      ],
+      [
+        'optimization.stopped',
+        { cause: 'plateau', mode: 'drain' },
+        { cause: 'bored', mode: 'drain' },
+      ],
+    ]
+    for (const [type, good, bad, actor] of cases) {
+      expect(valid(type, good, actor ?? DISPATCHER)).toMatchObject({ type })
+      invalid(type, bad, actor ?? DISPATCHER)
+      invalid(type, { ...(good as object), extra: true }, actor ?? DISPATCHER)
+    }
+  })
+
+  test('the settlement outcome is a closed vocabulary and only measured outcomes need a delta', () => {
+    for (const outcome of ['declined', 'stopped', 'aborted'])
+      expect(
+        valid('attempt.settled', { attempt: { proposal: 'a1', ticket }, outcome }),
+      ).toMatchObject({ type: 'attempt.settled' })
+    invalid('attempt.settled', { attempt: { proposal: 'a1', ticket }, outcome: 'merged' })
+    invalid('attempt.settled', { attempt: { proposal: 'a1', ticket }, outcome: 'no-improvement' })
+    invalid('attempt.settled', {
+      attempt: { proposal: 'a1', ticket },
+      outcome: 'declined',
+      note: 'x'.repeat(4001),
+    })
+  })
+
+  test('an empty proposal needs a reason, and a panel measurement carries a win rate alone', () => {
+    expect(
+      valid('optimization.attempts-proposed', {
+        request: 'p1',
+        proposals: [],
+        reason: 'out of ideas',
+      }),
+    ).toMatchObject({ type: 'optimization.attempts-proposed' })
+    expect(
+      valid(
+        'attempt.measured',
+        {
+          request: 'm1',
+          candidate: sha,
+          baseline: sha,
+          harnessPin: sha,
+          revision: 1,
+          samples: 5,
+          winRate: 0.8,
+          delta: 0.3,
+          decision: 'improved',
+        },
+        KERNEL,
+      ),
+    ).toMatchObject({ type: 'attempt.measured' })
+    invalid(
+      'attempt.measured',
+      {
+        request: 'm1',
+        candidate: sha,
+        baseline: sha,
+        harnessPin: sha,
+        revision: 1,
+        samples: 5,
+        delta: 0.3,
+        decision: 'improved',
+      },
+      KERNEL,
+    )
+  })
+
+  test('objective revisions are human facts and acceptance is not', () => {
+    invalid(
+      'optimization.objective-revised',
+      { changes: { threshold: 1 }, revision: 2 },
+      DISPATCHER,
+    )
+    invalid(
+      'optimization.objective-accepted',
+      { objective, revision: 1, harnessPin: sha, specRev: 0 },
+      humanActor('ada'),
+    )
+    expect(Object.keys(eventPayloadSchemas)).toContain('optimization.stopped')
+  })
+})
