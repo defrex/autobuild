@@ -630,5 +630,13 @@
   "packages/core/src/store/event-reads.ts::readHarvestTail::getRepoEvents": {
     "kind": "raw",
     "reason": "Explicit filtered harvest history, local adapter fallback only; hosted stores use indexed bounded pages."
+  },
+  "packages/core/src/kernel/optimization.ts::optimizationReducer/fold::advanceOptimization": {
+    "kind": "reduction",
+    "reason": "Registered incremental optimization digest definition; its fold consumes only the delta events handed to it by the persisted prefix."
+  },
+  "packages/core/src/kernel/reducer.ts::foldBuild::advanceOptimization": {
+    "kind": "reduction",
+    "reason": "Incrementally folds the same single incoming event into the nested optimization digest accumulator; no current-state replay or store read."
   }
 }
