@@ -1110,6 +1110,76 @@ export async function ticketTargetingReadBudget(
   expect(costs[1]).toEqual(costs[0]!)
 }
 
+/** One fixture per population and listing path: a fresh source over
+ * `population` tickets, all in `Ready`, none urgent. `native` is a service
+ * answering `list-page`; `fallback` is one predating it. `requests` are the
+ * ticket-service operations the source issued since `reset`, with their
+ * response sizes; window rows must not vary in size with the population. */
+export interface TicketPageFixture {
+  source: TicketSource
+  reset(): void
+  statements(): number
+  requests(): { operation: string; bytes: number }[]
+}
+
+/** A paged operator listing (per operator request and per dashboard page view)
+ * through a hosted service that pages natively costs one `list-page` request
+ * whose statements are the same, and whose bytes differ only by the width of
+ * the total's digits, at 10 and 10,000 tickets. Against a service predating it,
+ * the same listing reads every ticket through one `list-ready`. */
+export async function ticketPageReadBudget(
+  fixture: (population: number, mode: 'native' | 'fallback') => Promise<TicketPageFixture>,
+): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { listOperatorTickets } = await import('../operator/tickets')
+  const { ticketsSchema } = await import('../config/schema')
+  const tickets = ticketsSchema.parse({ source: 'hosted', teamKey: 'ENG', readyState: 'Ready' })
+  const populations = [10, 10_000] as const
+  const costs = new Map<string, { statements: number; bytes: number; ids: string[] }>()
+  for (const mode of ['native', 'fallback'] as const)
+    for (const population of populations) {
+      const { source, reset, statements, requests } = await fixture(population, mode)
+      if (mode === 'native') expect(source.listPage).toBeDefined()
+      else expect(source.listPage).toBeUndefined()
+      for (const order of ['oldest', 'newest'] as const) {
+        reset()
+        const queue = await listOperatorTickets({
+          store: new MemoryBuildStore(),
+          repo: 'repo',
+          state: 'Ready',
+          page: { limit: 3, offset: 2, order },
+          backend: {
+            contextFor: async () => ({ repo: 'repo', tickets, teamKey: 'ENG' }),
+            sourceFor: () => source,
+            statesFor: () => ['Ready'],
+          },
+        })
+        expect(queue.tickets).toHaveLength(3)
+        expect(queue.total).toBe(population)
+        expect(requests().map((request) => request.operation)).toEqual([
+          mode === 'native' ? 'list-page' : 'list-ready',
+        ])
+        costs.set(`${mode}:${population}:${order}`, {
+          statements: statements(),
+          bytes: requests().reduce((total, request) => total + request.bytes, 0),
+          ids: queue.tickets.map((ticket) => ticket.ref.id),
+        })
+      }
+    }
+  const digits = String(populations[1]).length - String(populations[0]).length
+  for (const order of ['oldest', 'newest'] as const) {
+    const small = costs.get(`native:${populations[0]}:${order}`)!
+    const large = costs.get(`native:${populations[1]}:${order}`)!
+    expect(large.statements).toBe(small.statements)
+    expect(Math.abs(large.bytes - small.bytes)).toBeLessThanOrEqual(digits)
+    // With no urgent ticket both paths agree on the window; the fallback read
+    // every ticket to produce it.
+    const fallback = costs.get(`fallback:${populations[1]}:${order}`)!
+    expect(fallback.ids).toEqual(large.ids)
+    expect(fallback.bytes).toBeGreaterThan(large.bytes * 100)
+  }
+}
+
 /** Builds one dispatcher pass's observation inputs for a node build over a
  * fresh memory store, reporting which listing path the source decided on
  * before the pass; `observe` then observes the node with those inputs. */

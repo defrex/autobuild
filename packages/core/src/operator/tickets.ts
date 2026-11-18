@@ -153,8 +153,7 @@ export async function listOperatorTickets(opts: {
   ])
   // Native pages arrive ordered; the fallback mirrors the dispatcher's claim
   // order. listReady is in the source's filing order, so reversing it is newest
-  // filed first. The remote hosted client is the exception: its listing arrives
-  // urgent-first with no filing time, so there newest is reversed dispatch order.
+  // filed first.
   const ordered = nativePage
     ? listing.tickets
     : opts.page?.order === 'newest'
