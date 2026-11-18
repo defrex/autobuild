@@ -6,7 +6,8 @@
  *
  * Every decision is read from reduced state. An unstopped node costs no
  * added read; a stopped node with attempts in flight costs at most one
- * `buildFacts` per non-terminal attempt build, and none once they settle.
+ * reduced `buildFacts` per unmerged attempt build not mid-abort, and none
+ * once they settle.
  */
 import { DISPATCHER } from '../events/envelope'
 import type { TicketMigrations } from '../kernel/ticket-migrations'
@@ -108,7 +109,10 @@ export async function enforceOptimizationStop(
       ...(digest.terminal !== undefined ? { terminal: digest.terminal } : {}),
       ...(digest.merged !== undefined ? { merged: true } : {}),
     }
-    if (digest.terminal === undefined && digest.merged === undefined) {
+    // An aborted attempt is decided from its digest until its cleanup's
+    // `build.completed`, which reports `done`; only the outcome tells an
+    // abandoned build from a finished one.
+    if (digest.terminal !== 'aborted' && digest.merged === undefined) {
       const child = (await deps.store.buildFacts(entry.record.slug)).state
       children.set(entry.record.slug, child)
       build.state = child

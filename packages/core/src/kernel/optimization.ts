@@ -303,8 +303,12 @@ export interface OptimizationAttemptBuild {
   slug: string
   terminal?: 'done' | 'aborted'
   merged?: boolean
-  /** The build's reduced state; read only for a non-terminal, unmerged build. */
-  state?: Pick<BuildState, 'status' | 'currentPhase' | 'lastCompletedPhase' | 'pendingCommands'>
+  /** The build's reduced state; read only for an unmerged build that is not
+   * mid-abort, since abort cleanup ends in `build.completed {abandoned}`. */
+  state?: Pick<
+    BuildState,
+    'status' | 'outcome' | 'currentPhase' | 'lastCompletedPhase' | 'pendingCommands'
+  >
 }
 
 export interface OptimizationStopActions {
@@ -332,7 +336,7 @@ export function optimizationStopActions(
       actions.settle.push({ attempt })
       continue
     }
-    if (build.terminal === 'aborted') {
+    if (build.terminal === 'aborted' || build.state?.outcome === 'abandoned') {
       actions.settle.push({ attempt, build: build.slug })
       continue
     }
