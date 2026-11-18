@@ -224,16 +224,16 @@ describe('hosted MCP endpoint guard', () => {
     // The transport contract: GET answers an SSE stream (the SDK's standalone
     // stream, not a 405 — stateless mode disables session validation, not
     // server-to-client streams).
-    expect(
-      (
-        await endpoint_.fetch(
-          new Request('https://operator.example/mcp', {
-            method: 'GET',
-            headers: { accept: 'text/event-stream' },
-          }),
-        )
-      ).status,
-    ).toBe(200)
+    const stream = await endpoint_.fetch(
+      new Request('https://operator.example/mcp', {
+        method: 'GET',
+        headers: { accept: 'text/event-stream' },
+      }),
+    )
+    expect(stream.status).toBe(200)
+    // Disconnect like a client would: the open stream arms the SDK's
+    // keep-alive interval, which would otherwise outlive this test.
+    await stream.body?.cancel()
     const preflight = await endpoint_.fetch(
       new Request('https://operator.example/mcp', { method: 'OPTIONS' }),
     )
