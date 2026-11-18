@@ -168,7 +168,7 @@ import {
   githubTokenFromEnv,
   type GitHubRequest,
 } from '../ports/forge/github-transport'
-import { GitHubForge } from '../ports/forge/github'
+import { GitHubForge, refusedArchiveFallback } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
@@ -628,6 +628,9 @@ async function defaultWire(
         },
       }
     : {}
+  // A guest whose archive push is refused falls back to the forge's REST
+  // creation on the host, in checkout and origin mode alike.
+  const refusedArchive = refusedArchiveFallback(forge)
   const opened = openStoreForRepoState(state, { env: opts.env })
 
   const tickets = await dispatcherTicketSource(
@@ -715,6 +718,7 @@ async function defaultWire(
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
     orchestratorSandboxEnabled: config.orchestrator.enabled,
     ...providerSeams,
+    ...(refusedArchive !== undefined ? { refusedArchive } : {}),
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 

@@ -5,8 +5,11 @@ import {
   GitHubForge,
   MERGEABILITY_RETRY_DELAYS_MS,
   parseRepoCoordinates,
+  refusedArchiveFallback,
   rulesetsHaveMergeGate,
 } from './github'
+import { FakeForge } from './fake'
+import { LocalGitForge } from './local-git'
 import {
   GitHubApiError,
   type GitHubRequest,
@@ -3526,6 +3529,54 @@ for (const entry of ['rewrite', 'kernelRewrite'] as const) {
     })
   }
 }
+describe('refused archive fallback for guest transports', () => {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  function forge(respond: (method: string) => GitHubResponse) {
+    const calls: { method: string; path: string; body: unknown }[] = []
+    const forge = new GitHubForge({
+      repository: 'acme/app',
+      token: 'test-token',
+      transport: async (method, path, opts) => {
+        calls.push({ method, path, body: opts?.body })
+        return respond(method)
+      },
+    })
+    return { forge, calls }
+  }
+
+  test('the GitHub fallback issues the create-only archive ref POST', async () => {
+    const h = forge(() => ({
+      status: 201,
+      headers: {},
+      json: { ref, object: { sha, type: 'commit' } },
+    }))
+    await refusedArchiveFallback(h.forge)!(ref, sha)
+    expect(h.calls).toEqual([
+      { method: 'POST', path: 'repos/acme/app/git/refs', body: { ref, sha } },
+    ])
+  })
+
+  test('a commit GitHub lacks gets the actionable local-only error', async () => {
+    const h = forge((method) => {
+      if (method === 'GET') throw new GitHubApiError(404, 'Not Found')
+      throw new GitHubApiError(422, 'Object does not exist')
+    })
+    await expect(refusedArchiveFallback(h.forge)!(ref, sha)).rejects.toThrow(
+      'exists only in the local workspace',
+    )
+    expect(h.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST repos/acme/app/git/refs',
+      `GET repos/acme/app/git/commits/${sha}`,
+    ])
+  })
+
+  test('non-GitHub forges have no fallback', () => {
+    expect(refusedArchiveFallback(new FakeForge())).toBeUndefined()
+    expect(refusedArchiveFallback(new LocalGitForge({ repoRoot: '/repo' }))).toBeUndefined()
+  })
+})
+
 describe('immutable ancestry proof', () => {
   const ancestor = 'a'.repeat(40)
   const descendant = 'b'.repeat(40)

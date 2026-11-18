@@ -148,7 +148,9 @@ when the workspace lacks the commit, retaining guarded Git pushes for local obje
 When the environment refuses a non-branch Git push of an archive ref, as Claude Code on
 the web's GitHub proxy does, GitHub creates the identical archive ref through the same
 REST call; a commit that exists only in the local workspace cannot use this fallback and
-fails with an error naming both refusals.
+fails with an error naming both refusals. Vercel Sandbox workspaces get the same fallback:
+the guest pushes first, the dispatcher creates the ref with host-held credentials after a
+refusal, and the guest's exact readback confirms it.
 Exact remote readback confirms publication, then a non-shallow fetch of only that exact
 archive ref (without tags, configured refmap expansion or a depth limit) restores
 missing commits and their missing ancestry, writes no shallow boundary, leaves an
@@ -220,8 +222,10 @@ retry eligibility and recheck authorization after repository forge cooldown.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate continues guarded publication.
-A genuinely missing reconcile or automatic restack candidate records
+replay objects first. An available candidate is archived under its exact archive ref,
+with the refused-push fallback where supported, before guarded publication continues.
+A failed archive, including a failed fallback, defers to a later attempt and neither
+proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
