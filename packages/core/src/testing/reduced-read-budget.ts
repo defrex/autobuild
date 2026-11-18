@@ -4188,6 +4188,13 @@ export async function optimizationReadBudget(): Promise<void> {
               : {}),
           },
         })
+        // The node sweep's committed rejected-role move.
+        if (!accepted)
+          await store.append(node, {
+            actor: DISPATCHER,
+            type: 'attempt.ticket-rejected',
+            payload: { proposal: `p${i}`, ticket: proposal(i).ticket, state: 'Rejected' },
+          })
       }
     }
     // Warm-up: each reduced key is computed once and saved.
