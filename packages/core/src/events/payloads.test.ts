@@ -1676,6 +1676,11 @@ describe('optimization event protocol', () => {
         { cause: 'plateau', mode: 'drain' },
         { cause: 'bored', mode: 'drain' },
       ],
+      [
+        'attempt.ticket-rejected',
+        { proposal: 'a1', ticket, state: 'Rejected' },
+        { proposal: 'a1', ticket, state: '' },
+      ],
     ]
     for (const [type, good, bad, actor] of cases) {
       expect(valid(type, good, actor ?? DISPATCHER)).toMatchObject({ type })
@@ -1769,6 +1774,8 @@ describe('optimization event protocol', () => {
       humanActor('ada'),
     )
     expect(Object.keys(eventPayloadSchemas)).toContain('optimization.stopped')
+    expect(Object.keys(eventPayloadSchemas)).toContain('attempt.ticket-rejected')
+    invalid('attempt.ticket-rejected', { proposal: 'a1', ticket, state: 'Rejected' }, KERNEL)
   })
 
   test('measurement facts carry an optional report and spread', () => {

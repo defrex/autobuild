@@ -124,7 +124,7 @@ JSON bodies are strict: unknown fields are rejected.
 
 | Method and path | Body |
 |---|---|
-| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`; `land` alone accepts an optional `"head":"<sha>"` (full or at least seven characters) that binds consent to that candidate head. Abort alone also accepts `"to":"triage"\|"ready"` (default triage) and a `"reason"` of 1–2000 characters after trimming, as `ab abort --to/--reason` does. Ready requires the current ticket to meet the spec standard; otherwise cleanup returns it to triage and the hand-back comment and `ticket.handed-back` event carry the `requested` role and `missing` parts. Repeating an identical pending abort is idempotent; a repeat with a different destination or reason is refused. |
+| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`; `land` alone accepts an optional `"head":"<sha>"` (full or at least seven characters) that binds consent to that candidate head. Abort alone also accepts `"to":"triage"\|"ready"` (default triage) and a `"reason"` of 1–2000 characters after trimming, as `ab abort --to/--reason` does. Ready requires the current ticket to meet the spec standard; otherwise cleanup returns it to triage and the hand-back comment and `ticket.handed-back` event carry the `requested` role and `missing` parts. Repeating an identical pending abort is idempotent; a repeat with a different destination or reason is refused. Aborting an [optimization attempt](optimization-nodes.md#landing-and-settlement) ignores `to`: it settles `aborted`, the node moves the ticket to rejected, and no hand-back is reported. |
 | `POST …/builds/{slug}/restack` | Empty body; durable node restack demand. |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |
@@ -332,7 +332,10 @@ The default watch reports actionable conditions only:
   `pr-closed` or `discard`), with its destination `state` and `role`, the build
   or preparation attempt, and any `requested` role, `missing` spec parts and
   `reason`. It is appended once, only after the move is committed, so moving
-  the ticket on receipt is never overridden.
+  the ticket on receipt is never overridden. An aborted or closed
+  optimization attempt reports no hand-back; its node records
+  `attempt.ticket-rejected` once the ticket is moved to rejected (see
+  [landing and settlement](optimization-nodes.md#landing-and-settlement)).
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,

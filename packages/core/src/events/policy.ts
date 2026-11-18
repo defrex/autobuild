@@ -90,6 +90,7 @@ export const buildEventPolicy = {
   'optimization.progress-measured': 'decisive',
   'attempt.settled': 'decisive',
   'optimization.stopped': 'decisive',
+  'attempt.ticket-rejected': 'decisive',
   'node.compared': 'decisive',
   'pr.opened': 'decisive',
   'build.created': 'decisive',

@@ -984,6 +984,50 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('rejectionsPending follows non-accepted attempt settlements until their ticket moves', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-opt'
+          const slug = 'dg-opt'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          await store.append(slug, buildCreatedWrite())
+          const pending = async () =>
+            (await store.getRepoBuildDigests(repo)).get(slug)!.rejectionsPending
+          const ticket = { source: 'fake', id: 'A-1' }
+          const settle = (proposal: string, outcome: 'accepted' | 'declined') =>
+            store.append(slug, {
+              actor: DISPATCHER,
+              type: 'attempt.settled',
+              payload: {
+                attempt: { proposal, ticket },
+                outcome,
+                ...(outcome === 'accepted'
+                  ? { measurement: { revision: 1, baseline: 50, candidate: 40, delta: 10 } }
+                  : {}),
+              },
+            })
+          expect(await pending()).toBeUndefined()
+          await settle('p1', 'accepted')
+          expect(await pending()).toBeUndefined()
+          await settle('p2', 'declined')
+          expect(await pending()).toBe(true)
+          // A completed node keeps the duty.
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'abandoned' },
+          })
+          const digest = (await store.getRepoBuildDigests(repo)).get(slug)!
+          expect(digest.terminal).toBe('done')
+          expect(digest.rejectionsPending).toBe(true)
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'attempt.ticket-rejected',
+            payload: { proposal: 'p2', ticket, state: 'Rejected' },
+          })
+          expect(await pending()).toBeUndefined()
+        })
+      })
+
       test('the digest equals the full-log ground truth over every lifecycle shape', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/dg-life'
