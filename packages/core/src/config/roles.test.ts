@@ -774,6 +774,182 @@ describe('roleKeyWarnings — the one message set', () => {
   })
 })
 
+describe('roleKeyWarnings — profile entries', () => {
+  const FINALIZE_STEP = `[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+`
+  const STEPS = `${E2E_STEP}\n${FINALIZE_STEP}`
+  /** A named profile whose entries are whatever the case under test needs. */
+  const profile = (name: string, entries: string): string =>
+    `\n[profiles.${name}]\nlabel = "${name}"\n${entries}`
+  const VALID_PROFILE =
+    'Valid profile role keys: code-review, e2e, finalize, implement, plan, plan-review, ' +
+    'reconcile, release-notes'
+  const EXTENSIONS = (table: string): string =>
+    `autobuild.toml: ${table} declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.`
+
+  test('consumed entries on phases and agent verify and finalize steps are silent', () => {
+    const parsed = withVerify(
+      STEPS,
+      profile(
+        'deep',
+        '[profiles.deep.roles.plan]\nmodel = "deep/plan"\n\n' +
+          '[profiles.deep.roles.implement]\nargs = ["--effort", "high"]\n\n' +
+          '[profiles.deep.roles.e2e]\nmodel = "deep/e2e"\n\n' +
+          '[profiles.deep.roles.release-notes]\nmodel = "deep/notes"\n',
+      ),
+    )
+    expect(roleKeyWarnings(parsed)).toEqual([])
+    expect(roleKeyDiagnostics(parsed).profiles).toEqual([])
+  })
+
+  test('an entry nothing requests is reported with its profile table, then the profile key list', () => {
+    const parsed = withVerify(STEPS, profile('deep', '[profiles.deep.roles.ghost]\nmodel = "x"\n'))
+    expect(roleKeyWarnings(parsed)).toEqual([
+      'autobuild.toml: [profiles.deep.roles.ghost] is declared but nothing requests it — its runtime, model, and args never reach a session.',
+      VALID_PROFILE,
+    ])
+    expect(roleKeyDiagnostics(parsed).profiles).toEqual([
+      { profile: 'deep', unconsumed: ['ghost'], deprecated: [] },
+    ])
+  })
+
+  test('every unconsumed entry across profiles shares one plural line, profile then key order', () => {
+    const parsed = withVerify(
+      STEPS,
+      profile('wide', '[profiles.wide.roles.typo]\nmodel = "x"\n') +
+        profile(
+          'deep',
+          '[profiles.deep.roles.typo]\nmodel = "x"\n\n[profiles.deep.roles.ghost]\nmodel = "x"\n',
+        ),
+    )
+    expect(roleKeyWarnings(parsed)[0]).toBe(
+      'autobuild.toml: [profiles.deep.roles.ghost], [profiles.deep.roles.typo], ' +
+        '[profiles.wide.roles.typo] are declared but nothing requests them — their runtime, ' +
+        'model, and args never reach a session.',
+    )
+  })
+
+  test('an entry on an internal role is unconsumed: those sessions never use a profile', () => {
+    const parsed = withVerify(
+      STEPS,
+      '[roles.slug]\nmodel = "fast"\n' +
+        profile(
+          'deep',
+          '[profiles.deep.roles.slug]\nmodel = "x"\n\n[profiles.deep.roles.harvest]\nmodel = "x"\n',
+        ),
+    )
+    const d = roleKeyDiagnostics(parsed)
+    expect(d.unconsumed).toEqual([])
+    expect(d.profiles).toEqual([
+      { profile: 'deep', unconsumed: ['harvest', 'slug'], deprecated: [] },
+    ])
+    expect(d.validProfile).not.toContain('slug')
+    expect(d.validProfile).not.toContain('default')
+  })
+
+  test('a deprecated skill-name entry gets the rename notice under its profile table', () => {
+    const parsed = withVerify(
+      STEPS,
+      profile('deep', '[profiles.deep.roles.ab-verify-e2e]\nmodel = "x"\n'),
+    )
+    expect(roleKeyWarnings(parsed)).toEqual([
+      'autobuild.toml: [profiles.deep.roles.ab-verify-e2e] should be [profiles.deep.roles.e2e] — ' +
+        'it is the deprecated skill-name key for agent verify step "e2e" and stops working in a ' +
+        'future release.',
+    ])
+  })
+
+  test('a step-named role in [roles] or the profile itself makes the alias entry deletable', () => {
+    const supersededBy = (roles: string, entries: string) =>
+      roleKeyWarnings(
+        withVerify(
+          STEPS,
+          roles + profile('deep', `[profiles.deep.roles.ab-verify-e2e]\nmodel = "x"\n\n${entries}`),
+        ),
+      )
+    for (const lines of [
+      supersededBy('[roles.e2e]\nmodel = "y"\n', ''),
+      supersededBy('', '[profiles.deep.roles.e2e]\nmodel = "y"\n'),
+    ]) {
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toStartWith(
+        'autobuild.toml: [profiles.deep.roles.ab-verify-e2e] can be deleted — agent verify step "e2e"',
+      )
+    }
+  })
+
+  test('extensions on an entry or its alternates warns once per entry, after [roles] notices', () => {
+    const parsed = withVerify(
+      STEPS,
+      '[roles.plan]\nextensions = []\n' +
+        profile(
+          'deep',
+          '[profiles.deep.roles.plan]\nextensions = ["legacy"]\n\n' +
+            '[profiles.deep.roles.implement]\nalternates = [{ extensions = [] }]\n\n' +
+            '[profiles.deep.roles.e2e]\nargs = ["--effort", "high"]\n',
+        ),
+    )
+    expect(roleKeyWarnings(parsed)).toEqual([
+      EXTENSIONS('[roles.plan]'),
+      EXTENSIONS('[profiles.deep.roles.plan]'),
+      EXTENSIONS('[profiles.deep.roles.implement]'),
+    ])
+  })
+
+  test('[roles] notices are unchanged by a clean profile, and lead every mixed config', () => {
+    const roles =
+      '[roles.ghost]\nmodel = "x"\n\n[roles.ab-verify-e2e]\nmodel = "x"\n\n' +
+      '[roles.plan]\nextensions = []\n'
+    const clean = profile('deep', '[profiles.deep.roles.plan]\nmodel = "deep/plan"\n')
+    const topOnly = roleKeyWarnings(withVerify(STEPS, roles))
+    expect(topOnly).toHaveLength(4)
+    expect(roleKeyWarnings(withVerify(STEPS, roles + clean))).toEqual(topOnly)
+
+    const mixed = roleKeyWarnings(
+      withVerify(
+        STEPS,
+        roles +
+          profile(
+            'deep',
+            '[profiles.deep.roles.ghost]\nmodel = "x"\n\n' +
+              '[profiles.deep.roles.ab-verify-e2e]\nmodel = "x"\n\n' +
+              '[profiles.deep.roles.implement]\nextensions = []\n',
+          ),
+      ),
+    )
+    expect(mixed).toEqual([
+      topOnly[0]!,
+      topOnly[1]!,
+      'autobuild.toml: [profiles.deep.roles.ghost] is declared but nothing requests it — its runtime, model, and args never reach a session.',
+      VALID_PROFILE,
+      topOnly[2]!,
+      // [roles.ab-verify-e2e] still routes the top-level resolver, but this
+      // profile's own entry is classified against the same overlay.
+      expect.stringContaining(
+        '[profiles.deep.roles.ab-verify-e2e] should be [profiles.deep.roles.e2e]',
+      ),
+      topOnly[3]!,
+      EXTENSIONS('[profiles.deep.roles.implement]'),
+    ])
+  })
+
+  test('unusual profile and role names render as typeable keys on one line', () => {
+    const parsed = withVerify(
+      STEPS,
+      '\n[profiles."odd name"]\nlabel = "odd"\n\n[profiles."odd name".roles."odd\\nname"]\nextensions = []\n',
+    )
+    const lines = roleKeyWarnings(parsed)
+    expect(lines[0]).toContain('[profiles."odd name".roles."odd\\u000Aname"] is declared')
+    expect(lines.at(-1)).toBe(EXTENSIONS('[profiles."odd name".roles."odd\\u000Aname"]'))
+    for (const line of lines) expect(line).not.toContain('\n')
+  })
+})
+
 describe('execution account admission', () => {
   test('deduplicates inherited primary and alternate routes and excludes unused readiness descriptors', () => {
     const parsed = config(`
