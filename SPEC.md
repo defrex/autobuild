@@ -1498,8 +1498,16 @@ AB_TOKEN     # signed credential for this exact phase session (remote store)
 ```
 
 A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE`
-of `synthesize@N` or `review@N`. The AgentRunner invocation argument is
-opaque: a build skill receives its slug; a harvest skill receives its run id.
+of `synthesize@N` or `review@N`. A judge session of a judge panel (§13.1.1)
+carries only `AB_STORE`, `AB_JUDGE` (`<build>:<panel>:<judge>`), `AB_SESSION`,
+`AB_CONTEXT_DIR` and, for a remote store, `AB_TOKEN`; it has no `AB_BUILD` and
+no `AB_PHASE`, and no inherited `AB_*`, `GIT_*`, `PWD` or `OLDPWD` value reaches
+it. A judge session has no read authority: its Store handle, local or remote,
+appends exactly one `panel.preferred` for its own panel, judge and session
+while that session is open and refuses every other operation, and any read
+command run with `AB_JUDGE` set fails before opening a Store. The AgentRunner
+invocation argument is opaque: a build skill receives its slug; a harvest skill
+receives its run id; a judge skill receives its panel id.
 The CLI resolves identity from ambient auth. Every build process holds an
 interface-enforced build-scoped Store handle. At the phase CLI opening boundary,
 both local and remote handles are wrapped with authority over exactly
@@ -1563,7 +1571,13 @@ that build, and harvest mutations target only the prepared run and execution,
 its artifacts and streams, with heartbeat authority for its adopted lease holder.
 Phase grants also enforce agent session attribution. They cannot create builds or
 operator sessions, administer repositories, invoke operator routes, or delegate.
-A runner can delegate only to a recorded session within its own authority.
+A runner can delegate only to a recorded session within its own authority. A
+build runner alone may also issue a `build-judge` grant for a recorded
+`panel.judge-started` session, binding its panel and judge. That grant is
+write-only: the service refuses every read, and admits only one
+`panel.preferred` for its exact panel, judge and session while the session is
+open and has not already preferred. It retires 60 seconds after
+`panel.judge-ended`.
 
 Delegated grants have no fixed wall-clock expiry. The service checks signed
 bindings against authoritative durable lifecycle facts on every request and
@@ -1771,7 +1785,11 @@ without the required artifacts; no `done` on a dirty worktree in
 `implement`, except an optimization attempt's `done --no-improvement`). A
 normally completed turn that ends **without** any terminal call is an infra
 failure: the runner emits
-`phase.failed {error: "no-terminal"}` and applies retry policy.
+`phase.failed {error: "no-terminal"}` and applies retry policy. A judge
+session is not a phase: it ends with exactly one `ab judge prefer`, which
+refuses a blank reason, an unknown preference and a second call; a judge turn
+without it records `panel.judge-ended {outcome: "no-terminal"}` under the
+panel's failure policy (§13.1.1).
 
 Provider/runtime-declared turn failures are a separate `AgentRunner` result
 (§9), never conflated with agent silence. When the selected role has declared
@@ -1939,6 +1957,13 @@ Observation harvest uses a separate typed, repository-scoped namespace
 (`ab harvest context|submit|verdict|status`), mirroring the build session
 commands: context hydration, a producer terminal, a reviewer terminal, and a
 sessionless read-only status projection.
+
+A judge session (§13.1.1) uses `ab judge context|prefer`. `ab judge context
+[--json]` writes `purpose.md`, `rubric.md` and `context.json` (`{judge,
+variants: {A, B}, purpose, rubric, allowedTerminals: ["prefer"]}`) into
+`$AB_CONTEXT_DIR` from the brief in the judge's root and the rubric under `A/`;
+it makes no Store read. `ab judge prefer <A|B|tie> (--reason <text> |
+--reason-file <file>)` is the judge's terminal.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
@@ -2259,8 +2284,9 @@ deterministic fail-safe.
   session boundary, like `[roles]`, so an edit reaches the in-flight builds that
   selected the profile at their next session and no other build. Every agent
   session of the build resolves through it — plan, plan review, implement,
-  code review, agent verify and finalize steps, and reconcile — and
-  `session.started.profile` records `{ name, configured }`. When a reload
+  code review, agent verify and finalize steps, reconcile, and the `judge`
+  sessions of a panel run on the build — and `session.started.profile`
+  records `{ name, configured }`. When a reload
   removes the profile, later sessions use the repository roles with
   `configured: false`, and `ab build status` says the recorded profile is no
   longer configured. A resumed session keeps its recorded target as before.
@@ -3693,8 +3719,65 @@ refuses an optimization node that has not stopped, or whose attempts are still
 in flight, naming the reason. To land the progress so far, stop the node, then
 run `ab merge` once it is ready.
 
-Proposing attempts and judge panels are designed in RFC 0005 §5 and §8. The facts they
-record are catalogued in §15.3 and their derived state in §15.5.
+**Judge panels.** A panel objective is measured by agent judges, because
+absolute scores drift between sessions and crowd the top of the scale: each
+judge says which of two variants is better. `BuildRunner.runPanel` runs one
+panel over two heads, a candidate and a baseline, under one harness pin, and
+returns the candidate's win rate. No caller runs it yet; the callers that will
+accept attempts and measure a node's noise and progress record their decisions
+in `attempt.measured.winRate`, `optimization.baseline-measured` and
+`optimization.progress-measured`. A run records `panel.started` with its
+inputs and no order. For each pending judge it draws an order
+(`candidate-first` or `baseline-first`) and materializes a fresh judge root in
+the system temporary directory holding the two variants as plain trees `A/`
+and `B/` in that order, a brief (judge, purpose, rubric path) and the
+`ab-judge` skill as regular files. The variants are checked out from scratch
+indexes in a private bare Git directory over the workspace's objects, with
+every byte-altering attribute unset, so each tree carries the exact committed
+blobs; every harness path, the rubric included, carries the harness pin's
+bytes, and a harness file the pin lacks is absent. The skill is read from the
+harness pin's `.agents/skills/ab-judge/SKILL.md`, or from the distribution
+when the pin predates it, so a candidate cannot rewrite its judges'
+instructions. That Git material lives outside every judge root and is removed
+before any judge session starts; the runner then refuses a root inside the
+workspace, one from which `git rev-parse --git-dir` finds a repository, or
+one holding a checked-out symlink that resolves outside the root, and fails
+the run with that cause. Symlinks that stay inside the root are kept. Every judge root is removed when the run
+ends.
+
+Each judge's order is recorded in the kernel fact `panel.judge-started` before
+its session starts, under the `judge` role and the build's profile, with the
+judge root as working directory; all pending judges run concurrently. The
+judge's environment and write-only Store handle are those of §8.1. The judge
+runs `ab judge context` and ends with `ab judge prefer`, which records
+`panel.preferred {panel, judge, session, preference, reason}` without the
+order. After the turn the runner makes one reduced read and, when the session
+preferred, records `panel.judged {panel, judge, session, order, preference,
+reason}`, the durable judgment, then `panel.judge-ended` with the outcome and
+the transcript. A preference for the candidate scores 1, a tie 0.5 and the
+baseline 0; the win rate is the mean over `panel.judged`.
+
+Nothing Autobuild gives a judge reveals which variant is the candidate: not its
+context, its environment, its labels, the location or names of its variant
+worktrees, its store credential, nor any git metadata reachable from its
+working directory. Nothing under the judge's root links back to the repository
+it was prepared from. This guarantee covers the channels Autobuild provides; a
+judge process deliberately reading the repository or store outside its root is
+the shared trust boundary of unconfined local agent sessions.
+
+A run with the same panel id resumes from its recorded facts and refuses
+different inputs. A judge with a saved `panel.preferred` and no `panel.judged`
+is completed from that preference and its session's recorded order without a
+new session. A judge session started and never ended is closed as
+`reclaimed`. Only judges with no preference run again, each with a fresh
+order. A judge outcome of `no-terminal`, `failed` or `expired` counts as a
+failure; after two counted failures for one judge the run fails, naming the
+judge and its last outcome. `interrupted` (shutdown) and `reclaimed` do not
+count. A run that cannot prepare its variants fails with the Git output tail.
+
+Proposing attempts is designed in RFC 0005 §5. The facts are catalogued in
+§15.3 and their derived state in §15.5.
+
 
 
 
@@ -4009,6 +4092,7 @@ with illustrative members:
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
+| Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -4267,6 +4351,18 @@ metric, no `starting`, not stopped, not terminal, paused or blocked, and no
 pending command. Engine, capacity and the dispatcher's decision read only
 these reduced values, so an idle tick reads no event rows; deciding one sampled
 request costs one reduced read of its node, once.
+
+**Judge panel.** A build that runs a judge panel embeds `panel`, bounded to its
+latest run: the `panel.started` payload and, per judge, every started session
+with its order, every ending outcome, the first `panel.preferred` and the
+`panel.judged`. Events for any other panel id are ignored, so the value is
+bounded by 20 judges. Pure selectors over it give the pending judges (no
+preference), the sessions awaiting reclaim, the saved preferences to complete
+and each judge's counted failures. The `buildDelegation` service value
+(version 2) folds `panel.judge-started` and `panel.judge-ended` into its
+session lifecycle beside `session.started` and `session.ended`, and records
+which judge sessions preferred, so the hosted judge guard decides a write with
+one reduced read.
 
 **Deltas, revisions and the ruler.** A positive `delta` is an improvement in
 the objective's direction: `baseline − candidate` when minimizing,

@@ -2378,7 +2378,8 @@ Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
 finalize post-steps both route by their logical step name. The verify step's
 configured skill name remains a deprecated alias for existing configurations
 and will be removed in a future release. Repository judgments use `harvest` and
-`harvest-review`; `slug` and `upgrade` configure tool-free one-shot judgments.
+`harvest-review`; each judge session of an optimization objective's judge panel
+uses `judge`; `slug` and `upgrade` configure tool-free one-shot judgments.
 Arbitrary additional role keys are accepted, but only a name selected by one of
 these routes affects a session.
 
@@ -2472,7 +2473,8 @@ session. If a reload removes the profile, those builds continue on the
 repository roles and `ab build status` reports the profile as no longer
 configured. Duplicate labels, a blank label, and an entry whose effective
 runtime, model, args or account is invalid are refused at load, by
-`ab init --validate`, and on live reload. Sessions outside a build (`slug`,
+`ab init --validate`, and on live reload. Judge sessions are build sessions, so
+the build's profile applies to them. Sessions outside a build (`slug`,
 `upgrade`, `harvest`, `harvest-review`) never use a profile. As for
 `[roles]`, `ab dispatch` warns at startup for a profile entry nothing requests,
 a deprecated skill-name key, or deprecated `extensions`, naming the
@@ -4018,7 +4020,7 @@ pre-attempt index and reports the original Git failure; merged worktree files
 remain in place and the merge's exit status is unchanged. Upgrade never pushes
 or rewrites history.
 
-Autobuild now installs 12 skills; only `ab-spec`, `ab-tickets`, `ab-guide`,
+Autobuild now installs 13 skills; only `ab-spec`, `ab-tickets`, `ab-guide`,
 and `ab-operate` are model-invocable. The setup reference is an ordinary support file in the
 editable/pristine `ab-guide` tree and participates in the same three-way
 upgrade merge as every other vendored file.

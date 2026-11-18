@@ -15,6 +15,7 @@ import { RemoteBuildStore } from '../store/remote/client'
 import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import {
+  InvalidAmbientContextError,
   resolveAmbientReadSession,
   type AmbientReadSession,
   type CliEnv,
@@ -94,6 +95,9 @@ export function openStoreForRepoState(
   state: RepoStatePaths,
   opts: OpenStoreForRepoStateOpts,
 ): OpenedStoreContext {
+  // A judge session's only store authority is its one preference.
+  if (opts.env.AB_JUDGE !== undefined)
+    throw new InvalidAmbientContextError('a judge session has no read authority')
   const token =
     opts.useProjectCredential !== false && isRemoteStoreRef(state.storeRef)
       ? projectToken(state.storeRef, state.repo, opts.env)
