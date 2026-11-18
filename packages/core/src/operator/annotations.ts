@@ -80,6 +80,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'optimization.stop': {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    approval: 'default',
+  },
   'builds.control': {
     readOnlyHint: false,
     destructiveHint: true,

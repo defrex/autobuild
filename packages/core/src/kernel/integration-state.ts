@@ -1,5 +1,6 @@
 import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
+import { optimizationCompletionBlocker } from './optimization'
 import type { BuildState } from './reducer'
 
 /** Exact immutable inputs, retained independently of disposable execution. */
@@ -40,9 +41,14 @@ export function advanceIntegration(state: IntegrationState, event: AbEvent): voi
       break
   }
 }
-export function integrationComplete(state: Pick<BuildState, 'integration'>): boolean {
+/** The node's children are all resolved and contributed, and an
+ * optimization node has also stopped with no attempt in flight. */
+export function integrationComplete(
+  state: Pick<BuildState, 'integration' | 'optimization'>,
+): boolean {
   const observation = state.integration?.observation
   return (
+    optimizationCompletionBlocker(state) === undefined &&
     !!observation &&
     observation.openChildren.length === 0 &&
     observation.diagnostics.length === 0 &&

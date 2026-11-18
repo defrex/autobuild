@@ -5,7 +5,7 @@ import type { ObjectiveView } from '../operator/optimization'
 import { stringFlag, type ParsedArgs } from './args'
 
 export const OBJECTIVE_USAGE =
-  'usage: ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] [--json] [--store <ref>]'
+  'usage: ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] [--stop [--drain|--abort]] [--json] [--store <ref>]'
 
 export const OBJECTIVE_FLAGS = {
   threshold: 'value',
@@ -15,6 +15,9 @@ export const OBJECTIVE_FLAGS = {
   plateau: 'value',
   'stop-mode': 'value',
   concurrency: 'value',
+  stop: 'boolean',
+  drain: 'boolean',
+  abort: 'boolean',
   json: 'boolean',
   store: 'value',
 } as const
@@ -54,6 +57,26 @@ export function objectiveChangesFromFlags(parsed: ParsedArgs): Partial<Objective
   return changes
 }
 
+/** The stop the flags request; undefined without `--stop`. `--drain` or
+ * `--abort` overrides the objective's stop mode. A stop is one fact, so it
+ * never combines with a revision. */
+export function objectiveStopFromFlags(
+  parsed: ParsedArgs,
+): { mode?: 'abort' | 'drain' } | undefined {
+  const stop = parsed.flags.get('stop') === true
+  const drain = parsed.flags.get('drain') === true
+  const abort = parsed.flags.get('abort') === true
+  if (!stop) {
+    if (drain || abort)
+      throw new Error(`--${drain ? 'drain' : 'abort'} requires --stop — ${OBJECTIVE_USAGE}`)
+    return undefined
+  }
+  if (drain && abort) throw new Error(`--drain and --abort are exclusive — ${OBJECTIVE_USAGE}`)
+  if (Object.keys(objectiveChangesFromFlags(parsed)).length > 0)
+    throw new Error(`--stop cannot be combined with a revision — ${OBJECTIVE_USAGE}`)
+  return drain ? { mode: 'drain' } : abort ? { mode: 'abort' } : {}
+}
+
 const value = (n: number | undefined) => (n === undefined ? 'not measured' : String(+n.toFixed(6)))
 
 export function renderObjective(view: ObjectiveView): string[] {
@@ -84,6 +107,7 @@ export function renderObjective(view: ObjectiveView): string[] {
     ...(progress.stopped !== undefined
       ? [
           `  stopped: ${progress.stopped.cause} (${progress.stopped.mode}) at ${progress.stopped.at}`,
+          `  completion: ${progress.completionBlocker ?? 'ready for node verification'}`,
         ]
       : []),
   ]
