@@ -352,7 +352,7 @@ export async function checkJudgeRoot(
   })
   if (found.exitCode === 0)
     return 'judge root is inside a git repository; point TMPDIR outside any repository'
-  const links = await deps.exec(['sh', '-c', ESCAPING_LINKS_PROBE, 'sh', rootPath], {})
+  const links = await deps.exec(['sh', '-c', ESCAPING_LINKS_PROBE, 'judge-links', rootPath], {})
   if (links.exitCode !== 0)
     throw new PanelPreparationFailure('checking the judge root for symlinks failed', tail(links))
   const escaping = links.stdout

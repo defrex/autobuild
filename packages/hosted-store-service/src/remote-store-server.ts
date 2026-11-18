@@ -1624,7 +1624,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (['repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
       // Every such route authenticates; a judge grant is decided here first.
       const caller = await principal(req)
-      if (caller?.kind === 'delegated' && caller.delegation.kind === 'build-judge')
+      if (caller?.kind === 'delegated' && caller.delegation?.kind === 'build-judge')
         await authorizeJudgeRequest(req, segments, caller.delegation)
     }
     if (segments[0] === 'streams') {
