@@ -3,7 +3,14 @@ import { agentActor, KERNEL } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { harvestStartedWrite, sampleBuildInput, sampleEventWrite } from './contract'
 import { MemoryBuildStore } from './memory'
-import { scopeLocalStoreToPhaseSession, PhaseSessionError } from './phase-session'
+import {
+  JUDGE_REFUSED_MEMBERS,
+  scopeLocalStoreToJudgeSession,
+  scopeLocalStoreToPhaseSession,
+  scopeRemoteStoreToJudgeSession,
+  PhaseSessionError,
+} from './phase-session'
+import { delegationFactKey, type BuildDelegationFacts } from '../kernel/service-facts'
 import type { BuildStore } from './types'
 
 const REPO = 'acme/project'
@@ -374,3 +381,146 @@ describe('local Harvest-session scope', () => {
 const _buildStore: (store: BuildStore) => BuildStore = (store) =>
   scopeLocalStoreToPhaseSession(store, { kind: 'build', id: BUILD, session: SESSION })
 void _buildStore
+
+describe('judge session scope', () => {
+  const PANEL = 'panel-1'
+  const JUDGE_SESSION = 's_judge'
+  const scope = { build: BUILD, panel: PANEL, judge: 1, session: JUDGE_SESSION }
+  const preference = (overrides: Record<string, unknown> = {}) => ({
+    actor: agentActor('judge', JUDGE_SESSION),
+    type: 'panel.preferred' as const,
+    payload: {
+      panel: PANEL,
+      judge: 1,
+      session: JUDGE_SESSION,
+      preference: 'A' as const,
+      reason: 'A follows the rubric',
+      ...overrides,
+    },
+  })
+
+  async function judging(): Promise<MemoryBuildStore> {
+    const store = await seeded()
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'panel.started',
+      payload: {
+        panel: PANEL,
+        candidate: 'c'.repeat(40),
+        baseline: 'b'.repeat(40),
+        harnessPin: 'a'.repeat(40),
+        purpose: 'clear prose',
+        rubric: 'evals/rubric.md',
+        harness: ['evals/**'],
+        judges: 1,
+      },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'panel.judge-started',
+      payload: {
+        panel: PANEL,
+        judge: 1,
+        session: JUDGE_SESSION,
+        order: 'candidate-first',
+        runner: 'scripted',
+      },
+    })
+    return store
+  }
+
+  /** Counts every inner call, so a refusal is proven to touch nothing. */
+  function counting(inner: BuildStore): { store: BuildStore; calls: string[] } {
+    const calls: string[] = []
+    const store = new Proxy(inner, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          calls.push(String(property))
+          return value.apply(target, args)
+        }
+      },
+    })
+    return { store, calls }
+  }
+
+  for (const [name, wrap] of [
+    ['local', scopeLocalStoreToJudgeSession],
+    ['remote', scopeRemoteStoreToJudgeSession],
+  ] as const) {
+    test(`${name}: every read and every other write is refused without touching the store`, async () => {
+      const { store: inner, calls } = counting(await judging())
+      const store = wrap(inner, scope)
+      for (const { name: member, kind } of JUDGE_REFUSED_MEMBERS) {
+        const method = (store as unknown as Record<string, (...args: unknown[]) => unknown>)[
+          member
+        ]!
+        const error = await authorityError(() => method.call(store, BUILD))
+        expect(error.operation).toBe(member)
+        expect(error.message).toContain(
+          kind === 'read' ? 'has no read authority' : 'may only record its preference',
+        )
+      }
+      expect(calls).toEqual([])
+    })
+
+    test(`${name}: refuses a write outside its scope`, async () => {
+      const store = wrap(await judging(), scope)
+      await authorityError(() => store.append(OTHER_BUILD, preference()))
+      await authorityError(() => store.append(BUILD, preference({ judge: 2 })))
+      await authorityError(() => store.append(BUILD, preference({ panel: 'panel-0' })))
+      await authorityError(() =>
+        store.append(BUILD, { ...preference(), actor: agentActor('judge', 's_other') }),
+      )
+      await authorityError(() =>
+        store.append(BUILD, {
+          actor: KERNEL,
+          type: 'panel.judge-ended',
+          payload: { panel: PANEL, judge: 1, session: JUDGE_SESSION, outcome: 'completed' },
+        }),
+      )
+    })
+  }
+
+  test('local: records one preference and refuses a second or an ended session', async () => {
+    const underlying = await judging()
+    const store = scopeLocalStoreToJudgeSession(underlying, scope)
+    const event = await store.append(BUILD, preference())
+    expect(event.type).toBe('panel.preferred')
+    const second = await authorityError(() => store.append(BUILD, preference({ preference: 'B' })))
+    expect(second.message).toContain('already recorded its preference')
+
+    const ended = await judging()
+    await ended.append(BUILD, {
+      actor: KERNEL,
+      type: 'panel.judge-ended',
+      payload: { panel: PANEL, judge: 1, session: JUDGE_SESSION, outcome: 'reclaimed' },
+    })
+    const late = await authorityError(() =>
+      scopeLocalStoreToJudgeSession(ended, scope).append(BUILD, preference()),
+    )
+    expect(late.message).toContain('has ended')
+  })
+
+  test('remote: the append is posted with no read; the server owns the lifecycle', async () => {
+    const { store: inner, calls } = counting(await judging())
+    const store = scopeRemoteStoreToJudgeSession(inner, scope)
+    await store.append(BUILD, preference())
+    expect(calls).toEqual(['append'])
+  })
+
+  test('the delegation value folds judge sessions and preferences', async () => {
+    const underlying = await judging()
+    await scopeLocalStoreToJudgeSession(underlying, scope).append(BUILD, preference())
+    const facts = (
+      await underlying.getReducerValue(
+        { kind: 'build', slug: BUILD },
+        { reducer: 'buildDelegation' },
+      )
+    ).value as unknown as BuildDelegationFacts
+    const key = delegationFactKey(JUDGE_SESSION)
+    expect(facts.sessions[key]?.starts).toEqual([2])
+    expect(facts.preferred[key]).toBe(true)
+  })
+})

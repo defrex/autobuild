@@ -978,6 +978,23 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
       'escalation. These three forms require a runner-provided harvest session.',
     ]),
   },
+  {
+    name: 'judge',
+    audience: 'ai',
+    summary: "A judge panel session's context and its one preference terminal.",
+    detail: page([
+      'Usage:',
+      '  ab judge context [--json]',
+      '  ab judge prefer <A|B|tie> (--reason <text> | --reason-file <file>)',
+      '',
+      'context writes purpose.md, rubric.md and context.json into the judge',
+      "session's directory from the brief in its root; it reads no store. The",
+      'two variants to compare are the plain trees A/ and B/ in the root.',
+      'prefer is the judge terminal: it records A, B or tie with a nonblank',
+      'reason, exactly once. Both forms run only inside a runner-provided judge',
+      'session, whose credential can record the preference and read nothing.',
+    ]),
+  },
 ]
 
 const ENTRY_BY_NAME = new Map(HELP_CATALOG.map((entry) => [entry.name, entry]))

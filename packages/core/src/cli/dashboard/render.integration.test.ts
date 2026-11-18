@@ -241,7 +241,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('multiple short warning notices wrap independently without dropping later notices', () => {
     const notices = [
       'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
-      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, judge, plan, plan-review, reconcile, slug, upgrade',
       'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
     ]
     const lines = rd({ ...model([build()]), warningLines: notices }, { color: false, width: 80 })
@@ -272,7 +272,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('a representative role diagnostic survives whole at operator terminal sizes', () => {
     const notices = [
       'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
-      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, judge, plan, plan-review, reconcile, slug, upgrade',
       'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
       'autobuild.toml: [roles.ab-verify-dash] should be [roles.dashboard] — it is the deprecated skill-name key for agent verify step "dashboard" and stops working in a future release.',
     ]

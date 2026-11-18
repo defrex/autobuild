@@ -95,11 +95,15 @@ export function evaluateDelegationLifecycle(
     const events = lifecycle.buildEvents ?? []
     if (!events.some((event) => event.seq === claims.anchor)) return false
     const state = reduceBuild(events)
+    // A judge grant is anchored at its `panel.judge-started`, every other
+    // session grant at its `session.started`.
+    const startType = claims.kind === 'build-judge' ? 'panel.judge-started' : 'session.started'
+    const endType = claims.kind === 'build-judge' ? 'panel.judge-ended' : 'session.ended'
     if (
       claims.session &&
       !events.some(
         (event) =>
-          event.type === 'session.started' &&
+          event.type === startType &&
           event.payload.session === claims.session &&
           event.seq === claims.anchor,
       )
@@ -110,7 +114,7 @@ export function evaluateDelegationLifecycle(
       if (
         event.type === 'build.completed' ||
         event.type === 'build.aborted' ||
-        (event.type === 'session.ended' && event.payload.session === claims.session)
+        (event.type === endType && event.payload.session === claims.session)
       )
         endings.push(event.ts)
     }
@@ -217,9 +221,15 @@ export function createDelegationHandler(options: {
         throw new MachineAuthError(403, 'operator authority cannot delegate machine credentials')
       if (principal.kind === 'delegated') {
         const parent = principal.delegation
+        // A judge grant is narrower than a phase grant: only the build's own
+        // runner issues it.
+        const narrower =
+          target.kind === 'build-judge'
+            ? parent.kind === 'build-runner'
+            : target.kind.endsWith('-phase')
         if (
           !parent.kind.endsWith('-runner') ||
-          !target.kind.endsWith('-phase') ||
+          !narrower ||
           parent.id !== target.id ||
           parent.kind.split('-')[0] !== target.kind.split('-')[0]
         )
@@ -262,6 +272,7 @@ export function createDelegationHandler(options: {
         ...(execution ? { execution } : {}),
         ...('session' in target ? { session: target.session } : {}),
         ...('leaseHolder' in target ? { leaseHolder: target.leaseHolder } : {}),
+        ...(target.kind === 'build-judge' ? { panel: target.panel, judge: target.judge } : {}),
       }
       if (
         !(await delegationActive(
