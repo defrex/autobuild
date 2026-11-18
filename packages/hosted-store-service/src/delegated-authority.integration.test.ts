@@ -1,6 +1,7 @@
 import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { withPaging } from './testing/paged-fake'
 import { createTicketServer } from './ticket-server'
 import { afterEach, expect, test } from 'bun:test'
 import { MemoryBuildStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
@@ -485,6 +486,8 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
   const inputs = {
     'list-ready': {},
     'list-targeting': { nodeId: 'unknown' },
+    // An operator listing: no grant or delegation may page.
+    'list-page': { criteria: {}, page: { limit: 1 } },
     get: { id: 'unknown' },
     'dependency-states': { ids: ['unknown'] },
     states: {},
@@ -606,7 +609,7 @@ test('project and admin credentials retain every hosted ticket operation', async
     exp: f.clock().getTime() + 60000,
   })
   for (const token of [f.project.token, admin]) {
-    const backend = new FakeTicketSource([])
+    const backend = withPaging(new FakeTicketSource([]))
     const server = createTicketServer({ secret, auth: f.auth, sourceFor: () => backend })
     const invoke = (operation: string, input: unknown) =>
       server.fetch(request(`/tickets/${operation}`, token, { context: { teamKey: 'TEAM' }, input }))
@@ -618,6 +621,7 @@ test('project and admin credentials retain every hosted ticket operation', async
     const blocker = await backend.create({ title: 'Blocker', body: 'Spec' })
     for (const [operation, input] of [
       ['list-ready', {}],
+      ['list-page', { criteria: {}, page: { limit: 1 } }],
       ['get', { id }],
       ['dependency-states', { ids: [id] }],
       ['claim', { id }],
