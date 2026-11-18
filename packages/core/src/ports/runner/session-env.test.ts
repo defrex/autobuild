@@ -52,4 +52,32 @@ describe('sessionEnv', () => {
     expect(ambient).toEqual(ambientBefore)
     expect(process.env.PATH).toBe(globalPathBefore)
   })
+
+  test('a judge session drops ambient Autobuild, Git and working-directory keys', () => {
+    const ambient = {
+      AB_BUILD: 'b',
+      AB_PHASE: 'implement@1',
+      AB_STRAY: 'x',
+      GIT_DIR: '/ws/.git',
+      GIT_CEILING_DIRECTORIES: '/',
+      PWD: '/ws',
+      OLDPWD: '/ws/sub',
+      HOME: '/home/me',
+    }
+    const env = sessionEnv({ AB_JUDGE: 'b:p:1', AB_SESSION: 's_1', AB_STORE: '/store' }, ambient)
+    expect(env).toMatchObject({ AB_JUDGE: 'b:p:1', AB_SESSION: 's_1', AB_STORE: '/store' })
+    expect(env.HOME).toBe('/home/me')
+    for (const key of ['AB_BUILD', 'AB_PHASE', 'AB_STRAY', 'GIT_DIR', 'GIT_CEILING_DIRECTORIES'])
+      expect(key in env).toBe(false)
+    expect('PWD' in env).toBe(false)
+    expect('OLDPWD' in env).toBe(false)
+  })
+
+  test('a phase session keeps inherited keys other than the dropped credentials', () => {
+    const env = sessionEnv(
+      { AB_BUILD: 'b', AB_SESSION: 's_1' },
+      { AB_STRAY: 'x', GIT_DIR: '/ws/.git', PWD: '/ws' },
+    )
+    expect(env).toMatchObject({ AB_STRAY: 'x', GIT_DIR: '/ws/.git', PWD: '/ws' })
+  })
 })

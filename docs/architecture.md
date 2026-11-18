@@ -337,6 +337,25 @@ that CLI process; resource authority still applies to every operation. Generic
 sessionless opening remains unwrapped; only those three reads use the dedicated
 ambient-aware finite opener.
 
+**Judge panels.** `packages/core/src/kernel/panel.ts` holds a judge panel's
+pure half: each judge's A/B order, the candidate's score, the win rate with
+ties counted as half, and the latest run's reduced state (`BuildState.panel`).
+`packages/core/src/processes/panel-runner.ts` materializes each pending judge's
+root outside any repository from a private Git directory over the workspace's
+objects, pins every harness path, copies `ab-judge` from the harness pin,
+removes that material before any session starts and refuses a root inside the
+workspace or any Git repository; its loop completes saved preferences, reclaims
+dangling sessions and launches each wave concurrently. `BuildRunner.runPanel`
+records the run's kernel facts, the order in `panel.judge-started` before each
+session, and `panel.judged` after it. A judge session's only store authority is
+write-only: `packages/core/src/store/judge-authority.ts` is the shared rule
+(one `panel.preferred` for its own panel, judge and session, while that session
+is open), applied in process by the local and remote wrappers in
+`packages/core/src/store/phase-session.ts` and on the server by the hosted
+`build-judge` guard. `packages/core/src/cli/judge.ts` implements
+`ab judge context` (no store read) and `ab judge prefer`, and any read command
+run with `AB_JUDGE` set fails before opening a store.
+
 **Phase decisions.** `packages/core/src/kernel/phases.ts` owns the phase table,
 `packages/core/src/kernel/engine.ts` the deterministic transitions;
 `packages/core/src/processes/build-runner.ts` executes the decisions. Repeated phase starts
@@ -1547,7 +1566,11 @@ process-scoped (`kernel/guarded-forge.ts`) and record only
 `forge.credential-limited`; the `dispatcher.forge-degraded` admission remains
 for runners pinned to older releases. This exception grants no repository administration,
 recovery, lease, or other journal writes. The agent-visible build-scoped Store
-still denies repository writes. Ticket routes deny build grants and allow harvest grants only the reads and
+still denies repository writes. A build-judge grant, issued only by its
+build's runner after `panel.judge-started`, is write-only: the request guard
+refuses every read before any other route logic and admits one
+`panel.preferred` for its exact panel, judge and session while that session is
+open. Ticket routes deny build grants and allow harvest grants only the reads and
 runner filing operations they require. Ticket sources and assets are partitioned
 by the authenticated project.
 

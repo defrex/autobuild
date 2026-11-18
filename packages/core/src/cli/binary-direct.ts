@@ -12,7 +12,17 @@ import { join } from 'node:path'
 import { isSessionlessInvocation, runCli } from './main'
 import { createUpgradeAgentResolver } from './upgrade-agent'
 import { loadDotEnv } from './dotenv'
-import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
+import {
+  MissingAmbientContextError,
+  resolveCliEnv,
+  resolveHarvestCliEnv,
+  resolveJudgeCliEnv,
+} from './env'
+import { isRemoteStoreRef } from './repo-state'
+import {
+  scopeLocalStoreToJudgeSession,
+  scopeRemoteStoreToJudgeSession,
+} from '../store/phase-session'
 import { openProductionSessionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
 import type { TerminalRestoreProcess } from './terminal-restore'
@@ -129,6 +139,36 @@ export async function runDirectBinary(
         ids: randomIds(),
         clock: systemClock,
       })
+    } finally {
+      await store.close()
+    }
+  }
+
+  if (command === 'judge') {
+    let judgeEnv: ReturnType<typeof resolveJudgeCliEnv>
+    try {
+      judgeEnv = resolveJudgeCliEnv(process.env)
+    } catch (error) {
+      if (error instanceof MissingAmbientContextError) {
+        return runCli(argv, unscopedDeps)
+      }
+      console.error(error instanceof Error ? error.message : String(error))
+      return 1
+    }
+    // A judge's store handle appends its one preference and refuses every
+    // read; a remote server is the authority behind the same refusals.
+    const inner = openProductionStore(judgeEnv.store, judgeEnv.token)
+    const scope = {
+      build: judgeEnv.build,
+      panel: judgeEnv.panel,
+      judge: judgeEnv.judge,
+      session: judgeEnv.session,
+    }
+    const store = isRemoteStoreRef(judgeEnv.store)
+      ? scopeRemoteStoreToJudgeSession(inner, scope)
+      : scopeLocalStoreToJudgeSession(inner, scope)
+    try {
+      return await runCli(argv, { ...unscopedDeps, store, judgeEnv })
     } finally {
       await store.close()
     }

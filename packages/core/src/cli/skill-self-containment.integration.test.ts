@@ -96,4 +96,18 @@ describe('shipped skill self-containment', () => {
       expect(installed!.content).toBe(await Bun.file(`${DIST_ROOT}/docs/${name}`).text())
     }
   })
+
+  test('ab-judge is one self-contained file, installed alone into each judge root', async () => {
+    const judge = (await readDistSkills(DIST_ROOT)).find(
+      (skill) => skill.installName === 'ab-judge',
+    )
+    expect(judge).toBeDefined()
+    expect(judge!.files.map((file) => file.path)).toEqual(['SKILL.md'])
+    const relative = markdownTargets(withoutFencedCode(judge!.content)).filter(
+      (target) => !/^(?:https?:|mailto:)/iu.test(target),
+    )
+    expect(relative).toEqual([])
+    for (const word of ['candidate', 'baseline', 'repository'])
+      expect(judge!.content.toLowerCase()).not.toContain(word)
+  })
 })
