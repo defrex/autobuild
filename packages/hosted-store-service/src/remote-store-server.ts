@@ -839,15 +839,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return snapshotRoute(req, url, { kind: 'repo', repo }, segments[1]!)
     }
     if (rest === 'reducer-values') return valueRoute(req, { kind: 'repo', repo })
-    if (req.method === 'GET' && rest === 'stream-seed') {
-      if (!store.getStreamSeed)
-        throw new RequestError(501, 'unsupported-operation', 'historical stream seeds unavailable')
-      const { catalogIdentity: _catalog, ...seed } = await store.getStreamSeed(
-        { kind: 'repo', repo },
-        cursorParam(url, 'cursor'),
-      )
-      return json(200, seed)
-    }
+    if (req.method === 'GET' && rest === 'stream-seed')
+      return streamSeedRoute(req, url, { kind: 'repo', repo })
     if (req.method === 'GET' && rest === 'harvest-history') {
       if (!store.getHarvestHistoryPage)
         throw new RequestError(501, 'unsupported-operation', 'harvest history unavailable')
@@ -1126,6 +1119,50 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
   }
 
+  /** How a reducer answer identifies its client: the released package version,
+   * or the catalog identity a projecting client sends. */
+  function reducerClient(req: Request) {
+    return {
+      version: req.headers.get(AUTOBUILD_VERSION_HEADER),
+      projects: req.headers.get(REDUCER_VALUE_PROJECTION_HEADER) === '1',
+      catalogIdentity: req.headers.get(CATALOG_IDENTITY_HEADER),
+    }
+  }
+
+  /** A strict reducer envelope, plus the catalog header when the answer names one. */
+  function reducerValueResponse(result: {
+    version: number
+    cursor: number
+    value: unknown
+    catalogIdentity?: string | null
+  }): Response {
+    const response = json(200, {
+      version: result.version,
+      cursor: result.cursor,
+      value: result.value,
+    })
+    if (result.catalogIdentity)
+      response.headers.set(CATALOG_IDENTITY_HEADER, result.catalogIdentity)
+    return response
+  }
+
+  /** `GET …/stream-seed?cursor=N`: the historical seed a watch resumes from,
+   * projected onto a released client's frozen contract exactly as
+   * `reducer-values` answers are. A seed the release cannot represent is
+   * returned canonical, so the client raises its typed incompatibility. */
+  async function streamSeedRoute(req: Request, url: URL, scope: SnapshotScope): Promise<Response> {
+    if (!store.getStreamSeed)
+      throw new RequestError(501, 'unsupported-operation', 'historical stream seeds unavailable')
+    const seed = await store.getStreamSeed(scope, cursorParam(url, 'cursor'))
+    return reducerValueResponse(
+      reducerValueForClient(
+        reducerClient(req),
+        scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention',
+        seed,
+      ),
+    )
+  }
+
   async function valueRoute(req: Request, scope: SnapshotScope): Promise<Response> {
     if (req.method !== 'POST')
       return fail(404, 'not-found', `no route: ${req.method} reducer-values`)
@@ -1143,22 +1180,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       throw new MachineAuthError(403, 'placement requires project authority')
     try {
       const result = reducerValueForClient(
-        {
-          version: req.headers.get(AUTOBUILD_VERSION_HEADER),
-          projects: req.headers.get(REDUCER_VALUE_PROJECTION_HEADER) === '1',
-          catalogIdentity: req.headers.get(CATALOG_IDENTITY_HEADER),
-        },
+        reducerClient(req),
         body.reducer,
         await store.getReducerValue(scope, body),
       )
-      const response = json(200, {
-        version: result.version,
-        cursor: result.cursor,
-        value: result.value,
-      })
-      if (result.catalogIdentity)
-        response.headers.set(CATALOG_IDENTITY_HEADER, result.catalogIdentity)
-      return response
+      return reducerValueResponse(result)
     } catch (error) {
       if (
         scope.kind === 'repo' &&
@@ -1236,15 +1262,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return snapshotRoute(req, url, { kind: 'build', slug }, segments[1]!)
     }
     if (rest === 'reducer-values') return valueRoute(req, { kind: 'build', slug })
-    if (req.method === 'GET' && rest === 'stream-seed') {
-      if (!store.getStreamSeed)
-        throw new RequestError(501, 'unsupported-operation', 'historical stream seeds unavailable')
-      const { catalogIdentity: _catalog, ...seed } = await store.getStreamSeed(
-        { kind: 'build', slug },
-        cursorParam(url, 'cursor'),
-      )
-      return json(200, seed)
-    }
+    if (req.method === 'GET' && rest === 'stream-seed')
+      return streamSeedRoute(req, url, { kind: 'build', slug })
     switch (`${req.method} ${rest}`) {
       // The build's frozen ticket assets (SPEC §6.3): read through the build's
       // own events, so a build-scoped token needs no ticket-asset authority.
