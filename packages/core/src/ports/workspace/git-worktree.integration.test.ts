@@ -186,6 +186,46 @@ describe('GitWorktreeProvider', () => {
     expect(await run(['git', 'rev-parse', 'refs/remotes/origin/main'], repo)).toBe(staleLocalSha)
   })
 
+  test('the target moving between base selection and checkout cannot change the recorded base (AUT-1252)', async () => {
+    const selected = await run(['git', 'rev-parse', 'refs/heads/main'], remote)
+    let moved: string | undefined
+    provider = new GitWorktreeProvider({
+      root,
+      exec: async (cmd, opts) => {
+        const result = await spawnExec(cmd, opts)
+        if (
+          moved === undefined &&
+          cmd.includes('fetch') &&
+          cmd.at(-1)?.startsWith('+refs/heads/main:refs/autobuild/provision/')
+        ) {
+          // A merge lands on the target right after the base was fetched.
+          moved = await commitFile(upstream, 'merged.txt', 'merged\n', 'merge to main')
+          await run(['git', 'push', '-q', 'origin', 'main'], upstream)
+          await run(['git', 'fetch', '-q', 'origin'], repo)
+          await run(['git', 'update-ref', 'refs/heads/main', moved], repo)
+        }
+        return result
+      },
+    })
+
+    const handle = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch: 'ab/raced',
+    })
+
+    expect(moved).toBeDefined()
+    expect(moved).not.toBe(selected)
+    expect(handle.base).toEqual({ source: 'remote', sha: selected })
+    expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(selected)
+    await commitFile(handle.path, 'work.txt', 'work\n', 'build work')
+    const ancestry = await spawnExec(
+      ['git', 'merge-base', '--is-ancestor', handle.base.sha, 'HEAD'],
+      { cwd: handle.path },
+    )
+    expect(ancestry.exitCode).toBe(0)
+  })
+
   test('provision is idempotent for the same branch (constitution #2)', async () => {
     const calls: string[][] = []
     provider = new GitWorktreeProvider({

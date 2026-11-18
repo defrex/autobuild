@@ -462,11 +462,17 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
     const base = await this.selectNewBranchBase(repo, baseBranch, branch)
     // Consume the selected immutable commit, not a mutable name that could
-    // move between fetch and branch creation.
+    // move between fetch and branch creation. The recorded base is the new
+    // worktree's verified HEAD, so it is always an ancestor of the build's
+    // own commits (AUT-1252).
     await this.gitOrThrow(repo, ['worktree', 'add', '-b', branch, worktreePath, base.sha])
     const actualSha = await this.resolveCommit(repo, branchRef)
     if (actualSha !== base.sha) {
       throw new Error(`created ${branchRef} at ${actualSha}, expected selected base ${base.sha}`)
+    }
+    const head = await this.resolveCommit(worktreePath, 'HEAD')
+    if (head !== base.sha) {
+      throw new Error(`checked out ${worktreePath} at ${head}, expected selected base ${base.sha}`)
     }
 
     this.repos.set(worktreePath, repo)

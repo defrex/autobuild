@@ -2,6 +2,7 @@ import { settlePendingPublication } from './publication-settlement'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { prepareRestack } from '../kernel/reconcile-restack'
 import { gitRewrite } from '../ports/forge/git-rewrite'
+import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { renderPrSummary } from './pr-summary'
 /**
  * Terminal-command tests (SPEC §8.4 D5, §8.5 D6, §8.6 D7): second-terminal
@@ -578,6 +579,92 @@ describe('ab done — implement', () => {
     )
     expect(deps.forge.pushes).toEqual([])
     expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+  })
+
+  test('first done succeeds when the target moved during git-worktree provisioning (AUT-1252)', async () => {
+    await store.close()
+    store = await seedStore()
+    const origin = join(tmp, 'raced-origin.git')
+    const upstream = join(tmp, 'raced-upstream')
+    const repo = join(tmp, 'raced-repo')
+    await mkdir(origin)
+    await runGit(['init', '-q', '--bare', '-b', 'main'], origin)
+    await mkdir(upstream)
+    await runGit(['init', '-q', '-b', 'main'], upstream)
+    const selected = await commitFile(upstream, 'README.md', 'raced\n', 'initial')
+    await runGit(['remote', 'add', 'origin', origin], upstream)
+    await runGit(['push', '-q', 'origin', 'main'], upstream)
+    await runGit(['clone', '-q', origin, repo], tmp)
+    let moved: string | undefined
+    const provider = new GitWorktreeProvider({
+      root: join(tmp, 'raced-worktrees'),
+      exec: async (cmd, opts) => {
+        const result = await spawnExec(cmd, opts)
+        if (
+          moved === undefined &&
+          cmd.includes('fetch') &&
+          cmd.at(-1)?.startsWith('+refs/heads/main:refs/autobuild/provision/')
+        ) {
+          // A merge lands on the target right after the base was fetched.
+          moved = await commitFile(upstream, 'merged.ts', 'merged\n', 'merge to main')
+          await runGit(['push', '-q', 'origin', 'main'], upstream)
+          await runGit(['fetch', '-q', 'origin'], repo)
+          await runGit(['update-ref', 'refs/heads/main', moved], repo)
+        }
+        return result
+      },
+    })
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch: BRANCH })
+    expect(moved).toBeDefined()
+    expect(handle.base).toEqual({ source: 'remote', sha: selected })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: handle.provider,
+        remote: false,
+        ref: handle.ref,
+        path: handle.path,
+        branch: handle.branch,
+        base: handle.base,
+      },
+    })
+    await store.append(BUILD, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
+    const head = await commitFile(handle.path, 'feature.ts', 'export const x = 1\n', 'feature')
+
+    const event = await done(
+      makeDeps({
+        store,
+        env: makeEnv({ phase: 'implement', round: 1 }),
+        workspacePath: handle.path,
+      }),
+      { notes: await stash('raced-notes', 'implemented') },
+    )
+
+    expect(event.type).toBe('implement.completed')
+    expect(event.payload).toMatchObject({ commits: { base: selected, head } })
+  })
+
+  test('first done succeeds on a remote-sandbox fact whose base is the checked-out commit while the target has moved', async () => {
+    await advanceTarget([{ file: 'upstream-only', content: 'upstream', message: 'advance' }])
+    // What the fixed provider records when a retry reuses a completed sandbox
+    // after the target moved: the guest's checkout, not the new target head.
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        remote: true,
+        ref: 'sandbox',
+        branch: BRANCH,
+        base: { source: 'remote', sha: implementationBase },
+      },
+    })
+    const event = await done(implementDeps(), {
+      notes: await stash('reused-sandbox-notes', 'implemented'),
+    })
+    expect(event.type).toBe('publication.requested')
+    expect(event.payload).toMatchObject({ base: implementationBase })
   })
 
   test('--notes is required', async () => {

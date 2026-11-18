@@ -781,7 +781,7 @@ describe('VercelSandboxProvider', () => {
       branch: 'ab/remote-build',
     })
 
-    expect((h.createInput?.source as { revision: string }).revision).toBe(before)
+    expect((h.createInput?.source as { revision?: string } | undefined)?.revision).toBe(before)
     expect(workspace.base).toEqual({ source: 'remote', sha: before })
     expect(h.sandbox.head).toBe(before)
   })
