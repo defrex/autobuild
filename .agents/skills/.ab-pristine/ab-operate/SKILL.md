@@ -1,5 +1,5 @@
 ---
-name: operate
+name: ab-operate
 description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control merge consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or from an external connected agent using the operator tool registry.
 ---
 

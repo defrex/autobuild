@@ -207,9 +207,14 @@ test('abort mode aborts a claimed attempt, cancels an unclaimed one and refuses 
       { slug: node, cause: 'operator', mode: 'abort' },
     )
     h.tickets.add(attemptTicket('A2'))
+    await tick(h)
+    await tick(h)
+    await tick(h)
+    // The rejection sweep moves the cancelled attempt's ticket out of Ready
+    // before any claim; a ticket handed back to Ready still meets the claim gate.
+    expect(h.tickets.transitions).toContainEqual({ id: 'A2', state: 'Rejected' })
+    await h.tickets.transition('A2', 'Ready')
     const report = await tick(h)
-    await tick(h)
-    await tick(h)
 
     const a1Events = await h.events(a1.slug)
     const requested = ofType(a1Events, 'build.abort-requested')

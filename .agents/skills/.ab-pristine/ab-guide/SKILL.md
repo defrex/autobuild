@@ -1,5 +1,5 @@
 ---
-name: guide
+name: ab-guide
 description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; when a question mentions autobuild, autobuild.toml, or the `ab` CLI; or when writing the product's own name in prose, documentation, or a UI string.
 ---
 
