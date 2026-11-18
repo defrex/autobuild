@@ -1686,6 +1686,103 @@ export async function ticketWaitIdleReadBudget(opts: {
   }
 }
 
+/** Sampled attempt measurements (SPEC §13.1.1): the dispatcher decides each
+ * parked attempt's sampled request with one reduced read of its node, once,
+ * and idle ticks afterwards read the node no more often than before any
+ * sample, append nothing and read zero historical event rows, at 100 and
+ * 100,000 events on every attempt and on the node. `sample` appends a fresh
+ * request and its samples to one attempt; `decided` names the fact the
+ * dispatcher must have written for it. */
+export async function sampledMeasurementReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  node: string
+  attempts: string[]
+  dispatcher: () => Dispatcher
+  sample: (slug: string, request: string) => Promise<void>
+  decided: (slug: string, request: string) => Promise<boolean>
+  advance: () => void
+}): Promise<void> {
+  const { store, node, attempts } = opts
+  let nodeReads = 0
+  const getReducerValue = store.getReducerValue.bind(store)
+  store.getReducerValue = (async (...args: Parameters<typeof store.getReducerValue>) => {
+    const [scope] = args
+    if (scope.kind === 'build' && scope.slug === node) nodeReads++
+    return getReducerValue(...args)
+  }) as typeof store.getReducerValue
+  const metrics = { historicalRows: 0, tailRows: 0 }
+  // Writes to the attempts only: the node's own polling facts are not this
+  // stage's.
+  let attemptWrites = 0
+  const append = store.append.bind(store)
+  const appendIfCurrent = store.appendIfCurrent.bind(store)
+  store.append = ((slug: string, event: never) => {
+    if (attempts.includes(slug)) attemptWrites++
+    return append(slug, event)
+  }) as typeof store.append
+  store.appendIfCurrent = ((slug: string, expected: number, event: never) => {
+    if (attempts.includes(slug)) attemptWrites++
+    return appendIfCurrent(slug, expected, event)
+  }) as typeof store.appendIfCurrent
+  try {
+    for (const length of [100, 100_000]) {
+      for (const slug of [node, ...attempts]) await seedBuildFiller(store, slug, length)
+      const dispatcher = opts.dispatcher()
+      // Warm durable projections over the new filler once.
+      opts.advance()
+      await dispatcher.tick({ acceptNewWork: false })
+      opts.advance()
+      await dispatcher.tick({ acceptNewWork: false })
+      opts.advance()
+      nodeReads = 0
+      await dispatcher.tick({ acceptNewWork: false })
+      const idleNodeReads = nodeReads
+      // Rows up to here are history; the samples and decisions are the tail.
+      const restore = [node, ...attempts].map((slug) => {
+        const boundary = buildEventRows(store, slug).at(-1)!.seq
+        return instrumentBuildRows(store, slug, () => boundary, metrics)
+      })
+      const request = `m-${length}`
+      for (const slug of attempts) await opts.sample(slug, request)
+      try {
+        // The deciding tick: one node read per sampled request, once.
+        opts.advance()
+        nodeReads = 0
+        metrics.historicalRows = 0
+        attemptWrites = 0
+        await dispatcher.tick({ acceptNewWork: false })
+        for (const slug of attempts) expect(await opts.decided(slug, request)).toBe(true)
+        expect(attemptWrites).toBe(attempts.length)
+        expect(nodeReads - idleNodeReads).toBe(attempts.length)
+        expect(metrics.historicalRows).toBe(0)
+        // Idle ticks after the decisions, on this and on a fresh dispatcher.
+        for (const make of [() => dispatcher, opts.dispatcher, () => dispatcher]) {
+          const ticking = make()
+          opts.advance()
+          nodeReads = 0
+          metrics.historicalRows = 0
+          attemptWrites = 0
+          await ticking.tick({ acceptNewWork: false })
+          expect(attemptWrites).toBe(0)
+          expect(nodeReads).toBeLessThanOrEqual(idleNodeReads)
+          expect(metrics.historicalRows).toBe(0)
+        }
+      } finally {
+        for (const undo of restore) undo()
+      }
+      console.log('sampled measurement read budget', {
+        history: length,
+        attempts: attempts.length,
+        idleNodeReads,
+      })
+    }
+  } finally {
+    store.getReducerValue = getReducerValue
+    store.append = append
+    store.appendIfCurrent = appendIfCurrent
+  }
+}
+
 /** Count every MemoryBuildStore method call made while `run` executes. */
 export async function countStoreRequests(
   store: import('../store/memory').MemoryBuildStore,

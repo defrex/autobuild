@@ -255,3 +255,11 @@ test('publication backoff failures cannot exhaust the empty-execution guard', ()
   expect(executionProgress['publication.retry-scheduled']).toBe('failure')
   expect(executionProgress['publication.retry-exhausted']).toBe('failure')
 })
+
+test('a measurement execution makes progress; its noise attention alone does not', () => {
+  expect(executionProgress['attempt.measured']).toBe('progress')
+  expect(executionProgress['optimization.baseline-measured']).toBe('progress')
+  expect(executionProgress['optimization.noise-exceeded']).toBe('bookkeeping')
+  const measured = [start('a'), event('attempt.measured'), end('a')]
+  expect(reducer.reduce([...three, ...measured]).count).toBe(0)
+})
