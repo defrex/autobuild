@@ -16,6 +16,7 @@ import { decideNext } from '../kernel/engine'
 import { epilogueLeaf } from '../kernel/dispatch-capacity'
 import { listOperatorBuilds } from '../operator/query'
 import { projectBuildFromFacts } from '../cli/dashboard/model'
+import { abWait } from '../cli/wait'
 import { publicationPending } from './publication-state'
 import { RepoViewStore } from './repo-view'
 import {
@@ -18556,6 +18557,33 @@ describe('dispatcher — ticket waits', () => {
         )
         expect(row?.status).toBe('waiting')
         expect(row?.wait?.tickets).toEqual(['B'])
+        // A wait-only build is not attention: `ab wait --for attention`
+        // stays pending until its timeout, at the same bound.
+        let time = 0
+        const woke: string[] = []
+        const waited = await abWait({
+          targetRepo: REPO,
+          env: {},
+          exec: async (args) =>
+            args[1] === 'remote'
+              ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+              : { stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`, stderr: '', exitCode: 0 },
+          storeRef: '/budget',
+          openStore: () => store,
+          slugs: ['waiter-open'],
+          forValues: ['attention'],
+          json: true,
+          timeout: '2',
+          now: () => new Date(time),
+          delay: async () => {
+            time += 1000
+          },
+          stdout: (line) => woke.push(line),
+          stderr: () => {},
+        })
+        expect(waited).toBe(3)
+        // The timeout record carries only a resume cursor.
+        expect(woke.map((line) => Object.keys(JSON.parse(line)))).toEqual([['cursor']])
       },
     })
     const final = (await readBuildFacts(store, 'waiter-ended')).value.state
