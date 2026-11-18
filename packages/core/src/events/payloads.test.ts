@@ -1848,6 +1848,39 @@ describe('optimization event protocol', () => {
     })
   })
 
+  test('a panel request carries its purpose; panel samples carry a win rate', () => {
+    const panel = { kind: 'panel', judges: 5, rubric: 'evals/rubric.md', harness: ['evals/**'] }
+    const request = {
+      id: 'm1',
+      node: 'node-slug',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+      metric: panel,
+    }
+    expect(
+      valid('attempt.measurement-requested', { ...request, purpose: 'clearer prose' }, DISPATCHER),
+    ).toMatchObject({ payload: { metric: panel, purpose: 'clearer prose' } })
+    invalid('attempt.measurement-requested', request, DISPATCHER)
+    invalid('attempt.measurement-requested', { ...request, purpose: '' }, DISPATCHER)
+    const sampled = {
+      request: 'm1',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+      samples: 5,
+      winRate: 0.7,
+      report: { kind: 'measurement-samples', rev: 0 },
+    }
+    expect(valid('attempt.sampled', sampled, KERNEL)).toMatchObject({ payload: { winRate: 0.7 } })
+    invalid('attempt.sampled', { ...sampled, winRate: 1.5 }, KERNEL)
+    invalid('attempt.sampled', { ...sampled, medians: { candidate: 39, baseline: 41 } }, KERNEL)
+    const { winRate: _winRate, ...neither } = sampled
+    invalid('attempt.sampled', neither, KERNEL)
+  })
+
   test('the noise check is an advisory kernel fact that allows a zero effective epsilon', () => {
     const noise = {
       revision: 1,

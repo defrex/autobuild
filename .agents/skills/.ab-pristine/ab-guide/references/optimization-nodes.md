@@ -243,22 +243,30 @@ positive for an improvement: `baseline − candidate` when minimizing,
 or the relative ε times the baseline median's magnitude. A delta of at least ε
 is `improved`; anything less is `no-improvement`. A starting measurement's
 value is the median of all samples, and its spread is the distance between the
-two sides' medians.
+two sides' medians. A panel decides by win rate instead, with ties counted as
+half: a win rate of at least 0.5 + ε is `improved`, so 3 of 5 judges meets an
+ε of 0.1, and anything less is `no-improvement`. Its delta is
+`winRate − 0.5`.
 
-**Spread beside every delta.** Each `attempt.measured` carries the node's
-starting spread as `spread`, and `ab watch` prints it next to the delta, such
-as `delta 6 (noise ±0.4)`. The raw per-sample values are deposited as a
-`measurement-samples` artifact referenced by `report`.
+**Spread beside every delta.** A command's `attempt.measured` carries the
+node's starting spread as `spread`, and `ab watch` prints it next to the
+delta, such as `delta 6 (noise ±0.4)`. The raw per-sample values, or a
+panel's judgments, are deposited as a `measurement-samples` artifact
+referenced by `report`.
 
 **Attempts.** An `attempt.measurement-requested` names the candidate, the
-baseline, the harness pin, the objective revision and the command metric. A
+baseline, the harness pin, the objective revision and the node's metric. A
+panel request also carries the objective's purpose, which its judges read. A
 parked attempt with such a request takes a runner slot as a re-verify does,
 and its runner samples in the attempt's own workspace and records
-`attempt.sampled`. The runner reads only its own build, so the dispatcher
-decides: it reads the node once, checks that the request's revision and
-harness pin are still the node's ruler, and records `attempt.measured` using
-the node's current ε and starting spread. A quick ε revision made while the
-samples ran therefore applies. A request whose ruler or pin was replaced
+`attempt.sampled`. For a panel, the runner runs one [judge
+panel](#judge-panels) of the attempt's head against the node head and records
+the win rate, with the judge count as `samples`. The runner reads only its own
+build, so the dispatcher decides: it reads the node once, checks that the
+request's revision and harness pin are still the node's ruler, and records
+`attempt.measured` using the node's current ε and, for a command, its starting
+spread. A panel decision needs no starting value. A quick ε revision made while
+the samples ran therefore applies. A request whose ruler or pin was replaced
 while it was sampled records no decision; the attempt needs a fresh request.
 
 **Failures.** None of these record a value or a decision:
@@ -266,23 +274,29 @@ while it was sampled records no decision; the attempt needs a fresh request.
 - the command exits nonzero, times out, or prints anything other than one
   JSON object with a numeric `value`;
 - a worktree or setup command fails;
-- a request names no command metric, or its ruler is no longer the node's.
+- a judge panel fails: a judge failed twice, or the variants could not be
+  prepared;
+- a request names no metric, a panel request names no purpose, or its ruler
+  is no longer the node's.
 
 Instead, the build escalates with target `measurement` and policy cause
 `measurement-failed`. The question names the cause, the failing sample and
-the output tail. Answering a runner failure measures again; abort still
-aborts. A refusal of samples taken under a replaced ruler stays refused after
+the output tail. Answering a runner failure measures again; for a panel the
+answer starts a fresh panel, while a crash resumes the same one and keeps its
+judgments. Abort still aborts. A refusal of samples taken under a replaced ruler stays refused after
 the answer, because sampling the same request again cannot succeed.
 
 ## Judge panels
 
 A panel objective is measured by agent judges instead of a command. A panel
 run compares two heads, a candidate and a baseline, under one harness pin, and
-returns the candidate's win rate. Nothing calls a panel run yet: attempts on a
-panel objective are not yet accepted by win rate, and a panel node records no
-baseline noise check and no `optimization.progress-measured`. Those callers
-will record their decisions in `attempt.measured.winRate`,
-`optimization.baseline-measured` and `optimization.progress-measured`.
+returns the candidate's win rate. Attempt acceptance runs one to measure each
+attempt on a panel objective (see [Measurement](#measurement) and [Landing and
+settlement](#landing-and-settlement)), and records the decision in
+`attempt.measured.winRate`. A panel node records no baseline noise check and
+no `optimization.progress-measured` yet. Those callers will record their
+decisions in `optimization.baseline-measured` and
+`optimization.progress-measured`.
 
 **The run.** `panel.started` records the run's inputs: the candidate, the
 baseline, the harness pin, the purpose, the rubric path, the harness and the
@@ -360,8 +374,8 @@ Every judge root is removed when the run ends.
 | `optimization.noise-exceeded` | node | revision, head, harnessPin, median, spread, epsilon, effective ε (advisory) |
 | `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, hours) |
 | `optimization.attempts-proposed` | node | request, proposals (id, ticket, title, strategy), reason when empty |
-| `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision, metric |
-| `attempt.sampled` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians, report |
+| `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision, metric, purpose (panel) |
+| `attempt.sampled` | attempt | request, candidate, baseline, harnessPin, revision, samples (judges for a panel), medians or win rate, report |
 | `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision, spread, report |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
@@ -538,12 +552,14 @@ on that measured node head.
   A landing interrupted after its writer reservation publishes on recovery only
   while that pair still passes the gate; after a revision it does not pass, the
   reservation is abandoned.
-- **Attempts must improve.** An attempt lands when its delta is at least ε. A
-  smaller delta settles it `no-improvement`: its PR closes without merging and
-  no further implement round runs.
+- **Attempts must improve.** An attempt lands when its delta is at least ε;
+  on a panel objective, when its win rate against the current node head
+  reaches 0.5 + ε. Anything less settles it `no-improvement`: its PR closes
+  without merging and no further implement round runs.
 - **Other children must not regress.** A child that is not an attempt lands
-  when its delta is at least −ε. A regressing child escalates with both
-  medians, the delta and ε; answering asks for a fresh measurement. These
+  when its delta is at least −ε, or its win rate at least 0.5 − ε. A
+  regressing child escalates with both medians or the win rate, the delta and
+  ε; answering asks for a fresh measurement. These
   children never settle and count toward neither budget nor plateau.
 - **Harness edits escalate.** An attempt whose head changes a harness path is
   never measured. It escalates naming the paths, and that head stays
@@ -552,7 +568,13 @@ on that measured node head.
   gets the next turn. Later candidates neither request measurements nor land
   until it lands, closes, or escalates.
 
-Every attempt settles exactly once, on the node's log:
+`ab watch` and `ab build status <child>` print the recorded measurement: a
+command's medians or a panel's win rate, the delta and the decision, such as
+`win rate 0.8: delta 0.3 → improved`.
+
+Every attempt settles exactly once, on the node's log. A measured settlement
+records the medians, or for a panel a baseline of 0.5 and the win rate as the
+candidate:
 
 | How the attempt ends | Outcome | Ticket role |
 |---|---|---|

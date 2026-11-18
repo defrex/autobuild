@@ -140,6 +140,17 @@ describe('classification', () => {
     expect(classifyLanding(panelObjective(), 'improve', { delta: 0.05 })).toBe('no-improvement')
   })
 
+  test('a panel win rate lands an attempt at 0.5 + ε and another child at 0.5 − ε', () => {
+    const panel = panelObjective() // ε 0.1
+    // 3 of 5 judges: 0.6 − 0.5 is just under 0.1 in floats, yet it lands.
+    expect(classifyLanding(panel, 'improve', { winRate: 3 / 5, delta: 3 / 5 - 0.5 })).toBe('land')
+    expect(classifyLanding(panel, 'improve', { winRate: 0.55, delta: 0.05 })).toBe('no-improvement')
+    expect(classifyLanding(panel, 'non-regress', { winRate: 2 / 5, delta: 2 / 5 - 0.5 })).toBe(
+      'land',
+    )
+    expect(classifyLanding(panel, 'non-regress', { winRate: 0.3, delta: -0.2 })).toBe('regressed')
+  })
+
   test('the settlement records medians, or 0.5 and the win rate for a panel', () => {
     expect(
       settlementMeasurement({ revision: 2, medians: { candidate: 40, baseline: 44 }, delta: 4 }),
