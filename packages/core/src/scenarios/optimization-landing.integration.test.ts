@@ -48,7 +48,25 @@ const OBJECTIVE = [
   'concurrency = 3',
 ].join('\n')
 
-const nodeBody = [CONFORMING_BODY, '', '```autobuild-objective', OBJECTIVE, '```'].join('\n')
+const PANEL_OBJECTIVE = [
+  'purpose = "clearer onboarding prose"',
+  '',
+  '[metric]',
+  'kind = "panel"',
+  'judges = 5',
+  'rubric = "evals/rubric.md"',
+  'harness = ["evals/**"]',
+  '',
+  '[target]',
+  'epsilon = { absolute = 0.1 }',
+  '',
+  '[budget]',
+  'maxAttempts = 20',
+].join('\n')
+
+const objectiveBody = (objective: string) =>
+  [CONFORMING_BODY, '', '```autobuild-objective', objective, '```'].join('\n')
+const nodeBody = objectiveBody(OBJECTIVE)
 
 /** Each build changes its own file, so siblings never conflict; a build whose
  * slug matches `harness` also edits a harness path. */
@@ -73,13 +91,14 @@ async function setup(
   attempts: string[],
   others: string[] = [],
   harness?: RegExp,
+  body = nodeBody,
 ) {
   const h = await makeHarness({
     localGitForge: true,
     configToml: WITH_REJECTED,
     handlers: handlers(harness),
     tickets: [
-      { ...readyTicket('OPT', { title: 'Faster search', body: nodeBody }), kind: 'node' },
+      { ...readyTicket('OPT', { title: 'Faster search', body }), kind: 'node' },
       ...[...attempts, ...others].map((id) => ({
         ...readyTicket(id, { title: `Change ${id}` }),
         target: 'OPT',
@@ -172,6 +191,27 @@ async function measure(h: E2eHarness, slug: string, delta: number) {
   return request
 }
 
+/** Answer the child's latest panel request with the judges' win rate, as
+ * the attempt runner records it; the dispatcher decides. */
+async function judge(h: E2eHarness, slug: string, winRate: number) {
+  const request = (await requests(h, slug)).at(-1)!.payload
+  await h.store.append(slug, {
+    actor: KERNEL,
+    type: 'attempt.sampled',
+    payload: {
+      request: request.id,
+      candidate: request.candidate,
+      baseline: request.baseline,
+      harnessPin: request.harnessPin,
+      revision: request.revision,
+      samples: 5,
+      winRate,
+      report: { kind: 'measurement-samples', rev: 0 },
+    },
+  })
+  return request
+}
+
 async function tick(h: E2eHarness) {
   h.clock.advance(60_000)
   await h.dispatcher.tick()
@@ -221,6 +261,69 @@ test('an improved attempt requests its first measurement, then lands only on its
     const digest = (await stateOf(h, node.slug)).optimization!
     expect(digest).toMatchObject({ inFlight: [], rejections: [], current: 48 })
     expect((await h.tickets.get('A1'))?.state).toBe('Done')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a panel attempt lands when its win rate reaches 0.5 + ε against the node head', async (makeHarness) => {
+  const panel = objectiveBody(PANEL_OBJECTIVE)
+  const { h, node } = await setup(makeHarness as never, ['A1'], [], undefined, panel)
+  try {
+    await tick(h)
+    const child = await slugOf(h, 'A1')
+    await toPr(h, child)
+    await tick(h)
+    const [request] = await requests(h, child)
+    const nodeHead = await git(['rev-parse', node.branch!], h.origin)
+    expect(request!.payload).toMatchObject({
+      baseline: nodeHead,
+      metric: { kind: 'panel', judges: 5, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+      purpose: 'clearer onboarding prose',
+    })
+    // 3 of 5 judges: exactly 0.5 + ε, which float subtraction misses.
+    await judge(h, child, 3 / 5)
+    await tick(h)
+    await tick(h)
+    const [measured] = ofType(await h.events(child), 'attempt.measured')
+    expect(measured?.payload).toMatchObject({ winRate: 0.6, decision: 'improved' })
+    expect(measured?.payload).not.toHaveProperty('medians')
+    const landed = await stateOf(h, child)
+    expect(landed.outcome).toBe('merged')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(landed.pr!.headSha)
+    expect(await settled(h, node.slug)).toEqual([
+      expect.objectContaining({
+        outcome: 'accepted',
+        measurement: { revision: 1, baseline: 0.5, candidate: 0.6, delta: 3 / 5 - 0.5 },
+      }),
+    ])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a panel attempt below 0.5 + ε closes unmerged and settles no-improvement', async (makeHarness) => {
+  const panel = objectiveBody(PANEL_OBJECTIVE)
+  const { h, node } = await setup(makeHarness as never, ['A1'], [], undefined, panel)
+  try {
+    await tick(h)
+    const child = await slugOf(h, 'A1')
+    await toPr(h, child)
+    await tick(h)
+    const nodeHead = await git(['rev-parse', node.branch!], h.origin)
+    await judge(h, child, 0.5)
+    await tick(h)
+    await tick(h)
+    const state = await stateOf(h, child)
+    expect(state.outcome).toBe('closed-unmerged')
+    expect(state.prState).toBe('closed')
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(nodeHead)
+    expect(await settled(h, node.slug)).toEqual([
+      expect.objectContaining({
+        outcome: 'no-improvement',
+        measurement: { revision: 1, baseline: 0.5, candidate: 0.5, delta: 0 },
+      }),
+    ])
   } finally {
     await h.cleanup()
   }
