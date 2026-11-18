@@ -1273,6 +1273,10 @@ export const eventPayloadSchemas = {
   'build.pause-requested': reasonOnly,
   'build.resume-requested': reasonOnly,
   'build.abort-requested': z.strictObject({
+    // Absent on historical and operator requests; the first request fixes cause.
+    origin: z
+      .strictObject({ kind: z.literal('optimization-stop'), node: z.string().min(1) })
+      .optional(),
     reason: z.string().optional(),
     to: abortDestinationSchema.optional(),
   }),

@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, and the landing gate and attempt settlement.
+- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, and the landing gate and attempt settlement, stopping and completion.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -217,6 +217,14 @@ attempt settles once. An attempt that does not land, including one an operator
 aborts, has its ticket moved to the rejected role: the one case in which the
 dispatcher moves a ticket there. See
 [landing and settlement](references/optimization-nodes.md#landing-and-settlement).
+
+An optimization node stops once: automatically on a threshold, plateau or
+budget cause, when the proposer is exhausted, or by hand with
+`ab objective <node> --stop [--drain | --abort]`. Its stop mode then aborts or
+drains the attempts in flight. It completes only after it has stopped with no
+attempt running or waiting to land, and stopping is not consent: land it with
+`ab merge <node>`. See
+[stopping and completion](references/optimization-nodes.md#stopping-and-completion).
 
 **Review severity is proportion to the spec.** Both review loops rate a
 finding by what the defect costs against the spec's acceptance criteria and
@@ -2559,7 +2567,8 @@ to the build's event log and apply the same write-time checks.
 | Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Consent to merge | `ab merge <slug> [--head <sha>] [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
 | Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
-| Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected. | `optimization.objective-revised` |
+| Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected; revised stop rules apply on the next tick. | `optimization.objective-revised` |
+| Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
 | Hold merge | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
