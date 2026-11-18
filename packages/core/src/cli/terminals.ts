@@ -68,6 +68,7 @@ import { textContent } from '../store/types'
 import { expandIssues } from '../zod-issues'
 import { preparePrAttachments } from './pr-attachments'
 import type { CliEnv } from './env'
+import { harnessPathsTouched, harnessRejection, readAttemptContext } from './attempt'
 
 /** Structural subset of CliDeps (src/cli/main.ts) — what terminals need. */
 export interface TerminalDeps {
@@ -297,6 +298,23 @@ function requireNotes(notes: string | undefined, why: string): string {
 export interface DoneOpts {
   /** Path to the notes file (implement/reconcile — deposited as the phase's artifact). */
   notes?: string
+  /** An optimization attempt's implementer declines with this reason
+   * (RFC 0005 §6.2): no review, verification, measurement or merge. */
+  noImprovement?: string
+}
+
+/** Resolve this build as an optimization attempt, or undefined. */
+async function attemptOf(deps: TerminalDeps, events: CurrentBuildFacts) {
+  const created = events.created
+  if (created?.type !== 'build.created') return undefined
+  return readAttemptContext(deps.store, {
+    slug: deps.env.build,
+    state: events.state,
+    repo: created.payload.repo,
+    ticket: created.payload.ticket,
+    ticketSource: async () =>
+      (await loadConfig(join(deps.workspacePath, 'autobuild.toml'))).tickets.source,
+  })
 }
 
 export interface FinalizePrInput {
@@ -383,6 +401,8 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
   if (diagnostic) throw new MixedVersionDeferral(diagnostic)
   await assertNoPriorTerminal(store, env)
   const actor = agentActor(env.phase, env.session)
+  if (opts.noImprovement !== undefined && spec.name !== 'implement')
+    throw new Error("'--no-improvement' is only valid in implement of an optimization attempt")
 
   switch (spec.name) {
     case 'plan': {
@@ -428,6 +448,40 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
     }
 
     case 'implement': {
+      if (opts.noImprovement !== undefined) {
+        // Declining publishes nothing, so it needs neither a clean worktree
+        // nor commits; the dispatcher settles the attempt on the node.
+        const reason = opts.noImprovement.trim()
+        if (reason === '')
+          throw new Error(
+            "'ab done --no-improvement' requires a non-empty reason: say what was tried and why it did not help",
+          )
+        if (reason.length > 4000)
+          throw new Error(
+            `'ab done --no-improvement' reason is ${reason.length} characters; the limit is 4000`,
+          )
+        if ((await attemptOf(deps, events)) === undefined)
+          throw new Error(
+            `ab done --no-improvement is only for optimization attempts: build ${env.build} ` +
+              'is not an attempt of an optimization node',
+          )
+        const notes =
+          opts.notes === undefined ? undefined : await readTextFile(opts.notes, '--notes')
+        const { event } = await terminalDeposit(
+          deps,
+          notes === undefined ? [] : [{ kind: 'implement-notes', content: notes }],
+          (deposited) => ({
+            actor,
+            type: 'implement.declined',
+            payload: {
+              round: env.round,
+              reason,
+              ...(notes === undefined ? {} : { artifact: refOf(deposited[0]) }),
+            },
+          }),
+        )
+        return event
+      }
       const notesPath = requireNotes(opts.notes, "implement's 'ab done' deposits implement-notes")
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
@@ -458,6 +512,22 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         head,
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
+      // An attempt must not change its pinned ruler (RFC 0005 §6.1). Refused
+      // here, before any deposit, so code review never sees the change. An
+      // identity error refuses too: the check is never silently skipped.
+      if (events.state.target !== undefined) {
+        const attempt = await attemptOf(deps, events)
+        if (attempt !== undefined) {
+          const harness = await harnessPathsTouched(
+            deps.exec,
+            deps.workspacePath,
+            base,
+            head,
+            attempt.optimization.objective.metric.harness,
+          )
+          if (harness.length > 0) throw harnessRejection(harness)
+        }
+      }
       if (remotePublication(events)) {
         const { event } = await terminalDeposit(
           deps,

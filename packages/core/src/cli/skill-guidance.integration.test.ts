@@ -151,3 +151,72 @@ describe('optimization-node marker guidance', () => {
     expect(reference?.content).toContain('`autobuild-objective`')
   })
 })
+
+/** The `## <heading>` section through the next `## ` heading. */
+function section(content: string, heading: string): string | undefined {
+  const start = content.indexOf(`\n## ${heading}\n`)
+  if (start < 0) return undefined
+  const end = content.indexOf('\n## ', start + 1)
+  return content.slice(start, end < 0 ? undefined : end)
+}
+
+/** The blank-line-separated block that mentions optimization attempts. */
+function attemptPassage(content: string): string | undefined {
+  return content.split(/\n\s*\n/).find((block) => block.includes('**Optimization attempts**'))
+}
+
+describe('optimization attempt guidance', () => {
+  test('ab-implement has an optimization-attempts section covering the contract', () => {
+    const text = section(byInstallName.get('ab-implement')?.content ?? '', 'Optimization attempts')
+    expect(text, 'ab-implement has no "## Optimization attempts" section').toBeDefined()
+    const flat = text!.replace(/\s+/g, ' ')
+    for (const phrase of [
+      '--no-improvement',
+      'meaningful improvement',
+      'not the largest',
+      'Regressing behavior is a failure even when the metric improves',
+      'harness',
+      'overfitting to the eval',
+      'special-casing the benchmark',
+      'implement notes',
+      'Declining is a successful outcome',
+    ])
+      expect(flat, phrase).toContain(phrase)
+  })
+
+  test('ab-plan plans the strategy the attempt was given', () => {
+    const text = section(byInstallName.get('ab-plan')?.content ?? '', 'Optimization attempts')
+    expect(text, 'ab-plan has no "## Optimization attempts" section').toBeDefined()
+    const flat = text!.replace(/\s+/g, ' ')
+    expect(flat).toContain('Plan that strategy')
+    expect(flat).toContain("another attempt's job")
+  })
+
+  test('both review skills judge attempts by purpose and treat measurements as claims', () => {
+    for (const name of ['ab-plan-review', 'ab-code-review']) {
+      const passage = attemptPassage(byInstallName.get(name)?.content ?? '')
+      expect(passage, `${name} has no optimization-attempts passage`).toBeDefined()
+      const text = passage!.replace(/\s+/g, ' ')
+      expect(text, name).toContain('purpose')
+      expect(text, name).toContain('blocking')
+      expect(text, name).toContain('claims, not the gate')
+    }
+  })
+
+  test('ab-guide describes attempt context and declining', () => {
+    const paragraph = guide?.content
+      .split(/\n\s*\n/)
+      .find((block) => block.trimStart().startsWith('**Optimization attempts.**'))
+    expect(paragraph, 'ab-guide has no "Optimization attempts" paragraph').toBeDefined()
+    expect(paragraph).toContain('--no-improvement')
+    expect(paragraph).toContain('objective.md')
+  })
+
+  test('the reference in the ab-guide install tree records implement.declined', () => {
+    const reference = guide?.files.find((file) => file.path === 'references/optimization-nodes.md')
+    expect(reference?.content).toContain('`implement.declined`')
+    expect(reference?.content).toContain('### Declining')
+    expect(reference?.content).toContain('### Harness edits are refused')
+    expect(reference?.content).toContain('### Attempt context')
+  })
+})

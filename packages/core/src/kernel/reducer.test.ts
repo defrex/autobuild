@@ -2642,3 +2642,20 @@ describe('janitor escalation', () => {
     expect(next.attempt).toBe(13)
   })
 })
+
+describe('reduceBuild: implement.declined', () => {
+  test('completes implement and records the decline', () => {
+    const state = reduceBuild(
+      toLog([
+        ...prelude(),
+        ...planApproved(),
+        ev('implement.started', { round: 1 }),
+        ev('implement.declined', { round: 1, reason: 'no measurable gain' }),
+      ]),
+    )
+    expect(state.declined).toEqual({ round: 1, reason: 'no measurable gain', seq: 10 })
+    expect(state.lastCompletedPhase).toEqual({ phase: 'implement', round: 1, seq: 10 })
+    expect(state.currentPhase).toBeUndefined()
+    expect(state.implement.commits).toBeUndefined()
+  })
+})

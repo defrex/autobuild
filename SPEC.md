@@ -1598,7 +1598,7 @@ sessions need no separate global installation.
 | `ab artifact get <kind>[@rev]` | fetch an artifact within own build | no |
 | `ab artifact download …` | read-only exact-byte retrieval; operator-wide without identity, own-build only with ambient phase identity; works after build termination | no |
 | `ab observe --kind <followup\|refactor\|latent-bug> …` | structured observation, any phase, any time | no |
-| `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
+| `ab done` | complete a producer phase (validates, then runs phase plumbing); in an optimization attempt's implement, `--no-improvement <reason>` declines instead (§13.1.1) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
 | `ab escalate <question>` | park the build for external judgment | **yes** |
 | `ab mcp [--store <ref>] [--repo <id>]` | serve the agent tool registry as an MCP server over stdio; fails closed inside a phase | no |
@@ -1664,7 +1664,7 @@ terminals:
 |---|---|---|
 | `plan` | ticket, spec; prior plan rev + findings (round > 1) | `done` (requires `plan` artifact) |
 | `plan-review` | spec, plan@latest, all prior rounds' findings (for `persists` marking) | `verdict` (requires notes artifact) |
-| `implement` | spec, approved plan, feedback (findings **or** verify report), own prior notes | `done` (requires clean worktree + notes) |
+| `implement` | spec, approved plan, feedback (findings **or** verify report), own prior notes | `done` (requires clean worktree + notes; an attempt's `done --no-improvement` requires neither) |
 | `code-review` | spec, plan, commit range `{base, head}`, prior findings, implement-notes | `verdict` |
 | `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range; node contribution specs and provenance | `verdict pass` \| `verdict fail --report` \| `verdict skip --reason` |
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
@@ -1753,8 +1753,9 @@ or `escalate`, or in a work build `wait-on`, which declares a ticket wait
 (§11). The CLI rejects a second terminal call, and each terminal
 validates its preconditions before emitting the phase event (no `done`
 without the required artifacts; no `done` on a dirty worktree in
-`implement`). A normally completed turn that ends **without** any terminal
-call is an infra failure: the runner emits
+`implement`, except an optimization attempt's `done --no-improvement`). A
+normally completed turn that ends **without** any terminal call is an infra
+failure: the runner emits
 `phase.failed {error: "no-terminal"}` and applies retry policy.
 
 Provider/runtime-declared turn failures are a separate `AgentRunner` result
@@ -3394,8 +3395,32 @@ marked. `ab ticket tree` labels such a ticket
 `[node, optimization]`, and status labels the build `optimization node`.
 
 **Attempts.** A build is an attempt of node N exactly when its ticket ref
-appears in a recorded `optimization.attempts-proposed` of N. Children filed any
-other way are not attempts and follow the ordinary child rules above.
+appears in a recorded `optimization.attempts-proposed` of N; the commands below
+recognize it while the attempt is in flight. Both refs are compared through the
+recorded ticket-migration identity, so a proposal recorded before a
+ticket-source migration matches a child dispatched after it; continuity that
+cannot be resolved fails the command closed instead of treating the build as an
+ordinary child. Children filed any
+other way are not attempts and follow the ordinary child rules above. An
+attempt keeps the ordinary work grammar.
+
+In every phase of an attempt, `ab context` writes a derived `objective.md`
+and a manifest `attempt` block `{node, proposal, revision, purpose, metric,
+harness, current?, path}`: the purpose, the measurement command or panel, the
+pinned harness, ε, any threshold and the node's current, best and starting
+values. In implement, `ab done` compares the net contribution (`base..head`,
+without rename detection) with `metric.harness` and refuses a change to any
+matching path before any deposit or publication, naming the paths (§8.5). No
+event is written, so code review never sees such a change.
+
+An attempt's implementer may decline with `ab done --no-improvement
+"<reason>"`, which records `implement.declined {round, reason, artifact?}`.
+Declining needs no commits or clean worktree and publishes nothing. The engine
+then waits (`declined`), so no review, verification, finalize or measurement
+runs. The dispatcher appends `attempt.settled {outcome: declined, note:
+reason}` to N's log if the attempt is still in flight, releases the lease and
+workspace, and completes the attempt `closed-unmerged`. The flag is refused
+outside implement and in a build that is not an attempt.
 
 Proposing attempts, measuring them through the landing gate, judge panels,
 settlement into the rejected role, and stopping and completion are designed in
@@ -3704,7 +3729,7 @@ with illustrative members:
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
-| Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
+| Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict`; agent `implement.declined {round, reason, artifact?}` (decisive), an optimization attempt's alternative implement terminal: the build completes `closed-unmerged` and the dispatcher writes `attempt.settled {outcome: declined, note}` on the node (§13.1.1) |
 | Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.cancelled {step, attempt, cause: {step}, baseSha?, headSha?, restackId?}`, `verify.stage-failed {attempt, cycle, stage, failed, cancelled, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
@@ -3898,6 +3923,12 @@ A rewrite receipt alone never promotes the boundary; only completed settlement
 does. CLI status exposes pending/active work, reachable build identities and
 node-owned foreign changes. A node stays `collecting` while its narrow reconcile
 runner is attached; it does not acquire a leaf pipeline.
+
+**Declined attempts.** `implement.declined` completes the implement phase
+and sets `declined {round, reason, seq}`. The engine decides
+`wait/declined` immediately after its aborted and done checks, ahead of
+pending operator commands, so nothing past implement is ever decided. The
+dispatcher's settlement completes the build, and `done` then wins.
 
 **Optimization digest.** Build state embeds `optimization`, a bounded digest of
 an optimization node's own log, absent until the first

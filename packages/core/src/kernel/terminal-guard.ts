@@ -1,7 +1,7 @@
 import type { AbEvent } from '../events/catalog'
 import type { Phase } from '../ontology'
 import { isVerifyPhase, verifyStep } from '../ontology'
-import { phaseSpecFor } from './phases'
+import { isPhaseTerminalEvent, phaseSpecFor } from './phases'
 import { defineReducer } from './incremental'
 type CliEnv = { phase: Phase; round: number; session: string }
 interface TerminalGuardAcc {
@@ -29,7 +29,7 @@ export function terminalGuardReducer(env: CliEnv) {
         try {
           checkEvent(event, env, acc.reconcileAttempt, acc.sessionStartedSeq)
         } catch (error) {
-          const key = event.type === spec.terminalEvent ? 'completion' : 'permanent'
+          const key = isPhaseTerminalEvent(spec, event) ? 'completion' : 'permanent'
           acc[key] ??= { seq: event.seq, diagnostic: (error as Error).message }
         }
       }
@@ -159,7 +159,7 @@ function checkEvent(
     throw new Error(
       `terminal rejected: ${env.phase}@${env.round} was cancelled by verify:${event.payload.cause.step}`,
     )
-  if (event.type !== spec.terminalEvent) return
+  if (!isPhaseTerminalEvent(spec, event)) return
   if (
     (event.type === 'verify.completed' || event.type === 'finalize.completed') &&
     event.seq <= restartSeq
@@ -178,6 +178,7 @@ function terminalMatchesRound(event: AbEvent, env: CliEnv, reconcileAttempt: num
     case 'plan.completed':
     case 'plan-review.verdict':
     case 'implement.completed':
+    case 'implement.declined':
     case 'code-review.verdict':
       return event.payload.round === env.round
     case 'verify.completed':

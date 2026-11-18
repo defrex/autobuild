@@ -367,6 +367,10 @@ export interface BuildState {
   answeredEscalations: AnsweredEscalation[]
   /** The latest ticket-wait request; see `WaitRequestState`. */
   waitRequest?: WaitRequestState
+  /** An optimization attempt's implementer declined (`implement.declined`);
+   * the engine waits and the dispatcher settles the attempt and completes
+   * the build unmerged. */
+  declined?: { round: number; reason: string; seq: number }
   /** The latest entered ticket wait; see `TicketWaitState`. */
   wait?: TicketWaitState
   /** Human-selected absolute caps for the current spec's independent loops. */
@@ -580,6 +584,7 @@ export interface BuildAcc {
   openEscalations: OpenEscalation[]
   answeredEscalations: AnsweredEscalation[]
   waitRequest?: WaitRequestState
+  declined?: BuildState['declined']
   /** Each `publication.requested {operation: 'wait'}` by wait id, awaiting
    * the `wait.requested` that follows it. The dispatcher may settle the
    * request before the declaration lands, so an early `wait.published` sha
@@ -640,7 +645,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 40
+export const BUILD_REDUCER_VERSION = 41
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1299,6 +1304,12 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         implement.artifactRev = event.payload.artifact.rev
         complete('implement', event.seq, { round })
         break
+      case 'implement.declined':
+        round = event.payload.round
+        implement.round = round
+        acc.declined = { round, reason: event.payload.reason, seq: event.seq }
+        complete('implement', event.seq, { round })
+        break
       case 'code-review.started':
         round = event.payload.round
         start({ phase: 'code-review', round, seq: event.seq })
@@ -1788,6 +1799,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     openEscalations: [...acc.openEscalations],
     answeredEscalations: acc.answeredEscalations,
     ...(acc.waitRequest !== undefined ? { waitRequest: acc.waitRequest } : {}),
+    ...(acc.declined !== undefined ? { declined: { ...acc.declined } } : {}),
     ...(acc.wait !== undefined ? { wait: acc.wait } : {}),
     reviewRoundCeilings: acc.reviewRoundCeilings,
     pr: acc.pr,

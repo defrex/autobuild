@@ -144,6 +144,19 @@ it instead of planning it:
 ab observe --kind followup "…"
 ```
 
+## Optimization attempts
+
+When the manifest has an `attempt` block, this build is one attempt of an
+optimization node, and its spec gives it one strategy. Plan that strategy. Do
+not drift into another strategy, which is another attempt's job, even when it
+looks more promising; record it with `ab observe --kind followup` instead.
+Read the attempt's `objective.md` (the block's `path`) before planning: the
+purpose says what must not change while the metric moves, and the harness is
+the pinned ruler. Plan no edit to a harness path, because `ab done` refuses one
+in implement. Plan how the implementer runs the measurement command on its own
+work and what it records in implement notes. When the strategy might find no
+real gain, say so: declining is the implementer's call to make.
+
 ## Feedback rounds
 
 A round that carries feedback carries exactly one kind, and only that file

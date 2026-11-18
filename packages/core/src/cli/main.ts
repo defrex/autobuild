@@ -1674,17 +1674,23 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'done': {
       const session = requireSession(command, deps)
-      const usage = 'usage: ab done [--notes <file>] (§8.2)'
-      const parsed = parseArgs(rest, { notes: 'value' }, usage)
+      const usage = 'usage: ab done [--notes <file>] [--no-improvement <reason>] (§8.2)'
+      const parsed = parseArgs(rest, { notes: 'value', 'no-improvement': 'value' }, usage)
       if (parsed.positionals.length > 0) throw new Error(usage)
       const notes = stringFlag(parsed, 'notes')
-      const event = await done(session, notes !== undefined ? { notes } : {})
+      const noImprovement = stringFlag(parsed, 'no-improvement')
+      const event = await done(session, {
+        ...(notes !== undefined ? { notes } : {}),
+        ...(noImprovement !== undefined ? { noImprovement } : {}),
+      })
       stdout(
-        event.type === 'publication.requested'
-          ? `${event.type} recorded (seq ${event.seq}); publication is pending — do not run ab done again`
-          : event.type === 'escalation.raised'
-            ? `implement produced no commits over its base — escalation ${(event.payload as { id: string }).id} recorded (seq ${event.seq}); this session is complete, do not run another terminal`
-            : `${event.type} recorded (seq ${event.seq})`,
+        event.type === 'implement.declined'
+          ? `${event.type} recorded (seq ${event.seq}); the attempt ends without review or merge — this session is complete`
+          : event.type === 'publication.requested'
+            ? `${event.type} recorded (seq ${event.seq}); publication is pending — do not run ab done again`
+            : event.type === 'escalation.raised'
+              ? `implement produced no commits over its base — escalation ${(event.payload as { id: string }).id} recorded (seq ${event.seq}); this session is complete, do not run another terminal`
+              : `${event.type} recorded (seq ${event.seq})`,
       )
       return 0
     }
