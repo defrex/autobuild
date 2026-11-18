@@ -116,16 +116,22 @@ export const policyEscalationCauseSchema = z.enum([
   'phase-attempt-limit',
   'non-retryable-phase-failure',
   'wait-unresolvable',
+  'measurement-failed',
 ])
 export type PolicyEscalationCause = z.infer<typeof policyEscalationCauseSchema>
 
-/** Setup may block a build through the escalation protocol without becoming a
- * pipeline phase. Keeping this target separate preserves the fixed phase
- * grammar while allowing the ordinary answer/retry machinery to re-arm setup. */
-export type EscalationTarget = Phase | 'setup'
+/** Setup and an optimization measurement may block a build through the
+ * escalation protocol without becoming pipeline phases. Keeping these targets
+ * separate preserves the fixed phase grammar while allowing the ordinary
+ * answer/retry machinery to re-arm them. */
+export type EscalationTarget = Phase | 'setup' | 'measurement'
 export const escalationTargetSchema = z.custom<EscalationTarget>(
-  (value) => value === 'setup' || (typeof value === 'string' && isPhase(value)),
-  { message: 'not an escalation target: expected "setup", a core phase, or "verify:<step>"' },
+  (value) =>
+    value === 'setup' || value === 'measurement' || (typeof value === 'string' && isPhase(value)),
+  {
+    message:
+      'not an escalation target: expected "setup", "measurement", a core phase, or "verify:<step>"',
+  },
 )
 
 export const escalationResolutionSchema = z.enum([
