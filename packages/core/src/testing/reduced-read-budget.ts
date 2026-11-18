@@ -1410,6 +1410,47 @@ export async function parkedSweepReadBudget(opts: {
       replacementId: 'replacement',
     },
   })
+  // A remote-workspace candidate whose guest archive push and REST fallback are
+  // refused: each retry reads the same bounded facts and appends nothing.
+  const refusedSlug = 'refused-archive-read-budget'
+  await store.ensureRepo('/refused-archive-read-budget')
+  await store.createBuild({ slug: refusedSlug, repo: '/refused-archive-read-budget' })
+  const candidate = '8'.repeat(40)
+  await store.append(refusedSlug, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'vercel-sandbox',
+      ref: 'refused-sandbox',
+      path: '/vercel/sandbox/workspace',
+      branch: `ab/${refusedSlug}`,
+      base: { source: 'remote', sha: transaction.oldBase },
+      remote: true,
+    },
+  })
+  const refusedRequest = await store.append(refusedSlug, {
+    actor: KERNEL,
+    type: 'publication.requested',
+    payload: {
+      operation: 'reconcile',
+      branch: `ab/${refusedSlug}`,
+      sha: candidate,
+      rewrite: { ...transaction, branch: `ab/${refusedSlug}` },
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    },
+  })
+  await store.append(refusedSlug, {
+    actor: DISPATCHER,
+    type: 'publication.lost',
+    payload: {
+      request: refusedRequest.seq,
+      operation: 'reconcile',
+      branch: `ab/${refusedSlug}`,
+      sha: candidate,
+      reason: 'replacement',
+    },
+  })
+  const refusedAttempts: Record<string, number>[] = []
   let seeded = 0
   const idleRequests: Record<string, number>[] = []
   for (const length of [100, 100_000]) {
@@ -1523,6 +1564,52 @@ export async function parkedSweepReadBudget(opts: {
       if (idleRequests.length) expect(requests).toEqual(idleRequests[0]!)
       idleRequests.push(requests)
     }
+    const refusedEvents = Reflect.get(store, 'builds').get(refusedSlug)
+      .events as import('../events/catalog').AbEvent[]
+    while (refusedEvents.length < length)
+      await store.append(refusedSlug, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    await readBuildFacts(store, refusedSlug)
+    const refusedBoundary = refusedEvents.at(-1)!.seq
+    let refusedRows = 0
+    refusedEvents.slice = function (start?: number, end?: number) {
+      const result = Array.prototype.slice.call(this, start, end) as typeof refusedEvents
+      refusedRows += result.filter((event) => event.seq <= refusedBoundary).length
+      return result
+    }
+    const { recoverLostCandidate } = await import('../kernel/reconcile-restack')
+    let probes = 0
+    for (const attempt of [0, 1, 2]) {
+      let outcome: string | undefined
+      const requests = await countStoreRequests(store, async () => {
+        outcome = await recoverLostCandidate({
+          store,
+          slug: refusedSlug,
+          workspacePath: '/unused',
+          forge: new FakeForge(),
+          exec: async () => {
+            throw new Error('a remote workspace candidate is never archived from the host')
+          },
+          probeCandidate: async () => {
+            if (++probes <= 2)
+              throw new Error(
+                'archive publication rejected: git push refused (non-branch); GitHub REST ref creation failed (403)',
+              )
+            return true
+          },
+        }).catch(() => 'deferred')
+      })
+      expect(outcome).toBe(attempt < 2 ? 'deferred' : 'available')
+      expect(requests.append ?? 0).toBe(0)
+      expect(requests.appendIfCurrent ?? 0).toBe(0)
+      if (refusedAttempts.length) expect(requests).toEqual(refusedAttempts[0]!)
+      refusedAttempts.push(requests)
+    }
+    expect(refusedRows).toBe(0)
+    Reflect.deleteProperty(refusedEvents, 'slice')
     console.log('parked sweep read budget', {
       history: length,
       builds: slugs.length,
