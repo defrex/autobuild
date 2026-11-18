@@ -23,6 +23,36 @@ export async function delegateCredential(
     },
     body: JSON.stringify(target),
   })
-  if (!response.ok) throw new Error(`credential delegation refused (${response.status})`)
+  if (!response.ok) {
+    const reason = await refusalReason(response)
+    throw new Error(
+      `credential delegation refused (${response.status})${reason ? `: ${reason}` : ''}`,
+    )
+  }
   return delegateCredentialResponseSchema.parse(await response.json()).token
+}
+
+const MAX_REASON_LENGTH = 200
+
+/** The server's stated reason for a refusal: the `error` field of a JSON
+ * body, else bounded plain text, else empty. Never throws, so an empty or
+ * unreadable body cannot mask the refusal itself. */
+async function refusalReason(response: Response): Promise<string> {
+  let text: string
+  try {
+    text = (await response.text()).trim()
+  } catch {
+    return ''
+  }
+  if (!text) return ''
+  try {
+    const body: unknown = JSON.parse(text)
+    if (body && typeof body === 'object' && 'error' in body) {
+      const error = (body as { error: unknown }).error
+      if (typeof error === 'string' && error.trim()) return error.trim().slice(0, MAX_REASON_LENGTH)
+    }
+    return ''
+  } catch {
+    return text.slice(0, MAX_REASON_LENGTH)
+  }
 }
