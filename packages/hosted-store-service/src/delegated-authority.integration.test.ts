@@ -1647,3 +1647,162 @@ test('a build-phase grant declares a ticket wait with no ticket credential', asy
     .catch((error: Error) => error)
   expect(other).toBeInstanceOf(Error)
 })
+
+test('a build runner issues a write-only judge grant bound to one judge session', async () => {
+  const f = await fixture()
+  const kernel = { kind: 'kernel' } as const
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'panel.started',
+    payload: {
+      panel: 'panel-1',
+      candidate: 'c'.repeat(40),
+      baseline: 'b'.repeat(40),
+      harnessPin: 'a'.repeat(40),
+      purpose: 'clearer prose',
+      rubric: 'evals/rubric.md',
+      harness: ['evals/**'],
+      judges: 2,
+    },
+  })
+  const target = { kind: 'build-judge', id: 'one', session: 's_j1', panel: 'panel-1', judge: 1 }
+  // An unstarted judge has no lifecycle binding.
+  expect((await f.issue(f.token, target)).status).toBe(404)
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'panel.judge-started',
+    payload: {
+      panel: 'panel-1',
+      judge: 1,
+      session: 's_j1',
+      order: 'baseline-first',
+      runner: 'fake',
+    },
+  })
+  const issued = await f.issue(f.token, target)
+  expect(issued.status).toBe(200)
+  const judge = (await issued.json()).token as string
+  expect(verifyToken(secret, judge, f.clock())).toMatchObject({
+    delegation: { kind: 'build-judge', id: 'one', session: 's_j1', panel: 'panel-1', judge: 1 },
+  })
+
+  // A phase grant, a judge grant and another build cannot issue it.
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'session.started',
+    payload: {
+      session: 's_phase',
+      role: 'implement',
+      runner: 'fake',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  const phase = (
+    await (await f.issue(f.token, { kind: 'build-phase', id: 'one', session: 's_phase' })).json()
+  ).token as string
+  expect((await f.issue(phase, target)).status).toBe(403)
+  expect((await f.issue(judge, target)).status).toBe(403)
+  expect((await f.issue(f.token, { ...target, id: 'two' })).status).toBe(403)
+
+  // Every read is refused.
+  for (const path of [
+    '/builds/one',
+    '/builds/one/events',
+    '/builds/one/artifacts?kind=transcript',
+    '/builds/two',
+    '/builds',
+    `/repos/${encodeURIComponent(A)}/events`,
+    `/repos/${encodeURIComponent(A)}`,
+  ]) {
+    const response = await f.server.fetch(request(path, judge))
+    expect(response.status).toBe(403)
+  }
+  expect(
+    (
+      await f.server.fetch(
+        request('/builds/one/reducer-values', judge, { reducer: 'buildDelegation' }),
+      )
+    ).status,
+  ).toBe(403)
+  expect(
+    (
+      await f.server.fetch(
+        request(`/repos/${encodeURIComponent(A)}/reducer-values`, judge, { reducer: 'x' }),
+      )
+    ).status,
+  ).toBe(403)
+
+  const preferred = (payload: Record<string, unknown> = {}, session = 's_j1') => ({
+    actor: { kind: 'agent', role: 'judge', session },
+    type: 'panel.preferred',
+    payload: {
+      panel: 'panel-1',
+      judge: 1,
+      session: 's_j1',
+      preference: 'A',
+      reason: 'A reads better',
+      ...payload,
+    },
+  })
+  // A wrong panel, judge or session, another type, or another route is refused.
+  for (const body of [
+    preferred({ panel: 'panel-0' }),
+    preferred({ judge: 2 }),
+    preferred({ session: 's_other' }),
+    preferred({}, 's_other'),
+    { ...preferred(), type: 'panel.judged' },
+    sampleEventWrite(),
+  ])
+    expect((await f.server.fetch(request('/builds/one/events', judge, body))).status).toBe(403)
+  for (const [path, body] of [
+    ['/builds/one/events/conditional', { expectedSeq: 1, event: preferred() }],
+    ['/builds/one/deposits', { event: preferred(), artifacts: [] }],
+    ['/builds/one/artifacts', { kind: 'x', contentBase64: '' }],
+    ['/builds/two/events', preferred()],
+  ] as const)
+    expect((await f.server.fetch(request(path, judge, body))).status).toBe(403)
+
+  // Its one preference is accepted; a duplicate is refused.
+  expect((await f.server.fetch(request('/builds/one/events', judge, preferred()))).status).toBe(201)
+  const duplicate = await f.server.fetch(
+    request('/builds/one/events', judge, preferred({ preference: 'B' })),
+  )
+  expect(duplicate.status).toBe(403)
+  expect(JSON.stringify(await duplicate.json())).toContain('already recorded')
+
+  // The grant retires 60 seconds after its judge session ends.
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'panel.judge-ended',
+    payload: { panel: 'panel-1', judge: 1, session: 's_j1', outcome: 'completed' },
+  })
+  f.advance(59_999)
+  expect((await f.server.fetch(request('/builds/one/events', judge, preferred()))).status).toBe(403)
+  f.advance(1)
+  expect((await f.server.fetch(request('/builds/one/events', judge, preferred()))).status).toBe(401)
+})
+
+test('a judge grant retires once its build terminates', async () => {
+  const f = await fixture()
+  const kernel = { kind: 'kernel' } as const
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'panel.judge-started',
+    payload: { panel: 'p', judge: 1, session: 's_j9', order: 'candidate-first', runner: 'fake' },
+  })
+  const judge = (
+    await (
+      await f.issue(f.token, {
+        kind: 'build-judge',
+        id: 'one',
+        session: 's_j9',
+        panel: 'p',
+        judge: 1,
+      })
+    ).json()
+  ).token as string
+  await f.store.append('one', { actor: kernel, type: 'build.aborted', payload: {} })
+  f.advance(60_000)
+  expect((await f.server.fetch(request('/builds/one', judge))).status).toBe(401)
+})

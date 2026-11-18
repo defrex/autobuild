@@ -15,7 +15,10 @@ import { join } from 'node:path'
 import { abWatch, DISPATCHER, KERNEL, steppingClock, type Exec } from '@defrex/autobuild/testing'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
-import { startStoreServer } from './remote-store-server'
+import { createMachineAuth } from './machine-auth'
+import { createStoreServer, startStoreServer } from './remote-store-server'
+import { testCredentials } from './testing/credentials'
+import { testProjects } from './testing/projects'
 
 const ROOT = join(import.meta.dir, '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
@@ -359,3 +362,107 @@ test('saved project credential serves real CLI processes in the main checkout an
     await backing.close()
   }
 }, 20000)
+
+test('a spawned judge records one preference over a write-only remote grant and reads nothing', async () => {
+  const repo = 'https://github.com/acme/judged'
+  const secret = 'judge-seam-secret'
+  const backing = new MemoryBuildStore()
+  await backing.createBuild({ slug: 'judged', repo })
+  await backing.append('judged', {
+    actor: KERNEL,
+    type: 'panel.started',
+    payload: {
+      panel: 'panel-1',
+      candidate: 'c'.repeat(40),
+      baseline: 'b'.repeat(40),
+      harnessPin: 'a'.repeat(40),
+      purpose: 'clearer prose',
+      rubric: 'evals/rubric.md',
+      harness: ['evals/**'],
+      judges: 1,
+    },
+  })
+  const started = await backing.append('judged', {
+    actor: KERNEL,
+    type: 'panel.judge-started',
+    payload: {
+      panel: 'panel-1',
+      judge: 1,
+      session: 's_judge',
+      order: 'candidate-first',
+      runner: 'scripted',
+    },
+  })
+  const projects = testProjects([repo])
+  const { store: credentials } = testCredentials(projects, secret)
+  const handler = createStoreServer({
+    store: backing,
+    auth: createMachineAuth({ secret, credentials, projects, store: backing }),
+  })
+  const token = mintToken(secret, {
+    version: 2,
+    delegation: {
+      repo,
+      kind: 'build-judge',
+      id: 'judged',
+      anchor: started.seq,
+      session: 's_judge',
+      panel: 'panel-1',
+      judge: 1,
+    },
+  })
+  const log: Array<{ method: string; path: string; status: number; judge: boolean }> = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      const response = await handler.fetch(req)
+      log.push({
+        method: req.method,
+        path: new URL(req.url).pathname,
+        status: response.status,
+        judge: req.headers.get('authorization') === `Bearer ${token}`,
+      })
+      return response
+    },
+  })
+  const env = {
+    AB_STORE: `http://127.0.0.1:${server.port}`,
+    AB_JUDGE: 'judged:panel-1:1',
+    AB_SESSION: 's_judge',
+    AB_TOKEN: token,
+    AB_CONTEXT_DIR: '.ab/judge',
+  }
+  try {
+    const first = await runBin(['judge', 'prefer', 'A', '--reason', 'A is clearer.'], env)
+    expect(first.stderr).toBe('')
+    expect(first.code).toBe(0)
+    const recorded = (await backing.getEvents('judged')).at(-1)!
+    expect(recorded).toMatchObject({
+      type: 'panel.preferred',
+      payload: { panel: 'panel-1', judge: 1, session: 's_judge', preference: 'A' },
+    })
+
+    // Without the local marker, the server itself refuses a second preference.
+    await rm(join(tmp, '.ab', 'judge', 'terminal'))
+    const second = await runBin(['judge', 'prefer', 'B', '--reason', 'second thoughts'], env)
+    expect(second.code).toBe(1)
+    expect(second.stderr).toContain('already recorded')
+    expect((await backing.getEvents('judged')).at(-1)!.seq).toBe(recorded.seq)
+
+    // Read commands fail without a successful read.
+    for (const argv of [['status'], ['builds', '--all'], ['build', 'status', 'judged']]) {
+      const read = await runBin(argv, env)
+      expect(read.code).not.toBe(0)
+    }
+    expect(
+      log.filter((entry) => entry.judge && entry.method === 'GET' && entry.status < 300),
+    ).toEqual([])
+    expect(log.filter((entry) => entry.judge && entry.status < 300)).toEqual([
+      { method: 'POST', path: '/builds/judged/events', status: 201, judge: true },
+    ])
+  } finally {
+    await server.stop(true)
+    await backing.close()
+  }
+})

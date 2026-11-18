@@ -38,6 +38,7 @@ const COMMANDS = [
   'escalate',
   'wait-on',
   'harvest',
+  'judge',
 ] as const
 
 function deps(): {
@@ -398,6 +399,14 @@ describe('layered CLI help catalog', () => {
         'harvest verdict',
         'sessionless',
         'harvest session',
+      ],
+      judge: [
+        'judge context',
+        'judge prefer <A|B|tie>',
+        '--reason-file',
+        'reads no store',
+        'exactly once',
+        'runner-provided judge',
       ],
     }
 
