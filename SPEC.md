@@ -1670,6 +1670,10 @@ terminals:
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
 | `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` and kernel-prepared replay transaction | `done` (requires one replayed commit on the frozen base) |
 
+Every phase also accepts `escalate`. In a work build every phase additionally
+accepts `wait-on` (§11), and the manifest's `allowedTerminals` lists it; a node
+build's manifest omits `wait-on`, and `ab wait-on` refuses there.
+
 In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
 `range`, `indexPath`, `contributions`, `handPushedCommits` and `unattributedCommits`. Each contribution
 has `build`, its preparation-time stored `ticket` identity, `spec: {kind: 'spec', rev}`,

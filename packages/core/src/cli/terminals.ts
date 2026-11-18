@@ -49,7 +49,7 @@ import type { EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
-import { phaseSpecFor } from '../kernel/phases'
+import { acceptsTicketWait, phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import {
   findingDraftSchema,
@@ -1018,7 +1018,7 @@ export async function escalate(
   })).then(({ event }) => event)
 }
 
-// ── ab wait-on (any leaf phase — SPEC §11 "Ticket waits") ────────────────────
+// ── ab wait-on (any leaf phase of a work build — SPEC §11 "Ticket waits") ──────
 
 export interface WaitOnOpts {
   tickets: string[]
@@ -1051,7 +1051,7 @@ export async function waitOn(
     throw new Error("'ab wait-on' requires --reason <text> — it says why the build must wait")
   await assertNoPriorTerminal(store, env)
   const facts = (await readBuildFacts(store, env.build)).value
-  if (facts.state.kind === 'node')
+  if (!acceptsTicketWait(facts.state.kind))
     throw new Error("'ab wait-on' is for work builds; a node build cannot declare a ticket wait")
   const own = (await store.getBuild(env.build))?.ticket?.id
   if (own !== undefined && tickets.includes(own))
