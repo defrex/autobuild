@@ -2393,7 +2393,7 @@ Without a live agent, acknowledgement still waits for a safe boundary. During
 that window `p` appends
 the opposing resume request, cancels the stale pause, and projects the build
 back to `RUNNING`. The cancelling resume holds back nothing, including merge
-readiness. An acknowledged paused build offers only `r resume` and reads
+readiness and janitor retry backoff. An acknowledged paused build offers only `r resume` and reads
 `RESUMING` until the kernel acknowledges that request; there is no gesture to
 cancel a pending resume. Blocked takes visual precedence, including when the
 build is also operator-paused, and `r` opens the existing feedback field. Keys
