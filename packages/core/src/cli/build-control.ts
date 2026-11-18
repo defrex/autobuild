@@ -22,6 +22,7 @@ import { discardInFlight, type BuildState, type OpenEscalation } from '../kernel
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
+import { objectiveBlocks, OBJECTIVE_INFO_STRING, parseObjective } from '../objective'
 import { samplePinnedAssets } from '../store/ticket-assets'
 import type { BuildStore } from '../store/types'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
@@ -799,6 +800,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
                 'nothing was recorded and the build remains blocked',
             )
           }
+          await assertObjectiveRevision(opts.store, opts.slug, state, body)
           // A deposit without a later human authorization is deliberately inert:
           // every consumer reads the revision anchored by a spec.* event.
           const deposited = await opts.store.putArtifact(opts.slug, {
@@ -1154,4 +1156,42 @@ export async function abBuildControl(opts: AbBuildControlOpts): Promise<BuildCon
       ...(opts.prepareTicketAssets ? { prepareTicketAssets: opts.prepareTicketAssets } : {}),
     }),
   )
+}
+
+/**
+ * The objective block is fixed for a build's life (SPEC §13.1): a revision of
+ * an optimization node may change the objective but never adds or removes the
+ * block, and a plain node or work build never gains one. One spec artifact
+ * read, only for a node that has not accepted its objective yet.
+ */
+async function assertObjectiveRevision(
+  store: Pick<BuildStore, 'getArtifact'>,
+  slug: string,
+  state: BuildState,
+  body: string,
+): Promise<void> {
+  const refuse = (reason: string) => {
+    throw new BuildControlError(
+      'spec-nonconforming',
+      `replacement spec ${reason}; nothing was recorded and the build remains blocked`,
+    )
+  }
+  const carries = objectiveBlocks(body).length > 0
+  let optimization = state.optimization !== undefined
+  if (!optimization && state.kind === 'node' && state.specRev !== undefined) {
+    const current = await store.getArtifact(slug, 'spec', state.specRev)
+    optimization =
+      current !== null && objectiveBlocks(new TextDecoder().decode(current.content)).length > 0
+  }
+  if (optimization && !carries)
+    refuse(
+      `cannot remove the \`${OBJECTIVE_INFO_STRING}\` block from an optimization node; close it and open a new node`,
+    )
+  if (!optimization && carries)
+    refuse(
+      `cannot add an \`${OBJECTIVE_INFO_STRING}\` block: only a node opened with one is an optimization node`,
+    )
+  if (!carries) return
+  const parsed = parseObjective(body)
+  if ('refusal' in parsed) refuse(`needs ${parsed.refusal}`)
 }
