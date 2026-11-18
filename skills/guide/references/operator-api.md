@@ -447,7 +447,23 @@ objective revision. The receipt contains `slug`, `revision` and `changes`.
 It refuses non-node builds, nodes with no accepted objective and terminal
 nodes, and changes that leave the effective objective invalid; it enforces
 repository ownership. Running attempts are unaffected. The metric, harness and
-purpose change only through a node spec revision. The tool has no HTTP route.
+purpose change only through a node spec revision. The dispatcher applies a
+revised threshold, budget or plateau on its next tick. The tool has no HTTP
+route.
+
+### Optimization stop
+
+`optimization.stop` accepts `{repo, slug, mode?}`, where `mode` is `abort` or
+`drain`; without it the objective's stop mode applies, `abort` by default. It
+uses the same service as `ab objective <node> --stop` and records one human
+`optimization.stopped {cause: operator, mode}`. The receipt contains `slug`,
+`cause` and `mode`. Abort cancels queued attempts and aborts running ones, and
+all of them settle `stopped`; drain cancels queued attempts and lets running
+ones finish and face the landing gate. No proposer runs after a stop, and a stop
+is final. It refuses non-node builds, nodes with no accepted objective, terminal
+nodes and a node that has already stopped, and enforces repository ownership.
+Stopping is not merge consent: once the node completes and verifies, land it
+with `builds.control` merge. The tool has no HTTP route.
 
 ### Node restack request
 
