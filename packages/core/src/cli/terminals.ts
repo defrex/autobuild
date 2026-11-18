@@ -376,11 +376,14 @@ function emptyContributionQuestion(build: string, round: number, head: string, b
 export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<EventEnvelope> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
-  if (spec.kind !== 'producer' || spec.terminal !== 'done') {
+  if (spec.kind !== 'producer') {
     throw new Error(
-      `'ab done' is not ${env.phase}'s terminal — ${env.phase} ends with ` +
-        `'ab ${spec.terminal}' (§8.2)`,
+      `'ab done' is not ${env.phase}'s terminal — ${env.phase} is a ` +
+        `${spec.kind} phase; use 'ab verdict' (§8.2)`,
     )
+  }
+  if (spec.terminal !== 'done') {
+    throw new Error(`'ab done' is not ${env.phase}'s terminal — use 'ab ${spec.terminal}' (§8.2)`)
   }
   const events = (await readBuildFacts(store, env.build)).value
   const diagnostic = compatibilityDiagnostic(events.state.compatibility)
@@ -703,10 +706,10 @@ const FINDING_DRAFT_SHAPE = [
 export async function verdict(deps: TerminalDeps, opts: VerdictOpts): Promise<EventEnvelope[]> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
-  if (spec.terminal !== 'verdict') {
+  if (spec.kind === 'producer') {
     throw new Error(
-      `'ab verdict' is not ${env.phase}'s terminal — ${env.phase} ends with ` +
-        `'ab ${spec.terminal}' (§8.2)`,
+      `'ab verdict' is not ${env.phase}'s terminal — ${env.phase} is a ` +
+        `producer phase; use 'ab ${spec.terminal}' (§8.2)`,
     )
   }
   // The verdict vocabulary is phase-dependent and enforced here (§8.2):

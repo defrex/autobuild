@@ -32,6 +32,7 @@ import {
   type OptimizationState,
 } from './optimization'
 import { reduceBuild } from './reducer'
+import { terminalGuardReducer } from './terminal-guard'
 import { reduceBuildDigest } from '../store/digest'
 import { REDUCERS } from './reducer-registry'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
@@ -662,3 +663,15 @@ test('the stop and admission inputs and the ledger have bounded read cost', asyn
   const { optimizationReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationReadBudget()
 }, 120_000)
+
+test('a second propose terminal for the round is refused', () => {
+  const log = new OptimizationLogBuilder()
+    .accept(commandObjective(), 1)
+    .request('r1', 2)
+    .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+    .deposit('r1', 1, ['a'])
+  const guard = terminalGuardReducer({ phase: 'propose', round: 1, session: 'sess-propose' })
+  expect(guard.reduce(log.events).diagnostic).toMatch(/second terminal call rejected/)
+  const next = terminalGuardReducer({ phase: 'propose', round: 2, session: 'sess-propose' })
+  expect(next.reduce(log.events).diagnostic).toBeUndefined()
+})

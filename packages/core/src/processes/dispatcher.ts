@@ -1344,13 +1344,9 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.leaseSweep(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
-    // An optimization node's proposer: exhausted stops, filings and new
-    // requests, chosen from build digests alone. Proposing is the node's own
-    // work, never intake, so it runs whether or not new work is accepted.
-    await this.advanceOptimizationNodes(report, opts)
-    if (this.outOfBudget(opts)) return report
     // Nodes with a durable verification or propose request take freed slots
     // before intake, whether or not idle node polling visited them this tick.
+    // The same pass advances optimization nodes' proposers first.
     await this.admitWaitingNodes(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
@@ -3416,12 +3412,15 @@ export class Dispatcher {
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
-    if (
-      !(await this.repoBuildDigests()).some(
-        ({ digest }) => digest.kind === 'node' && digest.terminal === undefined,
-      )
-    )
+    const entries = await this.repoBuildDigests()
+    if (!entries.some(({ digest }) => digest.kind === 'node' && digest.terminal === undefined))
       return
+    // An optimization node's proposer: exhausted stops, filings and new
+    // requests, chosen from this pass's digests alone. Proposing is the
+    // node's own work, never intake, so it runs whether or not new work is
+    // accepted.
+    await this.advanceOptimizationNodes(report, opts, entries)
+    if (this.outOfBudget(opts)) return
     const now = this.deps.clock()
     const builds = (await this.capacityBuilds()).sort((a, b) =>
       a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0,
@@ -3610,11 +3609,15 @@ export class Dispatcher {
    * node's digest. An older peer's digest without the optimization signal
    * fails the stage closed, never falling back to per-node reads.
    */
-  private async advanceOptimizationNodes(report: TickReport, opts: TickOpts): Promise<void> {
+  private async advanceOptimizationNodes(
+    report: TickReport,
+    opts: TickOpts,
+    entries: { record: BuildRecord; digest: BuildDigest }[],
+  ): Promise<void> {
     const now = this.deps.clock()
     const due: { record: BuildRecord; kind: 'exhausted' | 'filing' | 'request' }[] = []
     try {
-      for (const { record, digest } of await this.repoBuildDigests()) {
+      for (const { record, digest } of entries) {
         if (digest.terminal !== undefined || !digest.nodeOpened) continue
         const signal = digestOptimization(digest)
         if (!signal) continue
@@ -3637,7 +3640,7 @@ export class Dispatcher {
       await withForgeRequestContext({ build: record.slug }, async () => {
         try {
           if (kind === 'exhausted') await this.recordExhausted(record.slug)
-          else if (kind === 'filing') await this.fileProposedAttempts(record, report)
+          else if (kind === 'filing') await this.fileProposedAttempts(record)
           else await this.requestProposal(record, now)
         } catch (error) {
           rethrowAuthorityLapse(error)
@@ -3702,7 +3705,7 @@ export class Dispatcher {
    * in one `attempts-proposed`, whatever revisions or stops landed since.
    * Until that record lands, intake withholds these keys.
    */
-  private async fileProposedAttempts(record: BuildRecord, report: TickReport): Promise<void> {
+  private async fileProposedAttempts(record: BuildRecord): Promise<void> {
     const { state } = await this.store.buildFacts(record.slug)
     const proposal = state.optimization?.proposal
     const deposited = proposal?.deposited

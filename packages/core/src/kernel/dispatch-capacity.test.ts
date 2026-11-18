@@ -1,4 +1,10 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
+import { DISPATCHER, KERNEL } from '../events/envelope'
+import {
+  commandObjective,
+  OPTIMIZATION_SHA,
+  OptimizationLogBuilder,
+} from './generators/optimization-log'
 import { reduceBuild } from './reducer'
 import {
   capacityExplanation,
@@ -466,4 +472,57 @@ test('capacity wording joins node and parked-build waits', () => {
   ).toBe(
     ' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n; 1 parked build waiting for a slot ahead of new ticket claims: p)',
   )
+})
+
+describe('the optimization proposer', () => {
+  /** An opened optimization node with an open request of `room`. */
+  function proposerNode(slug: string, room = 2, started = false): CapacityBuild {
+    const log = new OptimizationLogBuilder(slug)
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          ticket: { source: 'file', id: slug },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      .accept(commandObjective(), 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .baseline(1, 50, 1)
+      .request('r1', room)
+    if (started)
+      log
+        .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+        .revise({ concurrency: 1 }, 2)
+    return { ...build(slug, 'node'), state: reduceBuild(log.events) }
+  }
+  const when = new Date('2026-11-17T01:00:00Z')
+
+  test('an open undeposited request asks for a slot and reserves it from intake', () => {
+    const node = proposerNode('opt')
+    expect(slotRequest(node, when)).toBe('propose')
+    const capacity = dispatchCapacity([node, build('a')], 3, when)
+    expect(capacity.waitingNodes).toEqual([{ slug: 'opt', request: 'propose' }])
+    expect(intakeCapacity(capacity)).toBe(1)
+    expect(occupiesCapacity(node, when)).toBe(false)
+  })
+
+  test('a held, deposited or stale request asks for nothing; a running one keeps its slot', () => {
+    const held = { ...proposerNode('opt'), workspace: true }
+    expect(slotRequest(held, when)).toBeUndefined()
+    expect(occupiesCapacity(held, when)).toBe(true)
+    const deposited = proposerNode('opt')
+    deposited.state.optimization!.proposal!.deposited = {
+      artifact: { kind: 'attempts', rev: 0 },
+      ids: ['a'],
+      at: when.toISOString(),
+    }
+    expect(slotRequest(deposited, when)).toBeUndefined()
+    expect(slotRequest(proposerNode('opt', 5), when)).toBeUndefined()
+    expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBeUndefined()
+    // A started session was admitted and resumes after a shrink.
+    expect(slotRequest(proposerNode('opt', 2, true), when)).toBe('propose')
+  })
 })
