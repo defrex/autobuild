@@ -3858,15 +3858,10 @@ export class Dispatcher {
       await escalate(`Cannot file proposal ${proposal.id}: the node build has no ticket to target.`)
       return
     }
-    // Attempts are dispatchable at creation: they carry every ready gate.
+    // Attempts are dispatchable at creation: they carry every ready gate. The
+    // source applies the ready assignee itself, also to an adopted ticket.
     const ready = readyCriteria(this.deps.config)
-    const assigned = [
-      ...new Set([
-        ...(creationAssignees(this.deps.config.tickets) ?? []),
-        ...(ready.assignee !== undefined ? [ready.assignee] : []),
-      ]),
-    ]
-    const assignees = assigned.length > 0 ? assigned : undefined
+    const assignees = creationAssignees(this.deps.config.tickets)
     const filed: EventPayload<'optimization.attempts-proposed'>['proposals'] = []
     for (const entry of document.proposals) {
       const ticket = await tickets.create(
@@ -3882,6 +3877,7 @@ export class Dispatcher {
           state: ready.state,
           idempotencyKey: attemptCreationKey(this.deps.repo, record.slug, entry.id),
           idempotencyKeyReservedAt: deposited.at,
+          ...(ready.assignee !== undefined ? { readyAssignee: ready.assignee } : {}),
         },
       )
       filed.push({

@@ -7,6 +7,9 @@ import { join } from 'node:path'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import { reduceBuild } from '../kernel/reducer'
+import { FakeTicketSource } from '../ports/tickets/fake'
+import { LinearTicketSource, type LinearFetch } from '../ports/tickets/linear'
+import type { Ticket, TicketCreateOptions, TicketDraft } from '../ports/types'
 import type { BuildRecord } from '../store/types'
 import {
   CONFIG_TOML,
@@ -204,6 +207,135 @@ test('the proposer is requested, deposits, and its attempts are filed ready and 
     h.clock.advance(60_000)
     await h.dispatcher.tick()
     expect(ofType(await h.events(node.slug), 'optimization.proposal-requested')).toHaveLength(1)
+  } finally {
+    await h.cleanup()
+  }
+}, 60_000)
+
+const LINEAR_VIEWER = { id: 'user-me', name: 'Pat', email: 'p@example.com' }
+
+/** A Linear stand-in under `readyAssignee = "me"`: every create goes through
+ * the real Linear adapter, whose GraphQL write is recorded, and the ready
+ * listing keeps only tickets that write assigned to the viewer, as Linear's
+ * assignee filter does. The fake keeps the tickets. */
+class LinearAssignedTickets extends FakeTicketSource {
+  readonly readyAssignee = true
+  readonly assigned = new Set<string>()
+  readonly writes: Array<Record<string, unknown>> = []
+  private readonly linear: LinearTicketSource
+
+  constructor(tickets: Ticket[]) {
+    super(tickets)
+    for (const ticket of tickets) this.assigned.add(ticket.ref.id)
+    const fetchFn: LinearFetch = async (_url, init) => {
+      const { query, variables } = JSON.parse(init.body) as {
+        query: string
+        variables: { input?: Record<string, unknown> }
+      }
+      let data: unknown
+      if (query.includes('viewer')) data = { viewer: LINEAR_VIEWER }
+      else if (query.includes('teams'))
+        data = {
+          teams: {
+            nodes: [
+              {
+                id: 'team-uuid',
+                states: { nodes: [{ id: 'st-ready', name: 'Ready' }] },
+                labels: { nodes: [{ id: 'lb-auto', name: 'autobuild' }] },
+              },
+            ],
+          },
+        }
+      else if (query.includes('issueCreate')) {
+        const input = variables.input!
+        this.writes.push(input)
+        const page = { hasNextPage: false, endCursor: null }
+        data = {
+          issueCreate: {
+            success: true,
+            issue: {
+              team: { key: 'ENG' },
+              parent: null,
+              id: input.id,
+              identifier: `ENG-${this.writes.length}`,
+              title: input.title,
+              description: input.description,
+              url: `https://linear.app/acme/issue/ENG-${this.writes.length}`,
+              priority: 0,
+              state: { name: 'Ready', type: 'unstarted' },
+              labels: { nodes: [{ name: 'autobuild' }], pageInfo: page },
+              comments: { nodes: [], pageInfo: page },
+              inverseRelations: { nodes: [], pageInfo: page },
+            },
+          },
+        }
+      } else throw new Error(`unexpected Linear request: ${query}`)
+      return { ok: true, status: 200, headers: new Headers(), json: async () => ({ data }) }
+    }
+    this.linear = new LinearTicketSource({ apiKey: 'test', teamKey: 'ENG', fetchFn })
+  }
+
+  override async listReady(criteria: { labels?: string[]; state?: string; assignee?: string }) {
+    const listing = await super.listReady(criteria)
+    if (criteria.assignee === undefined) return listing
+    return {
+      ...listing,
+      tickets: listing.tickets.filter((ticket) => this.assigned.has(ticket.ref.id)),
+    }
+  }
+
+  override async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
+    const write = this.writes.length
+    await this.linear.create(
+      { title: draft.title, body: draft.body, ...(draft.labels ? { labels: draft.labels } : {}) },
+      opts,
+    )
+    const ticket = await super.create(draft, opts)
+    if (this.writes[write]?.assigneeId === LINEAR_VIEWER.id) this.assigned.add(ticket.ref.id)
+    return ticket
+  }
+}
+
+test('under readyAssignee, filed attempts are assigned through the Linear adapter and dispatch', async (makeHarness) => {
+  const tickets = new LinearAssignedTickets([
+    {
+      ...readyTicket('OPT', {
+        title: 'Faster search',
+        body: [CONFORMING_BODY, '', objective('maxAttempts = 20', 2)].join('\n'),
+      }),
+      kind: 'node',
+    },
+  ])
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
+      .replace('source = "file"', 'source = "linear"\nteamKey = "ENG"\nreadyAssignee = "me"')
+      .replace('readyState = "Ready"', 'readyState = "Ready"\nrejectedState = "Rejected"'),
+    handlers: { ...happyHandlers(), propose: proposer(['cache', 'index']) },
+    ticketSource: tickets,
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'OPT')!
+    await measure(h, node.slug)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const filed = ofType(await h.events(node.slug), 'optimization.attempts-proposed')
+    expect(filed).toHaveLength(1)
+    expect(tickets.writes).toHaveLength(2)
+    for (const write of tickets.writes)
+      expect(write).toMatchObject({ assigneeId: LINEAR_VIEWER.id, stateId: 'st-ready' })
+
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const attempts = filed[0]!.payload.proposals.map((entry) => entry.ticket.id)
+    const opened = (await h.store.listBuilds())
+      .map((record) => record.ticket?.id)
+      .filter((id) => id !== undefined && attempts.includes(id))
+    expect(opened.sort()).toEqual([...attempts].sort())
   } finally {
     await h.cleanup()
   }

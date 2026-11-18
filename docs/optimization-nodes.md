@@ -418,7 +418,9 @@ A valid file is deposited as an `attempts` artifact together with
 `propose.completed`. The proposer never creates tickets.
 
 **Filing.** The dispatcher reads the deposit once and creates one work ticket
-per proposal, targeting the node, in the source's ready role. Each creation
+per proposal, targeting the node, in the source's ready role. Each ticket
+carries every `readyLabels` entry and, when `[tickets].readyAssignee` is set,
+is assigned to that user, adopted tickets included, so intake lists it. Each creation
 carries an idempotency key derived from the repository, the node and the
 proposal id, so a crash between the deposit, the creation and the record
 adopts the ticket an earlier try created instead of filing it twice. Until the

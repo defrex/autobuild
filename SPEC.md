@@ -3592,7 +3592,9 @@ the request's room, and a reason when the list is empty (`ab propose --none
 proposer never creates tickets.
 
 The dispatcher reads the deposited artifact once and creates one work ticket
-per proposal, targeting the node, in the source's ready role. Each creation
+per proposal, targeting the node, in the source's ready role. Each ticket
+carries every `readyLabels` entry and, when `[tickets].readyAssignee` is set,
+is assigned to that user, adopted tickets included, so intake lists it. Each creation
 carries an idempotency key derived from the repository, the node slug and the
 proposal id, so a crash between deposit, creation and recording adopts the
 existing ticket instead of filing a second one. Until the record lands,
