@@ -883,6 +883,33 @@ async function readableCommand(
   return stdout
 }
 
+/** The commit the guest checkout is actually on: HEAD and the build branch
+ * must resolve to the same commit, which is the only base a provisioning
+ * fact may record (AUT-1252). */
+async function checkedOutBranchHead(
+  sandbox: VercelSandboxHandle,
+  branch: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const stdout = await readableCommand(sandbox, {
+    cmd: 'git',
+    args: ['rev-parse', 'HEAD^{commit}', `refs/heads/${branch}^{commit}`],
+    cwd: VERCEL_WORKSPACE_PATH,
+    ...(signal ? { signal } : {}),
+  })
+  const lines = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const objectId = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+  if (lines.length !== 2 || !lines.every((line) => objectId.test(line)))
+    throw new Error(`unreadable checkout head for ${branch}: ${JSON.stringify(stdout.trim())}`)
+  const [head, branchHead] = lines as [string, string]
+  if (head !== branchHead)
+    throw new Error(`checkout HEAD ${head} disagrees with ${branch} at ${branchHead}`)
+  return head
+}
+
 /** Create, inspect, and always delete one remote readiness environment. Unlike
  * build provisioning this never uses a stable name, branch, or marker. */
 export async function validateVercelSandbox(
@@ -1521,12 +1548,31 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       )
     }
 
+    let checkedOut = base
     if (sandbox !== null) {
       const marker = await sandbox.runCommand({
         cmd: 'test',
         args: ['-f', VERCEL_PROVISIONED_MARKER],
       })
       if (marker.exitCode === 0) {
+        // A completed sandbox from an attempt that recorded nothing keeps the
+        // commit that attempt checked out, however far the target has moved
+        // since. Read it before any stop: a command after stop would resume
+        // the persistent guest.
+        try {
+          checkedOut = await checkedOutBranchHead(sandbox, opts.branch, this.operationSignal())
+        } catch (error) {
+          throw new WorkspaceCleanupRequired(
+            {
+              provider: this.name,
+              ref: name,
+              path: VERCEL_WORKSPACE_PATH,
+              branch: opts.branch,
+              base: { source: 'existing', sha: base },
+            },
+            error,
+          )
+        }
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
         if (installed === distributionIdentity) {
           await sandbox.stop({ signal: this.operationSignal() })
@@ -1617,6 +1663,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           args: ['checkout', '-B', opts.branch, base],
           cwd: VERCEL_WORKSPACE_PATH,
         })
+        const head = await checkedOutBranchHead(sandbox, opts.branch, this.operationSignal())
+        if (head !== base)
+          throw new Error(`checked out ${opts.branch} at ${head}, expected selected base ${base}`)
+        checkedOut = head
         await commandOrThrow(sandbox, {
           cmd: 'git',
           args: ['remote', 'set-url', 'origin', origin.url],
@@ -1675,7 +1725,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         )
       }
     }
-    let provisionHead = base
+    let provisionHead = checkedOut
     let restorationSkipped: import('../types').RestorationSkip[] = []
     if (opts.restoration?.length) {
       provisionHead = await this.withTrustedGit(sandbox, name, async (exec) => {
@@ -1703,6 +1753,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       ref: name,
       path: VERCEL_WORKSPACE_PATH,
       branch: opts.branch,
+      // The recorded sha is the guest's verified checkout (or restored branch
+      // head), never the separately read target head (AUT-1252).
       base: {
         source: opts.restoration?.length || existing !== null ? 'existing' : 'remote',
         sha: provisionHead,
