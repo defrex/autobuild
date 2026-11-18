@@ -14,6 +14,7 @@ import {
   landingMeasurementGate,
   measurementApplies,
   measurementThreshold,
+  mergedAttemptMeasurement,
   selectTurnHolder,
   settlementMeasurement,
   type LandingGateInput,
@@ -283,5 +284,42 @@ describe('turn', () => {
   test('a child that is not an in-flight attempt never holds the turn', () => {
     const outsider = { ...candidate('zz', 5), ticket: { source: 'file', id: 'T-zz' } }
     expect(selectTurnHolder(digest(), [outsider], key)).toBe(undefined)
+  })
+})
+
+describe('merged attempt measurement', () => {
+  test('a result for the merged head under the node is measured', () => {
+    const lm = fold(request('m1'), measured('m1', 5))
+    const verdict = mergedAttemptMeasurement(lm, 'opt-node', HEAD)
+    expect(verdict.kind).toBe('measured')
+    if (verdict.kind === 'measured') expect(verdict.result.candidate).toBe(HEAD)
+  })
+
+  test('no recorded result is absent, with or without a request', () => {
+    expect(mergedAttemptMeasurement(undefined, 'opt-node', HEAD)).toEqual({
+      kind: 'unmeasured',
+      reason: 'absent',
+    })
+    expect(mergedAttemptMeasurement(fold(request('m1')), 'opt-node', HEAD)).toEqual({
+      kind: 'unmeasured',
+      reason: 'absent',
+    })
+  })
+
+  test('a result for another candidate is a stale head', () => {
+    const lm = fold(request('m1'), measured('m1', 5))
+    expect(mergedAttemptMeasurement(lm, 'opt-node', sha('9'))).toEqual({
+      kind: 'unmeasured',
+      reason: 'stale-head',
+      measuredCandidate: HEAD,
+    })
+  })
+
+  test("another node's request is unrelated, even for the merged head", () => {
+    const lm = fold(request('m1'), measured('m1', 5))
+    expect(mergedAttemptMeasurement(lm, 'other-node', HEAD)).toEqual({
+      kind: 'unmeasured',
+      reason: 'unrelated',
+    })
   })
 })

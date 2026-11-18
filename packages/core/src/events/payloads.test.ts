@@ -1703,6 +1703,78 @@ describe('optimization event protocol', () => {
     })
   })
 
+  test('merged-unmeasured needs a policy and no measurement; branches belong to declined and no-improvement', () => {
+    const attempt = { proposal: 'a1', ticket, build: 'attempt-a1' }
+    const merged = 'd'.repeat(40)
+    const human = { kind: 'human', user: 'ada' } as const
+    expect(
+      valid(
+        'attempt.settled',
+        { attempt, outcome: 'merged-unmeasured', policy: 'release-unmeasured', mergedSha: merged },
+        human,
+      ),
+    ).toMatchObject({ type: 'attempt.settled' })
+    // An unresolvable merge settles without its head.
+    valid(
+      'attempt.settled',
+      { attempt, outcome: 'merged-unmeasured', policy: 'release-unmeasured' },
+      human,
+    )
+    invalid('attempt.settled', { attempt, outcome: 'merged-unmeasured' }, human)
+    invalid('attempt.settled', { attempt, outcome: 'merged-unmeasured', policy: 'accept' }, human)
+    invalid(
+      'attempt.settled',
+      {
+        attempt,
+        outcome: 'merged-unmeasured',
+        policy: 'release-unmeasured',
+        measurement: { revision: 1, baseline: 50, candidate: 40, delta: 10 },
+      },
+      human,
+    )
+    invalid('attempt.settled', { attempt, outcome: 'aborted', policy: 'release-unmeasured' })
+    invalid('attempt.settled', { attempt, outcome: 'aborted', mergedSha: merged })
+    const branched = { ...attempt, branch: 'ab/attempt-a1' }
+    valid('attempt.settled', { attempt: branched, outcome: 'declined' })
+    valid('attempt.settled', {
+      attempt: branched,
+      outcome: 'no-improvement',
+      measurement: { revision: 1, baseline: 50, candidate: 49, delta: 1 },
+    })
+    for (const outcome of ['stopped', 'aborted'])
+      invalid('attempt.settled', { attempt: branched, outcome })
+  })
+
+  test('unmeasured-merge and branch-cleanup facts', () => {
+    const merged = 'd'.repeat(40)
+    const base = { proposal: 'a1', ticket, build: 'attempt-a1' }
+    valid('attempt.merged-unmeasured', { ...base, sha: merged, reason: 'absent' })
+    valid('attempt.merged-unmeasured', {
+      ...base,
+      sha: merged,
+      reason: 'stale-head',
+      measuredCandidate: 'c'.repeat(40),
+    })
+    valid('attempt.merged-unmeasured', { ...base, reason: 'unresolvable' })
+    invalid('attempt.merged-unmeasured', { ...base, reason: 'absent' })
+    invalid('attempt.merged-unmeasured', { ...base, sha: merged, reason: 'unresolvable' })
+    invalid('attempt.merged-unmeasured', { ...base, sha: merged, reason: 'guessed' })
+    invalid(
+      'attempt.merged-unmeasured',
+      { ...base, sha: merged, reason: 'absent' },
+      {
+        kind: 'human',
+        user: 'ada',
+      },
+    )
+    const cleanup = { proposal: 'a1', build: 'attempt-a1', branch: 'ab/attempt-a1' }
+    valid('attempt.branch-deleted', cleanup)
+    valid('attempt.branch-cleanup-failed', { ...cleanup, error: 'forge down' })
+    invalid('attempt.branch-cleanup-failed', { ...cleanup, error: '' })
+    invalid('attempt.branch-cleanup-failed', { ...cleanup, error: 'x'.repeat(2001) })
+    invalid('attempt.branch-deleted', { ...cleanup, branch: '' })
+  })
+
   test('an attempt implementer declines with a bounded reason', () => {
     const actor = agentActor('implement', 's_1')
     expect(valid('implement.declined', { round: 1, reason: 'no gain' }, actor)).toMatchObject({

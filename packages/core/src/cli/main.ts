@@ -5,13 +5,19 @@ import { currentTicketRef } from '../kernel/ticket-migrations'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
-import { reviseObjective, showObjective, stopObjective } from '../operator/optimization'
+import {
+  reviseObjective,
+  settleUnmeasuredAttempt,
+  showObjective,
+  stopObjective,
+} from '../operator/optimization'
 import type { ObjectiveChanges } from '../objective'
 import {
   OBJECTIVE_FLAGS,
   OBJECTIVE_USAGE,
   objectiveChangesFromFlags,
   objectiveStopFromFlags,
+  objectiveSettleFromFlags,
   renderObjective,
 } from './objective'
 import { withSessionlessStore } from './store-opening'
@@ -1188,8 +1194,17 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (parsed.positionals.length !== 1) throw new Error(OBJECTIVE_USAGE)
       const slug = parsed.positionals[0]!
       const stopping = objectiveStopFromFlags(parsed)
+      const settling = objectiveSettleFromFlags(parsed)
       const changes = objectiveChangesFromFlags(parsed)
       const revising = Object.keys(changes).length > 0
+      if (
+        settling !== undefined &&
+        deps.processEnv?.AB_SESSION?.trim() &&
+        deps.processEnv?.AB_BUILD?.trim() === slug
+      )
+        throw new Error(
+          "cannot settle an optimization node's attempt from its own phase session (AB_SESSION/AB_BUILD conflict)",
+        )
       if (
         stopping !== undefined &&
         deps.processEnv?.AB_SESSION?.trim() &&
@@ -1219,6 +1234,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           const user =
             deps.processEnv?.USER?.trim() || deps.processEnv?.USERNAME?.trim() || 'operator'
           if (stopping !== undefined) await stopObjective({ store, repo, slug, user, ...stopping })
+          else if (settling !== undefined)
+            await settleUnmeasuredAttempt({ store, repo, slug, user, ...settling })
           else if (revising)
             await reviseObjective({
               store,
