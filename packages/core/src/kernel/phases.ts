@@ -10,7 +10,7 @@ import type { EventType } from '../events/payloads'
 import { installedSkillName } from '../skills'
 
 export type PhaseKind = 'producer' | 'review' | 'agent-verify'
-export type TerminalCommand = 'done' | 'verdict' | 'escalate'
+export type TerminalCommand = 'done' | 'verdict' | 'escalate' | 'wait-on'
 
 /**
  * Kernel-side plumbing triggered by the phase's terminal (D7, §8.6):
@@ -203,8 +203,22 @@ export function phaseSpecFor(phase: Phase): PhaseSpec {
   return isVerifyPhase(phase) ? PHASE_SPECS.verify : PHASE_SPECS[phase]
 }
 
-/** Every phase ends with exactly one terminal command (D5); `escalate` is
- * always available in addition to the phase's own terminal. */
-export function allowedTerminals(phase: Phase): TerminalCommand[] {
-  return [phaseSpecFor(phase).terminal, 'escalate']
+/** Ticket waits (SPEC §11) are a terminal in every leaf phase of a work
+ * build; a node build cannot declare one. `ab wait-on` and the `ab context`
+ * manifest both decide through this predicate. */
+export function acceptsTicketWait(buildKind: 'work' | 'node' | undefined): boolean {
+  return buildKind !== 'node'
+}
+
+/** Every phase ends with exactly one terminal command (D5): the phase's own,
+ * `escalate`, and in a work build `wait-on`. */
+export function allowedTerminals(
+  phase: Phase,
+  buildKind: 'work' | 'node' | undefined,
+): TerminalCommand[] {
+  return [
+    phaseSpecFor(phase).terminal,
+    'escalate',
+    ...(acceptsTicketWait(buildKind) ? (['wait-on'] as const) : []),
+  ]
 }
