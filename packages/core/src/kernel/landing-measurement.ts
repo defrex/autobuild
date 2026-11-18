@@ -162,7 +162,7 @@ export function selectTurnHolder(
 export type AttemptStatus = 'in-flight' | 'settled' | 'none'
 
 export interface LandingGateInput {
-  digest: Pick<OptimizationState, 'accepted' | 'rulerRevision' | 'objective'>
+  digest: Pick<OptimizationState, 'accepted' | 'rulerRevision' | 'objective' | 'progressQueue'>
   attempt: AttemptStatus
   lm: LandingMeasurementState | undefined
   candidate: string | undefined
@@ -186,6 +186,9 @@ export type LandingGateVerdict =
   | 'request'
   /** A request for this pair awaits its result. */
   | 'pending'
+  /** The node still owes a progress panel for an accepted head; landing
+   * would move the head past it. */
+  | 'wait-progress'
   | LandingClass
 
 /** The gate's one verdict for a ready child of an optimization node. */
@@ -200,6 +203,7 @@ export function landingMeasurementGate(input: LandingGateInput): LandingGateVerd
       input.attempt === 'in-flight' ? 'improve' : 'non-regress',
       lm!.result!,
     )
+    if (verdict === 'land' && (digest.progressQueue?.length ?? 0) > 0) return 'wait-progress'
     return verdict === 'regressed' && input.regressionAnswered ? 'request' : verdict
   }
   if (lm?.request !== undefined && forPair(digest, lm.request, candidate, nodeHead))

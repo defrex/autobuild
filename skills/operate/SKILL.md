@@ -509,7 +509,8 @@ Treat every default-watch record as a call to act:
 - `optimization.noise-exceeded`: an optimization node's ε is below the noise
   its starting measurement found, so its gate could accept noise. Tell the
   human both numbers; raising ε (`ab objective <node> --epsilon …`) or
-  `metric.samples` (a spec revision) is their call. The node keeps running.
+  `metric.samples`, or `metric.judges` for a panel (a spec revision), is their
+  call. The node keeps running.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
@@ -755,7 +756,8 @@ when to stop, and landing the result.
 - **Read progress** with `ab objective <node>` (`--json` for the structured
   view): starting, current and best values, attempts filed, accepted, rejected
   and running, the plateau counter, elapsed hours, stop eligibility, and, once
-  stopped, the cause, mode and what still blocks completion.
+  stopped, the cause, mode and what still blocks completion. A panel node's
+  current value is its latest recorded win rate against the starting head.
 - **Revise when to stop** with `ab objective <node> --threshold n`, or
   `--max-attempts n`, `--max-hours n`, `--plateau n` or `--stop-mode abort|drain`.
   The dispatcher applies the change on its next tick, with no replanning and
