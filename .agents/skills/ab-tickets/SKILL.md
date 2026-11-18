@@ -84,7 +84,9 @@ dispatcher never moves tickets into it and never dispatches from it unless
 `autobuild.toml` names it (for example `readyState` or `proposalState`).
 The optional backlog and rejected roles are directories too, named by
 `[tickets].backlogState` and `rejectedState` (`ab init` writes `backlog` and
-`rejected`); the dispatcher never claims from or moves into them.
+`rejected`); the dispatcher never claims from or moves into them, with one
+exception: an optimization attempt that settles other than `accepted`,
+including an aborted one, moves into the rejected role.
 
 ```
 .autobuild/tickets/
@@ -220,7 +222,9 @@ mark it urgent rather than moving other tickets out of `ready/`.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
 then to `done/` on merge or back to `triage/` if the build aborts (`ready/`
-with `ab abort --to ready`) or the spec bounces. A caught failure before build
+with `ab abort --to ready`) or the spec bounces. An optimization attempt that
+is aborted, or whose PR closes without merging, moves to the rejected role
+instead of `triage/`. A caught failure before build
 creation returns it to configured Ready after safe ownership checks. Every such
 return reports one `ticket.handed-back` repository event once the move is done.
 Unfinished recovery stays durably tracked and withheld from another claim. Uncertain ownership or externally changed/missing
@@ -269,6 +273,13 @@ A rejected ticket never resolves a blocker: tickets it blocks stay unclaimed,
 and `ab ticket show` marks it `(rejected)`. A rejected child no longer keeps its
 node incomplete. Moving it back to triage, backlog or ready restores ordinary
 behavior with no other step.
+
+The dispatcher moves a ticket here in exactly one case: an attempt of an
+optimization node that settles with any outcome other than `accepted`
+(no-improvement, declined, stopped or aborted). The node comments the outcome
+on the ticket. Every other ticket reaches this role only when an agent or a
+human moves it. See
+[landing and settlement](../ab-guide/references/optimization-nodes.md#landing-and-settlement).
 
 ## When a role is not configured
 

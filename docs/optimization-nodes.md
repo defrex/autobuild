@@ -207,6 +207,7 @@ build `optimization node`.
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
 | `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
 | `optimization.stopped` | node | cause, mode |
+| `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
 
 `decision` is `improved`, `no-improvement`, `non-regressing` or `regressed`.
 `outcome` is `accepted`, `no-improvement`, `declined`, `stopped` or `aborted`;
@@ -229,7 +230,9 @@ Progress is derived from the node's log, never recorded:
   against the starting head, else 0.5. **Best value** in the objective's
   direction.
 - **Attempts**: filed, accepted, rejected (no-improvement, declined, stopped or
-  aborted) and running.
+  aborted) and running, plus the settled attempts whose ticket has not yet
+  moved to the rejected role. Those still occupy a concurrency slot, so a
+  tracker that refuses the move stalls new proposals instead of piling up.
 - **Plateau counter**: consecutive `no-improvement` or `declined` settlements
   since the last `accepted`; `stopped` and `aborted` leave it unchanged.
 - **Elapsed budget**: hours since the first acceptance, against `maxHours`, and
@@ -317,6 +320,59 @@ is only valid in implement of an optimization attempt`) and in a build that is
 not an attempt (`ab done --no-improvement is only for optimization attempts:
 build <slug> is not an attempt of an optimization node`).
 
+## Landing and settlement
+
+Passing verify and finalize is not enough for a child of an optimization node
+to land. Verify asks whether a change is correct; measurement asks whether it
+helped. Once a child is ready to land, the dispatcher records
+`attempt.measurement-requested` on the child's log for one exact pair: the
+child's candidate head and the node head it would land on. The child lands only
+with an `attempt.measured` result for that same pair, under the accepted
+harness pin and the current ruler. The node writer's guarded merge is guarded
+on that measured node head.
+
+- **Freshness.** When a sibling lands first, the node head moves and the
+  measurement no longer applies. The child restacks and a new measurement is
+  requested. A clean restack keeps verification; it never keeps a measurement.
+  The node writer is never held while a measurement runs.
+  A landing interrupted after its writer reservation publishes on recovery only
+  while that pair still passes the gate; after a revision it does not pass, the
+  reservation is abandoned.
+- **Attempts must improve.** An attempt lands when its delta is at least ε. A
+  smaller delta settles it `no-improvement`: its PR closes without merging and
+  no further implement round runs.
+- **Other children must not regress.** A child that is not an attempt lands
+  when its delta is at least −ε. A regressing child escalates with both
+  medians, the delta and ε; answering asks for a fresh measurement. These
+  children never settle and count toward neither budget nor plateau.
+- **Harness edits escalate.** An attempt whose head changes a harness path is
+  never measured. It escalates naming the paths, and that head stays
+  unmeasured even after an answer; revise the attempt or abort it.
+- **Turn.** An attempt overtaken by sibling landings three consecutive times
+  gets the next turn. Later candidates neither request measurements nor land
+  until it lands, closes, or escalates.
+
+Every attempt settles exactly once, on the node's log:
+
+| How the attempt ends | Outcome | Ticket role |
+|---|---|---|
+| Merged into the node, with a measurement of the merged head | `accepted` | done |
+| Landing measurement shows no improvement | `no-improvement` | rejected |
+| Proposer declines it | `declined` | rejected |
+| Node stops | `stopped` | rejected |
+| Operator abort, or a human closes its PR | `aborted` | rejected |
+
+A human forge merge bypasses the landing gate. When no measurement exists for
+the merged head, the attempt cannot settle `accepted`: the dispatcher records a
+followup observation, and the attempt stays in flight and keeps its concurrency
+slot until your operator agent acts. Its build and ticket still complete.
+
+This is the one case in which the dispatcher moves a ticket into the rejected
+role. Once the attempt's build is done (or it never had one), the node's poll
+moves the ticket, comments the outcome, and records `attempt.ticket-rejected`.
+An aborted or closed attempt never returns to triage. A completed node keeps
+being polled until every such move has committed.
+
 ## Grooming an optimization node
 
 The node ticket is still a spec-standard charter, with what and why,
@@ -350,4 +406,5 @@ looking. Use `concurrency` above 1 only when attempts are independent enough to
 run side by side.
 
 **Configure the rejected role first.** The ticket source must name
-`[tickets].rejectedState`, or the node is refused.
+`[tickets].rejectedState`, or the node is refused. Every attempt that does not
+land ends there.
