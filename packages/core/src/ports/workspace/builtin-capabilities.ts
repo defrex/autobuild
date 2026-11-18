@@ -82,6 +82,7 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
         sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
         ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
         ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
+        ...(opts.refusedArchive !== undefined ? { refusedArchive: opts.refusedArchive } : {}),
       })
     },
   },

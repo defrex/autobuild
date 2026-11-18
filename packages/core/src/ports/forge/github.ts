@@ -2439,8 +2439,9 @@ export class GitHubForge implements Forge {
   /** Environments such as Claude Code on the web refuse non-branch git pushes but
    * allow REST, so the identical create-only ref goes through the API instead. A
    * 422 means the ref exists or GitHub lacks the commit; only a 404 commit probe
-   * proves the latter, and the caller's readback judges every other outcome. */
-  private async createArchiveAfterRefusal(ref: string, sha: string): Promise<void> {
+   * proves the latter, and the caller's readback judges every other outcome. The
+   * Vercel Sandbox provider uses it too when its guest git transport is refused. */
+  async createArchiveAfterRefusal(ref: string, sha: string): Promise<void> {
     try {
       await this.createArchive(ref, sha)
     } catch (error) {
@@ -2557,4 +2558,14 @@ export class GitHubForge implements Forge {
     }
     return new TextDecoder().decode(response.bytes)
   }
+}
+
+/** The host-side archive fallback a guest git transport (Vercel Sandbox) uses
+ * after its archive push is refused; credentials stay in the dispatcher. Only the
+ * GitHub adapter has one. */
+export function refusedArchiveFallback(
+  forge: Forge,
+): ((ref: string, sha: string) => Promise<void>) | undefined {
+  if (!(forge instanceof GitHubForge)) return undefined
+  return (ref, sha) => forge.createArchiveAfterRefusal(ref, sha)
 }
