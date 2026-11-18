@@ -18,6 +18,15 @@ import {
 import type { AbEvent } from '../events/catalog'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import type { AttemptOutcome } from '../events/payloads'
+import {
+  advanceOptimization,
+  isOptimizationEvent,
+  isProposerWakeEvent,
+  optimizationSignal,
+  PROPOSER_WAKE_EVENT_TYPES,
+  type OptimizationSignal,
+  type OptimizationState,
+} from '../kernel/optimization'
 import type { PolicyEscalationCause, TicketRef } from '../ontology'
 import type { BuildDigest, BuildDigestTicketWait } from './types'
 
@@ -49,6 +58,10 @@ export const DIGEST_EVENT_TYPES = [
   'escalation.answered',
   'attempt.settled',
   'attempt.ticket-rejected',
+  // The optimization signal: the node's optimization facts, its proposer
+  // deferrals, and every fact that can clear a deferral.
+  'optimization.proposal-deferred',
+  ...PROPOSER_WAKE_EVENT_TYPES,
 ] as const
 
 /** The digest-relevant slice of one event row. Adapters ship `hostedSeq` for
@@ -76,6 +89,9 @@ export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
   attemptProposal?: string
   /** `attempt.settled`: the settlement outcome. */
   attemptOutcome?: AttemptOutcome
+  /** An optimization fact the signal folds, decoded whole; every such
+   * payload is bounded. */
+  optimizationEvent?: AbEvent
 }
 
 /** The digest-relevant projection of one build's events, in log order.
@@ -114,21 +130,43 @@ export interface DigestAcc {
   /** An optimization node's settled, non-accepted attempts whose ticket has
    * not yet moved to the rejected role: proposal ids. */
   pendingRejections?: string[]
+  /** The node's optimization digest, folded by the same `advanceOptimization`
+   * BuildState uses, so the signal cannot drift from it. */
+  optimization?: OptimizationState
+  /** seq of the latest proposer wake fact. */
+  proposerWakeSeq?: number
+  /** seq of the latest `optimization.proposal-deferred`. */
+  proposerDeferredSeq?: number
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 14
+export const BUILD_DIGEST_REDUCER_VERSION = 15
 
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */
 export class BuildDigestCapabilityError extends Error {
-  readonly capability = 'nodeTargets' as const
-  constructor(readonly slug: string) {
+  constructor(
+    readonly slug: string,
+    readonly capability: 'nodeTargets' | 'optimization' = 'nodeTargets',
+  ) {
     super(
-      `build digest for ${slug} has no nodeTargets: the store's digest answer predates node targets`,
+      capability === 'nodeTargets'
+        ? `build digest for ${slug} has no nodeTargets: the store's digest answer predates node targets`
+        : `build digest for node ${slug} has no optimization signal: the store's digest answer predates optimization proposing`,
     )
     this.name = 'BuildDigestCapabilityError'
   }
+}
+
+/** A node digest's optimization signal: `false` for a plain node, undefined
+ * for a leaf. A node digest without the member is an older peer's answer. */
+export function digestOptimization(
+  digest: Pick<BuildDigest, 'slug' | 'kind' | 'optimization'>,
+): OptimizationSignal | false | undefined {
+  if (digest.kind !== 'node') return undefined
+  if (digest.optimization === undefined)
+    throw new BuildDigestCapabilityError(digest.slug, 'optimization')
+  return digest.optimization
 }
 
 /** Every node build the digest's build has targeted or moved between. */
@@ -156,6 +194,10 @@ export const buildDigestReducer: IncrementalReducer<
   fold(acc, events) {
     for (const event of events) {
       if (event.rawUnknown) advanceCompatibility(acc.compatibility, [event.rawUnknown])
+      if (event.optimizationEvent !== undefined && isOptimizationEvent(event.optimizationEvent))
+        acc.optimization = advanceOptimization(acc.optimization, [event.optimizationEvent])
+      if (event.type === 'optimization.proposal-deferred') acc.proposerDeferredSeq = event.seq
+      else if (isProposerWakeEvent(event)) acc.proposerWakeSeq = event.seq
       if (event.nodeTargets?.some((target) => !acc.nodeTargets.includes(target)))
         acc.nodeTargets = [...new Set([...acc.nodeTargets, ...event.nodeTargets])].sort()
       if (
@@ -244,6 +286,9 @@ export const buildDigestReducer: IncrementalReducer<
     waitPending,
     ticketWait,
     pendingRejections,
+    optimization,
+    proposerWakeSeq,
+    proposerDeferredSeq,
   }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
@@ -267,6 +312,19 @@ export const buildDigestReducer: IncrementalReducer<
       ...(ticketWait !== undefined ? { ticketWait: structuredClone(ticketWait) } : {}),
       ...(pendingRejections?.length ? { rejectionsPending: true as const } : {}),
       nodeTargets: [...nodeTargets],
+      ...(kind === 'node'
+        ? {
+            optimization:
+              optimization === undefined
+                ? (false as const)
+                : optimizationSignal(optimization, {
+                    ...(proposerWakeSeq !== undefined ? { wakeSeq: proposerWakeSeq } : {}),
+                    ...(proposerDeferredSeq !== undefined
+                      ? { deferredSeq: proposerDeferredSeq }
+                      : {}),
+                  }),
+          }
+        : {}),
     }
   },
 })

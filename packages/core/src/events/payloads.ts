@@ -531,6 +531,26 @@ const optimizationPayloadSchemas = {
       hours: z.number().nonnegative(),
     }),
   }),
+  /** The dispatcher found the node's proposer blocked by a non-optimization
+   * condition. Records the fact only; the digest selects the node again once
+   * a fact that can clear the blocker lands. */
+  'optimization.proposal-deferred': z.strictObject({
+    reason: z.enum([
+      'paused',
+      'blocked',
+      'command',
+      'restack',
+      'integration',
+      'landing',
+      'compatibility',
+    ]),
+  }),
+  /** An undeposited request became ineligible before any runner was
+   * admitted for it. Clears the request; never counts as an empty proposal. */
+  'optimization.proposal-withdrawn': z.strictObject({
+    request: z.string().min(1),
+    reason: z.enum(['stopped', 'budget', 'concurrency']),
+  }),
   'optimization.attempts-proposed': z
     .strictObject({
       request: z.string().min(1),
@@ -1725,6 +1745,16 @@ export const eventPayloadSchemas = {
     cycle: z.number().int().nonnegative(),
     cause: z.literal('wait-resume'),
     restackId: z.string().min(1).optional(),
+  }),
+  'propose.started': z.strictObject({
+    round,
+    request: z.string().min(1),
+  }),
+  'propose.completed': z.strictObject({
+    round,
+    request: z.string().min(1),
+    proposals: z.array(z.string().min(1)),
+    artifact: artifactRefSchema,
   }),
   'reconcile.completed': z.union([
     z.strictObject({
