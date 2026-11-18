@@ -58,6 +58,13 @@ export const TICKET_POLICY_ROLES_CAPABILITY = '1'
 export const TICKET_TARGETING_HEADER = 'x-autobuild-ticket-targeting'
 export const TICKET_TARGETING_CAPABILITY = '1'
 
+/** Services that answer `list-page` echo it on every ticket response, failures
+ * included. A client treats an ok response without it, or a 404/400 refusal of
+ * `list-page` without it, as a service predating the operation, and declares
+ * native paging only after a response carried it. */
+export const TICKET_PAGING_HEADER = 'x-autobuild-ticket-paging'
+export const TICKET_PAGING_CAPABILITY = '1'
+
 /** The node id a client's `list-targeting` negotiation probe names. Hosted
  * readable ids are `<teamKey>-<n>` or legacy `ticket-<uuid>`, so it never
  * names a ticket and the probe is an indexed miss. */
@@ -98,6 +105,12 @@ export const ticketWireSchema = z.strictObject({
 export const ticketListingWireSchema = z.strictObject({
   tickets: z.array(ticketWireSchema),
   diagnostics: z.array(z.string()),
+})
+/** `list-page` answers one ordered window and the full matching count. */
+export const ticketPageWireSchema = z.strictObject({
+  tickets: z.array(ticketWireSchema),
+  diagnostics: z.array(z.string()),
+  total: z.number().int().nonnegative(),
 })
 export const dependencyStateWireSchema = z.strictObject({
   id: z.string(),
@@ -174,6 +187,16 @@ export const hostedTicketRequestSchemas = {
   ),
   'list-ready': envelope(criteriaSchema),
   'list-targeting': envelope(z.strictObject({ nodeId: z.string().min(1) })),
+  'list-page': envelope(
+    z.strictObject({
+      criteria: criteriaSchema,
+      page: z.strictObject({
+        limit: z.number().int().nonnegative(),
+        offset: z.number().int().nonnegative().optional(),
+        order: z.enum(['oldest', 'newest']).optional(),
+      }),
+    }),
+  ),
   states: envelope(z.strictObject({})),
   'state-counts': envelope(z.strictObject({ names: z.array(z.string().min(1)).min(1).max(16) })),
   'add-state': envelope(z.strictObject({ name: z.string(), about: z.string().optional() })),

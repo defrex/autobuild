@@ -763,7 +763,7 @@ dispatch is tolerated. `Ticket.creationKey` is the optional stable external
 create/adoption correlation, distinct from `Ticket.ref.id`; Linear projects its
 issue UUID and file/fake preserve their idempotency metadata through create,
 adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
-unchanged. The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
+unchanged. The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; the remote hosted client forwards pages over the `list-page` ticket operation; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
 
 The `github` source spans four modules. `ports/tickets/github.ts` is the
 adapter: REST over the forge's `GitHubRequest` transport and credential order,

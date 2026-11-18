@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import { describeTicketSourceContract, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { HostedTicketSource } from './remote-tickets'
 import { createHostedStoreService } from './service'
+import { withPaging } from './testing/paged-fake'
 
 const now = new Date('2026-01-01T00:00:00.000Z')
 const secret = 'hosted-ticket-contract-secret'
@@ -28,7 +29,7 @@ function withTargeting(fake: FakeTicketSource): FakeTicketSource {
 }
 
 describeTicketSourceContract('hosted service composition', async () => {
-  const backend = withTargeting(new FakeTicketSource([], { doneState: 'Done' }))
+  const backend = withPaging(withTargeting(new FakeTicketSource([], { doneState: 'Done' })))
   const project = await ticketProject('https://github.com/acme/tickets', secret, () => now)
   const service = createHostedStoreService({
     ...project,
@@ -51,12 +52,16 @@ describeTicketSourceContract('hosted service composition', async () => {
   // The composed service must keep the echo, or the contract would skip targeting.
   expect(await source.negotiateTargeting()).toBe(true)
   expect(source.listTargeting).toBeDefined()
+  // The same response settled paging, so the shared paging fixtures run too.
+  expect(source.listPage).toBeDefined()
   return {
     source,
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'autobuild',
     // The fake backend has no state counts; the server answers 409.
     stateCounts: false,
+    // The fake backend files in insertion order, without a clock.
+    filingIntervalMs: 0,
   }
 })
 

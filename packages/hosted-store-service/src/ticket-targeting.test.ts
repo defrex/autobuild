@@ -1,19 +1,23 @@
-/** Targeted ticket listing (`list-targeting`) across the real client, ticket
- * server and Postgres ticket store: its bounded cost, its negotiation against
- * current and older services, and its completeness parity. In memory: the
- * server is called through `fetch`, and SQL is a recording fake. */
+/** The bounded hosted ticket reads across the real client, ticket server and
+ * Postgres ticket store: targeted listing (`list-targeting`), with its
+ * negotiation against current and older services and its completeness parity,
+ * and native paging (`list-page`) against the fallback an older service
+ * leaves. In memory: the server is called through `fetch`, and SQL is a
+ * recording fake. */
 import { expect, test } from 'bun:test'
 import type { SQL } from 'bun'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import { FakeTicketSource, type TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   HostedTicketSource,
+  TICKET_PAGING_HEADER,
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_PROBE_NODE,
 } from '@defrex/autobuild/hosted-tickets'
 import {
   integrationNodePass,
   targetedCompletenessParity,
+  ticketPageReadBudget,
   ticketTargetingReadBudget,
 } from '@defrex/autobuild/testing'
 import { PostgresTicketSource } from '@defrex/autobuild-postgres-store'
@@ -130,6 +134,112 @@ function recordingPostgres(rows: ReturnType<typeof ticketRows>) {
   )
   return { source, statements: () => statements, reset: () => (statements = 0) }
 }
+
+/** `population` Ready rows with fixed-width ids and titles, so a window's bytes
+ * do not depend on the population, filed one second apart. */
+function pageRows(population: number) {
+  return Array.from({ length: population }, (_, i) => {
+    const n = String(i + 1).padStart(6, '0')
+    return {
+      id: `storage-${n}`,
+      readable_id: `ENG-${n}`,
+      revision: '1',
+      creation_key: null,
+      kind: 'work',
+      title: `ticket ${n}`,
+      body: 'Body',
+      state: 'Ready',
+      labels: [],
+      issue_links: '[]',
+      priority: 'normal',
+      created_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString(),
+      target_id: null,
+      target_readable_id: null,
+      blockers: [],
+    }
+  })
+}
+
+/** A PostgresTicketSource whose SQL answers the paged listing: the state
+ * lookup, the count and the window statement (and the targeting probe that
+ * settles negotiation). The unbounded listing statement answers only in
+ * `fallback` mode; in `native` mode it fails. */
+function pagingPostgres(rows: ReturnType<typeof pageRows>, mode: 'native' | 'fallback') {
+  let statements = 0
+  const states = ['Triage', 'Ready', 'Doing', 'Done', 'Rejected']
+  const q = Object.assign(
+    async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      statements++
+      const query = parts.join('?')
+      if (query.includes('FROM ab_ticket_states s LEFT JOIN'))
+        return states.map((name) => ({ name, about: null, tickets: 0 }))
+      if (query.includes('SELECT name FROM ab_ticket_states'))
+        return [...(values[1] as string[]), ...(values[2] as string[])].map((name) => ({ name }))
+      if (query.includes('target_id = (SELECT n.id')) return []
+      expect(values[0]).toBe('budget')
+      const matching = rows.filter((row) => row.state === values[1])
+      if (query.includes('count(*)::text AS total')) return [{ total: String(matching.length) }]
+      if (query.includes('LIMIT')) {
+        const [limit, offset] = values.slice(-2) as [number, number]
+        const ordered = query.includes('created_at DESC')
+          ? [...matching].reverse()
+          : [...matching].sort(
+              (a, b) => Number(b.priority === 'urgent') - Number(a.priority === 'urgent'),
+            )
+        return ordered.slice(offset, offset + limit)
+      }
+      if (mode === 'fallback' && query.includes("ORDER BY (priority = 'urgent') DESC")) {
+        return [...matching].sort(
+          (a, b) => Number(b.priority === 'urgent') - Number(a.priority === 'urgent'),
+        )
+      }
+      throw new Error(`unexpected ticket statement: ${query}`)
+    },
+    { array: (values: unknown[]) => values },
+  )
+  const runner = {
+    run: (_pool: unknown, body: (exec: typeof q) => Promise<unknown>) => body(q),
+    tx: (_pool: unknown, body: (exec: typeof q) => Promise<unknown>) => body(q),
+  } as unknown as ConstructorParameters<typeof PostgresTicketSource>[3]
+  const source = new PostgresTicketSource(
+    {} as SQL,
+    { repo: 'budget', teamKey: 'ENG', lifecycle, rejectedState: 'Rejected' },
+    lifecycle,
+    runner,
+  )
+  return { source, statements: () => statements, reset: () => (statements = 0) }
+}
+
+/** A service predating `list-page`: no paging echo and no such route. */
+function predatingPaging(fetch: Fetch): Fetch {
+  return async (req) => {
+    if (new URL(req.url).pathname === '/tickets/list-page')
+      return Response.json({ error: 'no route', kind: 'not-found' }, { status: 404 })
+    const response = await fetch(req)
+    const headers = new Headers(response.headers)
+    headers.delete(TICKET_PAGING_HEADER)
+    return new Response(response.body, { status: response.status, headers })
+  }
+}
+
+test('a paged listing through client, service and Postgres reads only its window at any project size', async () => {
+  await ticketPageReadBudget(async (population, mode) => {
+    const postgres = pagingPostgres(pageRows(population), mode)
+    const service = server(postgres.source).fetch
+    const { source, requests } = client(mode === 'native' ? service : predatingPaging(service))
+    // Production settles paging on the construction-time response.
+    expect(await source.negotiateTargeting()).toBe(true)
+    return {
+      source,
+      reset: () => {
+        postgres.reset()
+        requests.length = 0
+      },
+      statements: postgres.statements,
+      requests: () => [...requests],
+    }
+  })
+})
 
 test('a targeted read through client, service and Postgres has a fixed budget at any project size', async () => {
   await ticketTargetingReadBudget(async (unrelated) => {
