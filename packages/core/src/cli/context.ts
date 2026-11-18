@@ -70,7 +70,9 @@ export type MaterializedEntry = ArtifactRef | 'derived'
 /**
  * The manifest (§8.3): the agent's contract — `required` deposits and
  * `allowedTerminals` — sourced from the same PHASE_SPECS table the terminal
- * commands validate with, so skills are self-checking.
+ * commands validate with, so skills are self-checking. `allowedTerminals`
+ * lists `wait-on` exactly when the build may declare a ticket wait, through
+ * the same predicate `ab wait-on` checks.
  */
 export interface ContextManifest {
   workspaceRecovery?: string
@@ -324,7 +326,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     phase,
     round,
     required: requiredKinds(spec, phase),
-    allowedTerminals: allowedTerminals(phase),
+    allowedTerminals: allowedTerminals(phase, state.kind),
     contextDir,
     manifestPath: `${contextDir}/${manifestRelPath}`,
     ...(notesRelPath !== undefined ? { notesPath: `${contextDir}/${notesRelPath}` } : {}),

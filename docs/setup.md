@@ -417,8 +417,10 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
 An applicable behavior that cannot be exercised is a failure with an
 explanation, never a skip or silent pass. Use `skip` only when the complete step
 does not apply. If guidance still cannot make a verdict possible, escalate and
-explain what remains unresolved. Record out-of-scope work with `ab observe`;
-the verifier does not fix it.
+explain what remains unresolved. In a work build, a verifier that cannot judge
+until another ticket merges may instead end with
+`ab wait-on <ticket-id>... --reason "…"`; a node build's verifier cannot.
+Record out-of-scope work with `ab observe`; the verifier does not fix it.
 
 ### Project-scoped hosted tickets
 
