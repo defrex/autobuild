@@ -21,6 +21,7 @@ import type { RuntimeIdentity } from '../events/runtime'
 import { relaunchTarget } from './execution-relaunch'
 import { runtimeIdentity } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
+import { leafVerifiedRestack } from '../kernel/verify-stages'
 import { waitResumeSupersedes } from '../kernel/ticket-wait'
 import {
   deferMixedVersion,
@@ -2709,8 +2710,7 @@ export class BuildRunner {
         throw new Error('integration checkout differs from prepared head')
       return { baseSha: cycle.parent, headSha: cycle.head, restackId: cycle.id }
     }
-    const cycle = Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq)
-    const gate = facts.log.restack.gates[String(cycle)]
+    const gate = leafVerifiedRestack(facts.log)
     if (gate !== undefined)
       return { baseSha: gate.targetBase, headSha: gate.headSha, restackId: gate.id }
     return {}

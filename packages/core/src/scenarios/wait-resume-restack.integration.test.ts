@@ -5,7 +5,8 @@
  * the wait; a clean replay resumes implement directly, a conflicting one
  * reconciles first, and an unchanged target resumes without a restack. A
  * reconcile session that waits has its frozen replay superseded when the
- * target moved, and keeps it when the target did not.
+ * target moved, and keeps it when the target did not. An agent verifier that
+ * waits re-verifies every step on the cleanly restacked base before finalize.
  * In-memory store, scripted agents, fake forge, real git worktrees.
  */
 import { afterEach, expect, test } from 'bun:test'
@@ -14,6 +15,7 @@ import { join } from 'node:path'
 import { controlBuild } from '../cli/build-control'
 import { normalizeVerifyCompletion } from '../events/payloads'
 import {
+  CONFIG_TOML,
   GIT_ID,
   commitAll,
   git,
@@ -267,4 +269,77 @@ test('a reconcile wait with an unchanged target resumes the same replay', async 
   expect(seen.picks).toHaveLength(2)
   expect(seen.picks[1]).toBe(seen.picks[0])
   expect(seen.picks[0]).not.toBe('')
+}, 120_000)
+
+const AGENT_VERIFY_TOML = CONFIG_TOML.replace(
+  'steps = ["unit"]',
+  'steps = ["unit", "e2e"]\n\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"',
+)
+
+test('a verifier wait re-verifies every step on the cleanly restacked base before finalize', async () => {
+  const handlers = happyHandlers()
+  const verifierHeads: string[] = []
+  handlers['ab-verify-e2e'] = async (cli) => {
+    await cli.run(['context'])
+    if (!hasGuidance(cli)) {
+      await cli.run(['wait-on', 'T-B', '--reason', 'e2e needs the T-B fixture'])
+      return
+    }
+    verifierHeads.push(await head(cli))
+    await cli.run(['verdict', 'pass'])
+  }
+  const h = await makeHarness({
+    handlers,
+    configToml: AGENT_VERIFY_TOML,
+    tickets: [readyTicket('T-A'), readyTicket('T-B', { state: 'Backlog' })],
+  })
+  harnesses.push(h)
+  await h.dispatcher.tick()
+  const slug = await onlyBuild(h)
+  await h.runLatest()
+  expect(h.cliErrors).toEqual([])
+  expect(ofType(await h.events(slug), 'wait.requested')[0]?.payload.phase).toBe('verify:e2e')
+  let blocker = ''
+  const state = await answerAndResume(h, slug, async () => {
+    blocker = await h.advanceRemote({ 'blocker.txt': 'T-B fixture\n' }, 'Land T-B')
+  })
+  expect(h.cliErrors).toEqual([])
+  expect(state.prState).toBe('open')
+  const events = await h.events(slug)
+  const completed = ofType(events, 'restack.completed').filter(
+    (e) => e.payload.trigger === 'wait-resume',
+  )
+  expect(completed).toHaveLength(1)
+  const resumedAt = completed[0]!.seq
+  expect(completed[0]!.payload.targetBase).toBe(blocker)
+  expect(ofType(events, 'reconcile.started')).toEqual([])
+  // The harness runner captures no verify configuration, so the kernel
+  // boundary alone opens the resumed cycle.
+  expect(ofType(events, 'verify.config-captured')).toEqual([])
+  // Every configured step re-runs at a new attempt on the restacked base and head.
+  const before = ofType(events, 'verify.started').filter((e) => e.seq < resumedAt)
+  const resumed = ofType(events, 'verify.started').filter((e) => e.seq > resumedAt)
+  const priorAttempt = Math.max(...before.map((e) => e.payload.attempt))
+  expect(resumed.map((e) => e.payload.step)).toEqual(['unit', 'e2e'])
+  for (const start of resumed) {
+    expect(start.payload.attempt).toBeGreaterThan(priorAttempt)
+    expect(start.payload).toMatchObject({
+      baseSha: blocker,
+      headSha: completed[0]!.payload.headSha,
+    })
+  }
+  const results = ofType(events, 'verify.completed')
+    .filter((e) => e.seq > resumedAt)
+    .map((e) => normalizeVerifyCompletion(e.payload))
+  expect(results.map(({ step, outcome }) => ({ step, outcome }))).toEqual([
+    { step: 'unit', outcome: 'pass' },
+    { step: 'e2e', outcome: 'pass' },
+  ])
+  for (const result of results)
+    expect(result).toMatchObject({ baseSha: blocker, headSha: completed[0]!.payload.headSha })
+  expect(verifierHeads).toEqual([completed[0]!.payload.headSha])
+  // Finalize starts once, only after the resumed cycle passes.
+  const finalized = ofType(events, 'finalize.started')
+  expect(finalized).toHaveLength(1)
+  expect(finalized[0]!.seq).toBeGreaterThan(ofType(events, 'verify.completed').at(-1)!.seq)
 }, 120_000)

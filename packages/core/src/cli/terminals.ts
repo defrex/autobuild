@@ -1,3 +1,4 @@
+import { leafVerifiedRestack } from '../kernel/verify-stages'
 import { publishExact } from '../kernel/publication'
 import { compatibilityDiagnostic, MixedVersionDeferral } from '../kernel/mixed-version'
 import { suspendNativeLanding } from '../kernel/landing-publication'
@@ -890,10 +891,7 @@ async function agentVerifyVerdict(
   const step = verifyStep(env.phase)
   const reportKind = verifyReportKind(step)
   const facts = (await readBuildFacts(store, env.build)).value
-  const start =
-    facts.log.restack.gates[
-      String(Math.max(facts.log.code.latestApproveSeq, facts.log.lastReconcileCompletedSeq))
-    ]
+  const start = leafVerifiedRestack(facts.log)
   const integrationStart =
     facts.state.kind === 'node'
       ? facts.log.verifyStarted.findLast((record) => record.attempt === env.round)
