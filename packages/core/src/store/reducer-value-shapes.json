@@ -12349,6 +12349,22 @@
         "order": {
           "type": "864",
           "optional": false
+        },
+        "runner": {
+          "type": "2",
+          "optional": false
+        },
+        "model": {
+          "type": "4",
+          "optional": true
+        },
+        "stream": {
+          "type": "4",
+          "optional": true
+        },
+        "substitutes": {
+          "type": "4",
+          "optional": true
         }
       }
     },
@@ -24996,6 +25012,14 @@
         },
         "account": {
           "type": "536",
+          "optional": true
+        },
+        "stream": {
+          "type": "4",
+          "optional": true
+        },
+        "substitution": {
+          "type": "1466",
           "optional": true
         }
       }
