@@ -23,8 +23,8 @@ committed.
 
 1. Run `ab context`. Read the printed manifest and its `materialized` paths,
    which are relative to `contextDir`. `optimization` names the request this
-   session answers: its `id`, the node `head` and `room`, the most proposals
-   this request accepts.
+   session answers: `optimization.request` is its identifier, with the node
+   `head` and `room`, the most proposals this request accepts.
 2. Read `ledger.json` first. `settled` holds one entry per settled attempt:
    its strategy, outcome, measured delta and closing note, with `nearMiss: true`
    on a near miss. `inFlight` lists attempts still running, with their titles

@@ -370,8 +370,11 @@ current ruler, has no open request, has fewer than two consecutive empty
 proposals, and has room. Room is the smaller of the free concurrency slots
 (`proposer.concurrency` minus attempts queued or running) and the attempts
 the budget still allows, and is 0 once the attempts or hours budget is spent.
-An open request means a proposer session is running, so the node never has
-two. A node that is paused, blocked, has a pending command, an active or
+An open request reserves the node's single outstanding proposal round, so no
+second request is made while it is open. It may be waiting for capacity,
+running, or awaiting filing after its session deposited. A proposer session is
+running only once its matching phase and session have started, not merely
+because a request is open. A node that is paused, blocked, has a pending command, an active or
 conflicted node restack, a landing intent or a merged or closed PR, or is
 deferred for runtime compatibility gets `optimization.proposal-deferred` with
 that reason instead, and is reconsidered once a fact that can clear it lands.

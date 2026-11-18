@@ -3557,8 +3557,11 @@ proposal request or session needs it; neither owner releases the other’s works
 `optimization.proposal-requested {id, head, room, budgetUsed}` when the
 selector `proposerAdmissible` holds (§15.5). Room is the smaller of the free
 concurrency slots and the remaining attempts budget, and zero once the
-attempts or hours budget is spent. An open request is the fact that a
-proposer session is running, so no second request is made. A node that is
+attempts or hours budget is spent. An open request reserves the node's single
+outstanding proposal round, so no second request is made while it is open; it
+may be waiting for capacity, running, or awaiting filing after deposit. A
+running proposer session is identified by its matching started phase and
+session, not by an open request alone. A node that is
 paused or blocked, has pending commands, has an active or conflicted node
 restack, has a landing intent, has a merged or closed PR, or is deferred for
 runtime compatibility is not requested; the dispatcher instead records

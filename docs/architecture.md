@@ -25,7 +25,11 @@ disagree, the code is authoritative.
    forward. Pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
-   that gate explicitly with `[tickets].proposalState`.
+   that gate explicitly with `[tickets].proposalState` for its own harvest.
+   An optimization node's attempts are the one other path: grooming the
+   node's objective, purpose, budget and stop policy is the dispatch decision
+   for the attempts its proposer files, so within that budget they go
+   straight to Ready. The gate still holds for all other generated work.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## Pipeline
