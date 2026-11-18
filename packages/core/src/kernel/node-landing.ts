@@ -24,6 +24,9 @@ export interface NodeLandingDeps {
   holder: string
   id: string
   stack?: { head: string; parent: string; cycle: string }
+  /** A child of an optimization node lands only the pair it measured: the
+   * reservation's guard (`expected`) must be this baseline exactly. */
+  measured?: { candidate: string; baseline: string }
   eligible: () => Promise<boolean>
 }
 /** Cheap API-only proof, repeated under writer authority before publication. */
@@ -148,6 +151,20 @@ export async function landIntoNode(
         destinationRef: `refs/autobuild/reconcile/${deps.slug}/landing-source`,
       })
       if (candidate !== pr.headSha) return undefined
+      if (
+        deps.measured &&
+        (expected !== deps.measured.baseline || candidate !== deps.measured.candidate)
+      ) {
+        await observeTarget({
+          store,
+          forge,
+          slug: deps.slug,
+          branch: deps.destination,
+          sha: expected,
+          actor: KERNEL,
+        })
+        return undefined
+      }
       const parents = await deps.exec(['git', 'show', '-s', '--format=%P', candidate], {
         cwd: workspacePath,
       })
