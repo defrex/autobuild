@@ -9,6 +9,7 @@ import {
   type DeferralLedger,
 } from '../kernel/auto-merge'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { actionableEscalations } from '../kernel/ticket-wait'
 
 export interface MergeDecision {
   type: 'build.merge-decision'
@@ -43,7 +44,7 @@ export function buildNeedsAttention(events: AbEvent[], state: BuildState): boole
     state.janitor?.attention === true ||
     !!state.targetRewrite ||
     (state.compatibility?.decisiveFacts ?? 0) > 0 ||
-    (state.openEscalations?.length ?? 0) > 0 ||
+    actionableEscalations(state).length > 0 ||
     mergeDecision(events, new Date(0), state) !== null
   )
 }
