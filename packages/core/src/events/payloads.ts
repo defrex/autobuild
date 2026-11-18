@@ -1466,6 +1466,14 @@ export const eventPayloadSchemas = {
     commits: commitRangeSchema,
     artifact: artifactRefSchema,
   }),
+  /** An optimization attempt's implementer found no real gain and declined
+   * (RFC 0005 §6.2). It ends the build unmerged; the dispatcher settles the
+   * attempt `declined` on the node with this reason. */
+  'implement.declined': z.strictObject({
+    round,
+    reason: z.string().trim().min(1).max(4000),
+    artifact: artifactRefSchema.optional(),
+  }),
   'code-review.started': z.strictObject({ round }),
   'code-review.verdict': reviewVerdictPayload,
 

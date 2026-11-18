@@ -1174,6 +1174,189 @@ describe('ab done — implement', () => {
   })
 })
 
+// ── ab done — optimization attempts (RFC 0005 §6.1, §6.2) ───────────────────
+
+describe('ab done — optimization attempts', () => {
+  const NODE = 'opt-node'
+  const target = { ticket: { source: 'linear', id: 'NODE-1' }, build: NODE }
+  const sha = 'a'.repeat(40)
+  let workspace: string
+
+  async function seedAttempt(
+    opts: {
+      objective?: boolean
+      proposal?: { source: string; id: string }
+      migration?: Record<string, string>
+      targeted?: boolean
+    } = {},
+  ) {
+    const { commandObjective } = await import('../kernel/generators/optimization-log')
+    await store.close()
+    store = await seedStore(opts.targeted === false ? {} : { target })
+    await store.createBuild({ slug: NODE, repo: 'acme/app', branch: 'ab-node/opt-node' })
+    await store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: 'acme/app', ticket: target.ticket, baseBranch: 'main', kind: 'node' },
+    })
+    if (opts.objective !== false) {
+      await store.append(NODE, {
+        actor: DISPATCHER,
+        type: 'optimization.objective-accepted',
+        payload: { objective: commandObjective(), revision: 1, harnessPin: sha, specRev: 0 },
+      })
+      await store.append(NODE, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: 'r1',
+          proposals: [
+            {
+              id: 'p1',
+              ticket: opts.proposal ?? { source: 'linear', id: 'ENG-42' },
+              title: 'Index the catalog',
+              strategy: 'add a trigram index',
+            },
+          ],
+        },
+      })
+    }
+    if (opts.migration !== undefined) {
+      await store.ensureRepo('acme/app')
+      await store.appendRepo('acme/app', {
+        actor: humanActor('operator'),
+        type: 'tickets.migration-recorded',
+        payload: {
+          identity: 'file-to-linear',
+          from: 'file',
+          to: 'linear',
+          mapping: opts.migration,
+        },
+      })
+    }
+
+    workspace = join(tmp, 'attempt-ws')
+    await initWorkspaceRepo(workspace)
+    await writeFile(
+      join(workspace, 'autobuild.toml'),
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "ready"\n',
+    )
+    await mkdir(join(workspace, 'bench/search'), { recursive: true })
+    await runGit(['add', 'autobuild.toml'], workspace)
+    const base = await commitFile(workspace, 'bench/search/run.ts', 'measure()\n', 'harness')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'remote', sha: base },
+      },
+    })
+    await initBareOrigin(workspace, join(tmp, 'attempt-origin.git'), BRANCH, base)
+    await store.append(BUILD, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
+  }
+
+  function attemptDeps(): TestDeps {
+    return makeDeps({
+      store,
+      env: makeEnv({ phase: 'implement', round: 1 }),
+      workspacePath: workspace,
+    })
+  }
+
+  async function editHarness(): Promise<void> {
+    await commitFile(workspace, 'feature.ts', 'export const fast = true\n', 'feature')
+    await commitFile(workspace, 'bench/search/run.ts', 'return 0\n', 'tune the ruler')
+  }
+
+  const harnessRefusal =
+    /must not change its harness \(the measurement's ruler\):\n {2}bench\/search\/run\.ts\nRevert these paths/
+
+  test('a contribution touching a harness path is refused before publication, naming it', async () => {
+    await seedAttempt()
+    await editHarness()
+    const deps = attemptDeps()
+    const notes = await stash('notes.md', 'notes\n')
+
+    await expect(done(deps, { notes })).rejects.toThrow(harnessRefusal)
+    expect(deps.forge.pushes).toEqual([])
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+    expect(await eventTypes()).not.toContain('implement.completed')
+
+    await commitFile(workspace, 'bench/search/run.ts', 'measure()\n', 'restore the ruler')
+    const event = await done(deps, { notes })
+    expect(event.type).toBe('implement.completed')
+  })
+
+  test('a node child that is not an attempt may change the same path', async () => {
+    await seedAttempt({ objective: false })
+    await editHarness()
+    const event = await done(attemptDeps(), { notes: await stash('notes.md', 'notes\n') })
+    expect(event.type).toBe('implement.completed')
+  })
+
+  test('--no-improvement declines with a dirty worktree and no commits, once', async () => {
+    await seedAttempt()
+    await writeFile(join(workspace, 'scratch.ts'), 'abandoned\n')
+    const deps = attemptDeps()
+    const event = await done(deps, {
+      noImprovement: '  a trigram index did not beat the btree  ',
+      notes: await stash('notes.md', 'baseline 52.5, candidate 52.4\n'),
+    })
+    expect(event.type).toBe('implement.declined')
+    expect(event.payload).toEqual({
+      round: 1,
+      reason: 'a trigram index did not beat the btree',
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(deps.forge.pushes).toEqual([])
+    expect((await readBuildFacts(store, BUILD)).value.state.declined?.reason).toBe(
+      'a trigram index did not beat the btree',
+    )
+    await expect(done(deps, { noImprovement: 'again' })).rejects.toThrow(
+      /second terminal call rejected \(D5\): implement\.declined for implement@1/,
+    )
+  })
+
+  test('--no-improvement is refused outside an attempt and outside implement', async () => {
+    await seedAttempt({ targeted: false })
+    const before = await eventTypes()
+    await expect(done(attemptDeps(), { noImprovement: 'nothing' })).rejects.toThrow(
+      `ab done --no-improvement is only for optimization attempts: build ${BUILD} is not an attempt of an optimization node`,
+    )
+    await expect(done(planDeps({ round: 1 }), { noImprovement: 'nothing' })).rejects.toThrow(
+      "'--no-improvement' is only valid in implement of an optimization attempt",
+    )
+    await expect(done(attemptDeps(), { noImprovement: '   ' })).rejects.toThrow(/non-empty reason/)
+    expect(await eventTypes()).toEqual(before)
+  })
+
+  test('a proposal recorded before a ticket migration is still the attempt', async () => {
+    await seedAttempt({ proposal: { source: 'file', id: 'F-7' }, migration: { 'F-7': 'ENG-42' } })
+    await editHarness()
+    const notes = await stash('notes.md', 'notes\n')
+    await expect(done(attemptDeps(), { notes })).rejects.toThrow(harnessRefusal)
+    const event = await done(attemptDeps(), { noImprovement: 'no gain' })
+    expect(event.type).toBe('implement.declined')
+  })
+
+  test('unresolvable migration continuity refuses both terminals and appends nothing', async () => {
+    await seedAttempt({ proposal: { source: 'file', id: 'F-7' }, migration: { 'F-8': 'ENG-1' } })
+    await editHarness()
+    const before = await eventTypes()
+    const notes = await stash('notes.md', 'notes\n')
+    await expect(done(attemptDeps(), { notes })).rejects.toThrow(
+      `cannot resolve optimization attempt identity for build ${BUILD}`,
+    )
+    await expect(done(attemptDeps(), { noImprovement: 'no gain' })).rejects.toThrow(
+      `cannot resolve optimization attempt identity for build ${BUILD}`,
+    )
+    expect(await eventTypes()).toEqual(before)
+  })
+})
+
 // ── ab done — finalize (D7: the CLI call IS the kernel plumbing) ─────────────
 
 describe('ab done — finalize', () => {
