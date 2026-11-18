@@ -44,6 +44,8 @@ export const UPGRADE_ROLE = 'upgrade'
 export const HARVEST_ROLE = 'harvest'
 /** The harvest run's review session (src/processes/harvest-runner.ts). */
 export const HARVEST_REVIEW_ROLE = 'harvest-review'
+/** A judge panel's judge session (src/processes/build-runner.ts `runPanel`). */
+export const JUDGE_ROLE = 'judge'
 
 /**
  * Roles the pipeline requests outside the configured phases and steps. These
@@ -52,7 +54,13 @@ export const HARVEST_REVIEW_ROLE = 'harvest-review'
  * from here would become a false "unconsumed" warning, which is the same class
  * of bug this module exists to report.
  */
-export const INTERNAL_ROLES = [SLUG_ROLE, UPGRADE_ROLE, HARVEST_ROLE, HARVEST_REVIEW_ROLE] as const
+export const INTERNAL_ROLES = [
+  SLUG_ROLE,
+  UPGRADE_ROLE,
+  HARVEST_ROLE,
+  HARVEST_REVIEW_ROLE,
+  JUDGE_ROLE,
+] as const
 
 /** The reserved `[roles]` inheritance base (§9). Never reported unconsumed. */
 export const RESERVED_ROLE = 'default'
