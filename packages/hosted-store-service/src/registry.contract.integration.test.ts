@@ -446,6 +446,69 @@ describe('agent tool registry contract', () => {
     expect((empty as RegistryError).body.kind).toBe('validation')
   })
 
+  test('optimization.stop records an operator stop once and refuses builds without an objective', async () => {
+    const world = await seedWorld()
+    const node = async (slug: string) => {
+      await world.store.createBuild({ slug, repo, branch: `ab-node/${slug}` })
+      await world.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo, ticket: { source: 'fake', id: slug }, kind: 'node', baseBranch: 'main' },
+      })
+      await world.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'optimization.objective-accepted',
+        payload: {
+          objective: {
+            purpose: 'faster',
+            metric: {
+              kind: 'command',
+              command: 'bun bench.ts',
+              direction: 'minimize',
+              samples: 3,
+              harness: ['bench/**'],
+            },
+            target: { epsilon: { absolute: 2 } },
+            budget: { maxAttempts: 5 },
+            stop: { mode: 'abort' },
+            proposer: { concurrency: 1 },
+          },
+          revision: 1,
+          harnessPin: 'a'.repeat(40),
+          specRev: 0,
+        },
+      })
+    }
+    await node('opt')
+    await node('opt-drain')
+    expectEqual(await toolFor(world)('optimization.stop', { repo, slug: 'opt' }), {
+      slug: 'opt',
+      cause: 'operator',
+      mode: 'abort',
+    })
+    expect((await world.store.getEvents('opt')).at(-1)).toMatchObject({
+      type: 'optimization.stopped',
+      actor: { kind: 'human' },
+      payload: { cause: 'operator', mode: 'abort' },
+    })
+    expectEqual(
+      await toolFor(world)('optimization.stop', { repo, slug: 'opt-drain', mode: 'drain' }),
+      { slug: 'opt-drain', cause: 'operator', mode: 'drain' },
+    )
+    const again = await toolFor(world)('optimization.stop', { repo, slug: 'opt' }).catch((e) => e)
+    expect(again).toBeInstanceOf(RegistryError)
+    expect((again as RegistryError).body.kind).toBe('conflict')
+    expect(String((again as RegistryError).body.error)).toContain(
+      'already stopped (operator, abort)',
+    )
+    const plain = await toolFor(world)('optimization.stop', { repo, slug: 'demo' }).catch((e) => e)
+    expect(plain).toBeInstanceOf(RegistryError)
+    expect((plain as RegistryError).body.kind).toBe('conflict')
+    expect(
+      (await world.store.getEvents('opt')).filter((e) => e.type === 'optimization.stopped'),
+    ).toHaveLength(1)
+  })
+
   test('builds.control matches the control route for an accepted command', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
@@ -1211,6 +1274,7 @@ describe('agent tool registry contract', () => {
     const inputs: Record<string, unknown> = {
       'builds.restack': { repo, slug: 'demo' },
       'optimization.revise': { repo, slug: 'demo', threshold: 30 },
+      'optimization.stop': { repo, slug: 'demo' },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
       'repository.forge_clear': { repo, forge: 'github', reason: 'override' },

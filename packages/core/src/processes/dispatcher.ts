@@ -156,6 +156,7 @@ import { runNodeTransaction } from '../kernel/node-restack-transaction'
 import { hasBuildTrailer } from '../kernel/build-identity'
 import { digestNodeTargets } from '../store/digest'
 import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
+import { enforceOptimizationStop } from './optimization-stop'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
@@ -2531,7 +2532,9 @@ export class Dispatcher {
     // Only this repo's builds that still have work (§12: another repo's
     // builds are another dispatcher's duty; settled terminal builds cost no
     // event reads).
-    const entries = (await this.repoBuildDigests()).filter(
+    // Unfiltered, so optimization stop enforcement sees terminal attempt builds.
+    const builds = await this.repoBuildDigests()
+    const entries = builds.filter(
       ({ digest }) => isWorkDigest(digest) || digest.integrationAuditPending === true,
     )
     // Receipt reporting requires no forge call, capacity or workspace. Recover
@@ -2573,6 +2576,24 @@ export class Dispatcher {
             (state.pr &&
               state.landing?.command &&
               state.landing.command.seq !== state.landing.acknowledgedSeq)
+          // Every tick, independent of janitor backoff and idle node polling: an
+          // hours budget must fire on a node with no other activity.
+          if (
+            state.optimization !== undefined &&
+            !mixedVersionDeferred(state) &&
+            (await enforceOptimizationStop(
+              {
+                store: this.store,
+                clock: this.deps.clock,
+                migrations: this.store.repositoryFacts().ticketMigrations,
+                ticketSource: this.deps.tickets.name,
+              },
+              record,
+              state,
+              builds,
+            ))
+          )
+            state = (await this.store.buildFacts(record.slug)).state
           // Read the clock only inside an episode, as before episodes could escalate.
           if (!controlDue && previous && !janitorDue(previous, this.deps.clock())) return
           if (mixedVersionDeferred(state)) {
@@ -7012,6 +7033,22 @@ export class Dispatcher {
       return `target node ${ticket.target} is ${state.prState === 'merged' ? 'landed' : 'closed'}`
     if (state.pendingCommands.some((c) => c.command === 'abort'))
       return `target node ${ticket.target} is closing`
+    if (state.optimization?.stopped !== undefined) {
+      const key = (ref: TicketRef) => {
+        try {
+          const resolved = resolveTicketRef(migrations, ref, this.deps.tickets.name)
+          return `${resolved.source}\u0000${resolved.id}`
+        } catch {
+          return `${ref.source}\u0000${ref.id}`
+        }
+      }
+      const wanted = key(ticket.ref)
+      if (
+        optimizationAttempt(state.optimization, ticket.ref, key) !== undefined ||
+        state.optimization.stoppedTickets?.some((ref) => key(ref) === wanted)
+      )
+        return `target optimization node ${ticket.target} has stopped; attempt ${ticket.ref.id} is cancelled`
+    }
     if (state.integration?.intent && !state.integration.landing)
       return `target node ${ticket.target} is merging`
     if (!digest.nodeOpened || !record.branch) return `target node ${ticket.target} is not yet open`
