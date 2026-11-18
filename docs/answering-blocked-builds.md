@@ -68,7 +68,11 @@ branch has moved past the base the build's work sits on, the build first
 restacks onto the target's current head so the resumed phase sees the merged blockers; a conflicting
 restack shows as `reconcile` and resolves first. The phase that declared the
 wait then re-runs at the same round or attempt. Its `guidance.json` carries a
-`wait` block naming the tickets, the reason, and how the wait ended.
+`wait` block naming the tickets, the reason, and how the wait ended. A wait
+declared in a verify step or finalize is the exception when the build
+restacked: verification re-runs from the first step on the new base, at a new
+attempt, before finalize or merge, and the verifier receives the answer as
+guidance without the `wait` block.
 
 If a named ticket is rejected or deleted, the wait can never end by itself.
 The dispatcher then ends it with an ordinary `wait-unresolvable` escalation

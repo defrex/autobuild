@@ -712,7 +712,9 @@ slot ahead of new ticket claims. If its target moved, it first restacks onto the
 target's current head, so the resumed phase sees the merged blockers;
 `ab build status` shows a `restack:` line with trigger `wait-resume`, and a
 conflicting restack shows as `reconcile` before the phase resumes. The phase
-that declared the wait then resumes, told what it waited on. Until the
+that declared the wait then resumes, told what it waited on. A verify or
+finalize wait whose target moved first re-runs every verification step on the
+restacked base before finalize or merge. Until the
 dispatcher accepts a request, the build keeps its slot and `ab build status`
 reports the wait as requested. A wait declared in `implement` first publishes
 the build's commits; if that publication is lost, the wait is refused
