@@ -239,7 +239,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 9 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 10 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -469,7 +469,7 @@ export const buildReadFactsReducer = defineReducer({
       if (event.type === 'reconcile.started')
         acc.reconcileBases[String(event.payload.attempt)] = event.payload.baseSha
       if (event.type === 'workspace.provisioned') acc.firstWorkspace ??= event
-      if (event.type === 'build.abort-requested') acc.latestAbort = event
+      if (event.type === 'build.abort-requested') acc.latestAbort ??= event
       if (event.type === 'abort.ticket-returned' || event.type === 'build.ticket-returned')
         acc.latestTicketReturned = event
       if (event.type === 'build.discard-requested') acc.latestDiscard = event

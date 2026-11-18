@@ -18,6 +18,8 @@ import {
 } from '../objective'
 import type { TicketRef } from '../ontology'
 import { defineReducer } from './incremental'
+export { optimizationCompletionBlocker } from './integration-state'
+import type { BuildState } from './reducer'
 
 /** One proposed attempt that has not settled. Admission caps these at the
  * objective's concurrency, so the list is bounded. */
@@ -88,6 +90,10 @@ export interface OptimizationState {
   /** Consecutive proposals that returned no attempts. */
   emptyProposals: number
   stopped?: { cause: OptimizationStopCause; mode: 'abort' | 'drain'; at: string }
+  /** Tickets of attempts settled `stopped`, which the claim gate refuses.
+   * Bounded: only attempts in flight at the stop settle `stopped`, and
+   * admission caps those at the objective's concurrency. */
+  stoppedTickets?: TicketRef[]
 }
 
 /** The digest accumulator, embedded in BuildAcc. Undefined until the first
@@ -223,6 +229,13 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         }
         state.attempts.rejected += 1
         if (outcome === 'no-improvement' || outcome === 'declined') state.plateau += 1
+        if (outcome === 'stopped') {
+          state.stoppedTickets ??= []
+          if (
+            !state.stoppedTickets.some((ticket) => ticketKey(ticket) === ticketKey(attempt.ticket))
+          )
+            state.stoppedTickets.push(attempt.ticket)
+        }
         break
       }
       case 'optimization.stopped':
@@ -246,7 +259,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 2,
+  version: 3,
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
@@ -294,6 +307,93 @@ export function optimizationStopEligibility(
     budget: budgetCause !== undefined,
     ...(budgetCause !== undefined ? { budgetCause } : {}),
   }
+}
+
+export type OptimizationAutomaticStopCause = Exclude<
+  OptimizationStopCause,
+  'exhausted' | 'operator'
+>
+
+/** The cause the dispatcher records as `optimization.stopped` at `now`, in
+ * precedence threshold, plateau, budget; undefined once the node has
+ * stopped. The effective objective is folded into the digest, so a revised
+ * threshold, budget or plateau applies on the next evaluation. */
+export function optimizationStopCause(
+  state: OptimizationState,
+  now: Date,
+): OptimizationAutomaticStopCause | undefined {
+  if (state.stopped !== undefined) return undefined
+  const eligibility = optimizationStopEligibility(state, now)
+  return eligibility.threshold
+    ? 'threshold'
+    : eligibility.plateau
+      ? 'plateau'
+      : eligibility.budget
+        ? 'budget'
+        : undefined
+}
+
+/** Whether a proposer session may be admitted at `now`. The proposer phase
+ * (RFC 0005 §5.1) must admit through this predicate: it is false once the
+ * node has stopped or any stop cause is eligible, and otherwise requires
+ * attempts-budget room and a free concurrency slot. */
+export function optimizationProposerAdmissible(state: OptimizationState, now: Date): boolean {
+  if (state.stopped !== undefined || optimizationStopCause(state, now) !== undefined) return false
+  const admission = optimizationAdmission(state, now)
+  return admission.attemptRoom !== 0 && admission.slots > 0
+}
+
+/** What the stop enforcer knows about one in-flight attempt's newest build. */
+export interface OptimizationAttemptBuild {
+  slug: string
+  terminal?: 'done' | 'aborted'
+  merged?: boolean
+  /** The build's reduced state; read only for an unmerged build that is not
+   * mid-abort, since abort cleanup ends in `build.completed {abandoned}`. */
+  state?: Pick<
+    BuildState,
+    'status' | 'outcome' | 'currentPhase' | 'lastCompletedPhase' | 'pendingCommands'
+  >
+}
+
+export interface OptimizationStopActions {
+  /** Attempts to settle `stopped`, with the build that ran, if any. */
+  settle: { attempt: InFlightAttempt; build?: string }[]
+  /** Attempt builds to request an abort of. */
+  abort: { slug: string; reason: string }[]
+}
+
+/**
+ * What a stopped node does to its in-flight attempts (RFC 0005 §9.2). Both
+ * modes cancel an attempt that never got a build or never started work; an
+ * aborted build is left to abort cleanup for settlement. Abort mode aborts every running attempt;
+ * drain mode lets a running one finish and face the landing gate. A done or
+ * merged attempt is the landing gate's to settle.
+ */
+export function optimizationStopActions(
+  node: { slug: string; stopped: NonNullable<OptimizationState['stopped']> },
+  attempts: readonly { attempt: InFlightAttempt; build?: OptimizationAttemptBuild }[],
+): OptimizationStopActions {
+  const reason = `optimization node ${node.slug} stopped (${node.stopped.cause}, ${node.stopped.mode})`
+  const actions: OptimizationStopActions = { settle: [], abort: [] }
+  for (const { attempt, build } of attempts) {
+    if (build === undefined) {
+      actions.settle.push({ attempt })
+      continue
+    }
+    // Abort cleanup alone settles builds, from the first request's origin.
+    if (build.terminal === 'aborted' || build.state?.outcome === 'abandoned') continue
+    if (build.terminal === 'done' || build.merged || build.state === undefined) continue
+    const state = build.state
+    if (state.status === 'done' || state.status === 'aborted') continue
+    if (state.pendingCommands.some((command) => command.command === 'abort')) continue
+    const started =
+      state.status === 'running' ||
+      state.currentPhase !== undefined ||
+      state.lastCompletedPhase !== undefined
+    if (node.stopped.mode === 'abort' || !started) actions.abort.push({ slug: build.slug, reason })
+  }
+  return actions
 }
 
 export interface OptimizationAdmission {

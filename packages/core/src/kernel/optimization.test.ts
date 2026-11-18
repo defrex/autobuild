@@ -10,14 +10,21 @@ import {
   isNearMiss,
   optimizationAdmission,
   optimizationAttempt,
+  optimizationCompletionBlocker,
   optimizationElapsedHours,
   optimizationLedgerReducer,
+  optimizationProposerAdmissible,
   optimizationReducer,
   optimizationRejection,
+  optimizationStopActions,
+  optimizationStopCause,
   optimizationStopEligibility,
+  type OptimizationAttemptBuild,
   type OptimizationState,
 } from './optimization'
+import { integrationComplete } from './integration-state'
 import { reduceBuild } from './reducer'
+import { DISPATCHER as DISPATCHER_ACTOR } from '../events/envelope'
 
 const START = Date.parse('2026-11-17T00:00:00Z')
 const at = (hours: number) => new Date(START + hours * 3_600_000)
@@ -417,6 +424,204 @@ describe('pending rejections', () => {
         builder.ticketRejected(state.rejections[0]!.proposal)
       }
     }
+  })
+})
+
+describe('optimization stopping', () => {
+  test('the stop cause follows precedence threshold, plateau, budget', () => {
+    const objective = commandObjective({
+      budget: { maxAttempts: 2, maxHours: 5 },
+      stop: { plateau: { attempts: 1 }, mode: 'abort' },
+    })
+    const builder = new OptimizationLogBuilder().accept(objective, 1).baseline(1, 50, 1)
+    expect(optimizationStopCause(digest(builder), at(0))).toBeUndefined()
+    builder.propose('r', ['a', 'b'])
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('budget')
+    builder.settle('a', 'declined')
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('plateau')
+    builder.settle('b', 'accepted', { revision: 1, baseline: 50, candidate: 39, delta: 11 })
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('threshold')
+    builder.stop('threshold', 'abort')
+    expect(optimizationStopCause(digest(builder), at(0))).toBeUndefined()
+  })
+
+  test('threshold stops in the objective direction', () => {
+    const maximize = commandObjective({
+      metric: { ...commandObjective().metric, direction: 'maximize' } as never,
+    })
+    expect(
+      optimizationStopCause(
+        digest(new OptimizationLogBuilder().accept(maximize, 1).baseline(1, 40, 1)),
+        at(0),
+      ),
+    ).toBe('threshold')
+    expect(
+      optimizationStopCause(
+        digest(new OptimizationLogBuilder().accept(maximize, 1).baseline(1, 39, 1)),
+        at(0),
+      ),
+    ).toBeUndefined()
+    expect(
+      optimizationStopCause(
+        digest(new OptimizationLogBuilder().accept(commandObjective(), 1).baseline(1, 40, 1)),
+        at(0),
+      ),
+    ).toBe('threshold')
+  })
+
+  test('the hours budget fires from the clock alone', () => {
+    const state = digest(
+      new OptimizationLogBuilder().accept(commandObjective({ budget: { maxHours: 2 } }), 1),
+    )
+    expect(optimizationStopCause(state, at(1.9))).toBeUndefined()
+    expect(optimizationStopCause(state, at(2))).toBe('budget')
+  })
+
+  test('a quick revision changes the stop cause on the next evaluation', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective({ budget: { maxAttempts: 3 } }), 1)
+      .baseline(1, 50, 1)
+      .propose('r', ['a', 'b'])
+      .settle('a', 'declined')
+      .settle('b', 'declined')
+    expect(optimizationStopCause(digest(builder), at(0))).toBeUndefined()
+    builder.revise({ threshold: 60 }, 2)
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('threshold')
+    builder.revise({ threshold: 30, plateau: 2 }, 3)
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('plateau')
+    builder.revise({ plateau: 10, maxAttempts: 2 }, 4)
+    expect(optimizationStopCause(digest(builder), at(0))).toBe('budget')
+    builder.revise({ maxAttempts: 20 }, 5)
+    expect(optimizationStopCause(digest(builder), at(0))).toBeUndefined()
+  })
+
+  test('no proposer is admissible after a stop or while a cause is eligible', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective({ budget: { maxAttempts: 3 } }), 1)
+      .baseline(1, 50, 1)
+    expect(optimizationProposerAdmissible(digest(builder), at(0))).toBe(true)
+    builder.revise({ threshold: 60 }, 2)
+    expect(optimizationProposerAdmissible(digest(builder), at(0))).toBe(false)
+    builder.revise({ threshold: 30 }, 3).stop('operator', 'drain')
+    expect(optimizationProposerAdmissible(digest(builder), at(0))).toBe(false)
+    const full = new OptimizationLogBuilder()
+      .accept(commandObjective({ proposer: { concurrency: 1 } }), 1)
+      .baseline(1, 50, 1)
+      .propose('r', ['a'])
+    expect(optimizationProposerAdmissible(digest(full), at(0))).toBe(false)
+  })
+
+  test('stopped settlements fold into the bounded stopped-ticket list', () => {
+    const state = digest(
+      new OptimizationLogBuilder()
+        .accept(commandObjective(), 1)
+        .propose('r', ['a', 'b', 'c'])
+        .stop('operator', 'abort')
+        .settle('a', 'stopped')
+        .settle('b', 'aborted')
+        .settle('c', 'stopped'),
+    )
+    expect(state.stoppedTickets).toEqual([
+      { source: 'file', id: 'T-a' },
+      { source: 'file', id: 'T-c' },
+    ])
+    expect(state.inFlight).toEqual([])
+    expect(state.plateau).toBe(0)
+  })
+
+  const attempt = (id: string) => ({ proposal: id, ticket: { source: 'file', id: `T-${id}` } })
+  const queued = { status: 'queued' as const, pendingCommands: [] }
+  const running = {
+    status: 'running' as const,
+    pendingCommands: [],
+    currentPhase: { phase: 'implement' } as never,
+  }
+  const cases: [string, OptimizationAttemptBuild | undefined, string, string][] = [
+    ['no build', undefined, 'settle', 'settle'],
+    ['a queued build', { slug: 'b', state: queued }, 'abort', 'abort'],
+    ['a running build', { slug: 'b', state: running }, 'abort', 'none'],
+    [
+      'a running build with a pending abort',
+      {
+        slug: 'b',
+        state: {
+          ...running,
+          pendingCommands: [{ command: 'abort', seq: 9, actor: DISPATCHER_ACTOR }],
+        },
+      },
+      'none',
+      'none',
+    ],
+    ['an aborted build', { slug: 'b', terminal: 'aborted' }, 'none', 'none'],
+    [
+      'an abandoned build after abort cleanup',
+      {
+        slug: 'b',
+        terminal: 'done',
+        state: { status: 'done', outcome: 'abandoned', pendingCommands: [] },
+      },
+      'none',
+      'none',
+    ],
+    [
+      'a done build',
+      {
+        slug: 'b',
+        terminal: 'done',
+        state: { status: 'done', outcome: 'closed-unmerged', pendingCommands: [] },
+      },
+      'none',
+      'none',
+    ],
+    ['a merged build', { slug: 'b', merged: true }, 'none', 'none'],
+  ]
+  for (const [name, build, abortMode, drainMode] of cases)
+    test(`stop actions for ${name}: ${abortMode} on abort, ${drainMode} on drain`, () => {
+      for (const [mode, expected] of [
+        ['abort', abortMode],
+        ['drain', drainMode],
+      ] as const) {
+        const actions = optimizationStopActions(
+          { slug: 'node', stopped: { cause: 'operator', mode, at: 'now' } },
+          [{ attempt: attempt('a'), ...(build !== undefined ? { build } : {}) }],
+        )
+        const kind =
+          actions.settle.length > 0 ? 'settle' : actions.abort.length > 0 ? 'abort' : 'none'
+        expect(kind).toBe(expected)
+        if (kind === 'settle')
+          expect(actions.settle[0]).toEqual({
+            attempt: attempt('a'),
+            ...(build !== undefined ? { build: build.slug } : {}),
+          })
+        if (kind === 'abort')
+          expect(actions.abort[0]).toEqual({
+            slug: 'b',
+            reason: `optimization node node stopped (operator, ${mode})`,
+          })
+      }
+    })
+
+  test('completion requires a stop and nothing in flight', () => {
+    const builder = new OptimizationLogBuilder().accept(commandObjective(), 1).propose('r', ['a'])
+    const observation = {
+      observation: {
+        openChildren: [],
+        diagnostics: [],
+        contributions: [{ build: 'c' }],
+      } as never,
+    }
+    const of = () => ({ optimization: digest(builder), integration: observation })
+    expect(optimizationCompletionBlocker({})).toBeUndefined()
+    expect(integrationComplete({ integration: observation })).toBe(true)
+    expect(optimizationCompletionBlocker(of())).toBe('the optimization node has not stopped')
+    expect(integrationComplete(of())).toBe(false)
+    builder.stop('operator', 'drain')
+    expect(optimizationCompletionBlocker(of())).toBe('attempts still in flight: T-a')
+    expect(integrationComplete(of())).toBe(false)
+    builder.settle('a', 'stopped')
+    expect(optimizationCompletionBlocker(of())).toBeUndefined()
+    expect(integrationComplete(of())).toBe(true)
+    expect(integrationComplete({ optimization: digest(builder) })).toBe(false)
   })
 })
 

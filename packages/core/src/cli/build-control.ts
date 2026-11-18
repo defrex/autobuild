@@ -1,3 +1,4 @@
+import { optimizationCompletionBlocker } from '../kernel/optimization'
 import { integrationFailed } from '../kernel/integration-state'
 import {
   candidateHeadMatches,
@@ -185,7 +186,6 @@ async function appendCommand(
   user: string,
   command: BuildControlCommand,
   via?: Via,
-  abort: { to?: AbortDestination; reason?: string } = {},
 ): Promise<BuildControlResult> {
   const actor = humanActor(user, via)
   let event: AbEvent
@@ -208,15 +208,7 @@ async function appendCommand(
       })
       break
     case 'abort':
-      event = await store.append(slug, {
-        actor,
-        type: 'build.abort-requested',
-        payload: {
-          ...(abort.reason !== undefined ? { reason: abort.reason } : {}),
-          ...(abort.to !== undefined ? { to: abort.to } : {}),
-        },
-      })
-      break
+      throw new Error('Abort commands require compare-and-append authorization')
     case 'discard':
       event = await store.append(slug, {
         actor,
@@ -572,10 +564,16 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         )
       return { kind: 'command', slug: opts.slug, command: 'abort', event: existing }
     }
-    return appendCommand(opts.store, opts.slug, user, 'abort', opts.via, {
-      ...(to !== undefined ? { to } : {}),
-      ...(reason !== undefined ? { reason } : {}),
+    const event = await opts.store.appendIfCurrent(opts.slug, state.lastSeq, {
+      actor: humanActor(user, opts.via),
+      type: 'build.abort-requested',
+      payload: {
+        ...(to !== undefined ? { to } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+      },
     })
+    if (event === null) return controlBuild(opts)
+    return { kind: 'command', slug: opts.slug, command: 'abort', event }
   }
 
   activeState(opts.slug, state)
@@ -603,6 +601,19 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         }
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
+          // Stopping an optimization node is not consent, and consent before
+          // the stop names what is missing.
+          const blocker =
+            current.kind === 'node' ? optimizationCompletionBlocker(current) : undefined
+          if (blocker !== undefined)
+            throw new BuildControlError(
+              'node-incomplete',
+              `Node is incomplete (${blocker}); ${
+                current.optimization?.stopped === undefined
+                  ? `stop it with ab objective ${opts.slug} --stop, then run ab merge once it is ready`
+                  : 'run ab merge once its attempts settle and it is ready'
+              }`,
+            )
           const reason = landRefusalReason(current, facts.log.restack)
           if (reason !== undefined)
             throw new BuildControlError(
