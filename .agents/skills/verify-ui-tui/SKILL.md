@@ -42,6 +42,10 @@ the diff and not to decide applicability again.
    versions and commits, plus the rollback event timestamp, as a yellow notice.
    The handoff wide/narrow frames must show both runtimes, mode, deadline and
    `(draining)` beside the independent lifecycle status.
+   The optimization-node wide/detail frames must show the node's objective row
+   legibly: starting → current value, threshold, noise, accepted, rejected and
+   running attempts, and budget, wrapped rather than truncated in the
+   70-column detail.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
    including `headline-happy-wide.png`. Judge the images themselves. The `.txt`
    files are human evidence and may help identify a frame, but they are not a
@@ -86,6 +90,10 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:harvest-suspended-wide:png .ab/dashboard-frames/harvest-suspended-wide.png --attach
    ab artifact put dashboard-frame:harvest-suspended-narrow:text .ab/dashboard-frames/harvest-suspended-narrow.txt --attach
    ab artifact put dashboard-frame:harvest-suspended-narrow:png .ab/dashboard-frames/harvest-suspended-narrow.png --attach
+   ab artifact put dashboard-frame:optimization-node-wide:text .ab/dashboard-frames/optimization-node-wide.txt --attach
+   ab artifact put dashboard-frame:optimization-node-wide:png .ab/dashboard-frames/optimization-node-wide.png --attach
+   ab artifact put dashboard-frame:optimization-node-detail:text .ab/dashboard-frames/optimization-node-detail.txt --attach
+   ab artifact put dashboard-frame:optimization-node-detail:png .ab/dashboard-frames/optimization-node-detail.png --attach
    ab artifact put dashboard-frame:capacity-wide:text .ab/dashboard-frames/capacity-wide.txt --attach
    ab artifact put dashboard-frame:capacity-wide:png .ab/dashboard-frames/capacity-wide.png --attach
    ab artifact put dashboard-frame:native-sessions:text .ab/dashboard-frames/native-sessions.txt --attach
