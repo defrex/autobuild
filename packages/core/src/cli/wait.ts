@@ -1,6 +1,7 @@
 import { readBuildRange, isTerminalEventReadError } from '../store/event-reads'
 import { integrationFailed } from '../kernel/integration-state'
 import { awaitsConsent } from '../kernel/landing-readiness'
+import { actionableEscalations } from '../kernel/ticket-wait'
 import { leafRestackReducer, type LeafRestackState } from '../kernel/leaf-restack-state'
 import { consentReady, consentIdentity } from './attention'
 import { readBuildDigests } from '../store/reduced-reads'
@@ -193,7 +194,9 @@ function attentionFrom(
     : mergeDecisionFromFacts(input.state, input.deferral, new Date(0))
 }
 
-/** Does one condition body hold over a reduction? Attention includes current escalation and merge state. */
+/** Does one condition body hold over a reduction? Attention includes current
+ * escalation and merge state; an open ticket wait's own escalation is not
+ * attention (SPEC §11 "Ticket waits"). */
 function stateSatisfies(
   cond: ConditionBody,
   state: BuildState,
@@ -231,7 +234,7 @@ function stateSatisfies(
         awaitsConsent(state, restack) ||
         !!state.nodeRestack?.conflict ||
         !!(restack.active && restack.replay?.conflicted) ||
-        (state.openEscalations?.length ?? 0) > 0 ||
+        actionableEscalations(state).length > 0 ||
         attentionFrom(events, state) !== null
       )
   }
