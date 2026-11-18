@@ -476,9 +476,15 @@ for (const change of ['hours', 'budget', 'concurrency', 'stopped'] as const)
       await h.dispatcher.tick()
       const events = await h.events(node.slug)
       const withdrawn = ofType(events, 'optimization.proposal-withdrawn')
+      // Spending the hours budget stops the node, and the stop withdraws the request.
       expect(withdrawn.map((event) => event.payload.reason)).toEqual([
-        change === 'hours' ? 'budget' : change,
+        change === 'hours' ? 'stopped' : change,
       ])
+      if (change === 'hours') {
+        const stopped = ofType(events, 'optimization.stopped')
+        expect(stopped.map((event) => event.payload.cause)).toEqual(['budget'])
+        expect(stopped[0]!.seq).toBeLessThan(withdrawn[0]!.seq)
+      }
       expect(ofType(events, 'propose.started')).toHaveLength(0)
       expect(h.launched.some((entry) => entry.slug === node.slug)).toBe(false)
 
