@@ -1223,7 +1223,11 @@ The base-selection invariants make this safe with Git:
   fetched origin tip of the configured base branch (fetched into a
   build-scoped internal ref so concurrent dispatches cannot clobber each
   other or the user's refs). If the remote is unavailable, creation falls
-  back to the local base and records the diagnostic.
+  back to the local base and records the diagnostic. The recorded base is
+  the commit the workspace actually checked out, read back from its HEAD
+  after checkout; a provider that reuses a completed environment from a
+  failed attempt records that environment's checkout, never a target head
+  read separately. A target that moved since is a restack concern.
 - **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
   resumes the published branch. The kernel collapses and restacks at verify
   entry, at a ticket-wait resume, and after target moves while awaiting merge. The first

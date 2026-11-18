@@ -801,7 +801,10 @@ operations fall back to the main checkout when `localPath` is absent.
 `packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
 resumes at the branch tip, so the first provisioning fact remains immutable
-original provenance. A remote workspace lost before its branch is published
+original provenance. Both providers record the verified checked-out commit as
+that base: the worktree's HEAD after creation, and for `vercel-sandbox.ts` the
+guest's HEAD and build branch read back after a fresh checkout or a reuse of a
+completed sandbox. A remote workspace lost before its branch is published
 can be freshly cut again; the latest `remote` or `local` provisioning base is
 the fallback review boundary, while `existing` facts only describe resumes.
 Each implementation terminal in `packages/core/src/cli/terminals.ts` records
