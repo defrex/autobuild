@@ -3232,7 +3232,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it.
+**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it, and the dispatcher moves each attempt that settles other than accepted into it.
 
 **Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default, but required to open an optimization node; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
 
@@ -3305,7 +3305,9 @@ shares its name is an ordinary custom state. `ab ticket move <id> --role
 backlog` (or `rejected`, `triage`, `ready`) moves a ticket by role; a role the
 repository has not configured is refused with the key to set, and a source that
 creates states creates the role state on first use. The dispatcher never claims
-from, moves into, or files proposals into either state. A rejected ticket never
+from, moves into, or files proposals into either state, with one exception: an
+optimization attempt that settles with any outcome but `accepted`, including an
+operator abort, moves to the rejected role instead of triage. A rejected ticket never
 resolves a blocker, even where the source natively counts it complete (a Linear
 `Canceled` state mapped to rejected), and a rejected node child no longer keeps
 its node incomplete. Moving the ticket out of the state restores ordinary

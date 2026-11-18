@@ -297,6 +297,42 @@ describe('reduceBuildDigest pending-work flags', () => {
     expect(pending).toEqual([true, false, true, true, true, false])
   })
 
+  test('rejectionsPending follows non-accepted settlements until their ticket moves', () => {
+    const row = (
+      type: 'attempt.settled' | 'attempt.ticket-rejected' | 'build.completed',
+      seq: number,
+      attemptProposal?: string,
+      attemptOutcome?: DigestEventRow['attemptOutcome'],
+    ): DigestEventRow => ({
+      ...event(type, seq),
+      ...(attemptProposal !== undefined ? { attemptProposal } : {}),
+      ...(attemptOutcome !== undefined ? { attemptOutcome } : {}),
+    })
+    expect(reduceBuildDigest([row('attempt.settled', 1, 'a', 'accepted')]).rejectionsPending).toBe(
+      undefined,
+    )
+    const settled = [
+      row('attempt.settled', 1, 'a', 'declined'),
+      row('attempt.settled', 2, 'b', 'stopped'),
+    ]
+    expect(reduceBuildDigest(settled).rejectionsPending).toBe(true)
+    // Present on a completed node: a post-terminal duty.
+    const done = [...settled, row('build.completed', 3)]
+    expect(reduceBuildDigest(done)).toMatchObject({ terminal: 'done', rejectionsPending: true })
+    const one = [...done, row('attempt.ticket-rejected', 4, 'a')]
+    expect(reduceBuildDigest(one).rejectionsPending).toBe(true)
+    const both = [...one, row('attempt.ticket-rejected', 5, 'b')]
+    expect(reduceBuildDigest(both).rejectionsPending).toBeUndefined()
+    // A duplicate settlement never re-arms a moved ticket twice.
+    expect(
+      reduceBuildDigest([
+        ...settled.slice(0, 1),
+        row('attempt.settled', 2, 'a', 'aborted'),
+        row('attempt.ticket-rejected', 3, 'a'),
+      ]).rejectionsPending,
+    ).toBeUndefined()
+  })
+
   test('neither flag is present for a log without those facts', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
       nodeTargets: [],
@@ -314,7 +350,7 @@ describe('reduceBuildDigest node targets', () => {
   })
 
   test('the version bump re-reduces saved digests that predate node targets', () => {
-    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(13)
+    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(14)
   })
 
   test('collects every named node as a sorted unique set that only grows', () => {

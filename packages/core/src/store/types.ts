@@ -165,6 +165,10 @@ export interface BuildDigest {
   /** The latest `execution.started` has no later `execution.ended` with the
    * same `instance` (the `openExecution` rule). Absent otherwise. */
   executionOpen?: true
+  /** An optimization node has a settled, non-accepted attempt whose ticket
+   * has not moved to the rejected role yet: a post-terminal duty that keeps
+   * a completed node polled, like `reclaimPending`. Absent otherwise. */
+  rejectionsPending?: true
 }
 
 export type RepoTickCompletion =

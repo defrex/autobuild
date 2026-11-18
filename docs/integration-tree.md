@@ -226,6 +226,14 @@ and declined advance the plateau. Stop eligibility is reported, not acted on:
 reading progress never stops the node. See
 [progress](optimization-nodes.md#progress) for the full definitions.
 
+A child of an optimization node lands only with a measurement of its exact head
+against the node's exact current head: an attempt must improve by at least ε,
+and any other child must not regress by more than ε. A sibling landing first
+makes the measurement stale, and the child restacks and is measured again. An
+attempt that does not land settles and its ticket moves to the rejected role,
+including after an operator abort; it never returns to triage. See
+[landing and settlement](optimization-nodes.md#landing-and-settlement).
+
 ### Node verification context
 
 In node `verify:*` context, `nodeVerification` in the manifest identifies the
