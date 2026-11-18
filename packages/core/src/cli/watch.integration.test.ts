@@ -305,14 +305,9 @@ describe('watch attention-set defaults', () => {
     await seeded.createBuild({ slug: 'b1', repo: REPO })
     await seeded.ensureRepo(REPO)
     await seeded.appendRepo(REPO, {
-      actor: KERNEL,
-      type: 'harvest.escalated',
-      payload: {
-        run: 'h1',
-        source: 'agent',
-        reason: 'stalled',
-        observations: [{ build: 'b1', seq: 1 }],
-      },
+      actor: DISPATCHER,
+      type: 'dispatcher.config-rejected',
+      payload: { run: 'r0', error: 'history' },
     })
 
     // Without --repository: nothing from the journal is ever emitted.
@@ -350,8 +345,8 @@ describe('watch attention-set defaults', () => {
           state: unknown
         },
     )
-    // The pre-existing harvest.escalated stays history; the mid-watch tick
-    // failure is the one attention event.
+    // The pre-existing rejection stays history; the mid-watch rejection is
+    // the one attention event.
     expect(records.map((record) => record.event.type)).toEqual(['dispatcher.config-rejected'])
     expect(records[0]).toMatchObject({ build: null, repo: REPO, state: null })
   })
@@ -709,14 +704,9 @@ describe('watch cursor resume', () => {
     await store.ensureRepo(REPO)
     // Pre-existing journal history the watch must never replay.
     await store.appendRepo(REPO, {
-      actor: KERNEL,
-      type: 'harvest.escalated',
-      payload: {
-        run: 'h0',
-        source: 'agent',
-        reason: 'stalled',
-        observations: [{ build: 'b1', seq: 1 }],
-      },
+      actor: DISPATCHER,
+      type: 'dispatcher.config-rejected',
+      payload: { run: 'r0', error: 'history' },
     })
 
     // Run 1: a fresh --repository watch emits nothing, and its final cursor
@@ -3125,6 +3115,11 @@ describe('advisory operator watches', () => {
       await held
       return []
     }
+    // Discovery's listing is what holds the watch's initialization.
+    store.listBuilds = async () => {
+      await held
+      return []
+    }
     let releaseBeat!: () => void
     let delayEntered!: () => void
     let entered = new Promise<void>((resolve) => {
@@ -3716,4 +3711,273 @@ test('kernel Git condition events render as repository attention lines', async (
       null,
     ),
   ).toBe('Kernel Git recovered (git)')
+})
+
+describe('watch announced builds and resumed merge decisions (AUT-1221)', () => {
+  const EXPECTED = { store: `${REPO}/.autobuild`, repo: REPO }
+  const ticketOf = (attempt: string) => ({ source: 'file', id: `T-${attempt}` })
+
+  async function selectCreation(store: MemoryBuildStore, attempt: string, slug: string) {
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt, ticket: ticketOf(attempt), readyState: 'ready', claimedState: 'claimed' },
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt, ticket: ticketOf(attempt), slug },
+    })
+  }
+
+  async function resolveOwned(store: MemoryBuildStore, attempt: string) {
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt, ticket: ticketOf(attempt), outcome: 'owned' },
+    })
+  }
+
+  /** Create a build the way ticket preparation does: announced in the journal,
+   * with `between` landing on the build before its resolution. */
+  async function announceBuild(
+    store: MemoryBuildStore,
+    slug: string,
+    attempt: string,
+    between?: () => Promise<void>,
+  ) {
+    await selectCreation(store, attempt, slug)
+    await seedRunningBuild(store, slug)
+    await between?.()
+    await resolveOwned(store, attempt)
+  }
+
+  const records = (out: string[]) =>
+    out
+      .map((line) => JSON.parse(line) as { id?: string; cursor: string; build?: string })
+      .filter((record) => record.id !== undefined)
+  const finalCursor = (out: string[]) => (JSON.parse(out.at(-1)!) as { cursor: string }).cursor
+
+  test('a build announced mid-watch joins from its first event', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++calls === 1)
+          await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+      },
+    })
+    await abWatch({ ...h.base, timeout: '3' })
+    expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
+  })
+
+  test('discovery defers a listed build still in preparation; it is delivered once', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        calls += 1
+        if (calls === 1) {
+          await selectCreation(store, 'a1', 'late')
+          await seedRunningBuild(store, 'late')
+          await appendEscalation(store, 'late')
+        }
+        if (calls === 3) await resolveOwned(store, 'a1')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '5' })
+    expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
+  })
+
+  test('a build created after a cursor while no watch ran is delivered on resume', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    await seedRunningBuild(store, 'old')
+    await appendEscalation(store, 'old')
+    const first = harness(store, { signal: alreadyAborted() })
+    await abWatch(first.base)
+    expect(records(first.out)).toEqual([])
+    const cursor = finalCursor(first.out)
+
+    await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+    await store.append('late', { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    const resumed = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...resumed.base, since: cursor })
+    // The pre-existing build's history stays baselined; the new build's
+    // escalation is delivered although the build is terminal by now.
+    expect(records(resumed.out).map((record) => record.id)).toEqual(['build:late:2'])
+
+    const again = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...again.base, since: finalCursor(resumed.out) })
+    expect(records(again.out)).toEqual([])
+  })
+
+  test('a selection before the cursor resolves after it through the carried preparations', async () => {
+    const store = makeStore()
+    await selectCreation(store, 'a1', 'late')
+    await seedRunningBuild(store, 'late')
+    const first = harness(store, { signal: alreadyAborted() })
+    await abWatch(first.base)
+    const cursor = finalCursor(first.out)
+    const payload = decodeCursor(cursor, EXPECTED)
+    expect(payload.preparing).toEqual({ a1: { slug: 'late' } })
+    expect(payload.streams).not.toHaveProperty('late')
+
+    await appendEscalation(store, 'late')
+    await resolveOwned(store, 'a1')
+    const resumed = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...resumed.base, since: cursor })
+    expect(records(resumed.out).map((record) => record.id)).toEqual(['build:late:2'])
+
+    // A cursor from a release that carried no preparations cannot resolve the
+    // announcement; discovery baselines the build as before.
+    const { preparing: _preparing, ...legacy } = payload
+    const old = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...old.base, since: encodeCursor(legacy) })
+    expect(records(old.out)).toEqual([])
+    expect(decodeCursor(finalCursor(old.out), EXPECTED).streams.late).toBe(2)
+  })
+
+  test('a named watch never joins announced builds', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++calls === 1)
+          await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+      },
+    })
+    await abWatch({ ...h.base, slugs: ['b1'], repository: true, timeout: '3' })
+    expect(records(h.out).filter((record) => record.build === 'late')).toEqual([])
+  })
+
+  test('an --event filter advances an announced build without records', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        if (++calls === 1)
+          await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+      },
+    })
+    await abWatch({ ...h.base, events: ['phase.failed'], timeout: '3' })
+    expect(records(h.out)).toEqual([])
+    expect(decodeCursor(finalCursor(h.out), EXPECTED).streams.late).toBe(2)
+  })
+
+  test('an announced build outside the retained window fails the resume, never replaying', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    const first = harness(store, { signal: alreadyAborted() })
+    await abWatch(first.base)
+    await announceBuild(store, 'late', 'a1', async () => {
+      for (let i = 0; i < 1001; i++)
+        await store.append('late', { actor: KERNEL, type: 'build.paused', payload: {} })
+    })
+    const resumed = harness(store, { signal: alreadyAborted() })
+    await expect(abWatch({ ...resumed.base, since: finalCursor(first.out) })).rejects.toThrow(
+      'Re-arm without --since',
+    )
+    expect(resumed.out).toEqual([])
+  })
+
+  /** b1 opens PR 7; its gate deferral (seq 4) makes a merge decision due and a
+   * janitor failure (seq 5) follows. */
+  async function appendMergeDecision(store: MemoryBuildStore) {
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 7, url: 'https://example.com/pr/7', headSha: 'abc' } },
+    })
+    await appendGateDeferral(store, 'b1', 7)
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.janitor-failing',
+      payload: { message: 'cleanup failed' },
+    })
+  }
+
+  test('a cursor stopped between an event and its merge decision delivers it once on resume', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await appendMergeDecision(store)
+    // The position a stop leaves when it lands on the deferral's seq before
+    // the observation it makes due: the identity is not yet delivered.
+    const cursor = encodeCursor({
+      ...EXPECTED,
+      v: 1,
+      streams: { b1: 4 },
+      deliveredAttention: [],
+    })
+    const first = harness(store)
+    await abWatch({ ...first.base, slugs: ['b1'], since: cursor, count: 1 })
+    const [observation] = records(first.out) as { observation?: { type: string }; cursor: string }[]
+    expect(observation?.observation?.type).toBe('build.merge-decision')
+    // The backlog after the position is still outstanding.
+    expect(decodeCursor(observation!.cursor, EXPECTED).streams.b1).toBe(4)
+
+    const second = harness(store)
+    await abWatch({ ...second.base, slugs: ['b1'], since: observation!.cursor, count: 1 })
+    expect(records(second.out).map((record) => record.id)).toEqual(['build:b1:5'])
+
+    const third = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...third.base, slugs: ['b1'], since: finalCursor(second.out) })
+    expect(records(third.out)).toEqual([])
+  })
+
+  test('uninterrupted and --count 1 partitioned watches deliver the same records', async () => {
+    const script = async (store: MemoryBuildStore, tick: number) => {
+      if (tick === 1)
+        await announceBuild(store, 'late', 'a1', () => appendEscalation(store, 'late'))
+      if (tick === 2) {
+        await appendEscalation(store, 'b0')
+        await appendMergeDecision(store)
+      }
+    }
+    const prepare = async () => {
+      const store = makeStore()
+      await store.ensureRepo(REPO)
+      await seedRunningBuild(store, 'b0')
+      await seedRunningBuild(store, 'b1')
+      return store
+    }
+
+    const whole = await prepare()
+    let wholeTicks = 0
+    const uninterrupted = harness(whole, { onTick: () => script(whole, ++wholeTicks) })
+    await abWatch({ ...uninterrupted.base, timeout: '4' })
+    const expected = records(uninterrupted.out).map((record) => record.id!)
+    expect(expected).toContain('build:late:2')
+    expect(expected).toContain('build:b0:2')
+    expect(expected.some((id) => id.startsWith('build.merge-decision:'))).toBe(true)
+
+    const parts = await prepare()
+    const start = harness(parts, { signal: alreadyAborted() })
+    await abWatch(start.base)
+    let cursor = finalCursor(start.out)
+    // The same appends land between partitioned runs, in the same order.
+    await script(parts, 1)
+    await script(parts, 2)
+    const delivered: string[] = []
+    for (let run = 0; run < 10; run++) {
+      const part = harness(parts, { signal: alreadyAborted() })
+      await abWatch({ ...part.base, since: cursor, count: 1 })
+      const got = records(part.out)
+      if (got.length === 0) break
+      delivered.push(...got.map((record) => record.id!))
+      cursor = got.at(-1)!.cursor
+    }
+    // Each stream's records arrive in order; streams interleave by read order.
+    expect(delivered.toSorted()).toEqual(expected.toSorted())
+    for (const prefix of ['build:late:', 'build:b0:', 'build:b1:'])
+      expect(delivered.filter((id) => id.startsWith(prefix))).toEqual(
+        expected.filter((id) => id.startsWith(prefix)),
+      )
+  })
 })

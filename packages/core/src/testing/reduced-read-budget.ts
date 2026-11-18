@@ -2401,6 +2401,155 @@ export async function stoppedOwnerWatchReadBudget() {
   }
 }
 
+/**
+ * A no-slug CLI watch follows build announcements (AUT-1221). At 100 and
+ * 100,000 journal events and pre-existing build events: attachment and quiet
+ * passes read no event rows, a build announced mid-watch costs its own rows
+ * and the appended journal rows, and resuming a cursor taken before an
+ * announced build costs that gap — never the pre-existing build's log, which
+ * is neither replayed nor reconstructed client-side.
+ */
+export async function cliWatchDiscoveryReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { manualClock } = await import('./fixed')
+  type Cost = { rows: number; buildRows: number; reducedCalls: number; own?: number }
+  const costs: Record<string, Cost>[] = []
+  for (const length of [100, 100_000]) {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    for (let i = 0; i < length; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('human'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    await store.createBuild({ slug: 'old', repo })
+    await store.append('old', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    for (let i = 1; i < length; i++)
+      await store.append('old', { actor: KERNEL, type: 'build.paused', payload: {} })
+    let attempts = 0
+    const announce = async (build: string) => {
+      const attempt = `attempt-${++attempts}`
+      const ticket = { source: 'fake', id: attempt }
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'ticket-preparation.creation-selected',
+        payload: { attempt, ticket, slug: build },
+      })
+      await store.createBuild({ slug: build, repo })
+      await store.append(build, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+      })
+      for (const id of ['esc_1', 'esc_2'])
+        await store.append(build, {
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: { id, phase: 'implement', round: 1, source: 'agent', question: id },
+        })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'ticket-preparation.resolved',
+        payload: { attempt, ticket, outcome: 'owned' },
+      })
+    }
+    // Served values exist before the watch, as on any running repository.
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    await readBuildDigests(store, repo)
+    await readBuildStreamSeed(store, 'old')
+    const fromStart: string[] = []
+    const getEvents = store.getEvents.bind(store)
+    store.getEvents = async (build, sinceSeq, opts) => {
+      if (build === 'old' && (sinceSeq ?? 0) === 0) fromStart.push(build)
+      return getEvents(build, sinceSeq, opts)
+    }
+    let counter = memoryRepositoryReadCounter(store, repo)
+    const cost = (announced?: string): Cost => ({
+      rows: counter.rows,
+      buildRows: counter.buildRows,
+      reducedCalls: counter.reducedCalls,
+      ...(announced !== undefined ? { own: counter.buildRowsBySlug.get(announced) ?? 0 } : {}),
+    })
+    const sample: Record<string, Cost> = {}
+    const output: string[] = []
+    let tick = 0
+    const watch = (opts: { since?: string; timeout: string; signal?: AbortSignal }) =>
+      abWatch({
+        targetRepo: repo,
+        env: {},
+        exec,
+        storeRef: '/budget',
+        openStore: () => store,
+        json: true,
+        now: clock,
+        stdout: (line) => output.push(line),
+        stderr: (line) => {
+          throw new Error(line)
+        },
+        delay: async () => {
+          clock.advance(1000)
+          tick++
+          if (tick === 1) sample.attach = cost()
+          if (tick === 2) sample.quiet = cost()
+          if (tick === 3) {
+            await announce('late')
+            // The adapter counter wraps only builds that exist when it is made.
+            counter = memoryRepositoryReadCounter(store, repo)
+          }
+          if (tick === 4) sample.announced = cost('late')
+          if (tick === 5) sample.settled = cost()
+          counter.reset()
+        },
+        ...opts,
+      })
+    await watch({ timeout: '6' })
+    const records = output.map((line) => JSON.parse(line) as { id?: string; cursor: string })
+    expect(records.filter((r) => r.id !== undefined).map((r) => r.id)).toEqual([
+      'build:late:2',
+      'build:late:3',
+    ])
+    const cursor = records.at(-1)!.cursor
+
+    // While no watch runs, another build is announced after the cursor.
+    await announce('gap')
+    counter = memoryRepositoryReadCounter(store, repo)
+    output.length = 0
+    await watch({ since: cursor, timeout: '1', signal: AbortSignal.abort() })
+    sample.resume = cost('gap')
+    expect(
+      output
+        .map((line) => JSON.parse(line) as { id?: string })
+        .filter((r) => r.id !== undefined)
+        .map((r) => r.id),
+    ).toEqual(['build:gap:2', 'build:gap:3'])
+
+    // Attachment and quiet passes read no event rows at all.
+    for (const key of ['attach', 'quiet', 'settled']) {
+      expect(sample[key]!.rows).toBe(0)
+      expect(sample[key]!.buildRows).toBe(0)
+    }
+    // The new builds' rows are their own few events; journal rows the gap.
+    expect(sample.announced!.own).toBeGreaterThan(0)
+    expect(sample.announced!.own).toBeLessThanOrEqual(3 * 3)
+    expect(sample.announced!.rows).toBeLessThanOrEqual(2 * 4)
+    expect(sample.resume!.own).toBeGreaterThan(0)
+    expect(sample.resume!.own).toBeLessThanOrEqual(3 * 3)
+    expect(sample.resume!.rows).toBeLessThanOrEqual(2 * 4)
+    // The pre-existing build's log is never read from the start.
+    expect(fromStart).toEqual([])
+    costs.push(sample)
+  }
+  // History-independent: every pass costs the same at both lengths.
+  expect(costs[1]).toEqual(costs[0]!)
+}
+
 /** Fresh operator backends must not turn canonical build history into ticket requests. */
 export async function operatorTicketAssociationBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
