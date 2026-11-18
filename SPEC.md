@@ -4162,7 +4162,10 @@ pushes for local objects. When an environment refuses a non-branch Git push of a
 archive ref (a refusal, not a transient failure), GitHub creates the identical archive
 ref through the same create-only REST call and holds it to the same exact readback; this
 is a transport for the same ref, never a branch or tag, never overwrites an archive, and
-cannot publish a commit that exists only locally, which fails naming both refusals. Exact remote readback confirms publication, then a non-shallow
+cannot publish a commit that exists only locally, which fails naming both refusals.
+Vercel Sandbox workspaces push archives through the guest Git transport for candidate
+recovery, preservation and rewrites; after a refusal the dispatcher makes the same REST
+call with host-held credentials, and the guest's exact readback still decides. Exact remote readback confirms publication, then a non-shallow
 fetch of only that exact archive ref (without tags, configured refmap expansion or a
 depth limit) restores missing commits and their missing ancestry, writes no shallow
 boundary, leaves an already-shallow repository's existing boundaries unchanged, and
@@ -5237,8 +5240,10 @@ polls read no receipts or event rows.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate continues guarded publication.
-A genuinely missing reconcile or automatic restack candidate records
+replay objects first. An available candidate is archived under its exact archive ref,
+with the refused-push fallback where supported, before guarded publication continues.
+A failed archive, including a failed fallback, defers to a later attempt and neither
+proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The

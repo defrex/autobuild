@@ -3339,8 +3339,10 @@ recovery and read-cost bounds.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate continues guarded publication.
-A genuinely missing reconcile or automatic restack candidate records
+replay objects first. An available candidate is archived under its exact archive ref,
+with the refused-push fallback where supported, before guarded publication continues.
+A failed archive, including a failed fallback, defers to a later attempt and neither
+proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
