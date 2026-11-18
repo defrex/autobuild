@@ -18,6 +18,7 @@ export const CORE_PHASES = [
   'code-review',
   'finalize',
   'reconcile',
+  'propose',
 ] as const
 export type CorePhase = (typeof CORE_PHASES)[number]
 
@@ -170,9 +171,45 @@ export const CORE_ARTIFACT_KINDS = [
   'code-review',
   'pr-description',
   'reconcile-notes',
+  'attempts',
   'transcript',
 ] as const
 export type CoreArtifactKind = (typeof CORE_ARTIFACT_KINDS)[number]
+
+// ── Proposals (SPEC §13.1.1) ────────────────────────────────────────────────
+
+const singleLine = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((value) => !/[\r\n]/.test(value), 'must be a single line')
+
+/** One attempt an optimization node's proposer deposits: one strategy, filed
+ * by the dispatcher as a ready ticket targeting the node. The id is the
+ * proposer's stable name for the strategy and never reused within the node. */
+export const proposalSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'kebab-case: lowercase letters, digits and hyphens'),
+  title: singleLine(200),
+  strategy: singleLine(300),
+  body: z.string().min(1),
+})
+export type Proposal = z.infer<typeof proposalSchema>
+
+/** The `attempts` artifact `ab propose` deposits. An empty list carries the
+ * proposer's reason. */
+export const proposalsDocumentSchema = z
+  .strictObject({
+    proposals: z.array(proposalSchema),
+    reason: z.string().min(1).max(4000).optional(),
+  })
+  .refine(
+    (document) => document.proposals.length > 0 || document.reason !== undefined,
+    'an empty proposal requires a reason',
+  )
+export type ProposalsDocument = z.infer<typeof proposalsDocumentSchema>
 
 /** `acceptance` → `verify-report:acceptance` */
 export function verifyReportKind(step: string): string {

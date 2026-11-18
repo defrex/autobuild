@@ -2,6 +2,7 @@ import type { TicketRef } from '../ontology'
 import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
+import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
@@ -22,8 +23,9 @@ export interface CapacityBuild {
 }
 
 /** The runner a node or parked leaf has durably requested and does not yet
- * hold. `resume` is a leaf whose ticket wait ended. */
-export type SlotRequest = 'verification' | 'reconcile' | 'resume'
+ * hold. `resume` is a leaf whose ticket wait ended; `propose` is an
+ * optimization node's open, still eligible proposal request. */
+export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'propose'
 
 export interface DispatchCapacity {
   configured: number
@@ -87,6 +89,33 @@ export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
   )
 }
 
+/** An optimization node's workspace that no work owns: no runner, no open
+ * execution, no proposal, restack or integration intent, and no pause, block
+ * or command holding it. Filing releases the proposer's workspace after its
+ * record clears the proposal; this is the durable condition that recovers a
+ * release the record outlived (a crash, a failed release, a live lease at
+ * filing time). A verification need does not keep it: integration admission
+ * provisions afresh, and a held workspace would withhold that request. */
+export function strandedNodeWorkspace(build: CapacityBuild, now: Date): boolean {
+  const { state } = build
+  return (
+    state.kind === 'node' &&
+    !terminal(state) &&
+    state.optimization !== undefined &&
+    state.optimization.proposal === undefined &&
+    build.workspace &&
+    !runnerAllocated(build, now) &&
+    !executionOpen(state) &&
+    state.status !== 'paused' &&
+    state.status !== 'blocked' &&
+    state.pendingCommands.length === 0 &&
+    (state.compatibility?.decisiveFacts ?? 0) === 0 &&
+    !state.nodeRestack?.active &&
+    !state.nodeRestack?.conflict &&
+    state.integration?.intent === undefined
+  )
+}
+
 /** A finished leaf whose latest verify cycle or finalize has not been settled
  * since: it must re-verify before it waits for its merge decision again. */
 export function epilogueUnsettled(state: BuildState): boolean {
@@ -108,7 +137,12 @@ export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   const { state } = build
   if (terminal(state)) return false
   if (state.kind !== 'node') return !parkedLeaf(build, now)
-  return !!state.nodeRestack?.conflict || (integrationNeedsRunner(state) && allocated(build, now))
+  return (
+    !!state.nodeRestack?.conflict ||
+    (integrationNeedsRunner(state) && allocated(build, now)) ||
+    // A running proposer keeps its slot until it deposits, eligible or not.
+    (proposeRunDue(state.optimization) && allocated(build, now))
+  )
 }
 
 /** A parked leaf's durable request for a runner, or undefined. */
@@ -147,6 +181,10 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
   )
     return undefined
   if (state.nodeRestack?.conflict) return state.openEscalations.length ? undefined : 'reconcile'
+  // A stale request (stopped, spent or shrunk below its room) reserves
+  // nothing; the dispatcher withdraws it. A started session was admitted
+  // already and resumes whatever its eligibility.
+  if (proposeAdmissible(state.optimization, now) || proposeStarted(state)) return 'propose'
   if (integrationAdmissible(state) && integrationNeedsRunner(state)) return 'verification'
   return undefined
 }
@@ -247,8 +285,9 @@ export function dispatchCapacity(
   }
 }
 
-/** Slots left for new ticket claims. A node verification request reserves one
- * slot until the node holds it; a node reconcile request already occupies one.
+/** Slots left for new ticket claims. A node verification or propose request
+ * reserves one slot until the node holds it; a node reconcile request already
+ * occupies one.
  * A parked build's request occupies nothing, so every one reserves a slot.
  * Never more than the configured budget minus occupied builds.
  *
@@ -260,7 +299,7 @@ export function intakeCapacity(
   adjust: { settled?: ReadonlySet<string>; denied?: ReadonlySet<string> } = {},
 ): number {
   const nodes = (capacity.waitingNodes ?? []).filter(
-    (node) => node.request === 'verification',
+    (node) => node.request === 'verification' || node.request === 'propose',
   ).length
   const builds = new Set(
     (capacity.waitingBuilds ?? [])
