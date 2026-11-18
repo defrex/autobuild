@@ -11,7 +11,9 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
-import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { listOperatorTickets } from '@defrex/autobuild/operator'
+import { parseConfig } from '@defrex/autobuild/testing'
 import {
   HostedTicketSource,
   TICKET_ISSUE_LINKS_HEADER,
@@ -22,8 +24,11 @@ import {
   TICKET_REVISIONS_CAPABILITY,
   TicketIssueLinksUnsupported,
   TicketPriorityUnsupported,
+  TICKET_PAGING_HEADER,
+  TICKET_PAGING_CAPABILITY,
 } from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
+import { withPaging } from './testing/paged-fake'
 
 /** Ticket shape/capability fixtures must identify each release with its actual
  * wire protocol, independently of which line is currently installed. */
@@ -57,7 +62,11 @@ function withTargeting(fake: FakeTicketSource): FakeTicketSource {
   })
 }
 
-function harness(backend = withTargeting(new FakeTicketSource([], { doneState: 'Done' }))) {
+function harness(
+  backend: FakeTicketSource = withPaging(
+    withTargeting(new FakeTicketSource([], { doneState: 'Done' })),
+  ),
+) {
   const contexts: unknown[] = []
   const server = createTicketServer({
     secret,
@@ -85,10 +94,14 @@ describeTicketSourceContract('HostedTicketSource (HTTP → FakeTicketSource)', a
   const { source } = harness()
   // Negotiated first, so the contract's targeting check cannot silently skip.
   expect(await source.negotiateTargeting()).toBe(true)
+  // The same response settled paging, so the shared paging fixtures cannot skip.
+  expect(source.listPage).toBeDefined()
   return {
     source,
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'autobuild',
+    // The fake backend files in insertion order, without a clock.
+    filingIntervalMs: 0,
   }
 })
 
@@ -834,4 +847,99 @@ test('a backend without priority support refuses urgent writes with a typed conf
   const stored = await fake.get(plain.ref.id)
   expect(stored?.revision).toBe(plain.revision)
   expect(stored && 'priority' in stored).toBe(false)
+})
+
+test('a remote operator page is newest filed first, or dispatch order, as the service answers it', async () => {
+  const { backend, source } = harness()
+  const operations: string[] = []
+  const recording = new Proxy(source, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target)
+      if (property === 'listPage' && value)
+        return (...args: Parameters<NonNullable<typeof source.listPage>>) => {
+          operations.push('list-page')
+          return value(...args)
+        }
+      if (property === 'listReady')
+        return (...args: Parameters<typeof source.listReady>) => {
+          operations.push('list-ready')
+          return source.listReady(...args)
+        }
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  // Filed A (normal), B (urgent), C (normal).
+  const ids: string[] = []
+  for (const [title, urgent] of [
+    ['A', false],
+    ['B', true],
+    ['C', false],
+  ] as const)
+    ids.push(
+      (
+        await source.create(
+          { title, body: title, ...(urgent ? { priority: 'urgent' as const } : {}) },
+          { state: 'Ready' },
+        )
+      ).ref.id,
+    )
+  expect(await source.negotiateTargeting()).toBe(true)
+  expect(source.listPage).toBeDefined()
+  const config = parseConfig('[tickets]\nsource = "file"\nreadyState = "Ready"\n')
+  const page = (order: 'oldest' | 'newest') =>
+    listOperatorTickets({
+      store: new MemoryBuildStore(),
+      repo: 'repo',
+      state: 'Ready',
+      page: { limit: 3, order },
+      backend: {
+        contextFor: async () => ({ repo: 'repo', tickets: config.tickets, teamKey: 'ENG' }),
+        sourceFor: () => recording,
+        statesFor: () => [],
+      },
+    })
+  const titles = (queue: Awaited<ReturnType<typeof page>>) =>
+    queue.tickets.map((ticket) => ticket.title)
+  const newest = await page('newest')
+  expect(titles(newest)).toEqual(['C', 'B', 'A'])
+  expect(newest.total).toBe(3)
+  expect(titles(await page('oldest'))).toEqual(['B', 'A', 'C'])
+  expect(operations).toEqual(['list-page', 'list-page'])
+  expect((await backend.listReady({})).tickets.map((ticket) => ticket.ref.id)).toEqual(ids)
+})
+
+test('a backend without native paging answers paging-unsupported, with no listing fallback', async () => {
+  let listed = 0
+  const fake = new FakeTicketSource([], { doneState: 'Done' })
+  const plain = Object.assign(Object.create(fake), {
+    listReady: async () => {
+      listed++
+      return { tickets: [], diagnostics: [] }
+    },
+  }) as FakeTicketSource
+  const { server, source } = harness(plain)
+  const response = await server.fetch(
+    new Request('https://tickets.example/tickets/list-page', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        'content-type': 'application/json',
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+      body: JSON.stringify({
+        context: { teamKey: 'ENG' },
+        input: { criteria: {}, page: { limit: 2 } },
+      }),
+    }),
+  )
+  expect(response.status).toBe(409)
+  expect(response.headers.get(TICKET_PAGING_HEADER)).toBe(TICKET_PAGING_CAPABILITY)
+  expect(await response.json()).toMatchObject({ kind: 'conflict', code: 'paging-unsupported' })
+  expect(await source.negotiateTargeting()).toBe(true)
+  await expect(source.listPage!({}, { limit: 2 })).rejects.toMatchObject({
+    name: 'HostedTicketPagingError',
+    code: 'paging-unsupported',
+  })
+  expect(listed).toBe(0)
 })

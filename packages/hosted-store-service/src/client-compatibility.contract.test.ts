@@ -28,8 +28,13 @@ import * as ticketWire from './compatibility-fixtures/tickets-v0.9'
 import * as ticket12 from './compatibility-fixtures/tickets-v0.12'
 import * as ticket13 from './compatibility-fixtures/tickets-v0.13'
 import * as ticket120 from './compatibility-fixtures/tickets-v1.2'
+import { listOperatorTickets } from '@defrex/autobuild/operator'
+import { withPaging } from './testing/paged-fake'
 import {
+  HostedTicketPagingError,
   HostedTicketSource,
+  TICKET_PAGING_HEADER,
+  TICKET_PAGING_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_PRIORITY_HEADER,
   TicketIssueLinksUnsupported,
@@ -883,6 +888,104 @@ test('a current client reports a published server refusing priority with a typed
   expect(read && 'priority' in read).toBe(false)
   expect((await client.listReady({})).tickets.every((ticket) => !('priority' in ticket))).toBe(true)
 })
+
+test('a current client pages through list-ready against a server predating list-page, and fails typed when one disappears', async () => {
+  // Filed A (normal), B (urgent), C (normal).
+  const backend = withPaging(new FakeTicketSource())
+  for (const [title, urgent] of [
+    ['A', false],
+    ['B', true],
+    ['C', false],
+  ] as const)
+    await backend.create(
+      { title, body: 'Body', ...(urgent ? { priority: 'urgent' as const } : {}) },
+      { state: 'Ready' },
+    )
+  const current = createTicketServer({ secret, sourceFor: () => backend })
+  // Emulates a published server: it has no list-page route and never echoes paging.
+  const published = async (req: Request): Promise<Response> => {
+    if (new URL(req.url).pathname === '/tickets/list-page')
+      return Response.json({ kind: 'not-found', error: 'no route' }, { status: 404 })
+    const response = await current.fetch(req)
+    const headers = new Headers(response.headers)
+    headers.delete(TICKET_PAGING_HEADER)
+    return new Response(response.body, { status: response.status, headers })
+  }
+  let serve = published
+  const operations: string[] = []
+  const client = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token,
+    teamKey: 'ENG',
+    fetchFn: (input, init) => {
+      operations.push(new URL(input.toString()).pathname.slice('/tickets/'.length))
+      return serve(new Request(input.toString(), init))
+    },
+  })
+  const config = parseConfig('[tickets]\nsource = "file"\nreadyState = "Ready"\n')
+  const page = (order: 'oldest' | 'newest') =>
+    listOperatorTickets({
+      store: new MemoryBuildStore(),
+      repo: 'repo',
+      state: 'Ready',
+      page: { limit: 2, offset: 1, order },
+      backend: {
+        contextFor: async () => ({ repo: 'repo', tickets: config.tickets, teamKey: 'ENG' }),
+        sourceFor: () => client,
+        statesFor: () => [],
+      },
+    })
+  const titles = (queue: Awaited<ReturnType<typeof page>>) =>
+    queue.tickets.map((ticket) => ticket.title)
+
+  // Construction-style negotiation settles no paging; the fallback is today's.
+  expect(await client.negotiateTargeting()).toBe(true)
+  expect(client.listPage).toBeUndefined()
+  operations.length = 0
+  const oldest = await page('oldest')
+  expect(titles(oldest)).toEqual(['A', 'C'])
+  expect(oldest.total).toBe(3)
+  expect(titles(await page('newest'))).toEqual(['A', 'B'])
+  expect(operations).toEqual(['list-ready', 'list-ready'])
+
+  // A client that saw the echo, then meets the older server, fails the call.
+  serve = current.fetch
+  await client.listStates()
+  expect(client.listPage).toBeDefined()
+  expect(titles(await page('newest'))).toEqual(['B', 'A'])
+  serve = published
+  operations.length = 0
+  const refused = await page('newest').catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(HostedTicketPagingError)
+  expect((refused as HostedTicketPagingError).code).toBe('service-predates')
+  expect(operations).toEqual(['list-page'])
+  expect(client.listPage).toBeUndefined()
+})
+
+// Published clients never send list-page; the new operation and its echo leave
+// their frozen requests and strict decoders untouched.
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} ticket listings are unchanged by list-page`, async () => {
+    const source = withPaging(new FakeTicketSource())
+    await source.create({ title: 'Normal', body: 'Body' }, { state: 'Ready' })
+    await source.create({ title: 'Urgent', body: 'Body', priority: 'urgent' }, { state: 'Ready' })
+    const server = createTicketServer({ secret, sourceFor: () => source })
+    const body = ticket120.hostedTicketRequestSchemas['list-ready'].parse({
+      context: { teamKey: 'ENG' },
+      input: { state: 'Ready' },
+    })
+    const req = request('/tickets/list-ready', version, body, token, publication.protocol!)
+    req.headers.set(ticket120.TICKET_TREE_HEADER, ticket120.TICKET_TREE_CAPABILITY)
+    req.headers.set(ticket120.TICKET_REVISIONS_HEADER, ticket120.TICKET_REVISIONS_CAPABILITY)
+    req.headers.set(ticket120.TICKET_COMMENTS_HEADER, ticket120.TICKET_COMMENTS_CAPABILITY)
+    const response = await server.fetch(req)
+    expect(response.status).toBe(200)
+    expect(response.headers.get(TICKET_PAGING_HEADER)).toBe(TICKET_PAGING_CAPABILITY)
+    const listing = ticket120.ticketListingWireSchema.parse(await response.json())
+    expect(listing.tickets.map((ticket) => ticket.title)).toEqual(['Urgent', 'Normal'])
+  })
+}
 
 // Published protocol-6 clients receive the bounded legacy shapes; the current
 // line's own clients speak protocol 7.
