@@ -72,7 +72,9 @@ export {
   integrationNodePass,
   targetedCompletenessParity,
   ticketListReadBudget,
+  ticketPageReadBudget,
   ticketTargetingReadBudget,
+  type TicketPageFixture,
   type TicketTargetingFixture,
 } from './dispatch-read-budget'
 
