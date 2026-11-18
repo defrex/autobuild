@@ -2171,7 +2171,9 @@ deterministic fail-safe.
      that concrete role's effective primary axes and is resolved and validated
      eagerly with indexed problems in the aggregate startup error.
   4. A **declared** key that nothing ever requests is resolved, validated, and
-     then never used. `ab dispatch` reports it at startup as a warning.
+     then never used. `ab dispatch` reports it at startup as a warning. This
+     includes `[profiles.<name>.roles.<role>]` entries, reported under that
+     header.
 
   Each `args` string is one argv token, preserved in order and appended to
   every phase and tool-free one-shot invocation for that role. Adapters reject
@@ -2247,7 +2249,9 @@ deterministic fail-safe.
   `configured: false`, and `ab build status` says the recorded profile is no
   longer configured. A resumed session keeps its recorded target as before.
   Sessions outside a build (`slug`, `upgrade`, `harvest`, `harvest-review`)
-  never use a profile.
+  never use a profile, so a profile entry on one of those keys is unconsumed.
+  Dispatch applies the unconsumed, deprecated skill-name and `extensions`
+  warnings to profile entries as it does to `[roles]`.
 - **Transcripts come back through the interface**, not scraped from disk, so
   every adapter must produce one whenever its owning runner reaches the session
   end boundary, including turns rejected by a provider after a handle exists.
