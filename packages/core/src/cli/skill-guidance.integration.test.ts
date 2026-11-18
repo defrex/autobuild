@@ -118,3 +118,36 @@ describe('guidance delivery — every receiving phase documents the file', () =>
     ).toEqual([])
   })
 })
+
+/** The blank-line-separated block that opens with the shared bold lead. */
+function optimizationParagraph(content: string): string | undefined {
+  return content
+    .split(/\n\s*\n/)
+    .find((block) => block.trimStart().startsWith('**Optimization nodes.**'))
+}
+
+describe('optimization-node marker guidance', () => {
+  test('ab-spec, ab-tickets and ab-guide state the marker in the same words', () => {
+    const paragraphs = ['ab-spec', 'ab-tickets', 'ab-guide'].map((name) => {
+      const paragraph = optimizationParagraph(byInstallName.get(name)?.content ?? '')
+      expect(paragraph, `${name} has no "Optimization nodes" paragraph`).toBeDefined()
+      return {
+        name,
+        text: paragraph!
+          .replace(/\]\([^)]*\)/g, ']')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      }
+    })
+    for (const { name, text } of paragraphs) {
+      expect(text, name).toContain('`autobuild-objective`')
+      expect(text, name).toBe(paragraphs[0]!.text)
+    }
+  })
+
+  test('the optimization-node reference is delivered in the ab-guide install tree', () => {
+    const reference = guide?.files.find((file) => file.path === 'references/optimization-nodes.md')
+    expect(reference).toBeDefined()
+    expect(reference?.content).toContain('`autobuild-objective`')
+  })
+})

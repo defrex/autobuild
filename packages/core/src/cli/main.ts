@@ -5,6 +5,14 @@ import { currentTicketRef } from '../kernel/ticket-migrations'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
+import { reviseObjective, showObjective } from '../operator/optimization'
+import type { ObjectiveChanges } from '../objective'
+import {
+  OBJECTIVE_FLAGS,
+  OBJECTIVE_USAGE,
+  objectiveChangesFromFlags,
+  renderObjective,
+} from './objective'
 import { withSessionlessStore } from './store-opening'
 import { abLandings } from './landings'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -131,6 +139,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'mcp',
   'repository',
   'restack',
+  'objective',
   'pause',
   'resume',
   'hold',
@@ -1157,6 +1166,47 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       deps.stdout(
         `restack requested for ${result.slug}${result.waiting ? '; waiting for normal safety gates' : ''}`,
       )
+      return 0
+    }
+
+    case 'objective': {
+      const parsed = parseArgs(rest, OBJECTIVE_FLAGS, OBJECTIVE_USAGE)
+      if (parsed.positionals.length !== 1) throw new Error(OBJECTIVE_USAGE)
+      const slug = parsed.positionals[0]!
+      const changes = objectiveChangesFromFlags(parsed)
+      const revising = Object.keys(changes).length > 0
+      if (
+        revising &&
+        deps.processEnv?.AB_SESSION?.trim() &&
+        deps.processEnv?.AB_BUILD?.trim() === slug
+      )
+        throw new Error(
+          'cannot revise a node objective from its own phase session (AB_SESSION/AB_BUILD conflict)',
+        )
+      if (!deps.exec) throw new Error('objective requires an exec seam')
+      const view = await withSessionlessStore(
+        {
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          ...(stringFlag(parsed, 'store') ? { storeRef: stringFlag(parsed, 'store') } : {}),
+          ...(deps.openStore ? { openStore: deps.openStore } : {}),
+        },
+        async ({ store, repo }) => {
+          if (revising)
+            await reviseObjective({
+              store,
+              repo,
+              slug,
+              changes: changes as ObjectiveChanges,
+              user:
+                deps.processEnv?.USER?.trim() || deps.processEnv?.USERNAME?.trim() || 'operator',
+            })
+          return showObjective({ store, repo, slug, now: new Date() })
+        },
+      )
+      if (parsed.flags.get('json') === true) deps.stdout(JSON.stringify(view, null, 2))
+      else deps.stdout(renderObjective(view).join('\n'))
       return 0
     }
 
