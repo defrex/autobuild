@@ -1372,6 +1372,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
 
       /**
+       * Streams still replaying their backlog in `trackBuild`. A remote watch
+       * registers a stream before the replay's read resolves, so a concurrent
+       * launch (discovery's `launchPending`) must not start polling it from
+       * the same position: both readers would deliver the backlog.
+       */
+      const replaying = new Set<string>()
+      /** Remote only: starts a stream's poll task once its replay finished. */
+      let launchTracked: ((stream: Stream) => void) | undefined
+
+      /**
        * Register a build stream over the full event prefix. `resumeSeq` (a
        * cursor position) additionally emits every matching event after it —
        * the backlog that landed while no watch was running. A baseline (the
@@ -1408,13 +1418,18 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // uninterrupted watch would have. The identity deduplicates it.
         if (resumeSeq !== undefined) checkMergeDecision(stream, buildReducer.finish(seed.build))
         if (resumeSeq !== undefined) {
-          const backlog = await readBuildRange(store, slug, resumeSeq)
-          for (const [index, event] of backlog.entries()) {
-            if (halted()) {
-              if (!stop) stream.backlog = backlog.slice(index)
-              break
+          replaying.add(slug)
+          try {
+            const backlog = await readBuildRange(store, slug, resumeSeq)
+            for (const [index, event] of backlog.entries()) {
+              if (halted()) {
+                if (!stop) stream.backlog = backlog.slice(index)
+                break
+              }
+              processBuildEvent(stream, event)
             }
-            processBuildEvent(stream, event)
+          } finally {
+            replaying.delete(slug)
           }
         }
         checkConsent(stream)
@@ -1422,6 +1437,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // check; the identity deduplicates one already delivered.
         if (resumeSeq !== undefined)
           checkMergeDecision(stream, buildReducer.finish(stream.seed.build))
+        if (streams.get(slug) === stream) launchTracked?.(stream)
         return true
       }
 
@@ -1922,6 +1938,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         runner = remoteRunner
 
         const launch = (stream: Stream): void => {
+          // trackBuild launches it once the replay has delivered the backlog.
+          if (stream.kind === 'build' && replaying.has(stream.slug)) return
           const key = stream.kind === 'build' ? stream.slug : REPO_STREAM_KEY
           remoteRunner.launch(
             key,
@@ -1937,6 +1955,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // the in-flight held reads and wakes the gap sleeps.
         opts.signal?.addEventListener('abort', requestStop, { once: true })
 
+        if (!shouldStop) launchTracked = launch
         for (const stream of streams.values()) if (!shouldStop) launch(stream)
 
         if ((slugs.length === 0 || followRepository) && !shouldStop) {

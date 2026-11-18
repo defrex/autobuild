@@ -3773,6 +3773,65 @@ describe('watch announced builds and resumed merge decisions (AUT-1221)', () => 
     expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
   })
 
+  test('remote: a discovery failure during an announced replay never polls the build twice', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    let announced = false
+    let discoveryFailed = false
+    let markReplay!: () => void
+    const replayStarted = new Promise<void>((resolve) => (markReplay = resolve))
+    let releaseReplay!: () => void
+    const replayGate = new Promise<void>((resolve) => (releaseReplay = resolve))
+    let listings = 0
+    const remote = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
+        // The repository stream's first held read observes the announcement.
+        if (prop === 'getRepoEvents')
+          return async (repo: string, sinceSeq?: number, opts?: { waitSeconds?: number }) => {
+            if (opts?.waitSeconds !== undefined && !announced) {
+              announced = true
+              await announceBuild(target, 'late', 'a1', () => appendEscalation(target, 'late'))
+            }
+            return target.getRepoEvents(repo, sinceSeq)
+          }
+        // The announcement's replay read is held until discovery has failed.
+        if (prop === 'getEvents')
+          return async (slug: string, sinceSeq?: number, opts?: { waitSeconds?: number }) => {
+            if (slug === 'late' && opts?.waitSeconds === undefined && !discoveryFailed) {
+              markReplay()
+              await replayGate
+            }
+            return target.getEvents(slug, sinceSeq)
+          }
+        // The periodic discovery pass fails while the replay is in flight;
+        // its unconditional launchPending then sees the registered stream.
+        if (prop === 'listBuilds')
+          return async () => {
+            if (++listings === 2) {
+              await replayStarted
+              discoveryFailed = true
+              throw new Error('listing outage')
+            }
+            return target.listBuilds()
+          }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    const h = harness(store, {
+      openStore: () => remote,
+      // The discovery gap sleep follows launchPending: release the replay then.
+      onTick: () => {
+        if (discoveryFailed) releaseReplay()
+      },
+    })
+    await abWatch({ ...h.base, storeRef: 'https://stores.example.com/ab', timeout: '4' })
+    expect(discoveryFailed).toBe(true)
+    expect(records(h.out).map((record) => record.id)).toEqual(['build:late:2'])
+    expect(h.err.join('\n')).toContain('listing outage')
+  })
+
   test('a failed journal drain defers discovery; the announced build is delivered once', async () => {
     const store = makeStore()
     await store.ensureRepo(REPO)
