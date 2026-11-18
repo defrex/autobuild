@@ -105,9 +105,11 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'optimization.objective-accepted': ['dispatcher', 'kernel'],
   'optimization.objective-revised': ['human'],
   'optimization.baseline-measured': ['kernel', 'dispatcher'],
+  'optimization.noise-exceeded': ['kernel', 'dispatcher'],
   'optimization.proposal-requested': ['dispatcher'],
   'optimization.attempts-proposed': ['dispatcher'],
   'attempt.measurement-requested': ['dispatcher', 'kernel'],
+  'attempt.sampled': ['kernel'],
   'attempt.measured': ['kernel', 'dispatcher'],
   'optimization.progress-measured': ['kernel', 'dispatcher'],
   'attempt.settled': ['dispatcher', 'kernel'],
@@ -302,10 +304,11 @@ export function validateEventWrite(input: {
           escalation.policyCause !== 'dispatch-failure-limit' &&
           escalation.policyCause !== 'execution-no-progress' &&
           escalation.policyCause !== 'publication-retry-limit' &&
-          escalation.policyCause !== 'wait-unresolvable'))
+          escalation.policyCause !== 'wait-unresolvable' &&
+          escalation.policyCause !== 'measurement-failed'))
     ) {
       throw new EventValidationError(
-        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress or policy/publication-retry-limit or policy/wait-unresolvable may be raised outside the kernel',
+        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress or policy/publication-retry-limit or policy/wait-unresolvable or policy/measurement-failed may be raised outside the kernel',
       )
     }
     if (escalation.source === 'policy' && escalation.policyCause === undefined) {

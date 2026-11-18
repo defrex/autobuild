@@ -8,8 +8,9 @@ own work, the rules below leave no room for a false positive and no silent
 fallback in either direction.
 
 This reference is the contract: how the marker is found, the objective schema,
-what refuses an objective, how it is revised, which facts the log records and
-what is derived from them. It ends with grooming guidance.
+what refuses an objective, how a node and its attempts are measured, how the
+objective is revised, which facts the log records and what is derived from
+them. It ends with grooming guidance.
 
 ## The marker
 
@@ -147,6 +148,20 @@ objective, revision 1, a `harnessPin` equal to the node's opening commit, and
 the spec revision it was parsed from. It is recorded before `node.opened`, so an
 opened optimization node always has an accepted objective.
 
+A command node then measures its opening head against itself, with the
+objective's pairing and sample count (see [Measurement](#measurement)), and
+records `optimization.baseline-measured` with the starting value and the noise
+spread. The dispatcher admits that run as it admits a node verification: the
+node takes a runner slot, gets a workspace for the run, and releases it once
+the starting value is recorded.
+
+**Noise check.** When ε, in metric units, is smaller than the measured spread,
+the gate would accept noise. The node records `optimization.noise-exceeded`
+naming both numbers, which `ab watch` reports as attention. The node still
+opens: raise `target.epsilon` with `ab objective`, or raise `metric.samples`
+with a spec revision. A relative ε over a starting value of 0 is 0, so any
+spread exceeds it.
+
 ## Revisions
 
 Two paths change the objective of an open optimization node.
@@ -182,7 +197,9 @@ A refused revision records nothing. After an accepted one, the dispatcher
 records `optimization.objective-accepted` again with the next revision. When the
 metric changed, or the purpose of a panel (judges read it), it pins the harness
 again at the current node head and starts a new ruler: earlier measurements stay
-in history but are never compared with new ones. Otherwise the pin is unchanged.
+in history but are never compared with new ones, and the node measures the new
+pin against itself for a new starting value and noise check. Otherwise the pin
+is unchanged.
 
 A quick revision is never written back to the ticket. `ab ticket show` prints
 the effective objective of an open optimization node and marks each field that
@@ -192,17 +209,78 @@ leaves it invalid, every field is marked.
 `ab ticket tree` labels the ticket `[node, optimization]`, and status labels the
 build `optimization node`.
 
+## Measurement
+
+A measurement compares two heads in one execution, so both sides run on the
+same hardware. A stored number from another machine is never a baseline.
+
+**Pairing.** The measurer makes two detached worktrees, one at the candidate
+and one at the baseline. A round runs the metric command once in each, and
+the rounds alternate which side runs first, so a warming cache or a
+throttling CPU cancels out. There are `samples` rounds. When `[commands].setup`
+is configured, it runs once in each worktree first, because a fresh worktree
+has no installed dependencies.
+
+**Harness pinning.** Before any run, every path matched by `metric.harness` is
+overwritten in both worktrees with its contents at `harnessPin`, and a harness
+file the pin lacks is deleted. A candidate that edits the benchmark, or a
+harness change arriving through a node restack, never moves the ruler.
+Attempts can read and run the harness; they cannot change what counts.
+
+**Output contract.** Each run must exit 0 and print exactly one JSON object
+whose `value` is a finite number, such as `{"value": 41.7}`. Each run, and each
+setup run, has a 30-minute timeout.
+
+**Decision.** The value of a side is the median of its samples. The delta is
+positive for an improvement: `baseline − candidate` when minimizing,
+`candidate − baseline` when maximizing. ε in metric units is the absolute ε,
+or the relative ε times the baseline median's magnitude. A delta of at least ε
+is `improved`; anything less is `no-improvement`. A starting measurement's
+value is the median of all samples, and its spread is the distance between the
+two sides' medians.
+
+**Spread beside every delta.** Each `attempt.measured` carries the node's
+starting spread as `spread`, and `ab watch` prints it next to the delta, such
+as `delta 6 (noise ±0.4)`. The raw per-sample values are deposited as a
+`measurement-samples` artifact referenced by `report`.
+
+**Attempts.** An `attempt.measurement-requested` names the candidate, the
+baseline, the harness pin, the objective revision and the command metric. A
+parked attempt with such a request takes a runner slot as a re-verify does,
+and its runner samples in the attempt's own workspace and records
+`attempt.sampled`. The runner reads only its own build, so the dispatcher
+decides: it reads the node once, checks that the request's revision and
+harness pin are still the node's ruler, and records `attempt.measured` using
+the node's current ε and starting spread. A quick ε revision made while the
+samples ran therefore applies. A request whose ruler or pin was replaced
+while it was sampled records no decision; the attempt needs a fresh request.
+
+**Failures.** None of these record a value or a decision:
+
+- the command exits nonzero, times out, or prints anything other than one
+  JSON object with a numeric `value`;
+- a worktree or setup command fails;
+- a request names no command metric, or its ruler is no longer the node's.
+
+Instead, the build escalates with target `measurement` and policy cause
+`measurement-failed`. The question names the cause, the failing sample and
+the output tail. Answering a runner failure measures again; abort still
+aborts. A refusal of samples taken under a replaced ruler stays refused after
+the answer, because sampling the same request again cannot succeed.
+
 ## Events
 
 | Event | Log | Facts |
 |---|---|---|
 | `optimization.objective-accepted` | node | objective, revision, harnessPin, specRev |
 | `optimization.objective-revised` | node | changes, revision (human) |
-| `optimization.baseline-measured` | node | revision, head, harnessPin, samples, median, spread |
+| `optimization.baseline-measured` | node | revision, head, harnessPin, samples, median, spread, report |
+| `optimization.noise-exceeded` | node | revision, head, harnessPin, median, spread, epsilon, effective ε (advisory) |
 | `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, hours) |
 | `optimization.attempts-proposed` | node | request, proposals (id, ticket, title, strategy), reason when empty |
-| `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision |
-| `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision |
+| `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision, metric |
+| `attempt.sampled` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians, report |
+| `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision, spread, report |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
 | `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
@@ -211,7 +289,10 @@ build `optimization node`.
 `decision` is `improved`, `no-improvement`, `non-regressing` or `regressed`.
 `outcome` is `accepted`, `no-improvement`, `declined`, `stopped` or `aborted`;
 `accepted` and `no-improvement` carry their measurement. `cause` is
-`threshold`, `plateau`, `budget`, `exhausted` or `operator`.
+`threshold`, `plateau`, `budget`, `exhausted` or `operator`. `report`,
+`spread` and a request's `metric` are optional: older facts lack them.
+`attempt.sampled` records samples, never a decision; `attempt.measured` is the
+decision.
 
 A positive delta is an improvement in the objective's direction:
 `baseline − candidate` when minimizing, `candidate − baseline` when maximizing,
@@ -338,7 +419,9 @@ meant to change.
 
 **Choose ε above the noise.** ε is the smallest gain worth landing. Run the
 command several times on the same tree first. If the median moves by more than
-your ε between identical runs, raise ε or `samples`. A relative ε suits
+your ε between identical runs, raise ε or `samples`. The node checks this when
+it opens: its starting measurement raises `optimization.noise-exceeded` when ε
+is below the measured spread. A relative ε suits
 metrics whose scale may change; an absolute ε suits metrics with a natural
 unit. A panel's ε is a win-rate margin above 0.5, such as 0.1.
 

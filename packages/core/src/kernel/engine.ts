@@ -45,6 +45,7 @@ import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer
 import { stalledChains, type FindingChain } from './stall'
 import { pendingWaitRequest, waitGuidance, waitResumeRestackCycle } from './ticket-wait'
 import { leafRestackedBase } from './leaf-restack-state'
+import { baselineMeasurementDue, pendingMeasurementRequest } from './measurement'
 
 // ── The decision contract ────────────────────────────────────────────────────
 
@@ -136,6 +137,18 @@ export type Decision =
     }
   | { kind: 'run-finalize-step'; step: string; action: FinalizeAction }
   | {
+      /** An optimization node's starting measurement: its harness pin against
+       * itself under the current ruler (SPEC §13.1.1). */
+      kind: 'measure-baseline'
+      revision: number
+      harnessPin: string
+    }
+  | {
+      /** A requested paired measurement of an optimization attempt. */
+      kind: 'run-measurement'
+      request: import('../events/payloads').EventPayload<'attempt.measurement-requested'>
+    }
+  | {
       /** Authoritative repeat-conflict observation before policy routing. */
       kind: 'check-reconcile-progress'
       conflictSeq: number
@@ -180,6 +193,12 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     },
     config,
   )
+  // A requested measurement runs only once the pipeline has nothing else to
+  // do, so restack, re-verify and reconcile keep their precedence over it.
+  if (decision.kind === 'wait' && decision.reason === 'awaiting-pr' && state.kind !== 'node') {
+    const request = pendingMeasurementRequest(state)
+    if (request !== undefined) return { kind: 'run-measurement', request }
+  }
   if (
     decision.kind !== 'run-phase' ||
     decision.phase !== 'implement' ||
@@ -323,6 +342,12 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
         reconcile: { attempt },
       }
     }
+    if (baselineMeasurementDue(state))
+      return {
+        kind: 'measure-baseline',
+        revision: state.optimization!.revision,
+        harnessPin: state.optimization!.accepted.harnessPin,
+      }
     const cycle = state.integration?.cycle
     if (!integrationCurrent(state) || cycle?.config !== integrationConfig(config))
       return { kind: 'wait', reason: 'awaiting-pr' }
