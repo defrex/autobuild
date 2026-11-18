@@ -211,6 +211,7 @@ Published clients with a recorded published catalog identity, or without a catal
 identity, receive answers projected onto their
 frozen released contracts in `store/remote/released-reducer-values/` and stamped
 with their released reducer versions, including projection-capable published clients.
+The projection covers both named reducer values and historical stream seeds.
 `reducerValueForClient` omits optional `lastEvent` fields with newer event variants,
 including nested build state, and filters `seenTypes` to known event types while
 preserving canonical cursor, progress, and compatibility facts. An invalid envelope
