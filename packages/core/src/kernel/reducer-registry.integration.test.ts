@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
-import { optimizationLog, panelOptimizationLog } from './generators/optimization-log'
+import {
+  attemptLandingLog,
+  optimizationLog,
+  panelOptimizationLog,
+} from './generators/optimization-log'
 import { describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
 import type { RegisteredReducer } from './reducer-registry'
@@ -783,6 +787,7 @@ function corpora(): unknown[][] {
     })),
     optimizationLog(),
     panelOptimizationLog(),
+    attemptLandingLog(),
     ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
     ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
     ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),
@@ -848,11 +853,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 41,
+        "build": 42,
         "buildDelegation": 1,
-        "buildDigest": 13,
-        "buildReadFacts": 99,
-        "buildStreamSeed": 57,
+        "buildDigest": 14,
+        "buildReadFacts": 100,
+        "buildStreamSeed": 58,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 3,
@@ -882,7 +887,7 @@ describe('reducer registry', () => {
         "openHarvestExecutions": 1,
         "openTick": 1,
         "openWorkspace": 1,
-        "optimization": 1,
+        "optimization": 2,
         "optimizationLedger": 1,
         "pendingPrAttachmentReclaims": 1,
         "phaseFailures": 3,
