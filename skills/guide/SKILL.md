@@ -210,15 +210,16 @@ any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
 they are given reveals which variant is the candidate. A resumed run reuses
-recorded preferences and reruns only judges without one. Nothing runs a panel
-yet: panel attempts are not accepted by win rate, and a panel node records no
-noise check or progress. See
+recorded preferences and reruns only judges without one. An attempt on a
+panel objective is accepted when its win rate against the current node head
+reaches 0.5 + ε; otherwise it settles `no-improvement`. A panel node records
+no noise check or progress yet. See
 [judge panels](references/optimization-nodes.md#judge-panels).
 
 **Optimization landing.** A child of an optimization node lands only with a
 fresh measurement of its exact head against the node's exact current head: an
 attempt must improve by at least ε, any other child must not regress by more
-than ε, and an attempt that edits a harness path escalates instead. Each
+than ε (for a panel, its win rate must reach 0.5 + ε or 0.5 − ε), and an attempt that edits a harness path escalates instead. Each
 attempt settles once. An attempt that does not land, including one an operator
 aborts, has its ticket moved to the rejected role: the one case in which the
 dispatcher moves a ticket there. See

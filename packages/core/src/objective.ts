@@ -204,7 +204,7 @@ export const commandMetricSchema = z.strictObject({
   harness: harnessSchema,
 })
 
-const panelMetricSchema = z
+export const panelMetricSchema = z
   .strictObject({
     kind: z.literal('panel'),
     judges: z.number().int().min(1).max(20),
@@ -219,8 +219,13 @@ const panelMetricSchema = z
       ctx.addIssue({ code: 'custom', path: ['rubric'], message: 'must be inside metric.harness' })
   })
 
-const metricSchema = z.discriminatedUnion('kind', [commandMetricSchema, panelMetricSchema])
+export const objectiveMetricSchema = z.discriminatedUnion('kind', [
+  commandMetricSchema,
+  panelMetricSchema,
+])
+const metricSchema = objectiveMetricSchema
 export type CommandMetric = z.infer<typeof commandMetricSchema>
+export type PanelMetric = z.infer<typeof panelMetricSchema>
 export type ObjectiveMetric = z.infer<typeof metricSchema>
 
 const BUDGET_MISSING = 'set budget.maxAttempts or budget.maxHours'
