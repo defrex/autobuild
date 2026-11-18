@@ -15,7 +15,11 @@ import { markUnmeasuredMerge, settleAttempt } from '../kernel/attempt-settlement
 import { mergedAttemptMeasurement, settlementMeasurement } from '../kernel/landing-measurement'
 import type { BuildState } from '../kernel/reducer'
 import type { BuildDigest, BuildRecord } from '../store/types'
-import { newestAttemptBuild, type OptimizationStopDeps } from './optimization-stop'
+import {
+  attemptTicketKey,
+  newestAttemptBuild,
+  type OptimizationStopDeps,
+} from './optimization-stop'
 
 /**
  * One tick of reconciliation for a node. A merged child whose head was
@@ -39,9 +43,27 @@ export async function reconcileMergedAttempts(
     state.prState === 'closed'
   )
     return false
+  const unmarked = optimization.inFlight.filter((attempt) => attempt.unmeasuredMerge === undefined)
+  if (unmarked.length === 0) return false
+  // A cheap pass first: only a done, merged build of an unmarked attempt's
+  // ticket can make one a candidate.
+  const key = attemptTicketKey(deps)
+  const wanted = new Set(
+    unmarked.flatMap((attempt) => {
+      const wantedKey = key(attempt.ticket)
+      return wantedKey === undefined ? [] : [wantedKey]
+    }),
+  )
+  const any = builds.some(
+    ({ record: build, digest }) =>
+      digest.terminal === 'done' &&
+      digest.merged !== undefined &&
+      build.ticket !== undefined &&
+      wanted.has(key(build.ticket, build.slug) ?? ''),
+  )
+  if (!any) return false
   let wrote = false
-  for (const attempt of optimization.inFlight) {
-    if (attempt.unmeasuredMerge !== undefined) continue
+  for (const attempt of unmarked) {
     const entry = newestAttemptBuild(deps, record.slug, attempt, builds)
     // Before completion the merged path owns the child.
     if (entry?.digest.terminal !== 'done' || entry.digest.merged === undefined) continue

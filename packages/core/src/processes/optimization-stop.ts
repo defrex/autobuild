@@ -46,6 +46,21 @@ function stopDutyApplies(state: BuildState): boolean {
   )
 }
 
+/** The ticket identity attempts and their builds are matched under: the
+ * repository's ticket-migration resolution, undefined when it cannot resolve. */
+export function attemptTicketKey(
+  deps: Pick<OptimizationStopDeps, 'migrations' | 'ticketSource'>,
+): (ref: TicketRef, build?: string) => string | undefined {
+  return (ref, build) => {
+    try {
+      const resolved = resolveTicketRef(deps.migrations, ref, deps.ticketSource, build)
+      return `${resolved.source}\u0000${resolved.id}`
+    } catch {
+      return undefined
+    }
+  }
+}
+
 /**
  * The newest build of one in-flight attempt in `builds`: a build targeting
  * `nodeSlug` whose ticket resolves, under the repository's ticket-migration
@@ -58,14 +73,7 @@ export function newestAttemptBuild(
   attempt: Pick<InFlightAttempt, 'ticket'>,
   builds: readonly { record: BuildRecord; digest: BuildDigest }[],
 ): { record: BuildRecord; digest: BuildDigest } | undefined {
-  const key = (ref: TicketRef, build?: string): string | undefined => {
-    try {
-      const resolved = resolveTicketRef(deps.migrations, ref, deps.ticketSource, build)
-      return `${resolved.source}\u0000${resolved.id}`
-    } catch {
-      return undefined
-    }
-  }
+  const key = attemptTicketKey(deps)
   const wanted = key(attempt.ticket)
   if (wanted === undefined) return undefined
   return builds
