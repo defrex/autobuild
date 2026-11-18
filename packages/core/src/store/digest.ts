@@ -17,6 +17,7 @@ import {
  */
 import type { AbEvent } from '../events/catalog'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
+import type { AttemptOutcome } from '../events/payloads'
 import type { PolicyEscalationCause, TicketRef } from '../ontology'
 import type { BuildDigest, BuildDigestTicketWait } from './types'
 
@@ -46,6 +47,8 @@ export const DIGEST_EVENT_TYPES = [
   'wait.ended',
   'escalation.raised',
   'escalation.answered',
+  'attempt.settled',
+  'attempt.ticket-rejected',
 ] as const
 
 /** The digest-relevant slice of one event row. Adapters ship `hostedSeq` for
@@ -69,6 +72,10 @@ export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
   waitTickets?: TicketRef[]
   /** `escalation.raised`: the policy cause, when one. */
   policyCause?: PolicyEscalationCause
+  /** `attempt.settled` / `attempt.ticket-rejected`: the attempt's proposal. */
+  attemptProposal?: string
+  /** `attempt.settled`: the settlement outcome. */
+  attemptOutcome?: AttemptOutcome
 }
 
 /** The digest-relevant projection of one build's events, in log order.
@@ -104,10 +111,13 @@ export interface DigestAcc {
   waitPending?: true
   /** The entered ticket wait that has not ended. */
   ticketWait?: BuildDigestTicketWait
+  /** An optimization node's settled, non-accepted attempts whose ticket has
+   * not yet moved to the rejected role: proposal ids. */
+  pendingRejections?: string[]
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 13
+export const BUILD_DIGEST_REDUCER_VERSION = 14
 
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */
@@ -194,6 +204,20 @@ export const buildDigestReducer: IncrementalReducer<
         if (event.escalation === acc.ticketWait?.escalation) acc.ticketWait = undefined
       } else if (event.type === 'escalation.raised') {
         if (event.policyCause === 'wait-unresolvable') acc.ticketWait = undefined
+      } else if (event.type === 'attempt.settled') {
+        const proposal = event.attemptProposal
+        if (
+          proposal !== undefined &&
+          event.attemptOutcome !== undefined &&
+          event.attemptOutcome !== 'accepted' &&
+          !acc.pendingRejections?.includes(proposal)
+        )
+          acc.pendingRejections = [...(acc.pendingRejections ?? []), proposal]
+      } else if (event.type === 'attempt.ticket-rejected') {
+        if (acc.pendingRejections !== undefined) {
+          const remaining = acc.pendingRejections.filter((p) => p !== event.attemptProposal)
+          acc.pendingRejections = remaining.length > 0 ? remaining : undefined
+        }
       } else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
       else if (event.type === 'execution.ended') {
         if (acc.openInstance !== null && event.instance === acc.openInstance)
@@ -219,6 +243,7 @@ export const buildDigestReducer: IncrementalReducer<
     nodeTargets,
     waitPending,
     ticketWait,
+    pendingRejections,
   }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
@@ -240,6 +265,7 @@ export const buildDigestReducer: IncrementalReducer<
       ...(openInstance !== null ? { executionOpen: true as const } : {}),
       ...(waitPending ? { waitPending } : {}),
       ...(ticketWait !== undefined ? { ticketWait: structuredClone(ticketWait) } : {}),
+      ...(pendingRejections?.length ? { rejectionsPending: true as const } : {}),
       nodeTargets: [...nodeTargets],
     }
   },
