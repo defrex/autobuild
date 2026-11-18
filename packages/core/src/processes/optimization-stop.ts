@@ -47,6 +47,42 @@ function stopDutyApplies(state: BuildState): boolean {
 }
 
 /**
+ * The newest build of one in-flight attempt in `builds`: a build targeting
+ * `nodeSlug` whose ticket resolves, under the repository's ticket-migration
+ * identity, to the attempt's ticket. A pure scan of the listing the tick
+ * already holds; undefined when no such build exists.
+ */
+export function newestAttemptBuild(
+  deps: Pick<OptimizationStopDeps, 'migrations' | 'ticketSource'>,
+  nodeSlug: string,
+  attempt: Pick<InFlightAttempt, 'ticket'>,
+  builds: readonly { record: BuildRecord; digest: BuildDigest }[],
+): { record: BuildRecord; digest: BuildDigest } | undefined {
+  const key = (ref: TicketRef, build?: string): string | undefined => {
+    try {
+      const resolved = resolveTicketRef(deps.migrations, ref, deps.ticketSource, build)
+      return `${resolved.source}\u0000${resolved.id}`
+    } catch {
+      return undefined
+    }
+  }
+  const wanted = key(attempt.ticket)
+  if (wanted === undefined) return undefined
+  return builds
+    .filter(
+      ({ record: candidate, digest }) =>
+        candidate.ticket !== undefined &&
+        key(candidate.ticket, candidate.slug) === wanted &&
+        digestNodeTargets(digest).includes(nodeSlug),
+    )
+    .sort(
+      (a, b) =>
+        b.record.createdAt.localeCompare(a.record.createdAt) ||
+        b.record.slug.localeCompare(a.record.slug),
+    )[0]
+}
+
+/**
  * One tick of the stop duty for a node. `builds` is the repository's
  * unfiltered build listing, so terminal attempt builds are visible. Returns
  * whether the node's log was written; the caller rereads its facts.
@@ -71,34 +107,10 @@ export async function enforceOptimizationStop(
   }
   if (optimization.inFlight.length === 0) return false
 
-  const key = (ref: TicketRef, build?: string): string | undefined => {
-    try {
-      const resolved = resolveTicketRef(deps.migrations, ref, deps.ticketSource, build)
-      return `${resolved.source}\u0000${resolved.id}`
-    } catch {
-      return undefined
-    }
-  }
-  const newest = (attempt: InFlightAttempt) => {
-    const wanted = key(attempt.ticket)
-    if (wanted === undefined) return undefined
-    return builds
-      .filter(
-        ({ record: candidate, digest }) =>
-          candidate.ticket !== undefined &&
-          key(candidate.ticket, candidate.slug) === wanted &&
-          digestNodeTargets(digest).includes(record.slug),
-      )
-      .sort(
-        (a, b) =>
-          b.record.createdAt.localeCompare(a.record.createdAt) ||
-          b.record.slug.localeCompare(a.record.slug),
-      )[0]
-  }
   const children = new Map<string, BuildState>()
   const attempts: { attempt: InFlightAttempt; build?: OptimizationAttemptBuild }[] = []
   for (const attempt of optimization.inFlight) {
-    const entry = newest(attempt)
+    const entry = newestAttemptBuild(deps, record.slug, attempt, builds)
     if (entry === undefined) {
       attempts.push({ attempt })
       continue

@@ -9,6 +9,7 @@
  * hours against their own clock.
  */
 import type { BuildState } from '../../kernel/reducer'
+import type { PendingCleanupView, UnmeasuredMergeView } from '../../kernel/optimization'
 import type { OptimizationStopCause } from '../../events/payloads'
 
 export interface ObjectiveRow {
@@ -21,7 +22,17 @@ export interface ObjectiveRow {
   threshold?: number
   /** The baseline measurement's spread. */
   noise?: number
-  attempts: { filed: number; accepted: number; rejected: number; running: number }
+  attempts: {
+    filed: number
+    accepted: number
+    rejected: number
+    /** Merged without a landing measurement and released by an operator. */
+    unmeasured: number
+    running: number
+  }
+  /** Running attempts that merged without a landing measurement and hold
+   * their slot until an operator settles them. Present only when > 0. */
+  unmeasuredMerges?: number
   budget: { maxAttempts?: number; maxHours?: number; openedAt: string }
   stopped?: { cause: OptimizationStopCause; mode: 'abort' | 'drain'; at: string }
 }
@@ -42,6 +53,8 @@ export const objectiveVocabulary = {
   accepted: 'accepted',
   rejected: 'rejected',
   running: 'running',
+  mergedUnmeasured: 'merged unmeasured',
+  slotHeld: 'slot held',
   budget: 'budget',
   hours: 'hours',
   stopped: 'stopped',
@@ -64,6 +77,10 @@ export function projectObjectiveRow(state: BuildState): ObjectiveRow | undefined
     ...(objective.target.threshold !== undefined ? { threshold: objective.target.threshold } : {}),
     ...(digest.starting !== undefined ? { noise: digest.starting.spread } : {}),
     attempts: { ...digest.attempts, running: digest.inFlight.length },
+    ...(() => {
+      const held = digest.inFlight.filter((attempt) => attempt.unmeasuredMerge).length
+      return held > 0 ? { unmeasuredMerges: held } : {}
+    })(),
     budget: {
       ...(maxAttempts !== undefined ? { maxAttempts } : {}),
       ...(maxHours !== undefined ? { maxHours } : {}),
@@ -127,6 +144,10 @@ export function objectiveParts(row: ObjectiveRow, elapsedHours: number): string[
       `${v.attempts} ${attempts.accepted} ${v.accepted}`,
       `${attempts.rejected} ${v.rejected}`,
       `${attempts.running} ${v.running}`,
+      ...(attempts.unmeasured > 0 ? [`${attempts.unmeasured} ${v.mergedUnmeasured}`] : []),
+      ...(row.unmeasuredMerges !== undefined
+        ? [`${row.unmeasuredMerges} ${v.mergedUnmeasured} (${v.slotHeld})`]
+        : []),
     ],
     ...(budgetParts.length > 0 ? [[`${v.budget} ${budgetParts[0]}`, ...budgetParts.slice(1)]] : []),
     ...(row.stopped !== undefined
@@ -138,4 +159,31 @@ export function objectiveParts(row: ObjectiveRow, elapsedHours: number): string[
 /** The segments joined for surfaces without a width bound. */
 export function objectiveSegments(row: ObjectiveRow, elapsedHours: number): string[] {
   return objectiveParts(row, elapsedHours).map((parts) => parts.join(' · '))
+}
+
+function unmeasuredReason(merge: UnmeasuredMergeView): string {
+  switch (merge.reason) {
+    case 'absent':
+      return 'no landing measurement was recorded'
+    case 'stale-head':
+      return `its landing measurement measured ${merge.measuredCandidate ?? 'another head'}`
+    case 'unrelated':
+      return 'its latest measurement request belongs to another node'
+    case 'unresolvable':
+      return 'its merged head was never recorded'
+  }
+}
+
+/** One unmeasured merge, as `ab objective` and `ab build status` print it:
+ * which attempt, why its head is unmeasured, and why its slot stays held. */
+export function unmeasuredMergeText(merge: UnmeasuredMergeView): string {
+  const head = merge.sha !== undefined ? `merged ${merge.sha}` : 'has no recorded merged head'
+  return `unmeasured merge: ${merge.proposal} (${merge.build}) ${head}, ${unmeasuredReason(merge)}; holds a concurrency slot until settled with --settle-unmeasured ${merge.proposal} --policy release-unmeasured`
+}
+
+/** One settled attempt's pending branch deletion. */
+export function pendingCleanupText(cleanup: PendingCleanupView): string {
+  const build = cleanup.build !== undefined ? ` (${cleanup.build})` : ''
+  const error = cleanup.error !== undefined ? `: ${cleanup.error}` : ''
+  return `branch cleanup pending: ${cleanup.branch}${build}${error}`
 }

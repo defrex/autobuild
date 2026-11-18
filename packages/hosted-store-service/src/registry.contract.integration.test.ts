@@ -1275,6 +1275,12 @@ describe('agent tool registry contract', () => {
       'builds.restack': { repo, slug: 'demo' },
       'optimization.revise': { repo, slug: 'demo', threshold: 30 },
       'optimization.stop': { repo, slug: 'demo' },
+      'optimization.settle-unmeasured': {
+        repo,
+        slug: 'demo',
+        attempt: 'p1',
+        policy: 'release-unmeasured',
+      },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
       'repository.forge_clear': { repo, forge: 'github', reason: 'override' },

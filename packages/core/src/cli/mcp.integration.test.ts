@@ -77,6 +77,7 @@ test('ab mcp advertises the registry: 30 tools with schemas and annotations', as
     expect(names).toContain('builds.restack')
     expect(names).toContain('optimization.revise')
     expect(names).toContain('optimization.stop')
+    expect(names).toContain('optimization.settle-unmeasured')
     expect(names).toContain('repository.forge_clear')
     expect(names).toContain('landings.list')
     expect(names).toContain('tickets.tree')
