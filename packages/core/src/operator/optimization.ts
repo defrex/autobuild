@@ -2,6 +2,7 @@ import { humanActor, type Via } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
 import type { BuildState } from '../kernel/reducer'
 import {
+  optimizationCompletionBlocker,
   optimizationElapsedHours,
   optimizationStopEligibility,
   type OptimizationState,
@@ -29,6 +30,8 @@ export interface ObjectiveProgress {
   elapsedHours: number
   eligibility: OptimizationStopEligibility
   stopped?: OptimizationState['stopped']
+  /** Once stopped: what still keeps the node from completing, if anything. */
+  completionBlocker?: string
 }
 
 export interface ObjectiveView {
@@ -58,6 +61,12 @@ export function objectiveView(slug: string, state: OptimizationState, now: Date)
       elapsedHours: optimizationElapsedHours(state, now),
       eligibility: optimizationStopEligibility(state, now),
       ...(state.stopped !== undefined ? { stopped: state.stopped } : {}),
+      ...(() => {
+        const blocker = optimizationCompletionBlocker({ optimization: state })
+        return state.stopped !== undefined && blocker !== undefined
+          ? { completionBlocker: blocker }
+          : {}
+      })(),
     },
   }
 }
@@ -70,6 +79,19 @@ function requireOptimization(slug: string, state: BuildState): OptimizationState
   if (state.optimization === undefined)
     refuse(`node "${slug}" is not an optimization node: no objective was accepted`)
   return state.optimization!
+}
+
+function requireRunning(slug: string, state: BuildState, refusal: string): void {
+  if (
+    state.status === 'done' ||
+    state.status === 'aborted' ||
+    state.prState === 'merged' ||
+    state.prState === 'closed'
+  )
+    throw new RouteRefusalError({
+      kind: 'conflict',
+      error: `node "${slug}" is terminal; ${refusal}`,
+    })
 }
 
 /** One `readBuildFacts`: the node's effective objective and progress. */
@@ -87,7 +109,9 @@ export async function showObjective(input: {
 /**
  * Record `optimization.objective-revised` (RFC 0005 §4.3): the knobs that
  * change when to stop, how much to spend or how large a gain must be.
- * Running attempts are unaffected and nothing is replanned.
+ * Running attempts are unaffected and nothing is replanned; the dispatcher
+ * evaluates the revised stop rules on its next tick. A revision after a stop
+ * is recorded but never resumes proposing: a stop is final.
  */
 export async function reviseObjective(input: {
   store: BuildStore
@@ -113,16 +137,7 @@ export async function reviseObjective(input: {
   for (;;) {
     const state = (await readBuildFacts(store, slug)).value.state
     const optimization = requireOptimization(slug, state)
-    if (
-      state.status === 'done' ||
-      state.status === 'aborted' ||
-      state.prState === 'merged' ||
-      state.prState === 'closed'
-    )
-      throw new RouteRefusalError({
-        kind: 'conflict',
-        error: `node "${slug}" is terminal; its objective can no longer be revised`,
-      })
+    requireRunning(slug, state, 'its objective can no longer be revised')
     const effective = objectiveSchema.safeParse(
       applyObjectiveRevisions(optimization.objective, [changes]),
     )
@@ -143,5 +158,40 @@ export async function reviseObjective(input: {
       payload,
     })
     if (event) return { slug, revision: payload.revision, changes }
+  }
+}
+
+/**
+ * Record an operator's `optimization.stopped` (RFC 0005 §9). Without `mode`
+ * the objective's stop mode applies. A stop is recorded once and is final;
+ * it is not merge consent.
+ */
+export async function stopObjective(input: {
+  store: BuildStore
+  repo: string
+  slug: string
+  user: string
+  via?: Via
+  mode?: 'abort' | 'drain'
+}): Promise<{ slug: string; cause: 'operator'; mode: 'abort' | 'drain' }> {
+  const { store, repo, slug } = input
+  await requireRouteBuild(store, repo, slug)
+  for (;;) {
+    const state = (await readBuildFacts(store, slug)).value.state
+    const optimization = requireOptimization(slug, state)
+    requireRunning(slug, state, 'it can no longer be stopped')
+    const stopped = optimization.stopped
+    if (stopped !== undefined)
+      throw new RouteRefusalError({
+        kind: 'conflict',
+        error: `node "${slug}" already stopped (${stopped.cause}, ${stopped.mode}) at ${stopped.at}`,
+      })
+    const mode = input.mode ?? optimization.objective.stop.mode
+    const event = await store.appendIfCurrent(slug, state.lastSeq, {
+      actor: humanActor(input.user, input.via),
+      type: 'optimization.stopped',
+      payload: { cause: 'operator', mode },
+    })
+    if (event) return { slug, cause: 'operator', mode }
   }
 }
