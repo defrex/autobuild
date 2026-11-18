@@ -731,7 +731,9 @@ Entering and leaving a wait (`wait.entered`, `wait.ended`, and the
 `escalation.answered` that ends a wait) are routine, not default-watch
 attention. To see waits begin and end, run a separate diagnostic
 `ab watch --event 'wait.*' --event escalation.answered --json` alongside the
-standing watch. On either dashboard, `r` / RESUME on a waiting build answers
+standing watch. A build waiting only on tickets is not attention either: it
+wakes neither `ab wait --for attention` nor default `ab watch`, so find
+waiting builds through `ab builds`, `ab status` or the dashboards. On either dashboard, `r` / RESUME on a waiting build answers
 the wait and ends it early.
 
 ### Janitor escalation attention

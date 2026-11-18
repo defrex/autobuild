@@ -368,7 +368,8 @@ arming the watch. Named watches still end when every named build is terminal;
 learn their outcomes from status reconciliation at exit.
 
 `ab wait --for attention` is build-only and uses the same build conditions:
-current failed node verification, an open escalation, janitor failure attention,
+current failed node verification, an open escalation other than a ticket wait's
+own, janitor failure attention,
 consent readiness, merge/conflict attention or a merge decision. Current failed
 verification satisfies attention even before its notification is written. Existing conditions return immediately,
 even with `--since`; live and backlog matches ignore routine outcomes and
