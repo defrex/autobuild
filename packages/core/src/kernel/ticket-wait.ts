@@ -2,6 +2,7 @@ import type { ReducedWaitEndCause } from '../events/payloads'
 import type { AnsweredEscalation, BuildState } from './reducer'
 import type { LogIndex } from './log-index'
 import { leafBaseInUse } from './leaf-restack-base'
+import { isVerifyPhase } from '../ontology'
 
 /**
  * Ticket waits (SPEC §11 "Ticket waits"): a phase agent declares with
@@ -158,7 +159,10 @@ export function waitResumeSupersedes(state: BuildState, log: WaitResumeLog): boo
  * declaring phase resumes (SPEC §11 "Ticket waits"), or undefined when none
  * is due: the wait has not ended, the build already resumed, the target has
  * not moved from the base in use, or an open transaction finishes through
- * its own path. The cycle is the wait end's seq. Reads reduced state only. */
+ * its own path. The cycle is the wait end's seq. Without a restack the
+ * declaring phase resumes at its round or attempt; a clean restack after a
+ * verify:* or finalize wait opens a new verify cycle instead (see
+ * `waitResumeReverifies`). Reads reduced state only. */
 export function waitResumeRestackCycle(state: BuildState, log: WaitResumeLog): number | undefined {
   const wait = state.wait
   const target = log.restack.target
@@ -170,6 +174,26 @@ export function waitResumeRestackCycle(state: BuildState, log: WaitResumeLog): n
   if (log.restack.gates[String(cycle)] !== undefined || log.restack.advanced?.cycle === cycle)
     return undefined
   return target.sha !== leafBaseInUse(log) ? cycle : undefined
+}
+
+/** Whether a wait declared from `phase` re-verifies after a clean
+ * wait-resume restack (SPEC §11 "Ticket waits"): verification evidence for
+ * the old base cannot satisfy finalize or landing once a verify:* or
+ * finalize wait resumes onto a moved target. Earlier phases need no
+ * boundary: the code loop's next approval opens a new cycle anyway. */
+export function waitResumeReverifies(phase: string | undefined): boolean {
+  return phase !== undefined && (isVerifyPhase(phase) || phase === 'finalize')
+}
+
+/** A wait-resume `restack.completed` replayed cleanly rather than through
+ * reconcile. A reconcile-linked completion always carries the cycle of the
+ * `reconcile.completed` before it; a clean one carries the wait end's seq,
+ * which never is. Immune to candidate retirement, which rewrites ids. */
+export function cleanWaitResumeCompletion(
+  payload: { trigger: string; cycle: number },
+  lastReconcileCompletedSeq: number,
+): boolean {
+  return payload.trigger === 'wait-resume' && payload.cycle !== lastReconcileCompletedSeq
 }
 
 /** Refused wait requests, shaped as answered guidance so the engine routes
