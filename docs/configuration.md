@@ -2381,7 +2381,11 @@ session or changes which runtime and model run. `kind = "check"` steps start no
 session and so are not a route: naming a role after one does not make it
 consumed. It is reported only when that check step is its sole apparent route —
 a check step named `plan` leaves `[roles.plan]` consumed by the core `plan`
-phase, and nothing is reported.
+phase, and nothing is reported. `[profiles.<name>.roles.<role>]` entries are
+reported the same way, named by their profile table, against the profile's own
+list of valid keys. A profile entry on `slug`, `upgrade`, `harvest` or
+`harvest-review` counts as unconsumed, because those sessions never use a
+profile.
 
 Resolver construction validates `default`, every declared role, and every
 alternate eagerly and aggregates all unknown-runtime and incompatible-model
@@ -2460,7 +2464,10 @@ repository roles and `ab build status` reports the profile as no longer
 configured. Duplicate labels, a blank label, and an entry whose effective
 runtime, model, args or account is invalid are refused at load, by
 `ab init --validate`, and on live reload. Sessions outside a build (`slug`,
-`upgrade`, `harvest`, `harvest-review`) never use a profile.
+`upgrade`, `harvest`, `harvest-review`) never use a profile. As for
+`[roles]`, `ab dispatch` warns at startup for a profile entry nothing requests,
+a deprecated skill-name key, or deprecated `extensions`, naming the
+`[profiles.<name>.roles.<role>]` table to change.
 
 <!-- configuration-reference:profiles -->
 

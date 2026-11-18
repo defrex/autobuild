@@ -1297,6 +1297,10 @@ args = ["--effort", "high"]
 - **Validation.** Duplicate labels, a missing or blank label, and an entry
   whose effective runtime, model, args or account would be refused for a
   `[roles]` entry fail config load, `ab init --validate` and a live reload.
+  Dispatch also warns at startup, never refuses, for a profile entry no build
+  session requests (including `slug`, `upgrade`, `harvest` and
+  `harvest-review`), a deprecated skill-name key, or deprecated `extensions`,
+  naming the `[profiles.<name>.roles.<role>]` table.
 - **Scope.** Sessions outside a build (`slug`, `upgrade`, `harvest`,
   `harvest-review`) never use a profile.
 
