@@ -5,12 +5,13 @@ import { currentTicketRef } from '../kernel/ticket-migrations'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
-import { reviseObjective, showObjective } from '../operator/optimization'
+import { reviseObjective, showObjective, stopObjective } from '../operator/optimization'
 import type { ObjectiveChanges } from '../objective'
 import {
   OBJECTIVE_FLAGS,
   OBJECTIVE_USAGE,
   objectiveChangesFromFlags,
+  objectiveStopFromFlags,
   renderObjective,
 } from './objective'
 import { withSessionlessStore } from './store-opening'
@@ -1173,8 +1174,17 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const parsed = parseArgs(rest, OBJECTIVE_FLAGS, OBJECTIVE_USAGE)
       if (parsed.positionals.length !== 1) throw new Error(OBJECTIVE_USAGE)
       const slug = parsed.positionals[0]!
+      const stopping = objectiveStopFromFlags(parsed)
       const changes = objectiveChangesFromFlags(parsed)
       const revising = Object.keys(changes).length > 0
+      if (
+        stopping !== undefined &&
+        deps.processEnv?.AB_SESSION?.trim() &&
+        deps.processEnv?.AB_BUILD?.trim() === slug
+      )
+        throw new Error(
+          'cannot stop an optimization node from its own phase session (AB_SESSION/AB_BUILD conflict)',
+        )
       if (
         revising &&
         deps.processEnv?.AB_SESSION?.trim() &&
@@ -1193,14 +1203,16 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           ...(deps.openStore ? { openStore: deps.openStore } : {}),
         },
         async ({ store, repo }) => {
-          if (revising)
+          const user =
+            deps.processEnv?.USER?.trim() || deps.processEnv?.USERNAME?.trim() || 'operator'
+          if (stopping !== undefined) await stopObjective({ store, repo, slug, user, ...stopping })
+          else if (revising)
             await reviseObjective({
               store,
               repo,
               slug,
               changes: changes as ObjectiveChanges,
-              user:
-                deps.processEnv?.USER?.trim() || deps.processEnv?.USERNAME?.trim() || 'operator',
+              user,
             })
           return showObjective({ store, repo, slug, now: new Date() })
         },

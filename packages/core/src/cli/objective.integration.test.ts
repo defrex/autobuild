@@ -192,6 +192,46 @@ test('ab objective refuses plain nodes, invalid values, terminal nodes and its o
   await local.close()
 })
 
+test('ab objective --stop records one operator stop with the objective mode or an override', async () => {
+  const slug = await seed({ optimization: true })
+  const own = deps({ AB_SESSION: 'phase', AB_BUILD: slug })
+  expect(await runCli(['objective', slug, '--stop'], own)).toBe(1)
+  expect(own.err.join('\n')).toContain('own phase session')
+  const mixed = deps()
+  expect(await runCli(['objective', slug, '--stop', '--threshold', '1'], mixed)).toBe(1)
+  expect(mixed.err.join('\n')).toContain('cannot be combined with a revision')
+
+  const d = deps()
+  expect(await runCli(['objective', slug, '--stop'], d)).toBe(0)
+  expect(d.out.join('\n')).toContain('  stopped: operator (abort) at ')
+  expect(d.out.join('\n')).toContain('  completion: ready for node verification')
+  const again = deps()
+  expect(await runCli(['objective', slug, '--stop', '--drain'], again)).toBe(1)
+  expect(again.err.join('\n')).toContain('already stopped (operator, abort)')
+
+  const drained = await seed({ optimization: true, slug: 'drained-node' })
+  expect(await runCli(['objective', drained, '--stop', '--drain'], deps())).toBe(0)
+
+  const plain = await seed({ optimization: false, slug: 'plain-node' })
+  const refused = deps()
+  expect(await runCli(['objective', plain, '--stop'], refused)).toBe(1)
+  expect(refused.err.join('\n')).toContain('not an optimization node')
+
+  const local = openLocalStore(storeRef)
+  const stops = async (build: string) =>
+    (await local.getEvents(build)).filter((event) => event.type === 'optimization.stopped')
+  expect(await stops(slug)).toMatchObject([
+    {
+      actor: { kind: 'human', user: 'cli-op' },
+      payload: { cause: 'operator', mode: 'abort' },
+    },
+  ])
+  expect((await stops(drained)).map((event) => event.payload)).toEqual([
+    { cause: 'operator', mode: 'drain' },
+  ])
+  await local.close()
+})
+
 test('ab ticket show prints the effective objective and marks fields revised since the ticket block', async () => {
   const slug = await seed({ optimization: true })
   expect(await runCli(['objective', slug, '--threshold', '35'], deps())).toBe(0)
