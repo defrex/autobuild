@@ -8,6 +8,7 @@ import { reportIntegrationFailures } from '../packages/core/src/kernel/integrati
 import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
 import { handoffCapture } from './handoff-capture'
 import { parkedSlotWaitCapture } from './parked-slot-wait-capture'
+import { OPTIMIZATION_NODE_SLUG, optimizationNodeCapture } from './optimization-node-capture'
 import { ticketWaitCapture, ticketWaitSlug } from './ticket-wait-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
@@ -67,6 +68,8 @@ export interface FrameSpec {
   rollback?: boolean
   handoff?: boolean
   parkedSlotWait?: boolean
+  /** Put a running optimization node, with its objective row, first in the list. */
+  optimizationNode?: boolean
   /** Park one running row on a ticket wait beside the blocked row; `detail`
    * opens that row's detail view. */
   ticketWait?: 'list' | 'detail'
@@ -326,6 +329,34 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'repair child',
       'ready to merge into',
     ],
+  },
+  {
+    id: 'optimization-node-wide',
+    scenario: 'integration',
+    columns: 140,
+    rows: 80,
+    optimizationNode: true,
+    requires: [
+      'OPT-1',
+      OPTIMIZATION_NODE_SLUG,
+      'objective 50 → 44 (minimize)',
+      'threshold 35',
+      'noise ±1.6',
+      '1 accepted',
+      '1 rejected',
+      '2 running',
+      'budget 4/60 attempts',
+      '6.0/24 hours',
+    ],
+  },
+  {
+    id: 'optimization-node-detail',
+    scenario: 'integration',
+    columns: 70,
+    rows: 60,
+    optimizationNode: true,
+    detail: { slug: OPTIMIZATION_NODE_SLUG, scroll: 0 },
+    requires: ['Objective', '50 → 44', '(minimize)', 'threshold 35', '2 running', '6.0/24 hours'],
   },
 
   {
@@ -1966,7 +1997,9 @@ async function capturePaint(
                 ? parkedSlotWaitCapture(model)
                 : spec.ticketWait
                   ? ticketWaitCapture(model)
-                  : model
+                  : spec.optimizationNode
+                    ? optimizationNodeCapture(model, harness.config)
+                    : model
       const ticketWaitDetail = spec.ticketWait === 'detail' ? ticketWaitSlug(model) : undefined
       const presented = {
         ...sourceModel,
@@ -2240,6 +2273,8 @@ export async function captureDashboardFrames(
         '- [ ] The session-closed frame shows the closed view: the withheld-row',
         '      count, the truncation marker, the error line, and the',
         '      Stream closed: completed outcome line.',
+        "- [ ] The optimization-node frames show the objective row under the node's integration bar",
+        '      (wide) and the wrapped Objective field (detail, 70 columns) without truncation.',
         '',
       ].join('\n'),
     )
