@@ -1,6 +1,6 @@
 import type { AbEvent } from '../events/catalog'
 import type { Phase } from '../ontology'
-import { phaseSpecFor } from './phases'
+import { isPhaseTerminalEvent, phaseSpecFor } from './phases'
 
 export interface ReadDeferral {
   session: string
@@ -58,7 +58,7 @@ export function foldReadDeferrals(acc: ReadDeferralsAcc, events: readonly AbEven
         event.actor.kind === 'kernel' ||
         (event.actor.kind === 'agent' && event.actor.session === id)
       const completion =
-        event.type === phaseSpecFor(session.phase).terminalEvent &&
+        isPhaseTerminalEvent(phaseSpecFor(session.phase), event) &&
         (event.type !== 'verify.completed' || session.phase === `verify:${event.payload.step}`) &&
         (!('round' in event.payload) || event.payload.round === session.round) &&
         (!('attempt' in event.payload) || event.payload.attempt === session.round)

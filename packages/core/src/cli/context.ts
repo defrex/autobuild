@@ -53,6 +53,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore } from '../store/types'
 import { writeAssetTo } from './ticket-assets'
 import type { CliEnv } from './env'
+import { readAttemptContext, type AttemptContext } from './attempt'
 
 export interface ContextDeps {
   store: BuildStore
@@ -135,6 +136,25 @@ export interface ContextManifest {
   feedback?: Feedback
   /** Chains a human resolved via dismiss-finding — the reviewer is told so (§15.6-B). */
   dismissedFindingIds?: string[]
+  /** An optimization attempt's objective (RFC 0005 §6.1), rendered at `path`
+   * (workspace-relative `objective.md`). Every phase of an attempt gets it. */
+  attempt?: {
+    node: string
+    proposal: string
+    revision: number
+    purpose: string
+    metric: {
+      kind: 'command' | 'panel'
+      command?: string
+      direction?: 'minimize' | 'maximize'
+      samples?: number
+      judges?: number
+      rubric?: string
+    }
+    harness: string[]
+    current?: number
+    path: string
+  }
 }
 
 function requiredKinds(spec: PhaseSpec, phase: Phase): string[] {
@@ -470,6 +490,46 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     await writeArtifact('spec.md', 'spec', state.specRev)
   }
 
+  // An optimization attempt's objective, for every phase: reviewers need the
+  // purpose as much as the implementer does. One served node read; none for
+  // a build without a target.
+  const created = events.created
+  if (created?.type === 'build.created') {
+    const attempt = await readAttemptContext(store, {
+      slug: build,
+      state,
+      repo: created.payload.repo,
+      ticket: created.payload.ticket,
+      ticketSource: async () =>
+        (await loadWorkspaceConfig(workspacePath, 'an optimization attempt')).tickets.source,
+    })
+    if (attempt !== undefined) {
+      const path = await writeDerived('objective.md', objectiveDocument(attempt))
+      const { objective } = attempt.optimization
+      const metric = objective.metric
+      manifest.attempt = {
+        node: attempt.node,
+        proposal: attempt.attempt.proposal,
+        revision: attempt.optimization.revision,
+        purpose: objective.purpose,
+        metric:
+          metric.kind === 'command'
+            ? {
+                kind: 'command',
+                command: metric.command,
+                direction: metric.direction,
+                samples: metric.samples,
+              }
+            : { kind: 'panel', judges: metric.judges, rubric: metric.rubric },
+        harness: [...metric.harness],
+        ...(attempt.optimization.current !== undefined
+          ? { current: attempt.optimization.current }
+          : {}),
+        path,
+      }
+    }
+  }
+
   // The plan a phase sees is the rev cited by the latest `plan.completed`
   // (D5: the terminal validates and cites this round's deposit). For
   // 'approved' inputs the engine only advances past the plan loop on an
@@ -732,15 +792,12 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
 
   if (inputs.stepConfig === true && isVerifyPhase(phase)) {
     const step = verifyStep(phase)
-    const tomlPath = join(workspacePath, 'autobuild.toml')
-    const file = Bun.file(tomlPath)
-    if (!(await file.exists())) {
-      throw new Error(
-        `verify:${step} needs its step config, but ${tomlPath} does not exist — ` +
-          'autobuild.toml declares [verify.<step>] tables (SPEC §16.1)',
-      )
-    }
-    const config = parseConfig(await file.text(), tomlPath)
+    const config = await loadWorkspaceConfig(
+      workspacePath,
+      `verify:${step}`,
+      'its step config',
+      'autobuild.toml declares [verify.<step>] tables (SPEC §16.1)',
+    )
     const stepConfig = config.verify.stepConfigs[step]
     if (stepConfig === undefined) {
       const known = Object.keys(config.verify.stepConfigs)
@@ -793,4 +850,70 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
   return manifest
+}
+
+async function loadWorkspaceConfig(
+  workspacePath: string,
+  who: string,
+  what = 'its ticket source',
+  why = 'the ticket source resolves attempt identity (RFC 0005 §6.1)',
+) {
+  const tomlPath = join(workspacePath, 'autobuild.toml')
+  const file = Bun.file(tomlPath)
+  if (!(await file.exists()))
+    throw new Error(`${who} needs ${what}, but ${tomlPath} does not exist — ${why}`)
+  return parseConfig(await file.text(), tomlPath)
+}
+
+function formatValue(value: number | undefined): string {
+  return value === undefined ? 'not measured yet' : String(value)
+}
+
+/** The derived `objective.md`: what the attempt optimizes and why. */
+function objectiveDocument(attempt: AttemptContext): string {
+  const { optimization } = attempt
+  const { objective } = optimization
+  const metric = objective.metric
+  const lines = [
+    `# Objective: node ${attempt.node}, revision ${optimization.revision}`,
+    '',
+    `This build is attempt \`${attempt.attempt.proposal}\` of the optimization node.`,
+    '',
+    '## Purpose',
+    '',
+    objective.purpose.trim(),
+    '',
+    '## Measurement',
+    '',
+    ...(metric.kind === 'command'
+      ? [
+          `- command: \`${metric.command}\``,
+          `- direction: ${metric.direction}`,
+          `- samples: ${metric.samples}`,
+        ]
+      : [`- panel: ${metric.judges} judges`, `- rubric: ${metric.rubric}`]),
+    '',
+    '## Harness',
+    '',
+    ...metric.harness.map((selector) => `- \`${selector}\``),
+    '',
+    "The harness is the measurement's pinned ruler. `ab done` refuses a change",
+    'that touches any of these paths.',
+    '',
+    '## Target',
+    '',
+    `- epsilon: ${
+      objective.target.epsilon.relative !== undefined
+        ? `${objective.target.epsilon.relative} relative`
+        : `${objective.target.epsilon.absolute} absolute`
+    }`,
+    `- threshold: ${objective.target.threshold ?? 'none'}`,
+    `- current value: ${formatValue(optimization.current)}`,
+    ...(optimization.best !== undefined ? [`- best value: ${optimization.best}`] : []),
+    ...(optimization.starting !== undefined
+      ? [`- starting value: ${optimization.starting.value}`]
+      : []),
+    '',
+  ]
+  return lines.join('\n')
 }

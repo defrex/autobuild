@@ -43,6 +43,7 @@ import {
   nodeTicketObservationKey,
 } from '../kernel/node-polling'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
+import { optimizationAttempt } from '../kernel/optimization'
 import { ticketScanDeferredByJournal, ticketScanSchedule } from './ticket-scan-schedule'
 import {
   resolveTicketRef,
@@ -2571,6 +2572,7 @@ export class Dispatcher {
           const controlDue =
             commands.length > 0 ||
             state.discardRequest !== undefined ||
+            (state.declined !== undefined && state.status !== 'done') ||
             (state.pr &&
               state.landing?.command &&
               state.landing.command.seq !== state.landing.acknowledgedSeq)
@@ -2887,6 +2889,11 @@ export class Dispatcher {
           if (!executionLeaseLive && state.status === 'aborted') {
             operation = 'abort cleanup'
             await this.cleanupAborted(record, await history(), report)
+            return
+          }
+          if (!executionLeaseLive && state.declined !== undefined) {
+            operation = 'decline settlement'
+            await this.settleDeclinedAttempt(record, await history())
             return
           }
           operation = 'target observation'
@@ -3742,6 +3749,44 @@ export class Dispatcher {
     if (record.ticket !== undefined) await this.settleBuildHandback(record.slug)
     await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
+  }
+
+  /** Settle an optimization attempt its implementer declined (RFC 0005
+   * §6.2): record `attempt.settled {declined}` on the node, release the
+   * workspace and lease, then complete the build unmerged. The completion is
+   * last, so a crash anywhere earlier retries on the next tick; an attempt no
+   * longer in flight was already settled and is not settled again. The
+   * ticket stays where dispatch left it. */
+  private async settleDeclinedAttempt(record: BuildRecord, events: CurrentBuildFacts) {
+    const store = this.store
+    const declined = events.state.declined!
+    const target = events.state.target
+    const created = events.created
+    // `ab done` refuses a decline outside an attempt, so a declined build
+    // always targets a node; append nothing if that invariant is broken.
+    if (target === undefined || created?.type !== 'build.created') return
+    const node = (await store.buildFacts(target.build)).state
+    const key = migrationIdentity(store.repositoryFacts().ticketMigrations, this.deps.tickets.name)
+    const attempt = optimizationAttempt(node.optimization, created.payload.ticket, (ref) =>
+      key(ref, record.slug),
+    )
+    if (attempt !== undefined)
+      await store.append(target.build, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: { proposal: attempt.proposal, ticket: attempt.ticket, build: record.slug },
+          outcome: 'declined',
+          note: declined.reason,
+        },
+      } satisfies EventWrite<'attempt.settled'>)
+    if (record.lease !== undefined) await store.releaseLease(record.slug, record.lease.holder)
+    await this.releaseWorkspace(record.slug, events)
+    await store.append(record.slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'closed-unmerged' },
+    } satisfies EventWrite<'build.completed'>)
   }
 
   /** A discard is recovery from dispatcher plumbing, not judgment about the

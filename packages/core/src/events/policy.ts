@@ -156,6 +156,7 @@ export const buildEventPolicy = {
   'plan-review.verdict': 'decisive',
   'implement.started': 'decisive',
   'implement.completed': 'decisive',
+  'implement.declined': 'decisive',
   'code-review.started': 'decisive',
   'code-review.verdict': 'decisive',
   'verify.reconcile-policy-captured': 'decisive',

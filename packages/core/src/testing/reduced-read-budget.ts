@@ -4428,11 +4428,17 @@ export async function optimizationReadBudget(): Promise<void> {
     '../kernel/optimization'
   )
   const { readOptimizationLedger } = await import('../store/reduced-reads')
+  const { readAttemptContext } = await import('../cli/attempt')
   const repo = '/budget/optimization'
   const node = 'opt-node'
   const sha = (n: number) => n.toString(16).padStart(40, '0')
   const now = new Date('2026-11-18T00:00:00Z')
-  const measured: { vector: Record<string, number>; digest: number }[] = []
+  const measured: {
+    vector: Record<string, number>
+    digest: number
+    attempt: Record<string, number>
+    migrated: Record<string, number>
+  }[] = []
   for (const attempts of [10, 10_000]) {
     const store = new MemoryBuildStore()
     await store.ensureRepo(repo)
@@ -4509,23 +4515,99 @@ export async function optimizationReadBudget(): Promise<void> {
         })
       }
     }
+    // Two in-flight attempts: one under the configured source, and one whose
+    // proposal predates a recorded migration to the `hosted` source.
+    const live = { source: 'fake', id: 'LIVE' }
+    const moved = { source: 'old', id: 'OLD-1' }
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: 'live',
+        proposals: [
+          { id: 'p-live', ticket: live, title: 'Live', strategy: 'live' },
+          { id: 'p-moved', ticket: moved, title: 'Moved', strategy: 'moved' },
+        ],
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: { kind: 'human', user: 'operator' },
+      type: 'tickets.migration-recorded',
+      payload: {
+        identity: 'old-to-hosted',
+        from: 'old',
+        to: 'hosted',
+        mapping: { 'OLD-1': 'H-1' },
+      },
+    })
+    const child = async (slug: string, ticket: { source: string; id: string }, target = true) => {
+      await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo,
+          ticket,
+          baseBranch: 'ab-node/opt-node',
+          ...(target ? { target: { ticket: { source: 'fake', id: 'NODE' }, build: node } } : {}),
+        },
+      })
+      const state = (await readBuildFacts(store, slug)).value.state
+      return { slug, state, repo, ticket }
+    }
+    const liveChild = await child('live-child', live)
+    const movedChild = await child('moved-child', { source: 'hosted', id: 'H-1' })
+    const plainChild = await child('plain-child', { source: 'fake', id: 'PLAIN' }, false)
     // Warm-up: each reduced key is computed once and saved.
     await readBuildFacts(store, node)
     await readOptimizationLedger(store, node)
+    await readRepositoryFacts(store, repo)
     const rows = memoryRepositoryReadCounter(store, repo)
     const requests = memoryStoreRequestCounter(store)
-    const attemptRows = () =>
-      [...rows.buildRowsBySlug].filter(([slug]) => slug.startsWith('attempt-'))
+    const attemptRows = () => [...rows.buildRowsBySlug].filter(([slug]) => slug !== node)
     try {
       // 1. The stop and admission inputs: one reduced read, from the digest.
       const state = (await readBuildFacts(store, node)).value.state
       const digest = state.optimization!
-      expect(digest.attempts.filed).toBe(attempts)
-      expect(digest.inFlight).toEqual([])
+      expect(digest.attempts.filed).toBe(attempts + 2)
+      expect(digest.inFlight.map((attempt) => attempt.proposal)).toEqual(['p-live', 'p-moved'])
       optimizationStopEligibility(digest, now)
       optimizationAdmission(digest, now)
-      measured.push({ vector: requests.vector(), digest: JSON.stringify(digest).length })
+      const vector = requests.vector()
+      const digestSize = JSON.stringify(digest).length
       expect(rows.buildRows).toBe(0)
+
+      // 1b. Attempt resolution (`ab context`, `ab done`) reads the node's
+      // served value once, plus the repository's only for an optimization
+      // node; a build without a target reads nothing. No event rows, and no
+      // attempt log.
+      requests.reset()
+      const resolved = await readAttemptContext(store, {
+        ...liveChild,
+        ticketSource: async () => 'fake',
+      })
+      expect(resolved?.attempt.proposal).toBe('p-live')
+      const attemptVector = requests.vector()
+      expect(attemptVector).toEqual({ getRepo: 1, getReducerValue: 2 })
+      requests.reset()
+      const migrated = await readAttemptContext(store, {
+        ...movedChild,
+        ticketSource: async () => 'hosted',
+      })
+      expect(migrated?.attempt.proposal).toBe('p-moved')
+      const migratedVector = requests.vector()
+      requests.reset()
+      expect(
+        await readAttemptContext(store, { ...plainChild, ticketSource: async () => 'fake' }),
+      ).toBeUndefined()
+      expect(requests.vector()).toEqual({})
+      expect(rows.buildRows).toBe(0)
+      measured.push({
+        vector,
+        digest: digestSize,
+        attempt: attemptVector,
+        migrated: migratedVector,
+      })
 
       // 2. Idle reads read zero event rows.
       rows.reset()
@@ -4554,7 +4636,7 @@ export async function optimizationReadBudget(): Promise<void> {
       })
       rows.reset()
       const advanced = (await readBuildFacts(store, node)).value.state.optimization!
-      expect(advanced.attempts.filed).toBe(attempts + 1)
+      expect(advanced.attempts.filed).toBe(attempts + 3)
       expect(rows.buildRowsBySlug.get(node)).toBe(1)
 
       // 4. The ledger advances with only the new node row, also through a
@@ -4575,5 +4657,7 @@ export async function optimizationReadBudget(): Promise<void> {
     }
   }
   expect(measured[1]!.vector).toEqual(measured[0]!.vector)
+  expect(measured[1]!.attempt).toEqual(measured[0]!.attempt)
+  expect(measured[1]!.migrated).toEqual(measured[0]!.migrated)
   expect(Math.abs(measured[1]!.digest - measured[0]!.digest)).toBeLessThanOrEqual(16)
 }
