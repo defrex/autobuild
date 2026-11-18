@@ -498,7 +498,15 @@ export async function purgeEnvironmentSnapshots(
 
 const cleanGithubOrigin = validateVercelGithubOrigin
 
+/** The build slug a build branch names: leaves use `ab/<slug>`, integration
+ * nodes `ab-node/<slug>`. The delegation target must name the build itself. */
+function buildSlugFromBranch(branch: string): string {
+  return branch.replace(/^ab(?:-node)?\//, '')
+}
+
 function sandboxName(origin: string, branch: string, generation = 0): string {
+  // Deliberately strips only the leaf prefix, unlike `buildSlugFromBranch`:
+  // changing the readable label would rename, and so orphan, live node sandboxes.
   const readable = branch
     .replace(/^ab\//, '')
     .toLowerCase()
@@ -1472,7 +1480,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
       this.options.storeRef,
       this.options.storeToken,
-      { kind: 'build-runner', id: opts.branch.replace(/^ab\//, '') },
+      { kind: 'build-runner', id: buildSlugFromBranch(opts.branch) },
     )
     const rawOrigin = await this.origin()
     const origin = cleanGithubOrigin(rawOrigin)
