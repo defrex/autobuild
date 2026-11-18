@@ -2786,6 +2786,7 @@ export class BuildRunner {
       },
       {
         workspacePath,
+        build: this.deps.slug,
         id: input.id,
         candidate: input.candidate,
         baseline: input.baseline,

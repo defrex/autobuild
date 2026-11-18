@@ -3,7 +3,7 @@ import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import { runPairedMeasurement, type MeasurementInput } from './measurement-runner'
 
 const COMMON = '/repo/.git'
-const ROOT = `${COMMON}/autobuild-measure/m-1`
+const ROOT = `${COMMON}/autobuild-measure/node-a/m-1`
 const PIN = 'a'.repeat(40)
 const CANDIDATE = 'c'.repeat(40)
 const BASELINE = 'b'.repeat(40)
@@ -50,6 +50,7 @@ function fakeExec(opts: {
 function input(overrides: Partial<MeasurementInput> = {}): MeasurementInput {
   return {
     workspacePath: '/repo',
+    build: 'node/a',
     id: 'm/1',
     candidate: CANDIDATE,
     baseline: BASELINE,

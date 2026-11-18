@@ -35,7 +35,11 @@ export interface MeasurementDeps {
 export interface MeasurementInput {
   /** The build's workspace; its Git common directory holds the scratch worktrees. */
   workspacePath: string
-  /** Names the scratch directory; reused ids clean up a crashed predecessor. */
+  /** The measuring build. Its scratch namespace keeps builds that share a Git
+   * common directory, such as two nodes at one revision and pin, apart. */
+  build: string
+  /** Names the scratch directory within the build's namespace; a reused id
+   * cleans up that build's crashed predecessor. */
   id: string
   candidate: string
   baseline: string
@@ -123,7 +127,7 @@ export async function runPairedMeasurement(
       reason: 'cannot locate the workspace Git directory',
       outputTail: tail(common),
     }
-  const root = `${common.stdout.trim()}/autobuild-measure/${scratchName(input.id)}`
+  const root = `${common.stdout.trim()}/autobuild-measure/${scratchName(input.build)}/${scratchName(input.id)}`
   const sides: Record<MeasurementSide, { sha: string; path: string }> = {
     baseline: { sha: input.baseline, path: `${root}/baseline` },
     candidate: { sha: input.candidate, path: `${root}/candidate` },
