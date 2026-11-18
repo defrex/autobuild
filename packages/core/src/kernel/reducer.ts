@@ -21,6 +21,7 @@ import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
 import { reconcileRewriteHead } from './reconcile-head'
+import { cleanWaitResumeCompletion, waitResumeReverifies } from './ticket-wait'
 /**
  * The state reducer (SPEC §15.5, §3.4): state is a reduction of events — any
  * snapshot is a cache, never the source of truth, and resumability falls out.
@@ -474,9 +475,11 @@ export interface BuildState {
    *
    * `cycleSince` is the seq after which results describe the CURRENT code
    * (§15.6-A): max(restartSince, latest code-review approve, latest
-   * `reconcile.completed`, config capture/supersession). Results at or before it describe code that no
-   * longer exists — implement or reconcile changed it, and a new cycle re-runs
-   * from the FIRST step. 0 before any boundary lands. This is the same filter
+   * `reconcile.completed`, config capture/supersession, a leaf's clean
+   * wait-resume `restack.completed` after a verify:* or finalize wait). Results
+   * at or before it describe code or a base that no longer exists — implement,
+   * reconcile or the resumed restack changed it, and a new cycle re-runs from
+   * the FIRST step. 0 before any boundary lands. This is the same filter
    * engine.ts:275-276 applies over its post-restart index. */
   verifyStage: VerifyStageState
   verify: {
@@ -581,6 +584,9 @@ export interface BuildAcc {
    * or `publication.lost` is held here and folded into the declaration. */
   waitPublicationRequests?: Record<string, { seq: number; publishedSha?: string; lost?: true }>
   wait?: TicketWaitState
+  /** seq of the latest `reconcile.completed`: a wait-resume
+   * `restack.completed` citing another cycle replayed cleanly. */
+  lastReconcileCompletedSeq?: number
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
   prState?: PrLifecycle
@@ -635,7 +641,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 40
+export const BUILD_REDUCER_VERSION = 41
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1426,6 +1432,16 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           }
         else if (acc.kind !== 'node') implement.contributionBase = event.payload.targetBase
         if (event.type === 'restack.completed' && prState === 'conflicted') prState = 'open'
+        // SPEC §11 "Ticket waits": a clean replay after a verify:* or finalize
+        // wait moved the base, so the old cycle's evidence no longer applies.
+        // The engine's `leafVerifyCycleInputs` folds the same boundary.
+        if (
+          event.type === 'restack.completed' &&
+          acc.kind !== 'node' &&
+          waitResumeReverifies(acc.wait?.phase) &&
+          cleanWaitResumeCompletion(event.payload, acc.lastReconcileCompletedSeq ?? 0)
+        )
+          verify.cycleSince = Math.max(verify.cycleSince, event.seq)
         if (pr !== undefined)
           pr = {
             ...pr,
@@ -1480,6 +1496,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         // Reconciliation changed the code, so verify re-runs in full — a new
         // cycle (§15.7, engine.ts:275).
         verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        acc.lastReconcileCompletedSeq = event.seq
         complete('reconcile', event.seq, attempt !== undefined ? { attempt } : undefined)
         break
       }
