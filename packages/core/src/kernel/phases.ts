@@ -10,7 +10,7 @@ import type { EventType } from '../events/payloads'
 import { installedSkillName } from '../skills'
 
 export type PhaseKind = 'producer' | 'review' | 'agent-verify'
-export type TerminalCommand = 'done' | 'verdict' | 'escalate'
+export type TerminalCommand = 'done' | 'verdict' | 'propose' | 'escalate'
 
 /**
  * Kernel-side plumbing triggered by the phase's terminal (D7, §8.6):
@@ -52,6 +52,9 @@ export interface ContextInputs {
    * loop routing (loopOfPhase → 'other') relies on this input existing.
    */
   answeredGuidance?: boolean
+  /** Propose: the node's objective, progress and attempt ledger, and the
+   * open proposal request (SPEC §13.1.1). */
+  optimization?: boolean
   /** The ticket assets the build froze at claim (SPEC §6.3), written under
    * `$AB_CONTEXT_DIR/assets/`. Every phase receives them. */
   assets?: boolean
@@ -64,7 +67,7 @@ export interface PhaseSpec {
    * comes from step config (§16.1). */
   skill: string
   startedEvent: EventType
-  terminal: 'done' | 'verdict'
+  terminal: 'done' | 'verdict' | 'propose'
   terminalEvent: EventType
   /** A second fact the same terminal command may record instead: an
    * optimization attempt's `ab done --no-improvement` (RFC 0005 §6.2). */
@@ -200,6 +203,16 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       answeredGuidance: true,
       assets: true,
     },
+  },
+  propose: {
+    name: 'propose',
+    kind: 'producer',
+    skill: installedSkillName('propose'),
+    startedEvent: 'propose.started',
+    terminal: 'propose',
+    terminalEvent: 'propose.completed',
+    requiredArtifact: 'attempts',
+    inputs: { spec: true, optimization: true, answeredGuidance: true, assets: true },
   },
 }
 

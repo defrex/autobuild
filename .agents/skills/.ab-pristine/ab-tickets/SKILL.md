@@ -40,7 +40,10 @@ limit, or a ticket source with no rejected role refuse the opening and name the
 reason; the node never opens as a plain node instead. A work ticket carrying the
 block is refused at dispatch. A spec revision of an open optimization node may
 change the objective but cannot add or remove the block, and a plain node never
-gains one. The marker rules and the objective schema are in
+gains one. Grooming the objective is the dispatch decision for the node's
+attempts: once the node is measured, its proposer files attempts straight to
+ready, within the groomed budget, and each must pass the ratchet before it
+lands. The marker rules and the objective schema are in
 [optimization nodes](../ab-guide/references/optimization-nodes.md).
 
 To groom an optimization node, follow the

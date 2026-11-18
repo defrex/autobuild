@@ -17,7 +17,7 @@ import { abDispatch } from '../cli/dispatch'
 import { createTerminalModeController } from '../cli/terminal-restore'
 import { randomUuids } from '../ids'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
-import { Dispatcher, defaultTriageState } from '../processes/dispatcher'
+import { Dispatcher, defaultTriageState, emptyTickReport } from '../processes/dispatcher'
 import { boundedStateCount } from '../ports/tickets/states'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -1693,6 +1693,212 @@ export async function sampledMeasurementReadBudget(opts: {
     store.getReducerValue = getReducerValue
     store.append = append
     store.appendIfCurrent = appendIfCurrent
+  }
+}
+
+/** Backing store traffic during one measured window: calls by method and by
+ * build slug, returned bytes, and event rows read from any build log. */
+export interface StoreReadMetrics {
+  calls: Record<string, number>
+  slugs: Record<string, number>
+  bytes: number
+  rows: number
+}
+
+const STORE_WRITES = new Set([
+  'append',
+  'appendIfCurrent',
+  'appendWithArtifacts',
+  'appendWithArtifactsIfCurrent',
+  'appendRepo',
+  'putArtifact',
+])
+
+/** Like `countStoreRequests`, attributing each call to the build slug it
+ * names and measuring what it returned. */
+export async function measureStoreReads(
+  store: import('../store/memory').MemoryBuildStore,
+  run: () => Promise<void>,
+): Promise<StoreReadMetrics> {
+  const metrics: StoreReadMetrics = { calls: {}, slugs: {}, bytes: 0, rows: 0 }
+  const builds: Map<string, { events: import('../events/catalog').AbEvent[] }> = Reflect.get(
+    store,
+    'builds',
+  )
+  const restore: (() => void)[] = []
+  const slice = Array.prototype.slice
+  for (const build of builds.values()) {
+    const events = build.events
+    events.slice = function (start?: number, end?: number) {
+      const result = slice.call(this, start, end) as typeof events
+      metrics.rows += result.length
+      return result
+    }
+    restore.push(() => Reflect.deleteProperty(events, 'slice'))
+  }
+  const names = Object.getOwnPropertyNames(Object.getPrototypeOf(store)).filter(
+    (name) => name !== 'constructor' && typeof Reflect.get(store, name) === 'function',
+  )
+  for (const name of names) {
+    const own = Object.getOwnPropertyDescriptor(store, name)
+    const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
+    const measure = (result: unknown) => {
+      if (!STORE_WRITES.has(name))
+        metrics.bytes += Buffer.byteLength(
+          JSON.stringify(result, (_key, value) =>
+            value instanceof Uint8Array ? value.byteLength : value,
+          ) ?? '',
+        )
+      return result
+    }
+    Reflect.set(store, name, (...args: unknown[]) => {
+      metrics.calls[name] = (metrics.calls[name] ?? 0) + 1
+      const scope = args[0]
+      const slug =
+        typeof scope === 'string'
+          ? scope
+          : scope !== null && typeof scope === 'object' && 'slug' in scope
+            ? String(scope.slug)
+            : undefined
+      if (slug !== undefined && builds.has(slug))
+        metrics.slugs[slug] = (metrics.slugs[slug] ?? 0) + 1
+      const result = original.apply(store, args)
+      return result instanceof Promise ? result.then(measure) : measure(result)
+    })
+    restore.push(() =>
+      own ? Object.defineProperty(store, name, own) : Reflect.deleteProperty(store, name),
+    )
+  }
+  try {
+    await run()
+  } finally {
+    for (const undo of restore) undo()
+  }
+  return metrics
+}
+
+function writes(metrics: StoreReadMetrics): number {
+  return Object.entries(metrics.calls)
+    .filter(([name]) => STORE_WRITES.has(name))
+    .reduce((sum, [, count]) => sum + count, 0)
+}
+
+/** The dispatcher stages this proposer adds, run over the dispatcher's own
+ * view: the proposer stage over the digest batch `admitWaitingNodes`
+ * already reads, the attempt creation hold, and proposer admission over the
+ * capacity states that pass already loads. The tick's shared refresh,
+ * digest batch and capacity reads happen outside the window. */
+async function measureProposerStages(
+  store: import('../store/memory').MemoryBuildStore,
+  dispatcher: Dispatcher,
+): Promise<StoreReadMetrics> {
+  type Stages = {
+    store: { refresh(): Promise<void> }
+    deps: { clock(): Date }
+    capacityBuilds(): Promise<unknown[]>
+    repoBuildDigests(): Promise<unknown[]>
+    advanceOptimizationNodes(
+      report: unknown,
+      opts: object,
+      entries: unknown[],
+      now: Date,
+    ): Promise<void>
+    optimizationCreationHolds(): Promise<unknown>
+    releaseStrandedNodeWorkspaces(
+      builds: unknown[],
+      now: Date,
+      launched: Set<string>,
+      report: unknown,
+      opts: object,
+    ): Promise<void>
+    admitProposers(
+      builds: unknown[],
+      now: Date,
+      admitted: number,
+      report: unknown,
+      launched: Set<string>,
+      opts: object,
+    ): Promise<void>
+  }
+  const stages = dispatcher as unknown as Stages
+  await stages.store.refresh()
+  const entries = await stages.repoBuildDigests()
+  const builds = await stages.capacityBuilds()
+  const report = emptyTickReport()
+  return measureStoreReads(store, async () => {
+    const now = stages.deps.clock()
+    await stages.advanceOptimizationNodes(report, {}, entries, now)
+    await stages.optimizationCreationHolds()
+    await stages.releaseStrandedNodeWorkspaces(builds, now, new Set(), report, {})
+    await stages.admitProposers(builds, now, 0, report, new Set(), {})
+  })
+}
+
+/**
+ * The optimization proposer's recurring cost (SPEC §13.1.1). At every size,
+ * after one warm-up pass that records the refused nodes' deferrals:
+ *
+ * - unchanged passes in a warm dispatcher, at a clock moving past backoffs
+ *   and hours budgets, make zero backing calls, return zero bytes and read
+ *   zero event rows, and write nothing;
+ * - so do passes in fresh dispatchers over the same store;
+ * - a wake fact on one deferred node costs reads of that node alone, then
+ *   one write, and the pass after it costs nothing again;
+ * - freeing one slot admits exactly one waiting proposer and reads no
+ *   other waiting node.
+ */
+export async function optimizationProposerReadBudget(opts: {
+  sizes: readonly number[]
+  setup: (size: number) => Promise<{
+    store: import('../store/memory').MemoryBuildStore
+    dispatcher: () => Dispatcher
+    advance: (ms: number) => void
+    /** Append one fact that clears a deferral; returns the woken slug. */
+    wake: () => Promise<string>
+    /** Free one slot; returns the capacity-waiting node slugs. */
+    release: () => Promise<string[]>
+    launches: () => string[]
+  }>
+}): Promise<void> {
+  const totals: Record<number, StoreReadMetrics[]> = {}
+  for (const size of opts.sizes) {
+    const fixture = await opts.setup(size)
+    const { store } = fixture
+    const warm = fixture.dispatcher()
+    const first = await measureProposerStages(store, warm)
+    expect(writes(first)).toBeGreaterThan(0)
+    const unchanged: StoreReadMetrics[] = []
+    for (const hours of [1, 6, 30, 72]) {
+      fixture.advance(hours * 3_600_000)
+      unchanged.push(await measureProposerStages(store, warm))
+    }
+    for (const _ of [0, 1]) unchanged.push(await measureProposerStages(store, fixture.dispatcher()))
+    for (const metrics of unchanged) {
+      expect(metrics.calls).toEqual({})
+      expect(metrics.bytes).toBe(0)
+      expect(metrics.rows).toBe(0)
+    }
+    totals[size] = unchanged
+
+    const woken = await fixture.wake()
+    const wake = await measureProposerStages(store, warm)
+    expect(Object.keys(wake.slugs)).toEqual([woken])
+    expect(writes(wake)).toBe(1)
+    const after = await measureProposerStages(store, warm)
+    expect(after.calls).toEqual({})
+
+    const waiting = await fixture.release()
+    const launched = fixture.launches().length
+    const admission = await measureProposerStages(store, warm)
+    expect(fixture.launches().length - launched).toBe(1)
+    const admitted = fixture.launches().at(-1)!
+    expect(waiting).toContain(admitted)
+    for (const slug of waiting) if (slug !== admitted) expect(admission.slugs[slug] ?? 0).toBe(0)
+    console.log('optimization proposer read budget', {
+      size,
+      first: { calls: first.calls, rows: first.rows },
+      admission: { calls: admission.calls, rows: admission.rows },
+    })
   }
 }
 
