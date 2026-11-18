@@ -268,6 +268,79 @@ the output tail. Answering a runner failure measures again; abort still
 aborts. A refusal of samples taken under a replaced ruler stays refused after
 the answer, because sampling the same request again cannot succeed.
 
+## Judge panels
+
+A panel objective is measured by agent judges instead of a command. A panel
+run compares two heads, a candidate and a baseline, under one harness pin. An
+attempt's run records its win rate on `attempt.measured.winRate`; a node's
+progress against its starting head records `optimization.progress-measured`.
+
+**The run.** `panel.started` records the run's inputs: the candidate, the
+baseline, the harness pin, the purpose, the rubric path, the harness and the
+judge count. Every judge then runs in its own session, all of them at once,
+under the `judge` role. Judges are build sessions, so the build's profile
+applies to them.
+
+**Blind, pinned variants.** Each judge gets a fresh root in the system
+temporary directory, outside any repository. The root holds the two variants
+as plain trees labeled `A/` and `B/`, a brief, and the `ab-judge` skill. Each
+judge's order is drawn at random. Both trees carry the exact committed bytes
+at every path, with no line-ending, filter or keyword conversion. Every harness
+path, the rubric included, carries the harness pin's bytes, and a harness file
+the pin lacks is absent. The skill is copied from the harness pin's
+`.agents/skills/ab-judge/SKILL.md`, so a candidate cannot rewrite its own
+judges' instructions. The variants are checked out from private Git material
+outside the roots, and that material is deleted before any judge starts.
+The runner refuses to start a judge whose root is inside the workspace or
+inside any Git repository, and fails the run with that cause. Point `TMPDIR`
+outside any repository.
+
+**What a judge can learn.** Nothing Autobuild gives a judge reveals which
+variant is the candidate: not its context, its environment, its labels, the
+location or names of its variant trees, its store credential, nor any Git
+metadata reachable from its working directory. Nothing under the judge's
+root links back to the repository it was prepared from. The guarantee covers
+these Autobuild-provided channels. A judge process that deliberately reads the
+repository or the store from outside its root crosses the shared trust
+boundary of unconfined local agent sessions.
+
+**The order is recorded where judges cannot read it.** The kernel records each
+judge's order in `panel.judge-started` before the session starts. No judge
+channel reads the log: the judge's environment carries `AB_STORE`, `AB_JUDGE`
+(`<build>:<panel>:<judge>`), `AB_SESSION`, `AB_CONTEXT_DIR` and, for a remote
+store, a `build-judge` credential in `AB_TOKEN`. It carries no `AB_BUILD`, no
+`AB_PHASE`, no inherited `AB_*` or `GIT_*` value and no `PWD`. The credential
+is write-only. It can append exactly one `panel.preferred` for its own panel,
+judge and session while the session is open, and every read is refused. Any
+read command run with `AB_JUDGE` set fails.
+
+**The terminal.** A judge runs `ab judge context`, which writes `purpose.md`,
+`rubric.md` and `context.json` from its brief and reads no store. It compares
+`A/` and `B/` and ends with exactly one
+`ab judge prefer <A|B|tie> --reason "<paragraph>"`. The reason must not be
+blank, and a second call is refused. After the turn, the kernel records
+`panel.judged` with the judge's index, its order, the preference and the
+reason.
+
+**Win rate.** A judge who prefers the candidate scores 1, a tie scores 0.5 and
+a preference for the baseline scores 0. The win rate is the mean over the
+recorded judgments, so ties count as half.
+
+**Resumption.** A run resumed after a crash or restart keeps every recorded
+judgment. A judge whose preference was saved before the crash is completed
+from that preference and its recorded order without a new session. A dangling
+session is closed as `reclaimed`. Only judges with no recorded preference run
+again, each with a freshly drawn order.
+
+**Failures.** A judge's turn that ends without a preference (`no-terminal`),
+fails (`failed`) or exceeds the session budget (`expired`) counts as a
+failure. After two counted failures for one judge, the run fails and names the
+judge and its last outcome. A shutdown records `interrupted`, which does not
+count. A run that cannot prepare its variants fails with the Git output tail.
+A variant holding a committed symlink that resolves outside its judge root
+fails the run before any judge starts, naming the link.
+Every judge root is removed when the run ends.
+
 ## Events
 
 | Event | Log | Facts |
@@ -286,6 +359,11 @@ the answer, because sampling the same request again cannot succeed.
 | `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
 | `optimization.stopped` | node | cause, mode |
 | `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
+| `panel.started` | panel host | panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges |
+| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account? |
+| `panel.preferred` | panel host | panel, judge, session, preference, reason (agent) |
+| `panel.judged` | panel host | panel, judge, session, order, preference, reason |
+| `panel.judge-ended` | panel host | panel, judge, session, outcome, error?, transcript? |
 
 `decision` is `improved`, `no-improvement`, `non-regressing` or `regressed`.
 `outcome` is `accepted`, `no-improvement`, `declined`, `stopped` or `aborted`;
@@ -294,6 +372,10 @@ the answer, because sampling the same request again cannot succeed.
 `spread` and a request's `metric` are optional: older facts lack them.
 `attempt.sampled` records samples, never a decision; `attempt.measured` is the
 decision.
+The panel facts live on the log of the build that runs the panel. `order` is
+`candidate-first` or `baseline-first`, `preference` is `A`, `B` or `tie`, and
+a judge's `outcome` is `completed`, `no-terminal`, `failed`, `expired`,
+`interrupted` or `reclaimed`. `panel.preferred` never carries the order.
 
 A positive delta is an improvement in the objective's direction:
 `baseline − candidate` when minimizing, `candidate − baseline` when maximizing,
@@ -507,6 +589,17 @@ it opens: its starting measurement raises `optimization.noise-exceeded` when ε
 is below the measured spread. A relative ε suits
 metrics whose scale may change; an absolute ε suits metrics with a natural
 unit. A panel's ε is a win-rate margin above 0.5, such as 0.1.
+
+**Write a panel's rubric for comparing two variants.** Judges see two
+variants side by side and say which is better, so write criteria a reader can
+apply to a pair: "which explains the setup steps in fewer, clearer sentences"
+compares; "scores 1–10 on clarity" does not. Name what must not be traded away,
+and say that text written for the judges rather than for the reader counts
+against a variant. Keep the rubric and any fixtures the judges read inside the
+harness, so the pin fixes them. Choose `judges` for cost against noise: each
+judge is one agent session per comparison, and more judges narrow the win
+rate's spread. Five suits most prose; use more when a single preference
+should not decide an ε of 0.1. See [judge panels](#judge-panels).
 
 **Choose a budget you would sign off on unattended.** It is the limit a human
 approves once for the whole run. `maxAttempts` bounds cost; `maxHours` bounds wall-clock
