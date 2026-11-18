@@ -58,6 +58,8 @@ export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/
 
 export { delegationFactKey } from '../../kernel/service-facts'
 export {
+  appendJudgePreference,
+  JudgePreferenceContentionError,
   judgeLifecycleFacts,
   judgeScopeRefusal,
   judgeWriteRefusal,
