@@ -4099,8 +4099,12 @@ export async function hookReadBudget(): Promise<void> {
  * 2. idle reads read zero event rows;
  * 3. one new `attempt.settled` costs exactly its own node row;
  * 4. the ledger advances with only the new node rows, through the store and
- *    through a fresh repository view over it; and
- * 5. no measured read ever touches an attempt build's log.
+ *    through a fresh repository view over it;
+ * 5. the objective row (RFC 0005 §12) on the terminal dashboard poll, in the
+ *    status summary and from `builds.get` comes from that same digest: an
+ *    idle poll reads zero event rows with an identical request vector, and a
+ *    row of the same size, at both histories; and
+ * 6. no measured read ever touches an attempt build's log.
  */
 export async function optimizationReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
@@ -4110,19 +4114,42 @@ export async function optimizationReadBudget(): Promise<void> {
   )
   const { readOptimizationLedger } = await import('../store/reduced-reads')
   const { readAttemptContext } = await import('../cli/attempt')
+  const { objectiveSummary } = await import('../cli/dashboard/objective-row')
+  const { summarizeFrom } = await import('../cli/status')
+  const { getOperatorBuild } = await import('../operator/query')
   const repo = '/budget/optimization'
   const node = 'opt-node'
   const sha = (n: number) => n.toString(16).padStart(40, '0')
   const now = new Date('2026-11-18T00:00:00Z')
+  const config = parseConfig(
+    '[tickets]\nsource="fake"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const { verify: _verify, finalize: _finalize, ...root } = config
   const measured: {
     vector: Record<string, number>
     digest: number
     attempt: Record<string, number>
     migrated: Record<string, number>
+    poll: Record<string, number>
+    objectiveRow: number
   }[] = []
   for (const attempts of [10, 10_000]) {
     const store = new MemoryBuildStore()
     await store.ensureRepo(repo)
+    const configArtifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'budget-run',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+      },
+    })
     await store.createBuild({ slug: node, repo, branch: 'ab-node/opt-node' })
     await store.append(node, {
       actor: DISPATCHER,
@@ -4283,11 +4310,48 @@ export async function optimizationReadBudget(): Promise<void> {
       ).toBeUndefined()
       expect(requests.vector()).toEqual({})
       expect(rows.buildRows).toBe(0)
+
+      // 1c. The objective row. The dashboard reader lists only the node: the
+      // live attempt builds are other rows, outside this surface's cost.
+      const record = (await store.getBuild(node))!
+      const nodeOnly = new Proxy(store, {
+        get(target, property) {
+          if (property === 'listBuildsForRepo') return async () => [record]
+          const value = Reflect.get(target, property)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }) as BuildStore
+      const dashboard = new DashboardBuildPollCache(
+        {
+          listBuildsForRepo: async () => [record],
+          getEvents: store.getEvents.bind(store),
+          getReducerValue: store.getReducerValue.bind(store),
+        },
+        repo,
+        config,
+      )
+      await dashboard.refresh()
+      rows.reset()
+      requests.reset()
+      const polled = (await dashboard.refresh()).builds.find((build) => build.slug === node)
+      const pollVector = requests.vector()
+      expect(polled?.objectiveRow?.attempts.filed).toBe(attempts + 2)
+      expect(polled?.objectiveRow?.attempts.running).toBe(2)
+      expect(rows.buildRows).toBe(0)
+      expect(summarizeFrom(record, state, now).objective).toEqual(objectiveSummary(state, now))
+      await getOperatorBuild({ store: nodeOnly, repo, slug: node, now })
+      rows.reset()
+      const operator = await getOperatorBuild({ store: nodeOnly, repo, slug: node, now })
+      expect(rows.buildRows).toBe(0)
+      expect(operator.detail.objective).toEqual(objectiveSummary(state, now))
+      expect(operator.dashboardRow?.objectiveRow).toEqual(polled!.objectiveRow!)
       measured.push({
         vector,
         digest: digestSize,
         attempt: attemptVector,
         migrated: migratedVector,
+        poll: pollVector,
+        objectiveRow: JSON.stringify(polled!.objectiveRow).length,
       })
 
       // 2. Idle reads read zero event rows.
@@ -4331,7 +4395,7 @@ export async function optimizationReadBudget(): Promise<void> {
       expect((await readOptimizationLedger(view, node)).value.entries).toHaveLength(attempts + 1)
       expect(rows.buildRows).toBe(0)
 
-      // 5. No attempt log was read at any point.
+      // 6. No attempt log was read at any point.
       expect(attemptRows()).toEqual([])
     } finally {
       requests.restore()
@@ -4341,4 +4405,6 @@ export async function optimizationReadBudget(): Promise<void> {
   expect(measured[1]!.attempt).toEqual(measured[0]!.attempt)
   expect(measured[1]!.migrated).toEqual(measured[0]!.migrated)
   expect(Math.abs(measured[1]!.digest - measured[0]!.digest)).toBeLessThanOrEqual(16)
+  expect(measured[1]!.poll).toEqual(measured[0]!.poll)
+  expect(Math.abs(measured[1]!.objectiveRow - measured[0]!.objectiveRow)).toBeLessThanOrEqual(16)
 }

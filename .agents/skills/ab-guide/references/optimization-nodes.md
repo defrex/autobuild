@@ -242,6 +242,33 @@ measured delta and closing note. A **near miss** is a `no-improvement`
 settlement that improved by less than ε (0 < delta < ε, with a relative ε
 scaled by the baseline's magnitude).
 
+### Where progress appears
+
+Every surface shows the same objective row, read from the node's digest alone:
+
+- The terminal dashboard prints it under the node's progress bar and as the
+  `Objective` field of the detail view.
+- `ab status` prints it on a continuation line under the node's row, and
+  `ab build status <node>` prints it under `optimization node: objective
+  revision N`.
+- `--json` summaries, the `builds.list` and `builds.get` operator tools, and
+  `ab watch --json` records (`state.objective`) carry it as `objective`;
+  `builds.get` also carries the dashboard's `objectiveRow`. `ab watch` appends
+  it to the line of every optimization event.
+
+```text
+objective 50 → 44 (minimize) · threshold 35 · noise ±1.5
+attempts 1 accepted · 3 rejected · 0 running
+budget 4/60 attempts · 3.1/24 hours
+stopped plateau (drain)
+```
+
+A panel shows `win rate 50% → 70%` instead. Only configured budgets appear,
+`no threshold` and `objective not measured` stand in for absent values, and
+the `stopped` segment appears once the node stops. Budget hours stop at the
+stop time; a watch record evaluates them at its own timestamp. `ab objective`
+remains the full view, with the best value, plateau and stop eligibility.
+
 ## Attempts
 
 A build is an attempt of a node exactly when its ticket was created from a

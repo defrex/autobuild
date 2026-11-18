@@ -1,6 +1,12 @@
 import { readBuildRange, isTerminalEventReadError } from '../store/event-reads'
 import { ReducerValueIncompatibilityError } from '../store/remote/compatibility'
 import { WatchLifetime } from './watch-lifetime'
+import {
+  objectiveSegments,
+  objectiveSummary,
+  type ObjectiveSummary,
+} from './dashboard/objective-row'
+import { isOptimizationEvent } from '../kernel/optimization'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { OPERATOR_HEARTBEAT_MS, operatorIdentitySchema } from '../store/operator-presence'
@@ -358,6 +364,10 @@ export interface WatchRecordState {
   outcome: BuildOutcome | null
   /** The ticket wait while requested, open, or ended and not yet resumed. */
   wait?: TicketWaitStatus
+  /** An optimization node's objective progress, with elapsed budget hours
+   * evaluated at the record's own timestamp so a regenerated record is
+   * identical. */
+  objective?: ObjectiveSummary
 }
 
 /** Lease-expiry evidence is an observation, never a fabricated journal event. */
@@ -397,7 +407,7 @@ export function projectAttentionRecord(
   return {
     ...scope,
     build: 'build' in scope ? scope.build : null,
-    state: state ? projectState(state) : null,
+    state: state ? projectState(state, new Date(observation.observedAt)) : null,
     observation,
     cursor,
   }
@@ -423,8 +433,9 @@ export interface WatchRecord {
   cursor: string
 }
 
-function projectState(state: BuildState): WatchRecordState {
+function projectState(state: BuildState, at: Date): WatchRecordState {
   const wait = ticketWaitStatus(state)
+  const objective = objectiveSummary(state, at)
   return {
     status: state.status,
     phase: state.phase ?? null,
@@ -447,6 +458,7 @@ function projectState(state: BuildState): WatchRecordState {
     prState: state.prState ?? null,
     outcome: state.outcome ?? null,
     ...(wait !== undefined ? { wait } : {}),
+    ...(objective !== undefined ? { objective } : {}),
   }
 }
 
@@ -485,7 +497,7 @@ export function projectRecord(
     return {
       build: event.build,
       event,
-      state: state === null ? null : projectState(state),
+      state: state === null ? null : projectState(state, new Date(event.ts)),
       cursor,
     }
   }
@@ -683,7 +695,14 @@ export function renderWatchLine(
   state: BuildState | null,
 ): string {
   const label = 'build' in event ? event.build : '(repository)'
-  return `${event.ts}  ${label}  ${event.type}  ${summarizeEvent(event, state)}`
+  const line = `${event.ts}  ${label}  ${event.type}  ${summarizeEvent(event, state)}`
+  const objective =
+    'build' in event && state !== null && isOptimizationEvent(event)
+      ? objectiveSummary(state, new Date(event.ts))
+      : undefined
+  return objective === undefined
+    ? line
+    : `${line}  — ${singleLine(objectiveSegments(objective, objective.elapsedHours).join(' · '))}`
 }
 
 // ── The ambient-scope preflight ─────────────────────────────────────────────
