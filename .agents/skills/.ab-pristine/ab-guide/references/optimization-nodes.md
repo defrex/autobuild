@@ -365,9 +365,12 @@ Every judge root is removed when the run ends.
 | `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision, spread, report |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
-| `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
+| `attempt.settled` | node | attempt (proposal, ticket, build, branch?), outcome, measurement (revision, baseline, candidate, delta), policy?, mergedSha?, note |
+| `attempt.merged-unmeasured` | node | proposal, ticket, build, merged head (sha?), reason, measuredCandidate? |
 | `optimization.stopped` | node | cause, mode |
 | `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
+| `attempt.branch-deleted` | node | proposal, build, branch |
+| `attempt.branch-cleanup-failed` | node | proposal, build?, branch, error |
 | `panel.started` | panel host | panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges |
 | `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account? |
 | `panel.preferred` | panel host | panel, judge, session, preference, reason (agent) |
@@ -375,8 +378,12 @@ Every judge root is removed when the run ends.
 | `panel.judge-ended` | panel host | panel, judge, session, outcome, error?, transcript? |
 
 `decision` is `improved`, `no-improvement`, `non-regressing` or `regressed`.
-`outcome` is `accepted`, `no-improvement`, `declined`, `stopped` or `aborted`;
-`accepted` and `no-improvement` carry their measurement. `cause` is
+`outcome` is `accepted`, `no-improvement`, `declined`, `stopped`, `aborted` or
+`merged-unmeasured`. `accepted` and `no-improvement` carry their measurement.
+`merged-unmeasured` carries a `policy` and never a measurement. Only `declined`
+and `no-improvement` carry a `branch` to clean up. A `reason` is `absent`,
+`stale-head`, `unrelated` or `unresolvable`; only `unresolvable` lacks the
+merged head. `cause` is
 `threshold`, `plateau`, `budget`, `exhausted` or `operator`. `report`,
 `spread` and a request's `metric` are optional: older facts lack them.
 `attempt.sampled` records samples, never a decision; `attempt.measured` is the
@@ -402,9 +409,16 @@ Progress is derived from the node's log, never recorded:
   against the starting head, else 0.5. **Best value** in the objective's
   direction.
 - **Attempts**: filed, accepted, rejected (no-improvement, declined, stopped or
-  aborted) and running, plus the settled attempts whose ticket has not yet
-  moved to the rejected role. Those still occupy a concurrency slot, so a
-  tracker that refuses the move stalls new proposals instead of piling up.
+  aborted), merged unmeasured (released by an operator) and running. Two kinds
+  of attempt still occupy a concurrency slot: settled attempts whose ticket has
+  not yet moved to the rejected role or whose branch is not yet deleted, and
+  running attempts that merged without a landing measurement. A tracker or
+  forge that refuses its step therefore stalls new proposals instead of piling
+  them up. `ab objective` lists each unmeasured merge (`unmeasured merge: …;
+  holds a concurrency slot until settled`) and each pending branch cleanup
+  (`branch cleanup pending: <branch> (<build>)[: <error>]`). `ab build status
+  <node>` prints the same lines, and the objective row adds `N merged
+  unmeasured (slot held)` while any remain.
 - **Plateau counter**: consecutive `no-improvement` or `declined` settlements
   since the last `accepted`; `stopped` and `aborted` leave it unchanged.
 - **Elapsed budget**: hours since the first acceptance, against `maxHours`, and
@@ -512,7 +526,9 @@ publishes nothing. No review, verification, finalize or measurement follows.
 The dispatcher then appends `attempt.settled {outcome: declined, note}` to the
 node with the reason as the note, releases the attempt's workspace, and
 completes the build `closed-unmerged`. A declined settlement enters the ledger
-the proposer reads and advances the plateau counter.
+the proposer reads and advances the plateau counter. If an earlier implement
+round published the attempt's branch, the node's poll deletes it before moving
+the ticket (see [Landing and settlement](#landing-and-settlement)).
 
 Declining is a successful outcome: a specific reason tells the proposer what
 not to try again. The flag is refused outside implement (`'--no-improvement'
@@ -561,17 +577,48 @@ Every attempt settles exactly once, on the node's log:
 | Proposer declines it | `declined` | rejected |
 | Node stops | `stopped` | rejected |
 | Operator abort, or a human closes its PR | `aborted` | rejected |
+| Merged without a measurement of the merged head, then released by an operator | `merged-unmeasured` | done |
 
-A human forge merge bypasses the landing gate. When no measurement exists for
-the merged head, the attempt cannot settle `accepted`: the dispatcher records a
-followup observation, and the attempt stays in flight and keeps its concurrency
-slot until your operator agent acts. Its build and ticket still complete.
+**Unmeasured merges.** A human forge merge bypasses the landing gate. An
+attempt settles `accepted` only with a result for exactly the merged head that
+answers this node's request. Otherwise the dispatcher records
+`attempt.merged-unmeasured` on the node once, with its reason, and one followup
+observation on the child. The attempt stays in flight and keeps its concurrency
+slot. Its build and ticket still complete. The dispatcher reconciles merges that
+completed without either record on its next node tick. Release the slot
+explicitly:
 
-This is the one case in which the dispatcher moves a ticket into the rejected
-role. Once the attempt's build is done (or it never had one), the node's poll
-moves the ticket, comments the outcome, and records `attempt.ticket-rejected`.
-An aborted or closed attempt never returns to triage. A completed node keeps
-being polled until every such move has committed.
+```sh
+ab objective <node> --settle-unmeasured <proposal|build> --policy release-unmeasured [--note <text>]
+```
+
+A connected agent calls the operator tool `optimization.settle-unmeasured`
+with `{repo, slug, attempt, policy, note?}`. The policy is required.
+`release-unmeasured` records `attempt.settled {outcome: merged-unmeasured,
+policy, mergedSha}` with you as the actor. The slot is released exactly once
+and the attempt is counted as merged unmeasured, never accepted. The current
+and best values, the baseline and the plateau counter do not move, and the
+ledger entry has no measurement. The action works on a stopped node. It refuses
+an attempt that is not in flight, has not merged unmeasured, or whose merged
+head has a valid measurement, and it refuses a terminal node.
+
+**Rejected tickets and branch cleanup.** This is the one case in which the
+dispatcher moves a ticket into the rejected role. Once the attempt's build is
+done (or it never had one), the node's poll moves the ticket, comments the
+outcome, and records `attempt.ticket-rejected`. An aborted or closed attempt
+never returns to triage. A completed node keeps being polled until every such
+move has committed.
+
+A `declined` or `no-improvement` attempt that published its branch (it
+completed an implement round or opened a PR) leaves a cleanup obligation on
+that pending rejection. Before moving the ticket, the poll deletes exactly that
+build's branch from the forge and records `attempt.branch-deleted`. A branch
+that is already gone counts as deleted. The poll never deletes the node's
+branch, its base or another build's branch. A failed or refused deletion
+records `attempt.branch-cleanup-failed` once per distinct error, keeps the
+slot, and retries on later polls without changing the settlement. An attempt
+that never published needs no deletion. Aborted and stopped attempts keep abort
+cleanup's own branch deletion.
 
 ## Stopping and completion
 
