@@ -205,7 +205,8 @@ or a work ticket carrying the block refuse the ticket: it returns to triage
 with a comment naming every reason, and no build is created. A refused node
 never opens as a plain node. Fix the block, or file the ticket with
 `--kind node`, and move it to ready again. An accepted node records its
-objective and pins its harness at the opening commit.
+objective, pins its harness at the opening commit, and measures its starting
+value and noise.
 
 `ab ticket tree` labels an optimization node `[node, optimization]`, and status
 labels its build `optimization node`. `ab objective <node>` shows the effective

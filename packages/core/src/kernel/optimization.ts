@@ -154,6 +154,10 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         }
         break
       }
+      case 'optimization.noise-exceeded':
+        // Advisory attention only: the starting value arrives with the
+        // `baseline-measured` fact written after it.
+        break
       case 'optimization.progress-measured':
         if (event.payload.revision < state.rulerRevision) break
         state.current = event.payload.winRate

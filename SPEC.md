@@ -2404,7 +2404,7 @@ the matching phase and `round`; a missing round cannot broaden either cause.
 `review-round-limit` retains the same matching-round effect.
 `verify-failure-limit` is the explicit phase-level case and re-arms every
 phase-runner failure round for its verify target. `reconcile-no-progress`,
-`setup-failure-limit` and `wait-unresolvable` have no phase-runner failure-budget effect (setup's own
+`setup-failure-limit`, `wait-unresolvable` and `measurement-failed` have no phase-runner failure-budget effect (setup's own
 answer/retry accounting remains separate). Agent and stall raises, and
 cause-less historical policy raises, retain the legacy shape rule: a matching
 round resets that round and an absent round resets all rounds for the target.
@@ -2607,7 +2607,8 @@ keeps its branch, workspace and completed phase work. Any other build that has
 not finished keeps its slot, even while paused, blocked on a question, waiting
 for the dispatcher to check a ticket wait, or interrupted between
 `finalize.completed` and its post-steps. When a finished build must restack,
-re-verify or reconcile, or a ticket wait ends, the build is admitted before new
+re-verify, reconcile or run a requested optimization measurement (§13.1.1), or
+a ticket wait ends, the build is admitted before new
 ticket claims, as a node is: intake reserves a slot for it (`resume` for an
 ended wait), and its wait records nothing, consumes no attempt and raises no
 attention. Abort and pause acknowledgements are not gated. A finished or
@@ -3361,6 +3362,27 @@ from. An opened optimization node therefore always has an accepted objective. A
 retried opening after a crash between the two facts records no second
 acceptance.
 
+A command node then measures its opening head against itself (see
+**Measurement**) and records `optimization.baseline-measured {revision, head,
+harnessPin, samples, median, spread, report}`: the starting value is the
+median of every sample and the spread is the distance between the two sides'
+medians. The engine decides `measure-baseline` for an opened, unstopped
+command node with no starting value under its current ruler, ahead of
+integration work and behind escalations, pause, abort and a node reconcile.
+The dispatcher admits it as it admits a node verification: the node requests
+a `verification` slot, is provisioned a workspace, and releases that
+workspace once no measurement, integration cycle, restack or reconcile needs
+it. A panel's starting value is defined, not measured here.
+
+**Noise check.** When ε in metric units (absolute, or relative × |median|) is
+strictly smaller than the starting spread, the runner first records advisory
+`optimization.noise-exceeded {revision, head, harnessPin, median, spread,
+epsilon, effectiveEpsilon}`, then the starting value. The fact is default
+watch attention naming both numbers. The node still opens; raising ε or
+`samples` is the operator's decision. A relative ε over a zero median is 0, so
+any positive spread exceeds it. Writing the attention first means a crash
+between the two facts measures and raises again rather than losing it.
+
 **Spec revisions.** `ab answer <node> --revise-spec`, `--revise-spec-from-ticket`
 and an escalation answer that revises the spec check the replacement before
 recording anything. A revision of an optimization node may change any part of
@@ -3371,7 +3393,9 @@ After an accepted `spec.revised` on an optimization node, the dispatcher records
 `optimization.objective-accepted` again with the next revision and the new
 `specRev`. It pins the harness again at the current node head when the metric
 changed, or the purpose of a panel, whose judges read it; otherwise the pin is
-unchanged. Such a change starts a new ruler (§15.5).
+unchanged. Such a change starts a new ruler (§15.5), which clears the starting
+value, so the node measures the new pin against itself and runs the noise
+check again.
 
 **Quick revisions.** `ab objective <node>` shows the effective objective and
 progress. With any of `--threshold n`, `--epsilon n|n%`, `--max-attempts n`,
@@ -3422,10 +3446,65 @@ reason}` to N's log if the attempt is still in flight, releases the lease and
 workspace, and completes the attempt `closed-unmerged`. The flag is refused
 outside implement and in a build that is not an attempt.
 
-Proposing attempts, measuring them through the landing gate, judge panels,
-settlement into the rejected role, and stopping and completion are designed in
-RFC 0005 §5–§9. The facts they record are catalogued in §15.3 and their derived
-state in §15.5.
+**Measurement.** A measurement runs two heads in one execution, so a number
+from another machine is never a baseline (RFC 0005 §7.3, §7.4). Code is
+authoritative (`packages/core/src/kernel/measurement.ts` for the math,
+`packages/core/src/processes/measurement-runner.ts` for the execution).
+
+- *Pairing.* Two detached worktrees, one at the candidate and one at the
+  baseline, are created under the workspace's Git common directory (a commit
+  missing locally is fetched from `origin`). Each of `samples` rounds runs the
+  metric command once per side, baseline first in even rounds and candidate
+  first in odd rounds, so monotone drift cancels. A configured
+  `[commands].setup` runs once in each worktree first. The worktrees are
+  removed afterwards, on failure too.
+- *Harness pinning.* Before any run, every file matched by `metric.harness`
+  (`compilePathSelectors`) is checked out at `harnessPin` in both worktrees,
+  and every matched file the pin lacks is removed, with literal pathspecs.
+  Only blob entries count. Harness changes in the candidate, or arriving
+  through a node restack, therefore never affect a measurement.
+- *Output contract.* Each run runs `sh -c <command>`, must exit 0, and must
+  print, trimmed, exactly one JSON object whose `value` is a finite number.
+  Every sample run and setup run has a 30-minute timeout.
+- *Decision.* A side's value is its median (the mean of the two middle values
+  for an even count). The delta is direction-aware (§15.5). ε in metric units
+  is `absolute`, or `relative × |baseline median|`. A delta ≥ ε is `improved`;
+  anything less is `no-improvement`. Significance tests are not applied.
+- *Attempts.* `attempt.measurement-requested` names the candidate, baseline,
+  harness pin, objective revision and, additively, the node's command
+  `metric`. The engine decides `run-measurement` for a leaf at `wait
+  awaiting-pr` whose latest request is neither sampled nor measured, so
+  restack, re-verify and reconcile keep precedence, and the dispatcher admits
+  it as a re-verify (§12). The attempt's runner holds only its own build, so it
+  samples in the attempt's workspace and records kernel `attempt.sampled
+  {request, candidate, baseline, harnessPin, revision, samples, medians,
+  report}`, which carries no decision. When the lease sweep finds a parked
+  leaf whose latest request is sampled and undecided, the dispatcher reads the
+  node's reduced state once, revalidates the request's revision against the
+  node's ruler and its harness pin against the node's pin, and records
+  dispatcher `attempt.measured` with the decision against the node's current ε
+  and its starting spread as `spread`. A quick ε revision made while the
+  samples ran therefore applies.
+- *Failures.* A command failure, a timeout, output outside the contract, a
+  worktree or setup failure, or a request with no command metric records no
+  value or decision. The kernel raises `escalation.raised {phase:
+  measurement, source: policy, policyCause: measurement-failed}` naming the
+  cause, the sample and the output tail; the build is blocked, and the answer
+  makes the request (or due starting value) pending again, so it is measured
+  again. A request whose ruler or pin was replaced before its decision is
+  refused the same way by the dispatcher, and stays refused after the answer:
+  the attempt needs a fresh request. `measurement` is an escalation target, not
+  a phase: its answers route no guidance into a phase and reset no phase
+  failures.
+- *Spread and report.* Every `attempt.measured` carries the node's starting
+  spread beside its delta, and watch prints it. Both measurement facts and
+  `attempt.sampled` reference a `measurement-samples` artifact with the raw
+  per-sample values, deposited with the fact.
+
+When to request a measurement, whether it lets an attempt merge, proposing
+attempts, judge panels, settlement into the rejected role, and stopping and
+completion are designed in RFC 0005 §5–§9. The facts they record are
+catalogued in §15.3 and their derived state in §15.5.
 
 
 
@@ -3739,7 +3818,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread}` (a panel records its self-comparison win rate and that rate's distance from 0.5); dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3965,6 +4044,20 @@ reports whether the node stopped, the attempts the budget still allows (none
 without `maxAttempts`), and the concurrency slots no in-flight attempt holds.
 Attempt identity (§13.1.1) is a lookup in `inFlight` by normalized ticket ref;
 settled attempts are in the ledger.
+
+**Attempt measurement.** A leaf's build state embeds `attemptMeasurement`,
+bounded to the latest `attempt.measurement-requested` (`request`), the latest
+`attempt.sampled` (`sampled`), the latest `attempt.measured` (`measured
+{request}`) and `refused`, the request whose samples a `measurement-failed`
+raise refused after sampling. Pure selectors read it alone:
+`pendingMeasurementRequest` is the latest request that is neither sampled nor
+measured on a nonterminal leaf, the runner's work; `sampledMeasurement` is the
+latest request's samples when neither measured nor refused, the dispatcher's
+work. `baselineMeasurementDue` reads the node digest: opened, a command
+metric, no `starting`, not stopped, not terminal, paused or blocked, and no
+pending command. Engine, capacity and the dispatcher's decision read only
+these reduced values, so an idle tick reads no event rows; deciding one sampled
+request costs one reduced read of its node, once.
 
 **Deltas, revisions and the ruler.** A positive `delta` is an improvement in
 the objective's direction: `baseline − candidate` when minimizing,
@@ -5371,7 +5464,7 @@ Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listin
 diagnostics; effective build targets remain frozen independently of source metadata.
 
 Default watch attention includes `integration.verification-failed`, `integration.landed`, `node.item-conflicted`,
-`landing.consent-revoked`, and conflicted `restack.replayed`. Derived `build.consent-ready` observations
+`landing.consent-revoked`, `optimization.noise-exceeded`, and conflicted `restack.replayed`. Derived `build.consent-ready` observations
 carry target, branch, candidate and the durable readiness entry position in the
 existing cursor envelope. Cursor identities retain readiness episodes across
 restart; a new candidate or exit/re-entry can wake again. Explicit event globs

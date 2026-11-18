@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
-import { optimizationLog, panelOptimizationLog } from './generators/optimization-log'
+import {
+  attemptMeasurementLog,
+  optimizationLog,
+  panelOptimizationLog,
+} from './generators/optimization-log'
 import { describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
 import type { RegisteredReducer } from './reducer-registry'
@@ -783,6 +787,7 @@ function corpora(): unknown[][] {
     })),
     optimizationLog(),
     panelOptimizationLog(),
+    attemptMeasurementLog(),
     ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
     ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
     ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),
@@ -848,11 +853,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 41,
+        "build": 42,
         "buildDelegation": 1,
         "buildDigest": 13,
-        "buildReadFacts": 99,
-        "buildStreamSeed": 57,
+        "buildReadFacts": 101,
+        "buildStreamSeed": 58,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 3,
@@ -864,7 +869,7 @@ describe('reducer registry', () => {
         "dispatchUpgrade": 7,
         "dispatcherRunFacts": 3,
         "effectiveConfig": 1,
-        "executionNoProgress": 6,
+        "executionNoProgress": 7,
         "forgeHealthValue": 1,
         "frozenPrImageHost": 1,
         "harvest": 4,
