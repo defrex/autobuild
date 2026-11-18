@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v1.9.0 — 2026-11-18
+
+This release makes landing gated pull requests more resilient: it uses GitHub's REST API for landing reads and can still land PRs when GitHub GraphQL is unavailable. It also falls back to REST when git refuses to push archive refs. Configured event hooks can now be delivered to local commands and to signed HTTPS webhooks. Web app problems are easier to catch, because browser errors now go to the runtime logs and verify fails if the app crashes while loading.
+
+- [#961](https://github.com/defrex/autobuild/pull/961) — Land gated PRs when GitHub GraphQL is unavailable
+- [#960](https://github.com/defrex/autobuild/pull/960) — Use REST for GitHub landing reads
+- [#959](https://github.com/defrex/autobuild/pull/959) — Deliver hooks to signed HTTPS webhooks
+- [#958](https://github.com/defrex/autobuild/pull/958) — Fall back to REST when git refuses archive ref pushes
+- [#957](https://github.com/defrex/autobuild/pull/957) — Deliver configured event hooks to local commands
+- [#956](https://github.com/defrex/autobuild/pull/956) — Fail verify when the web app crashes while loading
+- [#955](https://github.com/defrex/autobuild/pull/955) — Report browser errors from the web app to runtime logs
+
 ## v1.8.1 — 2026-11-17
 
 This patch release fixes a regression from #951 that made the web dashboard and settings pages crash in the browser with a "Bun is not defined" error. Both pages load normally again.

@@ -6,6 +6,7 @@ import release3 from './1.5.0.json'
 import release4 from './1.6.0.json'
 import release5 from './1.7.0.json'
 import release6 from './1.8.0.json'
+import release7 from './1.9.0.json'
 import type { ReducerValueCatalog } from '../../reducer-value-validation'
 export interface ReleasedReducerValues extends ReducerValueCatalog {
   versions: Record<string, number>
@@ -18,4 +19,5 @@ export const RELEASED_REDUCER_VALUES: Readonly<Record<string, ReleasedReducerVal
   '1.6.0.json': release4,
   '1.7.0.json': release5,
   '1.8.0.json': release6,
+  '1.9.0.json': release7,
 }
