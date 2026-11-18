@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
-import type { EventWrite } from '../events/catalog'
+import type { AbEvent, EventWrite } from '../events/catalog'
 import { sequentialIds } from '../ids'
 import { commandObjective, OPTIMIZATION_SHA as sha } from '../kernel/generators/optimization-log'
 import { FakeForge } from '../ports/forge/fake'
@@ -77,8 +77,10 @@ async function world(rejectedRole = true) {
   })
   const call = <T>(name: string, ...args: unknown[]): Promise<T> =>
     (Reflect.get(dispatcher, name) as (...a: unknown[]) => Promise<T>).apply(dispatcher, args)
-  const events = async (slug: string, type: EventWrite['type']) =>
-    (await store.getEvents(slug)).filter((event) => event.type === type)
+  const events = async <T extends AbEvent['type']>(slug: string, type: T) =>
+    (await store.getEvents(slug)).filter(
+      (event): event is Extract<AbEvent, { type: T }> => event.type === type,
+    )
   const nodeState = async () => (await readBuildFacts(store, node)).value.state
   return { store, tickets, forge, ticket, call, events, nodeState }
 }
