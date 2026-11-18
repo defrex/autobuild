@@ -467,3 +467,85 @@ test('capacity wording joins node and parked-build waits', () => {
     ' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n; 1 parked build waiting for a slot ahead of new ticket claims: p)',
   )
 })
+
+const measurementRequest = {
+  id: 'm1',
+  node: 'node',
+  candidate: 'c'.repeat(40),
+  baseline: 'a'.repeat(40),
+  harnessPin: 'a'.repeat(40),
+  revision: 1,
+}
+
+test('a parked attempt with a pending measurement request is admitted as a re-verify', () => {
+  const leaf = finished('a', { settled: 10 })
+  expect(slotRequest(leaf, now)).toBeUndefined()
+  leaf.state.attemptMeasurement = { request: { ...measurementRequest, seq: 11 } }
+  expect(slotRequest(leaf, now)).toBe('verification')
+  expect(dispatchCapacity([leaf], 2, now).waitingBuilds).toEqual([
+    { slug: 'a', request: 'verification' },
+  ])
+  for (const status of ['paused', 'blocked'] as const) {
+    leaf.state.status = status
+    expect(slotRequest(leaf, now)).toBeUndefined()
+  }
+  leaf.state.status = 'running'
+  leaf.state.attemptMeasurement.measured = { request: 'm1', seq: 12 }
+  expect(slotRequest(leaf, now)).toBeUndefined()
+})
+
+function measuringNode(slug: string): CapacityBuild {
+  const node = build(slug, 'node')
+  node.state.nodeOpened = { sha: 'a'.repeat(40) }
+  const objective = {
+    purpose: 'p',
+    metric: {
+      kind: 'command' as const,
+      command: 'bench',
+      direction: 'minimize' as const,
+      samples: 3,
+      harness: ['bench/**'],
+    },
+    target: { epsilon: { absolute: 1 } },
+    budget: { maxAttempts: 3 },
+    stop: { mode: 'abort' as const },
+    proposer: { concurrency: 1 },
+  }
+  node.state.optimization = {
+    accepted: {
+      objective,
+      revision: 1,
+      harnessPin: 'a'.repeat(40),
+      specRev: 0,
+      acceptedAt: now.toISOString(),
+    },
+    openedAt: now.toISOString(),
+    objective,
+    revision: 1,
+    revisedFields: [],
+    rulerRevision: 1,
+    attempts: { filed: 0, accepted: 0, rejected: 0 },
+    inFlight: [],
+    plateau: 0,
+    emptyProposals: 0,
+  }
+  return node
+}
+
+test('a node due its starting measurement requests verification and occupies while measuring', () => {
+  const node = measuringNode('node')
+  expect(slotRequest(node, now)).toBe('verification')
+  expect(occupiesCapacity(node, now)).toBe(false)
+  const capacity = dispatchCapacity([node, build('a')], 3, now)
+  expect(capacity.waitingNodes).toEqual([{ slug: 'node', request: 'verification' }])
+  expect(intakeCapacity(capacity)).toBe(1)
+  node.workspace = true
+  expect(slotRequest(node, now)).toBeUndefined()
+  expect(occupiesCapacity(node, now)).toBe(true)
+  node.workspace = false
+  node.state.status = 'blocked'
+  expect(slotRequest(node, now)).toBeUndefined()
+  node.state.status = 'running'
+  node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
+  expect(slotRequest(node, now)).toBeUndefined()
+})
