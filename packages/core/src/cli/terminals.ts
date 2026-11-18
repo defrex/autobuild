@@ -51,9 +51,13 @@ import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
+import { objectiveBlocks, WORK_TICKET_OBJECTIVE_REFUSAL } from '../objective'
+import { specConformance } from '../spec-standard'
+import { readOptimizationLedger } from '../store/reduced-reads'
 import {
   findingDraftSchema,
   isVerifyPhase,
+  proposalsDocumentSchema,
   verifyReportKind,
   verifyStep,
   type ArtifactRef,
@@ -395,6 +399,9 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       `'ab done' is not ${env.phase}'s terminal — ${env.phase} is a ` +
         `${spec.kind} phase; use 'ab verdict' (§8.2)`,
     )
+  }
+  if (spec.terminal !== 'done') {
+    throw new Error(`'ab done' is not ${env.phase}'s terminal — use 'ab ${spec.terminal}' (§8.2)`)
   }
   const events = (await readBuildFacts(store, env.build)).value
   const diagnostic = compatibilityDiagnostic(events.state.compatibility)
@@ -772,7 +779,7 @@ export async function verdict(deps: TerminalDeps, opts: VerdictOpts): Promise<Ev
   if (spec.kind === 'producer') {
     throw new Error(
       `'ab verdict' is not ${env.phase}'s terminal — ${env.phase} is a ` +
-        `producer phase; use 'ab done' (§8.2)`,
+        `producer phase; use 'ab ${spec.terminal}' (§8.2)`,
     )
   }
   // The verdict vocabulary is phase-dependent and enforced here (§8.2):
@@ -873,6 +880,128 @@ async function reviewVerdict(
     )
   }
   return out
+}
+
+// ── ab propose (an optimization node's proposer — SPEC §13.1.1) ─────────────
+
+const PROPOSALS_SHAPE = `{
+  "proposals": [
+    {
+      "id": "kebab-case-id, stable and never reused in this node",
+      "title": "one line, at most 200 characters",
+      "strategy": "one line naming the single strategy, at most 300 characters",
+      "body": "a spec-standard ticket body: what and why, '## Acceptance criteria' with at least one item, '## Out of scope'"
+    }
+  ],
+  "reason": "required when proposals is empty"
+}`
+
+export interface ProposeOpts {
+  /** Path to the proposals JSON document. */
+  file?: string
+  /** Propose nothing, for this reason. */
+  none?: string
+}
+
+/**
+ * Deposit the proposer's typed list as the `attempts` artifact with
+ * `propose.completed`, atomically. The proposer never creates tickets: the
+ * dispatcher files each proposal as a ready attempt targeting the node.
+ */
+export async function propose(deps: TerminalDeps, opts: ProposeOpts): Promise<EventEnvelope> {
+  const { env, store } = deps
+  const spec = phaseSpecFor(env.phase)
+  if (spec.terminal !== 'propose') {
+    throw new Error(
+      `'ab propose' is not ${env.phase}'s terminal — ${env.phase} ends with ` +
+        `'ab ${spec.terminal}' (§8.2)`,
+    )
+  }
+  if ((opts.file === undefined) === (opts.none === undefined))
+    throw new Error("'ab propose' takes exactly one of <file> or --none <reason>")
+  const events = (await readBuildFacts(store, env.build)).value
+  const diagnostic = compatibilityDiagnostic(events.state.compatibility)
+  if (diagnostic) throw new MixedVersionDeferral(diagnostic)
+  await assertNoPriorTerminal(store, env)
+  const optimization = events.state.optimization
+  const proposal = optimization?.proposal
+  if (optimization === undefined || proposal === undefined || proposal.round !== env.round)
+    throw new Error(
+      `propose@${env.round} has no open proposal request on ${env.build}; nothing can be deposited`,
+    )
+  if (proposal.deposited !== undefined)
+    throw new Error(`proposal request ${proposal.id} was already deposited`)
+
+  let raw: unknown
+  if (opts.none !== undefined) {
+    if (opts.none.trim() === '') throw new Error("'ab propose --none' requires a reason")
+    raw = { proposals: [], reason: opts.none }
+  } else {
+    const text = await readTextFile(opts.file!, 'proposals')
+    try {
+      raw = JSON.parse(text)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `${opts.file} is not valid JSON: ${message}\nExpected shape:\n${PROPOSALS_SHAPE}`,
+      )
+    }
+  }
+  const parsed = proposalsDocumentSchema.safeParse(raw)
+  if (!parsed.success)
+    throw new Error(
+      `the proposals do not match the schema:\n${renderFindingsIssues(parsed.error.issues)}\n` +
+        `Expected shape:\n${PROPOSALS_SHAPE}`,
+    )
+  const document = parsed.data
+  const ids = document.proposals.map((entry) => entry.id)
+  const duplicate = ids.find((id, index) => ids.indexOf(id) !== index)
+  if (duplicate !== undefined) throw new Error(`proposal id "${duplicate}" appears more than once`)
+  if (ids.length > proposal.room)
+    throw new Error(
+      `${ids.length} proposals exceed this request's room of ${proposal.room}; ` +
+        'propose at most that many',
+    )
+  for (const entry of document.proposals) {
+    const conformance = specConformance(entry.body)
+    if (!conformance.conforms)
+      throw new Error(
+        `proposal "${entry.id}" body does not meet the spec standard: missing ${conformance.missing.join(', ')}`,
+      )
+    if (objectiveBlocks(entry.body).length > 0)
+      throw new Error(`proposal "${entry.id}" refused: ${WORK_TICKET_OBJECTIVE_REFUSAL}`)
+  }
+  if (ids.length > 0) {
+    // One explicit history read per deposit: a fresh proposal must never
+    // adopt an earlier attempt's ticket by reusing its id.
+    const ledger = (await readOptimizationLedger(store, env.build)).value
+    const used = new Set([
+      ...ledger.entries.map((entry) => entry.proposal),
+      ...Object.keys(ledger.pending),
+      ...optimization.inFlight.map((attempt) => attempt.proposal),
+    ])
+    const reused = ids.find((id) => used.has(id))
+    if (reused !== undefined)
+      throw new Error(
+        `proposal id "${reused}" was already used by this node; choose a new id for a new attempt`,
+      )
+  }
+  const actor = agentActor(env.phase, env.session)
+  const { event } = await terminalDeposit(
+    deps,
+    [{ kind: 'attempts', content: `${JSON.stringify(document, null, 2)}\n` }],
+    (deposited) => ({
+      actor,
+      type: 'propose.completed',
+      payload: {
+        round: env.round,
+        request: proposal.id,
+        proposals: ids,
+        artifact: refOf(deposited[0]),
+      },
+    }),
+  )
+  return event
 }
 
 /**
