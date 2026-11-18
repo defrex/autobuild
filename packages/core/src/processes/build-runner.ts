@@ -36,6 +36,7 @@ import { nativeSessionHandleSchema } from '../ports/runner/native-session'
 import type { NativeSessionObserver } from '../ports/types'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { integrationCurrent } from '../kernel/integration-state'
+import { proposeRunDue } from '../kernel/optimization'
 import { replayNodeChange } from '../kernel/node-restack'
 import { restoreReplay } from '../kernel/reconcile-restack'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
@@ -1138,6 +1139,7 @@ export class BuildRunner {
     if (
       attaching.kind === 'node' &&
       !attaching.nodeRestack?.conflict &&
+      !proposeRunDue(attaching.optimization) &&
       !integrationCurrent(attaching)
     )
       throw new Error('integration runners require a reserved node conflict')
@@ -1162,7 +1164,20 @@ export class BuildRunner {
     }
 
     const state = facts.state
-    if (state.kind === 'node' && state.integration?.cycle && !state.nodeRestack?.conflict) {
+    const proposal = state.optimization?.proposal
+    if (
+      state.kind === 'node' &&
+      !state.nodeRestack?.conflict &&
+      proposal !== undefined &&
+      proposeRunDue(state.optimization)
+    ) {
+      // The proposer reads the tree its request recorded, never a later tip.
+      const checkout = await this.deps.exec(['git', 'checkout', '--detach', proposal.head], {
+        cwd: this.deps.workspacePath,
+      })
+      if (checkout.exitCode !== 0)
+        throw new Error(`cannot check out the proposal request head: ${checkout.stderr}`)
+    } else if (state.kind === 'node' && state.integration?.cycle && !state.nodeRestack?.conflict) {
       // Local worktree provisioning may create a new branch at its parent;
       // verification consumes the archived cycle commit, never that mutable tip.
       const checkout = await this.deps.exec(
@@ -1489,6 +1504,7 @@ export class BuildRunner {
     if (
       initial.kind === 'node' &&
       !initial.nodeRestack?.conflict &&
+      !proposeRunDue(initial.optimization) &&
       !integrationCurrent(initial) &&
       initialFacts.log.readDeferrals.length === 0
     )
@@ -4867,6 +4883,15 @@ export class BuildRunner {
           type: 'reconcile.started',
           payload: { attempt: reconcile.attempt, baseSha: reconcileBaseSha },
         } satisfies EventWrite<'reconcile.started'>
+      }
+      case 'propose': {
+        if (decision.propose === undefined)
+          throw new Error('run-phase propose start requires its open request')
+        return {
+          actor: KERNEL,
+          type: 'propose.started',
+          payload: { round, request: decision.propose.request },
+        } satisfies EventWrite<'propose.started'>
       }
     }
   }
