@@ -37,7 +37,7 @@ describe('optimization digest', () => {
     expect(state.objective.target).toEqual({ threshold: 35, epsilon: { absolute: 2 } })
     expect(state.objective.stop.plateau).toEqual({ attempts: 8 })
     expect(state.rulerRevision).toBe(1)
-    expect(state.starting).toEqual({ value: 50, spread: 1.5, head: 'a'.repeat(40) })
+    expect(state.starting).toEqual({ value: 50, spread: 1.6, head: 'a'.repeat(40) })
     expect(state.current).toBe(44)
     expect(state.best).toBe(44)
     expect(state.attempts).toEqual({ filed: 4, accepted: 1, rejected: 3 })

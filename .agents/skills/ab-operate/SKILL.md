@@ -502,6 +502,10 @@ Treat every default-watch record as a call to act:
   your consent was given under. Review the reconcile's edits to the named files
   at the new head, then consent again with `ab merge <slug> --head <new head>`
   or hold it. The build is back in the consent queue until you do.
+- `optimization.noise-exceeded`: an optimization node's ε is below the noise
+  its starting measurement found, so its gate could accept noise. Tell the
+  human both numbers; raising ε (`ab objective <node> --epsilon …`) or
+  `metric.samples` (a spec revision) is their call. The node keeps running.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
   When the reason begins `Awaiting a human merge`, Autobuild cannot land the PR
@@ -675,7 +679,7 @@ Watch for decisions and conflicts with `ab watch --operator --json`; save its op
 and resume with `ab watch --operator --since <watch-cursor> --json`. On
 `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge the
 unavailable historical gap. Default attention includes
-failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays, revoked protected consent (`landing.consent-revoked`) and derived
+failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays, revoked protected consent (`landing.consent-revoked`), optimization noise above ε (`optimization.noise-exceeded`) and derived
 `build.consent-ready` observations, including already-ready merges on first
 repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or
