@@ -490,6 +490,20 @@ test('a parked attempt with a pending measurement request is admitted as a re-ve
     expect(slotRequest(leaf, now)).toBeUndefined()
   }
   leaf.state.status = 'running'
+  // Sampled, the decision is the dispatcher's: no runner, no slot.
+  leaf.state.attemptMeasurement.sampled = {
+    request: 'm1',
+    candidate: 'c'.repeat(40),
+    baseline: 'a'.repeat(40),
+    harnessPin: 'a'.repeat(40),
+    revision: 1,
+    samples: 3,
+    medians: { baseline: 10, candidate: 9 },
+    report: { kind: 'measurement-samples', rev: 0 },
+    seq: 12,
+  }
+  expect(slotRequest(leaf, now)).toBeUndefined()
+  delete leaf.state.attemptMeasurement.sampled
   leaf.state.attemptMeasurement.measured = { request: 'm1', seq: 12 }
   expect(slotRequest(leaf, now)).toBeUndefined()
 })

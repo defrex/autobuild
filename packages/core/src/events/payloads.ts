@@ -16,7 +16,12 @@ import { nativeSessionHandleSchema } from './native-session'
  */
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
-import { objectiveEpsilonSchema, objectiveSchema, revisableChangesSchema } from '../objective'
+import {
+  commandMetricSchema,
+  objectiveEpsilonSchema,
+  objectiveSchema,
+  revisableChangesSchema,
+} from '../objective'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
 import {
   HEAD_PATHS_ARTIFACT,
@@ -475,9 +480,10 @@ export const optimizationStopCauseSchema = z.enum([
 export type OptimizationStopCause = z.infer<typeof optimizationStopCauseSchema>
 export const optimizationStopModeSchema = z.enum(['abort', 'drain'])
 
-/** The optimization-node facts (RFC 0005 §11.1, SPEC §15.3). `attempt.measured`
- * and `attempt.measurement-requested` live on the attempt's log; every other
- * fact, including `attempt.settled`, lives on the node's log. */
+/** The optimization-node facts (RFC 0005 §11.1, SPEC §15.3).
+ * `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured`
+ * live on the attempt's log; every other fact, including `attempt.settled`,
+ * lives on the node's log. */
 const optimizationPayloadSchemas = {
   'optimization.objective-accepted': z.strictObject({
     objective: objectiveSchema,
@@ -549,6 +555,23 @@ const optimizationPayloadSchemas = {
     baseline: sha,
     harnessPin: sha,
     revision: objectiveRevision,
+    /** The command metric the node's ruler measures with, so the attempt's
+     * runner can sample without reading the node. */
+    metric: commandMetricSchema.optional(),
+  }),
+  /** The attempt runner's paired samples for one request. The decision is
+   * not a sampled fact: the dispatcher records it as `attempt.measured`
+   * against the node's ε and spread after sampling. */
+  'attempt.sampled': z.strictObject({
+    request: z.string().min(1),
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: objectiveRevision,
+    samples: z.number().int().min(1),
+    medians: z.strictObject({ candidate: z.number(), baseline: z.number() }),
+    /** The raw per-sample values, deposited with this fact. */
+    report: artifactRefSchema,
   }),
   'attempt.measured': z
     .strictObject({

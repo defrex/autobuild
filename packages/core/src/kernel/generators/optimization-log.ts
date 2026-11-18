@@ -1,21 +1,26 @@
 import { validateEventWrite, type AbEvent, type EventWrite } from '../../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
 import type { AttemptOutcome } from '../../events/payloads'
-import type { Objective } from '../../objective'
+import type { CommandMetric, Objective } from '../../objective'
 
 export const OPTIMIZATION_SHA = (char: string) => char.repeat(40)
+
+/** The command metric `commandObjective` measures with. */
+export function commandMetric(): CommandMetric {
+  return {
+    kind: 'command',
+    command: 'bun bench/search.ts',
+    direction: 'minimize',
+    samples: 7,
+    harness: ['bench/search/**'],
+  }
+}
 
 /** A command objective minimizing a benchmark, with every optional field set. */
 export function commandObjective(overrides: Partial<Objective> = {}): Objective {
   return {
     purpose: 'p95 latency of the catalog search query',
-    metric: {
-      kind: 'command',
-      command: 'bun bench/search.ts',
-      direction: 'minimize',
-      samples: 7,
-      harness: ['bench/search/**'],
-    },
+    metric: commandMetric(),
     target: { threshold: 40, epsilon: { relative: 0.03 } },
     budget: { maxAttempts: 60, maxHours: 24 },
     stop: { plateau: { attempts: 12 }, mode: 'abort' },
@@ -128,6 +133,7 @@ export class OptimizationLogBuilder {
     node = 'opt-node',
     revision = 1,
     candidate = OPTIMIZATION_SHA('c'),
+    metric?: CommandMetric,
   ) {
     return this.push({
       actor: DISPATCHER,
@@ -139,6 +145,29 @@ export class OptimizationLogBuilder {
         baseline: OPTIMIZATION_SHA('a'),
         harnessPin: OPTIMIZATION_SHA('a'),
         revision,
+        ...(metric !== undefined ? { metric } : {}),
+      },
+    })
+  }
+
+  /** An attempt runner's paired samples, on the attempt's own log. */
+  sampled(
+    request: string,
+    medians: { baseline: number; candidate: number },
+    opts: { revision?: number; candidate?: string } = {},
+  ) {
+    return this.push({
+      actor: KERNEL,
+      type: 'attempt.sampled',
+      payload: {
+        request,
+        candidate: opts.candidate ?? OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: opts.revision ?? 1,
+        samples: 7,
+        medians,
+        report: { kind: 'measurement-samples', rev: 0 },
       },
     })
   }
@@ -288,7 +317,8 @@ export function attemptMeasurementLog(): AbEvent[] {
         kind: 'work',
       },
     })
-    .requestMeasurement('m1')
+    .requestMeasurement('m1', 'opt-node', 1, OPTIMIZATION_SHA('c'), commandMetric())
+    .sampled('m1', { baseline: 50, candidate: 44 })
     .measured(
       'm1',
       { baseline: 50, candidate: 44 },
@@ -297,5 +327,18 @@ export function attemptMeasurementLog(): AbEvent[] {
         report: { kind: 'measurement-samples', rev: 0 },
       },
     )
-    .requestMeasurement('m2').events
+    .requestMeasurement('m2')
+    .sampled('m2', { baseline: 44, candidate: 43 })
+    .push({
+      actor: DISPATCHER,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_m2',
+        phase: 'measurement',
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question: 'request m2 sampled a superseded ruler',
+      },
+    })
+    .requestMeasurement('m3').events
 }

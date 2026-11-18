@@ -79,6 +79,7 @@ export const executionProgress = {
   'optimization.proposal-requested': 'bookkeeping',
   'optimization.attempts-proposed': 'bookkeeping',
   'attempt.measurement-requested': 'bookkeeping',
+  'attempt.sampled': 'progress',
   'attempt.measured': 'progress',
   'optimization.progress-measured': 'bookkeeping',
   'attempt.settled': 'bookkeeping',

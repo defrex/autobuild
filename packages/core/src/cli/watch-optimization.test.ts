@@ -78,3 +78,20 @@ test('every attempt delta carries the noise spread beside it', () => {
     'candidate 44 vs baseline 50: delta 6 → improved',
   )
 })
+
+test('a sampled line reports both medians and leaves the decision to the dispatcher', () => {
+  const sampled = {
+    request: 'm1',
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: 1,
+    samples: 7,
+    medians: { candidate: 44, baseline: 50 },
+    report: { kind: 'measurement-samples', rev: 0 },
+  }
+  expect(summarizeEvent(event('attempt', 'attempt.sampled', sampled), null)).toBe(
+    `sampled candidate 44 vs baseline 50 (7 samples per side, harness ${sha.slice(0, 7)}); the dispatcher decides against the node's ε`,
+  )
+  expect(BUILD_ATTENTION_EVENTS as readonly string[]).not.toContain('attempt.sampled')
+})

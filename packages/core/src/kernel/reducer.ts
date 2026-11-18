@@ -300,7 +300,14 @@ export interface TicketWaitState {
 
 export interface AttemptMeasurementState {
   request?: EventPayload<'attempt.measurement-requested'> & { seq: number }
+  /** The latest `attempt.sampled`: the runner's samples awaiting the
+   * dispatcher's decision. */
+  sampled?: EventPayload<'attempt.sampled'> & { seq: number }
   measured?: { request: string; seq: number }
+  /** A request whose samples the dispatcher refused to decide (a
+   * `measurement-failed` escalation after sampling). It waits for a fresh
+   * request. */
+  refused?: string
 }
 
 export interface BuildState {
@@ -849,10 +856,25 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         ...acc.attemptMeasurement,
         request: { ...structuredClone(event.payload), seq: event.seq },
       }
+    if (event.type === 'attempt.sampled')
+      acc.attemptMeasurement = {
+        ...acc.attemptMeasurement,
+        sampled: { ...structuredClone(event.payload), seq: event.seq },
+      }
     if (event.type === 'attempt.measured')
       acc.attemptMeasurement = {
         ...acc.attemptMeasurement,
         measured: { request: event.payload.request, seq: event.seq },
+      }
+    if (
+      event.type === 'escalation.raised' &&
+      event.payload.policyCause === 'measurement-failed' &&
+      acc.attemptMeasurement?.request !== undefined &&
+      acc.attemptMeasurement.sampled?.request === acc.attemptMeasurement.request.id
+    )
+      acc.attemptMeasurement = {
+        ...acc.attemptMeasurement,
+        refused: acc.attemptMeasurement.request.id,
       }
     advanceVerifyStage(acc.verifyStage, event)
     if (event.type === 'verify.cancelled') {

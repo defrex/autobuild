@@ -150,8 +150,6 @@ import {
   baselineMeasurementDue,
   baselineSummary,
   effectiveEpsilon,
-  measurementDecision,
-  measurementDelta,
   median,
   noiseExceeded,
   pendingMeasurementRequest,
@@ -2904,44 +2902,23 @@ export class BuildRunner {
     )
   }
 
-  /** Why the node's digest cannot measure `request`, or undefined. */
-  private unmeasurable(
-    node: BuildState,
-    request: RunMeasurementDecision['request'],
-  ): string | undefined {
-    const optimization = node.optimization
-    if (optimization === undefined) return `node ${request.node} has no accepted objective`
-    if (optimization.objective.metric.kind !== 'command')
-      return `node ${request.node} measures with a panel, not a command`
-    if (request.revision < optimization.rulerRevision)
-      return `request ${request.id} uses objective revision ${request.revision}, older than the current ruler (revision ${optimization.rulerRevision})`
-    if (request.harnessPin !== optimization.accepted.harnessPin)
-      return `request ${request.id} pins the harness at ${request.harnessPin}, but the node pins it at ${optimization.accepted.harnessPin}`
-    if (optimization.starting === undefined)
-      return `node ${request.node} has no starting measurement under its current ruler`
-    return undefined
-  }
-
-  /** A requested paired measurement of this attempt against its baseline. */
+  /** A requested paired measurement of this attempt: sample both sides and
+   * record the samples. The runner holds only this build's store, so the
+   * decision against the node's ε and spread is the dispatcher's, recorded
+   * as `attempt.measured` after sampling (SPEC §13.1.1). */
   private async runMeasurement(decision: RunMeasurementDecision): Promise<void> {
     const { store, slug } = this.deps
     const { request } = decision
-    if (
-      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id !== request.id
-    )
-      return
-    // The pre-run read only screens out requests that can never be measured;
-    // the decision uses the node as it stands after sampling.
-    const screened = (await readBuildFacts(store, request.node)).value.state
-    const refusal = this.unmeasurable(screened, request)
-    if (refusal !== undefined) {
+    const pending = async () =>
+      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id === request.id
+    if (!(await pending())) return
+    const metric = request.metric
+    if (metric === undefined) {
       await this.raiseMeasurementEscalation(
-        `Measurement request ${request.id} cannot be measured: ${refusal}. Answer once the node can measure it, or abort the attempt.`,
+        `Measurement request ${request.id} names no command metric, so it cannot be sampled. Answer once a fresh request names the node's metric, or abort the attempt.`,
       )
       return
     }
-    const metric = screened.optimization!.objective.metric
-    if (metric.kind !== 'command') return
     const result = await this.pairedMeasurement({
       id: `attempt-${request.id}`,
       candidate: request.candidate,
@@ -2951,39 +2928,20 @@ export class BuildRunner {
       config: await this.captureConfig(),
     })
     if (result.kind === 'interrupted') return
-    if (
-      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id !== request.id
-    )
-      return
+    // A newer request supersedes these samples; the engine decides again.
+    if (!(await pending())) return
     if (result.kind === 'failed') {
       await this.raiseMeasurementEscalation(
         this.failedMeasurementQuestion(`Measurement request ${request.id}`, result),
       )
       return
     }
-    const node = (await readBuildFacts(store, request.node)).value.state
-    const optimization = node.optimization
-    const changed =
-      this.unmeasurable(node, request) ??
-      (optimization!.rulerRevision !== screened.optimization!.rulerRevision
-        ? `node ${request.node} started a new ruler (revision ${optimization!.rulerRevision}) while the samples ran`
-        : undefined)
-    if (changed !== undefined) {
-      await this.raiseMeasurementEscalation(
-        `Measurement request ${request.id} sampled a superseded ruler: ${changed}. No result was recorded; request a fresh measurement.`,
-      )
-      return
-    }
-    const medians = { baseline: median(result.baseline), candidate: median(result.candidate) }
-    const direction = metric.direction
-    const delta = measurementDelta(direction, medians.baseline, medians.candidate)
-    const epsilon = effectiveEpsilon(optimization!.objective.target.epsilon, medians.baseline)
     await store.appendWithArtifacts(
       slug,
       [{ kind: MEASUREMENT_SAMPLES_ARTIFACT, content: JSON.stringify(result, null, 2) }],
       (deposited) => ({
         actor: KERNEL,
-        type: 'attempt.measured',
+        type: 'attempt.sampled',
         payload: {
           request: request.id,
           candidate: request.candidate,
@@ -2991,10 +2949,7 @@ export class BuildRunner {
           harnessPin: request.harnessPin,
           revision: request.revision,
           samples: metric.samples,
-          medians,
-          delta,
-          decision: measurementDecision(delta, epsilon),
-          spread: optimization!.starting!.spread,
+          medians: { baseline: median(result.baseline), candidate: median(result.candidate) },
           report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
         },
       }),

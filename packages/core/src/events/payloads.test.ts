@@ -1780,6 +1780,49 @@ describe('optimization event protocol', () => {
     invalid('attempt.measured', { ...measured, noise: 1 }, KERNEL)
   })
 
+  test('a request may name its command metric; samples are a decisive kernel fact', () => {
+    const metric = {
+      kind: 'command',
+      command: 'bun bench.ts',
+      direction: 'minimize',
+      samples: 5,
+      harness: ['bench/**'],
+    }
+    const request = {
+      id: 'm1',
+      node: 'node-slug',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+    }
+    expect(
+      valid('attempt.measurement-requested', { ...request, metric }, DISPATCHER),
+    ).toMatchObject({ payload: { metric } })
+    invalid('attempt.measurement-requested', { ...request, metric: { kind: 'panel' } }, DISPATCHER)
+    const sampled = {
+      request: 'm1',
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: 1,
+      samples: 5,
+      medians: { candidate: 39, baseline: 41 },
+      report: { kind: 'measurement-samples', rev: 0 },
+    }
+    expect(valid('attempt.sampled', sampled, KERNEL)).toMatchObject({ type: 'attempt.sampled' })
+    expect(buildEventPolicy['attempt.sampled']).toBe('decisive')
+    // Samples carry no decision: that is the dispatcher's attempt.measured.
+    invalid('attempt.sampled', { ...sampled, decision: 'improved' }, KERNEL)
+    invalid('attempt.sampled', { ...sampled, delta: 2 }, KERNEL)
+    const { report: _report, ...unreported } = sampled
+    invalid('attempt.sampled', unreported, KERNEL)
+    invalid('attempt.sampled', sampled, DISPATCHER)
+    expect(valid('attempt.measured', { ...measuredFact(), spread: 1 }, DISPATCHER)).toMatchObject({
+      actor: DISPATCHER,
+    })
+  })
+
   test('the noise check is an advisory kernel fact that allows a zero effective epsilon', () => {
     const noise = {
       revision: 1,
@@ -1814,6 +1857,20 @@ describe('optimization event protocol', () => {
         KERNEL,
       ),
     ).toMatchObject({ payload: { phase: 'measurement' } })
+    // The dispatcher refuses samples taken under a superseded ruler.
+    expect(
+      valid(
+        'escalation.raised',
+        {
+          id: 'esc-2',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'superseded ruler',
+        },
+        DISPATCHER,
+      ),
+    ).toMatchObject({ actor: DISPATCHER })
     invalid(
       'escalation.raised',
       {
@@ -1827,3 +1884,18 @@ describe('optimization event protocol', () => {
     )
   })
 })
+
+function measuredFact() {
+  const sha = 'a'.repeat(40)
+  return {
+    request: 'm1',
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: 1,
+    samples: 5,
+    medians: { candidate: 39, baseline: 41 },
+    delta: 2,
+    decision: 'improved',
+  }
+}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import {
+  commandMetric,
   commandObjective,
   OPTIMIZATION_SHA,
   OptimizationLogBuilder,
@@ -9,6 +10,7 @@ import {
 import {
   baselineMeasurementDue,
   baselineSummary,
+  decideSampledMeasurement,
   effectiveEpsilon,
   harnessDiff,
   measurementDecision,
@@ -18,6 +20,7 @@ import {
   parseLsTree,
   parseMeasurementOutput,
   pendingMeasurementRequest,
+  sampledMeasurement,
   sampleOrder,
   type TreeEntry,
 } from './measurement'
@@ -250,5 +253,185 @@ describe('pendingMeasurementRequest', () => {
     expect(
       pendingMeasurementRequest(reduceBuild(opened().requestMeasurement('m1').events)),
     ).toBeUndefined()
+  })
+})
+
+describe('sampledMeasurement', () => {
+  test('a request is the runner’s until sampled, then the dispatcher’s until decided', () => {
+    const requested = attempt().requestMeasurement('m1')
+    const sampled = requested.sampled('m1', { baseline: 50, candidate: 44 })
+    const state = reduceBuild(sampled.events)
+    expect(pendingMeasurementRequest(state)).toBeUndefined()
+    expect(sampledMeasurement(state)).toMatchObject({
+      request: 'm1',
+      medians: { baseline: 50, candidate: 44 },
+      report: { kind: 'measurement-samples', rev: 0 },
+    })
+    const measured = sampled.measured('m1', { baseline: 50, candidate: 44 })
+    expect(sampledMeasurement(reduceBuild(measured.events))).toBeUndefined()
+  })
+
+  test('a newer request supersedes older samples', () => {
+    const log = attempt()
+      .requestMeasurement('m1')
+      .sampled('m1', { baseline: 50, candidate: 44 })
+      .requestMeasurement('m2')
+    const state = reduceBuild(log.events)
+    expect(sampledMeasurement(state)).toBeUndefined()
+    expect(pendingMeasurementRequest(state)?.id).toBe('m2')
+  })
+
+  test('a refusal after sampling ends the dispatcher’s work for that request', () => {
+    const log = attempt()
+      .requestMeasurement('m1')
+      .sampled('m1', { baseline: 50, candidate: 44 })
+      .push({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-1',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'q',
+        },
+      })
+    const refused = log.push({
+      actor: humanActor('ada'),
+      type: 'escalation.answered',
+      payload: { id: 'esc-1', answer: 'ok', resolution: 'guidance' },
+    })
+    const state = reduceBuild(refused.events)
+    expect(state.attemptMeasurement?.refused).toBe('m1')
+    expect(sampledMeasurement(state)).toBeUndefined()
+    expect(pendingMeasurementRequest(state)).toBeUndefined()
+  })
+
+  test('a runner failure before sampling is not a refusal; the answer re-arms sampling', () => {
+    const log = attempt()
+      .requestMeasurement('m1')
+      .push({
+        actor: { kind: 'kernel' },
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-1',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'q',
+        },
+      })
+      .push({
+        actor: humanActor('ada'),
+        type: 'escalation.answered',
+        payload: { id: 'esc-1', answer: 'retry', resolution: 'guidance' },
+      })
+    const state = reduceBuild(log.events)
+    expect(state.attemptMeasurement?.refused).toBeUndefined()
+    expect(pendingMeasurementRequest(state)?.id).toBe('m1')
+  })
+
+  test('none on a terminal leaf', () => {
+    const log = attempt()
+      .requestMeasurement('m1')
+      .sampled('m1', { baseline: 50, candidate: 44 })
+      .push({ actor: { kind: 'kernel' }, type: 'build.aborted', payload: {} })
+    expect(sampledMeasurement(reduceBuild(log.events))).toBeUndefined()
+  })
+})
+
+describe('decideSampledMeasurement', () => {
+  const request = {
+    id: 'm1',
+    node: 'opt-node',
+    candidate: OPTIMIZATION_SHA('c'),
+    baseline: OPTIMIZATION_SHA('a'),
+    harnessPin: OPTIMIZATION_SHA('a'),
+    revision: 1,
+    metric: commandMetric(),
+  }
+  const samples = (medians: { baseline: number; candidate: number }) =>
+    sampledMeasurement(
+      reduceBuild(attempt().requestMeasurement('m1').sampled('m1', medians).events),
+    )!
+
+  test('decides against the node’s current epsilon, with its spread beside the delta', () => {
+    const measuring = opened().baseline(1, 50, 0.4)
+    const sampled = samples({ baseline: 50, candidate: 48.8 })
+    // ε is 3% of 50 = 1.5: a delta of 1.2 is no improvement.
+    expect(decideSampledMeasurement(reduceBuild(measuring.events), request, sampled)).toEqual({
+      measured: {
+        request: 'm1',
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: 1,
+        samples: 7,
+        medians: { baseline: 50, candidate: 48.8 },
+        delta: expect.closeTo(1.2) as unknown as number,
+        decision: 'no-improvement',
+        spread: 0.4,
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+    // A quick revision while the samples ran applies: ε 1 accepts 1.2.
+    const revised = measuring.revise({ epsilon: { absolute: 1 } }, 2)
+    const decided = decideSampledMeasurement(reduceBuild(revised.events), request, sampled)
+    expect('measured' in decided && decided.measured.decision).toBe('improved')
+  })
+
+  test('a maximizing objective mirrors the delta', () => {
+    const objective = commandObjective({
+      metric: { ...commandMetric(), direction: 'maximize' },
+    })
+    const node = reduceBuild(opened(objective).baseline(1, 50, 0).events)
+    const decided = decideSampledMeasurement(
+      node,
+      { ...request, metric: objective.metric as ReturnType<typeof commandMetric> },
+      samples({ baseline: 50, candidate: 52 }),
+    )
+    expect('measured' in decided && decided.measured).toMatchObject({
+      delta: 2,
+      decision: 'improved',
+    })
+  })
+
+  test('a new ruler or harness pin after the request refuses instead of deciding', () => {
+    const sampled = samples({ baseline: 50, candidate: 40 })
+    const newRuler = opened()
+      .baseline(1, 50, 0.4)
+      .accept(
+        commandObjective({ metric: { ...commandMetric(), command: 'bun bench/v2.ts' } }),
+        2,
+        1,
+        OPTIMIZATION_SHA('b'),
+      )
+      .baseline(2, 50, 0.4)
+    expect(decideSampledMeasurement(reduceBuild(newRuler.events), request, sampled)).toEqual({
+      refusal: expect.stringContaining('older than the current ruler (revision 2)'),
+    })
+    const rePinned = opened()
+      .baseline(1, 50, 0.4)
+      .accept(commandObjective(), 2, 1, OPTIMIZATION_SHA('b'))
+    expect(
+      decideSampledMeasurement(reduceBuild(rePinned.events), { ...request, revision: 2 }, sampled),
+    ).toEqual({ refusal: expect.stringContaining('pins the harness at') })
+  })
+
+  test('a panel, a missing objective, a missing starting value or another metric refuses', () => {
+    const sampled = samples({ baseline: 50, candidate: 40 })
+    const refusal = (node: ReturnType<typeof reduceBuild>, req = request) => {
+      const decided = decideSampledMeasurement(node, req, sampled)
+      return 'refusal' in decided ? decided.refusal : undefined
+    }
+    expect(refusal(reduceBuild(node().events))).toContain('no accepted objective')
+    expect(refusal(reduceBuild(opened(panelObjective()).events))).toContain('panel')
+    expect(refusal(reduceBuild(opened().events))).toContain('no starting measurement')
+    expect(
+      refusal(reduceBuild(opened().baseline(1, 50, 0).events), {
+        ...request,
+        metric: { ...commandMetric(), command: 'other' },
+      }),
+    ).toContain('differs from the node')
   })
 })

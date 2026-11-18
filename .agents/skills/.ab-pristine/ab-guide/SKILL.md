@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, revisions and derived progress.
+- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions and derived progress.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -1375,8 +1375,8 @@ own-build-read deferral and its answer resets no phase failures; reconcile no-pr
 while `round` remains occurrence scope. Answering a runner-failure cause re-arms
 only its matching phase and round. The phase-level `verify-failure-limit` cause
 explicitly re-arms all rounds for its verify target, while
-`reconcile-no-progress`, `publication-retry-limit`, `wait-unresolvable` and the
-setup-only cause reset no phase-runner failures.
+`reconcile-no-progress`, `publication-retry-limit`, `wait-unresolvable`,
+`measurement-failed` and the setup-only cause reset no phase-runner failures.
 The closed cause map forces every future policy condition to choose one of these
 semantics instead of inheriting behavior from a missing `round`. Runner failures
 while checking progress or refreshing the base therefore remain counted after a
@@ -2898,6 +2898,10 @@ The default watch reports actionable conditions only:
   protected by the `paths` or `within` rule the merge consent was given under.
   It names the matched files and the previous and new heads; the build returns
   to the consent queue and needs fresh consent for its new head.
+- Build `optimization.noise-exceeded`: an optimization node's starting
+  measurement found more noise than ε can resolve. It names the spread and ε;
+  the node still opens. Raise `target.epsilon` with `ab objective`, or raise
+  `metric.samples` with a spec revision.
 - Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and

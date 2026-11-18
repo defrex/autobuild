@@ -9,7 +9,7 @@ import { sequentialIds } from '../ids'
 import type { Decision } from '../kernel/engine'
 import type { Objective } from '../objective'
 import { FakeForge } from '../ports/forge/fake'
-import { ScriptedAgentRunner } from '../ports/runner/fake'
+import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { reduceBuild } from '../kernel/reducer'
@@ -91,7 +91,12 @@ async function fixture(exec: Exec, slug: string) {
   const runner = new BuildRunner({
     store: store.scopeBuild(slug),
     config,
-    runtimes: { scripted: { runner: new ScriptedAgentRunner({ script: {} }) } },
+    runtimes: {
+      scripted: {
+        runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+        servesModels: [''],
+      },
+    },
     workspacePath: '/ws',
     branch: `ab/${slug}`,
     slug,
@@ -102,6 +107,11 @@ async function fixture(exec: Exec, slug: string) {
     clock: steppingClock(),
     instance: 'runner-1',
     host: 'test',
+    runtimeIdentity: {
+      version: '0.0.0-test',
+      commit: 'unknown',
+      source: { kind: 'package', location: '/autobuild' },
+    },
   })
   const internals = runner as unknown as {
     measureBaseline(decision: Extract<Decision, { kind: 'measure-baseline' }>): Promise<void>
@@ -222,5 +232,121 @@ describe('the node starting measurement', () => {
     })
     expect(types(await store.getEvents(NODE))).not.toContain('optimization.baseline-measured')
     expect(reduceBuild(await store.getEvents(NODE)).optimization?.accepted.harnessPin).toBe(NEW_PIN)
+  })
+})
+
+describe('an attempt measurement', () => {
+  const metric = objective().metric
+  async function request(store: MemoryBuildStore, withMetric = true) {
+    await store.append(ATTEMPT, {
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id: 'm1',
+        node: NODE,
+        candidate: 'c'.repeat(40),
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        ...(withMetric ? { metric } : {}),
+      },
+    })
+    return pendingRequest(store)
+  }
+  async function pendingRequest(store: MemoryBuildStore) {
+    const state = reduceBuild(await store.getEvents(ATTEMPT))
+    const { seq: _seq, ...payload } = state.attemptMeasurement!.request!
+    return payload
+  }
+
+  test('records the samples on its own log, reading no other build', async () => {
+    // The fixture's runner holds a build-scoped store: a node read throws.
+    const { store, internals } = await fixture(
+      scriptedExec({ baseline: [10, 12], candidate: [8, 8.4] }),
+      ATTEMPT,
+    )
+    await store.append(NODE, {
+      actor: humanActor('ada'),
+      type: 'optimization.objective-revised',
+      payload: { changes: { epsilon: { absolute: 5 } }, revision: 2 },
+    })
+    const payload = await request(store)
+    await internals.runMeasurement({
+      kind: 'run-measurement',
+      request: { ...payload, metric: { ...metric, samples: 2 } },
+    })
+    const events = await store.getEvents(ATTEMPT)
+    const sampled = events.at(-1) as AbEvent & { type: 'attempt.sampled' }
+    expect(sampled.type).toBe('attempt.sampled')
+    expect(sampled.payload).toEqual({
+      request: 'm1',
+      candidate: 'c'.repeat(40),
+      baseline: PIN,
+      harnessPin: PIN,
+      revision: 1,
+      samples: 2,
+      medians: { baseline: 11, candidate: 8.2 },
+      report: { kind: 'measurement-samples', rev: 0 },
+    })
+    expect(types(events)).not.toContain('attempt.measured')
+    const report = await store.getArtifact(ATTEMPT, 'measurement-samples', 0)
+    expect(JSON.parse(new TextDecoder().decode(report!.content))).toMatchObject({
+      baseline: [10, 12],
+      candidate: [8, 8.4],
+    })
+  })
+
+  test('a sampled request is never sampled again', async () => {
+    const { store, runner } = await fixture(
+      scriptedExec({ baseline: [10], candidate: [9] }),
+      ATTEMPT,
+    )
+    const payload = await request(store)
+    const state = reduceBuild(await store.getEvents(ATTEMPT))
+    expect(state.attemptMeasurement?.request?.id).toBe(payload.id)
+    const internals = runner as unknown as {
+      runMeasurement(decision: Extract<Decision, { kind: 'run-measurement' }>): Promise<void>
+    }
+    await internals.runMeasurement({ kind: 'run-measurement', request: payload })
+    await internals.runMeasurement({ kind: 'run-measurement', request: payload })
+    expect(
+      types(await store.getEvents(ATTEMPT)).filter((type) => type === 'attempt.sampled'),
+    ).toHaveLength(1)
+  })
+
+  test('a request without a metric, or a failing command, escalates without samples', async () => {
+    const missing = await fixture(scriptedExec({ baseline: [], candidate: [] }), ATTEMPT)
+    await missing.internals.runMeasurement({
+      kind: 'run-measurement',
+      request: await request(missing.store, false),
+    })
+    const refused = (await missing.store.getEvents(ATTEMPT)).at(-1) as AbEvent & {
+      type: 'escalation.raised'
+    }
+    expect(refused.payload).toMatchObject({
+      phase: 'measurement',
+      policyCause: 'measurement-failed',
+      question: expect.stringContaining('names no command metric'),
+    })
+
+    const failing = await fixture(
+      scriptedExec({ baseline: [], candidate: [] }, undefined, {
+        stdout: 'not json',
+        stderr: '',
+        exitCode: 0,
+      }),
+      ATTEMPT,
+    )
+    await failing.internals.runMeasurement({
+      kind: 'run-measurement',
+      request: await request(failing.store),
+    })
+    const events = await failing.store.getEvents(ATTEMPT)
+    expect(types(events)).not.toContain('attempt.sampled')
+    expect(events.at(-1)!.payload).toMatchObject({
+      phase: 'measurement',
+      policyCause: 'measurement-failed',
+      question: expect.stringContaining('not one JSON object'),
+    })
   })
 })

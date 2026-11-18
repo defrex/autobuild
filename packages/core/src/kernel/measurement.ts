@@ -6,7 +6,7 @@
  */
 import { compilePathSelectors } from '../config/path-selectors'
 import type { EventPayload } from '../events/payloads'
-import type { ObjectiveEpsilon } from '../objective'
+import type { CommandMetric, ObjectiveEpsilon } from '../objective'
 import type { BuildState } from './reducer'
 
 /** One command run's ceiling, applied to every sample run and every setup
@@ -133,16 +133,100 @@ function terminal(state: BuildState): boolean {
   return state.status === 'done' || state.status === 'aborted'
 }
 
-/** A leaf's latest measurement request that has no `attempt.measured` yet.
- * Read from reduced state alone. */
+/** A leaf's latest measurement request that has not been sampled or
+ * measured yet: the attempt runner's work. Read from reduced state alone. */
 export function pendingMeasurementRequest(
   state: BuildState,
 ): EventPayload<'attempt.measurement-requested'> | undefined {
-  const request = state.attemptMeasurement?.request
+  const measurement = state.attemptMeasurement
+  const request = measurement?.request
   if (request === undefined || state.kind === 'node' || terminal(state)) return undefined
-  if (state.attemptMeasurement?.measured?.request === request.id) return undefined
+  if (measurement?.measured?.request === request.id) return undefined
+  if (measurement?.sampled?.request === request.id) return undefined
   const { seq: _seq, ...payload } = request
   return payload
+}
+
+/** The samples of a leaf's latest request that await their decision: the
+ * dispatcher's work. Read from reduced state alone. */
+export function sampledMeasurement(state: BuildState): EventPayload<'attempt.sampled'> | undefined {
+  const measurement = state.attemptMeasurement
+  const request = measurement?.request
+  const sampled = measurement?.sampled
+  if (request === undefined || sampled === undefined) return undefined
+  if (state.kind === 'node' || terminal(state)) return undefined
+  if (sampled.request !== request.id) return undefined
+  if (measurement?.measured?.request === request.id || measurement?.refused === request.id)
+    return undefined
+  const { seq: _seq, ...payload } = sampled
+  return payload
+}
+
+/** Why a node's digest cannot measure `request` under its current ruler, or
+ * undefined. A ruler or harness pin newer than the request's, a panel, or a
+ * missing starting value all refuse. */
+export function unmeasurable(
+  node: BuildState,
+  request: Pick<
+    EventPayload<'attempt.measurement-requested'>,
+    'id' | 'node' | 'revision' | 'harnessPin'
+  > & { metric?: CommandMetric },
+): string | undefined {
+  const optimization = node.optimization
+  if (optimization === undefined) return `node ${request.node} has no accepted objective`
+  const metric = optimization.objective.metric
+  if (metric.kind !== 'command') return `node ${request.node} measures with a panel, not a command`
+  if (request.revision < optimization.rulerRevision)
+    return `request ${request.id} uses objective revision ${request.revision}, older than the current ruler (revision ${optimization.rulerRevision})`
+  if (request.harnessPin !== optimization.accepted.harnessPin)
+    return `request ${request.id} pins the harness at ${request.harnessPin}, but the node pins it at ${optimization.accepted.harnessPin}`
+  if (request.metric !== undefined && !sameMetric(request.metric, metric))
+    return `request ${request.id} names a metric that differs from the node's ruler`
+  if (optimization.starting === undefined)
+    return `node ${request.node} has no starting measurement under its current ruler`
+  return undefined
+}
+
+function sameMetric(a: CommandMetric, b: CommandMetric): boolean {
+  return (
+    a.command === b.command &&
+    a.direction === b.direction &&
+    a.samples === b.samples &&
+    a.harness.length === b.harness.length &&
+    a.harness.every((selector, index) => selector === b.harness[index])
+  )
+}
+
+/** The decision for one request's samples, against the node as it stands
+ * now: its current ε and starting spread. A ruler or pin that moved past the
+ * request refuses instead of deciding. */
+export function decideSampledMeasurement(
+  node: BuildState,
+  request: EventPayload<'attempt.measurement-requested'>,
+  sampled: EventPayload<'attempt.sampled'>,
+): { measured: EventPayload<'attempt.measured'> } | { refusal: string } {
+  const refusal = unmeasurable(node, request)
+  if (refusal !== undefined) return { refusal }
+  const optimization = node.optimization!
+  const metric = optimization.objective.metric as CommandMetric
+  const { medians } = sampled
+  const delta = measurementDelta(metric.direction, medians.baseline, medians.candidate)
+  const epsilon = effectiveEpsilon(optimization.objective.target.epsilon, medians.baseline)
+  return {
+    measured: {
+      request: sampled.request,
+      candidate: sampled.candidate,
+      baseline: sampled.baseline,
+      harnessPin: sampled.harnessPin,
+      revision: sampled.revision,
+      samples: sampled.samples,
+      medians: { ...medians },
+      delta,
+      decision: measurementDecision(delta, epsilon),
+      spread: optimization.starting!.spread,
+      report: { ...sampled.report },
+    },
+  }
 }
 
 /** An opened optimization node with a command objective has no starting

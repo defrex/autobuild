@@ -2697,6 +2697,22 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
   test('a parked attempt with an unmeasured request runs the measurement', () => {
     const requested = [...throughFinalize, ev('attempt.measurement-requested', measurementRequest)]
     expect(decide(requested)).toEqual({ kind: 'run-measurement', request: measurementRequest })
+    // Sampled, the request is the dispatcher's to decide; the runner parks.
+    expect(
+      decide([
+        ...requested,
+        ev('attempt.sampled', {
+          request: 'm1',
+          candidate: 'c'.repeat(40),
+          baseline: 'a'.repeat(40),
+          harnessPin: 'a'.repeat(40),
+          revision: 1,
+          samples: 3,
+          medians: { baseline: 10, candidate: 8 },
+          report: { kind: 'measurement-samples', rev: 0 },
+        }),
+      ]),
+    ).toEqual(wait('awaiting-pr'))
     expect(
       decide([
         ...requested,

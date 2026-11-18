@@ -90,7 +90,11 @@ import {
   slotRequest,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
-import { baselineMeasurementDue } from '../kernel/measurement'
+import {
+  baselineMeasurementDue,
+  decideSampledMeasurement,
+  sampledMeasurement,
+} from '../kernel/measurement'
 import {
   openTicketWait,
   pendingWaitRequest,
@@ -5842,6 +5846,55 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * Decide a parked attempt's sampled measurement (SPEC §13.1.1). The
+   * attempt's runner holds only its own build, so it records the samples and
+   * the dispatcher records `attempt.measured` against the node's ε and
+   * starting spread as they stand now, or a `policy/measurement-failed`
+   * escalation when the node's ruler or harness pin moved past the request.
+   *
+   * Cost: the sampled-but-undecided check reads the reduced state the sweep
+   * already holds, so a tick with nothing sampled reads nothing more. One
+   * record lookup and one reduced read of the node per sampled request, once:
+   * either append makes the request no longer pending. A lost race is
+   * decided again next tick.
+   */
+  private async recordSampledMeasurement(slug: string, state: BuildState): Promise<void> {
+    const sampled = sampledMeasurement(state)
+    const request = state.attemptMeasurement?.request
+    if (sampled === undefined || request === undefined) return
+    const { seq: _seq, ...requested } = request
+    // A missing node is refused once rather than failing every tick.
+    const decided =
+      (await this.store.getBuild(request.node)) === null
+        ? { refusal: `node ${request.node} does not exist` }
+        : decideSampledMeasurement(
+            (await readBuildFacts(this.store, request.node)).value.state,
+            requested,
+            sampled,
+          )
+    if ('measured' in decided)
+      await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'attempt.measured',
+        payload: decided.measured,
+      })
+    else
+      await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: this.deps.ids('esc'),
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question:
+            `Measurement request ${request.id} was sampled but cannot be decided: ${decided.refusal}. ` +
+            'No result was recorded; the attempt needs a fresh measurement request under the current ruler.',
+        },
+      })
+  }
+
   /** One build's lease-sweep pass; `leaseSweep` contains its failures. */
   private async sweepBuild(
     record: BuildRecord,
@@ -5905,7 +5958,11 @@ export class Dispatcher {
       // The engine reached the end of the pipeline: record it once per
       // settlement key so capacity stops counting the parked build. A lost
       // race is decided again next tick.
-      if (settlementDue(state))
+      // A sampled measurement is decided first: the attempt's landing waits
+      // on it, while settlement only frees capacity and follows next tick.
+      if (sampledMeasurement(state) !== undefined)
+        await this.recordSampledMeasurement(record.slug, state)
+      else if (settlementDue(state))
         await this.store.appendIfCurrent(record.slug, state.lastSeq, {
           actor: DISPATCHER,
           type: 'pipeline.settled',

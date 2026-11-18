@@ -530,6 +530,10 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       const p = event.payload
       return `starting value ${p.median}, noise spread ${p.spread} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)})`
     }
+    case 'attempt.sampled': {
+      const p = event.payload
+      return `sampled candidate ${p.medians.candidate} vs baseline ${p.medians.baseline} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)}); the dispatcher decides against the node's ε`
+    }
     case 'attempt.measured': {
       const p = event.payload
       const values = p.medians
