@@ -324,6 +324,8 @@ function harness(
      * lever and the returned `distributionIdentity` getter/setter stay (they
      * are simply inert in this mode). */
     defaultIdentityStamp?: boolean
+    /** Host-side fallback after a refused guest archive push. */
+    refusedArchive?: (ref: string, sha: string) => Promise<void>
     /** Overrides the store's credential delegation; e.g. to record targets. */
     delegateCredential?: (
       storeRef: string,
@@ -456,6 +458,7 @@ function harness(
         : {}),
       runtimeReferences:
         options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
+      ...(options.refusedArchive !== undefined ? { refusedArchive: options.refusedArchive } : {}),
     })
   const provider = makeProvider()
   return {
@@ -4268,4 +4271,196 @@ test('absent filesystem fencing permits authorized stale-name deletion', async (
   expect(h.sandbox.deletes).toBe(0)
   expect(await h.provider.recovery.reap(handle)).toMatchObject({ outcome: 'absent' })
   expect(h.sandbox.deletes).toBe(1)
+})
+
+/** A guest-side origin that refuses (or accepts) archive pushes; the returned
+ * `refs` map is what the guest's `ls-remote` reads back. */
+function scriptGuestRemote(
+  h: ReturnType<typeof harness>,
+  options: { refuseArchive: boolean; refs?: Map<string, string>; head?: string },
+) {
+  const refs = options.refs ?? new Map<string, string>()
+  const original = h.sandbox.runCommand.bind(h.sandbox)
+  h.sandbox.runCommand = async (params) => {
+    if (params.cmd !== 'git') return original(params)
+    h.sandbox.commands.push(params)
+    const args = params.args as string[]
+    let stdout = ''
+    let stderr = ''
+    let exitCode = 0
+    if (args[0] === 'ls-remote') {
+      const ref = args.at(-1)!
+      const sha = refs.get(ref)
+      if (sha !== undefined) stdout = `${sha}\t${ref}\n`
+    } else if (args[0] === 'push') {
+      const [sha, ref] = args.at(-1)!.split(':')
+      if (options.refuseArchive && ref!.startsWith('refs/autobuild/archive/')) {
+        exitCode = 1
+        stderr = `! [remote rejected] ${sha}:${ref} (refusing non-branch push)\n`
+      } else refs.set(ref!, sha!)
+    } else if (args[0] === 'rev-parse') stdout = `${options.head ?? SHA}\n`
+    else if (args[0] === 'rev-list') stdout = `${options.head ?? SHA}\n`
+    return { exitCode, stdout: async () => stdout, stderr: async () => stderr }
+  }
+  return refs
+}
+
+describe('refused guest archive pushes', () => {
+  const archiveRef = `refs/autobuild/archive/remote-build/${SHA}`
+  async function fenced(options: Parameters<typeof harness>[0] = {}) {
+    const h = harness(options)
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(await h.provider.recovery.fence!(workspace)).toEqual({ outcome: 'confirmed' })
+    return { h, workspace }
+  }
+  const recover = (h: ReturnType<typeof harness>, ref: string) =>
+    h.provider.publication.recoverCandidate!({
+      ref,
+      slug: 'remote-build',
+      branch: 'ab/remote-build',
+      sha: SHA,
+    })
+  const pushes = (h: ReturnType<typeof harness>) =>
+    h.sandbox.commands.filter(
+      (command) => command.cmd === 'git' && (command.args as string[])[0] === 'push',
+    )
+
+  test('recovery without a fallback still surfaces the refused archive push', async () => {
+    const { h, workspace } = await fenced()
+    scriptGuestRemote(h, { refuseArchive: true })
+    await expect(recover(h, workspace.ref)).rejects.toThrow(
+      `archive publication rejected for ${archiveRef} at ${SHA}: Error: ! [remote rejected]`,
+    )
+  })
+
+  test('recovery publishes through git without calling the fallback', async () => {
+    const calls: string[][] = []
+    const { h, workspace } = await fenced({
+      refusedArchive: async (ref, sha) => {
+        calls.push([ref, sha])
+      },
+    })
+    const refs = scriptGuestRemote(h, { refuseArchive: false })
+    expect(await recover(h, workspace.ref)).toBe(true)
+    expect(refs.get(archiveRef)).toBe(SHA)
+    expect(calls).toEqual([])
+  })
+
+  test('recovery falls back after a refused push and proves the archive by readback', async () => {
+    const refs = new Map<string, string>()
+    const calls: string[][] = []
+    const { h, workspace } = await fenced({
+      refusedArchive: async (ref, sha) => {
+        calls.push([ref, sha])
+        refs.set(ref, sha)
+      },
+    })
+    scriptGuestRemote(h, { refuseArchive: true, refs })
+    expect(await recover(h, workspace.ref)).toBe(true)
+    expect(calls).toEqual([[archiveRef, SHA]])
+    expect(pushes(h)).toHaveLength(1)
+    expect(h.sandbox.commands).toContainEqual(
+      expect.objectContaining({
+        cmd: 'git',
+        args: ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', archiveRef],
+      }),
+    )
+  })
+
+  test('a failed fallback rejects without recovering, keeps snapshots, and a retry succeeds', async () => {
+    const refs = new Map<string, string>()
+    let fail = true
+    const { h, workspace } = await fenced({
+      refusedArchive: async (ref, sha) => {
+        if (fail) throw new Error('GitHub API 403 Resource not accessible')
+        refs.set(ref, sha)
+      },
+    })
+    scriptGuestRemote(h, { refuseArchive: true, refs })
+    const snapshots = h.sandbox.snapshots.map((snapshot) => snapshot.id)
+    const stops = h.sandbox.stops
+    const policies = h.sandbox.policies.length
+    const error = await recover(h, workspace.ref).catch((error: unknown) => error)
+    expect(String(error)).toContain('git push refused (')
+    expect(String(error)).toContain('GitHub REST ref creation failed')
+    expect(refs.has(archiveRef)).toBe(false)
+    expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('receive')
+    expect(h.sandbox.policies.length).toBeGreaterThan(policies)
+    expect(h.sandbox.stops).toBeGreaterThan(stops)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.snapshots.map((snapshot) => snapshot.id)).toEqual(
+      expect.arrayContaining(snapshots),
+    )
+
+    fail = false
+    expect(await recover(h, workspace.ref)).toBe(true)
+    expect(refs.get(archiveRef)).toBe(SHA)
+  })
+
+  test('an acknowledged fallback the readback cannot confirm never reports recovery', async () => {
+    const { h, workspace } = await fenced({ refusedArchive: async () => {} })
+    scriptGuestRemote(h, { refuseArchive: true })
+    await expect(recover(h, workspace.ref)).rejects.toThrow(
+      'exact readback did not confirm publication',
+    )
+  })
+
+  test('preservation archives through the fallback after a refused push', async () => {
+    const refs = new Map<string, string>()
+    const calls: string[][] = []
+    const { h, workspace } = await fenced({
+      refusedArchive: async (ref, sha) => {
+        calls.push([ref, sha])
+        refs.set(ref, sha)
+      },
+    })
+    scriptGuestRemote(h, { refuseArchive: true, refs })
+    const base = 'b'.repeat(40)
+    const preserved = await h.provider.publication.preserve!({
+      ref: workspace.ref,
+      slug: 'remote-build',
+      branch: workspace.branch,
+      base,
+      candidates: [],
+    })
+    expect(preserved).toMatchObject({
+      outcome: 'preserved',
+      heads: [{ sha: SHA, remoteRef: archiveRef }],
+    })
+    expect(calls).toEqual([[archiveRef, SHA]])
+  })
+
+  test('a restack rewrite archives through the fallback before replacing the branch', async () => {
+    const old = 'c'.repeat(40)
+    const archive = `refs/autobuild/archive/remote-build/${old}`
+    const refs = new Map<string, string>([['refs/heads/ab/remote-build', old]])
+    const calls: string[][] = []
+    const h = harness({
+      refusedArchive: async (ref, sha) => {
+        calls.push([ref, sha])
+        refs.set(ref, sha)
+      },
+    })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    scriptGuestRemote(h, { refuseArchive: true, refs, head: old })
+    expect(
+      await h.provider.publication.rewrite!({
+        ref: workspace.ref,
+        sha: SHA,
+        branch: workspace.branch,
+        expected: old,
+        archives: [{ ref: archive, sha: old }],
+      }),
+    ).toEqual({ kind: 'published' })
+    expect(calls).toEqual([[archive, old]])
+    expect(refs.get('refs/heads/ab/remote-build')).toBe(SHA)
+  })
 })

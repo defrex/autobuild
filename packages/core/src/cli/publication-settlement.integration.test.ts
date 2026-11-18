@@ -1137,7 +1137,7 @@ test('a genuinely lost reconcile candidate is durably retired without retrying p
   expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(1)
 })
 
-test.each(['available', 'unavailable-inspection'] as const)(
+test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as const)(
   'legacy loss with %s preserves guarded publication behavior',
   async (outcome) => {
     const h = await seedRestackPublication()
@@ -1152,8 +1152,12 @@ test.each(['available', 'unavailable-inspection'] as const)(
         reason: 'replacement',
       },
     })
+    const refusal = `archive publication rejected for refs/autobuild/archive/${SLUG}/${SHA} at ${SHA}: git push refused (non-branch push); GitHub REST ref creation failed (Resource not accessible)`
+    let recoveries = 0
     h.deps.publication!.recoverCandidate = async () => {
+      recoveries++
       if (outcome === 'unavailable-inspection') throw new Error('transport unavailable')
+      if (outcome === 'refused-archive-retry' && recoveries === 1) throw new Error(refusal)
       return true
     }
     let calls = 0
@@ -1165,15 +1169,25 @@ test.each(['available', 'unavailable-inspection'] as const)(
     }
     if (outcome === 'unavailable-inspection')
       await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('transport unavailable')
-    else {
+    else if (outcome === 'refused-archive-retry') {
+      // A failed archive fallback neither retires the candidate nor reports recovery.
+      await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(refusal)
+      expect(calls).toBe(0)
+      const failed = await h.store.getEvents(SLUG)
+      expect(failed.some((event) => event.type === 'publication.candidate-retired')).toBe(false)
+      expect(failed.some((event) => event.type === 'reconcile.completed')).toBe(false)
+      await settlePendingPublication(h.deps, SLUG)
+      await settlePendingPublication(h.deps, SLUG)
+    } else {
       await settlePendingPublication(h.deps, SLUG)
       await settlePendingPublication(h.deps, SLUG)
     }
-    expect(calls).toBe(outcome === 'available' ? 1 : 0)
+    const recovered = outcome !== 'unavailable-inspection'
+    expect(calls).toBe(recovered ? 1 : 0)
     const events = await h.store.getEvents(SLUG)
     expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(0)
     expect(events.filter((event) => event.type === 'reconcile.completed')).toHaveLength(
-      outcome === 'available' ? 1 : 0,
+      recovered ? 1 : 0,
     )
   },
 )
