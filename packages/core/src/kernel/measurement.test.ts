@@ -158,8 +158,8 @@ describe('harness diff', () => {
       '100644 blob 1111111111111111111111111111111111111111\tbench/a b.json\0' +
       '160000 commit 2222222222222222222222222222222222222222\tvendor\0'
     expect(parseLsTree(output)).toEqual([
-      { mode: '100644', type: 'blob', path: 'bench/a b.json' },
-      { mode: '160000', type: 'commit', path: 'vendor' },
+      { mode: '100644', type: 'blob', path: 'bench/a b.json', object: '1'.repeat(40) },
+      { mode: '160000', type: 'commit', path: 'vendor', object: '2'.repeat(40) },
     ])
   })
 })

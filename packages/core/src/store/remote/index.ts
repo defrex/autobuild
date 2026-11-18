@@ -57,6 +57,12 @@ export type {
 export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/service-facts'
 
 export { delegationFactKey } from '../../kernel/service-facts'
+export {
+  judgeLifecycleFacts,
+  judgeScopeRefusal,
+  judgeWriteRefusal,
+  type JudgeScope,
+} from '../judge-authority'
 
 export { assertPublicSnapshotReducer } from '../snapshots'
 

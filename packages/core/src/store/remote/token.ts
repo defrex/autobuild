@@ -62,12 +62,16 @@ export interface DelegatedTokenScope {
   version: 2
   delegation: {
     repo: string
-    kind: 'build-runner' | 'build-phase' | 'harvest-runner' | 'harvest-phase'
+    kind: 'build-runner' | 'build-phase' | 'build-judge' | 'harvest-runner' | 'harvest-phase'
     id: string
     anchor: number
     session?: string
     execution?: string
     leaseHolder?: string
+    /** `build-judge` only: the one panel and judge this write-only grant
+     * may record a preference for. */
+    panel?: string
+    judge?: number
   }
 }
 
@@ -91,17 +95,22 @@ const exactIdentity = z
 const delegatedClaims = z
   .strictObject({
     repo: exactIdentity,
-    kind: z.enum(['build-runner', 'build-phase', 'harvest-runner', 'harvest-phase']),
+    kind: z.enum(['build-runner', 'build-phase', 'build-judge', 'harvest-runner', 'harvest-phase']),
     id: exactIdentity,
     anchor: z.number().int().positive(),
     session: exactIdentity.optional(),
     execution: exactIdentity.optional(),
     leaseHolder: exactIdentity.optional(),
+    panel: exactIdentity.optional(),
+    judge: z.number().int().min(1).optional(),
   })
   .refine(
     (claims) =>
-      claims.kind.endsWith('-phase') === (claims.session !== undefined) &&
-      claims.kind.startsWith('harvest') === (claims.execution !== undefined),
+      (claims.kind.endsWith('-phase') || claims.kind === 'build-judge') ===
+        (claims.session !== undefined) &&
+      claims.kind.startsWith('harvest') === (claims.execution !== undefined) &&
+      (claims.kind === 'build-judge') === (claims.panel !== undefined) &&
+      (claims.kind === 'build-judge') === (claims.judge !== undefined),
   )
 const tokenScopeSchema = z.union([
   z.strictObject({ version: z.literal(2), delegation: delegatedClaims }),
