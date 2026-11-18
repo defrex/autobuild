@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, revisions and derived progress.
+- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, revisions, derived progress and the proposer phase.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -79,12 +79,15 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   tickets; a human grooms them to the complete
   [spec standard](references/spec-standard.md) — what and why but never how,
   verifiable acceptance criteria, explicit out-of-scope, and evidence — and
-  dispatches. Generated work cannot leave Triage un-groomed. The dispatcher
+  dispatches. Generated work cannot leave Triage un-groomed, with one
+  exception: an optimization node's proposer files attempts straight to ready,
+  because grooming the node's objective and budget is the dispatch decision for
+  them (see [optimization nodes](references/optimization-nodes.md#proposer-phase)). The dispatcher
   claims tickets that pass the `[tickets]` ready
   gate — urgent tickets first, then normal ones, each in the source's order —
   chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound, after slots reserved for
-  integration nodes awaiting verification or reconcile, for finished builds
+  integration nodes awaiting verification, reconcile or propose, for finished builds
   waiting to re-verify or reconcile, and for builds whose ticket wait ended.
   `capacity` counts builds running work: a build that finished its pipeline
   holds no slot while it waits for a merge decision, though it keeps its
@@ -176,6 +179,10 @@ Integration builds use collect → verify → merge → close, with demand-drive
 repair children and source-aware reconcile as needed. Their exact-head/parent
 verification differs from clean waiting leaf rewrites. See the
 [node lifecycle](references/integration-tree.md#collect-verify-and-merge).
+An optimization node measures its starting value and then alternates `propose`
+and collecting: an `ab-propose` session reads the attempt ledger and deposits
+proposals with `ab propose`, and the dispatcher files each as an attempt
+ticket. See the [proposer phase](references/optimization-nodes.md#proposer-phase).
 
 **Optimization nodes.** A node becomes an optimization node only when its spec
 carries exactly one fenced block whose info string is exactly
@@ -186,7 +193,10 @@ limit, or a ticket source with no rejected role refuse the opening and name the
 reason; the node never opens as a plain node instead. A work ticket carrying the
 block is refused at dispatch. A spec revision of an open optimization node may
 change the objective but cannot add or remove the block, and a plain node never
-gains one. The marker rules and the objective schema are in
+gains one. Grooming the objective is the dispatch decision for the node's
+attempts: once the node is measured, its proposer files attempts straight to
+ready, within the groomed budget, and each must pass the ratchet before it
+lands. The marker rules and the objective schema are in
 [optimization nodes](references/optimization-nodes.md).
 
 **Optimization attempts.** A child is an attempt when its ticket came from one
@@ -1184,7 +1194,7 @@ they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 
 The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
-`finalize`, and `reconcile`, plus each **agent** verify and finalize step by
+`finalize`, `reconcile` and an optimization node's `propose`, plus each **agent** verify and finalize step by
 its logical step name. A verify step's configured skill name remains a
 deprecated alias for existing configurations and will be removed in a future
 release. The repository workflow resolves `harvest` and `harvest-review`. Two
@@ -1458,8 +1468,10 @@ as follows:
 
 An explicit `readyLabels` value always wins for every source.
 
-`proposalState` is the one supported way to waive the grooming gate, and it is
-deliberately not `triageState`. Do not suggest pointing `triageState` at the
+`proposalState` is the one supported way to waive the grooming gate for
+harvest, and it is deliberately not `triageState`. (An optimization node's
+attempts are the only other generated work that reaches ready: grooming the
+node's objective and budget is their dispatch decision.) Do not suggest pointing `triageState` at the
 ready state to get auto-dispatched proposals: `triageState` is also where a
 spec-gate bounce merges, so a nonconforming ticket would be claimed, bounced,
 and reclaimed on every tick. `proposalState` moves only what harvest files.
@@ -1715,7 +1727,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   `[commands]`, no verify or finalize steps, a valid local ticket gate, and one
   explicit runtime solely as a schema placeholder. It reads no package or
   language manifest and invents no command.
-- Vendors 12 skills before handoff, including the locally editable
+- Vendors 13 skills before handoff, including the locally editable
   [repository setup reference](references/setup.md) in the installed `ab-guide`
   tree. On an interactive terminal it starts the selected coding-agent CLI in
   the target repository with a short prompt to read that reference and
@@ -3099,7 +3111,7 @@ At least one `--for <condition>` or `--event <glob>` is required. The condition
 vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `aborted`,
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
-`implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
+`implement`, `code-review`, `finalize`, `reconcile`, `propose` — or `verify:<step>`), and
 `attention` (current failed node verification, an open escalation, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
@@ -3295,9 +3307,10 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
+| `ab-propose` | `propose` phase (optimization nodes) | Read an optimization node's attempt ledger, objective, progress and head, then deposit typed proposals for new attempts, or none with a reason, with `ab propose`; the dispatcher files them. Never creates tickets. |
 | `ab-operate` | outside the pipeline; model-invocable | The operator agent’s operating manual, for any agent: file and groom tickets, operate the builds the repository's dispatcher dispatches with a registered `ab watch --operator` loop, answer escalations, pause, resume, abort, control merge consent and holds, and adopt new builds until the human ends or hands off the role. MCP presence is deferred. |
 
-Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
+Autobuild installs 13 skills. Everything except `ab-spec`, `ab-tickets`,
 `ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not
 invoke a phase skill yourself, and do not remove that key to make one
 convenient to call. A model starting a pipeline phase by pattern-matching a

@@ -61,8 +61,13 @@ every design decision below answers to:
    Triage without a human grooming it to Ready. That single gate is where
    taste and prioritization live. A repository may waive the gate for its own
    harvest by naming a filing state (`[tickets].proposalState`, §12); the
-   waiver is explicit, repository-wide, and configured, and no code path
-   reaches Ready without one.
+   waiver is explicit, repository-wide, and configured. The one other path
+   is an optimization node's attempts (§13.1.1): grooming the node's
+   objective, its purpose, budget and stop policy, is the dispatch decision
+   for every attempt it generates. The node's proposer files attempts
+   straight to Ready, bounded by that budget, and each must pass the ratchet
+   before it affects anything. No other generated work reaches Ready without
+   the waiver.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 5. **Processes communicate only through durable state.** There is no private
    channel between Autobuild processes — not kernel to operator UI, not parent
@@ -620,12 +625,31 @@ the bare phase names throughout.
 
 Work builds retain the fixed grammar below. Integration builds instead follow
 `spec → branch opening → collecting → complete → verify:* → authorization → merge → close`.
+An optimization node (§13.1.1) follows
+`spec → branch opening → starting measurement → (propose → collecting)* → complete → verify:* → authorization → merge → close`;
+a plain node keeps the plain grammar.
 Authorization follows ordered merge policy: nodes default to explicit consent,
 while an auto rule authorizes a complete, verified candidate without a command.
-They never enter plan, implement, code-review or finalize. A node conflict uses
+Nodes never enter plan, implement, code-review or finalize; they enter
+reconcile, and optimization nodes also enter `propose`. A node conflict uses
 source-aware reconcile. Idle collecting nodes own no execution resources;
-reconcile and verification use descendant-sensitive execution capacity (§12).
-Empty nodes have no PR.
+reconcile, verification and propose use descendant-sensitive execution
+capacity (§12). Empty nodes have no PR.
+
+The **propose** phase is an optimization node's own agent phase. The
+dispatcher requests it (`optimization.proposal-requested`) only when the node
+is open with an accepted objective, has not stopped, has a starting
+measurement under the current ruler, has no open request, and has fewer than
+two consecutive empty proposals, and when its room is positive. Room is the
+smaller of the free concurrency slots (`proposer.concurrency` minus attempts
+queued or running) and the remaining attempts budget, and is zero once the
+attempts or hours budget is spent. A paused, blocked or otherwise held node
+is deferred instead. The request takes a slot ahead of new ticket claims,
+like node reconcile and verification, and is re-checked against current state
+before it is admitted. The session runs the `ab-propose` skill on the node
+head's tree and ends with `ab propose <file>`, `ab propose --none <reason>` or
+`ab escalate`; `ab done` and `ab verdict` are refused. The proposer only
+deposits proposals: the dispatcher files each as an attempt ticket (§13.1.1).
 
 ```
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize (+ finalize:*)
@@ -1093,7 +1117,9 @@ gate-evaluation cost is flat in accumulated build history, with the full
 per-build scan paid only when a gate actually trips and a scan packet is built.
 The digest also carries the build's node targets, every node its target or
 parent moves ever named, so the dispatcher finds a node's child builds from
-digests and reads full facts only for builds that name that node.
+digests and reads full facts only for builds that name that node. Optimization
+nodes add an `optimization` signal from which the dispatcher's proposer stage
+selects work (§13.1.1).
 
 Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
@@ -3035,9 +3061,10 @@ from its parent's sampled head. Opening intent and acknowledgement are durable;
 the branch is open to targeting tickets immediately, without a PR. Idle integration
 builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 
-A node requesting reconcile or verification is admitted before new ticket
-claims. The request is durable: a prepared verification cycle or a restack
-conflict, with no runner yet. Until the node holds its slot, intake reserves one
+A node requesting reconcile, verification or, for an optimization node,
+propose is admitted before new ticket claims. The request is durable: a
+prepared verification cycle, a restack conflict or an open proposal request,
+with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
 claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
@@ -3436,10 +3463,76 @@ reason}` to N's log if the attempt is still in flight, releases the lease and
 workspace, and completes the attempt `closed-unmerged`. The flag is refused
 outside implement and in a build that is not an attempt.
 
-Proposing attempts, measuring them through the landing gate, judge panels,
-settlement into the rejected role, and stopping and completion are designed in
-RFC 0005 §5–§9. The facts they record are catalogued in §15.3 and their derived
-state in §15.5.
+**Proposing.** An optimization node proposes its own attempts in the
+`propose` phase (§5). The dispatcher appends
+`optimization.proposal-requested {id, head, room, budgetUsed}` when the
+selector `proposerAdmissible` holds (§15.5). Room is the smaller of the free
+concurrency slots and the remaining attempts budget, and zero once the
+attempts or hours budget is spent. An open request is the fact that a
+proposer session is running, so no second request is made. A node that is
+paused or blocked, has pending commands, has an active or conflicted node
+restack, has a landing intent, has a merged or closed PR, or is deferred for
+runtime compatibility is not requested; the dispatcher instead records
+`optimization.proposal-deferred {reason}` (`paused`, `blocked`, `command`,
+`restack`, `integration`, `landing` or `compatibility`), and reconsiders the
+node only after a fact that can clear the blocker lands on its log. The
+request is the node's `propose` slot request, admitted ahead of new ticket
+claims (§13.1). Before admission the dispatcher re-checks it against current
+state: a request whose node has stopped, whose hours budget expired, whose
+room fell to zero or below the recorded room, or whose node has no free
+concurrency slot, and for which no session has started, records
+`optimization.proposal-withdrawn {request, reason: stopped|budget|concurrency}`.
+A withdrawal clears the request and never counts as an empty proposal. A
+session that already started keeps the room it was granted, and a deposit is
+never trimmed.
+
+The dispatcher provisions a workspace at the request head and launches the
+node runner, which appends `propose.started {round, request}`, checks out the
+head detached and runs the `ab-propose` skill. `ab context` materializes
+`objective.json` (the effective objective, revision and revised fields),
+`progress.json` (starting, current, best and threshold values, attempt counts,
+attempts in flight, plateau, consecutive empty proposals and the request) and
+`ledger.json` (settled attempts with near misses flagged, and attempts in
+flight), with the spec, answered guidance and assets. `ab propose <file>`
+takes `{proposals: [{id, title, strategy, body}], reason?}`: kebab-case ids
+unique in the file and never used before by the node, single-line titles and
+strategies, spec-standard bodies with no `autobuild-objective` block, at most
+the request's room, and a reason when the list is empty (`ab propose --none
+<reason>`). It deposits an `attempts` artifact and agent
+`propose.completed {round, request, proposals, artifact}` atomically. The
+proposer never creates tickets.
+
+The dispatcher reads the deposited artifact once and creates one work ticket
+per proposal, targeting the node, in the source's ready role. Each creation
+carries an idempotency key derived from the repository, the node slug and the
+proposal id, so a crash between deposit, creation and recording adopts the
+existing ticket instead of filing a second one. Until the record lands,
+intake withholds ready tickets whose creation key matches a deposited
+proposal. When every ticket exists it appends
+`optimization.attempts-proposed {request, proposals, reason?}` and releases
+the node's workspace. A source without the integration-tree capability, or an
+unreadable artifact, raises an escalation on the node in phase `propose`
+instead of creating anything. Two consecutive empty `attempts-proposed`
+records stop the node: the dispatcher appends
+`optimization.stopped {cause: exhausted, mode}` with the objective's stop
+mode, and admission requests no further proposals. Recording the stop is
+separate from applying it: aborting or draining attempts in flight under that
+mode belongs to the stop policy, not to the proposer.
+
+Discovery reads only build digests. Each build digest carries an
+`optimization` signal, `false` for a plain node and a bounded summary for an
+optimization node (stop, measurement, attempts in flight, concurrency,
+attempt room, empty proposals, opening time, hours budget, the open request
+and its deposit, and the latest wake and deferral sequences), from which the
+dispatcher selects nodes to request, file or stop. A store service whose digest
+lacks the member fails the proposer stage and the creation hold closed with a
+typed capability error: nothing is proposed and every ready ticket carrying a
+creation key is withheld that pass. There is no per-node fallback read.
+
+Measuring attempts through the landing gate, judge panels, settlement into the
+rejected role, and applying stops and completion are designed in RFC 0005
+§6–§9. The facts they record are catalogued in §15.3 and their derived state in
+§15.5.
 
 
 
@@ -3750,10 +3843,11 @@ with illustrative members:
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}` |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
+| Propose (§5, §13.1.1) | Kernel `propose.started {round, request}`; agent `propose.completed {round, request, proposals, artifact}` (the deposited proposal ids and the `attempts` artifact) |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread}` (a panel records its self-comparison win rate and that rate's distance from 0.5); dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread}` (a panel records its self-comparison win rate and that rate's distance from 0.5); dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`, which the dispatcher records with cause `exhausted` after two consecutive empty `attempts-proposed`. `attempt.measurement-requested` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3968,7 +4062,13 @@ an optimization node's own log, absent until the first
   consecutive `no-improvement` or `declined` settlements since the last
   `accepted` (`stopped` and `aborted` leave it unchanged); `emptyProposals`,
   consecutive proposals with no attempts; and `stopped {cause, mode, at}` from
-  the first `optimization.stopped`.
+  the first `optimization.stopped`;
+- `requests`, the count of `optimization.proposal-requested` facts and the
+  `propose` phase's round counter, and `proposal {id, head, room, requestedAt,
+  round, deposited?: {artifact, ids, at}}`, the open request. A request opens
+  it, `propose.completed` for that request sets `deposited`, and the matching
+  `optimization.attempts-proposed` closes it; `optimization.proposal-withdrawn`
+  closes it only while it is undeposited. At most one request is open.
 
 Pure selectors over the digest take the current time. Elapsed hours run from
 `openedAt`. Stop eligibility is computed per cause: threshold when `current` has
@@ -3979,6 +4079,21 @@ reports whether the node stopped, the attempts the budget still allows (none
 without `maxAttempts`), and the concurrency slots no in-flight attempt holds.
 Attempt identity (§13.1.1) is a lookup in `inFlight` by normalized ticket ref;
 settled attempts are in the ledger.
+
+The proposer selectors also read the digest. `proposerRoom` is the smaller of
+the free concurrency slots and the attempts the budget still allows, and 0
+once the attempts or hours budget is spent. `proposerAdmissible` holds for an
+opened, nonterminal optimization node that has not stopped, has a starting
+measurement, has no open request, has fewer than two consecutive empty
+proposals and has positive room, and that no non-optimization blocker holds
+(paused, blocked, pending commands, compatibility deferral, active or
+conflicted node restack, landing intent, merged or closed PR).
+`proposalEligible` re-checks an open request against current state: not
+stopped, hours budget not expired, attempt room and a free concurrency slot
+remaining, and the request's room no larger than the current room.
+`proposalWithdrawalDue` names the reason (`stopped`, `budget` or
+`concurrency`) an undeposited request fails it. `exhaustedStopDue` holds when
+`emptyProposals` ≥ 2 and the node has not stopped.
 
 **Deltas, revisions and the ruler.** A positive `delta` is an improvement in
 the objective's direction: `baseline − candidate` when minimizing,
@@ -5060,8 +5175,9 @@ is not re-verified, so breakage that only exists in the combination can merge.
 
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 
-This project ships 11 canonical default skills for the fixed phases, the
-non-phase surfaces (`spec`, `tickets`, and `guide`), and the outer-loop skills.
+This project ships 13 canonical default skills for the fixed phases, the
+optimization node's `propose` phase, the non-phase surfaces (`spec`,
+`tickets`, and `guide`), and the outer-loop skills.
 Repository setup guidance ships as `guide/references/setup.md`, not as a skill;
 each repository authors its own acceptance-check skill. No generic verifier
 skill ships. `ab init` installs into a repo:
@@ -5086,7 +5202,7 @@ skill ships. `ab init` installs into a repo:
   setup reference in an older or partial distribution does not fail init. On
   rerun, the prompt asks the agent to review and improve the preserved existing
   config.
-- **Copies** of the 11 default skills into the project skills directory,
+- **Copies** of the 13 default skills into the project skills directory,
   namespaced `ab-*`. Copies, not references — per-repo customization is the
   point: this repo's code-review standards and setup reference live in the
   vendored trees. Harness-specific discovery paths are symlinks to the one
