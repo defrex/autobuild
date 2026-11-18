@@ -987,7 +987,7 @@ documentFields(ticketsInputSchema, {
   backlogState:
     'State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.',
   rejectedState:
-    'State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.',
+    'State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it.',
   dir: 'Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.',
 })
 documentSchema(ticketsInputSchema, {
@@ -1048,7 +1048,7 @@ documentSchema(ticketsInputSchema.shape.backlogState, {
 })
 documentSchema(ticketsInputSchema.shape.rejectedState, {
   constraints:
-    'Optional for every source, no default; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).',
+    'Optional for every source, no default, but required to open an optimization node; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).',
 })
 documentSchema(ticketsInputSchema.shape.dir, {
   constraints:

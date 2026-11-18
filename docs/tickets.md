@@ -69,7 +69,7 @@ Two optional lifecycle roles sit beside triage, ready, claimed and done:
 - **Backlog** holds work you deferred on purpose. Nothing dispatches from it.
 - **Rejected** holds work you considered and declined. A rejected ticket never unblocks the tickets it blocks, and a rejected child no longer holds its node open.
 
-Both roles are recommended. Map each to a native state with `[tickets].backlogState` and `[tickets].rejectedState`; `ab init` writes `backlog` and `rejected` for the file, hosted and GitHub sources, and a Linear team might use `Icebox` and `Canceled`. With a key unset, that role doesn't exist. Your operator agent moves tickets by role, so it never needs your native names:
+Both roles are recommended. Map each to a native state with `[tickets].backlogState` and `[tickets].rejectedState`; `ab init` writes `backlog` and `rejected` for the file, hosted and GitHub sources, and a Linear team might use `Icebox` and `Canceled`. With a key unset, that role doesn't exist, and an [optimization node](optimization-nodes.md) is refused at dispatch: it needs the rejected role for its rejected attempts. Your operator agent moves tickets by role, so it never needs your native names:
 
 ```sh
 bun ab ticket move AUT-12 --role backlog

@@ -143,6 +143,7 @@ export { listOperatorLandings } from './landings'
 export { readTicketTree, getOperatorTicketTree } from './tickets'
 
 export { requestNodeRestack } from './restack'
+export { reviseObjective, showObjective, objectiveView, type ObjectiveView } from './optimization'
 
 export { clearForgeDegradation } from './control'
 

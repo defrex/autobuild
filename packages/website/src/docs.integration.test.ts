@@ -134,6 +134,7 @@ test('published pages keep navigation on-site and link only declared repository 
       ],
     ],
     ['docs/operating.md', ['docs/operator-api.md', 'docs/configuration.md#hooks']],
+    ['docs/tickets.md', ['docs/optimization-nodes.md']],
     ['docs/workspaces.md', ['docs/architecture.md#key-boundaries']],
     [
       'docs/troubleshooting.md',
