@@ -12,7 +12,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor, type Actor } from '../event
 import type { EventPayload, EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import { decideNextFromFacts, type Decision } from '../kernel/engine'
-import { landRefusalReason } from '../kernel/landing-readiness'
+import { actionableCommands, landRefusalReason } from '../kernel/landing-readiness'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -26,6 +26,7 @@ import {
 import { buildConfigIdentity } from '../processes/verify-cycle-config'
 import { readBuildFacts } from '../store/reduced-reads'
 import { manualClock } from '../testing/fixed'
+import { memoryStoreRequestCounter } from '../testing/reduced-read-budget'
 
 const REPO = '/repos/origin'
 const SLUG = 'h6-vwap-adapter'
@@ -479,5 +480,98 @@ describe('a declined leaf states why in ab build status (#944)', () => {
       ;({ decision, detail } = await statusOf(h))
       expect(decision).toEqual({ kind: 'awaiting-pr' })
       expect(detail.landingUndecided).toBeUndefined()
+    })
+})
+
+/** A green leaf whose first janitor attempt failed on an unreadable source
+ * ticket, inside its backoff window. Counts every later `tickets.get`. */
+async function backedOffLeaf(h: Harness) {
+  await greenLeaf(h)
+  const get = h.tickets.get.bind(h.tickets)
+  const ticketReads = { count: 0 }
+  h.tickets.get = async () => {
+    ticketReads.count += 1
+    return null
+  }
+  await h.tick()
+  const failures = async () =>
+    (await h.events()).filter((e) => e.type === 'build.janitor-attempt-failed')
+  expect(await failures()).toHaveLength(1)
+  ticketReads.count = 0
+  const restore = () => {
+    h.tickets.get = get
+  }
+  return { ticketReads, failures, restore }
+}
+
+describe('janitor failure backoff and leaf controls (AUT-1198)', () => {
+  test('an inert resume waits out the backoff, then the leaf is decided', async () => {
+    const h = harness()
+    const { ticketReads, failures, restore } = await backedOffLeaf(h)
+    // A backed-off poll with no pending command is the baseline.
+    const requests = memoryStoreRequestCounter(h.store)
+    await h.tick()
+    const baseline = requests.vector()
+    expect(ticketReads.count).toBe(0)
+
+    await h.append('build.pause-requested', {}, humanActor('operator'))
+    await h.append('build.resume-requested', {}, humanActor('operator'))
+    const { state } = (await readBuildFacts(h.store, SLUG)).value
+    expect(state.pendingCommands.map((c) => c.command)).toEqual(['resume'])
+    expect(state.status).not.toBe('paused')
+    expect(actionableCommands(state)).toEqual([])
+
+    const lastSeq = (await h.events()).at(-1)!.seq
+    for (let poll = 0; poll < 2; poll++) {
+      requests.reset()
+      await h.tick()
+      expect(requests.vector()).toEqual(baseline)
+    }
+    requests.restore()
+    expect(ticketReads.count).toBe(0)
+    expect(await failures()).toHaveLength(1)
+    expect((await h.events()).at(-1)!.seq).toBe(lastSeq)
+
+    restore()
+    h.clock.set(state.janitor!.nextAttemptAt)
+    h.clock.advance(1000)
+    await h.tick()
+    const events = await h.events()
+    expect(events.filter((e) => e.type === 'landing.decided')).toHaveLength(1)
+    expect(events.some((e) => e.type === 'build.janitor-recovered')).toBe(true)
+    // The inert resume still holds nothing back and stays queued.
+    const after = (await readBuildFacts(h.store, SLUG)).value.state
+    expect(after.pendingCommands.map((c) => c.command)).toEqual(['resume'])
+  })
+
+  const operator = humanActor('operator')
+  const controls: [string, (h: Harness) => Promise<void>][] = [
+    ['pause', (h) => h.append('build.pause-requested', {}, operator).then(() => {})],
+    [
+      'resume of a paused leaf',
+      async (h) => {
+        await h.append('build.pause-requested', {}, operator)
+        await h.append('build.paused', {})
+        await h.append('build.resume-requested', {}, operator)
+      },
+    ],
+    [
+      'abort',
+      (h) => h.append('build.abort-requested', { reason: 'stop' }, operator).then(() => {}),
+    ],
+  ]
+  for (const [name, request] of controls)
+    test(`an actionable ${name} still wakes the janitor during backoff`, async () => {
+      const h = harness()
+      const { ticketReads, failures } = await backedOffLeaf(h)
+      await request(h)
+      const { state } = (await readBuildFacts(h.store, SLUG)).value
+      expect(actionableCommands(state)).not.toEqual([])
+      await h.tick()
+      // The janitor body ran inside the backoff window: it read the ticket
+      // again and, with landing held back by the control, closed the episode.
+      expect(ticketReads.count).toBeGreaterThan(0)
+      expect(await failures()).toHaveLength(1)
+      expect((await h.events()).at(-1)!.type).toBe('build.janitor-recovered')
     })
 })
