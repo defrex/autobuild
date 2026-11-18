@@ -639,7 +639,13 @@ no client retries it from zero or silently baselines it.
 `{version, cursor, value}`. The server owns the accumulator. It checks expiry
 before canonical catch-up, then returns a checkpoint including event N; clients
 read only events strictly after N. Missing historical positions or corrupt stored
-state return typed `checkpoint-integrity` (HTTP 500).
+state return typed `checkpoint-integrity` (HTTP 500). Seed answers use the same
+client identification and released-contract projection as `reducer-values`:
+clients send the projection and catalog-identity headers, a published client
+receives the seed projected onto its frozen release contract and stamped with
+its released reducer version, and a seed that contract cannot represent is
+returned canonical, so the client fails with its typed incompatibility error and
+never replays events.
 
 During deployment overlap or rollback, a pre-checkpoint server may advance a
 valid canonical row without checkpoint coverage. Under the seed lock, the new
