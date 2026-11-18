@@ -96,13 +96,17 @@ test('a declined attempt settles on the node and completes unmerged', async (mak
     h.clock.advance(60_000)
     await h.dispatcher.tick()
     const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'TRY')!
-    expect(h.launched.map((entry) => entry.slug)).toEqual([child.slug])
+    // The node launches too, for its starting measurement (AUT-1225); only
+    // the attempt's launches matter here.
+    const attemptLaunches = () => h.launched.filter((entry) => entry.slug === child.slug)
+    expect(attemptLaunches()).toHaveLength(1)
+    expect(h.launched.at(-1)!.slug).toBe(child.slug)
     await h.runLatest()
     // The runner stopped at wait/declined; the janitor settles the attempt.
     expect(reduceBuild(await h.events(child.slug)).declined?.reason).toBe(REASON)
     h.clock.advance(60_000)
     await h.dispatcher.tick()
-    expect(h.launched).toHaveLength(1)
+    expect(attemptLaunches()).toHaveLength(1)
     const events = await h.events(child.slug)
     const types = events.map((event) => event.type)
     expect(ofType(events, 'implement.declined')).toHaveLength(1)
