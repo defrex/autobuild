@@ -4278,8 +4278,11 @@ export async function optimizationReadBudget(): Promise<void> {
  *    reads at most `concurrency` build facts and zero event rows; the pending
  *    entries stay within `concurrency` and admission reports no slot;
  * 3. once the move succeeds the entry clears and its slot returns;
- * 4. the gate's input reads (node and child reduced facts) read zero event
- *    rows while nothing changes, and never list builds;
+ * 4. the gate, with a would-be request waiting behind another attempt's
+ *    landing turn, reads zero event rows while nothing changes, never lists
+ *    builds or reads repository digests (its turn candidates come from the
+ *    janitor's listing), and reads at most one reduced value per in-flight
+ *    attempt plus the node;
  * 5. a completed node without pending rejections leaves the janitor's work
  *    set; a late settlement re-arms it through its incremental digest, which
  *    reads only the new row, never the node's history.
@@ -4301,14 +4304,15 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     const store = new MemoryBuildStore()
     const tickets = new FakeTicketSource()
     await store.ensureRepo(repo)
-    const created = async (slug: string, kind?: 'node', target?: string) => {
-      await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+    const created = async (slug: string, kind?: 'node', target?: string, ticket?: TicketRef) => {
+      const ref = ticket ?? { source: 'fake', id: slug.toUpperCase() }
+      await store.createBuild({ slug, repo, branch: `ab/${slug}`, ticket: ref })
       await store.append(slug, {
         actor: DISPATCHER,
         type: 'build.created',
         payload: {
           repo,
-          ticket: { source: 'fake', id: slug.toUpperCase() },
+          ticket: ref,
           baseBranch: 'main',
           ...(kind ? { kind } : {}),
           ...(target ? { target: { build: target, ticket: { source: 'fake', id: 'NODE' } } } : {}),
@@ -4377,7 +4381,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     const live: TicketRef[] = []
     for (let i = 0; i < concurrency; i++) {
       live.push(await propose(`p${i}`))
-      await created(`attempt-${i}`, undefined, node)
+      await created(`attempt-${i}`, undefined, node, live[i])
     }
     await completed('attempt-0')
     await settle('p0', live[0]!, 'attempt-0', 'declined')
@@ -4455,25 +4459,80 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       expect((await tickets.get(live[0]!.id))?.state).toBe('Rejected')
       expect((await tickets.get(live[1]!.id))?.state).not.toBe('Rejected')
 
-      // 4. The gate's inputs: zero event rows while unchanged, no listing.
+      // 4. The gate and its landing turn: attempt-2 has a known pair and
+      // would request a measurement, but attempt-3, overtaken three times,
+      // holds the turn. Zero event rows while unchanged, no listing or digest
+      // read beyond the janitor's own, and one reduced read per in-flight
+      // attempt plus the node.
+      const turnTicket = await propose('p3')
+      await created('attempt-3', undefined, node, turnTicket)
+      for (let i = 0; i < 4; i++)
+        await store.append('attempt-3', {
+          actor: DISPATCHER,
+          type: 'attempt.measurement-requested',
+          payload: {
+            id: `m${i}`,
+            node,
+            candidate: 'c'.repeat(40),
+            baseline: String(i).repeat(40),
+            harnessPin: sha,
+            revision: 1,
+          },
+        })
+      await store.append('attempt-2', {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'fake',
+          remote: false,
+          ref: 'attempt-2',
+          branch: 'ab/attempt-2',
+          base: { source: 'remote', sha },
+        },
+      })
+      await store.append('attempt-2', {
+        actor: DISPATCHER,
+        type: 'target.moved',
+        payload: { branch: 'main', sha },
+      })
+      await store.append('attempt-2', {
+        actor: DISPATCHER,
+        type: 'pr.opened',
+        payload: { pr: { number: 2, url: 'https://forge/2', headSha: 'b'.repeat(40) } },
+      })
+      await nodeState()
+      for (const slug of ['attempt-2', 'attempt-3']) await readBuildFacts(store, slug)
+      await readBuildDigests(store, repo)
       const record = (await store.getBuild('attempt-2'))!
-      const gate = dispatcher()
-      await call(gate, 'landingVerdict', record, node)
+      const tick = async () => {
+        const d = dispatcher()
+        // The janitor's one listing per tick, which the gate reuses.
+        Reflect.set(d, 'janitorEntries', await call(d, 'repoBuildDigests'))
+        // A cached view would hide a second listing from the store counters;
+        // the gate must not scan the repository's builds even in memory.
+        let listings = 0
+        Reflect.set(d, 'repoBuildDigests', async () => {
+          listings += 1
+          return []
+        })
+        return { d, listings: () => listings }
+      }
+      await call((await tick()).d, 'landingVerdict', record, node)
       for (let poll = 0; poll < 3; poll++) {
+        const { d, listings } = await tick()
         rows.reset()
         requests.reset()
-        const verdict = await call<{ verdict: string }>(
-          dispatcher(),
-          'landingVerdict',
-          record,
-          node,
-        )
-        expect(verdict.verdict).toBe('stale')
+        const verdict = await call<{ verdict: string }>(d, 'landingVerdict', record, node)
+        expect(verdict.verdict).toBe('wait-turn')
+        expect(listings()).toBe(0)
         expect(rows.buildRows).toBe(0)
+        expect(rows.buildFactsCalls).toBeLessThanOrEqual(concurrency + 1)
         const vector = requests.vector()
         expect(vector.listBuilds).toBeUndefined()
+        expect(vector.getRepoBuildDigests).toBeUndefined()
         measured.gate!.push(vector)
       }
+      expect(new Set(measured.gate!.map((v) => JSON.stringify(v))).size).toBe(1)
 
       // 5. The node completes; its last pending move then clears it from the
       // work set, and a late settlement re-arms it incrementally.

@@ -1160,6 +1160,11 @@ export class Dispatcher {
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+  /** Per tick: the janitor's work listing, and the nonterminal children of
+   * each node indexed from it on the first landing turn that needs them. The
+   * landing gate reads its turn candidates here, never from a new listing. */
+  private janitorEntries?: { record: BuildRecord; digest: BuildDigest }[]
+  private nodeChildren?: Map<string, BuildRecord[]>
   /** Set once kernel Git proved unable to run this tick; later node work in
    * the same tick defers on it without spawning again. */
   private kernelGitUnavailable?: KernelGitUnavailable
@@ -1224,6 +1229,8 @@ export class Dispatcher {
     this.kernelGitUnavailable = undefined
     this.tickAbandonments = []
     this.availabilityEntries = undefined
+    this.janitorEntries = undefined
+    this.nodeChildren = undefined
     this.availabilityLandings = undefined
     this.availabilityLandingKey = undefined
     const builds = new Map<string, number>()
@@ -2548,6 +2555,8 @@ export class Dispatcher {
     const entries = (await this.repoBuildDigests()).filter(
       ({ digest }) => isWorkDigest(digest) || digest.integrationAuditPending === true,
     )
+    this.janitorEntries = entries
+    this.nodeChildren = undefined
     // Receipt reporting requires no forge call, capacity or workspace. Recover
     // every episode before the transport-budget and janitor-backoff gates.
     for (const { record, digest } of entries) {
@@ -3523,10 +3532,34 @@ export class Dispatcher {
     return (ref) => identity(ref)
   }
 
+  /** The nonterminal children of `nodeSlug` in this tick's janitor listing,
+   * indexed once per tick. Attempts ride in the work set while nonterminal,
+   * and a build created later in the tick has never been overtaken, so it
+   * cannot hold the turn. */
+  private childrenOf(nodeSlug: string): BuildRecord[] {
+    const entries = this.janitorEntries
+    if (entries === undefined)
+      throw new Error('the landing turn reads the janitor listing; run it inside the janitor')
+    if (this.nodeChildren === undefined) {
+      const index = new Map<string, BuildRecord[]>()
+      for (const { record, digest } of entries) {
+        if (digest.terminal !== undefined || record.ticket === undefined) continue
+        for (const target of digestNodeTargets(digest)) {
+          const children = index.get(target)
+          if (children) children.push(record)
+          else index.set(target, [record])
+        }
+      }
+      this.nodeChildren = index
+    }
+    return this.nodeChildren.get(nodeSlug) ?? []
+  }
+
   /** The gate's verdict for one child of an optimization node, from the
    * child's and the node's reduced facts. The turn costs at most one reduced
    * read per other in-flight attempt, and only for a would-be request or
-   * landing. */
+   * landing; its candidates come from the tick's janitor listing, so it never
+   * lists the repository. */
   private async landingVerdict(
     record: BuildRecord,
     nodeSlug: string,
@@ -3574,18 +3607,11 @@ export class Dispatcher {
         const wanted = new Set(digest.inFlight.map((entry) => key(entry.ticket)))
         const candidates: TurnCandidate[] =
           record.ticket !== undefined ? [{ slug: record.slug, ticket: record.ticket, state }] : []
-        for (const { record: other, digest: summary } of await this.repoBuildDigests()) {
-          if (
-            other.slug === record.slug ||
-            other.ticket === undefined ||
-            summary.terminal !== undefined ||
-            !digestNodeTargets(summary).includes(nodeSlug) ||
-            !wanted.has(key(other.ticket))
-          )
-            continue
+        for (const other of this.childrenOf(nodeSlug)) {
+          if (other.slug === record.slug || !wanted.has(key(other.ticket!))) continue
           const otherState = (await this.store.buildFacts(other.slug)).state
           if (otherState.target?.build !== nodeSlug) continue
-          candidates.push({ slug: other.slug, ticket: other.ticket, state: otherState })
+          candidates.push({ slug: other.slug, ticket: other.ticket!, state: otherState })
         }
         verdict = landingMeasurementGate({
           ...input,
