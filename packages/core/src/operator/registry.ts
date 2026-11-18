@@ -2,6 +2,8 @@ import { readBuildPage } from '../store/event-reads'
 import { abortDestinationSchema } from '../events/payloads'
 import { readRepositoryAttentionPage } from './repository-events'
 import { requestNodeRestack } from './restack'
+import { reviseObjective } from './optimization'
+import { objectiveEpsilonSchema } from '../objective'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets, operatorControlTickets } from './tickets'
@@ -242,6 +244,31 @@ const buildListInput = z.strictObject({
 const buildDetailInput = z.strictObject({ repo: repoField, slug: slugField })
 
 const ticketDetailInput = z.strictObject({ repo: repoField, id: ticketIdField })
+
+const objectiveReviseInput = z
+  .strictObject({
+    repo: repoField,
+    slug: slugField,
+    threshold: z.number().optional().describe('Stop when the node head reaches this value.'),
+    epsilon: objectiveEpsilonSchema
+      .optional()
+      .describe('The smallest gain that counts: {absolute: n} or {relative: 0 < n < 1}.'),
+    maxAttempts: z.number().int().min(1).optional(),
+    maxHours: z.number().gt(0).optional(),
+    plateau: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Consecutive no-improvement or declined attempts that stop the node.'),
+    stopMode: z.enum(['abort', 'drain']).optional(),
+    concurrency: z.number().int().min(1).optional().describe('Attempts in flight.'),
+  })
+  .refine(
+    ({ repo: _repo, slug: _slug, ...changes }) =>
+      Object.values(changes).some((value) => value !== undefined),
+    'revise at least one field',
+  )
 
 const buildEventsInput = z.strictObject({
   repo: repoField,
@@ -661,6 +688,23 @@ export const TOOLS: readonly ToolEntry[] = [
       return requestNodeRestack({
         store: ctx.store,
         ...input,
+        user: attributed(ctx),
+        ...(ctx.via ? { via: ctx.via } : {}),
+      })
+    },
+  ),
+  defineTool(
+    'optimization.revise',
+    'Revise an optimization node’s objective knobs: threshold, epsilon, budget, plateau, stop mode or concurrency. Running attempts are unaffected and nothing is replanned; the metric, harness and purpose change only through a node spec revision. Refuses work builds, plain nodes and terminal nodes.',
+    objectiveReviseInput,
+    '{slug, revision, changes}: the recorded objective revision.',
+    async (raw, ctx) => {
+      const { repo, slug, ...changes } = raw as z.infer<typeof objectiveReviseInput>
+      return reviseObjective({
+        store: ctx.store,
+        repo,
+        slug,
+        changes,
         user: attributed(ctx),
         ...(ctx.via ? { via: ctx.via } : {}),
       })

@@ -1529,6 +1529,8 @@ export function buildDashboard(
 /** One vocabulary for CLI, terminal, web and operator reads. */
 export function buildVocabulary(state: BuildState): {
   kind?: 'integration' | 'work'
+  /** An integration build whose objective was accepted: an optimization node. */
+  optimization?: true
   target?: string
   integration?:
     | 'reparenting'
@@ -1546,6 +1548,9 @@ export function buildVocabulary(state: BuildState): {
 } {
   return {
     kind: state.kind === 'node' ? treeVocabulary.integrationKind : treeVocabulary.work,
+    ...(state.kind === 'node' && state.optimization !== undefined
+      ? { optimization: true as const }
+      : {}),
     ...(state.target?.ticket.id || state.baseBranch
       ? { target: state.target?.ticket.id ?? state.baseBranch }
       : {}),

@@ -22,6 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
+- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, revisions and derived progress.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -175,6 +176,18 @@ Integration builds use collect → verify → merge → close, with demand-drive
 repair children and source-aware reconcile as needed. Their exact-head/parent
 verification differs from clean waiting leaf rewrites. See the
 [node lifecycle](references/integration-tree.md#collect-verify-and-merge).
+
+**Optimization nodes.** A node becomes an optimization node only when its spec
+carries exactly one fenced block whose info string is exactly
+`autobuild-objective`. A heading named "Objective", a plain `toml` block, a block
+nested inside another fence, or prose describing an objective never counts. Two
+blocks, a block that fails to parse or validate, an objective with no budget
+limit, or a ticket source with no rejected role refuse the opening and name the
+reason; the node never opens as a plain node instead. A work ticket carrying the
+block is refused at dispatch. A spec revision of an open optimization node may
+change the objective but cannot add or remove the block, and a plain node never
+gains one. The marker rules and the objective schema are in
+[optimization nodes](references/optimization-nodes.md).
 
 **Review severity is proportion to the spec.** Both review loops rate a
 finding by what the defect costs against the spec's acceptance criteria and
@@ -1416,7 +1429,7 @@ state eligible.
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds (unless `ab abort --to ready`), closed-unmerged PRs. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file, hosted and github); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
-| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. Same distinctness rule. |
+| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. An [optimization node](references/optimization-nodes.md) is refused without it. Same distinctness rule. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, `hosted` and `github`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -2505,6 +2518,7 @@ to the build's event log and apply the same write-time checks.
 | Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Consent to merge | `ab merge <slug> [--head <sha>] [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
 | Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
+| Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected. | `optimization.objective-revised` |
 | Hold merge | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
@@ -2668,6 +2682,9 @@ A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
 spec and its publication is confirmed.
+A revision of an optimization node may change its `autobuild-objective` block
+but cannot remove it, and a revision of a plain node or a leaf cannot add one;
+both refusals record nothing.
 
 Every command requires an applicable target in this repository. Pause and
 resume require an active build; abort and hold also accept queued builds.
