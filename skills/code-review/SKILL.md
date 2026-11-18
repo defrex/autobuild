@@ -51,7 +51,11 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
      measures before anything lands. A change gaming the spirit of the test,
      by changing what it measures, overfitting the eval or special-casing the
      benchmark, is a blocking finding whatever the number did. So is a
-     regression in behavior the purpose protects.
+     regression in behavior the purpose protects. For a panel objective,
+     judges compare the work against a rubric, so a change that speaks to the
+     judges rather than to the purpose is gaming and a blocking finding:
+     rubric-keyword stuffing, or notes and comments addressed to reviewers or
+     judges.
 4. Write `$AB_CONTEXT_DIR/code-review.md`, then exactly one verdict:
 
    ```

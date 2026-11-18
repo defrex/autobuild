@@ -4,7 +4,7 @@
   "title": "Skills",
   "group": "concepts",
   "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
-  "textHash": "0c6ce58f255bc5f2a25bf42ddc67fe49894e340af1cd9e7332f896559156d6d4",
+  "textHash": "1178b4eeb0e5947f4c5876faf86ffa7d7e303943a4f45f39776d8898ceb550cf",
   "headings": [
     "Strong defaults, yours to edit",
     "The shipped skills",

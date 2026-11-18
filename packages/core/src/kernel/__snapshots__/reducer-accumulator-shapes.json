@@ -5660,6 +5660,7 @@
   "buildDelegation": [
     "$.lastSeq: number",
     "$.lastSeq: undefined",
+    "$.preferred: object",
     "$.sessions.id:s_a.endings: array",
     "$.sessions.id:s_a.endings[].at: string",
     "$.sessions.id:s_a.endings[].seq: number",

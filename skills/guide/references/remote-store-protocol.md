@@ -1243,6 +1243,8 @@ machine authentication. Its strict target is one of:
 
 - `{kind: "build-runner", id}` for an existing build;
 - `{kind: "build-phase", id, session}` after its `session.started` fact;
+- `{kind: "build-judge", id, session, panel, judge}` from the build's own
+  runner, after the judge's `panel.judge-started` fact;
 - `{kind: "harvest-runner", repo, id, execution, leaseHolder}` after trusted
   preparation has atomically claimed the scan and recorded
   `harvest.execution.authorized` for that run/execution and adopted holder;
@@ -1251,22 +1253,25 @@ machine authentication. Its strict target is one of:
 
 The response is `{token}` only. Project credentials can issue only within their
 registered project. A runner grant may issue only an exact phase grant within
-its own lifecycle binding; phase grants cannot delegate. Unknown targets are
+its own lifecycle binding, and only a build-runner grant may issue a judge
+grant; phase and judge grants cannot delegate. Unknown targets are
 refused. Tokens and parent secrets never become artifacts, launch envelopes or
 execution facts. Local-store execution requires no exchange; remote execution
 fails closed when issuance fails.
 
 The signed strict shape is `{version: 2, delegation: {repo, kind, id, anchor,
-session?, execution?, leaseHolder?}}`. `anchor` is the authoritative event
-sequence; harvest grants additionally bind the authorized execution. Session
-claims exist only on phase grants. No fixed `exp` applies to this shape:
+session?, execution?, leaseHolder?, panel?, judge?}}`. `anchor` is the
+authoritative event sequence; harvest grants additionally bind the authorized
+execution. Session claims exist only on phase and judge grants, and `panel` and
+`judge` only on judge grants. No fixed `exp` applies to this shape:
 signature/schema verification precedes registered-project and lifecycle checks
 on every request, with no authorization cache. Failure to read lifecycle state
 fails closed. Parent credential expiry does not expire an already-issued grant.
 Project removal refuses all its grants immediately.
 
 Build grants live until 60 seconds after durable build termination. Phase grants
-also retire 60 seconds after their own session ends, whichever comes first.
+also retire 60 seconds after their own session ends, whichever comes first;
+judge grants retire 60 seconds after their `panel.judge-ended`.
 Harvest grants retire 60 seconds after their run stops or their authorized
 execution ends/releases; harvest phases additionally retire on session end.
 Durable harvest suspension immediately closes the phase grant, without a grace interval.
@@ -1279,7 +1284,13 @@ survive hours-long turns, parent expiry and dispatcher/service reconstruction.
 A durable ending never resurrects: recovered harvest work gets a new
 `harvest.execution.authorized` identity and token.
 
-Delegated same-project reads remain available, including journals, artifacts,
+A judge grant is write-only. Every read is refused with 403, including reducer
+values, artifacts, streams and build listings. Its one permitted request is
+`POST /builds/<id>/events` carrying a single `panel.preferred` attributed to its
+own judge session, for its own panel, judge and session, while that session is
+open and has not already preferred. Every other write is refused.
+
+Other delegated grants keep same-project reads, including journals, artifacts,
 digests, bounded state, pinned assets and collections. Writes by a build grant
 are confined to its build's events/deposits/artifacts, snapshots, leases and
 streams. Phase grants also reject agent actors naming another session, while
