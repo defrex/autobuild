@@ -208,9 +208,10 @@ never opens as a plain node. Fix the block, or file the ticket with
 objective and pins its harness at the opening commit.
 
 `ab ticket tree` labels an optimization node `[node, optimization]`, and status
-labels its build `optimization node`. `ab objective <node>` shows the effective
-objective and its progress, and its flags revise the stopping, budget and
-epsilon knobs; see [quick revision](optimization-nodes.md#revisions). A quick
+labels its build `optimization node`. The dashboards, status and watch show its
+[objective row](optimization-nodes.md#where-progress-appears). `ab objective
+<node>` shows the effective objective and its full progress, and its flags
+revise the stopping, budget and epsilon knobs; see [quick revision](optimization-nodes.md#revisions). A quick
 revision is never written back to the ticket, so `ab ticket show` prints the
 effective objective and marks each field that differs from the ticket's block
 `(revised)`, or every field when the ticket's block was removed or made invalid.

@@ -3434,6 +3434,20 @@ body: when an edit removes the block or leaves it invalid, every field is
 marked. `ab ticket tree` labels such a ticket
 `[node, optimization]`, and status labels the build `optimization node`.
 
+**Progress surfaces.** The shared dashboard projection gives an optimization
+node an objective row (RFC 0005 §12): the starting and current value against
+the threshold, with the baseline's noise; accepted, rejected and running
+attempts; the budget used; and the stop cause once stopped. A panel objective
+shows win rates. Budget hours stop at the stop time. The terminal dashboard
+prints the row under the node's progress bar and in its detail view; `ab
+status` prints it on a continuation line and `ab build status <node>` under
+the `optimization node` label. `--json` summaries, `builds.list`, `builds.get`
+and `ab watch --json` records (`state.objective`, with elapsed hours evaluated
+at the record's own timestamp) carry the same fields under `objective`, and
+the dashboard row under `objectiveRow`, in the same terms. Each is projected
+from the digest in the build state the surface already reads. The web app's
+progress view is a separate design decision.
+
 **Attempts.** A build is an attempt of node N exactly when its ticket ref
 appears in a recorded `optimization.attempts-proposed` of N; the commands below
 recognize it while the attempt is in flight. Both refs are compared through the
@@ -4029,10 +4043,10 @@ proposal, dropped once the attempt settles, and the objective facts supply the
 
 **Optimization read cost.** The digest's size does not grow with settled
 attempts: admission caps `inFlight` at the objective's concurrency, and
-settled attempts leave only counters. The dispatcher, status and watch read it
-from the build state they already reduce, so the stop and admission inputs cost
-the same at 10 and 10,000 attempts and read zero event rows while nothing
-changes. The ledger grows with settled attempts, which `maxAttempts` bounds,
+settled attempts leave only counters. The dispatcher, the dashboards, status
+and watch read it from the build state they already reduce, so the stop and
+admission inputs and the objective row cost the same at 10 and 10,000
+attempts and read zero event rows while nothing changes. The ledger grows with settled attempts, which `maxAttempts` bounds,
 and is read only on an explicit history request; it advances from new node rows
 only. Neither value ever reads an attempt's log, because `attempt.settled`
 carries the measured delta. The read-budget harness in

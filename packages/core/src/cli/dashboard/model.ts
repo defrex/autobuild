@@ -24,6 +24,18 @@ import {
   landingAuthorized,
   landingFallbackReason,
 } from '../../kernel/landing-state'
+import { projectObjectiveRow, type ObjectiveRow } from './objective-row'
+export {
+  objectiveElapsedHours,
+  objectiveNumber,
+  objectiveParts,
+  objectiveSegments,
+  objectiveSummary,
+  objectiveVocabulary,
+  projectObjectiveRow,
+  type ObjectiveRow,
+  type ObjectiveSummary,
+} from './objective-row'
 import {
   integrationComplete,
   integrationFailed,
@@ -235,6 +247,8 @@ export interface DashboardBuild {
   /** A work row's standing alert, such as a parked build waiting for a slot. */
   alert?: { tone: 'yellow' | 'red'; text: string }
   integrationRow?: IntegrationRow
+  /** An optimization node's objective progress; absent for every other build. */
+  objectiveRow?: ObjectiveRow
   integrationDetail?: IntegrationDetail
   collectionIdentity?: {
     repo: string
@@ -649,6 +663,7 @@ export function projectBuildFromFacts(
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
   const wait = dashboardWait(state)
+  const objective = projectObjectiveRow(state)
   const abortProgress =
     status === 'aborting'
       ? state.status === 'queued'
@@ -696,6 +711,7 @@ export function projectBuildFromFacts(
       targetDistance: workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      ...(objective !== undefined ? { objectiveRow: objective } : {}),
       integrationDetail: projectIntegrationDetail(
         record,
         state,
@@ -743,6 +759,7 @@ export function projectBuildFromFacts(
         state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+      ...(objective !== undefined ? { objectiveRow: objective } : {}),
       integrationDetail: projectIntegrationDetail(
         record,
         state,
@@ -1105,6 +1122,7 @@ export function projectBuildFromFacts(
       state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
     tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
     integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
+    ...(objective !== undefined ? { objectiveRow: objective } : {}),
     integrationDetail: projectIntegrationDetail(record, state, facts.log.restack, config, pipeline),
     collectionIdentity: {
       repo: record.repo,
