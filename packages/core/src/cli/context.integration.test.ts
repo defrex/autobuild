@@ -119,7 +119,7 @@ describe('buildContext — plan (§8.3: ticket, spec; prior plan + findings on r
       'ticket.md',
     ])
     expect(manifest.required).toEqual(['plan'])
-    expect(manifest.allowedTerminals).toEqual(['done', 'escalate'])
+    expect(manifest.allowedTerminals).toEqual(['done', 'escalate', 'wait-on'])
     expect(manifest.materialized).toEqual({
       'spec.md': { kind: 'spec', rev: 0 },
       'ticket.md': 'derived',
@@ -248,7 +248,7 @@ describe('buildContext — plan-review (§8.3: spec, plan@latest, all prior roun
       'spec.md',
     ])
     expect(manifest.required).toEqual(['plan-review'])
-    expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate'])
+    expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate', 'wait-on'])
     // Latest rev IS the round-2 plan under review.
     expect(manifest.materialized['plan.md']).toEqual({ kind: 'plan', rev: 1 })
     expect(await abFile('plan.md')).toBe('# Plan v2\n')
@@ -481,7 +481,7 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
     expect(manifest.commitRange).toEqual({ base: 'sha-base', head: 'sha-head-1' })
     // The report kind is per-step, required only on fail (§8.2).
     expect(manifest.required).toEqual(['verify-report:e2e'])
-    expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate'])
+    expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate', 'wait-on'])
   })
 
   test('verify.started guidance materializes once from the exact step occurrence', async () => {
@@ -894,7 +894,7 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start
     ])
     expect(manifest.conflict).toEqual({ baseSha: 'sha-current-base' })
     expect(manifest.required).toEqual(['reconcile-notes'])
-    expect(manifest.allowedTerminals).toEqual(['done', 'escalate'])
+    expect(manifest.allowedTerminals).toEqual(['done', 'escalate', 'wait-on'])
   })
 
   test('a crashed attempt exposes its newest matching reconcile.started base', async () => {

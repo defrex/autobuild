@@ -197,6 +197,8 @@ test('node context materializes allocated paths and removes stale contributions'
     ).rejects.toThrow()
   }
   const manifest = await buildContext(deps)
+  // A node build cannot declare a ticket wait, so its manifest omits wait-on.
+  expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate'])
   const intent = [
     { sha: head, originalSha: head, message: 'A hand-pushed decision\n\nFull intent\n' },
   ]
