@@ -209,7 +209,12 @@ labeled `A/` and `B/` in an order drawn per judge, in its own root outside
 any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
-they are given reveals which variant is the candidate. A resumed run reuses
+they are given reveals which variant is the candidate. A judge whose primary
+target fails with an alternate-eligible failure runs again on the `judge`
+role's next alternate, as its own session in the same root and order; only an
+exhausted chain counts against the judge. Each judge session streams like any
+build session and shows among the build's session rows as role `judge`, phase
+`judge:<panel>:<judge>`. A resumed run reuses
 recorded preferences and reruns only judges without one. Nothing runs a panel
 yet: panel attempts are not accepted by win rate, and a panel node records no
 noise check or progress. See
@@ -1217,7 +1222,8 @@ The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
 its logical step name. A verify step's configured skill name remains a
 deprecated alias for existing configurations and will be removed in a future
 release. The repository workflow resolves `harvest` and `harvest-review`. Each
-judge session of an optimization objective's judge panel resolves `judge`. Two
+judge session of an optimization objective's judge panel resolves `judge`,
+including its alternates. Two
 non-phase judgments use the same runtime/model/args resolver: `slug` optionally
 proposes pre-build naming, and `upgrade` proposes a resolution only when a
 vendored skill merge conflicts. Both are tool-free one-shots and receive the
