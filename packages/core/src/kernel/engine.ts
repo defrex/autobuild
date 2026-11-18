@@ -60,6 +60,7 @@ export type WaitReason =
   | 'awaiting-pr'
   | 'done'
   | 'aborted'
+  | 'declined'
 
 export type VerifyAction =
   | { kind: 'run-check'; step: string; command: string; attempt: number }
@@ -218,6 +219,10 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // ── 1. Terminal (§15.5: terminal wins, latest wins) ────────────────────────
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
   if (state.status === 'done') return { kind: 'wait', reason: 'done' }
+  // An optimization attempt's implementer declined (RFC 0005 §6.2): the
+  // decision is already made, so nothing below runs — no review, verify,
+  // finalize or measurement. The dispatcher settles it and completes the build.
+  if (state.declined !== undefined) return { kind: 'wait', reason: 'declined' }
 
   // ── 2. Operator commands (D2, §15.2.7) ─────────────────────────────────────
   // Requests queue in the log; the kernel acknowledges with fact events, and a

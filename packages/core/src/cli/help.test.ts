@@ -362,7 +362,12 @@ describe('layered CLI help catalog', () => {
       ],
       observe: ['followup|refactor|latent-bug', '--files', '--refs', 'not a terminal'],
       issue: ['downgrade <N> --reason <text>', 'one-way', 'not a terminal'],
-      done: ['done [--notes <file>]', 'terminal command', 'exactly one terminal'],
+      done: [
+        'done [--notes <file>] [--no-improvement <reason>]',
+        'terminal command',
+        'exactly one terminal',
+        'harness path is refused',
+      ],
       verdict: [
         'approve|revise|escalate|pass|fail|skip',
         '--findings',
