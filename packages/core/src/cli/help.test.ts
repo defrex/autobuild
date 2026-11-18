@@ -341,6 +341,8 @@ describe('layered CLI help catalog', () => {
         '--threshold',
         '--epsilon n|n%',
         '--stop-mode',
+        '--stop [--drain|--abort]',
+        'not merge',
         'sessionless',
       ],
       hold: ['hold <slug>'],

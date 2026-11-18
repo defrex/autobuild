@@ -40,9 +40,29 @@ export function advanceIntegration(state: IntegrationState, event: AbEvent): voi
       break
   }
 }
-export function integrationComplete(state: Pick<BuildState, 'integration'>): boolean {
+/** Why an optimization node is not yet complete; undefined for a plain node
+ * and for an optimization node that has stopped with nothing in flight. The
+ * existing child-enumeration rule applies on top. It lives here, free of the
+ * reducer machinery, because browser dashboard bundles import this module. */
+export function optimizationCompletionBlocker(
+  state: Pick<BuildState, 'optimization'>,
+): string | undefined {
+  const optimization = state.optimization
+  if (optimization === undefined) return undefined
+  if (optimization.stopped === undefined) return 'the optimization node has not stopped'
+  if (optimization.inFlight.length > 0)
+    return `attempts still in flight: ${optimization.inFlight.map((attempt) => attempt.ticket.id).join(', ')}`
+  return undefined
+}
+
+/** The node's children are all resolved and contributed, and an
+ * optimization node has also stopped with no attempt in flight. */
+export function integrationComplete(
+  state: Pick<BuildState, 'integration' | 'optimization'>,
+): boolean {
   const observation = state.integration?.observation
   return (
+    optimizationCompletionBlocker(state) === undefined &&
     !!observation &&
     observation.openChildren.length === 0 &&
     observation.diagnostics.length === 0 &&

@@ -224,9 +224,16 @@ eligibility by threshold, plateau and budget. A child is an attempt only when
 its ticket was created from a recorded proposal of the node; a repair child
 filed by hand counts toward neither budget nor plateau. Rejected attempts are
 no-improvement, declined, stopped and aborted settlements; only no-improvement
-and declined advance the plateau. Stop eligibility is reported, not acted on:
-reading progress never stops the node. See
+and declined advance the plateau. See
 [progress](optimization-nodes.md#progress) for the full definitions.
+
+The dispatcher stops an optimization node on the first tick a threshold,
+plateau or budget cause is eligible; `ab objective <node> --stop` stops it by
+hand. A stopped node cancels or aborts its in-flight attempts according to its
+stop mode. An optimization node is complete only once it has stopped and no
+attempt is running or waiting to land; stopping is not consent, so land it with
+`ab merge <node>`. See
+[stopping and completion](optimization-nodes.md#stopping-and-completion).
 
 ### Node verification context
 
