@@ -1,4 +1,10 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
+import { DISPATCHER, KERNEL } from '../events/envelope'
+import {
+  commandObjective,
+  OPTIMIZATION_SHA,
+  OptimizationLogBuilder,
+} from './generators/optimization-log'
 import { reduceBuild } from './reducer'
 import {
   capacityExplanation,
@@ -12,6 +18,7 @@ import {
   settlementKey,
   slotRequest,
   slotWaitText,
+  strandedNodeWorkspace,
   waitingExplanation,
   type CapacityBuild,
   type DispatchCapacity,
@@ -543,6 +550,7 @@ function measuringNode(slug: string): CapacityBuild {
     rejections: [],
     plateau: 0,
     emptyProposals: 0,
+    requests: 0,
   }
   return node
 }
@@ -563,4 +571,125 @@ test('a node due its starting measurement requests verification and occupies whi
   node.state.status = 'running'
   node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
   expect(slotRequest(node, now)).toBeUndefined()
+})
+
+describe('the optimization proposer', () => {
+  /** An opened optimization node with an open request of `room`. */
+  function proposerNode(slug: string, room = 2, started = false): CapacityBuild {
+    const log = new OptimizationLogBuilder(slug)
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          ticket: { source: 'file', id: slug },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      .accept(commandObjective(), 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .baseline(1, 50, 1)
+      .request('r1', room)
+    if (started)
+      log
+        .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+        .revise({ concurrency: 1 }, 2)
+    return { ...build(slug, 'node'), state: reduceBuild(log.events) }
+  }
+  const when = new Date('2026-11-17T01:00:00Z')
+
+  test('an open undeposited request asks for a slot and reserves it from intake', () => {
+    const node = proposerNode('opt')
+    expect(slotRequest(node, when)).toBe('propose')
+    const capacity = dispatchCapacity([node, build('a')], 3, when)
+    expect(capacity.waitingNodes).toEqual([{ slug: 'opt', request: 'propose' }])
+    expect(intakeCapacity(capacity)).toBe(1)
+    expect(occupiesCapacity(node, when)).toBe(false)
+  })
+
+  test('a held, deposited or stale request asks for nothing; a running one keeps its slot', () => {
+    const held = { ...proposerNode('opt'), workspace: true }
+    expect(slotRequest(held, when)).toBeUndefined()
+    expect(occupiesCapacity(held, when)).toBe(true)
+    const deposited = proposerNode('opt')
+    deposited.state.optimization!.proposal!.deposited = {
+      artifact: { kind: 'attempts', rev: 0 },
+      ids: ['a'],
+      at: when.toISOString(),
+    }
+    expect(slotRequest(deposited, when)).toBeUndefined()
+    expect(slotRequest(proposerNode('opt', 5), when)).toBeUndefined()
+    expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBeUndefined()
+    // A started session was admitted and resumes after a shrink.
+    expect(slotRequest(proposerNode('opt', 2, true), when)).toBe('propose')
+  })
+
+  test('a filed node holding a workspace no work owns is stranded until a runner or request holds it', () => {
+    const filedNode = (extra?: (log: OptimizationLogBuilder) => void): CapacityBuild => {
+      const log = new OptimizationLogBuilder('opt')
+        .push({
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: 'repo',
+            ticket: { source: 'file', id: 'opt' },
+            baseBranch: 'main',
+            kind: 'node',
+          },
+        })
+        .accept(commandObjective(), 1)
+        .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+        .baseline(1, 50, 1)
+        .request('r1', 2)
+        .deposit('r1', 1, ['a'])
+        .file('r1', ['a'])
+      extra?.(log)
+      return { ...build('opt', 'node'), workspace: true, state: reduceBuild(log.events) }
+    }
+    expect(strandedNodeWorkspace(filedNode(), when)).toBe(true)
+    expect(strandedNodeWorkspace({ ...filedNode(), workspace: false }, when)).toBe(false)
+    // A live runner or a provisioning marker still owns it.
+    const leased = filedNode()
+    leased.record = { ...leased.record, lease: { holder: 'r', expiresAt: '2026-11-17T02:00:00Z' } }
+    expect(strandedNodeWorkspace(leased, when)).toBe(false)
+    expect(strandedNodeWorkspace({ ...filedNode(), provisioning: true }, when)).toBe(false)
+    // An expired lease does not.
+    const expired = filedNode()
+    expired.record = {
+      ...expired.record,
+      lease: { holder: 'r', expiresAt: '2026-11-17T00:00:00Z' },
+    }
+    expect(strandedNodeWorkspace(expired, when)).toBe(true)
+    // An open proposal's proposer owns it.
+    expect(
+      strandedNodeWorkspace(
+        filedNode((log) => log.request('r2', 1)),
+        when,
+      ),
+    ).toBe(false)
+    expect(strandedNodeWorkspace({ ...proposerNode('opt'), workspace: true }, when)).toBe(false)
+    // A plain node's workspace is outside this condition.
+    expect(strandedNodeWorkspace({ ...build('plain', 'node'), workspace: true }, when)).toBe(false)
+  })
+})
+
+test('cleanup keeps a workspace while measurement or a proposal owns it', () => {
+  const node = measuringNode('node')
+  node.workspace = true
+  expect(strandedNodeWorkspace(node, now)).toBe(false)
+  node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
+  expect(strandedNodeWorkspace(node, now)).toBe(true)
+  node.state.optimization!.proposal = {
+    id: 'r1',
+    head: 'a'.repeat(40),
+    room: 1,
+    requestedAt: now.toISOString(),
+    round: 1,
+  }
+  expect(strandedNodeWorkspace(node, now)).toBe(false)
+  delete node.state.optimization!.starting
+  expect(slotRequest({ ...node, workspace: false }, now)).toBe('verification')
+  node.state.currentPhase = { phase: 'propose', round: 1, seq: 1 }
+  expect(slotRequest({ ...node, workspace: false }, now)).toBe('propose')
 })
