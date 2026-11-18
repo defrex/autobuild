@@ -83,7 +83,8 @@ do not repeat `ab done` after success. Post-reconcile verification follows the
 captured policy and begins a fresh cycle after confirmed publication. A conflict
 at initial verify entry, or at a ticket-wait resume, still requires initial
 checks regardless of that policy. After a wait-resume replay publishes, the
-build resumes the phase that declared the wait.
+build resumes the phase that declared the wait; a verify or finalize wait
+re-verifies from the first step.
 
 A leaf replay resumed after a spec revision uses the revised spec as its
 contract. Its historical plan and implement notes describe the retained change;

@@ -1,5 +1,5 @@
 import { resolveApprovedVerifySelection } from './plan-verify-selection'
-import { activeVerifyStage } from './verify-stages'
+import { activeVerifyStage, leafVerifyCycleInputs } from './verify-stages'
 import { verifyBudgetExhaustedQuestion } from './verify-budget'
 import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
@@ -248,15 +248,12 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
 
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).
+  // The active stage's cycle: a leaf's shares `leafVerifyCycleInputs` with
+  // `cycleBoundary` below, so both drop the same prior-base evidence.
   const stageCycle =
     state.kind === 'node'
       ? Math.max(state.integration?.cycle?.seq ?? 0, log.verifyConfigBoundary)
-      : Math.max(
-          log.code.latestApproveSeq,
-          log.lastReconcileCompletedSeq,
-          log.restartSeq,
-          log.verifyConfigBoundary,
-        )
+      : Math.max(leafVerifyCycleInputs(log), log.restartSeq)
   const stage =
     config.verify.stages === undefined
       ? undefined
@@ -484,11 +481,13 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   }
 
   // Verify cycle (§15.6-A): results only count after the latest of (last
-  // code-review approval, reconcile completion, or configuration boundary).
-  // Replay identity remains separate: refreshing config neither restacks the
-  // workspace again nor discards its post-reconcile policy.
+  // code-review approval, reconcile completion, configuration boundary, or a
+  // clean wait-resume restack after a verify:* or finalize wait). The stage
+  // selection's `stageCycle` above shares these inputs. Replay identity
+  // remains separate: refreshing config or resuming a wait neither restacks
+  // the workspace again nor discards its post-reconcile policy.
   const replayBoundary = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
-  const cycleBoundary = Math.max(replayBoundary, log.verifyConfigBoundary)
+  const cycleBoundary = leafVerifyCycleInputs(log)
   const cycleResults = log.verifyCompleted.filter((v) => v.seq > cycleBoundary)
   const cycleFails = cycleResults.filter((v) => v.outcome === 'fail')
   const lastCycleFail = cycleFails.at(-1)
