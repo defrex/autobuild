@@ -673,3 +673,241 @@ for (const length of [100, 10_000]) {
     expect(rows).toBe(length)
   })
 }
+
+const STREAM_SEEDS = [
+  ['/builds/mixed', 'buildStreamSeed'],
+  ['/repos/repo', 'repositoryAttention'],
+] as const
+
+/** A store whose build and repository logs are long enough to resume inside. */
+async function seedFixture() {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  await store.createBuild({ slug: 'mixed', repo: 'repo' })
+  for (let i = 0; i < 4; i++) {
+    await store.append('mixed', { actor: { kind: 'kernel' }, type: 'build.paused', payload: {} })
+    await store.appendRepo('repo', {
+      actor: { kind: 'human', user: 'test' },
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+  }
+  const cursors = {
+    '/builds/mixed': (await store.getEvents('mixed')).length - 2,
+    '/repos/repo': (await store.getRepositoryTail('repo', 0)).length - 2,
+  }
+  return { store, cursors }
+}
+
+const line = (version: string) => version.split('.').slice(0, 2).join('.')
+/** The headers a released client sends to `stream-seed`: version and protocol only. */
+const releasedHeaders = (client: string) => ({
+  authorization: `Bearer ${token}`,
+  [AUTOBUILD_VERSION_HEADER]: client,
+  [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+    line(client) === line(AUTOBUILD_VERSION)
+      ? REMOTE_STORE_PROTOCOL_VERSION
+      : RELEASE_LINE_PROTOCOLS[line(client)]!,
+})
+const supportedReleases = () =>
+  RELEASED_CLIENTS.map((entry) => entry.version).filter(
+    (version) => classifyClient(version, supportedClientRange()) === 'supported',
+  )
+const frozenCatalog = (client: string) =>
+  RELEASED_REDUCER_VALUES[RELEASED_CLIENTS.find((entry) => entry.version === client)!.contract!]!
+
+/** Make the store answer seeds as a newer server would: a bumped version and an
+ * additive field no released contract knows. */
+function newerSeeds(store: MemoryBuildStore, edit?: (value: Record<string, unknown>) => void) {
+  const read = store.getStreamSeed.bind(store)
+  store.getStreamSeed = async (...args) => {
+    const seed = await read(...args)
+    const value = { ...(seed.value as Record<string, unknown>), addedByNewerServer: 1 }
+    edit?.(value)
+    return { ...seed, version: seed.version + 1, value: value as never }
+  }
+}
+
+test('released clients resume both stream kinds with a seed projected onto their frozen contract', async () => {
+  const { store, cursors } = await seedFixture()
+  const direct = createStoreServer({ store, secret })
+  const composed = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+    openProjectRegistry: async () => testProjects(['repo']),
+    env: {
+      AB_STORE_SECRET: secret,
+      AB_POSTGRES_URL: 'postgres://unused/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'us-east-1',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    sourceFor: () => new FakeTicketSource(),
+    openStore: async () => store,
+  })
+  const released = supportedReleases()
+  // The regression this pins: 1.8.1 knows buildStreamSeed 55 and the server is newer.
+  expect(released).toContain('1.8.1')
+  expect(frozenCatalog('1.8.1').versions.buildStreamSeed).toBe(55)
+  const current = await store.getStreamSeed(
+    { kind: 'build', slug: 'mixed' },
+    cursors['/builds/mixed'],
+  )
+  expect(current.version).toBeGreaterThan(55)
+  for (const client of released)
+    for (const service of [direct, composed])
+      for (const [path, reducer] of STREAM_SEEDS) {
+        const response = await service.fetch(
+          new Request(`https://test${path}/stream-seed?cursor=${cursors[path]}`, {
+            headers: releasedHeaders(client),
+          }),
+        )
+        expect(response.status).toBe(200)
+        const body = await response.json()
+        expect(Object.keys(body).sort()).toEqual(['cursor', 'value', 'version'])
+        expect(body.cursor).toBe(cursors[path])
+        const catalog = frozenCatalog(client)
+        expect(body.version).toBe(catalog.versions[reducer]!)
+        expect(projectReducerValue(reducer, body.value, catalog)).toEqual({ value: body.value })
+      }
+})
+
+test('a newer server seed is projected for both stream kinds', async () => {
+  const { store, cursors } = await seedFixture()
+  newerSeeds(store)
+  const server = createStoreServer({ store, secret })
+  for (const client of supportedReleases())
+    for (const [path, reducer] of STREAM_SEEDS) {
+      const response = await server.fetch(
+        new Request(`https://test${path}/stream-seed?cursor=${cursors[path]}`, {
+          headers: releasedHeaders(client),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.version).toBe(frozenCatalog(client).versions[reducer]!)
+      expect(body.value).not.toHaveProperty('addedByNewerServer')
+    }
+})
+
+test('stream seeds keep the typed incompatibility failures', async () => {
+  const { store, cursors } = await seedFixture()
+  const server = createStoreServer({ store, secret })
+  for (const [path] of STREAM_SEEDS) {
+    for (const outside of [
+      { ...releasedHeaders('1.8.1'), [AUTOBUILD_VERSION_HEADER]: '1.1.0' },
+      { ...releasedHeaders('1.8.1'), [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '0' },
+    ]) {
+      const response = await server.fetch(
+        new Request(`https://test${path}/stream-seed?cursor=${cursors[path]}`, {
+          headers: outside,
+        }),
+      )
+      expect(response.status).toBe(409)
+    }
+  }
+  // A seed the frozen release cannot represent stays canonical, so the client refuses it.
+  newerSeeds(store, (value) => {
+    for (const key of Object.keys(value)) delete value[key]
+  })
+  const calls: string[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init)
+    calls.push(new URL(request.url).pathname)
+    return server.fetch(request)
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  for (const [path, reducer] of STREAM_SEEDS) {
+    const response = await server.fetch(
+      new Request(`https://test${path}/stream-seed?cursor=${cursors[path]}`, {
+        headers: releasedHeaders('1.8.1'),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect((await response.json()).version).not.toBe(frozenCatalog('1.8.1').versions[reducer])
+  }
+  await expect(
+    client.getStreamSeed({ kind: 'build', slug: 'mixed' }, cursors['/builds/mixed']),
+  ).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
+  await expect(
+    client.getStreamSeed({ kind: 'repo', repo: 'repo' }, cursors['/repos/repo']),
+  ).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
+  expect(calls.filter((path) => !path.endsWith('/stream-seed'))).toEqual([])
+})
+
+test('a source catalog receives the canonical seed and the client sends its catalog headers', async () => {
+  const { store, cursors } = await seedFixture()
+  newerSeeds(store)
+  const server = createStoreServer({ store, secret })
+  const canonical = await store.getStreamSeed(
+    { kind: 'build', slug: 'mixed' },
+    cursors['/builds/mixed'],
+  )
+  const response = await server.fetch(
+    new Request(`https://test/builds/mixed/stream-seed?cursor=${cursors['/builds/mixed']}`, {
+      headers: {
+        ...releasedHeaders('1.8.1'),
+        [REDUCER_VALUE_PROJECTION_HEADER]: '1',
+        [CATALOG_IDENTITY_HEADER]: 'f'.repeat(64),
+      },
+    }),
+  )
+  const body = await response.json()
+  expect(body.version).toBe(canonical.version)
+  expect(body.value).toHaveProperty('addedByNewerServer', 1)
+
+  const sent: Headers[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init)
+    sent.push(request.headers)
+    return new Response(JSON.stringify({ error: 'stop' }), { status: 500 })
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  await expect(client.getStreamSeed({ kind: 'build', slug: 'mixed' }, 1)).rejects.toThrow()
+  await expect(
+    client.getReducerValue({ kind: 'build', slug: 'mixed' }, { reducer: 'buildStreamSeed' }),
+  ).rejects.toThrow()
+  // The seed request identifies its catalog exactly as a named value request does.
+  expect(sent[0]!.get(REDUCER_VALUE_PROJECTION_HEADER)).toBe('1')
+  expect(sent[0]!.get(CATALOG_IDENTITY_HEADER)).toMatch(/^[0-9a-f]{64}$/)
+  expect(sent[0]!.get(CATALOG_IDENTITY_HEADER)).toBe(sent[1]!.get(CATALOG_IDENTITY_HEADER))
+})
+
+test('projecting a stream seed reads no more rows than serving it unprojected', async () => {
+  const { store, cursors } = await seedFixture()
+  let rows = 0
+  for (const key of ['builds', 'repos']) {
+    const states = Reflect.get(store, key) as Map<string, { events: unknown[] }>
+    for (const state of states.values())
+      for (const method of ['slice', 'filter'] as const) {
+        const original = state.events[method].bind(state.events)
+        Object.defineProperty(state.events, method, {
+          value: (...args: unknown[]) => {
+            const result = Reflect.apply(original, state.events, args) as unknown[]
+            rows += result.length
+            return result
+          },
+        })
+      }
+  }
+  const server = createStoreServer({ store, secret })
+  const read = async (path: string, client: Record<string, string>) => {
+    rows = 0
+    const response = await server.fetch(
+      new Request(
+        `https://test${path}/stream-seed?cursor=${cursors[path as keyof typeof cursors]}`,
+        {
+          headers: client,
+        },
+      ),
+    )
+    expect(response.status).toBe(200)
+    return rows
+  }
+  for (const [path] of STREAM_SEEDS) {
+    await read(path, headers)
+    expect(await read(path, releasedHeaders('1.8.1'))).toBe(0)
+    expect(await read(path, headers)).toBe(0)
+  }
+})
