@@ -600,15 +600,13 @@ Only paged operator listings select this capability. Sources without it retain
 the full-read fallback, which orders the listing before offset and limit: by
 default a stable urgent-first partition (urgent, then normal, each in source
 order), or for newest the reversed listing, which is newest filed first for
-sources that list in filing order (file, GitHub, Linear). The remote
-`HostedTicketSource` is the exception: the hosted list-ready protocol returns
-urgent tickets first and carries no filing time, so the client cannot see
-filing order, and its newest pages are reversed dispatch order whenever urgent
-tickets exist. Native errors propagate. Unpaged operator
-listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
-`listReady`/`listAll`. The hosted PostgreSQL source counts matches without
-bodies and reads only the SQL-bounded window. File, Linear, GitHub and the remote
-`HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.
+sources that list in filing order (file, GitHub, Linear). Native errors
+propagate. Unpaged operator listings, CLI ticket lists and dispatcher ready
+scans remain exhaustive through `listReady`/`listAll`. The hosted PostgreSQL
+source counts matches without bodies and reads only the SQL-bounded window.
+File, Linear and GitHub retain fallback; the remote `HostedTicketSource`
+forwards pages to the service's native paging (`list-page`), falling back only
+against a service predating it. The POST list-ready protocol stays exhaustive.
 
 Hosted cooldown recording rejects observed reset deadlines beyond the 24-hour
 admission horizon explicitly; adapters must not shorten or invent a provider
