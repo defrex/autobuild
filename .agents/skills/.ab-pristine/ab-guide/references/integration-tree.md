@@ -98,9 +98,10 @@ execution lease or dispatch capacity. A PR opens or is adopted when the node
 has commits its current parent lacks; parent-only advancement remains empty.
 
 
-A node requesting reconcile or verification is admitted before new ticket
-claims. The request is durable: a prepared verification cycle or a restack
-conflict, with no runner yet. Until the node holds its slot, intake reserves one
+A node requesting reconcile, verification or, for an optimization node,
+propose is admitted before new ticket claims. The request is durable: a
+prepared verification cycle, a restack conflict or an open proposal request,
+with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
 claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
@@ -238,6 +239,17 @@ makes the measurement stale, and the child restacks and is measured again. An
 attempt that does not land settles and its ticket moves to the rejected role,
 including after an operator abort; it never returns to triage. See
 [landing and settlement](optimization-nodes.md#landing-and-settlement).
+An optimization node follows `branch opening → starting measurement →
+(propose → collecting)*`, then completes, verifies and merges like any node.
+Once the starting value is measured, the dispatcher requests a `propose`
+session whenever the node has room within its concurrency and attempts budget.
+The request takes a slot ahead of new ticket claims, like node reconcile and
+verification. The session runs the `ab-propose` skill on the node head, reads
+the attempt ledger and deposits proposals with `ab propose`; it never creates
+tickets. The dispatcher files each proposal as a work ticket targeting the
+node, in the ready role, deduplicated by proposal id. Two consecutive empty
+proposals stop the node as `exhausted`. See the
+[proposer phase](optimization-nodes.md#proposer-phase).
 
 The dispatcher stops an optimization node on the first tick a threshold,
 plateau or budget cause is eligible; `ab objective <node> --stop` stops it by

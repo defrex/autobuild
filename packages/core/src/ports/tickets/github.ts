@@ -1356,8 +1356,11 @@ export class GitHubTicketSource implements TicketSource {
           : Date.parse(opts.idempotencyKeyReservedAt)
       if (!Number.isFinite(reservedAt)) throw new TicketCreationKeyReservationRequired()
     }
-    const assignees =
-      draft.assignees === undefined ? [] : await this.resolveAssignees('create', draft.assignees)
+    const requested = [
+      ...(draft.assignees ?? []),
+      ...(opts.readyAssignee !== undefined ? [opts.readyAssignee] : []),
+    ]
+    const assignees = requested.length === 0 ? [] : await this.resolveAssignees('create', requested)
     const state = await this.resolveTarget('create', opts.state ?? this.lifecycle.create)
     const target =
       draft.target === undefined || draft.target === null

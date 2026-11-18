@@ -88,8 +88,23 @@ import {
   settlementDue,
   settlementKey,
   slotRequest,
+  strandedNodeWorkspace,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
+import { attemptCreationKey } from '../kernel/attempt-creation-key'
+import {
+  exhaustedStopDue,
+  optimizationElapsedHours,
+  proposalWithdrawalDue,
+  proposeAdmissible,
+  proposerAdmissible,
+  proposerBlocker,
+  proposerRoom,
+  proposeRunDue,
+  proposeStarted,
+  signalDue,
+} from '../kernel/optimization'
+import { proposalsDocumentSchema } from '../ontology'
 import {
   baselineMeasurementDue,
   decideSampledMeasurement,
@@ -105,6 +120,7 @@ import {
   waitUnresolvableQuestion,
 } from '../kernel/ticket-wait'
 import { changeBlockers } from '../ports/tickets/operations'
+import { creationAssignees } from '../ports/tickets/assignees'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import { landingPolicyIdentity } from '../kernel/landing-policy-identity'
 import {
@@ -174,7 +190,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runNodeTransaction } from '../kernel/node-restack-transaction'
 import { hasBuildTrailer } from '../kernel/build-identity'
-import { digestNodeTargets } from '../store/digest'
+import { BuildDigestCapabilityError, digestNodeTargets, digestOptimization } from '../store/digest'
 import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { enforceOptimizationStop } from './optimization-stop'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
@@ -1363,8 +1379,9 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.leaseSweep(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
-    // Nodes with a durable verification request take freed slots before
-    // intake, whether or not idle node polling visited them this tick.
+    // Nodes with a durable verification or propose request take freed slots
+    // before intake, whether or not idle node polling visited them this tick.
+    // The same pass advances optimization nodes' proposers first.
     await this.admitWaitingNodes(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
@@ -1899,13 +1916,21 @@ export class Dispatcher {
     if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
     const launchState = (await this.store.buildFacts(slug)).state
-    if (
-      launchState.kind === 'node' &&
-      !launchState.nodeRestack?.conflict &&
-      !integrationCurrent(launchState) &&
-      !baselineMeasurementDue(launchState)
-    )
-      return 'already-active'
+    if (launchState.kind === 'node' && !launchState.nodeRestack?.conflict) {
+      // The last check before a proposer starts: the open request must still
+      // fit current state, unless its session was already admitted.
+      if (
+        proposeRunDue(launchState.optimization) &&
+        (proposeStarted(launchState) || !baselineMeasurementDue(launchState))
+      ) {
+        if (
+          !proposeStarted(launchState) &&
+          !proposeAdmissible(launchState.optimization, this.deps.clock())
+        )
+          return 'already-active'
+      } else if (!integrationCurrent(launchState) && !baselineMeasurementDue(launchState))
+        return 'already-active'
+    }
     if (launched.has(slug)) return 'already-active'
     if (launchState.kind !== 'node' && !(await this.leafAdmission(slug))) return 'already-active'
     launched.add(slug)
@@ -2395,14 +2420,20 @@ export class Dispatcher {
         // providers ignore the value (their host seams are injected).
         repo: this.deps.checkout ?? this.deps.repo,
         baseBranch:
-          events.state.kind === 'node' && events.state.integration?.cycle
+          events.state.kind === 'node' &&
+          (events.state.integration?.cycle || proposeRunDue(events.state.optimization))
             ? input.branch
             : baseBranchOf(events, config),
         branch: input.branch,
         ...(priorGenerations > 0 || input.generation > 0
           ? {
               publication: await this.confirmedWorkspacePublication(events, slug),
-              revision: events.state.integration?.cycle?.head ?? this.recoveryCheckpoint(events),
+              revision:
+                (proposeRunDue(events.state.optimization)
+                  ? events.state.optimization?.proposal?.head
+                  : undefined) ??
+                events.state.integration?.cycle?.head ??
+                this.recoveryCheckpoint(events),
               generation: Math.max(priorGenerations, input.generation),
             }
           : {}),
@@ -3458,24 +3489,37 @@ export class Dispatcher {
   }
 
   /** Admit every node awaiting verification that has a slot, in slug order,
-   * through the janitor's own admission path. Independent of `acceptNewWork`:
-   * node admission is existing work, never intake. */
+   * through the janitor's own admission path, then every proposer the free
+   * slots allow. Independent of `acceptNewWork`: node admission is existing
+   * work, never intake. */
   private async admitWaitingNodes(
     report: TickReport,
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
-    if (
-      !(await this.repoBuildDigests()).some(
-        ({ digest }) => digest.kind === 'node' && digest.terminal === undefined,
-      )
-    )
+    const entries = await this.repoBuildDigests()
+    if (!entries.some(({ digest }) => digest.kind === 'node' && digest.terminal === undefined))
       return
+    // An optimization node's proposer: exhausted stops, filings and new
+    // requests, chosen from this pass's digests alone. Proposing is the
+    // node's own work, never intake, so it runs whether or not new work is
+    // accepted. One clock reading serves every stage of the pass.
     const now = this.deps.clock()
-    const builds = await this.capacityBuilds()
-    const waiting = builds
-      .filter((build) => slotRequest(build, now) === 'verification')
-      .sort((a, b) => (a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0))
+    await this.advanceOptimizationNodes(report, opts, entries, now)
+    if (this.outOfBudget(opts)) return
+    const builds = (await this.capacityBuilds()).sort((a, b) =>
+      a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0,
+    )
+    await this.releaseStrandedNodeWorkspaces(builds, now, launched, report, opts)
+    if (this.outOfBudget(opts)) return
+    const waiting = builds.filter(
+      (build) =>
+        slotRequest(build, now) === 'verification' ||
+        (baselineMeasurementDue(build.state) &&
+          !proposeStarted(build.state) &&
+          slotRequest({ ...build, workspace: false }, now) === 'verification'),
+    )
+    const before = launched.size
     for (const { record, state } of waiting) {
       if (this.outOfBudget(opts)) return
       if (
@@ -3499,12 +3543,152 @@ export class Dispatcher {
         }
       })
     }
-    await this.releaseMeasuredNodeWorkspaces(builds, now, report, launched)
+    await this.admitProposers(builds, now, launched.size - before, report, launched, opts)
   }
 
-  /** Provision a workspace for an optimization node's starting measurement
-   * and launch its runner. The measurer fetches the pinned commit itself, so
-   * the workspace's revision does not matter. */
+  /**
+   * Release every optimization node workspace that no work owns
+   * (`strandedNodeWorkspace`), over the capacity states this pass already
+   * loaded: no read for a node that holds none. A released entry is updated
+   * in place, so this pass's admission sees the node free.
+   */
+  private async releaseStrandedNodeWorkspaces(
+    builds: CapacityBuild[],
+    now: Date,
+    launched: Set<string>,
+    report: TickReport,
+    opts: TickOpts,
+  ): Promise<void> {
+    for (const build of builds) {
+      if (launched.has(build.record.slug) || !strandedNodeWorkspace(build, now)) continue
+      if (this.outOfBudget(opts)) return
+      const { record } = build
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        try {
+          const facts = (await readBuildFacts(this.store, record.slug)).value
+          if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
+          const current = await this.store.buildFacts(record.slug)
+          build.workspace = current.workspace !== null
+          build.state = current.state
+        } catch (error) {
+          rethrowAuthorityLapse(error)
+          report.janitorDiagnostics.push(
+            `build ${record.slug}: node workspace release failed — ${String(error)}`,
+          )
+        }
+      })
+    }
+  }
+
+  /**
+   * Withdraw stale proposal requests and admit proposers (SPEC §13.1.1), over
+   * the capacity states `admitWaitingNodes` already loaded: one capacity
+   * computation, and no read for a waiter beyond the free slots.
+   *
+   * An undeposited request with no admitted session is withdrawn once it no
+   * longer fits current state (a stop, a spent budget, or a room shrunk below
+   * its allowance); the node requests again at the current room once room
+   * exists. A session that already started keeps its allowance and resumes.
+   */
+  private async admitProposers(
+    builds: CapacityBuild[],
+    now: Date,
+    admittedThisPass: number,
+    report: TickReport,
+    launched: Set<string>,
+    opts: TickOpts,
+  ): Promise<void> {
+    const proposers = builds.filter(
+      (build) => build.state.kind === 'node' && proposeRunDue(build.state.optimization),
+    )
+    if (proposers.length === 0) return
+    let free =
+      this.deps.config.capacity -
+      dispatchCapacity(builds, this.deps.config.capacity, now).occupied -
+      admittedThisPass
+    for (const build of proposers) {
+      if (this.outOfBudget(opts)) return
+      const { record, state } = build
+      if (
+        launched.has(record.slug) ||
+        this.hasLiveExecutionLease(record) ||
+        build.provisioning ||
+        (baselineMeasurementDue(state) && !proposeStarted(state))
+      )
+        continue
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        try {
+          const withdrawal = proposeStarted(state)
+            ? undefined
+            : proposalWithdrawalDue(state.optimization, now)
+          if (withdrawal !== undefined) {
+            await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+              actor: DISPATCHER,
+              type: 'optimization.proposal-withdrawn',
+              payload: { request: state.optimization!.proposal!.id, reason: withdrawal },
+            } satisfies EventWrite<'optimization.proposal-withdrawn'>)
+            const facts = (await readBuildFacts(this.store, record.slug)).value
+            if (strandedNodeWorkspace({ ...build, state: facts.state }, now))
+              await this.releaseWorkspace(record.slug, facts)
+            return
+          }
+          // A workspace already holds this node's slot (a proposer that lost
+          // its runner); otherwise it needs a free one.
+          const holding = build.workspace
+          if (
+            (holding
+              ? state.status === 'paused' || state.status === 'blocked'
+              : slotRequest(build, now) !== 'propose') ||
+            !state.nodeOpened ||
+            !janitorDue(state.janitor, now)
+          )
+            return
+          if (!holding) {
+            if (free <= 0 || !this.accountsAvailable()) return
+            free--
+          }
+          await this.launchProposer(record, report, launched)
+        } catch (error) {
+          rethrowAuthorityLapse(error)
+          report.janitorDiagnostics.push(
+            `build ${record.slug}: proposer admission failed — ${String(error)}`,
+          )
+        }
+      })
+    }
+  }
+
+  /**
+   * The creation keys of attempts a node deposited and has not recorded yet,
+   * from the build digests alone: no per-node read, and one set lookup per
+   * ready ticket. A node digest without the optimization signal (an older
+   * peer) fails closed: every ready ticket with a creation key is withheld.
+   */
+  private async optimizationCreationHolds(): Promise<{
+    holds: Map<string, { node: string; request: string }>
+    failure?: string
+  }> {
+    const holds = new Map<string, { node: string; request: string }>()
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (digest.terminal !== undefined) continue
+      let signal: ReturnType<typeof digestOptimization>
+      try {
+        signal = digestOptimization(digest)
+      } catch (error) {
+        if (!(error instanceof BuildDigestCapabilityError)) throw error
+        return { holds, failure: error.message }
+      }
+      const proposal = signal ? signal.proposal : undefined
+      for (const id of proposal?.deposited?.ids ?? [])
+        holds.set(attemptCreationKey(this.deps.repo, record.slug, id), {
+          node: record.slug,
+          request: proposal!.request,
+        })
+    }
+    return { holds }
+  }
+
+  /** Provision a workspace for the starting measurement. */
   private async prepareBaselineMeasurement(
     record: BuildRecord,
     report: TickReport,
@@ -3516,46 +3700,290 @@ export class Dispatcher {
     await this.provisionNodeAndLaunch(record, facts, report, launched)
   }
 
-  /** Release the workspace an optimization node held for its starting
-   * measurement once nothing else needs it: no measurement due, no
-   * integration cycle, no node restack or reconcile, no runner. Reads reduced
-   * state only; the raw read happens only for a node it releases. */
-  private async releaseMeasuredNodeWorkspaces(
-    builds: CapacityBuild[],
-    now: Date,
+  /** Provision the node workspace at its proposal head. */
+  private async launchProposer(
+    record: BuildRecord,
     report: TickReport,
-    launched: ReadonlySet<string>,
+    launched: Set<string>,
   ): Promise<void> {
-    for (const build of builds) {
-      const { record, state } = build
-      if (
-        state.kind !== 'node' ||
-        launched.has(record.slug) ||
-        state.optimization === undefined ||
-        !build.workspace ||
-        build.provisioning ||
-        this.hasLiveExecutionLease(record) ||
-        this.continuations.has(record.slug) ||
-        state.openExecution !== undefined ||
-        baselineMeasurementDue(state) ||
-        state.integration?.cycle !== undefined ||
-        state.integration?.intent !== undefined ||
-        state.nodeRestack?.conflict !== undefined ||
-        state.nodeRestack?.active !== undefined ||
-        state.sessions.open.length > 0 ||
-        now.getTime() - new Date(record.updatedAt).getTime() < this.leaseTtlMs
-      )
-        continue
-      try {
-        const facts = (await readBuildFacts(this.store, record.slug)).value
-        if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
-      } catch (error) {
-        rethrowAuthorityLapse(error)
-        report.janitorDiagnostics.push(
-          `build ${record.slug}: measurement workspace release failed — ${String(error)}`,
-        )
-      }
+    const facts = (await readBuildFacts(this.store, record.slug)).value
+    const proposal = facts.state.optimization?.proposal
+    if (proposal === undefined || !record.branch) return
+    if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
+      const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
+      if (kicked === 'kicked') report.provisioning++
+      return
     }
+    if (openWorkspace(facts) === null) {
+      let handle: WorkspaceProvisionResult
+      try {
+        handle = await this.provisionWorkspace(record.slug, {
+          repo: this.deps.checkout ?? this.deps.repo,
+          baseBranch: record.branch,
+          branch: record.branch,
+          revision: proposal.head,
+        })
+      } catch (error) {
+        if (await this.holdForMissingAccounts(error)) return
+        throw error
+      }
+      await this.store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: handle.provider,
+          ref: handle.ref,
+          path: handle.path,
+          localPath: handle.localPath,
+          remote: false,
+          branch: handle.branch,
+          base: handle.base,
+          ...(handle.restorationSkipped?.length
+            ? { restorationSkipped: handle.restorationSkipped }
+            : {}),
+        },
+      })
+    }
+    await this.launch(record.slug, launched, report)
+  }
+
+  /**
+   * The optimization proposer stage (SPEC §13.1.1). Nodes are selected from
+   * build digests alone: a plain node, a leaf, a stopped or idle optimization
+   * node, and a deferred node with no wake since its deferral cost no read.
+   * Every build read this stage makes precedes a write that changes the
+   * node's digest. An older peer's digest without the optimization signal
+   * fails the stage closed, never falling back to per-node reads.
+   */
+  private async advanceOptimizationNodes(
+    report: TickReport,
+    opts: TickOpts,
+    entries: { record: BuildRecord; digest: BuildDigest }[],
+    now: Date,
+  ): Promise<void> {
+    const due: { record: BuildRecord; kind: 'exhausted' | 'filing' | 'request' }[] = []
+    try {
+      for (const { record, digest } of entries) {
+        if (digest.terminal !== undefined || !digest.nodeOpened) continue
+        const signal = digestOptimization(digest)
+        if (!signal) continue
+        const kind = signalDue(signal, now, (digest.compatibility?.decisiveFacts ?? 0) > 0)
+        // A node whose runner is working requests nothing until it ends.
+        if (
+          kind === 'request' &&
+          (digest.executionOpen === true || this.hasLiveExecutionLease(record))
+        )
+          continue
+        if (kind !== undefined) due.push({ record, kind })
+      }
+    } catch (error) {
+      if (!(error instanceof BuildDigestCapabilityError)) throw error
+      report.janitorDiagnostics.push(`optimization proposing skipped — ${error.message}`)
+      return
+    }
+    for (const { record, kind } of due) {
+      if (this.outOfBudget(opts)) return
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        try {
+          if (kind === 'exhausted') await this.recordExhausted(record.slug)
+          else if (kind === 'filing') await this.fileProposedAttempts(record, now)
+          else await this.requestProposal(record, now)
+        } catch (error) {
+          rethrowAuthorityLapse(error)
+          report.janitorDiagnostics.push(
+            `build ${record.slug}: optimization proposing failed — ${String(error)}`,
+          )
+        }
+      })
+    }
+  }
+
+  /** Record a new proposal request, or a durable deferral naming what
+   * blocks the proposer. */
+  private async requestProposal(record: BuildRecord, now: Date): Promise<void> {
+    const { state } = await this.store.buildFacts(record.slug)
+    const optimization = state.optimization
+    if (optimization === undefined || !record.branch) return
+    if (!proposerAdmissible(state, now)) {
+      const reason = proposerBlocker(state)
+      if (reason !== undefined)
+        await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+          actor: DISPATCHER,
+          type: 'optimization.proposal-deferred',
+          payload: { reason },
+        } satisfies EventWrite<'optimization.proposal-deferred'>)
+      return
+    }
+    const head = await this.baseSha(record.branch)
+    await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'optimization.proposal-requested',
+      payload: {
+        id: this.deps.ids('proposal'),
+        head,
+        room: proposerRoom(optimization, now),
+        budgetUsed: {
+          attempts: optimization.attempts.filed,
+          hours: optimizationElapsedHours(optimization, now),
+        },
+      },
+    } satisfies EventWrite<'optimization.proposal-requested'>)
+  }
+
+  /** Two consecutive empty proposals stop the node with cause `exhausted`.
+   * Only the cause is recorded here; what a stop does to running attempts
+   * belongs to the stop policy. */
+  private async recordExhausted(slug: string): Promise<void> {
+    const { state } = await this.store.buildFacts(slug)
+    if (!exhaustedStopDue(state.optimization)) return
+    await this.store.appendIfCurrent(slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'optimization.stopped',
+      payload: { cause: 'exhausted', mode: state.optimization!.objective.stop.mode },
+    } satisfies EventWrite<'optimization.stopped'>)
+  }
+
+  /**
+   * File a deposited proposal: one ready ticket per proposal, targeting the
+   * node, each created under a key derived from the node and proposal id so
+   * a retry after a crash adopts what an earlier attempt created. The
+   * deposit is a commitment: every deposited proposal is filed and recorded
+   * in one `attempts-proposed`, whatever revisions or stops landed since.
+   * Until that record lands, intake withholds these keys.
+   */
+  private async fileProposedAttempts(record: BuildRecord, now: Date): Promise<void> {
+    const { state } = await this.store.buildFacts(record.slug)
+    const proposal = state.optimization?.proposal
+    const deposited = proposal?.deposited
+    if (proposal === undefined || deposited === undefined) return
+    const escalate = async (question: string) => {
+      await this.store.append(record.slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: this.deps.ids('esc'),
+          phase: 'propose',
+          round: proposal.round,
+          source: 'agent',
+          question,
+        },
+      } satisfies EventWrite<'escalation.raised'>)
+    }
+    // A filing this node already escalated waits for the answer, durably.
+    if (
+      state.openEscalations.some(
+        (escalation) => escalation.phase === 'propose' && escalation.round === proposal.round,
+      )
+    ) {
+      await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'optimization.proposal-deferred',
+        payload: { reason: 'blocked' },
+      } satisfies EventWrite<'optimization.proposal-deferred'>)
+      return
+    }
+    const artifact = await this.store.getArtifact(
+      record.slug,
+      deposited.artifact.kind,
+      deposited.artifact.rev,
+    )
+    let document: ReturnType<typeof proposalsDocumentSchema.parse> | undefined
+    try {
+      if (artifact !== null)
+        document = proposalsDocumentSchema.parse(
+          JSON.parse(new TextDecoder().decode(artifact.content)),
+        )
+    } catch {
+      document = undefined
+    }
+    if (
+      document === undefined ||
+      document.proposals.map((entry) => entry.id).join('\u0000') !== deposited.ids.join('\u0000')
+    ) {
+      await escalate(
+        `Cannot file proposal ${proposal.id}: its attempts artifact ` +
+          `${deposited.artifact.kind}@${deposited.artifact.rev} is missing or does not match the deposit.`,
+      )
+      return
+    }
+    const tickets = this.deps.tickets
+    if (document.proposals.length > 0 && !tickets.integrationTree) {
+      await escalate(
+        `Cannot file proposal ${proposal.id}: ticket source ${tickets.name} lacks the ` +
+          'integrationTree capability, so it cannot create attempts that target this node.',
+      )
+      return
+    }
+    const node = record.ticket
+      ? resolveTicketRef(
+          this.store.repositoryFacts().ticketMigrations,
+          record.ticket,
+          tickets.name,
+          record.slug,
+        )
+      : undefined
+    if (document.proposals.length > 0 && node === undefined) {
+      await escalate(`Cannot file proposal ${proposal.id}: the node build has no ticket to target.`)
+      return
+    }
+    // Attempts are dispatchable at creation: they carry every ready gate. The
+    // source applies the ready assignee itself, also to an adopted ticket.
+    const ready = readyCriteria(this.deps.config)
+    const assignees = creationAssignees(this.deps.config.tickets)
+    const filed: EventPayload<'optimization.attempts-proposed'>['proposals'] = []
+    for (const entry of document.proposals) {
+      const ticket = await tickets.create(
+        {
+          kind: 'work',
+          target: node!.id,
+          title: entry.title,
+          body: entry.body,
+          ...(ready.labels.length > 0 ? { labels: ready.labels } : {}),
+          ...(assignees !== undefined ? { assignees } : {}),
+        },
+        {
+          state: ready.state,
+          idempotencyKey: attemptCreationKey(this.deps.repo, record.slug, entry.id),
+          idempotencyKeyReservedAt: deposited.at,
+          ...(ready.assignee !== undefined ? { readyAssignee: ready.assignee } : {}),
+        },
+      )
+      filed.push({
+        id: entry.id,
+        ticket: ticket.ref,
+        title: entry.title,
+        strategy: entry.strategy,
+      })
+    }
+    const current = (await this.store.buildFacts(record.slug)).state
+    if (current.optimization?.proposal?.id !== proposal.id) return
+    await this.store.appendIfCurrent(record.slug, current.lastSeq, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: proposal.id,
+        proposals: filed,
+        ...(document.proposals.length === 0 && document.reason !== undefined
+          ? { reason: document.reason }
+          : {}),
+      },
+    } satisfies EventWrite<'optimization.attempts-proposed'>)
+    // A crash or failure before this release, or a live lease now, leaves the
+    // workspace to `releaseStrandedNodeWorkspaces` on a later pass.
+    const facts = (await readBuildFacts(this.store, record.slug)).value
+    if (
+      strandedNodeWorkspace(
+        {
+          record,
+          state: facts.state,
+          workspace: openWorkspace(facts) !== null,
+          provisioning: this.continuations.has(record.slug),
+        },
+        now,
+      )
+    )
+      await this.releaseWorkspace(record.slug, facts)
+    await this.recordExhausted(record.slug)
   }
 
   private async nodeHasCapacity(slug: string): Promise<boolean> {
@@ -6992,6 +7420,7 @@ export class Dispatcher {
         creation,
       ]),
     )
+    const attemptHolds = await this.optimizationCreationHolds()
     const eligible = listing.tickets.filter(
       (ticket) =>
         !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
@@ -7009,7 +7438,20 @@ export class Dispatcher {
     const withheld = new Set<string>()
     for (const ticket of ready) {
       if (ticket.creationKey === undefined) continue
-      const creation = creationHolds.get(ticket.creationKey.toLowerCase())
+      const key = ticket.creationKey.toLowerCase()
+      const attempt = attemptHolds.failure ?? attemptHolds.holds.get(key)
+      if (attempt !== undefined) {
+        withheld.add(ticket.ref.id)
+        report.creationWithheld += 1
+        report.creationDiagnostics.push(
+          typeof attempt === 'string'
+            ? `ticket ${ticket.ref.id}: creation withheld — ${attempt}`
+            : `ticket ${ticket.ref.id}: creation withheld — optimization node ${attempt.node}, ` +
+                `proposal request ${attempt.request} has not recorded its attempts`,
+        )
+        continue
+      }
+      const creation = creationHolds.get(key)
       if (creation === undefined) continue
       withheld.add(ticket.ref.id)
       report.creationWithheld += 1
@@ -8110,6 +8552,7 @@ export class Dispatcher {
     if (
       state.integration?.cycle &&
       !state.nodeRestack?.active &&
+      !proposeRunDue(state.optimization) &&
       (!integrationCurrent(state) || integrationFailed(state))
     ) {
       const stale = (await readBuildFacts(this.store, record.slug)).value
@@ -8254,7 +8697,9 @@ export class Dispatcher {
     }
     if (integrationFailed(state) || integrationVerified(state, config)) {
       const facts = (await readBuildFacts(this.store, record.slug)).value
-      if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
+      // The proposer's workspace is released by its filing.
+      if (openWorkspace(facts) && !proposeRunDue(state.optimization))
+        await this.releaseWorkspace(record.slug, facts)
       return
     }
     if (!(await this.nodeHasCapacity(record.slug))) return

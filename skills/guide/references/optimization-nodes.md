@@ -10,7 +10,8 @@ fallback in either direction.
 This reference is the contract: how the marker is found, the objective schema,
 what refuses an objective, how a node and its attempts are measured, how the
 objective is revised, which facts the log records, what is derived from them,
-and how the node stops and completes. It ends with grooming guidance.
+how the node proposes its own attempts, and how it stops and completes. It ends
+with grooming guidance.
 
 ## The marker
 
@@ -282,11 +283,15 @@ the answer, because sampling the same request again cannot succeed.
 | `optimization.objective-revised` | node | changes, revision (human) |
 | `optimization.baseline-measured` | node | revision, head, harnessPin, samples, median, spread, report |
 | `optimization.noise-exceeded` | node | revision, head, harnessPin, median, spread, epsilon, effective ε (advisory) |
-| `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, hours) |
-| `optimization.attempts-proposed` | node | request, proposals (id, ticket, title, strategy), reason when empty |
+| `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, hours) (dispatcher) |
+| `optimization.attempts-proposed` | node | request, proposals (id, ticket, title, strategy), reason when empty; recorded after every ticket exists (dispatcher) |
 | `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision, metric |
 | `attempt.sampled` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians, report |
 | `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision, spread, report |
+| `optimization.proposal-deferred` | node | reason: `paused`, `blocked`, `command`, `restack`, `integration`, `landing` or `compatibility` (dispatcher) |
+| `optimization.proposal-withdrawn` | node | request, reason: `stopped`, `budget` or `concurrency` (dispatcher) |
+| `propose.started` | node | round, request (kernel) |
+| `propose.completed` | node | round, request, proposal ids, `attempts` artifact (proposer) |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
 | `attempt.settled` | node | attempt (proposal, ticket, build), outcome, measurement (revision, baseline, candidate, delta), note |
@@ -300,6 +305,7 @@ the answer, because sampling the same request again cannot succeed.
 `spread` and a request's `metric` are optional: older facts lack them.
 `attempt.sampled` records samples, never a decision; `attempt.measured` is the
 decision.
+The dispatcher records `exhausted` after two consecutive empty proposals.
 
 A positive delta is an improvement in the objective's direction:
 `baseline − candidate` when minimizing, `candidate − baseline` when maximizing,
@@ -360,10 +366,102 @@ the `stopped` segment appears once the node stops. Budget hours stop at the
 stop time; a watch record evaluates them at its own timestamp. `ab objective`
 remains the full view, with the best value, plateau and stop eligibility.
 
+## Proposer phase
+
+An optimization node proposes its own attempts. Its grammar is
+`branch opening → starting measurement → (propose → collecting)*`, followed by
+the node's normal completion, verification and merge. Grooming the objective,
+its purpose, budget and stop policy, is the dispatch decision for every attempt
+the node generates: the proposer's attempts go straight to ready, within that
+budget, and each must pass the measurement gate before it lands.
+
+**Admission.** The dispatcher records `optimization.proposal-requested` when
+the node is open, has not stopped and no stop cause is eligible, has a starting measurement under the
+current ruler, has no open request, has fewer than two consecutive empty
+proposals, and has room. Room is the smaller of the free concurrency slots
+(`proposer.concurrency` minus attempts queued or running) and the attempts
+the budget still allows, and is 0 once the attempts or hours budget is spent.
+An open request reserves the node's single outstanding proposal round, so no
+second request is made while it is open. It may be waiting for capacity,
+running, or awaiting filing after its session deposited. A proposer session is
+running only once its matching phase and session have started, not merely
+because a request is open. A node that is paused, blocked, has a pending command, an active or
+conflicted node restack, a landing intent or a merged or closed PR, or is
+deferred for runtime compatibility gets `optimization.proposal-deferred` with
+that reason instead, and is reconsidered once a fact that can clear it lands.
+The request takes a slot ahead of new ticket claims, like node reconcile and
+verification. Before the session starts, the dispatcher re-checks the request:
+when the node stopped, the hours budget expired, or room fell below the
+recorded room, it records `optimization.proposal-withdrawn`, which clears the
+request and never counts as an empty proposal. A session that already started
+keeps the room it was granted.
+
+**Context.** The session runs the `ab-propose` skill on the node head, checked
+out detached. `ab context` writes:
+
+- `objective.json`: the effective objective, its revision and the fields
+  quick-revised since its latest acceptance;
+- `progress.json`: starting, current, best and threshold values, attempt
+  counts, attempts in flight, the plateau counter, consecutive empty proposals,
+  the opening time and the request (`id`, `head`, `room`);
+- `ledger.json`: `settled`, one entry per settled attempt with `nearMiss: true`
+  on a near miss, and `inFlight`, the running attempts with their titles and
+  strategies;
+
+plus the spec, answered guidance and ticket assets. The manifest's
+`optimization` names the request, head and room.
+
+**`ab propose`.** The session ends with `ab propose <file>`,
+`ab propose --none <reason>` or `ab escalate`; `ab done` and `ab verdict` are
+refused. The file is JSON:
+
+```json
+{"proposals": [{"id": "batch-index-lookups", "title": "…", "strategy": "…", "body": "…"}], "reason": "…"}
+```
+
+- `id` matches `^[a-z0-9][a-z0-9-]{0,63}$`, is unique in the file and was never
+  used by this node before, whether settled, pending or in flight.
+- `title` is one line of at most 200 characters; `strategy` is one line of at
+  most 300 characters naming one strategy.
+- `body` meets the [spec standard](spec-standard.md) (what and why,
+  `## Acceptance criteria` with at least one item, `## Out of scope`) and
+  carries no `autobuild-objective` block.
+- The count is at most the request's room. An empty list needs a `reason`.
+
+A valid file is deposited as an `attempts` artifact together with
+`propose.completed`. The proposer never creates tickets.
+
+**Filing.** The dispatcher reads the deposit once and creates one work ticket
+per proposal, targeting the node, in the source's ready role. Each ticket
+carries every `readyLabels` entry and, when `[tickets].readyAssignee` is set,
+is assigned to that user, adopted tickets included, so intake lists it. Each creation
+carries an idempotency key derived from the repository, the node and the
+proposal id, so a crash between the deposit, the creation and the record
+adopts the ticket an earlier try created instead of filing it twice. Until the
+record lands, intake withholds ready tickets whose creation key matches a
+deposited proposal. Once every ticket exists, the dispatcher records
+`optimization.attempts-proposed` and releases the node's workspace. If that
+release never happens, after a crash, a failed release or a runner still
+leased, a later dispatcher pass releases any optimization-node workspace that
+no runner, baseline measurement, proposal, restack or integration work owns. A ticket source without integration-tree support, or an unreadable deposit, raises an
+escalation on the node instead of creating anything.
+
+**Exhausted.** Two consecutive empty proposals stop the node: the dispatcher
+records `optimization.stopped` with cause `exhausted` and the objective's stop
+mode, and requests no further proposals. The shared stop enforcer applies the
+recorded mode to attempts already in flight, just as for every other stop cause.
+
+Baseline measurement has precedence over new proposer admission. A proposer
+already started when a ruler revision makes a baseline due finishes and its
+deposit is filed normally. Measurement runs next, before another proposer.
+The node workspace remains held while either a baseline measurement or a
+proposal request or session needs it; neither owner releases the other’s workspace.
+
 ## Attempts
 
 A build is an attempt of a node exactly when its ticket was created from a
-recorded proposal of that node (`optimization.attempts-proposed`). Children
+recorded proposal of that node (`optimization.attempts-proposed`), which the
+dispatcher files from the proposer's deposit. Children
 filed any other way, for example a repair child, are not attempts and count
 toward neither the budget nor the plateau. The proposal's ticket and the
 build's ticket are compared through any recorded ticket-source migration, so a
