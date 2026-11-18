@@ -16,7 +16,7 @@ interface TerminalGuardAcc {
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
   return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string; waitHeld?: string }>({
-    version: 5,
+    version: 6,
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -179,6 +179,7 @@ function terminalMatchesRound(event: AbEvent, env: CliEnv, reconcileAttempt: num
     case 'plan-review.verdict':
     case 'implement.completed':
     case 'code-review.verdict':
+    case 'propose.completed':
       return event.payload.round === env.round
     case 'verify.completed':
       return (

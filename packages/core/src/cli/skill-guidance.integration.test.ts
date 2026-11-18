@@ -63,11 +63,12 @@ function guidanceDocumentsFor(spec: PhaseSpec): Array<{ name: string; content: s
 }
 
 describe('guidance delivery — every receiving phase documents the file', () => {
-  test('the derived receiving set is the five phase kinds the contract covers', () => {
+  test('the derived receiving set is the six phase kinds the contract covers', () => {
     expect(guidancePhases.map((spec) => spec.name).sort()).toEqual([
       'finalize',
       'implement',
       'plan',
+      'propose',
       'reconcile',
       'verify',
     ])
@@ -149,5 +150,40 @@ describe('optimization-node marker guidance', () => {
     const reference = guide?.files.find((file) => file.path === 'references/optimization-nodes.md')
     expect(reference).toBeDefined()
     expect(reference?.content).toContain('`autobuild-objective`')
+  })
+})
+
+describe('optimization proposer guidance', () => {
+  const propose = byInstallName.get('ab-propose')
+  const text = (propose?.content ?? '').replace(/\s+/g, ' ')
+
+  test('ab-propose is installed as a runner-only phase skill', () => {
+    expect(propose).toBeDefined()
+    expect(propose?.content).toContain('name: ab-propose')
+    expect(propose?.content).toContain('disable-model-invocation: true')
+    expect(PHASE_SPECS.propose?.skill).toBe('ab-propose')
+  })
+
+  test('it reads the attempt ledger before anything else', () => {
+    expect(text).toContain('Read `ledger.json` first.')
+    expect(text.indexOf('`ledger.json` first')).toBeLessThan(text.indexOf('Read `objective.json`'))
+  })
+
+  test('it treats a near miss as a refined new attempt with a new id', () => {
+    expect(text).toContain('Treat a near miss as a candidate for a refined new attempt.')
+    expect(text).toContain('new attempt with a new id')
+    expect(text).toContain("never reuse the near miss's id")
+  })
+
+  test('it never exploits how the metric is measured', () => {
+    expect(text).toContain('Never exploit how the metric is measured.')
+    expect(text).toMatch(/special-cases the harness, the eval or the benchmark/)
+  })
+
+  test('it proposes nothing when the ideas run out, and never creates tickets', () => {
+    expect(text).toContain('When no promising strategy remains, propose nothing and say why.')
+    expect(text).toContain('`ab propose --none')
+    expect(text).toContain('Two consecutive empty proposals stop the node as `exhausted`')
+    expect(text).toContain('Never create tickets yourself')
   })
 })

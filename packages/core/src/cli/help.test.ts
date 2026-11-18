@@ -35,6 +35,7 @@ const COMMANDS = [
   'issue',
   'done',
   'verdict',
+  'propose',
   'escalate',
   'wait-on',
   'harvest',
@@ -363,6 +364,7 @@ describe('layered CLI help catalog', () => {
       observe: ['followup|refactor|latent-bug', '--files', '--refs', 'not a terminal'],
       issue: ['downgrade <N> --reason <text>', 'one-way', 'not a terminal'],
       done: ['done [--notes <file>]', 'terminal command', 'exactly one terminal'],
+      propose: ['propose <file>', '--none <reason>', 'never create tickets', 'exactly one'],
       verdict: [
         'approve|revise|escalate|pass|fail|skip',
         '--findings',
