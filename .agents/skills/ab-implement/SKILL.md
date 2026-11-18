@@ -70,7 +70,8 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    request; fix the failure and retry in the same session. In a remote workspace it records one publication
    request and parks while the dispatcher publishes and records completion;
    **do not run `ab done` again** after that success message. It is your only
-   terminal command besides `ab escalate` and `ab wait-on`. If it reports a validation error,
+   terminal command besides `ab escalate`, `ab wait-on` and, in an optimization
+   attempt, `ab done --no-improvement` (below). If it reports a validation error,
    fix what it names and run it again.
 
    An empty contribution is refused: when HEAD has no commits over the
@@ -79,6 +80,43 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    terminal; stop and run no further terminal. Commit intended changes before
    running `ab done`. If you conclude the spec needs no code change, that is a
    question for the operator: run `ab escalate` with the reason instead.
+
+## Optimization attempts
+
+When the manifest has an `attempt` block, this build is one attempt of an
+optimization node at one strategy, the one the spec gives it. The attempt's
+`objective.md` (the block's `path`) names the purpose, the measurement command
+or judge panel, the harness and the node's current value. Read the purpose
+first: it says why the number matters and what must not change while it moves.
+
+- **The goal is a meaningful improvement toward the purpose, not the largest
+  number.** A gain the purpose would not recognize is not one.
+- **Regressing behavior is a failure even when the metric improves.** Keep
+  every behavior, output and interface the purpose protects, and keep the
+  tests that guard them passing.
+- **Changing what the test measures, overfitting to the eval, or
+  special-casing the benchmark defeats the point.** The harness is the pinned
+  ruler. `ab done` refuses a contribution that changes a harness path, naming
+  each path; revert them to the contribution base, commit and retry.
+- **Measure your own work.** Run the measurement command while you work and
+  keep what helps. Record your runs in implement notes: baseline and candidate
+  values, samples and the tree each ran on. They are your claims; the kernel
+  measures again before anything lands, and reviewers read them as claims.
+- **Stay on the strategy you were given.** Another strategy is another
+  attempt's job. Do not drift into it, even when it looks promising; record it
+  with `ab observe --kind followup` instead.
+- **Declining is a successful outcome.** When the strategy produces no real
+  gain, say so instead of shipping a marginal or suspect change:
+
+  ```
+  ab done --no-improvement "<what you tried and why it did not help>" --notes <notesPath>
+  ```
+
+  It needs no commits and no clean worktree, publishes nothing, skips review,
+  verification and measurement, and ends the build without merging. The
+  reason goes to the ledger the proposer reads before choosing the next
+  strategy, so a specific reason teaches it something. The flag is refused
+  outside an optimization attempt's implement phase.
 
 ## Ground rules for this phase
 

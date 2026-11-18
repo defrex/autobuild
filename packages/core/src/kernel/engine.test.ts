@@ -539,6 +539,22 @@ describe('decideNext: rule 1 — terminal states', () => {
   })
 })
 
+describe('decideNext: a declined optimization attempt', () => {
+  test('waits for settlement even with code review configured and a pending pause', () => {
+    const declined = [
+      ...prelude(),
+      ...planApproved(),
+      ev('implement.started', { round: 1 }),
+      ev('implement.declined', { round: 1, reason: 'no measurable gain' }),
+    ]
+    expect(decide(declined)).toEqual(wait('declined'))
+    expect(decide([...declined, ev('build.pause-requested', {})])).toEqual(wait('declined'))
+    expect(decide([...declined, ev('build.completed', { outcome: 'closed-unmerged' })])).toEqual(
+      wait('done'),
+    )
+  })
+})
+
 // ── Rule 2: operator commands (D2) ───────────────────────────────────────────
 
 describe('decideNext: rule 2 — operator commands (D2)', () => {

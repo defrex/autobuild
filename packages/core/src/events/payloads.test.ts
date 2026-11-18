@@ -1697,6 +1697,24 @@ describe('optimization event protocol', () => {
     })
   })
 
+  test('an attempt implementer declines with a bounded reason', () => {
+    const actor = agentActor('implement', 's_1')
+    expect(valid('implement.declined', { round: 1, reason: 'no gain' }, actor)).toMatchObject({
+      type: 'implement.declined',
+    })
+    expect(
+      valid(
+        'implement.declined',
+        { round: 2, reason: 'no gain', artifact: { kind: 'implement-notes', rev: 1 } },
+        actor,
+      ),
+    ).toMatchObject({ type: 'implement.declined' })
+    invalid('implement.declined', { round: 1, reason: '   ' }, actor)
+    invalid('implement.declined', { round: 1, reason: 'x'.repeat(4001) }, actor)
+    invalid('implement.declined', { round: 1, reason: 'no gain', extra: true }, actor)
+    invalid('implement.declined', { round: 1, reason: 'no gain' }, DISPATCHER)
+  })
+
   test('an empty proposal needs a reason, and a panel measurement carries a win rate alone', () => {
     expect(
       valid('optimization.attempts-proposed', {

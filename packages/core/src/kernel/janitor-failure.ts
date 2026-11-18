@@ -25,6 +25,7 @@ export type JanitorOperation =
   | 'empty node poll'
   | 'abort cleanup'
   | 'discard cleanup'
+  | 'decline settlement'
   | 'target observation'
   | 'PR check'
 
