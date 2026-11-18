@@ -536,6 +536,10 @@ must then honour `criteria.assignee` in `listReady` (and `listPage`, if
 implemented): only tickets assigned to that user are ready, and an unassigned
 ticket is never ready while it is set. `"me"` means the owner of the source's
 credential; any other value's forms are the source's to define and enforce.
+`create` must also honour `options.readyAssignee`, which the dispatcher passes
+when it files optimization attempts: assign the created ticket, or the ticket a
+creation key adopts, to that user so the same `listReady` includes it, or fail
+without recording the create.
 Without the flag, dispatcher startup, `ab init --validate` and live reloads
 refuse a configured `readyAssignee` with an error naming the source and plugin.
 

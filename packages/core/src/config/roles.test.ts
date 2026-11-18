@@ -725,7 +725,7 @@ describe('roleKeyWarnings — the one message set', () => {
     )
     expect(lines[1]).toBe(
       'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, ' +
-        'implement, plan, plan-review, reconcile, slug, upgrade',
+        'implement, plan, plan-review, propose, reconcile, slug, upgrade',
     )
     expect(lines[2]).toContain('[roles.ab-verify-e2e] should be [roles.e2e]')
   })
