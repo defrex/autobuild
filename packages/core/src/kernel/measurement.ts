@@ -6,7 +6,7 @@
  */
 import { compilePathSelectors } from '../config/path-selectors'
 import type { EventPayload } from '../events/payloads'
-import type { CommandMetric, ObjectiveEpsilon } from '../objective'
+import type { ObjectiveEpsilon, ObjectiveMetric } from '../objective'
 import type { BuildState } from './reducer'
 
 /** One command run's ceiling, applied to every sample run and every setup
@@ -43,6 +43,18 @@ export function effectiveEpsilon(epsilon: ObjectiveEpsilon, baselineMedian: numb
 /** An attempt improved when its delta reaches ε. */
 export function measurementDecision(delta: number, epsilon: number): 'improved' | 'no-improvement' {
   return delta >= epsilon ? 'improved' : 'no-improvement'
+}
+
+/** Absorbs float error in a panel's win-rate comparison, such as
+ * `0.6 - 0.5 = 0.09999999999999998`. Win rates are multiples of
+ * `1/(2·judges)` with at most 20 judges, so the tolerance cannot admit a
+ * genuinely lower rate. */
+export const PANEL_WIN_RATE_TOLERANCE = 1e-9
+
+/** A panel attempt improved when its win rate, ties counted as half,
+ * reaches 0.5 + ε. */
+export function panelDecision(winRate: number, epsilon: number): 'improved' | 'no-improvement' {
+  return winRate + PANEL_WIN_RATE_TOLERANCE >= 0.5 + epsilon ? 'improved' : 'no-improvement'
 }
 
 /** The ruler cannot resolve ε: the noise between two identical runs is
@@ -170,43 +182,57 @@ export function sampledMeasurement(state: BuildState): EventPayload<'attempt.sam
 }
 
 /** Why a node's digest cannot measure `request` under its current ruler, or
- * undefined. A ruler or harness pin newer than the request's, a panel, or a
- * missing starting value all refuse. */
+ * undefined. A ruler or harness pin newer than the request's, a different
+ * metric or purpose, or a command ruler's missing starting value all refuse.
+ * A panel's decision needs no starting value. */
 export function unmeasurable(
   node: BuildState,
   request: Pick<
     EventPayload<'attempt.measurement-requested'>,
-    'id' | 'node' | 'revision' | 'harnessPin'
-  > & { metric?: CommandMetric },
+    'id' | 'node' | 'revision' | 'harnessPin' | 'metric' | 'purpose'
+  >,
 ): string | undefined {
   const optimization = node.optimization
   if (optimization === undefined) return `node ${request.node} has no accepted objective`
   const metric = optimization.objective.metric
-  if (metric.kind !== 'command') return `node ${request.node} measures with a panel, not a command`
   if (request.revision < optimization.rulerRevision)
     return `request ${request.id} uses objective revision ${request.revision}, older than the current ruler (revision ${optimization.rulerRevision})`
   if (request.harnessPin !== optimization.accepted.harnessPin)
     return `request ${request.id} pins the harness at ${request.harnessPin}, but the node pins it at ${optimization.accepted.harnessPin}`
   if (request.metric !== undefined && !sameMetric(request.metric, metric))
     return `request ${request.id} names a metric that differs from the node's ruler`
-  if (optimization.starting === undefined)
+  if (
+    metric.kind === 'panel' &&
+    request.purpose !== undefined &&
+    request.purpose !== optimization.objective.purpose
+  )
+    return `request ${request.id} names a purpose that differs from the node's objective`
+  if (metric.kind === 'command' && optimization.starting === undefined)
     return `node ${request.node} has no starting measurement under its current ruler`
   return undefined
 }
 
-function sameMetric(a: CommandMetric, b: CommandMetric): boolean {
-  return (
-    a.command === b.command &&
-    a.direction === b.direction &&
-    a.samples === b.samples &&
-    a.harness.length === b.harness.length &&
-    a.harness.every((selector, index) => selector === b.harness[index])
-  )
+function sameHarness(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((selector, index) => selector === b[index])
+}
+
+function sameMetric(a: ObjectiveMetric, b: ObjectiveMetric): boolean {
+  if (a.kind === 'command' && b.kind === 'command')
+    return (
+      a.command === b.command &&
+      a.direction === b.direction &&
+      a.samples === b.samples &&
+      sameHarness(a.harness, b.harness)
+    )
+  if (a.kind === 'panel' && b.kind === 'panel')
+    return a.judges === b.judges && a.rubric === b.rubric && sameHarness(a.harness, b.harness)
+  return false
 }
 
 /** The decision for one request's samples, against the node as it stands
- * now: its current ε and starting spread. A ruler or pin that moved past the
- * request refuses instead of deciding. */
+ * now: its current ε and, for a command, its starting spread. A command's
+ * medians decide by delta; a panel's win rate decides against 0.5 + ε. A
+ * ruler or pin that moved past the request refuses instead of deciding. */
 export function decideSampledMeasurement(
   node: BuildState,
   request: EventPayload<'attempt.measurement-requested'>,
@@ -215,18 +241,40 @@ export function decideSampledMeasurement(
   const refusal = unmeasurable(node, request)
   if (refusal !== undefined) return { refusal }
   const optimization = node.optimization!
-  const metric = optimization.objective.metric as CommandMetric
+  const metric = optimization.objective.metric
+  const pair = {
+    request: sampled.request,
+    candidate: sampled.candidate,
+    baseline: sampled.baseline,
+    harnessPin: sampled.harnessPin,
+    revision: sampled.revision,
+    samples: sampled.samples,
+  }
+  if (metric.kind === 'panel') {
+    const { winRate } = sampled
+    if (winRate === undefined)
+      return { refusal: `request ${request.id} sampled medians for a panel ruler` }
+    const epsilon = effectiveEpsilon(optimization.objective.target.epsilon, 0.5)
+    const starting = optimization.starting
+    return {
+      measured: {
+        ...pair,
+        winRate,
+        delta: winRate - 0.5,
+        decision: panelDecision(winRate, epsilon),
+        ...(starting !== undefined ? { spread: starting.spread } : {}),
+        report: { ...sampled.report },
+      },
+    }
+  }
   const { medians } = sampled
+  if (medians === undefined)
+    return { refusal: `request ${request.id} sampled a win rate for a command ruler` }
   const delta = measurementDelta(metric.direction, medians.baseline, medians.candidate)
   const epsilon = effectiveEpsilon(optimization.objective.target.epsilon, medians.baseline)
   return {
     measured: {
-      request: sampled.request,
-      candidate: sampled.candidate,
-      baseline: sampled.baseline,
-      harnessPin: sampled.harnessPin,
-      revision: sampled.revision,
-      samples: sampled.samples,
+      ...pair,
       medians: { ...medians },
       delta,
       decision: measurementDecision(delta, epsilon),
@@ -234,6 +282,21 @@ export function decideSampledMeasurement(
       report: { ...sampled.report },
     },
   }
+}
+
+/** The judge panel id that samples `request` on an attempt. A crash resumes
+ * the same panel, so completed judgments are kept. An answered measurement
+ * escalation after the request asks for a fresh panel, since a judge that
+ * exhausted its attempts fails a resumed run immediately: the id then carries
+ * the latest such answer's sequence number. Read from reduced state alone. */
+export function attemptPanelId(state: BuildState, request: { id: string; seq: number }): string {
+  let answered: number | undefined
+  for (const escalation of state.answeredEscalations) {
+    if (escalation.phase !== 'measurement' || escalation.seq <= request.seq) continue
+    if (answered === undefined || escalation.answeredSeq > answered)
+      answered = escalation.answeredSeq
+  }
+  return answered === undefined ? `attempt-${request.id}` : `attempt-${request.id}-a${answered}`
 }
 
 /** An opened optimization node with a command objective has no starting

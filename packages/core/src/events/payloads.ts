@@ -18,8 +18,8 @@ import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
 import { pathSelectorSchema } from '../config/path-selectors'
 import {
-  commandMetricSchema,
   objectiveEpsilonSchema,
+  objectiveMetricSchema,
   objectiveSchema,
   revisableChangesSchema,
 } from '../objective'
@@ -565,31 +565,47 @@ const optimizationPayloadSchemas = {
       (proposed) => proposed.proposals.length > 0 || proposed.reason !== undefined,
       'an empty proposal requires a reason',
     ),
-  'attempt.measurement-requested': z.strictObject({
-    id: z.string().min(1),
-    node: z.string().min(1),
-    candidate: sha,
-    baseline: sha,
-    harnessPin: sha,
-    revision: objectiveRevision,
-    /** The command metric the node's ruler measures with, so the attempt's
-     * runner can sample without reading the node. */
-    metric: commandMetricSchema.optional(),
-  }),
-  /** The attempt runner's paired samples for one request. The decision is
-   * not a sampled fact: the dispatcher records it as `attempt.measured`
-   * against the node's ε and spread after sampling. */
-  'attempt.sampled': z.strictObject({
-    request: z.string().min(1),
-    candidate: sha,
-    baseline: sha,
-    harnessPin: sha,
-    revision: objectiveRevision,
-    samples: z.number().int().min(1),
-    medians: z.strictObject({ candidate: z.number(), baseline: z.number() }),
-    /** The raw per-sample values, deposited with this fact. */
-    report: artifactRefSchema,
-  }),
+  'attempt.measurement-requested': z
+    .strictObject({
+      id: z.string().min(1),
+      node: z.string().min(1),
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: objectiveRevision,
+      /** The metric the node's ruler measures with, a command or a judge
+       * panel, so the attempt's runner can sample without reading the node. */
+      metric: objectiveMetricSchema.optional(),
+      /** The objective purpose a panel's judges read; present with a panel
+       * metric. */
+      purpose: z.string().min(1).optional(),
+    })
+    .refine(
+      (request) => request.metric?.kind !== 'panel' || request.purpose !== undefined,
+      'a panel metric requires its purpose',
+    ),
+  /** The attempt runner's samples for one request: a command's paired
+   * medians, or a judge panel's win rate with `samples` as the judge count.
+   * The decision is not a sampled fact: the dispatcher records it as
+   * `attempt.measured` against the node's ε and spread after sampling. */
+  'attempt.sampled': z
+    .strictObject({
+      request: z.string().min(1),
+      candidate: sha,
+      baseline: sha,
+      harnessPin: sha,
+      revision: objectiveRevision,
+      samples: z.number().int().min(1),
+      medians: z.strictObject({ candidate: z.number(), baseline: z.number() }).optional(),
+      winRate: z.number().min(0).max(1).optional(),
+      /** The raw per-sample values or the panel's judgments, deposited with
+       * this fact. */
+      report: artifactRefSchema,
+    })
+    .refine(
+      (sampled) => (sampled.medians === undefined) !== (sampled.winRate === undefined),
+      'exactly one of medians or winRate',
+    ),
   'attempt.measured': z
     .strictObject({
       request: z.string().min(1),
