@@ -2470,7 +2470,12 @@ diagnostic and is retried on the next tick.
 
 An entered wait opens an escalation with id `escalation`, the declaring phase
 and round, `source: agent`, the declaring session and the waited tickets as
-`refs`; its question begins `Waiting on`. The build is `blocked`. A work build
+`refs`; its question begins `Waiting on`. The build is `blocked`. An
+escalation whose sole cause is an open ticket wait is not operator attention:
+`ab wait --for attention` and other build-attention reads ignore it, as
+default `ab watch` ignores `wait.entered` and `wait.ended`; any other open
+escalation, including a `wait-unresolvable` raise, is attention. Waiting stays
+visible through status surfaces. A work build
 whose only open escalation is its wait, and which has no runner working, holds
 no capacity slot and keeps its branch, workspace and completed phase work
 (§12 "What holds a slot"). A wait ends at its first end fact: an
