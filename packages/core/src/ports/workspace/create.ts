@@ -33,6 +33,9 @@ export interface CreateWorkspaceProviderOptions {
    * absent branch. Absent seams fall back to host `git` from `repoRoot`. */
   origin?: () => Promise<string>
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
+  /** Host-side archive fallback after the guest git transport refuses an archive
+   * push; consumed only by the built-in sandbox. */
+  refusedArchive?: (ref: string, sha: string) => Promise<void>
   /** Operator-sandbox options (AUT-340), set once at construction: the raw
    * `[commands].setup` shell string, the local-state-tree sandbox root, and
    * the forwarded non-secret variable names. The service never re-receives
