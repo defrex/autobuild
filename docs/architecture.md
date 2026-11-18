@@ -1658,6 +1658,9 @@ compatibility facade. Metadata is excluded from hosted persistence/protocols.
 
 The product dispatcher owns the workspace-free node lifecycle:
 spec → node.opening → node.opened → collecting → complete → verify:* → consent → merge.
+An optimization node measures its starting value after opening and then
+repeats propose → collecting: an `ab-propose` session deposits proposals and
+the dispatcher files each as an attempt ticket targeting the node.
 The ordinary work pipeline is unchanged. `build.created` freezes kind, target
 ticket/build identity and resolved parent in `baseBranch`. Integration facts
 are projected by the shared reducer and digests, including collecting/empty

@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
 import { parseConfig } from '../config/load'
-import { KERNEL, humanActor, type Actor } from '../events/envelope'
+import { DISPATCHER, KERNEL, humanActor, type Actor } from '../events/envelope'
 import {
   validateEventWrite,
   allowedActorKinds,
@@ -27,6 +27,11 @@ import {
   type WaitReason,
 } from './engine'
 import { leafTransaction } from './generators/leaf-restack-log'
+import {
+  commandObjective,
+  OPTIMIZATION_SHA,
+  OptimizationLogBuilder,
+} from './generators/optimization-log'
 import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
@@ -4287,5 +4292,99 @@ describe('decideNext: optimization node starting measurement', () => {
         ev('escalation.answered', { id: 'esc-m', answer: 'retry', resolution: 'guidance' }),
       ]),
     ).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
+  })
+})
+
+describe('the optimization proposer', () => {
+  const node = () =>
+    new OptimizationLogBuilder(BUILD)
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          ticket: { source: 'file', id: 'node' },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      .accept(commandObjective(), 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .baseline(1, 50, 1)
+
+  test('an open request runs propose at its round; a deposit or withdrawal does not', () => {
+    expect(decideNext(node().request('r1', 2).events, config)).toEqual({
+      kind: 'run-phase',
+      phase: 'propose',
+      round: 1,
+      propose: { request: 'r1', head: OPTIMIZATION_SHA('a') },
+    })
+    const deposited = decideNext(node().request('r1', 2).deposit('r1', 1, ['a']).events, config)
+    expect(deposited).toMatchObject({ kind: 'wait' })
+    const withdrawn = decideNext(node().request('r1', 2).withdraw('r1', 'budget').events, config)
+    expect(withdrawn).toMatchObject({ kind: 'wait' })
+  })
+
+  test('an open escalation outranks propose', () => {
+    const blocked = node()
+      .request('r1', 2)
+      .push({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'e1', phase: 'propose', round: 1, source: 'agent', question: 'why?' },
+      })
+    expect(decideNext(blocked.events, config)).toEqual({ kind: 'wait', reason: 'blocked' })
+  })
+})
+
+describe('baseline and proposer ordering after a ruler change', () => {
+  function pending(started: boolean) {
+    const log = new OptimizationLogBuilder(BUILD)
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          ticket: { source: 'file', id: 'node' },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      .accept(commandObjective(), 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .baseline(1, 50, 1)
+      .request('r1', 2)
+    if (started)
+      log.push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+    return log.accept(
+      commandObjective({
+        metric: {
+          ...commandObjective().metric,
+          kind: 'command',
+          command: 'bun new-bench.ts',
+          direction: 'minimize',
+          samples: 7,
+        },
+      }),
+      2,
+    )
+  }
+  test('an admitted proposer finishes before the replacement baseline, then proposing resumes', () => {
+    const log = pending(true)
+    expect(decideNext(log.events, config)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
+    log.deposit('r1', 1, ['a']).file('r1', ['a'])
+    expect(decideNext(log.events, config)).toMatchObject({ kind: 'measure-baseline', revision: 2 })
+    log.baseline(2, 45, 1).request('r2', 1)
+    expect(decideNext(log.events, config)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'propose',
+      round: 2,
+    })
+  })
+  test('a waiting proposer runs only after the replacement baseline', () => {
+    const log = pending(false)
+    expect(decideNext(log.events, config)).toMatchObject({ kind: 'measure-baseline', revision: 2 })
+    log.baseline(2, 45, 1)
+    expect(decideNext(log.events, config)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
   })
 })
