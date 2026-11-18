@@ -116,7 +116,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   only when it has no commits the target lacks and no uncommitted tracked
   changes, and otherwise the restack fails without discarding them), so the
   resumed phase sees the merged blockers; an unchanged target resumes without
-  a restack. The declaring phase then re-runs at the same round or attempt. `ab build status` shows a `waiting on:` line naming the tickets,
+  a restack. The declaring phase then re-runs at the same round or attempt,
+  except that a verify or finalize wait whose restack replayed cleanly
+  re-verifies every step from the first, at a new attempt, before finalize or
+  merge. `ab build status` shows a `waiting on:` line naming the tickets,
   and `ab builds` and both dashboards show the build as `waiting` on them.
   Node builds cannot declare waits.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
@@ -168,14 +171,15 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **Restacking and epilogue.** The kernel replays one net leaf change at verify
   entry, when a ticket wait ends and its destination moved, and when its
   destination moves while awaiting merge. Clean replay
-  starts no agent; conflicts enter `reconcile`, then verification. The leaf
+  starts no agent; conflicts enter `reconcile`, then verification. A clean
+  replay after a verify or finalize wait re-verifies on the restacked base. The leaf
   terminates **merged** or **closed**. Transient leaf publication failures park
   on a durable six-retry schedule, independently of agent phase attempts.
   See the [replay reference](references/restacking.md).
 
 Integration builds use collect → verify → merge → close, with demand-driven node restacking,
 repair children and source-aware reconcile as needed. Their exact-head/parent
-verification differs from clean waiting leaf rewrites. See the
+verification differs from clean awaiting-merge leaf rewrites. See the
 [node lifecycle](references/integration-tree.md#collect-verify-and-merge).
 
 **Review severity is proportion to the spec.** Both review loops rate a
@@ -2625,10 +2629,13 @@ or raises a `wait-unresolvable` escalation, whose answer routes the same way,
 when one is rejected or deleted. Either way the phase that declared it resumes at the same round or attempt once it
 holds a slot, on a checkout restacked onto the target's current head when the
 target moved; a reviewer's wait resumes that review round and never feeds the
-next producer. Its `$AB_CONTEXT_DIR/guidance.json` carries a `wait` block
+next producer. A verify or finalize wait whose target moved and replayed
+cleanly instead re-verifies from the first step at a new attempt, because the
+old base's results no longer count. Its `$AB_CONTEXT_DIR/guidance.json` carries a `wait` block
 (`id`, `tickets`, `reason`, `outcome` `ended` or `refused`, `cause`,
 `message`), even after a bare retry or a `wait.ended`, which leave a one-line
-summary as the answer. A refused wait writes the same file with the refusal.
+summary as the answer. A verifier re-run at a new attempt still receives the
+answer as guidance, without the `wait` block. A refused wait writes the same file with the refusal.
 In each of these routed cases, `ab context`
 writes the answer to `$AB_CONTEXT_DIR/guidance.json` in the build's workspace, and the
 receiving skill treats it as authoritative feedback for that round or attempt.

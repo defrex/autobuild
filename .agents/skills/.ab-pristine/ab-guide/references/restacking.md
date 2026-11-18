@@ -58,7 +58,10 @@ path selection excludes upstream-only paths. A build leaving a ticket wait
 restacks with trigger `wait-resume` before its declaring phase resumes, when the
 target moved from the base its work sits on; an unchanged target resumes
 without a restack. Published work replays through the guarded restack, and a
-conflict runs reconcile before the declaring phase resumes. With nothing
+conflict runs reconcile before the declaring phase resumes. A clean replay for
+a wait declared in verify or finalize starts a fresh verification cycle on the
+restacked base: every configured step re-runs at a new attempt before finalize
+or merge. With nothing
 published, the local branch fast-forwards to the target (`restack.advanced`)
 only when it has no commits the target lacks and the workspace has no
 uncommitted tracked changes; unpublished local commits or uncommitted tracked
@@ -68,7 +71,7 @@ replay when the target moved, discarding its undeposited resolution, and
 replays the published head onto the current target instead. After finalize and post-steps,
 waiting leaves restack when the target moves. Node-target finalize contributions
 are canonicalized before guarded merge even when the target SHA is unchanged.
-Clean replay starts no agent. A clean waiting leaf rewrite preserves completed
+Clean replay starts no agent. A clean awaiting-merge leaf rewrite preserves completed
 verification when build-owned config is unchanged, even when replay replaces
 the pin commit's ancestry. Reports retain their actual cycle base/head.
 Changed config still starts a fresh verification cycle while waiting. Before

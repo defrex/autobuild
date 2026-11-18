@@ -708,13 +708,16 @@ This is kernel work within the fixed grammar, not another phase. A verify failur
 returns to implementation; its new commits append to the canonical change, and
 the next approved cycle collapses and restacks again. A build resuming from a
 ticket wait (§11 "Ticket waits") first restacks onto the target's current head
-when the target moved, so the resumed phase sees the merged blockers. While
+when the target moved, so the resumed phase sees the merged blockers. When the
+wait was declared in `verify:*` or `finalize`, a clean wait-resume restack opens
+a new verification cycle: verification re-runs from the first step on the
+restacked base, and earlier results satisfy neither finalize nor landing. While
 waiting to merge after finalize and its post-steps, an observed target move
 also schedules a restack.
 For a node-targeted leaf, published finalize-step commits also schedule one
 waiting restack, even when the target SHA is unchanged, so guarded merge
 preserves one canonical build identity.
-Clean waiting restacks retain existing verification when build-owned config is
+Clean awaiting-merge restacks retain existing verification when build-owned config is
 unchanged (§16.1), including when replay replaces the pin commit's ancestry.
 Conflicts use reconcile and its captured post-reconcile policy. A conflict before initial verification,
 including one at a wait resume, cannot skip initial checks through that policy.
@@ -1257,8 +1260,10 @@ The base-selection invariants make this safe with Git:
   publication promotes the contribution/path base, as does a wait-resume
   fast-forward (`restack.advanced`). Every new verify start and
   result, including skips, cites the cycle's base and head. Those citations stay
-  frozen throughout the cycle and survive clean waiting restacks; historical
-  facts without citations remain readable. Upstream-only paths are excluded.
+  frozen throughout the cycle and survive clean awaiting-merge restacks; a clean
+  wait-resume restack after a `verify:*` or `finalize` wait starts a fresh cycle
+  that cites the restacked base and head. Historical facts without citations
+  remain readable. Upstream-only paths are excluded.
 - **Work distance is advisory durable telemetry.** Each admitted work target poll
   samples destination-only commits (`BUILD..TARGET`), even when only the build
   head changed. `target.distance` pins branch, target SHA, nullable build head
@@ -2538,7 +2543,17 @@ work sits on. When the target has not moved, no restack runs. A build with
 published work replays it through the guarded automatic restack (`restack.*`
 facts carry the `wait-resume` trigger); a conflict runs `reconcile` for that
 transaction, which counts as initial verification, and the declaring phase
-resumes after `restack.completed`. A build with nothing published, whose local
+resumes after `restack.completed`. That conflicted path re-verifies in full
+because `reconcile.completed` opens a new verify cycle. A clean
+`restack.completed` for a wait declared in `verify:*` or `finalize` is itself a
+verify cycle boundary: results at or before it describe the old base and
+satisfy neither finalize nor landing, verification re-runs from the first
+configured step at a new attempt, and its facts cite the restacked base and
+head. The boundary is not a replay boundary, so the verify-entry restack does
+not run again. Clean is decided from facts already in the log: a
+reconcile-linked completion carries the `reconcile.completed` seq as its cycle,
+a clean one the wait end's. Waits declared in earlier phases add no boundary,
+because the code loop's next approval opens a new cycle. A build with nothing published, whose local
 branch has no commits the target lacks and whose workspace has no uncommitted
 tracked changes (plan, plan-review, implement before its first commit),
 fast-forwards its local branch to the fresh target snapshot and records `restack.advanced
@@ -2561,13 +2576,19 @@ target, or none when the replay is clean. With the target unchanged the same
 attempt resumes with its replay intact.
 
 The engine's ordinary rules then re-run the declaring phase: a
-producer at the same round, a reviewer at the same review round, an agent
-verifier at the same step and attempt, and finalize or reconcile. Guidance
+producer at the same round, a reviewer at the same review round, and
+reconcile. An agent verifier resumes at the same step and attempt, and finalize
+or its post-step resumes directly, only when the target was unchanged. After a
+clean wait-resume restack, a verifier or finalize wait re-verifies from the
+first step in the new cycle; finalize, or the remaining post-steps of a
+post-step wait, run once that cycle passes. Guidance
 reaches the session through its usual carrier, and its
 `$AB_CONTEXT_DIR/guidance.json` gains a `wait` block — `{id, tickets, reason,
 outcome: refused | ended, cause, message}` — whenever the guidance is the
 wait's refusal or answer (including the answer to its `wait-unresolvable`
-escalation), or when the wait ended without guidance text. A
+escalation), or when the wait ended without guidance text. The block goes only
+to the declaring phase at its declaring round or attempt: a verifier re-run at
+a new attempt receives the answer as guidance without it. A
 review phase's wait resumes that review round and never feeds the next
 producer. `ab build status` shows a requested, open, or ended-but-not-resumed
 wait and the tickets it names. Node builds cannot declare waits.
