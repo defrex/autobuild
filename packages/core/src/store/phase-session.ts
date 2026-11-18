@@ -10,6 +10,13 @@ import type { ReducerValueRequest, ReducerValue } from './reducer-values'
  * store to a single operator session's record.
  */
 import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+import type { BuildDelegationFacts } from '../kernel/service-facts'
+import {
+  judgeLifecycleFacts,
+  judgeScopeRefusal,
+  judgeWriteRefusal,
+  type JudgeScope,
+} from './judge-authority'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -620,4 +627,180 @@ export function scopeLocalStoreToPhaseSession(
     scopeBuild(slug: string): BuildPhaseSessionStore
   }
   return scoped as PhaseSessionStore
+}
+
+// ── Judge sessions (SPEC §13.1.1) ────────────────────────────────────────────
+
+/** Every BuildStore member a judge store refuses, classified. A member added
+ * to BuildStore fails typecheck here until it is classified, so no new read
+ * reaches a judge unreviewed. Only `append` (the one preference) and `close`
+ * pass through. */
+const JUDGE_REFUSED: Record<
+  Exclude<keyof BuildStore, 'append' | 'close'>,
+  'read' | 'write' | 'property'
+> = {
+  inspectDispatcherOverlap: 'read',
+  catalogIdentity: 'property',
+  networkReads: 'property',
+  scopeBuild: 'read',
+  buildCreationIdentity: 'read',
+  createBuild: 'write',
+  getBuild: 'read',
+  listBuilds: 'read',
+  listBuildsForRepo: 'read',
+  getRepoChangePosition: 'read',
+  appendIfCurrent: 'write',
+  appendWithArtifacts: 'write',
+  appendWithArtifactsIfCurrent: 'write',
+  getEvents: 'read',
+  getNodeRewrite: 'read',
+  getRepoBuildDigests: 'read',
+  putArtifact: 'write',
+  getArtifact: 'read',
+  getLatestArtifactMeta: 'read',
+  listArtifacts: 'read',
+  claimNodeWriter: 'write',
+  renewNodeWriter: 'write',
+  releaseNodeWriter: 'write',
+  claimLease: 'write',
+  heartbeat: 'write',
+  releaseLease: 'write',
+  subscribe: 'read',
+  ensureRepo: 'write',
+  getRepo: 'read',
+  getScanCadence: 'read',
+  putScanCadence: 'write',
+  upsertOperatorPresence: 'write',
+  removeOperatorPresence: 'write',
+  listOperatorPresence: 'read',
+  appendRepo: 'write',
+  appendRepoWithArtifacts: 'write',
+  getRepoEvents: 'read',
+  getRepoStateEvents: 'read',
+  getRepoHighWater: 'read',
+  getReducerValue: 'read',
+  getReducerSnapshot: 'read',
+  putReducerSnapshot: 'write',
+  putRepoArtifact: 'write',
+  getRepoArtifact: 'read',
+  listRepoArtifacts: 'read',
+  ticketAssetLimits: 'read',
+  putTicketAsset: 'write',
+  getTicketAsset: 'read',
+  getPinnedTicketAsset: 'read',
+  listTicketAssets: 'read',
+  removeTicketAsset: 'write',
+  beginRepoTick: 'write',
+  finishRepoTick: 'write',
+  claimRepoLease: 'write',
+  heartbeatRepo: 'write',
+  releaseRepoLease: 'write',
+  createSession: 'write',
+  getSession: 'read',
+  listSessions: 'read',
+  appendSessionEvent: 'write',
+  appendSessionEventIfCurrent: 'write',
+  getSessionEvents: 'read',
+  appendSessionWithArtifacts: 'write',
+  putSessionArtifact: 'write',
+  getSessionArtifact: 'read',
+  listSessionArtifacts: 'read',
+  scopeSession: 'read',
+  createStream: 'write',
+  appendStreamParts: 'write',
+  readStream: 'read',
+  closeStream: 'write',
+  getStream: 'read',
+  listStreams: 'read',
+  getBuildEventPage: 'read',
+  getRepositoryTail: 'read',
+  getStreamSeed: 'read',
+  getHarvestHistoryPage: 'read',
+}
+
+/** The members a judge store refuses, for exhaustive negative tests. */
+export const JUDGE_REFUSED_MEMBERS = Object.freeze(
+  Object.entries(JUDGE_REFUSED)
+    .filter(([, kind]) => kind !== 'property')
+    .map(([name, kind]) => ({ name: name as keyof BuildStore, kind: kind as 'read' | 'write' })),
+)
+
+function judgeError(scope: JudgeScope, operation: string, message: string): PhaseSessionError {
+  return new PhaseSessionError(
+    { kind: 'build', id: scope.build, session: scope.session },
+    operation,
+    undefined,
+    message,
+  )
+}
+
+function judgeStore(
+  store: BuildStore,
+  scope: JudgeScope,
+  append: BuildStore['append'],
+): JudgeSessionStore {
+  const wrapper: Record<string, unknown> = { judgeSession: scope }
+  for (const [name, kind] of Object.entries(JUDGE_REFUSED)) {
+    if (kind === 'property') continue
+    wrapper[name] = () => {
+      throw judgeError(
+        scope,
+        name,
+        kind === 'read'
+          ? `a judge session has no read authority: ${name} is refused`
+          : `a judge session may only record its preference: ${name} is refused`,
+      )
+    }
+  }
+  wrapper.append = append
+  wrapper.close = () => store.close()
+  return wrapper as unknown as JudgeSessionStore
+}
+
+export interface JudgeSessionStore extends BuildStore {
+  readonly judgeSession: JudgeScope
+}
+
+/**
+ * A local store handle for one judge session: it appends exactly one
+ * `panel.preferred` for its own panel, judge and session, and refuses every
+ * read. The local store has no server, so this in-process guard is the
+ * authority; it reads the lifecycle facts through the inner, unwrapped store.
+ */
+export function scopeLocalStoreToJudgeSession(
+  store: BuildStore,
+  scope: JudgeScope,
+): JudgeSessionStore {
+  return judgeStore(store, scope, async (slug, event) => {
+    if (slug !== scope.build)
+      throw judgeError(scope, 'append', `a judge session may write only build ${scope.build}`)
+    const facts = (
+      await store.getReducerValue(
+        { kind: 'build', slug: scope.build },
+        { reducer: 'buildDelegation' },
+      )
+    ).value as unknown as BuildDelegationFacts
+    const refusal = judgeWriteRefusal(scope, event, judgeLifecycleFacts(facts, scope.session))
+    if (refusal !== undefined) throw judgeError(scope, 'append', refusal)
+    return store.append(slug, event)
+  })
+}
+
+/**
+ * A remote store handle for one judge session. Its `build-judge` credential is
+ * refused every read on the server, so this wrapper checks only the write's
+ * scope, with no store call, and posts it; the hosted guard is the authority
+ * for duplicates and lifecycle.
+ */
+export function scopeRemoteStoreToJudgeSession(
+  store: BuildStore,
+  scope: JudgeScope,
+): JudgeSessionStore {
+  return judgeStore(store, scope, async (slug, event) => {
+    if (slug !== scope.build)
+      throw judgeError(scope, 'append', `a judge session may write only build ${scope.build}`)
+    const refusal = judgeScopeRefusal(scope, event)
+    if (refusal !== undefined) throw judgeError(scope, 'append', refusal)
+    return store.append(slug, event)
+  })
 }

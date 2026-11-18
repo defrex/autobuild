@@ -203,6 +203,18 @@ node with the reason as the ledger note. The flag is refused outside an
 attempt's implement phase. See
 [attempts](references/optimization-nodes.md#attempts).
 
+**Judge panels.** A panel objective is measured by a panel of judge sessions
+under the `judge` role. Each judge compares two harness-pinned variants,
+labeled `A/` and `B/` in an order drawn per judge, in its own root outside
+any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
+kernel records each judgment with its order in `panel.judged`; the candidate's
+win rate counts ties as half. Judges hold a write-only credential and nothing
+they are given reveals which variant is the candidate. A resumed run reuses
+recorded preferences and reruns only judges without one. Nothing runs a panel
+yet: panel attempts are not accepted by win rate, and a panel node records no
+noise check or progress. See
+[judge panels](references/optimization-nodes.md#judge-panels).
+
 **Optimization landing.** A child of an optimization node lands only with a
 fresh measurement of its exact head against the node's exact current head: an
 attempt must improve by at least ε, any other child must not regress by more
@@ -1204,7 +1216,8 @@ The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
 `finalize`, and `reconcile`, plus each **agent** verify and finalize step by
 its logical step name. A verify step's configured skill name remains a
 deprecated alias for existing configurations and will be removed in a future
-release. The repository workflow resolves `harvest` and `harvest-review`. Two
+release. The repository workflow resolves `harvest` and `harvest-review`. Each
+judge session of an optimization objective's judge panel resolves `judge`. Two
 non-phase judgments use the same runtime/model/args resolver: `slug` optionally
 proposes pre-build naming, and `upgrade` proposes a resolution only when a
 vendored skill merge conflicts. Both are tool-free one-shots and receive the
@@ -1332,8 +1345,8 @@ args = ["--effort", "high"]
   `ab repository status` until it carries at most one. A ticket can only
   select a profile; it never supplies a model, runtime or argument itself.
 - **Contents are live.** Every agent session of the build (plan, plan
-  review, implement, code review, agent verify and finalize steps, reconcile)
-  resolves through the profile read from the current configuration, so an
+  review, implement, code review, agent verify and finalize steps, reconcile,
+  and the judges of a panel run on the build) resolves through the profile read from the current configuration, so an
   edit reaches only the builds that selected it, at their next session.
   `session.started.profile` records `{ name, configured }`. If a reload removes
   the profile, those builds continue on the repository roles and
@@ -1732,7 +1745,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   `[commands]`, no verify or finalize steps, a valid local ticket gate, and one
   explicit runtime solely as a schema placeholder. It reads no package or
   language manifest and invents no command.
-- Vendors 12 skills before handoff, including the locally editable
+- Vendors 13 skills before handoff, including the locally editable
   [repository setup reference](references/setup.md) in the installed `ab-guide`
   tree. On an interactive terminal it starts the selected coding-agent CLI in
   the target repository with a short prompt to read that reference and
@@ -3317,9 +3330,10 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
+| `ab-judge` | A judge panel run | One judge of a panel objective: compare the blind variants `A/` and `B/` against the rubric and purpose, then record one preference (`A`, `B` or `tie`) with a reason through `ab judge prefer`. Runner-only; its session reads no build state. |
 | `ab-operate` | outside the pipeline; model-invocable | The operator agent’s operating manual, for any agent: file and groom tickets, operate the builds the repository's dispatcher dispatches with a registered `ab watch --operator` loop, answer escalations, pause, resume, abort, control merge consent and holds, and adopt new builds until the human ends or hands off the role. MCP presence is deferred. |
 
-Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
+Autobuild installs 13 skills. Everything except `ab-spec`, `ab-tickets`,
 `ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not
 invoke a phase skill yourself, and do not remove that key to make one
 convenient to call. A model starting a pipeline phase by pattern-matching a

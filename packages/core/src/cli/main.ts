@@ -59,7 +59,8 @@ import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
 import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
-import type { CliEnv, HarvestCliEnv } from './env'
+import type { CliEnv, HarvestCliEnv, JudgeCliEnv } from './env'
+import { buildJudgeContext, recordPreference, type JudgeCliDeps } from './judge'
 import { abInit } from './init'
 import { validateInitReadiness } from './init-validation'
 import { loadDotEnv } from './dotenv'
@@ -243,6 +244,7 @@ export interface SessionlessCliDeps {
   store?: BuildStore
   env?: CliEnv
   harvestEnv?: HarvestCliEnv
+  judgeEnv?: JudgeCliEnv
   forge?: Forge
   exec?: Exec
   ids?: IdSource
@@ -259,6 +261,17 @@ function requireHarvestSession(command: string, deps: SessionlessCliDeps): Harve
     )
   }
   return { store, env, ids, workspacePath: deps.workspacePath }
+}
+
+function requireJudgeSession(command: string, deps: SessionlessCliDeps): JudgeCliDeps {
+  const { store, judgeEnv: env } = deps
+  if (store === undefined || env === undefined) {
+    throw new Error(
+      `'ab judge ${command}' runs inside a judge session — the runner sets ` +
+        'AB_STORE, AB_JUDGE, AB_SESSION and AB_CONTEXT_DIR.',
+    )
+  }
+  return { store, env, workspacePath: deps.workspacePath }
 }
 
 function requireSession(command: string, deps: SessionlessCliDeps): CliDeps {
@@ -1520,6 +1533,46 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         return 0
       }
       throw new Error('usage: ab harvest <status|context|submit|verdict> …')
+    }
+
+    case 'judge': {
+      const [sub, ...more] = rest
+      if (sub === 'context') {
+        const usage = 'usage: ab judge context [--json]'
+        const parsed = parseArgs(more, { json: 'boolean' }, usage)
+        if (parsed.positionals.length > 0) throw new Error(usage)
+        const judge = requireJudgeSession('context', deps)
+        const manifest = await buildJudgeContext(judge)
+        if (parsed.flags.get('json') === true) stdout(JSON.stringify(manifest, null, 2))
+        else {
+          stdout(`judge context materialized for judge ${manifest.judge}`)
+          stdout(`variants: A/ and B/`)
+          stdout(`directory: ${judge.env.contextDir}`)
+          stdout(`  purpose.md — what the work is for`)
+          stdout(`  rubric.md — the criteria to compare the variants against`)
+          stdout(`allowed terminal: prefer`)
+        }
+        return 0
+      }
+      if (sub === 'prefer') {
+        const usage = 'usage: ab judge prefer <A|B|tie> (--reason <text> | --reason-file <file>)'
+        const parsed = parseArgs(more, { reason: 'value', 'reason-file': 'value' }, usage)
+        const [preference] = parsed.positionals
+        const inline = stringFlag(parsed, 'reason')
+        const file = stringFlag(parsed, 'reason-file')
+        if (
+          preference === undefined ||
+          parsed.positionals.length !== 1 ||
+          (inline === undefined) === (file === undefined)
+        )
+          throw new Error(usage)
+        const judge = requireJudgeSession('prefer', deps)
+        const reason = inline ?? (await readFile(file!, 'utf8'))
+        const event = await recordPreference(judge, { preference, reason })
+        stdout(`${event.type} recorded: ${event.payload.preference} (seq ${event.seq})`)
+        return 0
+      }
+      throw new Error('usage: ab judge <context|prefer> …')
     }
 
     case 'context': {

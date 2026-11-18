@@ -33,9 +33,10 @@ Skills guide the agents that plan, implement, review and operate Autobuild, one 
 | `ab-tickets` | Read, create, groom and update tickets through the tracker interface |
 | `ab-harvest` | Turn claimed observations into ticket proposals |
 | `ab-harvest-review` | Review those proposals independently |
+| `ab-judge` | One judge of a panel objective: compare two blind variants and record a preference |
 | `ab-guide` | Reference for the system, configuration, setup and installed skills |
 
-- **Phase skills** (plan through reconcile) are runner-invoked; don't start them manually.
+- **Phase skills** (plan through reconcile) and `ab-judge` are runner-invoked; don't start them manually.
 - **Spec, ticket and operator skills** work outside the pipeline. Observation harvest is a separate repository workflow.
 - **No generic agent verifier ships.** Your repository supplies its own evidence and checks.
 
