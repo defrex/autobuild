@@ -24,6 +24,11 @@ import { selectAccount, type SelectedAccount } from './accounts'
  *
  * The harm named here is the pair of the two: a key declared on one side and
  * never requested on the other.
+ *
+ * `[profiles.<name>.roles.<role>]` entries are classified the same way, against
+ * that profile's overlay of `[roles]` (the map the profile resolver walks). A
+ * profile is only ever selected for a build, so a profile entry on an internal
+ * role — which runs outside any build — is never requested.
  */
 import { CORE_PHASES } from '../ontology'
 import { profileRoles } from './profiles'
@@ -75,6 +80,20 @@ export interface RoleKeyDiagnostics {
   unconsumed: string[]
   /** Declared keys a deprecated skill-name alias reaches, sorted by key —
    * both the still-routing and the superseded-and-inert cases. */
+  deprecated: RoleKeyConsumers[]
+  /** Canonical keys a profile entry can consume: core phases and agent
+   * verify/finalize steps — never `default` or internal roles. Sorted. */
+  validProfile: string[]
+  /** Per-profile findings, profile-name order; profiles with none are omitted. */
+  profiles: ProfileRoleKeyDiagnostics[]
+}
+
+/** One `[profiles.<name>]` table's unconsumed and deprecated entries. */
+export interface ProfileRoleKeyDiagnostics {
+  profile: string
+  /** Entries with no consumer of any kind, sorted. */
+  unconsumed: string[]
+  /** Entries a deprecated skill-name alias reaches, sorted by key. */
   deprecated: RoleKeyConsumers[]
 }
 
@@ -328,62 +347,40 @@ export function tomlKey(name: string): string {
 /** The table header to write, quoted when the name needs it. */
 const roleTable = (name: string): string => `[roles.${tomlKey(name)}]`
 
+/** A profile entry's table header, both segments quoted when they need it. */
+const profileRoleTable = (profile: string, role: string): string =>
+  `[profiles.${tomlKey(profile)}.roles.${tomlKey(role)}]`
+
+/** Whether a role declares the deprecated `extensions` field, on its primary
+ * or on any of its own alternates. */
+const declaresExtensions = (spec: RoleConfig): boolean =>
+  spec.extensions !== undefined ||
+  (spec.alternates?.some((alt) => alt.extensions !== undefined) ?? false)
+
+type AgentStep = { step: string; skill: string }
+
 /**
- * Classify every declared `[roles.<key>]` against every consumer it has.
- * Iterates `steps` rather than the `stepConfigs` key sets so only steps that
- * actually run contribute; cross-validation already guarantees the two agree.
+ * Sort `keys` into unconsumed and deprecated against the consumers a roles map
+ * offers. `roles` is the map "declared" is read from — `[roles]` itself, or a
+ * profile's overlay of it — and `canonicalUse` names each key's own use.
  */
-export function roleKeyDiagnostics(config: Config): RoleKeyDiagnostics {
-  const verifyAgents = agentSteps(config.verify.steps, config.verify.stepConfigs)
-  const finalizeAgents = agentSteps(config.finalize.steps, config.finalize.stepConfigs)
-
-  // `default` is tested FIRST so the reserved phrase always wins, which is also
-  // what keeps the rename/delete advice structurally unreachable for it.
-  //
-  // Every arm renders through `displayName`, including the two whose names come
-  // from fixed lists. Those two are safe on their own, but a phrase built here
-  // is appended verbatim to a notice by the shared/colliding branch, and one
-  // uniform rule is what stops the next arm added to this list from being the
-  // hand-quoted one.
-  const canonicalUse = (key: string): string | undefined => {
-    if (key === RESERVED_ROLE) return `the reserved ${roleTable(RESERVED_ROLE)} inheritance base`
-    if ((CORE_PHASES as readonly string[]).includes(key)) {
-      return `the ${displayName(key)} core phase role`
-    }
-    if (verifyAgents.some((agent) => agent.step === key)) {
-      return `agent verify step ${displayName(key)}`
-    }
-    if (finalizeAgents.some((agent) => agent.step === key)) {
-      return `agent finalize step ${displayName(key)}`
-    }
-    if ((INTERNAL_ROLES as readonly string[]).includes(key)) {
-      return `the internal ${displayName(key)} role`
-    }
-    return undefined
-  }
-
+function classify(
+  keys: readonly string[],
+  roles: Record<string, unknown>,
+  canonicalUse: (key: string) => string | undefined,
+  verifyAgents: readonly AgentStep[],
+): { unconsumed: string[]; deprecated: RoleKeyConsumers[] } {
   // MUST mirror the resolver's candidate walk (src/ports/runner/routing.ts),
   // reserved arm included: a step named `default` always has its step-named
   // role declared, so its skill-name alias really is inert. The `||` arm is
   // redundant in practice — construction fails without `[roles.default]` — but
   // it keeps the two implementations of "declared" from drifting apart.
-  const declared = (step: string): boolean =>
-    step === RESERVED_ROLE || Object.hasOwn(config.roles, step)
-
-  const valid = [
-    ...new Set([
-      RESERVED_ROLE,
-      ...CORE_PHASES,
-      ...verifyAgents.map((agent) => agent.step),
-      ...finalizeAgents.map((agent) => agent.step),
-      ...INTERNAL_ROLES,
-    ]),
-  ].sort()
+  const declared = (step: string): boolean => step === RESERVED_ROLE || Object.hasOwn(roles, step)
 
   const unconsumed: string[] = []
   const deprecated: RoleKeyConsumers[] = []
 
-  for (const key of Object.keys(config.roles).sort()) {
+  for (const key of keys) {
     const use = canonicalUse(key)
     // A step whose own name IS the key has no alias at all: the key is
     // canonical for it, and step-name precedence means it routes that way.
@@ -407,7 +404,83 @@ export function roleKeyDiagnostics(config: Config): RoleKeyDiagnostics {
     unconsumed.push(key)
   }
 
-  return { valid, unconsumed, deprecated }
+  return { unconsumed, deprecated }
+}
+
+/**
+ * Classify every declared `[roles.<key>]` against every consumer it has.
+ * Iterates `steps` rather than the `stepConfigs` key sets so only steps that
+ * actually run contribute; cross-validation already guarantees the two agree.
+ */
+export function roleKeyDiagnostics(config: Config): RoleKeyDiagnostics {
+  const verifyAgents = agentSteps(config.verify.steps, config.verify.stepConfigs)
+  const finalizeAgents = agentSteps(config.finalize.steps, config.finalize.stepConfigs)
+
+  // `default` is tested FIRST so the reserved phrase always wins, which is also
+  // what keeps the rename/delete advice structurally unreachable for it.
+  //
+  // Every arm renders through `displayName`, including the two whose names come
+  // from fixed lists. Those two are safe on their own, but a phrase built here
+  // is appended verbatim to a notice by the shared/colliding branch, and one
+  // uniform rule is what stops the next arm added to this list from being the
+  // hand-quoted one.
+  //
+  // A profile is only selected for a build, so `internal: false` drops the
+  // internal arm: a profile entry on `slug` is never requested. The reserved
+  // arm stays but is unreachable there — the schema refuses a profile `default`.
+  const canonicalUseFor =
+    ({ internal }: { internal: boolean }) =>
+    (key: string): string | undefined => {
+      if (key === RESERVED_ROLE) return `the reserved ${roleTable(RESERVED_ROLE)} inheritance base`
+      if ((CORE_PHASES as readonly string[]).includes(key)) {
+        return `the ${displayName(key)} core phase role`
+      }
+      if (verifyAgents.some((agent) => agent.step === key)) {
+        return `agent verify step ${displayName(key)}`
+      }
+      if (finalizeAgents.some((agent) => agent.step === key)) {
+        return `agent finalize step ${displayName(key)}`
+      }
+      if (internal && (INTERNAL_ROLES as readonly string[]).includes(key)) {
+        return `the internal ${displayName(key)} role`
+      }
+      return undefined
+    }
+
+  const stepKeys = [
+    ...CORE_PHASES,
+    ...verifyAgents.map((agent) => agent.step),
+    ...finalizeAgents.map((agent) => agent.step),
+  ]
+  const valid = [...new Set([RESERVED_ROLE, ...stepKeys, ...INTERNAL_ROLES])].sort()
+  const validProfile = [...new Set(stepKeys)].sort()
+
+  const { unconsumed, deprecated } = classify(
+    Object.keys(config.roles).sort(),
+    config.roles,
+    canonicalUseFor({ internal: true }),
+    verifyAgents,
+  )
+
+  // Each profile against its own overlay, so a step-named role declared in
+  // either `[roles]` or the profile supersedes an alias — as the profile
+  // resolver sees it.
+  const profileUse = canonicalUseFor({ internal: false })
+  const profiles: ProfileRoleKeyDiagnostics[] = []
+  for (const profile of Object.keys(config.profiles ?? {}).sort()) {
+    const entries = config.profiles![profile]!.roles
+    const found = classify(
+      Object.keys(entries).sort(),
+      profileRoles(config.roles, entries),
+      profileUse,
+      verifyAgents,
+    )
+    if (found.unconsumed.length > 0 || found.deprecated.length > 0) {
+      profiles.push({ profile, ...found })
+    }
+  }
+
+  return { valid, unconsumed, deprecated, validProfile, profiles }
 }
 
 // ── Notices ──────────────────────────────────────────────────────────────────
@@ -430,9 +503,10 @@ function andList(parts: readonly string[]): string {
 /** Step names in prose — each through `displayName`, never hand-quoted. */
 const named = (steps: readonly string[]): string => andList(steps.map(displayName))
 
-const roleTables = (names: readonly string[]): string => andList(names.map(roleTable))
-
-function deprecationNotice(entry: RoleKeyConsumers): string {
+function deprecationNotice(
+  entry: RoleKeyConsumers,
+  table: (name: string) => string = roleTable,
+): string {
   const { key, canonicalUse, activeAlias, supersededAlias } = entry
 
   // A SUPERSEDED alias is not a consumer. It is inert by definition — the step
@@ -448,7 +522,7 @@ function deprecationNotice(entry: RoleKeyConsumers): string {
         ? `agent verify step ${named(supersededAlias)} declares its own step-named role`
         : `agent verify steps ${named(supersededAlias)} each declare their own step-named role`
     return (
-      `autobuild.toml: ${roleTable(key)} can be deleted — ${subject}, so this ` +
+      `autobuild.toml: ${table(key)} can be deleted — ${subject}, so this ` +
       `deprecated skill-name key changes nothing.`
     )
   }
@@ -457,7 +531,7 @@ function deprecationNotice(entry: RoleKeyConsumers): string {
   // in one edit. Superseded steps are deliberately not "other consumers".
   if (canonicalUse === undefined && activeAlias.length === 1) {
     return (
-      `autobuild.toml: ${roleTable(key)} should be ${roleTable(activeAlias[0]!)} — it is the ` +
+      `autobuild.toml: ${table(key)} should be ${table(activeAlias[0]!)} — it is the ` +
       `deprecated skill-name key for agent verify step ${named(activeAlias)} and stops ` +
       `working in a future release.`
     )
@@ -471,46 +545,73 @@ function deprecationNotice(entry: RoleKeyConsumers): string {
       : 'it routes those agent verify steps through the deprecated skill-name key'
   const advice =
     canonicalUse !== undefined
-      ? `Keep ${roleTable(key)}: it is also ${canonicalUse}.`
-      : `Delete ${roleTable(key)} once those are declared.`
-  return `autobuild.toml: ${roleTable(key)} should be ${roleTables(activeAlias)} — ${routed}. ${advice}`
+      ? `Keep ${table(key)}: it is also ${canonicalUse}.`
+      : `Delete ${table(key)} once those are declared.`
+  return `autobuild.toml: ${table(key)} should be ${andList(activeAlias.map(table))} — ${routed}. ${advice}`
 }
+
+/** The unconsumed-tables sentence, one wording for `[roles]` and profiles. */
+function unconsumedLine(tables: readonly string[]): string {
+  const keys = tables.join(', ')
+  return tables.length === 1
+    ? `autobuild.toml: ${keys} is declared but nothing requests it — its runtime, model, and args never reach a session.`
+    : `autobuild.toml: ${keys} are declared but nothing requests them — their runtime, model, and args never reach a session.`
+}
+
+const extensionsNotice = (table: string): string =>
+  `autobuild.toml: ${table} declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.`
 
 /**
  * The rendered notices — THE one message set. Empty for a clean configuration.
  *
- * Order: the unconsumed-keys line, then the valid-key line (only when there are
- * unconsumed keys), then one notice per deprecated key in key order. Every
- * surface renders these exact strings in full: nothing here or downstream may
- * cap, summarize, or truncate them, or a surface would report that a class of
- * problem exists without naming the keys the operator has to change.
+ * Order: the `[roles]` unconsumed-keys line, then the valid-key line (only when
+ * there are unconsumed keys); the profile unconsumed line naming every
+ * unconsumed `[profiles.<name>.roles.<role>]` in profile then key order, then
+ * the valid profile-key line (only when there are any); one notice per
+ * deprecated `[roles]` key in key order, then per deprecated profile entry;
+ * one `extensions` notice per declaring `[roles]` entry in declaration order,
+ * then per declaring profile entry. A configuration without profile findings
+ * renders exactly the `[roles]` lines. Every surface renders these exact strings in full: nothing
+ * here or downstream may cap, summarize, or truncate them, or a surface would
+ * report that a class of problem exists without naming the keys the operator
+ * has to change.
  *
  * The unconsumed line deliberately stops at the harm and does not explain what
  * runs instead — that belongs in SPEC §9 and `docs/configuration.md`, and
  * putting it here pushed the required valid-key list past the right edge.
  */
 export function roleKeyWarnings(config: Config): string[] {
-  const { valid, unconsumed, deprecated } = roleKeyDiagnostics(config)
+  const { valid, unconsumed, deprecated, validProfile, profiles } = roleKeyDiagnostics(config)
   const lines: string[] = []
   if (unconsumed.length > 0) {
-    const keys = unconsumed.map(roleTable).join(', ')
-    lines.push(
-      unconsumed.length === 1
-        ? `autobuild.toml: ${keys} is declared but nothing requests it — its runtime, model, and args never reach a session.`
-        : `autobuild.toml: ${keys} are declared but nothing requests them — their runtime, model, and args never reach a session.`,
-    )
+    lines.push(unconsumedLine(unconsumed.map(roleTable)))
     // Rendered as keys, not as prose names: this list is what the operator
     // types next, so a name needing quotes must show them here too.
     lines.push(`Valid role keys: ${valid.map(tomlKey).join(', ')}`)
   }
+  const profileUnconsumed = profiles.flatMap(({ profile, unconsumed }) =>
+    unconsumed.map((role) => profileRoleTable(profile, role)),
+  )
+  if (profileUnconsumed.length > 0) {
+    // Its own list: the `[roles]` one names `default` and the internal roles,
+    // which a profile entry can never consume.
+    lines.push(unconsumedLine(profileUnconsumed))
+    lines.push(`Valid profile role keys: ${validProfile.map(tomlKey).join(', ')}`)
+  }
   for (const entry of deprecated) lines.push(deprecationNotice(entry))
+  for (const { profile, deprecated } of profiles) {
+    const table = (role: string): string => profileRoleTable(profile, role)
+    for (const entry of deprecated) lines.push(deprecationNotice(entry, table))
+  }
   for (const [role, spec] of Object.entries(config.roles)) {
-    const declared =
-      spec.extensions !== undefined || spec.alternates?.some((alt) => alt.extensions !== undefined)
-    if (!declared) continue
-    lines.push(
-      `autobuild.toml: ${roleTable(role)} declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.`,
-    )
+    if (declaresExtensions(spec)) lines.push(extensionsNotice(roleTable(role)))
+  }
+  // Only the profile's own declared fields: an inherited top-level `extensions`
+  // is already reported on its own table.
+  for (const profile of Object.keys(config.profiles ?? {}).sort()) {
+    for (const [role, spec] of Object.entries(config.profiles![profile]!.roles)) {
+      if (declaresExtensions(spec)) lines.push(extensionsNotice(profileRoleTable(profile, role)))
+    }
   }
   return lines
 }
