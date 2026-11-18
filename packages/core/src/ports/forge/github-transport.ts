@@ -476,3 +476,33 @@ export function classifyGitHubFailure(error: unknown, now = Date.now()): unknown
     return new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })
   return error
 }
+
+/** GitHub GraphQL refused by the environment rather than by GitHub's own
+ * limits or permissions: an HTTP 403 on the GraphQL endpoint whose message
+ * says GraphQL is unavailable. Claude Code's GitHub proxy answers this way
+ * for every GraphQL request, whatever credential is supplied. Deliberately
+ * not a `ForgeFailure`: it never drives forge cooldown or landing backoff. */
+export class GitHubGraphQLUnavailable extends Error {
+  readonly status = 403
+  constructor(readonly forgeMessage: string) {
+    super(`GitHub GraphQL is unavailable: ${forgeMessage}`)
+    this.name = 'GitHubGraphQLUnavailable'
+  }
+}
+
+export function isGitHubGraphQLUnavailable(error: unknown): error is GitHubGraphQLUnavailable {
+  return error instanceof GitHubGraphQLUnavailable
+}
+
+const GRAPHQL_UNAVAILABLE = /\bgraphql\b[^\n]*\b(?:not available|unavailable)\b/i
+
+/** Classify a refusal of a GraphQL request. Apply only to errors from the
+ * GraphQL endpoint and only after {@link classifyGitHubFailure}, so rate
+ * limits and transient failures stay `ForgeFailure`s; ordinary permission
+ * 403s are returned unchanged. */
+export function classifyGitHubGraphQLRefusal(error: unknown): unknown {
+  if (isForgeFailure(error)) return error
+  if (!(error instanceof GitHubApiError) || error.status !== 403) return error
+  if (!GRAPHQL_UNAVAILABLE.test(error.message)) return error
+  return new GitHubGraphQLUnavailable(error.message)
+}

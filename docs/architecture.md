@@ -885,7 +885,18 @@ built-in adapters preserve their squash message and normalize a final
 adapter derives the squash headline/body from the PR and the repository's
 `squash_merge_commit_title` and `squash_merge_commit_message` settings
 (`packages/core/src/ports/forge/github-squash-message.ts`), all read over REST;
-GraphQL carries only the native enable and disable mutations. The janitor
+GraphQL carries only the native enable and disable mutations. The transport
+wrapper classifies a GraphQL 403 that says GraphQL is unavailable (Claude Code's
+GitHub proxy) as `GitHubGraphQLUnavailable`, after the shared rate-limit and
+transient classification and never as a `ForgeFailure`. Each `GitHubForge`
+instance memoizes availability: one read-only `rateLimit` probe decides it, and
+a refusal suppresses GraphQL for `GITHUB_GRAPHQL_RECHECK_MS` (30 minutes). With
+GraphQL unavailable, `setAutoMerge` routes a gated root leaf to `polling` or,
+when GitHub exposes a merge queue over REST, `human-merge`; the dispatcher
+records `landing.polling-selected` or `landing.human-merge-required`, squashes a
+clear PR through `squashMerge` with `requireClearState`, and settles when GitHub
+refuses that merge. A current polling fact lets a quiet tick answer from the
+poll's PR read alone. The janitor
 maintains native request message freshness after acknowledgement. A matching
 request costs the PR representation the poll already read plus one conditional
 repository read shared by every build in the tick; a PR's commit messages are
@@ -944,8 +955,9 @@ no rules. The base comes from the REST PR representation and must equal the
 build's base branch: a retargeted PR defers native enable and refuses the
 direct squash rather than following the new base.
 Kernel auto-merge therefore
-returns an actionable `unproven-gate-state` deferral for queue-protected bases;
-it never bypasses the queue. Human queue merges still settle normally with
+returns an actionable `unproven-gate-state` deferral for queue-protected bases,
+or, with GraphQL unavailable, settles the landing as awaiting a human merge; it
+never bypasses the queue. Human queue merges still settle normally with
 inspected trailer evidence when available. Expected-head guards and recurring
 polls bound native message freshness, but cannot prevent a push and automatic
 merge from both completing between polls.

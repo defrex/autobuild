@@ -35,7 +35,7 @@ import { bulkControlRepository } from '../cli/bulk-control'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
-import type { EventType } from '../events/payloads'
+import type { EventPayload, EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { waitGuidance } from '../kernel/ticket-wait'
@@ -17276,6 +17276,223 @@ describe('native identity (AUT-812/AUT-821)', () => {
           wrapTickets: () => h.tickets,
           forge: h.forge,
         }).dispatcher.tick({ acceptNewWork: false }),
+    })
+  }, 60_000)
+})
+
+describe('gated landing when GitHub GraphQL is unavailable (AUT-1217)', () => {
+  const typesOf = (events: readonly AbEvent[]) => events.map((event) => event.type)
+  const ofType = (events: readonly AbEvent[], type: AbEvent['type']) =>
+    events.filter((event) => event.type === type)
+
+  /** A green, consented root leaf on a gated base whose GraphQL is refused. */
+  async function gated(mergeState: 'BLOCKED' | 'CLEAN' = 'BLOCKED') {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'present')
+    h.forge.setMergeStateStatus(1, mergeState)
+    h.forge.setGraphqlUnavailable()
+    const poll = () => h.dispatcher.tick({ acceptNewWork: false })
+    const events = () => h.store.getEvents(slug)
+    const hold = () =>
+      h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+    return { ...h, slug, poll, events, hold }
+  }
+
+  test('polls quietly while blocked and squashes on the first clear tick', async () => {
+    const h = await gated()
+    await h.poll()
+    const first = await h.events()
+    expect(ofType(first, 'landing.polling-selected')).toHaveLength(1)
+    expect(ofType(first, 'landing.native-enable-started')).toEqual([])
+    expect(ofType(first, 'observation.recorded')).toEqual([])
+    expect(h.forge.graphqlRequests).toBe(1)
+    for (let i = 0; i < 3; i++) await h.poll()
+    expect(await h.events()).toEqual(first)
+    expect(h.forge.squashMergeCalls).toEqual([])
+    expect(h.forge.pollingFastPath).toBe(3)
+    expect(h.forge.graphqlRequests).toBe(1)
+
+    h.forge.setMergeStateStatus(1, 'CLEAN')
+    await h.poll()
+    expect(h.forge.squashMergeCalls).toEqual([
+      {
+        workspacePath: `/ws/ab/${h.slug}`,
+        number: 1,
+        expectedHeadSha: PR.headSha,
+        buildSlug: h.slug,
+      },
+    ])
+    expect(await h.poll()).toMatchObject({ merged: 1 })
+    const done = await h.events()
+    expect(typesOf(done)).toContain('pr.merged')
+    expect(typesOf(done).at(-1)).toBe('build.completed')
+    expect(ofType(done, 'landing.human-merge-required')).toEqual([])
+  })
+
+  test('consent revoked before the clear tick, or inside the guarded squash, merges nothing', async () => {
+    const before = await gated()
+    await before.poll()
+    await before.hold()
+    before.forge.setMergeStateStatus(1, 'CLEAN')
+    await before.poll()
+    await before.poll()
+    expect(before.forge.squashMergeCalls).toEqual([])
+
+    const inside = await gated()
+    await inside.poll()
+    inside.forge.setMergeStateStatus(1, 'CLEAN')
+    const squash = inside.forge.squashMerge.bind(inside.forge)
+    inside.forge.squashMerge = async (...args) => {
+      // Consent is withdrawn after the dispatcher's own check.
+      await inside.hold()
+      return squash(...args)
+    }
+    await inside.poll()
+    expect(inside.forge.squashMergeCalls).toEqual([])
+    expect(ofType(await inside.events(), 'landing.human-merge-required')).toEqual([])
+  })
+
+  test('a head that moved after verification is never merged', async () => {
+    const h = await gated()
+    await h.poll()
+    h.forge.setPrHeadSha(1, 'moved-head')
+    h.forge.setMergeStateStatus(1, 'CLEAN')
+    await h.poll()
+    await h.poll()
+    expect(h.forge.squashMergeCalls).toEqual([])
+  })
+
+  test('a blocked PR on a base with merge-queue activity settles on its first tick', async () => {
+    const h = await gated()
+    h.forge.setMergeQueue(1, 'activity')
+    await h.poll()
+    const settled = await h.events()
+    expect(ofType(settled, 'landing.polling-selected')).toEqual([])
+    expect(ofType(settled, 'landing.human-merge-required').map((e) => e.payload)).toMatchObject([
+      { cause: 'merge-queue-activity' },
+    ])
+    const calls = h.forge.autoMergeCalls.length
+    const graphql = h.forge.graphqlRequests
+    for (let i = 0; i < 3; i++) await h.poll()
+    expect(h.forge.autoMergeCalls).toHaveLength(calls)
+    expect(h.forge.pollingFastPath).toBe(0)
+    expect(h.forge.graphqlRequests).toBe(graphql)
+    expect(await h.events()).toEqual(settled)
+  })
+
+  test.each([
+    ['merge-queue-rule', 'main requires its merge queue'],
+    ['merge-queue-activity', 'merge-queue merges'],
+    ['merge-refused', 'Pull Request is not mergeable'],
+  ] as const)('%s settles once, stops landing, and records a human merge', async (cause, text) => {
+    const h = await gated('CLEAN')
+    if (cause === 'merge-refused') h.forge.setMergeRefusal(1, 'Pull Request is not mergeable')
+    else h.forge.setMergeQueue(1, cause === 'merge-queue-rule' ? 'rule' : 'activity')
+    await h.poll()
+    const settled = await h.events()
+    const facts = ofType(settled, 'landing.human-merge-required')
+    expect(facts.map((e) => e.payload)).toMatchObject([{ cause }])
+    if (cause === 'merge-refused')
+      expect(facts[0]!.payload).toMatchObject({ detail: 'Pull Request is not mergeable' })
+    const reason = mergeDecision(settled, new Date(0))?.reason ?? ''
+    expect(reason).toStartWith('Awaiting a human merge')
+    if (cause !== 'merge-queue-rule') expect(reason).toContain(text)
+    expect(h.forge.squashMergeCalls).toEqual([])
+
+    const calls = h.forge.autoMergeCalls.length
+    const fast = h.forge.pollingFastPath
+    const graphql = h.forge.graphqlRequests
+    const activity = h.forge.activityReads
+    for (let i = 0; i < 3; i++) await h.poll()
+    expect(h.forge.autoMergeCalls).toHaveLength(calls)
+    expect(h.forge.pollingFastPath).toBe(fast)
+    expect(h.forge.graphqlRequests).toBe(graphql)
+    expect(h.forge.activityReads).toBe(activity)
+    expect(h.forge.squashMergeCalls).toEqual([])
+    expect(await h.events()).toEqual(settled)
+
+    // A human merges on GitHub: recorded like any human forge merge.
+    h.forge.setPrState(1, { state: 'merged', sha: 'human-squash' })
+    expect(await h.poll()).toMatchObject({ merged: 1 })
+    const done = await h.events()
+    expect(typesOf(done)).toContain('pr.merged')
+    expect(ofType(done, 'landing.forge-merged')).toEqual([])
+    expect(
+      ofType(done, 'observation.recorded').some((e) =>
+        (e.payload as { refs?: string[] }).refs?.includes('landing-contrary-to-policy'),
+      ),
+    ).toBe(false)
+  })
+
+  test('a pre-merge "no longer clear" refusal does not settle, and the next clear tick merges', async () => {
+    const h = await gated('CLEAN')
+    const squash = h.forge.squashMerge.bind(h.forge)
+    let raced = false
+    h.forge.squashMerge = async (...args) => {
+      if (!raced) {
+        raced = true
+        // GitHub stops reporting the PR clear between inspection and merge.
+        h.forge.setMergeStateStatus(1, 'BLOCKED')
+        try {
+          return await squash(...args)
+        } finally {
+          h.forge.setMergeStateStatus(1, 'CLEAN')
+        }
+      }
+      return squash(...args)
+    }
+    await h.poll()
+    // An ordinary janitor failure with its usual backoff, not a settlement.
+    const failed = await h.events()
+    expect(ofType(failed, 'landing.human-merge-required')).toEqual([])
+    expect(ofType(failed, 'build.janitor-attempt-failed').map((e) => e.payload)).toMatchObject([
+      { message: expect.stringContaining('no longer reported clear') },
+    ])
+    expect(h.forge.squashMergeCalls).toEqual([])
+    h.clock.advance(60_000)
+    await h.poll()
+    expect(h.forge.squashMergeCalls).toHaveLength(1)
+    expect(ofType(await h.events(), 'landing.human-merge-required')).toEqual([])
+  })
+
+  test('quiet polling costs one PR read and no store growth at 100 and 10000 events', async () => {
+    const h = await gated()
+    await h.poll()
+    const selected = ofType(await h.events(), 'landing.polling-selected')[0]!
+    const { gatedPollingReadBudget } = await import('../testing/reduced-read-budget')
+    await gatedPollingReadBudget({
+      store: h.store as MemoryBuildStore,
+      slug: h.slug,
+      forge: h.forge,
+      tick: () =>
+        harness({
+          store: h.store,
+          clock: h.clock,
+          wrapTickets: () => h.tickets,
+          forge: h.forge,
+        }).dispatcher.tick({ acceptNewWork: false }),
+      settle: () =>
+        h.store.append(h.slug, {
+          actor: DISPATCHER,
+          type: 'landing.human-merge-required',
+          payload: {
+            ...(selected.payload as EventPayload<'landing.polling-selected'>),
+            cause: 'merge-queue-activity',
+            detail: 'GitHub reports merge-queue merges on main',
+          },
+        }),
     })
   }, 60_000)
 })
