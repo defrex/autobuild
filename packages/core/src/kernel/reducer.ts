@@ -298,6 +298,11 @@ export interface TicketWaitState {
   resumedSeq?: number
 }
 
+export interface AttemptMeasurementState {
+  request?: EventPayload<'attempt.measurement-requested'> & { seq: number }
+  measured?: { request: string; seq: number }
+}
+
 export interface BuildState {
   drainingExecutions?: Record<string, DrainExecution>
   compatibility: CompatibilityState
@@ -312,6 +317,9 @@ export interface BuildState {
   /** An optimization node's bounded digest (SPEC §15.5). Present exactly
    * when the node's objective was accepted. */
   optimization?: OptimizationState
+  /** An optimization attempt's latest measurement request and latest
+   * `attempt.measured` (SPEC §15.5). Bounded: older ones are history. */
+  attemptMeasurement?: AttemptMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -558,6 +566,9 @@ export interface BuildAcc {
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
   optimization?: OptimizationState
+  /** An optimization attempt's latest measurement request and latest
+   * `attempt.measured` (SPEC §15.5). Bounded: older ones are history. */
+  attemptMeasurement?: AttemptMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -640,7 +651,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 40
+export const BUILD_REDUCER_VERSION = 41
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -833,6 +844,16 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     }
     if (isOptimizationEvent(event))
       acc.optimization = advanceOptimization(acc.optimization, [event])
+    if (event.type === 'attempt.measurement-requested')
+      acc.attemptMeasurement = {
+        ...acc.attemptMeasurement,
+        request: { ...structuredClone(event.payload), seq: event.seq },
+      }
+    if (event.type === 'attempt.measured')
+      acc.attemptMeasurement = {
+        ...acc.attemptMeasurement,
+        measured: { request: event.payload.request, seq: event.seq },
+      }
     advanceVerifyStage(acc.verifyStage, event)
     if (event.type === 'verify.cancelled') {
       for (const escalation of [...openEscalations.values(), ...answeredEscalations]) {
@@ -1778,6 +1799,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.headPaths !== undefined ? { headPaths: structuredClone(acc.headPaths) } : {}),
     nodeRestack: acc.nodeRestack,
     ...(acc.optimization !== undefined ? { optimization: structuredClone(acc.optimization) } : {}),
+    ...(acc.attemptMeasurement !== undefined
+      ? { attemptMeasurement: structuredClone(acc.attemptMeasurement) }
+      : {}),
     status,
     ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),
     outcome: acc.outcome,

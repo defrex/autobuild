@@ -16,7 +16,7 @@ import { nativeSessionHandleSchema } from './native-session'
  */
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
-import { objectiveSchema, revisableChangesSchema } from '../objective'
+import { objectiveEpsilonSchema, objectiveSchema, revisableChangesSchema } from '../objective'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
 import {
   HEAD_PATHS_ARTIFACT,
@@ -500,6 +500,21 @@ const optimizationPayloadSchemas = {
     median: z.number(),
     /** A panel records the win rate's distance from 0.5 here. */
     spread: z.number().nonnegative(),
+    /** The raw per-sample values, deposited with this fact. */
+    report: artifactRefSchema.optional(),
+  }),
+  /** Advisory: the starting measurement's noise spread exceeds the ε in
+   * effect. The node stays open. */
+  'optimization.noise-exceeded': z.strictObject({
+    revision: objectiveRevision,
+    head: sha,
+    harnessPin: sha,
+    median: z.number(),
+    spread: z.number().nonnegative(),
+    epsilon: objectiveEpsilonSchema,
+    /** ε in metric units: absolute, or relative × |median|. Zero for a
+     * relative ε over a zero median. */
+    effectiveEpsilon: z.number().nonnegative(),
   }),
   'optimization.proposal-requested': z.strictObject({
     id: z.string().min(1),
@@ -547,6 +562,11 @@ const optimizationPayloadSchemas = {
       winRate: z.number().min(0).max(1).optional(),
       delta,
       decision: z.enum(['improved', 'no-improvement', 'non-regressing', 'regressed']),
+      /** The node's starting noise spread under the request's ruler, reported
+       * beside the delta. */
+      spread: z.number().nonnegative().optional(),
+      /** The raw per-sample values, deposited with this fact. */
+      report: artifactRefSchema.optional(),
     })
     .refine(
       (measured) => (measured.medians === undefined) !== (measured.winRate === undefined),

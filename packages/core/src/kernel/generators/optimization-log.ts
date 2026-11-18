@@ -84,11 +84,88 @@ export class OptimizationLogBuilder {
     })
   }
 
-  baseline(revision: number, median: number, spread: number, head = OPTIMIZATION_SHA('a')) {
+  baseline(
+    revision: number,
+    median: number,
+    spread: number,
+    head = OPTIMIZATION_SHA('a'),
+    report?: { kind: string; rev: number },
+  ) {
     return this.push({
       actor: KERNEL,
       type: 'optimization.baseline-measured',
-      payload: { revision, head, harnessPin: OPTIMIZATION_SHA('a'), samples: 7, median, spread },
+      payload: {
+        revision,
+        head,
+        harnessPin: OPTIMIZATION_SHA('a'),
+        samples: 7,
+        median,
+        spread,
+        ...(report !== undefined ? { report } : {}),
+      },
+    })
+  }
+
+  noiseExceeded(revision: number, median: number, spread: number, effectiveEpsilon: number) {
+    return this.push({
+      actor: KERNEL,
+      type: 'optimization.noise-exceeded',
+      payload: {
+        revision,
+        head: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        median,
+        spread,
+        epsilon: { relative: 0.03 },
+        effectiveEpsilon,
+      },
+    })
+  }
+
+  /** An attempt's measurement request, on the attempt's own log. */
+  requestMeasurement(
+    id: string,
+    node = 'opt-node',
+    revision = 1,
+    candidate = OPTIMIZATION_SHA('c'),
+  ) {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id,
+        node,
+        candidate,
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision,
+      },
+    })
+  }
+
+  /** An attempt's recorded measurement, on the attempt's own log. */
+  measured(
+    request: string,
+    medians: { baseline: number; candidate: number },
+    opts: { revision?: number; spread?: number; report?: { kind: string; rev: number } } = {},
+  ) {
+    const delta = medians.baseline - medians.candidate
+    return this.push({
+      actor: KERNEL,
+      type: 'attempt.measured',
+      payload: {
+        request,
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: opts.revision ?? 1,
+        samples: 7,
+        medians,
+        delta,
+        decision: delta > 0 ? 'improved' : 'no-improvement',
+        ...(opts.spread !== undefined ? { spread: opts.spread } : {}),
+        ...(opts.report !== undefined ? { report: opts.report } : {}),
+      },
     })
   }
 
@@ -175,7 +252,8 @@ export function optimizationLog(): AbEvent[] {
     })
     .accept(commandObjective(), 1)
     .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
-    .baseline(1, 50, 1.5)
+    .noiseExceeded(1, 50, 1.6, 1.5)
+    .baseline(1, 50, 1.6, OPTIMIZATION_SHA('a'), { kind: 'measurement-samples', rev: 0 })
     .revise({ threshold: 35, plateau: 8, epsilon: { absolute: 2 } }, 2)
     .propose('r1', ['a1', 'a2', 'a3'])
     .settle('a1', 'accepted', { revision: 2, baseline: 50, candidate: 44, delta: 6 })
@@ -195,4 +273,29 @@ export function panelOptimizationLog(): AbEvent[] {
     .propose('r1', ['p1'])
     .settle('p1', 'accepted', { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 })
     .progress(1, 0.7).events
+}
+
+/** An attempt leaf's log that reaches every measurement field. */
+export function attemptMeasurementLog(): AbEvent[] {
+  return new OptimizationLogBuilder('attempt-a1')
+    .push({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: 'repo',
+        ticket: { source: 'file', id: 'T-a1' },
+        baseBranch: 'ab/opt-node',
+        kind: 'work',
+      },
+    })
+    .requestMeasurement('m1')
+    .measured(
+      'm1',
+      { baseline: 50, candidate: 44 },
+      {
+        spread: 1.6,
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    )
+    .requestMeasurement('m2').events
 }

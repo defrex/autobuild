@@ -132,6 +132,7 @@ export const BUILD_ATTENTION_EVENTS = [
   'integration.verification-failed',
   'node.item-conflicted',
   'landing.consent-revoked',
+  'optimization.noise-exceeded',
 ] as const satisfies readonly EventType[]
 
 // ── Glob compilation and matching ────────────────────────────────────────────
@@ -516,6 +517,26 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return singleLine(
         `Merge consent revoked for ${event.build}: reconcile edited files protected by merge[${p.rule.index}] (${p.paths.preview.join(', ')}${more > 0 ? `, +${more} more` : ''}); head ${p.previousHead} → ${p.head}; re-review and run ab merge ${event.build}`,
       )
+    }
+    case 'optimization.noise-exceeded': {
+      const p = event.payload
+      const epsilon =
+        p.epsilon.relative !== undefined
+          ? `relative ${p.epsilon.relative} of median ${p.median}`
+          : 'absolute'
+      return `Noise exceeds ε on ${event.build}: starting spread ${p.spread} > ε ${p.effectiveEpsilon} (${epsilon}); the node continues — raise target.epsilon or metric.samples`
+    }
+    case 'optimization.baseline-measured': {
+      const p = event.payload
+      return `starting value ${p.median}, noise spread ${p.spread} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)})`
+    }
+    case 'attempt.measured': {
+      const p = event.payload
+      const values = p.medians
+        ? `candidate ${p.medians.candidate} vs baseline ${p.medians.baseline}`
+        : `win rate ${p.winRate}`
+      const noise = p.spread !== undefined ? ` (noise ±${p.spread})` : ''
+      return `${values}: delta ${p.delta}${noise} → ${p.decision}`
     }
     case 'target.rewritten':
       return `Upstream rewrite on ${event.payload.branch}: ${event.payload.previousSha} → ${event.payload.sha}; automatic adoption withheld`

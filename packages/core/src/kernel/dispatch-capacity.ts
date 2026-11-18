@@ -3,6 +3,7 @@ import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
 import { waitParked, waitResumeDue } from './ticket-wait'
+import { baselineMeasurementDue, pendingMeasurementRequest } from './measurement'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
@@ -108,7 +109,10 @@ export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   const { state } = build
   if (terminal(state)) return false
   if (state.kind !== 'node') return !parkedLeaf(build, now)
-  return !!state.nodeRestack?.conflict || (integrationNeedsRunner(state) && allocated(build, now))
+  return (
+    !!state.nodeRestack?.conflict ||
+    ((integrationNeedsRunner(state) || baselineMeasurementDue(state)) && allocated(build, now))
+  )
 }
 
 /** A parked leaf's durable request for a runner, or undefined. */
@@ -126,7 +130,13 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
   // wait has ended, to resume the phase that declared it.
   if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined
   if (state.prState === 'conflicted') return 'reconcile'
-  if (build.restackDue || epilogueUnsettled(state)) return 'verification'
+  // A requested optimization measurement is admitted as a re-verify is.
+  if (
+    build.restackDue ||
+    epilogueUnsettled(state) ||
+    pendingMeasurementRequest(state) !== undefined
+  )
+    return 'verification'
   return undefined
 }
 
@@ -147,6 +157,8 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
   )
     return undefined
   if (state.nodeRestack?.conflict) return state.openEscalations.length ? undefined : 'reconcile'
+  // The starting measurement is admitted as a re-verify is.
+  if (baselineMeasurementDue(state)) return 'verification'
   if (integrationAdmissible(state) && integrationNeedsRunner(state)) return 'verification'
   return undefined
 }

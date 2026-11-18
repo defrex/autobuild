@@ -146,6 +146,17 @@ import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/work
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
+import {
+  baselineMeasurementDue,
+  baselineSummary,
+  effectiveEpsilon,
+  measurementDecision,
+  measurementDelta,
+  median,
+  noiseExceeded,
+  pendingMeasurementRequest,
+} from '../kernel/measurement'
+import { runPairedMeasurement, type MeasurementResult } from './measurement-runner'
 
 export { publicationPending } from './publication-state'
 
@@ -232,6 +243,9 @@ export interface BuildRunnerDeps {
   slug: string
   /** Shell seam for deterministic checks and finalize Git guards (§8.2, D7). */
   exec: Exec
+  /** A signal that aborts after `ms`: one measurement command run's timeout.
+   * Defaults to `AbortSignal.timeout`. */
+  timeoutSignal?: (ms: number) => AbortSignal
   /** Remote publication stays behind the kernel-owned Forge port (D7). */
   forge: Forge
   ids: IdSource
@@ -257,6 +271,11 @@ type SkipVerifyDecision = Extract<Decision, { kind: 'skip-verify' }>
 type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
 type CheckReconcileProgressDecision = Extract<Decision, { kind: 'check-reconcile-progress' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
+type MeasureBaselineDecision = Extract<Decision, { kind: 'measure-baseline' }>
+type RunMeasurementDecision = Extract<Decision, { kind: 'run-measurement' }>
+
+/** The artifact kind holding a measurement's raw per-sample values. */
+const MEASUREMENT_SAMPLES_ARTIFACT = 'measurement-samples'
 
 /** Lease acquisition can finish either workspace-backed attachment or one
  * engine-selected stop acknowledgement that deliberately needs no workspace. */
@@ -1285,6 +1304,10 @@ export class BuildRunner {
     const config = await this.captureConfig()
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
+    // A requested measurement runs where the pipeline is otherwise parked.
+    const parked =
+      decision.kind === 'run-measurement' ||
+      (decision.kind === 'wait' && decision.reason === 'awaiting-pr')
     if (
       this.deps.readVerifyPipeline &&
       ([
@@ -1297,8 +1320,7 @@ export class BuildRunner {
         'record-verify-selection-drift',
       ].includes(decision.kind) ||
         (decision.kind === 'run-phase' && decision.phase === 'finalize') ||
-        (decision.kind === 'wait' &&
-          decision.reason === 'awaiting-pr' &&
+        (parked &&
           (facts.state.verify.configPin !== undefined ||
             (facts.state.kind === 'node' && integrationCurrent(facts.state)))))
     ) {
@@ -1309,10 +1331,7 @@ export class BuildRunner {
           state: facts.state,
           deployment: config,
           read: this.deps.readVerifyPipeline,
-          retainCompletedVerification:
-            facts.state.kind !== 'node' &&
-            decision.kind === 'wait' &&
-            decision.reason === 'awaiting-pr',
+          retainCompletedVerification: facts.state.kind !== 'node' && parked,
           exec: this.deps.exec,
           workspacePath: this.deps.workspacePath,
         })
@@ -1433,6 +1452,12 @@ export class BuildRunner {
         case 'check-reconcile-progress':
           await this.checkReconcileProgress(decision)
           return decision
+        case 'measure-baseline':
+          await this.measureBaseline(decision)
+          return decision
+        case 'run-measurement':
+          await this.runMeasurement(decision)
+          return decision
       }
     } catch (error) {
       if (error instanceof ForgeRequestDeferred)
@@ -1490,6 +1515,7 @@ export class BuildRunner {
       initial.kind === 'node' &&
       !initial.nodeRestack?.conflict &&
       !integrationCurrent(initial) &&
+      !baselineMeasurementDue(initial) &&
       initialFacts.log.readDeferrals.length === 0
     )
       return initial
@@ -2741,6 +2767,238 @@ export class BuildRunner {
         },
       } satisfies EventWrite<'verify.completed'>)
     })
+  }
+
+  // ── Optimization measurement (SPEC §13.1.1) ────────────────────────────────
+
+  private pairedMeasurement(input: {
+    id: string
+    candidate: string
+    baseline: string
+    harnessPin: string
+    metric: Parameters<typeof runPairedMeasurement>[1]['metric']
+    config: Config
+  }): Promise<MeasurementResult> {
+    const { exec, workspacePath, shutdownSignal } = this.deps
+    return runPairedMeasurement(
+      {
+        exec,
+        timeoutSignal: this.deps.timeoutSignal ?? ((ms) => AbortSignal.timeout(ms)),
+        ...(shutdownSignal !== undefined ? { shutdownSignal } : {}),
+      },
+      {
+        workspacePath,
+        id: input.id,
+        candidate: input.candidate,
+        baseline: input.baseline,
+        harnessPin: input.harnessPin,
+        metric: input.metric,
+        ...(input.config.commands.setup !== undefined
+          ? { setupCommand: input.config.commands.setup }
+          : {}),
+      },
+    )
+  }
+
+  /** A measurement that cannot record a decision blocks the build until an
+   * operator answers; the answer re-arms the same measurement. */
+  private async raiseMeasurementEscalation(question: string): Promise<void> {
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: this.deps.ids('esc'),
+        phase: 'measurement',
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question,
+      },
+    } satisfies EventWrite<'escalation.raised'>)
+  }
+
+  private failedMeasurementQuestion(
+    what: string,
+    failure: Extract<MeasurementResult, { kind: 'failed' }>,
+  ): string {
+    return (
+      `${what} failed: ${failure.reason}. ` +
+      `Output: ${failure.outputTail || '(no output)'}. ` +
+      'Fix the metric command, harness or setup, then answer to measure again.'
+    )
+  }
+
+  /** The node's starting value: its harness pin measured against itself. */
+  private async measureBaseline(decision: MeasureBaselineDecision): Promise<void> {
+    const { store, slug } = this.deps
+    const before = (await readBuildFacts(store, slug)).value.state
+    const ruler = before.optimization?.rulerRevision
+    if (
+      !baselineMeasurementDue(before) ||
+      before.optimization!.accepted.harnessPin !== decision.harnessPin
+    )
+      return
+    const metric = before.optimization!.objective.metric
+    if (metric.kind !== 'command') return
+    const pin = decision.harnessPin
+    const result = await this.pairedMeasurement({
+      id: `baseline-${decision.revision}-${pin}`,
+      candidate: pin,
+      baseline: pin,
+      harnessPin: pin,
+      metric,
+      config: await this.captureConfig(),
+    })
+    if (result.kind === 'interrupted') return
+    // A newer ruler, or a measurement another runner recorded, supersedes
+    // these samples; the engine decides again from the fresh state.
+    const after = (await readBuildFacts(store, slug)).value.state
+    const optimization = after.optimization
+    if (
+      !baselineMeasurementDue(after) ||
+      optimization === undefined ||
+      optimization.rulerRevision !== ruler ||
+      optimization.accepted.harnessPin !== pin
+    )
+      return
+    if (result.kind === 'failed') {
+      await this.raiseMeasurementEscalation(
+        this.failedMeasurementQuestion(`The starting measurement of harness pin ${pin}`, result),
+      )
+      return
+    }
+    const summary = baselineSummary(result.baseline, result.candidate)
+    const epsilon = optimization.objective.target.epsilon
+    const effective = effectiveEpsilon(epsilon, summary.median)
+    // Attention first: a crash before the starting value re-measures and
+    // raises it again, never loses it.
+    if (noiseExceeded(effective, summary.spread))
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'optimization.noise-exceeded',
+        payload: {
+          revision: optimization.revision,
+          head: pin,
+          harnessPin: pin,
+          median: summary.median,
+          spread: summary.spread,
+          epsilon: { ...epsilon },
+          effectiveEpsilon: effective,
+        },
+      } satisfies EventWrite<'optimization.noise-exceeded'>)
+    await store.appendWithArtifacts(
+      slug,
+      [{ kind: MEASUREMENT_SAMPLES_ARTIFACT, content: JSON.stringify(result, null, 2) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'optimization.baseline-measured',
+        payload: {
+          revision: optimization.revision,
+          head: pin,
+          harnessPin: pin,
+          samples: metric.samples,
+          median: summary.median,
+          spread: summary.spread,
+          report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+  }
+
+  /** Why the node's digest cannot measure `request`, or undefined. */
+  private unmeasurable(
+    node: BuildState,
+    request: RunMeasurementDecision['request'],
+  ): string | undefined {
+    const optimization = node.optimization
+    if (optimization === undefined) return `node ${request.node} has no accepted objective`
+    if (optimization.objective.metric.kind !== 'command')
+      return `node ${request.node} measures with a panel, not a command`
+    if (request.revision < optimization.rulerRevision)
+      return `request ${request.id} uses objective revision ${request.revision}, older than the current ruler (revision ${optimization.rulerRevision})`
+    if (request.harnessPin !== optimization.accepted.harnessPin)
+      return `request ${request.id} pins the harness at ${request.harnessPin}, but the node pins it at ${optimization.accepted.harnessPin}`
+    if (optimization.starting === undefined)
+      return `node ${request.node} has no starting measurement under its current ruler`
+    return undefined
+  }
+
+  /** A requested paired measurement of this attempt against its baseline. */
+  private async runMeasurement(decision: RunMeasurementDecision): Promise<void> {
+    const { store, slug } = this.deps
+    const { request } = decision
+    if (
+      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id !== request.id
+    )
+      return
+    // The pre-run read only screens out requests that can never be measured;
+    // the decision uses the node as it stands after sampling.
+    const screened = (await readBuildFacts(store, request.node)).value.state
+    const refusal = this.unmeasurable(screened, request)
+    if (refusal !== undefined) {
+      await this.raiseMeasurementEscalation(
+        `Measurement request ${request.id} cannot be measured: ${refusal}. Answer once the node can measure it, or abort the attempt.`,
+      )
+      return
+    }
+    const metric = screened.optimization!.objective.metric
+    if (metric.kind !== 'command') return
+    const result = await this.pairedMeasurement({
+      id: `attempt-${request.id}`,
+      candidate: request.candidate,
+      baseline: request.baseline,
+      harnessPin: request.harnessPin,
+      metric,
+      config: await this.captureConfig(),
+    })
+    if (result.kind === 'interrupted') return
+    if (
+      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id !== request.id
+    )
+      return
+    if (result.kind === 'failed') {
+      await this.raiseMeasurementEscalation(
+        this.failedMeasurementQuestion(`Measurement request ${request.id}`, result),
+      )
+      return
+    }
+    const node = (await readBuildFacts(store, request.node)).value.state
+    const optimization = node.optimization
+    const changed =
+      this.unmeasurable(node, request) ??
+      (optimization!.rulerRevision !== screened.optimization!.rulerRevision
+        ? `node ${request.node} started a new ruler (revision ${optimization!.rulerRevision}) while the samples ran`
+        : undefined)
+    if (changed !== undefined) {
+      await this.raiseMeasurementEscalation(
+        `Measurement request ${request.id} sampled a superseded ruler: ${changed}. No result was recorded; request a fresh measurement.`,
+      )
+      return
+    }
+    const medians = { baseline: median(result.baseline), candidate: median(result.candidate) }
+    const direction = metric.direction
+    const delta = measurementDelta(direction, medians.baseline, medians.candidate)
+    const epsilon = effectiveEpsilon(optimization!.objective.target.epsilon, medians.baseline)
+    await store.appendWithArtifacts(
+      slug,
+      [{ kind: MEASUREMENT_SAMPLES_ARTIFACT, content: JSON.stringify(result, null, 2) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'attempt.measured',
+        payload: {
+          request: request.id,
+          candidate: request.candidate,
+          baseline: request.baseline,
+          harnessPin: request.harnessPin,
+          revision: request.revision,
+          samples: metric.samples,
+          medians,
+          delta,
+          decision: measurementDecision(delta, epsilon),
+          spread: optimization!.starting!.spread,
+          report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
+        },
+      }),
+    )
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the

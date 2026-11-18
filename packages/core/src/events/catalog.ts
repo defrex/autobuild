@@ -105,6 +105,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'optimization.objective-accepted': ['dispatcher', 'kernel'],
   'optimization.objective-revised': ['human'],
   'optimization.baseline-measured': ['kernel', 'dispatcher'],
+  'optimization.noise-exceeded': ['kernel', 'dispatcher'],
   'optimization.proposal-requested': ['dispatcher'],
   'optimization.attempts-proposed': ['dispatcher'],
   'attempt.measurement-requested': ['dispatcher', 'kernel'],

@@ -81,6 +81,7 @@ export const buildEventPolicy = {
   'optimization.objective-accepted': 'decisive',
   'optimization.objective-revised': 'decisive',
   'optimization.baseline-measured': 'decisive',
+  'optimization.noise-exceeded': 'advisory',
   'optimization.proposal-requested': 'decisive',
   'optimization.attempts-proposed': 'decisive',
   'attempt.measurement-requested': 'decisive',
