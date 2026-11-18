@@ -326,7 +326,7 @@ describe('an attempt measurement', () => {
     expect(refused.payload).toMatchObject({
       phase: 'measurement',
       policyCause: 'measurement-failed',
-      question: expect.stringContaining('names no command metric'),
+      question: expect.stringContaining('names no metric'),
     })
 
     const failing = await fixture(

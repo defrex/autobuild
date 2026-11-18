@@ -4,8 +4,10 @@ import '../kernel/reducer-registry'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { AbEvent } from '../events/catalog'
-import { DISPATCHER } from '../events/envelope'
+import { DISPATCHER, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
+import type { Decision } from '../kernel/engine'
+import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
 import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
 import type { AgentTurnResult } from '../ports/types'
@@ -362,5 +364,177 @@ describe('BuildRunner.runPanel', () => {
       (event) => event.type === 'panel.judge-ended',
     )!
     expect((ended.payload as { outcome: string }).outcome).toBe('interrupted')
+  })
+})
+
+describe('a panel attempt measurement', () => {
+  const metric = {
+    kind: 'panel',
+    judges: 2,
+    rubric: 'evals/rubric.md',
+    harness: ['evals/**'],
+  } as const
+
+  async function request(
+    store: MemoryBuildStore,
+    id = 'm1',
+    purpose: string | undefined = REQUEST.purpose,
+  ) {
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id,
+        node: 'node',
+        candidate: CANDIDATE,
+        baseline: BASELINE,
+        harnessPin: PIN,
+        revision: 1,
+        metric,
+        ...(purpose !== undefined ? { purpose } : {}),
+      },
+    })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    const { seq: _seq, ...payload } = state.attemptMeasurement!.request!
+    return payload
+  }
+
+  const measure = (runner: BuildRunner, payload: Awaited<ReturnType<typeof request>>) =>
+    (
+      runner as unknown as {
+        runMeasurement(decision: Extract<Decision, { kind: 'run-measurement' }>): Promise<void>
+      }
+    ).runMeasurement({ kind: 'run-measurement', request: payload })
+
+  const last = async (store: MemoryBuildStore) => (await store.getEvents(SLUG)).at(-1)!
+
+  test('judges the attempt head against the node head and records the win rate', async () => {
+    const store = await seeded()
+    const agent = judgeRunner(store, async (_ctx, prefer) => {
+      await prefer('A')
+      return defaultTurnResult()
+    })
+    // Both judges see the candidate first: A is the candidate, so it wins both.
+    await measure(runnerFor(store, agent, { random: () => 0.1 }), await request(store))
+    const events = await store.getEvents(SLUG)
+    const started = events.find((event) => event.type === 'panel.started')!
+    expect(started.payload).toMatchObject({
+      panel: 'attempt-m1',
+      candidate: CANDIDATE,
+      baseline: BASELINE,
+      harnessPin: PIN,
+      purpose: REQUEST.purpose,
+      rubric: metric.rubric,
+      judges: 2,
+    })
+    const sampled = events.at(-1) as AbEvent & { type: 'attempt.sampled' }
+    expect(sampled.type).toBe('attempt.sampled')
+    expect(sampled.payload).toEqual({
+      request: 'm1',
+      candidate: CANDIDATE,
+      baseline: BASELINE,
+      harnessPin: PIN,
+      revision: 1,
+      samples: 2,
+      winRate: 1,
+      report: { kind: 'measurement-samples', rev: 0 },
+    })
+    expect(events.map((event) => event.type)).not.toContain('attempt.measured')
+    const report = await store.getArtifact(SLUG, 'measurement-samples', 0)
+    const judged = JSON.parse(new TextDecoder().decode(report!.content))
+    expect(judged).toMatchObject({ kind: 'panel', panel: 'attempt-m1', winRate: 1 })
+    expect(judged.judgments).toHaveLength(2)
+  })
+
+  test('a failed panel escalates; the answer judges afresh under a new panel id', async () => {
+    const store = await seeded()
+    let fail = true
+    const agent = judgeRunner(store, async (ctx, prefer) => {
+      if (fail && ctx.opts.env.AB_JUDGE!.endsWith(':2')) return defaultTurnResult()
+      await prefer('B')
+      return defaultTurnResult()
+    })
+    const payload = await request(store)
+    await measure(runnerFor(store, agent), payload)
+    const raised = (await last(store)) as AbEvent & { type: 'escalation.raised' }
+    expect(raised.type).toBe('escalation.raised')
+    expect(raised.payload).toMatchObject({
+      phase: 'measurement',
+      policyCause: 'measurement-failed',
+      question: expect.stringContaining('Judge panel attempt-m1 for measurement request m1 failed'),
+    })
+    expect((await store.getEvents(SLUG)).map((event) => event.type)).not.toContain(
+      'attempt.sampled',
+    )
+    await store.append(SLUG, {
+      actor: humanActor('ada'),
+      type: 'escalation.answered',
+      payload: { id: raised.payload.id, answer: 'judge again', resolution: 'guidance' },
+    })
+    const answered = (await last(store)).seq
+    fail = false
+    let session = 0
+    await measure(runnerFor(store, agent, { ids: () => `s_retry_${++session}` }), payload)
+    const events = await store.getEvents(SLUG)
+    const panels = events
+      .filter((event) => event.type === 'panel.started')
+      .map((event) => (event.payload as { panel: string }).panel)
+    expect(panels).toEqual(['attempt-m1', `attempt-m1-a${answered}`])
+    expect(events.at(-1)!.payload).toMatchObject({ winRate: 0 })
+  })
+
+  test('an interrupted panel records no samples and resumes under the same id', async () => {
+    const store = await seeded()
+    const controller = new AbortController()
+    const interrupting = judgeRunner(store, async () => {
+      controller.abort()
+      return defaultTurnResult()
+    })
+    const payload = await request(store)
+    await measure(runnerFor(store, interrupting, { shutdownSignal: controller.signal }), payload)
+    expect((await store.getEvents(SLUG)).map((event) => event.type)).not.toContain(
+      'attempt.sampled',
+    )
+    const judging = judgeRunner(store, async (_ctx, prefer) => {
+      await prefer('tie')
+      return defaultTurnResult()
+    })
+    await measure(runnerFor(store, judging), payload)
+    const events = await store.getEvents(SLUG)
+    expect(
+      events.filter((event) => event.type === 'panel.started').map((event) => event.payload),
+    ).toEqual([expect.objectContaining({ panel: 'attempt-m1' })])
+    expect(events.at(-1)!.payload).toMatchObject({ winRate: 0.5 })
+  })
+
+  test('a newer request supersedes the panel result', async () => {
+    const store = await seeded()
+    let superseded = false
+    const agent = judgeRunner(store, async (_ctx, prefer) => {
+      if (!superseded) {
+        superseded = true
+        await request(store, 'm2')
+      }
+      await prefer('A')
+      return defaultTurnResult()
+    })
+    await measure(runnerFor(store, agent), await request(store))
+    const types = (await store.getEvents(SLUG)).map((event) => event.type)
+    expect(types).not.toContain('attempt.sampled')
+    expect(types).not.toContain('escalation.raised')
+  })
+
+  test('a panel request without the purpose escalates without judging', async () => {
+    const store = await seeded()
+    const agent = judgeRunner(store, async () => defaultTurnResult())
+    // An unvalidated reader could hand the runner such a request.
+    const payload = await request(store)
+    const { purpose: _purpose, ...unpurposed } = payload
+    await measure(runnerFor(store, agent), unpurposed)
+    expect(agent.sessions.size).toBe(0)
+    expect((await last(store)).payload).toMatchObject({
+      phase: 'measurement',
+      question: expect.stringContaining('without the objective purpose'),
+    })
   })
 })
