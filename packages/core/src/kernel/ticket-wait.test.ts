@@ -32,6 +32,7 @@ import { logIndexReducer } from './log-index'
 import { leafBaseInUse, leafRestackedBase } from './leaf-restack-state'
 import { buildReducer, reduceBuild as reduceBuildWhole, type BuildState } from './reducer'
 import { terminalGuardReducer } from './terminal-guard'
+import { leafVerifiedRestack } from './verify-stages'
 import {
   openTicketWait,
   pendingWaitRequest,
@@ -1254,7 +1255,10 @@ skill = "custom-screenshot-skill"
     const log = cleanResume(verifyWait())
     const boundary = completionSeq(log)
     expect(decide(log)).toEqual(runUnit(2))
-    expect(logIndexReducer.reduce(toLog(log)).waitResumeVerifyBoundary).toBe(boundary)
+    const index = logIndexReducer.reduce(toLog(log))
+    expect(index.waitResumeVerifyBoundary).toBe(boundary)
+    // Verify facts cite the resume's restack, not the entry restack.
+    expect(leafVerifiedRestack(index)).toMatchObject({ id: 'rs-1', targetBase: T1 })
     // The reducer's cycle agrees, so a landing decision recorded before the
     // resume no longer satisfies `landingReady`.
     expect(reduce(log).verify.cycleSince).toBe(boundary)
@@ -1358,6 +1362,7 @@ skill = "custom-screenshot-skill"
     // The reconcile completion is the boundary; the restack adds none.
     expect(index.waitResumeVerifyBoundary).toBe(0)
     expect(reduce(log).verify.cycleSince).toBe(index.lastReconcileCompletedSeq)
+    expect(leafVerifiedRestack(index)).toMatchObject({ id: 'rs-1', targetBase: T1 })
   })
 
   test('an implement wait after a verify failure keeps the failure across a clean resume', () => {
@@ -1372,7 +1377,9 @@ skill = "custom-screenshot-skill"
     const log = cleanResume(waited)
     const events = toLog(log)
     const failSeq = events.find((e) => e.type === 'verify.completed')!.seq
-    expect(logIndexReducer.reduce(events).waitResumeVerifyBoundary).toBe(0)
+    const index = logIndexReducer.reduce(events)
+    expect(index.waitResumeVerifyBoundary).toBe(0)
+    expect(leafVerifiedRestack(index)?.trigger).toBe('verify-entry')
     expect(reduce(log).verify.cycleSince).toBeLessThan(failSeq)
     expect(decide(log)).toMatchObject({ kind: 'run-phase', phase: 'implement', round: 2 })
   })

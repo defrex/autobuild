@@ -27796,6 +27796,10 @@
           "type": "14",
           "optional": false
         },
+        "waitResumeVerifyCycle": {
+          "type": "14",
+          "optional": false
+        },
         "lastImplementCompletedSeq": {
           "type": "14",
           "optional": false
@@ -28961,6 +28965,10 @@
           "optional": false
         },
         "waitResumeVerifyBoundary": {
+          "type": "14",
+          "optional": false
+        },
+        "waitResumeVerifyCycle": {
           "type": "14",
           "optional": false
         },

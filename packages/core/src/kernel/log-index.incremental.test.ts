@@ -59,6 +59,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
   const pendingGuidanceStarts = new Map<string, { escalation: string; seq: number }>()
   let lastReconcileCompletedSeq = 0
   let waitResumeVerifyBoundary = 0
+  let waitResumeVerifyCycle = 0
   let waitRequest: { id: string; phase: string; settled: boolean } | undefined
   let waitPhase: string | undefined
   let lastImplementCompletedSeq = 0
@@ -281,9 +282,12 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
           event.payload.trigger === 'wait-resume' &&
           waitPhase !== undefined &&
           (waitPhase.startsWith('verify:') || waitPhase === 'finalize') &&
-          event.payload.cycle !== lastReconcileCompletedSeq
-        )
-          waitResumeVerifyBoundary = Math.max(waitResumeVerifyBoundary, event.seq)
+          event.payload.cycle !== lastReconcileCompletedSeq &&
+          event.seq > waitResumeVerifyBoundary
+        ) {
+          waitResumeVerifyBoundary = event.seq
+          waitResumeVerifyCycle = event.payload.cycle
+        }
         break
       case 'reconcile.superseded':
         if (activeReconcileStart?.attempt === event.payload.attempt)
@@ -356,6 +360,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
     verifyConfigBoundary: 0,
     lastReconcileCompletedSeq,
     waitResumeVerifyBoundary,
+    waitResumeVerifyCycle,
     lastImplementCompletedSeq,
     finalizeCompleted,
     finalizeStepsDone,

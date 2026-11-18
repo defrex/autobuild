@@ -57,3 +57,23 @@ export function leafVerifyCycleInputs(
     log.waitResumeVerifyBoundary,
   )
 }
+
+/** The restack a leaf's current verify cycle runs on, which its verify facts
+ * cite: the clean wait-resume completion that opened the cycle (SPEC §11
+ * "Ticket waits"), else the replay boundary's verify-entry or
+ * reconcile-linked completion. Undefined before any restack completed. */
+export function leafVerifiedRestack(
+  log: Pick<
+    LogIndex,
+    | 'code'
+    | 'lastReconcileCompletedSeq'
+    | 'waitResumeVerifyBoundary'
+    | 'waitResumeVerifyCycle'
+    | 'restack'
+  >,
+) {
+  const replay = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
+  return log.waitResumeVerifyBoundary > replay
+    ? log.restack.gates[String(log.waitResumeVerifyCycle)]
+    : log.restack.gates[String(replay)]
+}

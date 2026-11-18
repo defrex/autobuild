@@ -171,6 +171,8 @@ export interface LogIndex {
    * boundary: the restacked base re-verifies from the first step (SPEC §11
    * "Ticket waits"). Deliberately not a replay boundary. */
   waitResumeVerifyBoundary: number
+  /** That completion's restack cycle (its `restack.gates` key), else 0. */
+  waitResumeVerifyCycle: number
   /** seq of the latest post-restart `implement.completed` — a verify failure
    * with an implement round after it was already routed (§15.6-A). */
   lastImplementCompletedSeq: number
@@ -557,6 +559,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   let verifyConfigBoundary = 0
   let lastReconcileCompletedSeq = 0
   let waitResumeVerifyBoundary = 0
+  let waitResumeVerifyCycle = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
 
@@ -652,12 +655,15 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
         break
       case 'wait-resume-restacked':
         if (
+          candidate.seq > waitResumeVerifyBoundary &&
           cleanWaitResumeCompletion(
             { trigger: 'wait-resume', ...candidate },
             lastReconcileCompletedSeq,
           )
-        )
-          waitResumeVerifyBoundary = Math.max(waitResumeVerifyBoundary, candidate.seq)
+        ) {
+          waitResumeVerifyBoundary = candidate.seq
+          waitResumeVerifyCycle = candidate.cycle
+        }
         break
     }
   }
@@ -726,6 +732,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     verifyConfigBoundary,
     lastReconcileCompletedSeq,
     waitResumeVerifyBoundary,
+    waitResumeVerifyCycle,
     lastImplementCompletedSeq,
     finalizeCompleted,
     finalizeStepsDone,
