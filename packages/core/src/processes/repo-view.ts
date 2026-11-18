@@ -88,7 +88,8 @@ export function isWorkDigest(digest: Omit<BuildDigest, 'slug'>): boolean {
     digest.terminal === undefined ||
     digest.terminal === 'aborted' ||
     digest.reclaimPending === true ||
-    digest.executionOpen === true
+    digest.executionOpen === true ||
+    digest.rejectionsPending === true
   )
 }
 class Chain {

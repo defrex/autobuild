@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions and derived progress.
+- [Optimization nodes](references/optimization-nodes.md): the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, and the landing gate and attempt settlement.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -208,6 +208,15 @@ skips review, verification and measurement, completes the build
 node with the reason as the ledger note. The flag is refused outside an
 attempt's implement phase. See
 [attempts](references/optimization-nodes.md#attempts).
+
+**Optimization landing.** A child of an optimization node lands only with a
+fresh measurement of its exact head against the node's exact current head: an
+attempt must improve by at least ε, any other child must not regress by more
+than ε, and an attempt that edits a harness path escalates instead. Each
+attempt settles once. An attempt that does not land, including one an operator
+aborts, has its ticket moved to the rejected role: the one case in which the
+dispatcher moves a ticket there. See
+[landing and settlement](references/optimization-nodes.md#landing-and-settlement).
 
 **Review severity is proportion to the spec.** Both review loops rate a
 finding by what the defect costs against the spec's acceptance criteria and
@@ -1450,10 +1459,10 @@ state eligible.
 | `claimedState` | hosted, github: `doing` | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `doneState` | hosted, github: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted and github tickets only. A github ticket is done when its issue is closed as completed. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage; github: triage). |
-| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds (unless `ab abort --to ready`), closed-unmerged PRs. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds (unless `ab abort --to ready`), closed-unmerged PRs; an optimization attempt goes to the rejected role instead. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file, hosted and github); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
-| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. An [optimization node](references/optimization-nodes.md) is refused without it. Same distinctness rule. |
+| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. An [optimization node](references/optimization-nodes.md) is refused without it, and its attempts that settle other than `accepted` move into it. Same distinctness rule. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, `hosted` and `github`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -2554,7 +2563,7 @@ to the build's event log and apply the same write-time checks.
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
-| Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket |
+| Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket (an optimization attempt instead settles `aborted` and its ticket moves to the rejected role) |
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
 The repository pause is written first and intake second, both absolutely —
