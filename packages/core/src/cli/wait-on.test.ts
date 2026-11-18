@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { DISPATCHER } from '../events/envelope'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { FakeForge } from '../ports/forge/fake'
+import { acceptsTicketWait, allowedTerminals, PHASE_SPECS, phaseSpecFor } from '../kernel/phases'
+import type { Phase } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
+import { readBuildFacts } from '../store/reduced-reads'
 import { escalate, waitOn } from './terminals'
 import { BRANCH, BUILD, makeDeps, makeEnv, seedStore } from './testkit'
 
@@ -287,5 +290,63 @@ describe('ab wait-on', () => {
       })
       expect(exec.calls).toEqual([])
     })
+  })
+
+  describe('the context manifest and the CLI agree', () => {
+    /** Every leaf phase, derived from the phase table so a new phase is covered. */
+    const phases = Object.keys(PHASE_SPECS).map(
+      (name): Phase => (name === 'verify' ? 'verify:e2e' : (name as Phase)),
+    )
+    const buildKind = async () => (await readBuildFacts(store, BUILD)).value.state.kind
+    const markNode = () =>
+      store.append(BUILD, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          kind: 'node',
+          ticket: { source: 'linear', id: 'ENG-42' },
+          repo: 'acme/app',
+          baseBranch: 'main',
+        },
+      })
+
+    test('only a node build refuses ticket waits', () => {
+      expect(acceptsTicketWait(undefined)).toBe(true)
+      expect(acceptsTicketWait('work')).toBe(true)
+      expect(acceptsTicketWait('node')).toBe(false)
+    })
+
+    for (const phase of phases) {
+      test(`a work build's ${phase} advertises wait-on and accepts it`, async () => {
+        if (phase === 'implement') await provision()
+        expect(allowedTerminals(phase, await buildKind())).toEqual([
+          phaseSpecFor(phase).terminal,
+          'escalate',
+          'wait-on',
+        ])
+        const event = await waitOn(
+          makeDeps({ store, env: makeEnv({ phase, round: 1 }), exec: git() }),
+          { tickets: ['ENG-7'], reason: 'r' },
+        )
+        expect(event.type).toBe('wait.requested')
+        expect(event.payload.phase).toBe(phase)
+      })
+
+      test(`a node build's ${phase} omits wait-on and refuses it`, async () => {
+        await markNode()
+        expect(allowedTerminals(phase, await buildKind())).toEqual([
+          phaseSpecFor(phase).terminal,
+          'escalate',
+        ])
+        const before = await eventCount()
+        await expect(
+          waitOn(makeDeps({ store, env: makeEnv({ phase, round: 1 }), exec: git() }), {
+            tickets: ['ENG-7'],
+            reason: 'r',
+          }),
+        ).rejects.toThrow(/a node build cannot declare a ticket wait/)
+        expect(await eventCount()).toBe(before)
+      })
+    }
   })
 })
