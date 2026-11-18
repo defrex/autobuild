@@ -110,4 +110,37 @@ test("path rules predict from the cycle head's recorded paths, pending while unr
   expect(nodeLandingRuleDisplay(recorded(['src/a.ts']), rules)).toBe(
     'default rule for integration builds: consent',
   )
+  const mixed: LandingRule[] = [
+    { within: ['docs/**'], mode: 'auto' },
+    { label: 'fast', mode: 'auto' },
+    { mode: 'consent' },
+  ]
+  expect(nodeLandingPolicyDisplay(recorded(['src/a.ts']), mixed)).toBe('policy pending')
+  expect(nodeLandingRuleDisplay(recorded(['src/a.ts']), mixed)).toBe('rule pending ticket labels')
+  expect(nodeLandingPolicyDisplay(recorded(['docs/a.md']), mixed)).toBe('auto')
+  expect(nodeLandingRuleDisplay(recorded(['docs/a.md']), mixed)).toBe(
+    'rule 1: {"within":["docs/**"],"mode":"auto"}',
+  )
+  expect(nodeLandingPolicyDisplay(cycled, mixed)).toBe('policy pending')
+  expect(nodeLandingRuleDisplay(cycled, mixed)).toBe('rule pending changed paths')
+  const catchAll: LandingRule[] = [{ within: ['docs/**'], mode: 'auto' }, { mode: 'consent' }]
+  expect(nodeLandingPolicyDisplay(recorded(['src/a.ts']), catchAll)).toBe('consent')
+  expect(nodeLandingRuleDisplay(recorded(['src/a.ts']), catchAll)).toBe(
+    'rule 2: {"mode":"consent"}',
+  )
+  const sameMode: LandingRule[] = [
+    { within: ['docs/**'], mode: 'auto' },
+    { label: 'safe', mode: 'consent' },
+    { mode: 'consent' },
+  ]
+  expect(nodeLandingPolicyDisplay(recorded(['src/a.ts']), sameMode)).toBe('consent')
+  expect(nodeLandingRuleDisplay(recorded(['src/a.ts']), sameMode)).toBe(
+    'rule pending ticket labels',
+  )
+  const anyPath: LandingRule[] = [
+    { paths: ['docs/**'], mode: 'auto' },
+    { label: 'fast', mode: 'auto' },
+  ]
+  expect(nodeLandingPolicyDisplay(recorded(['src/a.ts']), anyPath)).toBe('policy pending')
+  expect(nodeLandingPolicyDisplay(recorded(['docs/a.md', 'src/a.ts']), anyPath)).toBe('auto')
 })
