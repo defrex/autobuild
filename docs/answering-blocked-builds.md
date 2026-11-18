@@ -8,7 +8,7 @@ Every action below is sessionless, records a human-authored fact, and accepts
 | Need | Command | Effect |
 |---|---|---|
 | Give the phase a decision or missing information | `ab answer <slug> <text>` | Records `guidance`. In a review loop it feeds the next producer round; a ticket wait's answer instead resumes the phase that declared it, including the same review round. |
-| Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent, except that a ticket wait's resumed phase still gets a one-line summary and its `wait` block. |
+| Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent, except that a ticket wait's declaring phase, resumed at its original round or attempt, still gets a one-line summary and its `wait` block. A verify or finalize wait that restacked re-runs verification at a new attempt without that block; see [Ending a ticket wait](#ending-a-ticket-wait). |
 | Widen an exhausted review loop | `ab answer <slug> [<text>] --review-round-ceiling <n>` | Answers the open `review-round-limit` escalation and replaces the configured cap with absolute ceiling `n` for that loop and spec revision only. |
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
 | Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts leaves at `plan`; nodes recollect and verify. |
@@ -78,8 +78,11 @@ If a named ticket is rejected or deleted, the wait can never end by itself.
 The dispatcher then ends it with an ordinary `wait-unresolvable` escalation
 that names the ticket and why, and the build shows as blocked in the default
 attention filter. Answer it with guidance to resume the declaring phase without
-that ticket, revise the spec, or abort. Guidance resumes the same phase with
-the same `wait` block.
+that ticket, revise the spec, or abort. Resumption follows the rules above:
+guidance resumes the declaring phase at the same round or attempt with the same
+`wait` block, unless a verify or finalize wait restacked onto a moved target,
+in which case verification re-runs from the first step at a new attempt and
+receives the answer as guidance without the `wait` block.
 
 A wait declared in `implement` first publishes the build's commits, so the
 agent must commit or discard its changes before running `ab wait-on`; the
