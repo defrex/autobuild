@@ -333,3 +333,20 @@ test('rewrites keep a bounded record of the latest replaced heads', () => {
   expect(finish(acc)).toHaveLength(REPLACED_HEADS_CAP)
   expect(finish(acc)).toEqual(Array.from({ length: 64 }, (_, i) => oid(2006 + i)))
 })
+
+test('the first abort origin survives later requests and persisted accumulator roundtrips', () => {
+  for (const stopFirst of [false, true]) {
+    const requests = [stopFirst, !stopFirst].map((stop, index) => ({
+      v: 1 as const,
+      build: 'attempt',
+      seq: index + 1,
+      ts: '2026-11-18T00:00:00Z',
+      type: 'build.abort-requested' as const,
+      actor: humanActor('op'),
+      payload: stop ? { origin: { kind: 'optimization-stop' as const, node: 'node' } } : {},
+    }))
+    const first = buildReadFactsReducer.advance(buildReadFactsReducer.initial(), [requests[0]!])
+    const resumed = buildReadFactsReducer.advance(roundtrip(first), [requests[1]!])
+    expect(buildReadFactsReducer.finish(resumed).latestAbort).toEqual(requests[0]!)
+  }
+})

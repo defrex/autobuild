@@ -9,8 +9,8 @@ fallback in either direction.
 
 This reference is the contract: how the marker is found, the objective schema,
 what refuses an objective, how a node and its attempts are measured, how the
-objective is revised, which facts the log records and what is derived from
-them. It ends with grooming guidance.
+objective is revised, which facts the log records, what is derived from them,
+and how the node stops and completes. It ends with grooming guidance.
 
 ## The marker
 
@@ -174,6 +174,7 @@ spend or how large a gain must be:
 ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] \
   [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] \
   [--json] [--store <ref>]
+ab objective <node> --stop [--drain | --abort] [--json] [--store <ref>]
 ```
 
 `--epsilon 2` is absolute; `--epsilon 3%` is relative 0.03. A revision records
@@ -181,7 +182,12 @@ ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] \
 shows the result. The operator tool `optimization.revise` does the same; see the
 [operator API](operator-api.md#optimization-objective-revision). Both refuse a
 build that is not a node, a node with no accepted objective and a terminal node,
-and the revised objective must still validate. Running attempts are unaffected.
+and the revised objective must still validate. Running attempts are unaffected
+and nothing is replanned: the dispatcher checks the revised threshold, budget
+and plateau on its next tick, so lowering the threshold to the current value or
+the budget to what was already spent stops the node then. A stop is final; a
+revision after it is recorded but never resumes proposing. `--stop` is
+described under [stopping and completion](#stopping-and-completion).
 
 **Spec revision.** `ab answer <node> --revise-spec <file>` or
 `--revise-spec-from-ticket` changes anything else: the metric, the harness or
@@ -319,7 +325,8 @@ Progress is derived from the node's log, never recorded:
 - **Elapsed budget**: hours since the first acceptance, against `maxHours`, and
   attempts filed, against `maxAttempts`.
 - **Stop eligibility** by threshold, plateau and budget, and whether the node
-  has stopped.
+  has stopped. Once stopped, `ab objective` also shows what still blocks
+  completion, or `ready for node verification`.
 
 The attempt ledger holds one entry per settled attempt: strategy, outcome,
 measured delta and closing note. A **near miss** is a `no-improvement`
@@ -480,6 +487,66 @@ role. Once the attempt's build is done (or it never had one), the node's poll
 moves the ticket, comments the outcome, and records `attempt.ticket-rejected`.
 An aborted or closed attempt never returns to triage. A completed node keeps
 being polled until every such move has committed.
+
+## Stopping and completion
+
+An optimization node is done when the number is good enough, when it stops
+getting better, when the budget runs out, or when an operator takes the
+progress so far. Every accepted attempt improved the node head, so stopping at
+any point lands real, verified progress.
+
+**Causes.** The node records `optimization.stopped {cause, mode}` once:
+
+| Cause | When |
+|---|---|
+| `threshold` | The node head's current value has reached `target.threshold` in the objective's direction. |
+| `plateau` | `stop.plateau.attempts` consecutive `no-improvement` or `declined` settlements. |
+| `budget` | Attempts filed reached `maxAttempts`, or hours since the first acceptance reached `maxHours`. |
+| `exhausted` | The proposer has nothing left to try. |
+| `operator` | A human stopped it with `ab objective <node> --stop` or `optimization.stop`. |
+
+The dispatcher checks every open, unpaused optimization node on every tick and
+records the first eligible of threshold, plateau and budget, with the
+objective's stop mode. It checks the effective objective, so a quick revision
+takes effect on the next tick.
+
+**Stopping by hand.** `ab objective <node> --stop` uses the objective's stop
+mode, `abort` unless the objective says otherwise; `--stop --drain` and
+`--stop --abort` override it for this stop. The operator tool
+`optimization.stop` takes an optional `mode`; see the
+[operator API](operator-api.md#optimization-stop). Both refuse a build that is
+not a node, a plain node, a terminal node and a node that has already stopped.
+`--stop` cannot be combined with revision flags.
+
+**Modes.** Every cause, `exhausted` included, applies the same modes:
+
+- **abort**: queued attempts are cancelled and running attempts are aborted
+  through the ordinary abort saga, with a dispatcher `build.abort-requested`
+  naming the stop. Those aborted by the stop settle `stopped`.
+- **drain**: queued attempts are cancelled and settle `stopped`; running
+  attempts finish and face the landing gate.
+
+The first recorded `build.abort-requested` fixes the abort's cause. A node-stop
+request records `origin {kind: optimization-stop, node}`; an operator request has
+operator origin (no node-stop origin). Abort cleanup alone settles an aborted
+build: `stopped` for a node-stop request, `aborted` for an operator request.
+An existing request is never replaced: identical repeats are idempotent and
+conflicting operator requests are refused. The stop enforcer waits for a pending
+abort, so an operator abort before a stop remains `aborted`; an operator abort
+during drain is also `aborted`. Settlement is conditional on the attempt still
+being in flight, and the existing node sweep alone moves its ticket to rejected.
+
+An attempt with no build yet is cancelled and settles `stopped` in both modes. No proposer runs after
+a stop, and dispatch refuses an attempt ticket of a stopped node with
+`target optimization node <id> has stopped; attempt <ticket> is cancelled`.
+Children filed by hand, such as repair tickets, are still admitted.
+
+**Completion.** The node is complete when it has stopped, no attempt is running
+or waiting to land, and every child is otherwise resolved under the ordinary
+node completion rule. It then verifies, authorizes and merges like any other
+node. Stopping is not consent: once the node is ready, land it with
+`ab merge <node>`. `ab merge` refuses an optimization node that has not
+stopped, or whose attempts are still in flight, and names which.
 
 ## Grooming an optimization node
 

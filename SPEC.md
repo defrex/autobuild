@@ -3412,8 +3412,9 @@ maxHours?, plateau?, stopMode?, concurrency?}`, at least one change) records the
 same fact and returns `{slug, revision, changes}`. Both refuse a build that is
 not a node, a node with no accepted objective and a terminal node, and both
 require the effective objective to remain valid. Running attempts are
-unaffected and nothing is replanned. The metric, harness and purpose change
-only through a spec revision.
+unaffected and nothing is replanned; the dispatcher applies a revised stop rule
+on its next tick. The metric, harness and purpose change only through a spec
+revision.
 
 The effective objective is the kernel's, reduced from events; a quick revision
 is never written back to the ticket. `ab ticket show` prints the effective
@@ -3583,9 +3584,77 @@ followup and leaves the attempt in flight for an operator.
 | `accepted` | done |
 | `no-improvement`, `declined`, `stopped`, `aborted` | rejected |
 
-Proposing attempts, judge panels, and stopping and completion are designed in
-RFC 0005 §5, §8 and §9. The facts they record are catalogued in §15.3 and their
-derived state in §15.5.
+**Stopping.** An optimization node is done when its number is good enough,
+when it stops getting better, when its budget runs out, or when an operator
+takes the progress so far. Every accepted attempt improved the node head, so a
+stop at any point lands real, verified progress. The node records
+`optimization.stopped {cause, mode}` once; the first one is kept. The causes:
+
+- `threshold`: the node head's value (`current`, §15.5) has reached
+  `target.threshold` in the objective's direction;
+- `plateau`: `stop.plateau.attempts` consecutive `no-improvement` or `declined`
+  settlements;
+- `budget`: attempts filed reached `budget.maxAttempts`, or the hours since the
+  first acceptance reached `budget.maxHours`;
+- `exhausted`: recorded by the proposer when it has nothing left to try;
+- `operator`: recorded by a human through `ab objective <node> --stop` or the
+  operator tool `optimization.stop`.
+
+The dispatcher checks every open, unpaused optimization node on every tick,
+independent of janitor backoff and idle polling, from the reduced digest and
+the current time. It records the first eligible cause in the order threshold,
+plateau, budget, with the objective's `stop.mode`. The effective objective is
+the one checked, so a quick revision of the threshold, budget or plateau takes
+effect on the next tick with no replanning. `ab objective <node> --stop
+[--drain | --abort]` and `optimization.stop` (input `{repo, slug, mode?}`,
+receipt `{slug, cause, mode}`) record cause `operator`; without a flag the
+objective's stop mode applies, and that defaults to `abort`. Both refuse a
+build that is not a node, a node with no objective, a terminal node and a node
+that has already stopped. `--stop` does not combine with revision flags. A stop
+is final: a later revision is recorded but never resumes proposing.
+
+Every stop, whatever its cause, is enforced the same way on each tick until no
+attempt is in flight:
+
+- An attempt with no build, or whose build has not started work, is cancelled in
+  both modes. A queued build receives a dispatcher `build.abort-requested`
+  naming the stop.
+- In `abort` mode a running attempt receives a dispatcher
+  `build.abort-requested`, and the ordinary abort saga acknowledges and cleans
+  it up.
+- In `drain` mode a running attempt finishes and faces the landing gate, which
+  settles it.
+- An attempt cancelled before it has a build settles `stopped` through the stop
+  enforcer. For an aborted build, cleanup is the single settlement writer; the
+  landing gate and stop enforcer never settle it.
+
+The first recorded `build.abort-requested` fixes the abort's cause. A node-stop
+request records `origin {kind: optimization-stop, node}`; an operator request has
+operator origin (no node-stop origin). Abort cleanup alone settles an aborted
+build: `stopped` for a node-stop request, `aborted` for an operator request.
+An existing request is never replaced: identical repeats are idempotent and
+conflicting operator requests are refused. The stop enforcer waits for a pending
+abort, so an operator abort before a stop remains `aborted`; an operator abort
+during drain is also `aborted`. Settlement is conditional on the attempt still
+being in flight, and the existing node sweep alone moves its ticket to rejected.
+
+
+Dispatch refuses an attempt ticket of a stopped node, whether still in flight or
+settled `stopped`, with the diagnostic `target optimization node <id> has
+stopped; attempt <ticket> is cancelled`. Children filed any other way are still
+admitted. No proposer session is admitted once the node has stopped or any stop
+cause is eligible.
+
+**Completion.** An optimization node is complete when it has stopped, no
+attempt is running or waiting to land, and its child enumeration satisfies the
+node completion rule above. It then follows the ordinary node grammar through
+verify, authorization and merge. Stopping is not consent: `ab merge <node>`
+refuses an optimization node that has not stopped, or whose attempts are still
+in flight, naming the reason. To land the progress so far, stop the node, then
+run `ab merge` once it is ready.
+
+Proposing attempts and judge panels are designed in RFC 0005 §5 and §8. The facts they
+record are catalogued in §15.3 and their derived state in §15.5.
 
 
 
@@ -3885,7 +3954,7 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.abort-requested {reason?, to?}` → `build.aborted`; `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
@@ -4120,8 +4189,11 @@ an optimization node's own log, absent until the first
   consecutive proposals with no attempts; `rejections`, the settled attempts
   other than `accepted` whose ticket has not moved to the rejected role, as
   `{proposal, ticket, build?, outcome}`, added only for an attempt that was in
-  flight and removed by `attempt.ticket-rejected`; and `stopped {cause, mode,
-  at}` from the first `optimization.stopped`.
+  flight and removed by `attempt.ticket-rejected`; `stopped {cause, mode,
+  at}` from the first `optimization.stopped`; and `stoppedTickets`, the tickets of
+  attempts settled `stopped`, which the dispatch claim gate refuses. Only
+  attempts in flight at the stop settle `stopped`, so it is bounded by the
+  concurrency.
 
 Pure selectors over the digest take the current time. Elapsed hours run from
 `openedAt`. Stop eligibility is computed per cause: threshold when `current` has
@@ -4134,6 +4206,11 @@ attempt nor by a pending rejection. A tracker that keeps refusing the move
 therefore stalls proposals rather than accumulating pending rejections, and
 `inFlight` plus `rejections` never exceeds the concurrency through new
 proposals.
+The stop cause is the first eligible of threshold, plateau and budget, and none
+once stopped. A proposer is admissible only when the node has not stopped, no
+cause is eligible, the budget allows another attempt and a slot is free. An
+optimization node's completion blocker is `not stopped`, or the attempts still
+in flight; node completeness requires it to be clear.
 Attempt identity (§13.1.1) is a lookup in `inFlight` by normalized ticket ref;
 settled attempts are in the ledger.
 
