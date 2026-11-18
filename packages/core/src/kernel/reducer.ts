@@ -20,6 +20,7 @@ import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import { advanceOptimization, isOptimizationEvent, type OptimizationState } from './optimization'
+import { advanceLandingMeasurement, type LandingMeasurementState } from './landing-measurement'
 import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
 import { reconcileRewriteHead } from './reconcile-head'
 /**
@@ -327,6 +328,9 @@ export interface BuildState {
   /** An optimization attempt's latest measurement request and latest
    * `attempt.measured` (SPEC §15.5). Bounded: older ones are history. */
   attemptMeasurement?: AttemptMeasurementState
+  /** A child of an optimization node: its latest landing measurement request
+   * and result (SPEC §15.7). Absent until the first request. */
+  landingMeasurement?: LandingMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -580,6 +584,7 @@ export interface BuildAcc {
   /** An optimization attempt's latest measurement request and latest
    * `attempt.measured` (SPEC §15.5). Bounded: older ones are history. */
   attemptMeasurement?: AttemptMeasurementState
+  landingMeasurement?: LandingMeasurementState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -663,7 +668,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 42
+export const BUILD_REDUCER_VERSION = 43
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -881,6 +886,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         ...acc.attemptMeasurement,
         refused: acc.attemptMeasurement.request.id,
       }
+    if (event.type === 'attempt.measurement-requested' || event.type === 'attempt.measured')
+      acc.landingMeasurement = advanceLandingMeasurement(acc.landingMeasurement, event)
     advanceVerifyStage(acc.verifyStage, event)
     if (event.type === 'verify.cancelled') {
       for (const escalation of [...openEscalations.values(), ...answeredEscalations]) {
@@ -1834,6 +1841,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.optimization !== undefined ? { optimization: structuredClone(acc.optimization) } : {}),
     ...(acc.attemptMeasurement !== undefined
       ? { attemptMeasurement: structuredClone(acc.attemptMeasurement) }
+      : {}),
+    ...(acc.landingMeasurement !== undefined
+      ? { landingMeasurement: structuredClone(acc.landingMeasurement) }
       : {}),
     status,
     ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),

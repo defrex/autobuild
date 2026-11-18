@@ -84,6 +84,7 @@ export const executionProgress = {
   'optimization.progress-measured': 'bookkeeping',
   'attempt.settled': 'bookkeeping',
   'optimization.stopped': 'bookkeeping',
+  'attempt.ticket-rejected': 'bookkeeping',
   'node.poll-checked': 'bookkeeping',
   'node.compared': 'bookkeeping',
   'pr.opened': 'progress',

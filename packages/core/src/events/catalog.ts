@@ -114,6 +114,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'optimization.progress-measured': ['kernel', 'dispatcher'],
   'attempt.settled': ['dispatcher', 'kernel'],
   'optimization.stopped': ['dispatcher', 'kernel', 'human'],
+  'attempt.ticket-rejected': ['dispatcher'],
   'node.poll-checked': ['dispatcher'],
   'node.compared': ['dispatcher'],
   'pr.opened': ['dispatcher'],
