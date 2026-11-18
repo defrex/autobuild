@@ -384,6 +384,30 @@ describe('a judge panel run', () => {
     expect((await readdir(inside)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
   })
 
+  test('a committed symlink out of the judge root fails the run before any session', async () => {
+    const repo = await repository()
+    await symlink(repo.workspace, join(repo.workspace, 'source'))
+    await git(repo.workspace, 'add', 'source')
+    await git(repo.workspace, 'commit', '-q', '-m', 'link the checkout')
+    const candidate = (await git(repo.workspace, 'rev-parse', 'HEAD')).trim()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    const agent = judges(store, () => {
+      throw new Error('no judge may start')
+    })
+    const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel({
+      ...request(repo, 2),
+      candidate,
+    })
+    expect(result).toMatchObject({ kind: 'failed' })
+    // Only the candidate carries the link; the safe relative `evals/link` passes.
+    const reason = (result as { reason: string }).reason
+    expect(reason).toMatch(/resolve outside its judge root: [AB]\/source$/)
+    expect(reason).not.toContain('evals/link')
+    expect(agent.sessions.size).toBe(0)
+    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+  })
+
   test('a crash after a saved preference resumes without rerunning that judge', async () => {
     const repo = await repository()
     const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))

@@ -308,8 +308,33 @@ export async function sealPanelMaterial(deps: PanelDeps, material: PanelMaterial
     throw new PanelPreparationFailure('removing the panel material failed', tail(removed))
 }
 
-/** Refuse a judge root inside the workspace, or one from which Git finds any
- * repository. Returns the refusal, or undefined. */
+/**
+ * Lists, one absolute path per line, every symlink under the real root `$1`
+ * whose physical resolution leaves that root: each hop is followed with
+ * `readlink` and its directory resolved physically with `cd -P`, and a link whose
+ * directory cannot be resolved or that loops is listed too, so the check fails
+ * closed. Links that stay inside the root print nothing.
+ */
+export const ESCAPING_LINKS_PROBE = `find "$1" -type l -exec sh -c '
+root=$1; shift
+for link do
+  p=$link; hops=0
+  while [ -L "$p" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || { printf "%s\\n" "$link"; continue 2; }
+    t=$(readlink "$p") || { printf "%s\\n" "$link"; continue 2; }
+    case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+    d=$(cd -P "$(dirname "$p")" 2>/dev/null && pwd -P) || { printf "%s\\n" "$link"; continue 2; }
+    p=$d/$(basename "$p")
+  done
+  if [ -d "$p" ]; then p=$(cd -P "$p" && pwd -P) || { printf "%s\\n" "$link"; continue; }; fi
+  case $p in "$root" | "$root"/*) ;; *) printf "%s\\n" "$link" ;; esac
+done' sh "$1" {} +`
+
+/** Refuse a judge root inside the workspace, one from which Git finds any
+ * repository, or one holding a checked-out symlink that resolves outside it,
+ * which could lead a judge back to the repository. Internal links are kept.
+ * Returns the refusal, or undefined. */
 export async function checkJudgeRoot(
   deps: PanelDeps,
   root: string,
@@ -327,6 +352,15 @@ export async function checkJudgeRoot(
   })
   if (found.exitCode === 0)
     return 'judge root is inside a git repository; point TMPDIR outside any repository'
+  const links = await deps.exec(['sh', '-c', ESCAPING_LINKS_PROBE, 'sh', rootPath], {})
+  if (links.exitCode !== 0)
+    throw new PanelPreparationFailure('checking the judge root for symlinks failed', tail(links))
+  const escaping = links.stdout
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => (line.startsWith(`${rootPath}/`) ? line.slice(rootPath.length + 1) : line))
+  if (escaping.length > 0)
+    return `a variant holds symlinks that resolve outside its judge root: ${escaping.slice(0, 5).join(', ')}${escaping.length > 5 ? ', …' : ''}`
   return undefined
 }
 

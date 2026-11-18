@@ -3629,8 +3629,9 @@ harness pin's `.agents/skills/ab-judge/SKILL.md`, or from the distribution
 when the pin predates it, so a candidate cannot rewrite its judges'
 instructions. That Git material lives outside every judge root and is removed
 before any judge session starts; the runner then refuses a root inside the
-workspace, or one from which `git rev-parse --git-dir` finds a repository,
-and fails the run with that cause. Every judge root is removed when the run
+workspace, one from which `git rev-parse --git-dir` finds a repository, or
+one holding a checked-out symlink that resolves outside the root, and fails
+the run with that cause. Symlinks that stay inside the root are kept. Every judge root is removed when the run
 ends.
 
 Each judge's order is recorded in the kernel fact `panel.judge-started` before

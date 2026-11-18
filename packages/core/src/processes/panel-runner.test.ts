@@ -6,6 +6,7 @@ import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import {
   TMPDIR_PROBE,
   checkJudgeRoot,
+  ESCAPING_LINKS_PROBE,
   JUDGE_SKILL_INSTALLS,
   NEUTRAL_ATTRIBUTES,
   PINNED_JUDGE_SKILL,
@@ -44,6 +45,7 @@ function scriptedExec(opts: {
   workspace?: string
   pinnedSkill?: boolean
   rootIsRepository?: boolean
+  escapingLinks?: string
   failCheckout?: boolean
   onLaunchCheck?: () => void
 }): Exec {
@@ -51,6 +53,7 @@ function scriptedExec(opts: {
     opts.calls.push({ cmd, ...(cwd !== undefined ? { cwd } : {}), ...(env ? { env } : {}) })
     if (cmd[0] === 'sh' && cmd[2] === TMPDIR_PROBE) return ok(`${opts.tmp ?? '/tmp/t'}\n`)
     if (cmd[0] === 'sh' && cmd[2] === 'cd "$1" && pwd -P') return ok(`${cmd[4]}\n`)
+    if (cmd[0] === 'sh' && cmd[2] === ESCAPING_LINKS_PROBE) return ok(opts.escapingLinks ?? '')
     if (cmd[0] !== 'git') return ok()
     const sub = cmd.find((part) => !part.startsWith('-') && part !== 'git' && !part.includes('='))
     if (sub === 'rev-parse' && cmd.includes('--git-common-dir')) return ok('/ws/.git\n')
@@ -288,6 +291,29 @@ describe('panel materialization', () => {
     expect(await checkJudgeRoot(deps(scriptedExec({ calls: [] })), '/tmp/t/r', '/ws')).toBe(
       undefined,
     )
+  })
+
+  test('a symlink resolving outside a judge root fails before any session', async () => {
+    const calls: Call[] = []
+    const exec = scriptedExec({
+      calls,
+      escapingLinks: '/tmp/t/autobuild-judge-x/A/source\n/tmp/t/autobuild-judge-x/B/source\n',
+    })
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    const result = await runPanelJudges(deps(exec), { ...INPUT, judges: 1 }, h)
+    expect(result).toMatchObject({ kind: 'failed' })
+    expect((result as { reason: string }).reason).toContain('resolve outside its judge root')
+    expect(h.launched).toEqual([])
+    const probe = calls.find((call) => call.cmd[2] === ESCAPING_LINKS_PROBE)!
+    expect(probe.cmd[4]).toMatch(/^\/tmp\/t\/autobuild-judge-/)
+    expect(
+      await checkJudgeRoot(
+        deps(scriptedExec({ calls: [], escapingLinks: '/tmp/t/r/A/source\n' })),
+        '/tmp/t/r',
+        '/ws',
+      ),
+    ).toBe('a variant holds symlinks that resolve outside its judge root: A/source')
   })
 
   test('a preparation failure fails the run with the output tail and cleans up', async () => {

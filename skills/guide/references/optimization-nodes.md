@@ -337,6 +337,8 @@ fails (`failed`) or exceeds the session budget (`expired`) counts as a
 failure. After two counted failures for one judge, the run fails and names the
 judge and its last outcome. A shutdown records `interrupted`, which does not
 count. A run that cannot prepare its variants fails with the Git output tail.
+A variant holding a committed symlink that resolves outside its judge root
+fails the run before any judge starts, naming the link.
 Every judge root is removed when the run ends.
 
 ## Events
