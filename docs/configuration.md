@@ -3248,9 +3248,9 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.
+**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it.
 
-**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default, but required to open an optimization node; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
 
 #### `tickets.dir`
 
@@ -3325,7 +3325,11 @@ from, moves into, or files proposals into either state. A rejected ticket never
 resolves a blocker, even where the source natively counts it complete (a Linear
 `Canceled` state mapped to rejected), and a rejected node child no longer keeps
 its node incomplete. Moving the ticket out of the state restores ordinary
-behavior.
+behavior. An [optimization node](optimization-nodes.md) needs the rejected role for
+the attempts it rejects, so it requires `rejectedState`, with no inferred
+default: without it the dispatcher refuses to open the node and returns the
+ticket to triage. Ordinary nodes and
+work tickets never require it.
 
 Source-specific validation is strict:
 

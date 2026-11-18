@@ -19,6 +19,7 @@ import type { IssueLink, NativeSessionHandle } from '../ports/types'
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
+import { advanceOptimization, isOptimizationEvent, type OptimizationState } from './optimization'
 import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
 import { reconcileRewriteHead } from './reconcile-head'
 import { cleanWaitResumeCompletion, waitResumeReverifies } from './ticket-wait'
@@ -309,6 +310,9 @@ export interface BuildState {
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
+  /** An optimization node's bounded digest (SPEC §15.5). Present exactly
+   * when the node's objective was accepted. */
+  optimization?: OptimizationState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -556,6 +560,7 @@ export interface BuildAcc {
   nodeOpening?: EventPayload<'node.opening'>
   nodeOpened?: EventPayload<'node.opened'>
   nodeRestack?: NodeRestackState
+  optimization?: OptimizationState
   integration?: IntegrationState
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
@@ -641,7 +646,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 41
+export const BUILD_REDUCER_VERSION = 42
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -832,6 +837,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       acc.nodeRestack ??= { items: [] }
       advanceNodeRestack(acc.nodeRestack, [event])
     }
+    if (isOptimizationEvent(event))
+      acc.optimization = advanceOptimization(acc.optimization, [event])
     advanceVerifyStage(acc.verifyStage, event)
     if (event.type === 'verify.cancelled') {
       for (const escalation of [...openEscalations.values(), ...answeredEscalations]) {
@@ -1787,6 +1794,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.nodeIssueLinks !== undefined ? { nodeIssueLinks: acc.nodeIssueLinks } : {}),
     ...(acc.headPaths !== undefined ? { headPaths: structuredClone(acc.headPaths) } : {}),
     nodeRestack: acc.nodeRestack,
+    ...(acc.optimization !== undefined ? { optimization: structuredClone(acc.optimization) } : {}),
     status,
     ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),
     outcome: acc.outcome,

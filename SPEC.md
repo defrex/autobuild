@@ -3327,6 +3327,121 @@ revision once; equivalent aliases and unchanged values do not. Node demotion
 checks all targeting tickets, including completed work. Legacy plugins without
 integrationTree support read as work with no target and refuse metadata writes.
 
+#### 13.1.1 Optimization nodes
+
+An optimization node is a node whose spec declares an objective (RFC 0005 §3,
+§4). The objective is the only marker: `kind` stays `node`, and ticket sources,
+labels and forge capabilities are unchanged. The marker makes a node file and
+dispatch its own work, so the rules below admit no false positive and no silent
+fallback in either direction. Code is authoritative
+(`packages/core/src/objective.ts`); the full schema table, with defaults and
+constraints, is the installed `ab-guide` reference
+`references/optimization-nodes.md`.
+
+**Marker.** A node becomes an optimization node only when its spec carries
+exactly one fenced block whose info string is exactly `autobuild-objective`.
+The scan follows CommonMark fences. A fence opens on a line indented at most
+three spaces with three or more backticks or tildes, and closes on a line of the
+same character, at least as long, carrying no info string. A backtick line whose
+info string contains a backtick is inline code, not a fence. Only a fence whose
+trimmed info string equals `autobuild-objective`, case-sensitively, counts. None
+of these count:
+
+- a fence nested inside another open fence, so a Markdown example that shows
+  the block never marks the spec that contains it;
+- a fence line that begins with a blockquote or list marker, or is indented
+  four or more spaces;
+- a fence inside an HTML block, such as an HTML comment, so a commented-out
+  example never counts;
+- a heading named "Objective";
+- a `toml` block, or a fence with any other info string;
+- prose describing an objective, and inline code.
+
+A spec with no block is a plain node.
+
+**Objective.** The block's content is TOML with a required `purpose` and
+`[metric]`, `[target]` and `[budget]` tables, and optional `[stop]` and
+`[proposer]` tables. Every table is strict: an unknown key is refused and named.
+A metric is a `command` (command, direction, samples, harness) or a `panel`
+(judges, rubric, harness); a panel always maximizes a win rate, so the
+command-only fields are refused for it and the panel-only fields for a command.
+Harness entries are path selectors, the grammar `[[merge]]` and verify `paths`
+use, and a panel's rubric must be a literal path inside the harness. At least
+one of `budget.maxAttempts` and `budget.maxHours` is required. `stop.mode`
+defaults to `abort` and `proposer.concurrency` to 1. The normalized objective,
+defaults applied, is what events store.
+
+**Refusals.** Each refusal names its reason:
+
+| Condition | Reason |
+|---|---|
+| Two or more blocks | `exactly one autobuild-objective block (found N)` |
+| A block never closed | `a valid autobuild-objective block: the fence is never closed` |
+| A TOML syntax error | `a valid autobuild-objective block: TOML syntax error at line L: …` |
+| A schema failure | `a valid autobuild-objective block: <field>: <message>`, for example `unknown field metric.cmd` or `metric.rubric: must be inside metric.harness` |
+| No budget limit | `a budget limit in the autobuild-objective block: set budget.maxAttempts or budget.maxHours` |
+| No rejected role | `a rejected role for optimization attempts: set [tickets].rejectedState` |
+| A work ticket carrying the block | `no autobuild-objective block in a work ticket: the block marks an optimization node (file it with --kind node)` |
+
+Ticket preparation checks the ticket body before any spec authoring. A refusal
+bounces the ticket to Triage with a comment naming every reason, through the
+same hand-back as a spec-standard bounce, and creates no build, so a node whose
+block is refused never opens as a plain node. The dispatcher never authors a
+spec for a body that carries a block, and treats an authored spec that gains
+one as nonconforming. Dispatch recovery repeats the
+check before importing the spec; a refusal fails the dispatch and the node never
+opens.
+
+**Acceptance.** Opening an optimization node records
+`optimization.objective-accepted {objective, revision: 1, harnessPin, specRev}`
+after the node branch exists and before `node.opened`. `harnessPin` is the
+node's opening commit and `specRev` the spec revision the objective was parsed
+from. An opened optimization node therefore always has an accepted objective. A
+retried opening after a crash between the two facts records no second
+acceptance.
+
+**Spec revisions.** `ab answer <node> --revise-spec`, `--revise-spec-from-ticket`
+and an escalation answer that revises the spec check the replacement before
+recording anything. A revision of an optimization node may change any part of
+the objective, but it cannot remove the block: close the node and open a new
+one instead. A revision of a plain node or a work build cannot add one. A
+replacement block that fails to parse or validate is refused, naming the field.
+After an accepted `spec.revised` on an optimization node, the dispatcher records
+`optimization.objective-accepted` again with the next revision and the new
+`specRev`. It pins the harness again at the current node head when the metric
+changed, or the purpose of a panel, whose judges read it; otherwise the pin is
+unchanged. Such a change starts a new ruler (§15.5).
+
+**Quick revisions.** `ab objective <node>` shows the effective objective and
+progress. With any of `--threshold n`, `--epsilon n|n%`, `--max-attempts n`,
+`--max-hours n`, `--plateau n`, `--stop-mode abort|drain` or `--concurrency n`
+it records human `optimization.objective-revised {changes, revision}` first;
+`--epsilon 2` is absolute and `--epsilon 3%` is relative 0.03. The operator tool
+`optimization.revise` (input `{repo, slug, threshold?, epsilon?, maxAttempts?,
+maxHours?, plateau?, stopMode?, concurrency?}`, at least one change) records the
+same fact and returns `{slug, revision, changes}`. Both refuse a build that is
+not a node, a node with no accepted objective and a terminal node, and both
+require the effective objective to remain valid. Running attempts are
+unaffected and nothing is replanned. The metric, harness and purpose change
+only through a spec revision.
+
+The effective objective is the kernel's, reduced from events; a quick revision
+is never written back to the ticket. `ab ticket show` prints the effective
+objective of an open optimization node and marks each field that differs from
+the ticket's block `(revised)`. The open build decides this, not the ticket
+body: when an edit removes the block or leaves it invalid, every field is
+marked. `ab ticket tree` labels such a ticket
+`[node, optimization]`, and status labels the build `optimization node`.
+
+**Attempts.** A build is an attempt of node N exactly when its ticket ref
+appears in a recorded `optimization.attempts-proposed` of N. Children filed any
+other way are not attempts and follow the ordinary child rules above.
+
+Proposing attempts, measuring them through the landing gate, judge panels,
+settlement into the rejected role, and stopping and completion are designed in
+RFC 0005 §5–§9. The facts they record are catalogued in §15.3 and their derived
+state in §15.5.
+
 
 
 ## 14. Operator UI
@@ -3639,6 +3754,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread}` (a panel records its self-comparison win rate and that rate's distance from 0.5); dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted, measurement?: {revision, baseline, candidate, delta}, note?}`, with `measurement` required for `accepted` and `no-improvement`; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3822,6 +3938,74 @@ A rewrite receipt alone never promotes the boundary; only completed settlement
 does. CLI status exposes pending/active work, reachable build identities and
 node-owned foreign changes. A node stays `collecting` while its narrow reconcile
 runner is attached; it does not acquire a leaf pipeline.
+
+**Optimization digest.** Build state embeds `optimization`, a bounded digest of
+an optimization node's own log, absent until the first
+`optimization.objective-accepted` (§13.1.1). It holds:
+
+- the latest acceptance with its time; `openedAt`, the first acceptance's time
+  and the start of the hours budget; the effective `objective`, which is the
+  latest accepted objective with every later quick revision applied in order;
+  `revision`; `revisedFields`, the fields quick-revised since the latest
+  acceptance; and `rulerRevision`;
+- `starting {value, spread, head}` from `optimization.baseline-measured` under
+  the current ruler. A panel's starting value is 0.5 by definition and its
+  spread comes from the baseline fact;
+- `current`: for a command, the candidate value of the latest `accepted`
+  settlement under the current ruler, else the starting value; for a panel, the
+  latest `optimization.progress-measured` win rate under the current ruler,
+  else 0.5. `best` is the best value in the objective's direction under the
+  current ruler;
+- `attempts {filed, accepted, rejected}`, where `filed` counts proposed tickets
+  and `rejected` counts `no-improvement`, `declined`, `stopped` and `aborted`
+  settlements; `inFlight`, the proposed attempts not yet settled as
+  `{proposal, ticket}`, whose length is the running count; `plateau`, the
+  consecutive `no-improvement` or `declined` settlements since the last
+  `accepted` (`stopped` and `aborted` leave it unchanged); `emptyProposals`,
+  consecutive proposals with no attempts; and `stopped {cause, mode, at}` from
+  the first `optimization.stopped`.
+
+Pure selectors over the digest take the current time. Elapsed hours run from
+`openedAt`. Stop eligibility is computed per cause: threshold when `current` has
+reached `target.threshold` in the objective's direction (a panel compares its
+win rate, which it maximizes); plateau when `plateau` ≥ `stop.plateau.attempts`;
+budget when `filed` ≥ `maxAttempts` or elapsed hours ≥ `maxHours`. Admission
+reports whether the node stopped, the attempts the budget still allows (none
+without `maxAttempts`), and the concurrency slots no in-flight attempt holds.
+Attempt identity (§13.1.1) is a lookup in `inFlight` by normalized ticket ref;
+settled attempts are in the ledger.
+
+**Deltas, revisions and the ruler.** A positive `delta` is an improvement in
+the objective's direction: `baseline − candidate` when minimizing,
+`candidate − baseline` when maximizing, and `winRate − 0.5` for a panel.
+`revision` is one monotonic objective revision across
+`optimization.objective-accepted` and `optimization.objective-revised`: the
+first acceptance is 1 and each later accepted or revised fact increments it.
+Measurement facts carry the revision they ran under. The first acceptance
+starts a ruler, and so does any later acceptance whose `metric` differs from the
+previous accepted objective, or whose `purpose` differs when the metric is a
+panel. Quick revisions never change the ruler. A measurement or settlement
+whose revision is below `rulerRevision` is history: it stays in the log and the
+ledger but never feeds `starting`, `current` or `best`.
+
+**Attempt ledger.** A separate registered build-scoped value folds the node's
+log into one entry per `attempt.settled`: `{seq, proposal, ticket, build?,
+title, strategy, outcome, delta?, baseline?, candidate?, note?, nearMiss?}`.
+`optimization.attempts-proposed` supplies the pending title and strategy by
+proposal, dropped once the attempt settles, and the objective facts supply the
+ε in effect. A near miss is a `no-improvement` settlement with
+0 < `delta` < ε; a relative ε is ε × |baseline|.
+
+**Optimization read cost.** The digest's size does not grow with settled
+attempts: admission caps `inFlight` at the objective's concurrency, and
+settled attempts leave only counters. The dispatcher, status and watch read it
+from the build state they already reduce, so the stop and admission inputs cost
+the same at 10 and 10,000 attempts and read zero event rows while nothing
+changes. The ledger grows with settled attempts, which `maxAttempts` bounds,
+and is read only on an explicit history request; it advances from new node rows
+only. Neither value ever reads an attempt's log, because `attempt.settled`
+carries the measured delta. The read-budget harness in
+`packages/core/src/testing/` proves both bounds.
 
 `status ∈ queued | running | collecting | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
