@@ -3612,10 +3612,11 @@ followup and leaves the attempt in flight for an operator.
 **Judge panels.** A panel objective is measured by agent judges, because
 absolute scores drift between sessions and crowd the top of the scale: each
 judge says which of two variants is better. `BuildRunner.runPanel` runs one
-panel over two heads, a candidate and a baseline, under one harness pin; the
-callers that accept attempts and measure a node's noise and progress record
-their decisions in `attempt.measured.winRate`, `optimization.baseline-measured`
-and `optimization.progress-measured`. A run records `panel.started` with its
+panel over two heads, a candidate and a baseline, under one harness pin, and
+returns the candidate's win rate. No caller runs it yet; the callers that will
+accept attempts and measure a node's noise and progress record their decisions
+in `attempt.measured.winRate`, `optimization.baseline-measured` and
+`optimization.progress-measured`. A run records `panel.started` with its
 inputs and no order. For each pending judge it draws an order
 (`candidate-first` or `baseline-first`) and materializes a fresh judge root in
 the system temporary directory holding the two variants as plain trees `A/`

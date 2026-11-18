@@ -271,9 +271,12 @@ the answer, because sampling the same request again cannot succeed.
 ## Judge panels
 
 A panel objective is measured by agent judges instead of a command. A panel
-run compares two heads, a candidate and a baseline, under one harness pin. An
-attempt's run records its win rate on `attempt.measured.winRate`; a node's
-progress against its starting head records `optimization.progress-measured`.
+run compares two heads, a candidate and a baseline, under one harness pin, and
+returns the candidate's win rate. Nothing calls a panel run yet: attempts on a
+panel objective are not yet accepted by win rate, and a panel node records no
+baseline noise check and no `optimization.progress-measured`. Those callers
+will record their decisions in `attempt.measured.winRate`,
+`optimization.baseline-measured` and `optimization.progress-measured`.
 
 **The run.** `panel.started` records the run's inputs: the candidate, the
 baseline, the harness pin, the purpose, the rubric path, the harness and the

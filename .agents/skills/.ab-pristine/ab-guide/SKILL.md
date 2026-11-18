@@ -210,7 +210,9 @@ any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
 they are given reveals which variant is the candidate. A resumed run reuses
-recorded preferences and reruns only judges without one. See
+recorded preferences and reruns only judges without one. Nothing runs a panel
+yet: panel attempts are not accepted by win rate, and a panel node records no
+noise check or progress. See
 [judge panels](references/optimization-nodes.md#judge-panels).
 
 **Optimization landing.** A child of an optimization node lands only with a
