@@ -257,6 +257,13 @@ import { creationBuildSlug } from '../kernel/build-creation'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
+import {
+  objectiveBlocks,
+  objectiveRefusals,
+  objectiveRulerChanged,
+  parseObjective,
+  type Objective,
+} from '../objective'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { settleOpenExecution } from './execution-settlement'
@@ -831,6 +838,19 @@ function cleanupRequiredWorkspace(events: CurrentBuildFacts): boolean {
  * falls back to the repo config for logs missing one. */
 function baseBranchOf(events: CurrentBuildFacts, config: Config): string {
   return events.baseBranch ?? config.baseBranch
+}
+
+/** An open optimization node whose latest spec revision has not had its
+ * objective accepted yet. Read from reduced state alone: zero added reads. */
+export function objectiveAcceptancePending(state: BuildState): boolean {
+  return (
+    state.kind === 'node' &&
+    state.nodeOpened !== undefined &&
+    state.optimization !== undefined &&
+    state.status !== 'done' &&
+    state.status !== 'aborted' &&
+    (state.specRev ?? 0) > state.optimization.accepted.specRev
+  )
 }
 
 function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
@@ -2560,6 +2580,13 @@ export class Dispatcher {
             await deferMixedVersion(this.store, record.slug)
             return
           }
+          // Independent of idle polling: a pending re-acceptance is read from
+          // reduced state, so it survives a crash after `spec.revised`.
+          if (
+            objectiveAcceptancePending(state) &&
+            (await this.acceptRevisedObjective(record, state, report))
+          )
+            state = (await this.store.buildFacts(record.slug)).state
           const executionLeaseLive = this.hasLiveExecutionLease(record)
           attempted = !executionLeaseLive
           // Raw history, read at most once and only by a branch that acts on it:
@@ -5330,11 +5357,21 @@ export class Dispatcher {
         }
 
         let body = seed?.body ?? ticket.body
+        const refusals = objectiveRefusals(body, {
+          kind: state.kind ?? 'work',
+          rejectedState: this.rejectedState(),
+        })
+        if (refusals.length > 0)
+          throw new Error(`claimed ticket's spec cannot open as dispatched: ${refusals.join('; ')}`)
         let conformance = specConformance(body)
         let authoredSession = seed?.authoredSession
-        if (!conformance.conforms && this.deps.authorSpec !== undefined) {
+        if (
+          !conformance.conforms &&
+          objectiveBlocks(body).length === 0 &&
+          this.deps.authorSpec !== undefined
+        ) {
           const candidate = await this.deps.authorSpec(ticket)
-          if (candidate !== null) {
+          if (candidate !== null && objectiveBlocks(candidate).length === 0) {
             conformance = specConformance(candidate)
             if (conformance.conforms) {
               body = candidate
@@ -6649,10 +6686,23 @@ export class Dispatcher {
         // Quality gate (§6.3): import a conforming ticket body as the spec;
         // author one for thin-but-groomed tickets; otherwise bounce.
         stage = 'spec'
-        let conformance = specConformance(body)
-        if (!conformance.conforms && this.deps.authorSpec) {
+        // An objective refusal bounces before any authoring: an authored spec
+        // could strip the block and open a plain node instead (SPEC §13.1).
+        const refusals = objectiveRefusals(body, {
+          kind: ticket.kind ?? 'work',
+          rejectedState: this.rejectedState(),
+        })
+        let conformance =
+          refusals.length > 0 ? { conforms: false, missing: refusals } : specConformance(body)
+        if (
+          !conformance.conforms &&
+          refusals.length === 0 &&
+          objectiveBlocks(body).length === 0 &&
+          this.deps.authorSpec
+        ) {
           const authored = await this.deps.authorSpec(ticket)
-          if (authored !== null) {
+          // An authored spec never gains the marker the ticket did not carry.
+          if (authored !== null && objectiveBlocks(authored).length === 0) {
             conformance = specConformance(authored)
             if (conformance.conforms) {
               body = authored
@@ -6675,7 +6725,7 @@ export class Dispatcher {
             },
           })
           stage = 'bounce'
-          await this.bounce(ticket, conformance.missing)
+          await this.bounce(ticket, conformance.missing, refusals.length > 0)
           stage = 'handback-report'
           await this.reportPreparationHandback(attempt, {
             ticket: ticket.ref,
@@ -6903,13 +6953,87 @@ export class Dispatcher {
     }
     const sha = await forge.createNodeBranch(intent.branch, intent.sha)
     await this.store.refreshBuild(record.slug)
-    const latest = (await this.store.buildFacts(record.slug)).state
+    let latest = (await this.store.buildFacts(record.slug)).state
     if (latest.status !== 'queued' || latest.pendingCommands.length > 0 || latest.nodeOpened) return
+    // An optimization node's objective is accepted before it opens, so an
+    // opened node without its accepted objective never exists (SPEC §13.1).
+    if (latest.optimization === undefined) {
+      const objective = await this.specObjective(record.slug, latest.specRev)
+      if (objective !== undefined) {
+        const accepted = await this.store.appendIfCurrent(record.slug, latest.lastSeq, {
+          actor: DISPATCHER,
+          type: 'optimization.objective-accepted',
+          payload: { objective, revision: 1, harnessPin: sha, specRev: latest.specRev ?? 0 },
+        })
+        if (!accepted) return
+        await this.store.refreshBuild(record.slug)
+        latest = (await this.store.buildFacts(record.slug)).state
+      }
+    }
     await this.store.appendIfCurrent(record.slug, latest.lastSeq, {
       actor: DISPATCHER,
       type: 'node.opened',
       payload: { sha },
     })
+  }
+
+  /** Re-accept an optimization node's objective after a spec revision
+   * (SPEC §13.1). The harness is pinned again at the node head only when the
+   * revision starts a new ruler. Returns whether a fact was written. */
+  private async acceptRevisedObjective(
+    record: BuildRecord,
+    state: BuildState,
+    report: TickReport,
+  ): Promise<boolean> {
+    const optimization = state.optimization!
+    let objective: Objective | undefined
+    try {
+      objective = await this.specObjective(record.slug, state.specRev)
+    } catch (error) {
+      report.janitorDiagnostics.push(
+        `${record.slug}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return false
+    }
+    if (objective === undefined) {
+      report.janitorDiagnostics.push(
+        `${record.slug}: spec revision ${state.specRev} removed the autobuild-objective block`,
+      )
+      return false
+    }
+    const forge = this.deps.forge
+    const harnessPin =
+      objectiveRulerChanged(optimization.accepted.objective, objective) && record.branch
+        ? await forge.remoteBranchSha?.(record.branch)
+        : optimization.accepted.harnessPin
+    if (harnessPin === undefined) return false
+    const written = await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective,
+        revision: optimization.revision + 1,
+        harnessPin,
+        specRev: state.specRev ?? 0,
+      },
+    })
+    return written !== null
+  }
+
+  /** The objective a recorded spec revision declares: undefined for a plain
+   * node or no recorded spec, a thrown refusal for a spec that cannot open as
+   * either kind. One artifact read. */
+  private async specObjective(
+    slug: string,
+    rev: number | undefined,
+  ): Promise<Objective | undefined> {
+    if (rev === undefined) return undefined
+    const artifact = await this.store.getArtifact(slug, 'spec', rev)
+    if (artifact === null) throw new Error(`spec revision ${rev} is unreadable`)
+    const parsed = parseObjective(new TextDecoder().decode(artifact.content))
+    if ('refusal' in parsed)
+      throw new Error(`spec revision ${rev} cannot open as an optimization node: ${parsed.refusal}`)
+    return 'objective' in parsed ? parsed.objective : undefined
   }
 
   private kernelForge(): Forge {
@@ -8034,14 +8158,18 @@ export class Dispatcher {
   /** Bounce (§6.3): back to Triage with a comment citing the standard and
    * WHICH parts are missing — failure at the cheapest point, not a build
    * that thrashes and escalates. No build is created. */
-  private async bounce(ticket: Ticket, missing: string[]): Promise<void> {
+  private async bounce(ticket: Ticket, missing: string[], refused = false): Promise<void> {
     const triageState = this.triageState()
     await this.deps.tickets.transition(ticket.ref.id, triageState)
     await this.deps.tickets.comment(
       ticket.ref.id,
-      `Bounced back to ${triageState}: this ticket does not conform to ` +
-        `the spec standard (.agents/skills/ab-guide/references/spec-standard.md) and cannot be dispatched.\n` +
-        `Missing: ${missing.join('; ')}.`,
+      refused
+        ? `Bounced back to ${triageState}: this ticket's spec cannot open as dispatched ` +
+            `(.agents/skills/ab-guide/references/optimization-nodes.md).\n` +
+            `Refused: it needs ${missing.join('; ')}.`
+        : `Bounced back to ${triageState}: this ticket does not conform to ` +
+            `the spec standard (.agents/skills/ab-guide/references/spec-standard.md) and cannot be dispatched.\n` +
+            `Missing: ${missing.join('; ')}.`,
     )
   }
 
