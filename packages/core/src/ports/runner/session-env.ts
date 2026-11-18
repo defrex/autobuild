@@ -2,7 +2,8 @@
  * Build the environment passed to an agent runtime for one turn.
  *
  * Scoped values (AB_STORE, AB_PHASE, and so on) override the ambient process
- * environment. The distribution-owned launcher is then forced to the front of
+ * environment. A judge session (scoped `AB_JUDGE`) drops every ambient
+ * `AB_*` and `GIT_*` key and `PWD`/`OLDPWD` first. The distribution-owned launcher is then forced to the front of
  * PATH so an inherited executable with the public `ab` name cannot shadow the
  * Autobuild CLI. A fresh object is returned on every call; neither input nor
  * process.env is mutated, which keeps concurrent builds isolated.
@@ -24,6 +25,13 @@ export function sessionEnv(
   delete env.AB_TICKET_TOKEN
   delete env.AB_TICKET_URL
   delete env.AB_TOKEN
+  // A judge session inherits no Autobuild identity, no Git selection and no
+  // working-directory hint from the dispatcher: only its scoped values reach
+  // it (SPEC §13.1.1).
+  if (scoped.AB_JUDGE !== undefined)
+    for (const key of Object.keys(env))
+      if (key.startsWith('AB_') || key.startsWith('GIT_') || key === 'PWD' || key === 'OLDPWD')
+        delete env[key]
   Object.assign(env, scoped)
   delete env.AB_DISPATCH_GENERATION
 

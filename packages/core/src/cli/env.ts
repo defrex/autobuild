@@ -38,6 +38,19 @@ export interface CliEnv {
   token?: string
 }
 
+/** A judge session's ambient identity (SPEC §13.1.1): write-only, with no
+ * build phase. `AB_JUDGE` is `<build>:<panel>:<judge>`. */
+export interface JudgeCliEnv {
+  store: string
+  build: string
+  panel: string
+  judge: number
+  session: string
+  token?: string
+  /** Root-relative judge scratch directory (`AB_CONTEXT_DIR`). */
+  contextDir: string
+}
+
 export type AmbientReadSession = CliEnv | HarvestCliEnv
 
 const PHASE_FORMAT = "'<phase>[@<round>]' (e.g. 'implement@2', 'verify:acceptance@1')"
@@ -155,6 +168,30 @@ export function resolveHarvestCliEnv(env: Record<string, string | undefined>): H
   }
 }
 
+const JUDGE_FORMAT = "'<build>:<panel>:<judge>' (e.g. 'my-build:panel-1:3')"
+const DEFAULT_JUDGE_CONTEXT_DIR = '.ab/judge'
+
+export function resolveJudgeCliEnv(env: Record<string, string | undefined>): JudgeCliEnv {
+  const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
+  const raw = requireVar(env, 'AB_JUDGE', `the judge identity in the format ${JUDGE_FORMAT}`)
+  const session = requireVar(env, 'AB_SESSION', 'the session id')
+  const match = /^([^:]+):([^:]+):([1-9]\d*)$/.exec(raw)
+  if (!match)
+    throw new Error(`AB_JUDGE "${raw}" is malformed — expected the format ${JUDGE_FORMAT}`)
+  const token = env.AB_TOKEN
+  const contextDir = env.AB_CONTEXT_DIR
+  return {
+    store,
+    build: match[1]!,
+    panel: match[2]!,
+    judge: Number(match[3]),
+    session,
+    contextDir:
+      contextDir !== undefined && contextDir !== '' ? contextDir : DEFAULT_JUDGE_CONTEXT_DIR,
+    ...(token !== undefined && token !== '' ? { token } : {}),
+  }
+}
+
 export function resolveCliEnv(env: Record<string, string | undefined>): CliEnv {
   const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
   const build = requireVar(env, 'AB_BUILD', 'the build slug')
@@ -185,6 +222,10 @@ export function resolveAmbientReadSession(
   env: Record<string, string | undefined>,
 ): AmbientReadSession | undefined {
   const present = (name: string): boolean => env[name] !== undefined
+  // A judge holds a write-only credential; no read may fall back to any
+  // other authority from inside its session.
+  if (present('AB_JUDGE'))
+    throw new InvalidAmbientContextError('a judge session has no read authority')
   const hasBuildMarker = present('AB_BUILD')
   const hasHarvestMarker = present('AB_REPO') || present('AB_HARVEST')
   const hasSharedMarker = present('AB_PHASE') || present('AB_SESSION')

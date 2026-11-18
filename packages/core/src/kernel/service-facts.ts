@@ -42,8 +42,12 @@ export interface SessionFacts {
 }
 export interface BuildDelegationFacts {
   lastSeq: number
+  /** Phase sessions and judge sessions share the key space: session ids are
+   * unique per build. */
   sessions: Record<string, SessionFacts>
   terminals: EndingFact[]
+  /** Judge sessions that recorded their `panel.preferred`. */
+  preferred: Record<string, true>
 }
 export interface HarvestDelegationFacts {
   lastSeq: number
@@ -60,18 +64,26 @@ export const buildDelegationReducer = defineReducer<
   AbEvent,
   BuildDelegationFacts
 >({
-  version: 1,
-  initial: () => ({ lastSeq: 0, sessions: {}, terminals: [] }),
+  version: 2,
+  initial: () => ({ lastSeq: 0, sessions: {}, terminals: [], preferred: {} }),
   fold(acc, events) {
     for (const event of events) {
       acc.lastSeq = event.seq
-      if (event.type === 'session.started' || event.type === 'session.ended') {
+      if (
+        event.type === 'session.started' ||
+        event.type === 'session.ended' ||
+        event.type === 'panel.judge-started' ||
+        event.type === 'panel.judge-ended'
+      ) {
         const key = delegationFactKey(event.payload.session)
         acc.sessions[key] ??= { starts: [], endings: [] }
         const session = acc.sessions[key]!
-        if (event.type === 'session.started') session.starts.push(event.seq)
+        if (event.type === 'session.started' || event.type === 'panel.judge-started')
+          session.starts.push(event.seq)
         else session.endings.push({ seq: event.seq, at: event.ts })
-      } else if (event.type === 'build.completed' || event.type === 'build.aborted')
+      } else if (event.type === 'panel.preferred')
+        acc.preferred[delegationFactKey(event.payload.session)] = true
+      else if (event.type === 'build.completed' || event.type === 'build.aborted')
         acc.terminals.push({ seq: event.seq, at: event.ts })
     }
   },

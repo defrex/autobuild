@@ -141,6 +141,7 @@ import type {
   AgentTurnResult,
   Forge,
   SessionStreamSink,
+  Transcript,
 } from '../ports/types'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/workspace/phase-scratch'
@@ -156,6 +157,16 @@ import {
   pendingMeasurementRequest,
 } from '../kernel/measurement'
 import { runPairedMeasurement, type MeasurementResult } from './measurement-runner'
+import { JUDGE_ROLE } from '../config/roles'
+import type { PanelJudgeOutcome, PanelOrder } from '../kernel/panel'
+import { installedSkillName } from '../skills'
+import { distributionRoot } from '../distribution'
+import {
+  JUDGE_CONTEXT_DIR,
+  runPanelJudges,
+  type PanelResult,
+  type PanelRunInput,
+} from './panel-runner'
 
 export { publicationPending } from './publication-state'
 
@@ -245,6 +256,13 @@ export interface BuildRunnerDeps {
   /** A signal that aborts after `ms`: one measurement command run's timeout.
    * Defaults to `AbortSignal.timeout`. */
   timeoutSignal?: (ms: number) => AbortSignal
+  /** The random source a judge panel draws each judge's A/B order from.
+   * Defaults to `Math.random`. */
+  random?: () => number
+  /** The distribution's install form of `ab-judge`, installed into a judge
+   * root when the harness pin predates the vendored copy. Defaults to the
+   * running distribution's `skills/judge`. */
+  judgeSkill?: () => Promise<string>
   /** Remote publication stays behind the kernel-owned Forge port (D7). */
   forge: Forge
   ids: IdSource
@@ -759,6 +777,44 @@ function recoveryMatches(decision: Decision, session: OpenSession): boolean {
       : decision.kind === 'run-finalize-step'
         ? session.phase === 'finalize' && session.role === decision.step
         : false
+}
+
+/** One judge panel run's inputs (SPEC §13.1.1). */
+export interface PanelRequest {
+  /** The panel id; a later call with the same id resumes the run. */
+  id: string
+  candidate: string
+  baseline: string
+  harnessPin: string
+  purpose: string
+  /** The rubric's path, inside the harness. */
+  rubric: string
+  harness: readonly string[]
+  judges: number
+}
+
+function samePanelInputs(
+  recorded: EventPayload<'panel.started'>,
+  requested: EventPayload<'panel.started'>,
+): boolean {
+  return (
+    recorded.candidate === requested.candidate &&
+    recorded.baseline === requested.baseline &&
+    recorded.harnessPin === requested.harnessPin &&
+    recorded.purpose === requested.purpose &&
+    recorded.rubric === requested.rubric &&
+    recorded.judges === requested.judges &&
+    recorded.harness.length === requested.harness.length &&
+    recorded.harness.every((path, index) => path === requested.harness[index])
+  )
+}
+
+/** The running distribution's install form of `ab-judge`. */
+async function distributionJudgeSkill(): Promise<string> {
+  const { readDistSkills } = await import('../cli/init')
+  const skill = (await readDistSkills(distributionRoot())).find((s) => s.name === 'judge')
+  if (skill === undefined) throw new Error('this distribution ships no judge skill')
+  return skill.content
 }
 
 export class BuildRunner {
@@ -2955,6 +3011,253 @@ export class BuildRunner {
         },
       }),
     )
+  }
+
+  // ── Judge panels (SPEC §13.1.1) ────────────────────────────────────────────
+
+  /**
+   * Run one judge panel over two harness-pinned variants and return the
+   * candidate's win rate, ties counted as half. A run with the same id
+   * resumes: recorded judgments are kept, a saved preference is completed
+   * without a session, and only judges with no preference run again.
+   */
+  async runPanel(input: PanelRequest): Promise<PanelResult> {
+    const { store, slug } = this.deps
+    const started: EventPayload<'panel.started'> = {
+      panel: input.id,
+      candidate: input.candidate,
+      baseline: input.baseline,
+      harnessPin: input.harnessPin,
+      purpose: input.purpose,
+      rubric: input.rubric,
+      harness: [...input.harness],
+      judges: input.judges,
+    }
+    const recorded = (await readBuildFacts(store, slug)).value.state.panel
+    if (recorded?.started.panel === input.id) {
+      if (!samePanelInputs(recorded.started, started))
+        throw new Error(`panel ${input.id} was started with different inputs`)
+    } else
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'panel.started',
+        payload: started,
+      } satisfies EventWrite<'panel.started'>)
+    await this.captureConfig()
+    const read = async () => {
+      const run = (await readBuildFacts(store, slug)).value.state.panel
+      if (run?.started.panel !== input.id)
+        throw new Error(`panel ${input.id} was superseded by another run`)
+      return run
+    }
+    const run: PanelRunInput = {
+      workspacePath: this.deps.workspacePath,
+      build: slug,
+      panel: input.id,
+      candidate: input.candidate,
+      baseline: input.baseline,
+      harnessPin: input.harnessPin,
+      harness: input.harness,
+      purpose: input.purpose,
+      rubric: input.rubric,
+      judges: input.judges,
+    }
+    return runPanelJudges(
+      {
+        exec: this.deps.exec,
+        distributionSkill: this.deps.judgeSkill ?? distributionJudgeSkill,
+      },
+      run,
+      {
+        read,
+        complete: async (judged) => {
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'panel.judged',
+            payload: judged,
+          } satisfies EventWrite<'panel.judged'>)
+        },
+        reclaim: async (judge, session) => {
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'panel.judge-ended',
+            payload: { panel: input.id, judge, session, outcome: 'reclaimed' },
+          } satisfies EventWrite<'panel.judge-ended'>)
+        },
+        launch: (judge, order, root) => this.runJudge(input.id, judge, order, root),
+        random: this.deps.random ?? Math.random,
+        ...(this.deps.shutdownSignal !== undefined
+          ? { shutdownSignal: this.deps.shutdownSignal }
+          : {}),
+      },
+    )
+  }
+
+  /** One judge session in its sealed root. Its order is durable in
+   * `panel.judge-started` before it starts; afterwards one reduced read
+   * finds its preference, recorded with the order as `panel.judged`.
+   * Failures inside the session become its outcome; store errors propagate. */
+  private async runJudge(
+    panel: string,
+    judge: number,
+    order: PanelOrder,
+    root: string,
+  ): Promise<PanelJudgeOutcome> {
+    const { store, slug, ids, shutdownSignal } = this.deps
+    const session = ids('s')
+    const resolved = this.boundaryResolver.resolve(JUDGE_ROLE)
+    const { runner, runtime, model, args, account, sessionBudgetSeconds } = resolved
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'panel.judge-started',
+      payload: {
+        panel,
+        judge,
+        session,
+        order,
+        runner: runtime,
+        ...(model !== undefined ? { model } : {}),
+        ...(account !== undefined ? { account } : {}),
+      },
+    } satisfies EventWrite<'panel.judge-started'>)
+
+    const budget = (this.deps.timeoutSignal ?? ((ms) => AbortSignal.timeout(ms)))(
+      sessionBudgetSeconds * 1000,
+    )
+    const signal = shutdownSignal ? AbortSignal.any([budget, shutdownSignal]) : budget
+    let outcome: PanelJudgeOutcome = 'completed'
+    let error: string | undefined
+    let handle: AgentSessionHandle | undefined
+    try {
+      const turn = await runner.start({
+        skill: installedSkillName('judge'),
+        invocation: panel,
+        workspacePath: root,
+        ...(model !== undefined ? { model } : {}),
+        ...(args.length > 0 ? { args } : {}),
+        ...(account !== undefined ? { account } : {}),
+        env: await this.judgeSessionEnv(panel, judge, session),
+        signal,
+      })
+      handle = turn.session
+      if (turn.result.kind === 'failed') {
+        outcome = 'failed'
+        error = turn.result.failure.message
+      }
+    } catch (caught) {
+      outcome = 'failed'
+      error = errorMessage(caught)
+    }
+    if (shutdownSignal?.aborted) outcome = 'interrupted'
+    else if (budget.aborted) {
+      outcome = 'expired'
+      error = sessionBudgetError(sessionBudgetSeconds)
+    }
+    let transcript: Transcript | undefined
+    if (handle !== undefined)
+      try {
+        transcript = await runner.end(handle)
+      } catch {
+        // Best-effort: the judge's outcome below is still recorded.
+      }
+
+    const state = (await readBuildFacts(store, slug)).value.state.panel
+    const recorded = state?.started.panel === panel ? state.judges[String(judge)] : undefined
+    const preferred = recorded?.preferred?.session === session ? recorded.preferred : undefined
+    if (preferred !== undefined) {
+      if (recorded?.judged === undefined)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'panel.judged',
+          payload: {
+            panel,
+            judge,
+            session,
+            order,
+            preference: preferred.preference,
+            reason: preferred.reason,
+          },
+        } satisfies EventWrite<'panel.judged'>)
+      outcome = 'completed'
+      error = undefined
+    } else if (outcome === 'completed') outcome = 'no-terminal'
+
+    const ended = (artifact?: { kind: string; rev: number }): EventWrite<'panel.judge-ended'> => ({
+      actor: KERNEL,
+      type: 'panel.judge-ended',
+      payload: {
+        panel,
+        judge,
+        session,
+        outcome,
+        ...(error !== undefined ? { error } : {}),
+        ...(artifact !== undefined ? { transcript: artifact } : {}),
+      },
+    })
+    if (transcript === undefined) await store.append(slug, ended())
+    else
+      await store.appendWithArtifacts(
+        slug,
+        [
+          {
+            kind: 'transcript',
+            content: transcript.content,
+            metadata: {
+              panel,
+              judge,
+              session,
+              role: JUDGE_ROLE,
+              runner: runtime,
+              ...((transcript.metadata.model ?? model)
+                ? { model: transcript.metadata.model ?? model }
+                : {}),
+              usage: transcript.metadata.usage,
+            },
+          },
+        ],
+        (deposited) => ended({ kind: deposited[0]!.kind, rev: deposited[0]!.revision }),
+      )
+    return outcome
+  }
+
+  /**
+   * A judge session's scoped environment: the store, a write-only credential
+   * for a remote store, and the judge identity. There is no `AB_BUILD` and no
+   * `AB_PHASE`, and the runner's own token never passes through.
+   */
+  private async judgeSessionEnv(
+    panel: string,
+    judge: number,
+    session: string,
+  ): Promise<Record<string, string>> {
+    const parent = this.deps.sessionEnv ?? {}
+    const token =
+      parent.AB_STORE && /^https?:/i.test(parent.AB_STORE)
+        ? await (this.deps.delegateCredential ?? delegateCredential)(
+            parent.AB_STORE,
+            parent.AB_TOKEN,
+            { kind: 'build-judge', id: this.deps.slug, session, panel, judge },
+          )
+        : undefined
+    const env: Record<string, string> = {
+      AB_ACCOUNT_CREDENTIAL_ENVS: JSON.stringify(
+        Object.values(this.boundaryConfig.accounts).map((account) => account.credentialEnv),
+      ),
+      AB_STORE: 'local',
+      ...parent,
+    }
+    delete env.AB_TOKEN
+    delete env.AB_BUILD
+    delete env.AB_PHASE
+    delete env.AB_REPO
+    delete env.AB_HARVEST
+    return {
+      ...env,
+      ...(token !== undefined ? { AB_TOKEN: token } : {}),
+      AB_JUDGE: `${this.deps.slug}:${panel}:${judge}`,
+      AB_SESSION: session,
+      AB_CONTEXT_DIR: JUDGE_CONTEXT_DIR,
+    }
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
