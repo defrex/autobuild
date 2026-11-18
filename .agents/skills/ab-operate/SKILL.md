@@ -480,6 +480,9 @@ that does the job, and say what you are doing before you do it:
 - `optimization.revise`, `optimization.stop` — revise an optimization node's
   stop rules, or stop it; see [optimization nodes](#optimization-nodes).
   Stopping cancels or aborts attempts in flight and cannot be undone.
+- `optimization.settle-unmeasured` — release the slot of an attempt that merged
+  without a landing measurement, under an explicit policy; see
+  [optimization nodes](#optimization-nodes).
 
 Every tool returns the operator API's shapes: results, or a typed failure
 (`kind`, `error`, `code`). A refusal is information, not an exception:
@@ -753,9 +756,24 @@ and stops itself once a cause is met. Your part is reading progress, adjusting
 when to stop, and landing the result.
 
 - **Read progress** with `ab objective <node>` (`--json` for the structured
-  view): starting, current and best values, attempts filed, accepted, rejected
-  and running, the plateau counter, elapsed hours, stop eligibility, and, once
-  stopped, the cause, mode and what still blocks completion.
+  view): starting, current and best values, attempts filed, accepted, rejected,
+  merged unmeasured and running, the plateau counter, elapsed hours, stop
+  eligibility, and, once stopped, the cause, mode and what still blocks
+  completion. It also lists every `unmeasured merge` and every `branch cleanup
+  pending`, each of which holds a concurrency slot; `ab build status <node>`
+  prints the same lines.
+- **Settle an unmeasured merge** when a human merged an attempt on the forge
+  and the merged head was never measured. The attempt stays in flight, holding
+  its slot, and a stopped node cannot complete while it remains. Measured
+  progress cannot be inferred from such a merge, so release it explicitly:
+  `ab objective <node> --settle-unmeasured <proposal|build> --policy
+  release-unmeasured [--note <text>]`. It settles `merged-unmeasured`, frees the
+  slot once, and never counts as accepted or moves the current, best or plateau
+  value. It is refused for settled, unmerged or measured attempts.
+- **Branch cleanup pending** means a declined or no-improvement attempt's
+  published branch has not been deleted yet. The node retries on its own; a
+  shown error names why the forge refused, and the ticket moves to rejected
+  once the branch is gone.
 - **Revise when to stop** with `ab objective <node> --threshold n`, or
   `--max-attempts n`, `--max-hours n`, `--plateau n` or `--stop-mode abort|drain`.
   The dispatcher applies the change on its next tick, with no replanning and
@@ -774,11 +792,13 @@ when to stop, and landing the result.
 - **Land it** once it completes. A stopped node with no attempt running or
   waiting to land completes, verifies and appears in the consent queue like any
   node. Stopping is not consent: run `ab merge <node>`. Before then, `ab merge`
-  refuses with `node-incomplete` and names the reason, either that the node has
-  not stopped or which attempts are still in flight.
+  refuses with `node-incomplete` and names the reason: the node has not
+  stopped, attempts are still in flight, or attempts merged without a landing
+  measurement and await settlement.
 
-A connected agent uses `optimization.revise` and `optimization.stop` (optional
-`mode`), then `builds.control` with action `merge`.
+A connected agent uses `optimization.revise`, `optimization.stop` (optional
+`mode`) and `optimization.settle-unmeasured` (`attempt`, `policy`, optional
+`note`), then `builds.control` with action `merge`.
 
 ## Forge failure recovery
 

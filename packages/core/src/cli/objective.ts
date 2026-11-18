@@ -3,10 +3,10 @@
 import { formatObjective, type ObjectiveChanges } from '../objective'
 import type { ObjectiveView } from '../operator/optimization'
 import { stringFlag, type ParsedArgs } from './args'
-import { objectiveNumber } from './dashboard/objective-row'
+import { objectiveNumber, pendingCleanupText, unmeasuredMergeText } from './dashboard/objective-row'
 
 export const OBJECTIVE_USAGE =
-  'usage: ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] [--stop [--drain|--abort]] [--json] [--store <ref>]'
+  'usage: ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] [--stop [--drain|--abort]] [--settle-unmeasured <proposal|build> --policy release-unmeasured [--note <text>]] [--json] [--store <ref>]'
 
 export const OBJECTIVE_FLAGS = {
   threshold: 'value',
@@ -19,6 +19,9 @@ export const OBJECTIVE_FLAGS = {
   stop: 'boolean',
   drain: 'boolean',
   abort: 'boolean',
+  'settle-unmeasured': 'value',
+  policy: 'value',
+  note: 'value',
   json: 'boolean',
   store: 'value',
 } as const
@@ -78,6 +81,40 @@ export function objectiveStopFromFlags(
   return drain ? { mode: 'drain' } : abort ? { mode: 'abort' } : {}
 }
 
+/** The unmeasured-merge settlement the flags request; undefined without
+ * `--settle-unmeasured`. `--policy` is required and names the settlement
+ * policy, which the service validates. It is one fact, so it never combines
+ * with a stop or a revision. */
+export function objectiveSettleFromFlags(
+  parsed: ParsedArgs,
+): { attempt: string; policy: string; note?: string } | undefined {
+  const attempt = stringFlag(parsed, 'settle-unmeasured')
+  const policy = stringFlag(parsed, 'policy')
+  const note = stringFlag(parsed, 'note')
+  if (attempt === undefined) {
+    if (policy !== undefined || note !== undefined)
+      throw new Error(
+        `--${policy !== undefined ? 'policy' : 'note'} requires --settle-unmeasured — ${OBJECTIVE_USAGE}`,
+      )
+    return undefined
+  }
+  if (attempt.trim() === '')
+    throw new Error(`--settle-unmeasured needs an attempt proposal or build — ${OBJECTIVE_USAGE}`)
+  if (policy === undefined)
+    throw new Error(
+      `--settle-unmeasured requires an explicit --policy (release-unmeasured) — ${OBJECTIVE_USAGE}`,
+    )
+  if (
+    parsed.flags.get('stop') === true ||
+    parsed.flags.get('drain') === true ||
+    parsed.flags.get('abort') === true
+  )
+    throw new Error(`--settle-unmeasured cannot be combined with --stop — ${OBJECTIVE_USAGE}`)
+  if (Object.keys(objectiveChangesFromFlags(parsed)).length > 0)
+    throw new Error(`--settle-unmeasured cannot be combined with a revision — ${OBJECTIVE_USAGE}`)
+  return { attempt: attempt.trim(), policy, ...(note !== undefined ? { note } : {}) }
+}
+
 const value = (n: number | undefined) => (n === undefined ? 'not measured' : objectiveNumber(n))
 
 export function renderObjective(view: ObjectiveView): string[] {
@@ -93,7 +130,9 @@ export function renderObjective(view: ObjectiveView): string[] {
     `  starting: ${value(progress.starting)}${progress.spread === undefined ? '' : ` (noise spread ${value(progress.spread)})`}`,
     `  current: ${value(progress.current)}`,
     `  best: ${value(progress.best)}`,
-    `  attempts: ${progress.attempts.filed} filed, ${progress.attempts.accepted} accepted, ${progress.attempts.rejected} rejected, ${progress.attempts.running} running`,
+    `  attempts: ${progress.attempts.filed} filed, ${progress.attempts.accepted} accepted, ${progress.attempts.rejected} rejected, ${progress.attempts.running} running${progress.attempts.unmeasured > 0 ? `, ${progress.attempts.unmeasured} merged unmeasured` : ''}`,
+    ...progress.unmeasuredMerges.map((merge) => `  ${unmeasuredMergeText(merge)}`),
+    ...progress.pendingCleanups.map((cleanup) => `  ${pendingCleanupText(cleanup)}`),
     `  plateau: ${progress.plateau}`,
     `  elapsed: ${progress.elapsedHours.toFixed(1)} hours`,
     `  stop eligible: ${

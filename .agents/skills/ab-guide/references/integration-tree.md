@@ -182,6 +182,7 @@ paused or unverified. The janitor records human provenance and whether the actua
 merged head was verified, then completes the ticket. A human merge of an
 optimization attempt also skips its landing measurement; when the merged head
 was never measured, the attempt stays in flight and keeps its concurrency slot
+until an operator settles it with `ab objective <node> --settle-unmeasured`
 (see [landing and settlement](optimization-nodes.md#landing-and-settlement)).
 Closing without merge or aborting closes admission and returns the ticket to
 triage (or ready with `ab abort --to ready`), except that an optimization
