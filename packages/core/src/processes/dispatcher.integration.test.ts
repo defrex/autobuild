@@ -12,7 +12,7 @@ import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
-import { decideNext } from '../kernel/engine'
+import { decideNext, decideNextFromFacts } from '../kernel/engine'
 import { epilogueLeaf } from '../kernel/dispatch-capacity'
 import { listOperatorBuilds } from '../operator/query'
 import { projectBuildFromFacts } from '../cli/dashboard/model'
@@ -18517,6 +18517,113 @@ describe('dispatcher — ticket waits', () => {
     expect(h.tickets.blockerAdds).toHaveLength(blockerAdds)
   })
 
+  /** A leaf whose e2e verifier waited on B, then cleanly restacked onto a
+   * moved target when the wait ended: its next decision re-verifies. */
+  async function seedResumedVerifyWaiter(h: Harness, slug: string, ticketId: string) {
+    await seedBuild(h, { slug, ticketId })
+    const append = (write: EventWrite) => h.store.append(slug, write)
+    await append({ actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    await append({
+      actor: agentActor('plan', `s_plan_${slug}`),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    await append({
+      actor: agentActor('plan-review', `s_pr_${slug}`),
+      type: 'plan-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      },
+    })
+    await append({ actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
+    await append({
+      actor: agentActor('implement', `s_impl_${slug}`),
+      type: 'implement.completed',
+      payload: {
+        round: 1,
+        commits: { base: leafTransaction.oldBase, head: leafTransaction.oldHead },
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    const approved = await append({
+      actor: agentActor('code-review', `s_cr_${slug}`),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    await append({
+      actor: KERNEL,
+      type: 'restack.completed',
+      payload: { ...leafTransaction, cycle: approved.seq, headSha: 'e'.repeat(40) },
+    })
+    await append({ actor: KERNEL, type: 'verify.started', payload: { step: 'unit', attempt: 1 } })
+    await append({
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 1, outcome: 'pass' },
+    })
+    await append({ actor: KERNEL, type: 'verify.started', payload: { step: 'e2e', attempt: 1 } })
+    await append({
+      actor: agentActor('verify:e2e', `s_e2e_${slug}`),
+      type: 'wait.requested',
+      payload: { id: `wait_${slug}`, phase: 'verify:e2e', round: 1, tickets: ['B'], reason: 'r' },
+    })
+    await append({
+      actor: DISPATCHER,
+      type: 'wait.entered',
+      payload: {
+        id: `wait_${slug}`,
+        escalation: `esc_${slug}`,
+        tickets: [{ source: 'fake', id: 'B' }],
+        reason: 'r',
+        question: 'Waiting on B to complete: r.',
+      },
+    })
+    const ended = await append({
+      actor: humanActor('aron'),
+      type: 'wait.ended',
+      payload: { id: `wait_${slug}`, cause: 'operator', message: 'B landed' },
+    })
+    const moved = await append({
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: 'f'.repeat(40) },
+    })
+    const tx = {
+      ...leafTransaction,
+      id: `rs-${slug}`,
+      trigger: 'wait-resume' as const,
+      cycle: ended.seq,
+      observation: moved.seq,
+      oldBase: leafTransaction.targetBase,
+      oldHead: 'e'.repeat(40),
+      targetBase: 'f'.repeat(40),
+    }
+    await append({ actor: KERNEL, type: 'restack.prepared', payload: tx })
+    await append({
+      actor: KERNEL,
+      type: 'restack.replayed',
+      payload: { id: tx.id, conflicted: false },
+    })
+    await append({
+      actor: KERNEL,
+      type: 'restack.publish-intended',
+      payload: { ...tx, headSha: '9'.repeat(40) },
+    })
+    return append({
+      actor: KERNEL,
+      type: 'restack.completed',
+      payload: { ...tx, headSha: '9'.repeat(40) },
+    })
+  }
+
   test('idle ticks over waiting leaves stay bounded at 100 and 100,000 events', async () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
@@ -18525,6 +18632,7 @@ describe('dispatcher — ticket waits', () => {
       readyTicket('E', { state: 'In Progress' }),
       readyTicket('F', { state: 'In Progress' }),
       readyTicket('G', { state: 'In Progress' }),
+      readyTicket('H', { state: 'In Progress' }),
       readyTicket('B', { state: 'Backlog' }),
     ])
     let waitCalls = 0
@@ -18552,6 +18660,16 @@ describe('dispatcher — ticket waits', () => {
     await store.claimLease('busy', 'runner-busy', 24 * 60 * 60_000)
     // A third leaf's wait awaits the publication of its commits.
     await seedPublishingWaiter(h, 'waiter-publishing', 'G')
+    // A fourth leaf resumed from a verifier wait onto a moved target, and must
+    // re-verify; the occupied slot keeps it from launching.
+    const resumedAt = (await seedResumedVerifyWaiter(h, 'waiter-resumed', 'H')).seq
+    const verifyConfig = parseConfig(
+      withReadyState(
+        'capacity = 1\n[commands]\ntest = "bun test"\n[verify]\nsteps = ["unit", "e2e"]\n' +
+          '[verify.unit]\nkind = "check"\ncommand = "test"\n' +
+          '[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\n',
+      ),
+    )
     for (const [slug, ticketId] of [
       ['waiter-open', 'A'],
       ['waiter-ended', 'E'],
@@ -18572,7 +18690,7 @@ describe('dispatcher — ticket waits', () => {
     })
     await ticketWaitIdleReadBudget({
       store,
-      slugs: ['waiter-open', 'waiter-ended', 'waiter-publishing'],
+      slugs: ['waiter-open', 'waiter-ended', 'waiter-publishing', 'waiter-resumed'],
       dispatcher: () => make().dispatcher,
       waitCalls: () => waitCalls,
       releaseBatches: () => releaseBatches,
@@ -18625,6 +18743,16 @@ describe('dispatcher — ticket waits', () => {
         expect(waited).toBe(3)
         // The timeout record carries only a resume cursor.
         expect(woke.map((line) => Object.keys(JSON.parse(line)))).toEqual([['cursor']])
+        // The resumed leaf's reduced facts carry the new cycle boundary.
+        const resumed = (await readBuildFacts(store, 'waiter-resumed')).value
+        expect(resumed.log.waitResumeVerifyBoundary).toBe(resumedAt)
+        expect(resumed.state.verify.cycleSince).toBe(resumedAt)
+        expect(decideNextFromFacts(resumed.state, resumed.log, verifyConfig)).toEqual({
+          kind: 'run-check',
+          step: 'unit',
+          command: 'bun test',
+          attempt: 2,
+        })
       },
     })
     const final = (await readBuildFacts(store, 'waiter-ended')).value.state
