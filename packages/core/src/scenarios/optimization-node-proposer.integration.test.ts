@@ -14,6 +14,7 @@ import {
   type E2eHarness,
   happyHandlers,
   ofType,
+  openWorkspacePath,
   readyTicket,
   type SkillHandler,
   scenarioScope,
@@ -247,6 +248,42 @@ test('a crash between creation and record adopts the same tickets and holds them
     const state = reduceBuild(events)
     expect(state.optimization?.attempts.filed).toBe(2)
     expect(state.optimization?.emptyProposals).toBe(0)
+  } finally {
+    await h.cleanup()
+  }
+}, 60_000)
+
+test('a crash after the filing record still releases the proposer workspace', async (makeHarness) => {
+  const { h, node } = await openNode(makeHarness)
+  try {
+    await measure(h, node.slug)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    expect(openWorkspacePath(await h.events(node.slug))).not.toBeNull()
+    // The record commits, then the dispatcher fails before its release.
+    const append = h.store.appendIfCurrent.bind(h.store)
+    let failures = 1
+    h.store.appendIfCurrent = (async (slug, seq, write) => {
+      const result = await append(slug, seq, write)
+      if (write.type === 'optimization.attempts-proposed' && failures-- > 0)
+        throw new Error('injected crash after the record')
+      return result
+    }) as typeof h.store.appendIfCurrent
+    // The proposal is gone, so filing is no longer due; the stranded
+    // workspace itself is the durable condition that releases it.
+    for (let tick = 0; tick < 2; tick += 1) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    const events = await h.events(node.slug)
+    expect(failures).toBe(0)
+    expect(reduceBuild(events).optimization?.proposal).toBeUndefined()
+    expect(ofType(events, 'optimization.attempts-proposed')).toHaveLength(1)
+    expect(openWorkspacePath(events)).toBeNull()
+    expect(ofType(events, 'workspace.released').at(-1)!.seq).toBeGreaterThan(
+      ofType(events, 'optimization.attempts-proposed')[0]!.seq,
+    )
   } finally {
     await h.cleanup()
   }

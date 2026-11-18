@@ -18,6 +18,7 @@ import {
   settlementKey,
   slotRequest,
   slotWaitText,
+  strandedNodeWorkspace,
   waitingExplanation,
   type CapacityBuild,
   type DispatchCapacity,
@@ -524,5 +525,53 @@ describe('the optimization proposer', () => {
     expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBeUndefined()
     // A started session was admitted and resumes after a shrink.
     expect(slotRequest(proposerNode('opt', 2, true), when)).toBe('propose')
+  })
+
+  test('a filed node holding a workspace no work owns is stranded until a runner or request holds it', () => {
+    const filedNode = (extra?: (log: OptimizationLogBuilder) => void): CapacityBuild => {
+      const log = new OptimizationLogBuilder('opt')
+        .push({
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: 'repo',
+            ticket: { source: 'file', id: 'opt' },
+            baseBranch: 'main',
+            kind: 'node',
+          },
+        })
+        .accept(commandObjective(), 1)
+        .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+        .baseline(1, 50, 1)
+        .request('r1', 2)
+        .deposit('r1', 1, ['a'])
+        .file('r1', ['a'])
+      extra?.(log)
+      return { ...build('opt', 'node'), workspace: true, state: reduceBuild(log.events) }
+    }
+    expect(strandedNodeWorkspace(filedNode(), when)).toBe(true)
+    expect(strandedNodeWorkspace({ ...filedNode(), workspace: false }, when)).toBe(false)
+    // A live runner or a provisioning marker still owns it.
+    const leased = filedNode()
+    leased.record = { ...leased.record, lease: { holder: 'r', expiresAt: '2026-11-17T02:00:00Z' } }
+    expect(strandedNodeWorkspace(leased, when)).toBe(false)
+    expect(strandedNodeWorkspace({ ...filedNode(), provisioning: true }, when)).toBe(false)
+    // An expired lease does not.
+    const expired = filedNode()
+    expired.record = {
+      ...expired.record,
+      lease: { holder: 'r', expiresAt: '2026-11-17T00:00:00Z' },
+    }
+    expect(strandedNodeWorkspace(expired, when)).toBe(true)
+    // An open proposal's proposer owns it.
+    expect(
+      strandedNodeWorkspace(
+        filedNode((log) => log.request('r2', 1)),
+        when,
+      ),
+    ).toBe(false)
+    expect(strandedNodeWorkspace({ ...proposerNode('opt'), workspace: true }, when)).toBe(false)
+    // A plain node's workspace is outside this condition.
+    expect(strandedNodeWorkspace({ ...build('plain', 'node'), workspace: true }, when)).toBe(false)
   })
 })

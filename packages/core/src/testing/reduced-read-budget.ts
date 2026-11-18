@@ -1697,12 +1697,26 @@ async function measureProposerStages(
 ): Promise<StoreReadMetrics> {
   type Stages = {
     store: { refresh(): Promise<void> }
+    deps: { clock(): Date }
     capacityBuilds(): Promise<unknown[]>
     repoBuildDigests(): Promise<unknown[]>
-    advanceOptimizationNodes(report: unknown, opts: object, entries: unknown[]): Promise<void>
+    advanceOptimizationNodes(
+      report: unknown,
+      opts: object,
+      entries: unknown[],
+      now: Date,
+    ): Promise<void>
     optimizationCreationHolds(): Promise<unknown>
+    releaseStrandedNodeWorkspaces(
+      builds: unknown[],
+      now: Date,
+      launched: Set<string>,
+      report: unknown,
+      opts: object,
+    ): Promise<void>
     admitProposers(
       builds: unknown[],
+      now: Date,
       admitted: number,
       report: unknown,
       launched: Set<string>,
@@ -1715,9 +1729,11 @@ async function measureProposerStages(
   const builds = await stages.capacityBuilds()
   const report = emptyTickReport()
   return measureStoreReads(store, async () => {
-    await stages.advanceOptimizationNodes(report, {}, entries)
+    const now = stages.deps.clock()
+    await stages.advanceOptimizationNodes(report, {}, entries, now)
     await stages.optimizationCreationHolds()
-    await stages.admitProposers(builds, 0, report, new Set(), {})
+    await stages.releaseStrandedNodeWorkspaces(builds, now, new Set(), report, {})
+    await stages.admitProposers(builds, now, 0, report, new Set(), {})
   })
 }
 

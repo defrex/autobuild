@@ -88,6 +88,7 @@ import {
   settlementDue,
   settlementKey,
   slotRequest,
+  strandedNodeWorkspace,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
 import {
@@ -3418,13 +3419,15 @@ export class Dispatcher {
     // An optimization node's proposer: exhausted stops, filings and new
     // requests, chosen from this pass's digests alone. Proposing is the
     // node's own work, never intake, so it runs whether or not new work is
-    // accepted.
-    await this.advanceOptimizationNodes(report, opts, entries)
-    if (this.outOfBudget(opts)) return
+    // accepted. One clock reading serves every stage of the pass.
     const now = this.deps.clock()
+    await this.advanceOptimizationNodes(report, opts, entries, now)
+    if (this.outOfBudget(opts)) return
     const builds = (await this.capacityBuilds()).sort((a, b) =>
       a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0,
     )
+    await this.releaseStrandedNodeWorkspaces(builds, now, launched, report, opts)
+    if (this.outOfBudget(opts)) return
     const waiting = builds.filter((build) => slotRequest(build, now) === 'verification')
     const before = launched.size
     for (const { record, state } of waiting) {
@@ -3448,7 +3451,41 @@ export class Dispatcher {
         }
       })
     }
-    await this.admitProposers(builds, launched.size - before, report, launched, opts)
+    await this.admitProposers(builds, now, launched.size - before, report, launched, opts)
+  }
+
+  /**
+   * Release every optimization node workspace that no work owns
+   * (`strandedNodeWorkspace`), over the capacity states this pass already
+   * loaded: no read for a node that holds none. A released entry is updated
+   * in place, so this pass's admission sees the node free.
+   */
+  private async releaseStrandedNodeWorkspaces(
+    builds: CapacityBuild[],
+    now: Date,
+    launched: Set<string>,
+    report: TickReport,
+    opts: TickOpts,
+  ): Promise<void> {
+    for (const build of builds) {
+      if (launched.has(build.record.slug) || !strandedNodeWorkspace(build, now)) continue
+      if (this.outOfBudget(opts)) return
+      const { record } = build
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        try {
+          const facts = (await readBuildFacts(this.store, record.slug)).value
+          if (openWorkspace(facts)) await this.releaseWorkspace(record.slug, facts)
+          const current = await this.store.buildFacts(record.slug)
+          build.workspace = current.workspace !== null
+          build.state = current.state
+        } catch (error) {
+          rethrowAuthorityLapse(error)
+          report.janitorDiagnostics.push(
+            `build ${record.slug}: node workspace release failed — ${String(error)}`,
+          )
+        }
+      })
+    }
   }
 
   /**
@@ -3463,12 +3500,12 @@ export class Dispatcher {
    */
   private async admitProposers(
     builds: CapacityBuild[],
+    now: Date,
     admittedThisPass: number,
     report: TickReport,
     launched: Set<string>,
     opts: TickOpts,
   ): Promise<void> {
-    const now = this.deps.clock()
     const proposers = builds.filter(
       (build) => build.state.kind === 'node' && proposeRunDue(build.state.optimization),
     )
@@ -3613,8 +3650,8 @@ export class Dispatcher {
     report: TickReport,
     opts: TickOpts,
     entries: { record: BuildRecord; digest: BuildDigest }[],
+    now: Date,
   ): Promise<void> {
-    const now = this.deps.clock()
     const due: { record: BuildRecord; kind: 'exhausted' | 'filing' | 'request' }[] = []
     try {
       for (const { record, digest } of entries) {
@@ -3826,6 +3863,8 @@ export class Dispatcher {
           : {}),
       },
     } satisfies EventWrite<'optimization.attempts-proposed'>)
+    // A crash or failure before this release, or a live lease now, leaves the
+    // workspace to `releaseStrandedNodeWorkspaces` on a later pass.
     const facts = (await readBuildFacts(this.store, record.slug)).value
     if (openWorkspace(facts) && !this.hasLiveExecutionLease(record))
       await this.releaseWorkspace(record.slug, facts)

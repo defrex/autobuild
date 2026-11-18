@@ -316,8 +316,10 @@ proposal id, so a crash between the deposit, the creation and the record
 adopts the ticket an earlier try created instead of filing it twice. Until the
 record lands, intake withholds ready tickets whose creation key matches a
 deposited proposal. Once every ticket exists, the dispatcher records
-`optimization.attempts-proposed` and releases the node's workspace. A ticket
-source without integration-tree support, or an unreadable deposit, raises an
+`optimization.attempts-proposed` and releases the node's workspace. If that
+release never happens, after a crash, a failed release or a runner still
+leased, a later dispatcher pass releases any optimization-node workspace that
+no runner, proposal, restack or integration work owns. A ticket source without integration-tree support, or an unreadable deposit, raises an
 escalation on the node instead of creating anything.
 
 **Exhausted.** Two consecutive empty proposals stop the node: the dispatcher

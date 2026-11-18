@@ -18503,6 +18503,30 @@ describe('optimization proposer read budget', () => {
             ],
           },
         })
+        // A filed node whose proposer workspace outlived its record: the
+        // first pass releases it, and it costs nothing after.
+        await node('stranded', commandObjective({ proposer: { concurrency: 1 } }))
+        await request('stranded', 1)
+        await store.append('stranded', {
+          actor: DISPATCHER,
+          type: 'workspace.provisioned',
+          payload: {
+            provider: 'fake',
+            ref: '/ws/ab/stranded',
+            branch: 'ab/stranded',
+            base: { source: 'remote', sha: BASE_SHA },
+          },
+        })
+        await store.append('stranded', {
+          actor: DISPATCHER,
+          type: 'optimization.attempts-proposed',
+          payload: {
+            request: 'req-stranded',
+            proposals: [
+              { id: 'a', ticket: { source: 'fake', id: 'S' }, title: 'a', strategy: 's' },
+            ],
+          },
+        })
         await node('idle-stopped')
         await store.append('idle-stopped', {
           actor: DISPATCHER,
@@ -18561,6 +18585,9 @@ describe('optimization proposer read budget', () => {
             return 'refused-0'
           },
           release: async () => {
+            // The warm passes released the stranded workspace once.
+            const stranded = await store.getEvents('stranded')
+            expect(stranded.filter((event) => event.type === 'workspace.released')).toHaveLength(1)
             await store.append('busy', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
             return [...waiting, 'refused-0']
           },

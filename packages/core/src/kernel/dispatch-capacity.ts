@@ -89,6 +89,33 @@ export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
   )
 }
 
+/** An optimization node's workspace that no work owns: no runner, no open
+ * execution, no proposal, restack or integration intent, and no pause, block
+ * or command holding it. Filing releases the proposer's workspace after its
+ * record clears the proposal; this is the durable condition that recovers a
+ * release the record outlived (a crash, a failed release, a live lease at
+ * filing time). A verification need does not keep it: integration admission
+ * provisions afresh, and a held workspace would withhold that request. */
+export function strandedNodeWorkspace(build: CapacityBuild, now: Date): boolean {
+  const { state } = build
+  return (
+    state.kind === 'node' &&
+    !terminal(state) &&
+    state.optimization !== undefined &&
+    state.optimization.proposal === undefined &&
+    build.workspace &&
+    !runnerAllocated(build, now) &&
+    !executionOpen(state) &&
+    state.status !== 'paused' &&
+    state.status !== 'blocked' &&
+    state.pendingCommands.length === 0 &&
+    (state.compatibility?.decisiveFacts ?? 0) === 0 &&
+    !state.nodeRestack?.active &&
+    !state.nodeRestack?.conflict &&
+    state.integration?.intent === undefined
+  )
+}
+
 /** A finished leaf whose latest verify cycle or finalize has not been settled
  * since: it must re-verify before it waits for its merge decision again. */
 export function epilogueUnsettled(state: BuildState): boolean {
