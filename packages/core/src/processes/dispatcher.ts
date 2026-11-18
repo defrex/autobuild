@@ -3397,7 +3397,8 @@ export class Dispatcher {
     )
       return
     const now = this.deps.clock()
-    const waiting = (await this.capacityBuilds())
+    const builds = await this.capacityBuilds()
+    const waiting = builds
       .filter((build) => slotRequest(build, now) === 'verification')
       .sort((a, b) => (a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0))
     for (const { record, state } of waiting) {
@@ -3423,7 +3424,7 @@ export class Dispatcher {
         }
       })
     }
-    await this.releaseMeasuredNodeWorkspaces(report)
+    await this.releaseMeasuredNodeWorkspaces(builds, now, report, launched)
   }
 
   /** Provision a workspace for an optimization node's starting measurement
@@ -3444,12 +3445,17 @@ export class Dispatcher {
    * measurement once nothing else needs it: no measurement due, no
    * integration cycle, no node restack or reconcile, no runner. Reads reduced
    * state only; the raw read happens only for a node it releases. */
-  private async releaseMeasuredNodeWorkspaces(report: TickReport): Promise<void> {
-    const now = this.deps.clock()
-    for (const build of await this.capacityBuilds()) {
+  private async releaseMeasuredNodeWorkspaces(
+    builds: CapacityBuild[],
+    now: Date,
+    report: TickReport,
+    launched: ReadonlySet<string>,
+  ): Promise<void> {
+    for (const build of builds) {
       const { record, state } = build
       if (
         state.kind !== 'node' ||
+        launched.has(record.slug) ||
         state.optimization === undefined ||
         !build.workspace ||
         build.provisioning ||
