@@ -18,6 +18,7 @@ import {
 } from '../objective'
 import type { TicketRef } from '../ontology'
 import { defineReducer } from './incremental'
+export { optimizationCompletionBlocker } from './integration-state'
 import type { BuildState } from './reducer'
 
 /** One proposed attempt that has not settled. Admission caps these at the
@@ -351,20 +352,6 @@ export function optimizationStopActions(
     if (node.stopped.mode === 'abort' || !started) actions.abort.push({ slug: build.slug, reason })
   }
   return actions
-}
-
-/** Why an optimization node is not yet complete; undefined for a plain node
- * and for an optimization node that has stopped with nothing in flight. The
- * existing child-enumeration rule applies on top. */
-export function optimizationCompletionBlocker(
-  state: Pick<BuildState, 'optimization'>,
-): string | undefined {
-  const optimization = state.optimization
-  if (optimization === undefined) return undefined
-  if (optimization.stopped === undefined) return 'the optimization node has not stopped'
-  if (optimization.inFlight.length > 0)
-    return `attempts still in flight: ${optimization.inFlight.map((attempt) => attempt.ticket.id).join(', ')}`
-  return undefined
 }
 
 export interface OptimizationAdmission {
