@@ -247,6 +247,15 @@ export class OptimizationLogBuilder {
     })
   }
 
+  /** Record that a settled attempt's ticket moved to the rejected role. */
+  ticketRejected(proposal: string, state = 'Rejected'): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'attempt.ticket-rejected',
+      payload: { proposal, ticket: { source: 'file', id: `T-${proposal}` }, state },
+    })
+  }
+
   progress(revision: number, winRate: number): this {
     return this.push({
       actor: KERNEL,
@@ -288,6 +297,7 @@ export function optimizationLog(): AbEvent[] {
     .settle('a1', 'accepted', { revision: 2, baseline: 50, candidate: 44, delta: 6 })
     .settle('a2', 'no-improvement', { revision: 2, baseline: 44, candidate: 43, delta: 1 }, 'noise')
     .settle('a3', 'declined', undefined, 'not worth it')
+    .ticketRejected('a2')
     .propose('r2', [], 'out of ideas')
     .propose('r3', ['a4'])
     .stop('plateau', 'drain')
@@ -341,4 +351,50 @@ export function attemptMeasurementLog(): AbEvent[] {
       },
     })
     .requestMeasurement('m3').events
+}
+
+/** A child of an optimization node whose head the node moved under: two
+ * requests with different baselines and a result, for the child's landing
+ * measurement state. */
+export function attemptLandingLog(): AbEvent[] {
+  const request = (id: string, baseline: string) => ({
+    actor: DISPATCHER,
+    type: 'attempt.measurement-requested' as const,
+    payload: {
+      id,
+      node: 'opt-node',
+      candidate: OPTIMIZATION_SHA('c'),
+      baseline,
+      harnessPin: OPTIMIZATION_SHA('a'),
+      revision: 1,
+    },
+  })
+  return new OptimizationLogBuilder('attempt-a1')
+    .push({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: 'repo',
+        ticket: { source: 'file', id: 'T-a1' },
+        baseBranch: 'ab-node/opt',
+        target: { build: 'opt-node', ticket: { source: 'file', id: 'node' } },
+      },
+    })
+    .push(request('m1', OPTIMIZATION_SHA('a')))
+    .push(request('m2', OPTIMIZATION_SHA('b')))
+    .push({
+      actor: KERNEL,
+      type: 'attempt.measured',
+      payload: {
+        request: 'm2',
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('b'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: 1,
+        samples: 7,
+        medians: { candidate: 41, baseline: 44 },
+        delta: 3,
+        decision: 'improved',
+      },
+    }).events
 }

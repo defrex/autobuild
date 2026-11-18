@@ -115,6 +115,13 @@ that the spec does not settle. Do not guess away either side's behavior:
 ab escalate "The target changes the session-token format but the build keys its limiter on the old format. Which behavior should the limiter adopt?" --refs src/auth.ts
 ```
 
+When the build targets an optimization node, never resolve a conflict by
+editing one of the node's harness paths (its objective's `metric.harness`
+selectors): the harness is the ruler the candidate is measured with. Escalate
+instead. A candidate that changes a harness path escalates at landing rather
+than being measured, so such a resolution cannot land anyway. See
+[landing and settlement](../ab-guide/references/optimization-nodes.md#landing-and-settlement).
+
 An operator answer in guidance is authoritative while the spec remains the
 contract. If they cannot both be satisfied, escalate the contradiction.
 Reconcile has no code-review round; escalate risky resolutions for external
