@@ -15,6 +15,7 @@ import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import { distributionRoot } from '../../distribution'
 import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
+import type { DelegateCredentialTarget } from '../../store/remote/protocol'
 import {
   distributionStampFor,
   packageAutobuildDistribution,
@@ -323,6 +324,12 @@ function harness(
      * lever and the returned `distributionIdentity` getter/setter stay (they
      * are simply inert in this mode). */
     defaultIdentityStamp?: boolean
+    /** Overrides the store's credential delegation; e.g. to record targets. */
+    delegateCredential?: (
+      storeRef: string,
+      token: string | undefined,
+      target: DelegateCredentialTarget,
+    ) => Promise<string>
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -424,7 +431,7 @@ function harness(
       },
       storeRef: 'https://store.example.test',
       storeToken: 'scoped-store-token',
-      delegateCredential: async () => 'delegated-store-token',
+      delegateCredential: options.delegateCredential ?? (async () => 'delegated-store-token'),
       repo: '/repo',
       facade,
       exec,
@@ -1259,6 +1266,41 @@ describe('VercelSandboxProvider', () => {
     expect(sourceCheckoutPath({ cwd: '  ' } as VercelSandboxHandle, 'app')).toBe(
       '/vercel/sandbox/app',
     )
+  })
+
+  test('provision delegates the build-runner credential for the build slug, for leaf and node branches', async () => {
+    const recorder = () => {
+      const targets: DelegateCredentialTarget[] = []
+      return {
+        targets,
+        delegate: async (
+          _storeRef: string,
+          _token: string | undefined,
+          target: DelegateCredentialTarget,
+        ) => {
+          targets.push(target)
+          return 'delegated-store-token'
+        },
+      }
+    }
+    const leafTargets = recorder()
+    const leaf = harness({ delegateCredential: leafTargets.delegate })
+    await leaf.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+    expect(leafTargets.targets).toEqual([{ kind: 'build-runner', id: 'remote-build' }])
+
+    // A node branch is `ab-node/<slug>`; the store only knows the build by its slug (#969).
+    const nodeTargets = recorder()
+    const node = harness({ delegateCredential: nodeTargets.delegate })
+    await node.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab-node/remote-node',
+    })
+    expect(nodeTargets.targets).toEqual([{ kind: 'build-runner', id: 'remote-node' }])
+
+    // Sandbox names are unchanged, so live leaf and node sandboxes are still reused.
+    expect(leaf.createInput?.name).toBe('autobuild-remote-build-g0-e61874178a')
+    expect(node.createInput?.name).toBe('autobuild-ab-node-remote-node-g0-05f6e15b57')
   })
 
   test('uses generation-scoped names and the supplied checkpoint when the branch is absent', async () => {
