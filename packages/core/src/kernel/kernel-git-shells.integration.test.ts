@@ -227,6 +227,8 @@ const DYNAMIC_SHELL_ALLOWLIST: Record<string, string> = {
   'processes/hook-command.ts command': 'operator-configured hook command in the checkout',
   'processes/measurement-runner.ts command':
     'configured objective measurement command in a scratch worktree',
+  'processes/panel-runner.ts TMPDIR_PROBE': 'resolves the temporary directory; no Git',
+  'processes/panel-runner.ts judge-links': 'finds symlinks escaping the sealed judge root; no Git',
 }
 
 /** Sandbox-side scripts that name Git. They run inside the Vercel Sandbox VM

@@ -86,6 +86,8 @@ export interface TreeEntry {
   mode: string
   type: string
   path: string
+  /** The object id, when parsed from `ls-tree` output. */
+  object?: string
 }
 
 /** Parse `git ls-tree -r -z` output. */
@@ -95,8 +97,13 @@ export function parseLsTree(output: string): TreeEntry[] {
     if (record === '') continue
     const tab = record.indexOf('\t')
     if (tab < 0) continue
-    const [mode = '', type = ''] = record.slice(0, tab).split(' ')
-    entries.push({ mode, type, path: record.slice(tab + 1) })
+    const [mode = '', type = '', object] = record.slice(0, tab).split(' ')
+    entries.push({
+      mode,
+      type,
+      path: record.slice(tab + 1),
+      ...(object !== undefined ? { object } : {}),
+    })
   }
   return entries
 }
