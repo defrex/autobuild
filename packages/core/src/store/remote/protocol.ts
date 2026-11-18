@@ -371,7 +371,7 @@ export const buildDigestWireSchema = z.object({
         measured: z.literal(true).optional(),
         inFlight: z.number().int().nonnegative(),
         concurrency: z.number().int().nonnegative(),
-        attemptRoom: z.number().int().nonnegative().nullable(),
+        attemptRoom: z.number().int().nonnegative().optional(),
         emptyProposals: z.number().int().nonnegative(),
         openedAt: z.string().min(1),
         maxHours: z.number().positive().optional(),

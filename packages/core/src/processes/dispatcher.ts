@@ -92,8 +92,8 @@ import {
   strandedNodeWorkspace,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
+import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import {
-  attemptCreationKey,
   exhaustedStopDue,
   optimizationElapsedHours,
   proposalWithdrawalDue,

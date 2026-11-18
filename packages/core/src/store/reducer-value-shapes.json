@@ -30345,8 +30345,8 @@
           "optional": false
         },
         "attemptRoom": {
-          "type": "40",
-          "optional": false
+          "type": "60",
+          "optional": true
         },
         "emptyProposals": {
           "type": "14",

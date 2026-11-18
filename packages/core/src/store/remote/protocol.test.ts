@@ -29,7 +29,6 @@ describe('build digest wire schema', () => {
       measured: true as const,
       inFlight: 1,
       concurrency: 2,
-      attemptRoom: null,
       emptyProposals: 0,
       openedAt: '2026-11-17T00:00:00.000Z',
       proposal: { request: 'r1', deposited: { ids: ['a'], at: '2026-11-17T00:01:00.000Z' } },

@@ -6,8 +6,8 @@ import {
   panelObjective,
   panelOptimizationLog,
 } from './generators/optimization-log'
+import { attemptCreationKey } from './attempt-creation-key'
 import {
-  attemptCreationKey,
   exhaustedStopDue,
   isNearMiss,
   isProposerWakeEvent,

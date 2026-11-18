@@ -5,7 +5,7 @@ import { afterEach, expect, test as bunTest } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
-import { attemptCreationKey } from '../kernel/optimization'
+import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildRecord } from '../store/types'
 import {

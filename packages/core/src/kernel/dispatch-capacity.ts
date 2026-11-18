@@ -2,7 +2,7 @@ import type { TicketRef } from '../ontology'
 import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
-import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization'
+import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.

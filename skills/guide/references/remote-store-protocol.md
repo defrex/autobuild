@@ -792,7 +792,7 @@ field from events.
 `optimization` is present on every node digest and absent on a leaf's. It is
 `false` for a plain node. For an optimization node it is a bounded summary of
 the node's own optimization facts: `stopped?` and `measured?` (each `true` when
-set), `inFlight`, `concurrency`, `attemptRoom` (`null` without an attempts
+set), `inFlight`, `concurrency`, `attemptRoom?` (absent without an attempts
 budget), `emptyProposals`, `openedAt`, `maxHours?`, `proposal?: {request,
 deposited?: {ids, at}}`, and `wakeSeq?` and `deferredSeq?`, the sequences of
 the latest fact that can clear a proposer deferral and of the latest
