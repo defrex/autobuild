@@ -728,7 +728,9 @@ completes with `wait.published`; `serviceWaitRequest` enters the wait only
 after that. `waitResumeRestackCycle` in the same module is the engine's
 wait-resume restack predicate, decided ahead of the plan and code loops against
 `leafBaseInUse` (`kernel/leaf-restack-state.ts`), which target observation
-shares. The runner's `restack()` replays published work through the guarded
+shares. `waitResumeReverifies` and `cleanWaitResumeCompletion` decide which
+resumed completions open a new verify cycle (see "Leaf and reconcile restacking").
+The runner's `restack()` replays published work through the guarded
 automatic restack, fast-forwards an unpublished branch that has no commits the
 target lacks and no uncommitted tracked changes (`advanceWaitResume`,
 `restack.advanced`) and otherwise fails without discarding local work, and first supersedes a reconcile occurrence whose session
@@ -1747,7 +1749,13 @@ and session settlement fence mutation. Transaction targets stay frozen while
 later moves coalesce. `publication.requested` carries automatic transaction
 identity through trusted remote teardown and publication. The runner settles
 local resolver intent only after its session ends. Verification facts
-cite the cycle's base/head. Clean waiting leaf rewrites preserve completed
+cite the cycle's base/head (`leafVerifiedRestack` in `kernel/verify-stages.ts`).
+A clean wait-resume `restack.completed` for a wait declared in `verify:*` or
+`finalize` is a verify cycle boundary: the log index records it as
+`waitResumeVerifyBoundary`, the reducer moves `verify.cycleSince`, and the
+engine's stage selection and cycle boundary both read it through
+`leafVerifyCycleInputs`. It is not a replay boundary, so the verify-entry
+restack does not run again. Clean awaiting-merge leaf rewrites preserve completed
 verification when build-owned config is unchanged, even when the old pin commit
 is no longer an ancestor. Changed config still supersedes while waiting.
 Ancestry gates cycles that run further steps; those cycles capture fresh config.

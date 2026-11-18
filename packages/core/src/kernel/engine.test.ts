@@ -31,6 +31,7 @@ import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
 import { logIndexReducer } from './log-index'
+import { activeVerifyStage, leafVerifyCycleInputs } from './verify-stages'
 
 const BUILD = 'auth-rate-limit'
 
@@ -3994,6 +3995,199 @@ describe('ordered concurrent verification stages', () => {
     expect(decideNext(toLog([...failed, ...verifyRun('unit', 1, true)]), fast).kind).toBe(
       'record-verify-stage-failure',
     )
+  })
+})
+
+describe('verification stages resumed by a clean wait-resume restack', () => {
+  // SPEC §11 "Ticket waits": a clean replay after a verify:* wait opens a new
+  // verify cycle. Stage selection and the cycle boundary must both drop the
+  // prior base's outcomes and cancellations. No `verify.config-captured`
+  // follows the restack, covering paths without a captured pipeline.
+  const T1 = '2'.repeat(40)
+  const RESTACKED = '5'.repeat(40)
+  const typesUnitFirst = parseConfig(
+    CONFIG_TOML.replace('steps = ["types", "unit", "e2e"]', 'steps = [["types", "unit"], "e2e"]'),
+  )
+  const typesE2eFirst = parseConfig(
+    CONFIG_TOML.replace('steps = ["types", "unit", "e2e"]', 'steps = [["types", "e2e"], "unit"]'),
+  )
+  const failFast = (config: typeof typesE2eFirst) => ({
+    ...config,
+    verify: {
+      ...config.verify,
+      stepConfigs: {
+        ...config.verify.stepConfigs,
+        types: { ...config.verify.stepConfigs.types!, failFast: true },
+      },
+    },
+  })
+  const ready = (): EventWrite[] => [
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'approve'),
+  ]
+  const agentActor: Actor = { kind: 'agent', role: 'e2e', session: 's_e2e' }
+  /** The e2e verifier starts at attempt 1 and declares a wait on B. */
+  const e2eWaits = (): EventWrite[] => [
+    ev('verify.started', { step: 'e2e', attempt: 1 }),
+    ev('session.started', {
+      session: 's_e2e',
+      role: 'e2e',
+      runner: 'test',
+      phase: 'verify:e2e',
+      round: 1,
+    }),
+    ev(
+      'wait.requested',
+      { id: 'wait_1', phase: 'verify:e2e', round: 1, tickets: ['B'], reason: 'needs B' },
+      agentActor,
+    ),
+    ev('session.ended', {
+      session: 's_e2e',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
+    }),
+    ev('wait.entered', {
+      id: 'wait_1',
+      escalation: 'esc_w',
+      tickets: [{ source: 'file', id: 'B' }],
+      reason: 'needs B',
+      question: 'Waiting on B to complete',
+    }),
+  ]
+  /** The wait ends automatically and the build cleanly restacks onto T1. */
+  const resumed = (writes: EventWrite[]): EventWrite[] => {
+    const ended = [
+      ...writes,
+      ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
+    ]
+    const tx = {
+      ...leafTransaction,
+      id: 'rs-wait',
+      trigger: 'wait-resume' as const,
+      cycle: ended.length,
+      oldBase: 'a'.repeat(40),
+      targetBase: T1,
+    }
+    return [
+      ...ended,
+      ev('target.moved', { branch: 'main', sha: T1 }),
+      ev('restack.prepared', tx),
+      ev('restack.replayed', { id: 'rs-wait', conflicted: false }),
+      ev('restack.publish-intended', { ...tx, headSha: RESTACKED }),
+      ev('restack.completed', { ...tx, headSha: RESTACKED }),
+    ]
+  }
+  const members = (decision: Decision) =>
+    decision.kind === 'run-verify-stage'
+      ? decision.members.map((member) => [member.step, member.attempt])
+      : decision
+
+  test('a passed preceding stage re-runs on the restacked base', () => {
+    const waited = [
+      ...ready(),
+      ...verifyRun('types', 1, true),
+      ...verifyRun('unit', 1, true),
+      ...e2eWaits(),
+    ]
+    const log = toLog(resumed(waited))
+    expect(logIndexReducer.reduce(log).waitResumeVerifyBoundary).toBe(log.at(-1)!.seq)
+    expect(members(decideNext(log, typesUnitFirst))).toEqual([
+      ['types', 2],
+      ['unit', 2],
+    ])
+  })
+
+  test('a waiting member with a failed sibling relaunches the whole stage', () => {
+    const waited = [...ready(), ...e2eWaits(), ...verifyRun('types', 1, false)]
+    expect(decideNext(toLog(waited), typesE2eFirst)).toEqual({ kind: 'wait', reason: 'blocked' })
+    const log = resumed(waited)
+    const decision = decideNext(toLog(log), typesE2eFirst)
+    expect(members(decision)).toEqual([
+      ['types', 2],
+      ['e2e', 2],
+    ])
+    // The declaring verifier still receives the wait's answer.
+    expect(decision).toMatchObject({
+      members: [{}, { feedback: { guidance: { escalation: 'esc_w', answer: 'B completed' } } }],
+    })
+  })
+
+  test('an old cancellation does not finish its member in the resumed stage', () => {
+    const fast = failFast(typesE2eFirst)
+    const waited = [
+      ...ready(),
+      ...e2eWaits(),
+      ...verifyRun('types', 1, false),
+      ev('verify.cancelled', { step: 'e2e', attempt: 1, cause: { step: 'types' } }),
+      ev('execution.started', { provider: 'test', workspaceRef: '/ws', instance: 'new' }),
+    ]
+    const log = toLog(resumed(waited))
+    const boundary = leafVerifyCycleInputs(logIndexReducer.reduce(log))
+    expect(boundary).toBe(log.at(-1)!.seq)
+    const stage = activeVerifyStage(
+      fast.verify,
+      logIndexReducer.reduce(log).verifyCompleted,
+      reduceBuild(log).verifyStage,
+      boundary,
+    )
+    expect(stage).toMatchObject({
+      stage: ['types', 'e2e'],
+      failures: [],
+      cancellations: [],
+      unfinished: ['types', 'e2e'],
+      settled: false,
+    })
+    expect(members(decideNext(log, fast))).toEqual([
+      ['types', 2],
+      ['e2e', 2],
+    ])
+  })
+
+  test('an interrupted resumed stage re-decides the same attempt', () => {
+    const log = resumed([
+      ...ready(),
+      ...verifyRun('types', 1, true),
+      ...verifyRun('unit', 1, true),
+      ...e2eWaits(),
+    ])
+    const first = decideNext(toLog(log), typesUnitFirst)
+    expect(decideNext(toLog(log), typesUnitFirst)).toEqual(first)
+    expect(first).not.toMatchObject({ kind: 'restack' })
+    const crashed = [...log, ev('verify.started', { step: 'types', attempt: 2 })]
+    expect(members(decideNext(toLog(crashed), typesUnitFirst))).toEqual([
+      ['types', 2],
+      ['unit', 2],
+    ])
+    const half = [...log, ...verifyRun('types', 2, true)]
+    expect(members(decideNext(toLog(half), typesUnitFirst))).toEqual([['unit', 2]])
+  })
+
+  test('a failure in the resumed stage records only that cycle, then routes to implement', () => {
+    const report = { kind: 'verify-report:types', rev: 2 }
+    const log = resumed([...ready(), ...e2eWaits(), ...verifyRun('types', 1, false)])
+    const boundary = toLog(log).at(-1)!.seq
+    const settled = [...log, ...verifyRun('types', 2, false, report), ...verifyRun('e2e', 2, true)]
+    const receipt = decideNext(toLog(settled), typesE2eFirst)
+    expect(receipt).toEqual({
+      kind: 'record-verify-stage-failure',
+      failure: {
+        cycle: boundary,
+        stage: ['types', 'e2e'],
+        attempt: 2,
+        failed: [{ step: 'types', report }],
+        cancelled: [],
+      },
+    })
+    if (receipt.kind !== 'record-verify-stage-failure') throw new Error('missing receipt')
+    const recorded = toLog([...settled, ev('verify.stage-failed', receipt.failure)])
+    expect(decideNext(recorded, typesE2eFirst)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      round: 2,
+      verifyStageFailure: recorded.at(-1)!.seq,
+    })
   })
 })
 
