@@ -7,7 +7,22 @@ import {
   panelOptimizationLog,
 } from './generators/optimization-log'
 import {
+  attemptCreationKey,
+  exhaustedStopDue,
   isNearMiss,
+  isProposerWakeEvent,
+  optimizationSignal,
+  proposalEligible,
+  proposalFilingDue,
+  proposalWithdrawalDue,
+  proposeAdmissible,
+  proposerAdmissible,
+  proposerBlocker,
+  proposerRoom,
+  proposeRunDue,
+  proposeStarted,
+  PROPOSER_WAKE_EVENT_TYPES,
+  signalDue,
   optimizationAdmission,
   optimizationAttempt,
   optimizationElapsedHours,
@@ -17,6 +32,18 @@ import {
   type OptimizationState,
 } from './optimization'
 import { reduceBuild } from './reducer'
+import { terminalGuardReducer } from './terminal-guard'
+import { reduceBuildDigest } from '../store/digest'
+import { REDUCERS } from './reducer-registry'
+import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import { OPTIMIZATION_SHA } from './generators/optimization-log'
+
+/** Digest rows exactly as the store's adapter builds them. */
+function digestRows(events: readonly import('../events/catalog').AbEvent[]) {
+  const read = REDUCERS.buildDigest!.valueRead
+  if ('excluded' in read) throw new Error('buildDigest has no value read')
+  return read.adapt(events as never) as Parameters<typeof reduceBuildDigest>[0]
+}
 
 const START = Date.parse('2026-11-17T00:00:00Z')
 const at = (hours: number) => new Date(START + hours * 3_600_000)
@@ -355,7 +382,296 @@ describe('optimization ledger', () => {
   })
 })
 
+/** An opened, measured optimization node: concurrency 4, 60 attempts, 24 hours. */
+function openedNode(objective = commandObjective()): OptimizationLogBuilder {
+  return new OptimizationLogBuilder()
+    .push({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: 'repo',
+        ticket: { source: 'file', id: 'node' },
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    .accept(objective, 1)
+    .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+    .baseline(1, 50, 1.5)
+}
+
+describe('proposer state', () => {
+  test('a request opens a proposal at the next round; a deposit and filing close it', () => {
+    const log = openedNode().request('r1', 3)
+    let state = digest(log)
+    expect(state.requests).toBe(1)
+    expect(state.proposal).toMatchObject({ id: 'r1', room: 3, round: 1 })
+    expect(proposeRunDue(state)).toBe(true)
+    log.deposit('wrong', 1, ['x'])
+    expect(digest(log).proposal?.deposited).toBeUndefined()
+    log.deposit('r1', 1, ['a', 'b'])
+    state = digest(log)
+    expect(state.proposal?.deposited).toMatchObject({ ids: ['a', 'b'] })
+    expect(proposeRunDue(state)).toBe(false)
+    expect(proposalFilingDue(state)).toBe(true)
+    log.file('r1', ['a', 'b'])
+    state = digest(log)
+    expect(state.proposal).toBeUndefined()
+    expect(state.attempts.filed).toBe(2)
+    expect(state.inFlight.map((attempt) => attempt.proposal)).toEqual(['a', 'b'])
+    expect(digest(log.request('r2', 2)).proposal?.round).toBe(2)
+  })
+
+  test('a withdrawal clears only an undeposited request and never counts as empty', () => {
+    const withdrawn = digest(openedNode().request('r1', 3).withdraw('r1', 'budget'))
+    expect(withdrawn.proposal).toBeUndefined()
+    expect(withdrawn.emptyProposals).toBe(0)
+    const deposited = digest(
+      openedNode().request('r1', 3).deposit('r1', 1, ['a']).withdraw('r1', 'stopped'),
+    )
+    expect(deposited.proposal?.deposited?.ids).toEqual(['a'])
+    // The build digest's signal folds the same way.
+    expect(
+      reduceBuildDigest(
+        digestRows(
+          openedNode().request('r1', 3).deposit('r1', 1, ['a']).withdraw('r1', 'stopped').events,
+        ),
+      ).optimization,
+    ).toMatchObject({ proposal: { request: 'r1', deposited: { ids: ['a'] } } })
+  })
+
+  test('room is the free slots capped by the attempts budget, and 0 once a budget is spent', () => {
+    const state = digest(openedNode())
+    expect(proposerRoom(state, at(1))).toBe(4)
+    expect(proposerRoom(state, at(25))).toBe(0)
+    const tight = digest(openedNode(commandObjective({ budget: { maxAttempts: 2 } })))
+    expect(proposerRoom(tight, at(1))).toBe(2)
+    const running = digest(openedNode().propose('r1', ['a', 'b', 'c']))
+    expect(proposerRoom(running, at(1))).toBe(1)
+  })
+
+  test('admission refuses each condition in turn and admits otherwise', () => {
+    const now = at(1)
+    expect(proposerAdmissible(reduceBuild(openedNode().events), now)).toBe(true)
+    const refused = (builder: OptimizationLogBuilder, when = now) =>
+      expect(proposerAdmissible(reduceBuild(builder.events), when)).toBe(false)
+    refused(openedNode().stop('operator', 'abort'))
+    refused(
+      new OptimizationLogBuilder()
+        .push({
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: 'repo',
+            ticket: { source: 'file', id: 'node' },
+            baseBranch: 'main',
+            kind: 'node',
+          },
+        })
+        .accept(commandObjective(), 1)
+        .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } }),
+    )
+    refused(openedNode().request('r1', 4))
+    refused(openedNode(commandObjective({ budget: { maxAttempts: 2 } })).propose('r1', ['a', 'b']))
+    refused(openedNode(), at(25))
+    refused(openedNode().propose('r1', ['a', 'b', 'c', 'd']))
+    refused(openedNode().propose('r1', [], 'none').propose('r2', [], 'none'))
+    refused(openedNode().push({ actor: KERNEL, type: 'build.paused', payload: {} }))
+    refused(
+      openedNode().push({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'e1', phase: 'propose', source: 'agent', question: 'why?' },
+      }),
+    )
+  })
+
+  test('a waiting request stays eligible only while it fits current state', () => {
+    const now = at(1)
+    const fits = digest(openedNode().request('r1', 4))
+    expect(proposalEligible(fits, now)).toBe(true)
+    expect(proposeAdmissible(fits, now)).toBe(true)
+    expect(proposalWithdrawalDue(fits, now)).toBeUndefined()
+    expect(proposalWithdrawalDue(fits, at(25))).toBe('budget')
+    const stopped = digest(openedNode().request('r1', 4).stop('operator', 'abort'))
+    expect(proposalWithdrawalDue(stopped, now)).toBe('stopped')
+    const budget = digest(openedNode().request('r1', 4).revise({ maxAttempts: 1 }, 2))
+    expect(proposalWithdrawalDue(budget, now)).toBe('budget')
+    const concurrency = digest(openedNode().request('r1', 4).revise({ concurrency: 2 }, 2))
+    expect(proposalWithdrawalDue(concurrency, now)).toBe('concurrency')
+    expect(proposeAdmissible(concurrency, now)).toBe(false)
+    // Deposited requests are never withdrawn.
+    const deposited = digest(
+      openedNode().request('r1', 4).deposit('r1', 1, ['a']).stop('operator', 'abort'),
+    )
+    expect(proposalWithdrawalDue(deposited, now)).toBeUndefined()
+  })
+
+  test('a started session is admitted whatever later revisions say', () => {
+    const log = openedNode().request('r1', 4)
+    expect(proposeStarted(reduceBuild(log.events))).toBe(false)
+    log.push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+    log.revise({ concurrency: 1 }, 2)
+    const state = reduceBuild(log.events)
+    expect(state.currentPhase).toMatchObject({ phase: 'propose', round: 1 })
+    expect(proposeStarted(state)).toBe(true)
+    expect(proposeAdmissible(state.optimization, at(1))).toBe(false)
+  })
+
+  test('two consecutive empty proposals make the exhausted stop due', () => {
+    expect(exhaustedStopDue(digest(openedNode().propose('r1', [], 'none')))).toBe(false)
+    const twice = openedNode().propose('r1', [], 'none').propose('r2', [], 'none')
+    expect(exhaustedStopDue(digest(twice))).toBe(true)
+    expect(exhaustedStopDue(digest(twice.stop('exhausted', 'abort')))).toBe(false)
+  })
+
+  test('attempt creation keys are deterministic version-4 UUIDs per node and proposal', () => {
+    const key = attemptCreationKey('acme/repo', 'node-a', 'cache')
+    expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(attemptCreationKey('acme/repo', 'node-a', 'cache')).toBe(key)
+    expect(attemptCreationKey('acme/repo', 'node-b', 'cache')).not.toBe(key)
+    expect(attemptCreationKey('acme/repo', 'node-a', 'index')).not.toBe(key)
+  })
+})
+
+describe('proposer digest signal', () => {
+  test('the build digest signal equals the BuildState digest signal', () => {
+    const log = optimizationLog()
+    const state = reduceBuild(log).optimization!
+    const signal = reduceBuildDigest(digestRows(log)).optimization
+    expect(signal).toMatchObject(optimizationSignal(state))
+  })
+
+  test('a plain node signals false and a leaf has no signal', () => {
+    const node = reduceBuildDigest(
+      digestRows([
+        {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: 'r',
+            ticket: { source: 'file', id: 'n' },
+            baseBranch: 'm',
+            kind: 'node',
+          },
+          build: 'n',
+          seq: 1,
+          ts: '2026-11-17T00:00:00.000Z',
+        } as never,
+      ]),
+    )
+    expect(node.optimization).toBe(false)
+    expect(reduceBuildDigest([]).optimization).toBeUndefined()
+  })
+
+  test('due work follows the signal; a deferral holds until a wake fact', () => {
+    const now = at(1)
+    const signal = (builder: OptimizationLogBuilder) =>
+      reduceBuildDigest(digestRows(builder.events)).optimization || undefined
+    expect(signalDue(signal(openedNode())!, now)).toBe('request')
+    expect(signalDue(signal(openedNode())!, at(25))).toBeUndefined()
+    expect(signalDue(signal(openedNode())!, now, true)).toBeUndefined()
+    expect(signalDue(signal(openedNode().request('r1', 4))!, now)).toBeUndefined()
+    expect(signalDue(signal(openedNode().request('r1', 4).deposit('r1', 1, ['a']))!, now)).toBe(
+      'filing',
+    )
+    const exhausted = openedNode().propose('r1', [], 'none').propose('r2', [], 'none')
+    expect(signalDue(signal(exhausted)!, now)).toBe('exhausted')
+    const deferred = openedNode().defer('paused')
+    expect(signalDue(signal(deferred)!, now)).toBeUndefined()
+    deferred.push({ actor: KERNEL, type: 'build.resumed', payload: {} })
+    expect(signalDue(signal(deferred)!, now)).toBe('request')
+  })
+
+  test('the signal is the same size at 10 and 10,000 settled attempts', () => {
+    const settled = (count: number) => {
+      const log = openedNode(commandObjective({ budget: { maxAttempts: 20_000 } }))
+      for (let index = 0; index < count; index += 1)
+        log.propose(`r${index}`, [`a${index}`]).settle(`a${index}`, 'declined')
+      return JSON.stringify(reduceBuildDigest(digestRows(log.events)).optimization).length
+    }
+    // Only the counters' digit widths may differ.
+    expect(Math.abs(settled(10_000) - settled(10))).toBeLessThan(16)
+  })
+})
+
+describe('proposer wake set', () => {
+  // Each blocker is built from facts, then cleared by a fact that must wake
+  // the node; compatibility clears by upgrade, which the digest observes.
+  const opened = () => openedNode()
+  const cases: {
+    reason: NonNullable<ReturnType<typeof proposerBlocker>>
+    block: (log: OptimizationLogBuilder) => OptimizationLogBuilder
+    clear: (log: OptimizationLogBuilder) => OptimizationLogBuilder
+  }[] = [
+    {
+      reason: 'paused',
+      block: (log) => log.push({ actor: KERNEL, type: 'build.paused', payload: {} }),
+      clear: (log) => log.push({ actor: KERNEL, type: 'build.resumed', payload: {} }),
+    },
+    {
+      reason: 'command',
+      block: (log) =>
+        log.push({ actor: humanActor('ada'), type: 'build.pause-requested', payload: {} }),
+      clear: (log) => log.push({ actor: KERNEL, type: 'build.paused', payload: {} }),
+    },
+    {
+      reason: 'blocked',
+      block: (log) =>
+        log.push({
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: { id: 'e1', phase: 'propose', source: 'agent', question: 'why?' },
+        }),
+      clear: (log) =>
+        log.push({
+          actor: humanActor('ada'),
+          type: 'escalation.answered',
+          payload: { id: 'e1', answer: 'because', resolution: 'guidance' },
+        }),
+    },
+  ]
+  for (const { reason, block, clear } of cases)
+    test(`${reason} is cleared by a wake fact`, () => {
+      const blocked = block(opened())
+      expect(proposerBlocker(reduceBuild(blocked.events))).toBe(reason)
+      const cleared = clear(blocked)
+      const last = cleared.events.at(-1)!
+      expect(isProposerWakeEvent(last)).toBe(true)
+      // `command` clears to `paused`, which `build.resumed` then wakes.
+      const after = proposerBlocker(reduceBuild(cleared.events))
+      expect(after === undefined || after === 'paused').toBe(true)
+    })
+
+  test('every structural blocker has a clearing fact in the wake set', () => {
+    const wake = new Set<string>(PROPOSER_WAKE_EVENT_TYPES)
+    const clearing: Record<string, string[]> = {
+      paused: ['build.resumed'],
+      blocked: ['escalation.answered', 'wait.ended'],
+      command: ['build.paused', 'build.resumed', 'build.aborted'],
+      restack: ['node.item-replayed', 'node.writer-settled'],
+      integration: ['integration.abandoned', 'integration.landed'],
+      landing: ['pr.opened'],
+    }
+    for (const types of Object.values(clearing))
+      for (const type of types) expect(wake.has(type)).toBe(true)
+    expect(wake.has('optimization.proposal-deferred')).toBe(false)
+  })
+})
+
 test('the stop and admission inputs and the ledger have bounded read cost', async () => {
   const { optimizationReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationReadBudget()
 }, 120_000)
+
+test('a second propose terminal for the round is refused', () => {
+  const log = new OptimizationLogBuilder()
+    .accept(commandObjective(), 1)
+    .request('r1', 2)
+    .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+    .deposit('r1', 1, ['a'])
+  const guard = terminalGuardReducer({ phase: 'propose', round: 1, session: 'sess-propose' })
+  expect(guard.reduce(log.events).diagnostic).toMatch(/second terminal call rejected/)
+  const next = terminalGuardReducer({ phase: 'propose', round: 2, session: 'sess-propose' })
+  expect(next.reduce(log.events).diagnostic).toBeUndefined()
+})

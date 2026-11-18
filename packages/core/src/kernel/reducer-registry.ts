@@ -5,7 +5,7 @@ import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
-import { optimizationLedgerReducer, optimizationReducer } from './optimization'
+import { isOptimizationEvent, optimizationLedgerReducer, optimizationReducer } from './optimization'
 import { leafRestackReducer } from './leaf-restack-state'
 import { terminalGuardReducer } from './terminal-guard'
 import { repositoryAttentionReducer } from './repository-attention'
@@ -307,6 +307,17 @@ function digestNodeTargetsOf(event: { type: string; payload: unknown }): {
   return nodeTargets.length ? { nodeTargets } : {}
 }
 
+/** The optimization fact one digest row carries, decoded whole. */
+function digestOptimizationOf(
+  event: Parameters<ValueCatalogEntry['adapt']>[0][number],
+): Pick<DigestEventRow, 'optimizationEvent'> {
+  if (!isOptimizationEvent(event)) return {}
+  const decoded = decodeStoredEvent(event)
+  return decoded === null
+    ? {}
+    : { optimizationEvent: decoded as DigestEventRow['optimizationEvent'] }
+}
+
 /** The ticket-wait slice of one event row the build digest folds. */
 function digestTicketWaitOf(
   event: Parameters<ValueCatalogEntry['adapt']>[0][number],
@@ -363,6 +374,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                       ? { instance: event.payload.instance }
                       : {}),
                     ...digestTicketWaitOf(event),
+                    ...digestOptimizationOf(event),
                   }))
                 : events,
             create: parameterized[name]?.create ?? (() => entry.reducer),

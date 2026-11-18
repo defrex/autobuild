@@ -29,13 +29,14 @@ Skills guide the agents that plan, implement, review and operate Autobuild, one 
 | `ab-code-review` | Review the implementation against the contract independently |
 | `ab-finalize` | Write the pull request description after verification |
 | `ab-reconcile` | Resolve conflicts in a kernel-prepared replay onto a refreshed base |
+| `ab-propose` | Propose the next attempts for an optimization node; the dispatcher files them |
 | `ab-operate` | External operator agent: operate the builds the repository's dispatcher dispatches, adopt new work, answer escalations and control merge |
 | `ab-tickets` | Read, create, groom and update tickets through the tracker interface |
 | `ab-harvest` | Turn claimed observations into ticket proposals |
 | `ab-harvest-review` | Review those proposals independently |
 | `ab-guide` | Reference for the system, configuration, setup and installed skills |
 
-- **Phase skills** (plan through reconcile) are runner-invoked; don't start them manually.
+- **Phase skills** (plan through reconcile, and propose) are runner-invoked; don't start them manually.
 - **Spec, ticket and operator skills** work outside the pipeline. Observation harvest is a separate repository workflow.
 - **No generic agent verifier ships.** Your repository supplies its own evidence and checks.
 
