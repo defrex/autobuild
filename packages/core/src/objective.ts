@@ -196,7 +196,7 @@ export type ObjectiveEpsilon = z.infer<typeof objectiveEpsilonSchema>
 
 const harnessSchema = z.array(pathSelectorSchema).min(1)
 
-const commandMetricSchema = z.strictObject({
+export const commandMetricSchema = z.strictObject({
   kind: z.literal('command'),
   command: z.string().trim().min(1),
   direction: z.enum(['minimize', 'maximize']),
@@ -220,6 +220,7 @@ const panelMetricSchema = z
   })
 
 const metricSchema = z.discriminatedUnion('kind', [commandMetricSchema, panelMetricSchema])
+export type CommandMetric = z.infer<typeof commandMetricSchema>
 export type ObjectiveMetric = z.infer<typeof metricSchema>
 
 const BUDGET_MISSING = 'set budget.maxAttempts or budget.maxHours'

@@ -74,11 +74,13 @@ export const executionProgress = {
   'node.opened': 'progress',
   'optimization.objective-accepted': 'progress',
   'optimization.objective-revised': 'bookkeeping',
-  'optimization.baseline-measured': 'bookkeeping',
+  'optimization.baseline-measured': 'progress',
+  'optimization.noise-exceeded': 'bookkeeping',
   'optimization.proposal-requested': 'bookkeeping',
   'optimization.attempts-proposed': 'bookkeeping',
   'attempt.measurement-requested': 'bookkeeping',
-  'attempt.measured': 'bookkeeping',
+  'attempt.sampled': 'progress',
+  'attempt.measured': 'progress',
   'optimization.progress-measured': 'bookkeeping',
   'attempt.settled': 'bookkeeping',
   'optimization.stopped': 'bookkeeping',
@@ -197,7 +199,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 6,
+  version: 7,
   initial: (): Accumulator => ({
     active: null,
     count: 0,
