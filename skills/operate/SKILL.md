@@ -345,6 +345,9 @@ Read events with a cursor or a small `--events` count; logs are long.
   head beside the current one.
 - Configure ordered `[[merge]]` rules for project policy through ab-guide.
   Repository auto-merge defaults and per-build auto-merge toggles are retired.
+- `ab objective <node>` reads an optimization node's progress; its flags
+  revise the stop rules and `--stop [--drain | --abort]` stops it. See
+  [optimization nodes](#optimization-nodes).
 
 ### Tickets
 
@@ -471,6 +474,9 @@ that does the job, and say what you are doing before you do it:
 - `repository.settings` and `repository.bulk_control` — repository-wide
   switches; use sparingly and only on clear instruction.
 - `harvest.control` — start or control an observation run.
+- `optimization.revise`, `optimization.stop` — revise an optimization node's
+  stop rules, or stop it; see [optimization nodes](#optimization-nodes).
+  Stopping cancels or aborts attempts in flight and cannot be undone.
 
 Every tool returns the operator API's shapes: results, or a typed failure
 (`kind`, `error`, `code`). A refusal is information, not an exception:
@@ -736,6 +742,37 @@ the episode started. Diagnose and fix the cause within the Boundaries, then
 answer with a bare retry so the janitor attempts on its next tick. The janitor
 keeps retrying underneath, so the escalation may also close on its own when an
 attempt succeeds; reconcile current status before acting on it.
+
+## Optimization nodes
+
+An optimization node files and dispatches its own attempts toward an objective,
+and stops itself once a cause is met. Your part is reading progress, adjusting
+when to stop, and landing the result.
+
+- **Read progress** with `ab objective <node>` (`--json` for the structured
+  view): starting, current and best values, attempts filed, accepted, rejected
+  and running, the plateau counter, elapsed hours, stop eligibility, and, once
+  stopped, the cause, mode and what still blocks completion.
+- **Revise when to stop** with `ab objective <node> --threshold n`, or
+  `--max-attempts n`, `--max-hours n`, `--plateau n` or `--stop-mode abort|drain`.
+  The dispatcher applies the change on its next tick, with no replanning and
+  running attempts untouched. Lowering the threshold to the current value, or a
+  budget to what is already spent, stops the node on that tick.
+- **Stop it** with `ab objective <node> --stop` to take the progress so far.
+  Without a flag the objective's stop mode applies, `abort` unless the objective
+  says otherwise. `--stop --abort` cancels queued attempts and aborts running
+  ones, and they all settle `stopped`. `--stop --drain` cancels queued attempts
+  and lets running ones finish and face the landing gate, so a nearly finished
+  improvement can still land. A stop is final: no proposer runs after it, and a
+  later revision does not restart the search.
+- **Land it** once it completes. A stopped node with no attempt running or
+  waiting to land completes, verifies and appears in the consent queue like any
+  node. Stopping is not consent: run `ab merge <node>`. Before then, `ab merge`
+  refuses with `node-incomplete` and names the reason, either that the node has
+  not stopped or which attempts are still in flight.
+
+A connected agent uses `optimization.revise` and `optimization.stop` (optional
+`mode`), then `builds.control` with action `merge`.
 
 ## Forge failure recovery
 

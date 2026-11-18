@@ -65,13 +65,13 @@ test('a command objective projects every field from the digest', () => {
     starting: 50,
     current: 44,
     threshold: 35,
-    noise: 1.5,
+    noise: 1.6,
     attempts: { filed: 4, accepted: 1, rejected: 3, running: 0 },
     budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-11-17T00:00:00.000Z' },
     stopped: { cause: 'plateau', mode: 'drain', at: '2026-11-17T00:00:00.000Z' },
   })
   expect(objectiveParts(row, 0)).toEqual([
-    ['objective 50 → 44 (minimize)', 'threshold 35', 'noise ±1.5'],
+    ['objective 50 → 44 (minimize)', 'threshold 35', 'noise ±1.6'],
     ['attempts 1 accepted', '3 rejected', '0 running'],
     ['budget 4/60 attempts', '0.0/24 hours'],
     ['stopped plateau (drain)'],
@@ -135,7 +135,7 @@ test('the terminal dashboard renders the row and the detail field', () => {
   const list = render(events, 120)
   const bar = list.findIndex((line) => line.includes('children unknown'))
   expect(list[bar + 1]).toBe(
-    '   objective 50 → 44 (minimize) · threshold 35 · noise ±1.5 · attempts 1 accepted · 3 rejected · 0 running ·',
+    '   objective 50 → 44 (minimize) · threshold 35 · noise ±1.6 · attempts 1 accepted · 3 rejected · 0 running ·',
   )
   expect(list.join('\n')).toContain('stopped plateau (drain)')
   const detail = render(events, 120, true)
