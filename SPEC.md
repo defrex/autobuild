@@ -3515,7 +3515,9 @@ unreadable artifact, raises an escalation on the node in phase `propose`
 instead of creating anything. Two consecutive empty `attempts-proposed`
 records stop the node: the dispatcher appends
 `optimization.stopped {cause: exhausted, mode}` with the objective's stop
-mode, and the stop policy applies.
+mode, and admission requests no further proposals. Recording the stop is
+separate from applying it: aborting or draining attempts in flight under that
+mode belongs to the stop policy, not to the proposer.
 
 Discovery reads only build digests. Each build digest carries an
 `optimization` signal, `false` for a plain node and a bounded summary for an

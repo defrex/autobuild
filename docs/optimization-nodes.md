@@ -352,7 +352,8 @@ escalation on the node instead of creating anything.
 
 **Exhausted.** Two consecutive empty proposals stop the node: the dispatcher
 records `optimization.stopped` with cause `exhausted` and the objective's stop
-mode, and the stop policy applies.
+mode, and requests no further proposals. Recording the stop does not abort or
+drain attempts already in flight.
 
 ## Attempts
 
