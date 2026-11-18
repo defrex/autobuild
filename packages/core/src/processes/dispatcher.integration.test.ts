@@ -6,6 +6,7 @@ import {
   parkedSweepReadBudget,
   ticketWaitIdleReadBudget,
   provisionContinuationGuardReadBudget,
+  sampledMeasurementReadBudget,
 } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
@@ -18382,4 +18383,249 @@ describe('dispatcher — ticket waits', () => {
     expect(h.launches).toContain(WAITER)
     expect(h.tickets.claims).not.toContain('D')
   })
+})
+
+describe('the dispatcher admits and decides optimization measurements (SPEC §13.1.1)', () => {
+  const NODE = 'opt-node'
+  const PIN = 'a'.repeat(40)
+  const CANDIDATE = 'c'.repeat(40)
+  const metric = {
+    kind: 'command' as const,
+    command: 'bun bench.ts',
+    direction: 'minimize' as const,
+    samples: 3,
+    harness: ['bench/**'],
+  }
+  const objective = (command = metric.command) => ({
+    purpose: 'faster search',
+    metric: { ...metric, command },
+    target: { epsilon: { absolute: 2 } },
+    budget: { maxAttempts: 10 },
+    stop: { mode: 'abort' as const },
+    proposer: { concurrency: 1 },
+  })
+
+  async function seedNode(store: BuildStore, forge: FakeForge): Promise<void> {
+    forge.seedBranch(`ab-node/${NODE}`, PIN)
+    await store.createBuild({ slug: NODE, repo: REPO, branch: `ab-node/${NODE}` })
+    await store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'NODE' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: { objective: objective(), revision: 1, harnessPin: PIN, specRev: 0 },
+    })
+    await store.append(NODE, { actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+    await store.append(NODE, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+    })
+  }
+
+  /** A green attempt parked at `awaiting-pr` with no runner. */
+  async function parkedAttempt(h: Harness, slug: string, number: number): Promise<string> {
+    await h.tickets.create(
+      { title: slug, body: CONFORMING_BODY, labels: [] },
+      { requestedId: `T-${slug}` },
+    )
+    await seedBuild(h, { slug, ticketId: `T-${slug}` })
+    await seedLoopsApproved(h, slug)
+    const pr = { number, url: `https://fake.forge/pr/${number}`, headSha: 'head-1' }
+    await h.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr } })
+    h.forge.setPrState(number, { state: 'open', mergeable: true })
+    return slug
+  }
+
+  async function sample(
+    store: BuildStore,
+    slug: string,
+    request: string,
+    medians = { baseline: 50, candidate: 47 },
+  ): Promise<void> {
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id: request,
+        node: NODE,
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        metric,
+      },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'attempt.sampled',
+      payload: {
+        request,
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        samples: 3,
+        medians,
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+  }
+
+  const decisions = async (store: BuildStore, slug: string) =>
+    (await store.getEvents(slug)).filter(
+      (event) =>
+        event.type === 'attempt.measured' ||
+        (event.type === 'escalation.raised' && event.payload.policyCause === 'measurement-failed'),
+    )
+
+  test('records attempt.measured against the node’s current epsilon and spread, once', async () => {
+    const h = harness()
+    await seedNode(h.store, h.forge)
+    const slug = await parkedAttempt(h, 'attempt-a1', 1)
+    await sample(h.store, slug, 'm1')
+    // Revised while the samples ran: ε 2 → 4 turns a delta of 3 into no improvement.
+    await h.store.append(NODE, {
+      actor: humanActor('ada'),
+      type: 'optimization.objective-revised',
+      payload: { changes: { epsilon: { absolute: 4 } }, revision: 2 },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const [measured, ...rest] = await decisions(h.store, slug)
+    expect(rest).toEqual([])
+    expect(measured).toMatchObject({
+      actor: DISPATCHER,
+      type: 'attempt.measured',
+      payload: {
+        request: 'm1',
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        samples: 3,
+        medians: { baseline: 50, candidate: 47 },
+        delta: 3,
+        decision: 'no-improvement',
+        spread: 0.5,
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await decisions(h.store, slug)).toHaveLength(1)
+  })
+
+  test('a new ruler after sampling raises measurement-failed instead, and only once', async () => {
+    const h = harness()
+    await seedNode(h.store, h.forge)
+    const slug = await parkedAttempt(h, 'attempt-a1', 1)
+    await sample(h.store, slug, 'm1')
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: objective('bun bench-v2.ts'),
+        revision: 2,
+        harnessPin: 'b'.repeat(40),
+        specRev: 1,
+      },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const [raised, ...rest] = await decisions(h.store, slug)
+    expect(rest).toEqual([])
+    expect(raised).toMatchObject({
+      actor: DISPATCHER,
+      type: 'escalation.raised',
+      payload: {
+        phase: 'measurement',
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question: expect.stringContaining('older than the current ruler (revision 2)'),
+      },
+    })
+    const id = (raised!.payload as { id: string }).id
+    await h.store.append(slug, {
+      actor: humanActor('ada'),
+      type: 'escalation.answered',
+      payload: { id, answer: 'noted', resolution: 'guidance' },
+    })
+    for (let tick = 0; tick < 2; tick++) {
+      h.clock.advance(10 * 60_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(await decisions(h.store, slug)).toHaveLength(1)
+    const state = (await readBuildFacts(h.store, slug)).value.state
+    expect(state.attemptMeasurement?.refused).toBe('m1')
+  })
+
+  test('a node due its starting measurement gets a workspace and runner, then releases it', async () => {
+    const h = harness()
+    h.forge.seedBranch(`ab-node/${NODE}`, PIN)
+    await h.store.createBuild({ slug: NODE, repo: REPO, branch: `ab-node/${NODE}` })
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'NODE' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: { objective: objective(), revision: 1, harnessPin: PIN, specRev: 0 },
+    })
+    await h.store.append(NODE, { actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.launches).toEqual([NODE])
+    const types = async () => (await h.store.getEvents(NODE)).map((event) => event.type)
+    expect(await types()).toContain('workspace.provisioned')
+    await h.store.append(NODE, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await types()).toContain('workspace.released')
+    expect(h.launches).toEqual([NODE])
+  })
+
+  test('idle ticks stay bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const first = harness({ store, clock })
+    const make = () =>
+      harness({ store, clock, forge: first.forge, wrapTickets: () => first.tickets })
+    const h = first
+    await seedNode(store, first.forge)
+    const attempts = [
+      await parkedAttempt(h, 'attempt-a1', 1),
+      await parkedAttempt(h, 'attempt-a2', 2),
+    ]
+    await sampledMeasurementReadBudget({
+      store,
+      node: NODE,
+      attempts,
+      dispatcher: () => make().dispatcher,
+      sample: (slug, request) => sample(store, slug, request),
+      decided: async (slug, request) =>
+        (await store.getEvents(slug)).some(
+          (event) => event.type === 'attempt.measured' && event.payload.request === request,
+        ),
+      advance: () => clock.advance(10 * 60_000),
+    })
+  }, 120_000)
 })
