@@ -27,6 +27,8 @@ export async function settleAttempt(
   outcome: AttemptOutcome,
   measurement?: EventPayload<'attempt.settled'>['measurement'],
   note?: string,
+  /** The node head an `accepted` attempt landed as. */
+  head?: string,
 ): Promise<boolean> {
   while (true) {
     const state = (await readBuildFacts(store, node)).value.state
@@ -44,6 +46,7 @@ export async function settleAttempt(
         outcome,
         ...(measurement !== undefined ? { measurement } : {}),
         ...(note !== undefined ? { note: note.slice(0, 4000) } : {}),
+        ...(head !== undefined ? { head } : {}),
       },
     })
     if (written) return true

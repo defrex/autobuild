@@ -96,6 +96,7 @@ describe('optimization digest', () => {
     expect(state.starting).toEqual({ value: 0.5, spread: 0.05, head: 'a'.repeat(40) })
     expect(state.current).toBe(0.7)
     expect(state.best).toBe(0.7)
+    expect(state.progressQueue).toEqual(['d'.repeat(40)])
     const before = digest(new OptimizationLogBuilder().accept(panelObjective(), 1))
     expect(before.current).toBe(0.5)
   })
@@ -211,10 +212,32 @@ describe('optimization selectors', () => {
     builder.settle('a', 'accepted', { revision: 1, baseline: 50, candidate: 40, delta: 10 })
     expect(optimizationStopEligibility(digest(builder), at(0)).threshold).toBe(true)
 
-    const panel = new OptimizationLogBuilder().accept(panelObjective(), 1).progress(1, 0.79)
+    const panel = new OptimizationLogBuilder()
+      .accept(panelObjective(), 1)
+      .baseline(1, 0.5, 0)
+      .progress(1, 0.79)
     expect(optimizationStopEligibility(digest(panel), at(0)).threshold).toBe(false)
     panel.progress(1, 0.8)
     expect(optimizationStopEligibility(digest(panel), at(0)).threshold).toBe(true)
+  })
+
+  test('a panel threshold reads recorded progress against the start, never a settlement win rate', () => {
+    const panel = new OptimizationLogBuilder()
+      .accept(panelObjective(), 1)
+      .baseline(1, 0.5, 0)
+      .propose('r', ['a'])
+      .settle(
+        'a',
+        'accepted',
+        { revision: 1, baseline: 0.5, candidate: 0.9, delta: 0.4 },
+        undefined,
+        'c'.repeat(40),
+      )
+    expect(digest(panel).current).toBe(0.5)
+    expect(optimizationStopCause(digest(panel), at(0))).toBeUndefined()
+    panel.progress(1, 0.8, 'c'.repeat(40))
+    expect(optimizationStopCause(digest(panel), at(0))).toBe('threshold')
+    expect(digest(panel).progressQueue).toBeUndefined()
   })
 
   test('no threshold is never eligible', () => {
@@ -683,6 +706,11 @@ describe('optimization ledger', () => {
 test('the stop and admission inputs and the ledger have bounded read cost', async () => {
   const { optimizationReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationReadBudget()
+}, 120_000)
+
+test('panel progress selection reads zero idle event rows at 100 and 100,000 events', async () => {
+  const { panelProgressReadBudget } = await import('../testing/reduced-read-budget')
+  await panelProgressReadBudget()
 }, 120_000)
 
 test('the landing gate and the rejected-role sweep have bounded read cost', async () => {

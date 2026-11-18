@@ -152,8 +152,12 @@ import {
   baselineSummary,
   effectiveEpsilon,
   median,
+  nodeMeasurementDue,
+  nodePanelEscalationId,
+  nodePanelId,
   noiseExceeded,
   pendingMeasurementRequest,
+  progressMeasurementDue,
 } from '../kernel/measurement'
 import { runPairedMeasurement, type MeasurementResult } from './measurement-runner'
 import { JUDGE_ROLE } from '../config/roles'
@@ -288,6 +292,7 @@ type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
 type CheckReconcileProgressDecision = Extract<Decision, { kind: 'check-reconcile-progress' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 type MeasureBaselineDecision = Extract<Decision, { kind: 'measure-baseline' }>
+type MeasureProgressDecision = Extract<Decision, { kind: 'measure-progress' }>
 type RunMeasurementDecision = Extract<Decision, { kind: 'run-measurement' }>
 
 /** The artifact kind holding a measurement's raw per-sample values. */
@@ -1509,6 +1514,9 @@ export class BuildRunner {
         case 'measure-baseline':
           await this.measureBaseline(decision)
           return decision
+        case 'measure-progress':
+          await this.measureProgress(decision)
+          return decision
         case 'run-measurement':
           await this.runMeasurement(decision)
           return decision
@@ -1569,7 +1577,7 @@ export class BuildRunner {
       initial.kind === 'node' &&
       !initial.nodeRestack?.conflict &&
       !integrationCurrent(initial) &&
-      !baselineMeasurementDue(initial) &&
+      !nodeMeasurementDue(initial) &&
       initialFacts.log.readDeferrals.length === 0
     )
       return initial
@@ -2856,13 +2864,22 @@ export class BuildRunner {
   }
 
   /** A measurement that cannot record a decision blocks the build until an
-   * operator answers; the answer re-arms the same measurement. */
-  private async raiseMeasurementEscalation(question: string): Promise<void> {
+   * operator answers; the answer re-arms the same measurement. A node panel
+   * passes its deterministic id, so a crash never raises it twice. */
+  private async raiseMeasurementEscalation(question: string, id?: string): Promise<void> {
+    if (id !== undefined) {
+      const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
+      if (
+        state.openEscalations.some((escalation) => escalation.id === id) ||
+        state.answeredEscalations.some((escalation) => escalation.id === id)
+      )
+        return
+    }
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,
       type: 'escalation.raised',
       payload: {
-        id: this.deps.ids('esc'),
+        id: id ?? this.deps.ids('esc'),
         phase: 'measurement',
         source: 'policy',
         policyCause: 'measurement-failed',
@@ -2893,7 +2910,7 @@ export class BuildRunner {
     )
       return
     const metric = before.optimization!.objective.metric
-    if (metric.kind !== 'command') return
+    if (metric.kind === 'panel') return this.measurePanelBaseline(decision, before)
     const pin = decision.harnessPin
     const result = await this.pairedMeasurement({
       id: `baseline-${decision.revision}-${pin}`,
@@ -2956,6 +2973,157 @@ export class BuildRunner {
           report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
         },
       }),
+    )
+  }
+
+  /** A panel node's starting measurement: one panel of its harness pin
+   * against itself. The starting value is 0.5 by definition; the spread is
+   * the self-comparison win rate's distance from 0.5. */
+  private async measurePanelBaseline(
+    decision: MeasureBaselineDecision,
+    before: BuildState,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    const ruler = before.optimization!.rulerRevision
+    const { objective } = before.optimization!
+    if (objective.metric.kind !== 'panel') return
+    const metric = objective.metric
+    const pin = decision.harnessPin
+    // Keyed on the ruler, not the revision: a quick revision mid-run resumes
+    // the same panel.
+    const panel = nodePanelId(before, `baseline-${ruler}-${pin}`)
+    const result = await this.runPanel({
+      id: panel,
+      candidate: pin,
+      baseline: pin,
+      harnessPin: pin,
+      purpose: objective.purpose,
+      rubric: metric.rubric,
+      harness: metric.harness,
+      judges: metric.judges,
+    })
+    if (result.kind === 'interrupted') return
+    const after = (await readBuildFacts(store, slug)).value.state
+    const optimization = after.optimization
+    if (
+      !baselineMeasurementDue(after) ||
+      optimization === undefined ||
+      optimization.rulerRevision !== ruler ||
+      optimization.accepted.harnessPin !== pin
+    )
+      return
+    if (result.kind === 'failed') {
+      await this.raiseMeasurementEscalation(
+        this.failedPanelQuestion(`The starting panel of harness pin ${pin}`, result),
+        nodePanelEscalationId(panel),
+      )
+      return
+    }
+    const spread = Math.abs(result.winRate - 0.5)
+    const epsilon = optimization.objective.target.epsilon
+    const effective = effectiveEpsilon(epsilon, result.winRate)
+    // Attention first, as for a command: a crash before the starting value
+    // resumes the panel and raises it again, never loses it.
+    if (noiseExceeded(effective, spread))
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'optimization.noise-exceeded',
+        payload: {
+          revision: optimization.revision,
+          head: pin,
+          harnessPin: pin,
+          median: result.winRate,
+          spread,
+          epsilon: { ...epsilon },
+          effectiveEpsilon: effective,
+        },
+      } satisfies EventWrite<'optimization.noise-exceeded'>)
+    // The judgments are on this log as `panel.judged`; no report is deposited.
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: {
+        revision: optimization.revision,
+        head: pin,
+        harnessPin: pin,
+        samples: metric.judges,
+        median: result.winRate,
+        spread,
+      },
+    } satisfies EventWrite<'optimization.baseline-measured'>)
+  }
+
+  /** A panel node's progress: one panel of the oldest landed head without a
+   * recorded progress against the starting head (SPEC §13.1.1). */
+  private async measureProgress(decision: MeasureProgressDecision): Promise<void> {
+    const { store, slug } = this.deps
+    const before = (await readBuildFacts(store, slug)).value.state
+    const due = progressMeasurementDue(before)
+    if (
+      due === undefined ||
+      due.head !== decision.head ||
+      due.start !== decision.start ||
+      due.harnessPin !== decision.harnessPin
+    )
+      return
+    const { objective, rulerRevision: ruler } = before.optimization!
+    if (objective.metric.kind !== 'panel') return
+    const metric = objective.metric
+    const { head, start, harnessPin } = due
+    const panel = nodePanelId(before, `progress-${ruler}-${head}`)
+    const result = await this.runPanel({
+      id: panel,
+      candidate: head,
+      baseline: start,
+      harnessPin,
+      purpose: objective.purpose,
+      rubric: metric.rubric,
+      harness: metric.harness,
+      judges: metric.judges,
+    })
+    if (result.kind === 'interrupted') return
+    // A newer ruler or starting head makes this win rate history. Heads
+    // accepted during the run stay queued behind this one.
+    const after = (await readBuildFacts(store, slug)).value.state
+    const optimization = after.optimization
+    if (
+      optimization === undefined ||
+      optimization.rulerRevision !== ruler ||
+      optimization.starting?.head !== start ||
+      !optimization.progressQueue?.includes(head)
+    )
+      return
+    if (result.kind === 'failed') {
+      await this.raiseMeasurementEscalation(
+        this.failedPanelQuestion(
+          `The progress panel of head ${head} against starting head ${start}`,
+          result,
+        ),
+        nodePanelEscalationId(panel),
+      )
+      return
+    }
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'optimization.progress-measured',
+      payload: {
+        revision: optimization.revision,
+        head,
+        start,
+        winRate: result.winRate,
+        judges: metric.judges,
+      },
+    } satisfies EventWrite<'optimization.progress-measured'>)
+  }
+
+  private failedPanelQuestion(
+    what: string,
+    failure: Extract<PanelResult, { kind: 'failed' }>,
+  ): string {
+    return (
+      `${what} failed: ${failure.reason}. ` +
+      `Output: ${failure.outputTail || '(no output)'}. ` +
+      'Fix the rubric, harness or judge configuration, then answer to run the panel again with fresh judges.'
     )
   }
 

@@ -222,6 +222,30 @@ describe('gate', () => {
     expect(gate({ turn: 'other' })).toBe('wait-turn')
     expect(gate({ lm, turn: 'child' })).toBe('land')
   })
+
+  test('an owed progress panel holds landing until it is recorded', () => {
+    const lm = fold(request('m1'), measured('m1', 5))
+    const log = new OptimizationLogBuilder()
+      .accept(panelObjective(), 1)
+      .baseline(1, 0.5, 0)
+      .propose('r', ['a1', 'a2'])
+    const node = () => optimizationReducer.reduce(log.events) as OptimizationState
+    const measuring = { lm, digest: node() }
+    expect(gate(measuring)).toBe('land')
+    log.settle(
+      'a1',
+      'accepted',
+      { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 },
+      undefined,
+      NODE,
+    )
+    expect(gate({ lm, digest: node() })).toBe('wait-progress')
+    expect(gate({ attempt: 'none', lm, digest: node() })).toBe('wait-progress')
+    expect(gate({ lm: fold(request('m1')), digest: node() })).toBe('pending')
+    expect(gate({ digest: node() })).toBe('request')
+    log.progress(1, 0.7, NODE)
+    expect(gate({ lm, digest: node() })).toBe('land')
+  })
 })
 
 describe('turn', () => {

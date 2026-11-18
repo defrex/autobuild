@@ -210,9 +210,12 @@ any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
 they are given reveals which variant is the candidate. A resumed run reuses
-recorded preferences and reruns only judges without one. Nothing runs a panel
-yet: panel attempts are not accepted by win rate, and a panel node records no
-noise check or progress. See
+recorded preferences and reruns only judges without one. A panel node judges
+its opening head against itself for its noise check (its starting value is
+0.5), and after each accepted attempt judges the landed head against the
+starting head, recording that win rate as progress; a panel threshold compares
+it. Its next child waits to land while a progress panel is owed. Panel
+attempts are not accepted by win rate yet. See
 [judge panels](references/optimization-nodes.md#judge-panels).
 
 **Optimization landing.** A child of an optimization node lands only with a
@@ -2946,7 +2949,7 @@ The default watch reports actionable conditions only:
 - Build `optimization.noise-exceeded`: an optimization node's starting
   measurement found more noise than ε can resolve. It names the spread and ε;
   the node still opens. Raise `target.epsilon` with `ab objective`, or raise
-  `metric.samples` with a spec revision.
+  `metric.samples` (or `metric.judges` for a panel) with a spec revision.
 - Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
