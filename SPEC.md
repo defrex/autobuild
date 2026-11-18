@@ -5292,6 +5292,11 @@ clears the attention, closes the escalation unanswered and the build continues.
 Answering it with a bare retry makes the janitor attempt on its next tick. An
 episode raises at most one escalation; a new episode after recovery can raise
 another. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+A pending control the janitor can act on wakes it during backoff: an abort, a
+pause, a resume of a paused build, a queued discard or an unacknowledged landing
+command. A leaf's resume that only cancelled a never-acknowledged pause is not
+one and waits out the backoff; a node's janitor acknowledges every pending
+control itself, so any node command wakes it.
 A dispatcher that cannot execute Git for kernel node work (a missing or
 unloadable `git` for the bare clone) records no janitor failures. It records
 one durable `dispatcher.kernel-git-unavailable` repository condition, node work

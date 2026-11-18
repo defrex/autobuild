@@ -62,7 +62,7 @@ import {
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
-import { leafLandingDeclineReason } from '../kernel/landing-readiness'
+import { actionableCommands, leafLandingDeclineReason } from '../kernel/landing-readiness'
 import {
   escalationsBeyondJanitor,
   janitorBlocked,
@@ -2544,8 +2544,12 @@ export class Dispatcher {
           const initialFacts = await this.store.buildFacts(record.slug)
           let { state, workspace, log } = initialFacts
           previous = state.janitor
+          // A node's janitor acknowledges every pending control itself, a
+          // cancelling resume included; a leaf's resume that only cancelled a
+          // never-acknowledged pause holds nothing back and waits out backoff.
+          const commands = state.kind === 'node' ? state.pendingCommands : actionableCommands(state)
           const controlDue =
-            state.pendingCommands.length > 0 ||
+            commands.length > 0 ||
             state.discardRequest !== undefined ||
             (state.pr &&
               state.landing?.command &&

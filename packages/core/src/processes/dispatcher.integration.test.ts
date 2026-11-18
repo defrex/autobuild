@@ -12336,6 +12336,47 @@ describe('integration review regressions', () => {
       expect(h.launches).toEqual([])
     },
   )
+
+  // Unlike a leaf's inert resume (AUT-1198), every node command is the node
+  // janitor's to acknowledge, so it does not wait out janitor failure backoff.
+  test.each([
+    [['pause', 'resume'], 'build.resumed', 'collecting'],
+    [['pause'], 'build.paused', 'paused'],
+  ] as const)(
+    'node commands %p are acknowledged during janitor failure backoff',
+    async (commands, acknowledgement, expected) => {
+      const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+      h.forge.remoteBranches.set('main', BASE_SHA)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds())[0]!
+      const now = h.clock().getTime()
+      await h.store.append(node.slug, {
+        actor: DISPATCHER,
+        type: 'build.janitor-attempt-failed',
+        payload: {
+          firstFailureAt: new Date(now).toISOString(),
+          attempt: 1,
+          message: 'injected janitor failure',
+          nextAttemptAt: new Date(now + 3_600_000).toISOString(),
+        },
+      })
+      for (const command of commands)
+        await h.store.append(node.slug, {
+          actor: humanActor('operator'),
+          type: command === 'pause' ? 'build.pause-requested' : 'build.resume-requested',
+          payload: {},
+        })
+      await h.dispatcher.tick()
+      const events = await h.store.getEvents(node.slug)
+      expect(events.some((e) => e.type === acknowledgement && e.actor.kind === 'dispatcher')).toBe(
+        true,
+      )
+      const state = reduceBuild(events)
+      expect(state.status).toBe(expected)
+      expect(state.pendingCommands).toEqual([])
+      expect(h.launches).toEqual([])
+    },
+  )
 })
 
 test.each([true, false])(
