@@ -7,6 +7,11 @@ import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
 import { buildVocabulary } from './dashboard/model'
+import {
+  objectiveSegments,
+  objectiveSummary,
+  type ObjectiveSummary,
+} from './dashboard/objective-row'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
@@ -127,6 +132,9 @@ export interface BuildSummary {
   optimization?: true
   /** An optimization node's current objective revision. */
   objectiveRevision?: number
+  /** An optimization node's objective progress, with elapsed budget hours
+   * evaluated at the summary's `now`. */
+  objective?: ObjectiveSummary
   target?: string
   integration?: ReturnType<typeof buildVocabulary>['integration']
   integrationState?: BuildState['integration']
@@ -345,12 +353,14 @@ export function summarizeFrom(
   const round = active?.round
   const attempt = active?.attempt
   const wait = ticketWaitStatus(state)
+  const objective = objectiveSummary(state, now)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
     ...(state.kind === 'node' && state.optimization !== undefined
       ? { objectiveRevision: state.optimization.revision }
       : {}),
+    ...(objective !== undefined ? { objective } : {}),
     ...((state.verify.running?.length ?? 0) > 1
       ? { runningVerifySteps: state.verify.running }
       : {}),
@@ -729,7 +739,14 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       prCell(summary),
     ])
   }
-  return padColumns(rows)
+  // An optimization node's objective progress rides on a continuation line
+  // under its row, so it costs the table's column alignment nothing.
+  return padColumns(rows).flatMap((line, index) => {
+    const objective = index === 0 ? undefined : summaries[index - 1]!.objective
+    return objective === undefined
+      ? [line]
+      : [line, `    ${objectiveSegments(objective, objective.elapsedHours).join(' · ')}`]
+  })
 }
 
 /** The status word text renderers print: `waiting` for a build whose only
@@ -785,8 +802,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   if (d.kind === 'integration')
     lines.push(`  hand-pushed changes (node-owned): ${handPushedText(d.handPushedCommits)}`)
-  if (d.optimization)
+  if (d.optimization) {
     lines.push(`  ${treeVocabulary.optimizationKind}: objective revision ${d.objectiveRevision}`)
+    if (d.objective !== undefined)
+      for (const segment of objectiveSegments(d.objective, d.objective.elapsedHours))
+        lines.push(`    ${segment}`)
+  }
   if (d.nodeRestack) {
     const node = d.nodeRestack
     const move = node.parentRequest ?? node.parentChange

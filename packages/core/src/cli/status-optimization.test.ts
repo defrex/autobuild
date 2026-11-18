@@ -4,6 +4,7 @@ import { DISPATCHER } from '../events/envelope'
 import { commandObjective } from '../kernel/generators/optimization-log'
 import { MemoryBuildStore } from '../store/memory'
 import { buildVocabulary } from './dashboard/model'
+import { objectiveSegments, objectiveSummary } from './dashboard/objective-row'
 import { reduceBuild } from '../kernel/reducer'
 import { detail, renderDetail, renderSummaries, summarize } from './status'
 
@@ -52,12 +53,41 @@ test('an optimization node is labeled in the summary and the detail', async () =
   )
 })
 
+test('an optimization node carries its objective progress on every status surface', async () => {
+  const { record, events } = await node(true)
+  const summary = summarize(record, events, now)
+  expect(summary.objective).toEqual(objectiveSummary(reduceBuild(events), now))
+  const segments = objectiveSegments(summary.objective!, summary.objective!.elapsedHours)
+  expect(segments).toEqual([
+    'objective not measured · threshold 40',
+    'attempts 0 accepted · 0 rejected · 0 running',
+    'budget 0/60 attempts · 0.0/24 hours',
+  ])
+  const plain = summarize(record, (await node(false)).events, now)
+  const table = renderSummaries([summary, plain], now, '')
+  expect(table).toHaveLength(4)
+  expect(table[1]).toStartWith('node ')
+  expect(table[2]).toBe(`    ${segments.join(' · ')}`)
+  expect(table[3]).toStartWith('node ')
+  expect(table[3]).toContain('integration empty')
+  const lines = renderDetail(detail(record, events, now), now)
+  const label = lines.indexOf('  optimization node: objective revision 1')
+  expect(lines.slice(label + 1, label + 1 + segments.length)).toEqual(
+    segments.map((segment) => `    ${segment}`),
+  )
+  expect(detail(record, events, now).objective).toEqual(summary.objective)
+})
+
 test('a plain node and a work build project exactly as before', async () => {
   const { record, events } = await node(false)
   const summary = summarize(record, events, now)
   expect(summary).not.toHaveProperty('optimization')
   expect(summary).not.toHaveProperty('objectiveRevision')
-  expect(renderSummaries([summary], now, '').join('\n')).toContain('integration empty')
+  expect(summary).not.toHaveProperty('objective')
+  expect(detail(record, events, now)).not.toHaveProperty('objective')
+  const table = renderSummaries([summary], now, '')
+  expect(table).toHaveLength(2)
+  expect(table.join('\n')).toContain('integration empty')
   expect(buildVocabulary(reduceBuild(events))).not.toHaveProperty('optimization')
   expect(buildVocabulary(reduceBuild([]))).toEqual({ kind: 'work' })
 })
