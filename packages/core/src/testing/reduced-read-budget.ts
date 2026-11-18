@@ -4104,15 +4104,22 @@ export async function hookReadBudget(): Promise<void> {
  *    status summary and from `builds.get` comes from that same digest: an
  *    idle poll reads zero event rows with an identical request vector, and a
  *    row of the same size, at both histories; and
- * 6. no measured read ever touches an attempt build's log.
+ * 6. no measured read ever touches an attempt build's log; and
+ * 7. once the node stops, the dispatcher's stop duty reads at most one
+ *    reduced `buildFacts` per unmerged in-flight attempt build not mid-abort, zero
+ *    event rows while idle, and never a settled or aborted attempt's build.
  */
 export async function optimizationReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
   const { commandObjective } = await import('../kernel/generators/optimization-log')
-  const { optimizationAdmission, optimizationStopEligibility } = await import(
-    '../kernel/optimization'
-  )
-  const { readOptimizationLedger } = await import('../store/reduced-reads')
+  const {
+    optimizationAdmission,
+    optimizationProposerAdmissible,
+    optimizationStopCause,
+    optimizationStopEligibility,
+  } = await import('../kernel/optimization')
+  const { enforceOptimizationStop } = await import('../processes/optimization-stop')
+  const { readBuildDigests, readOptimizationLedger } = await import('../store/reduced-reads')
   const { readAttemptContext } = await import('../cli/attempt')
   const { objectiveSummary } = await import('../cli/dashboard/objective-row')
   const { summarizeFrom } = await import('../cli/status')
@@ -4132,6 +4139,7 @@ export async function optimizationReadBudget(): Promise<void> {
     migrated: Record<string, number>
     poll: Record<string, number>
     objectiveRow: number
+    stopVector: Record<string, number>
   }[] = []
   for (const attempts of [10, 10_000]) {
     const store = new MemoryBuildStore()
@@ -4280,6 +4288,8 @@ export async function optimizationReadBudget(): Promise<void> {
       expect(digest.attempts.filed).toBe(attempts + 2)
       expect(digest.inFlight.map((attempt) => attempt.proposal)).toEqual(['p-live', 'p-moved'])
       optimizationStopEligibility(digest, now)
+      optimizationStopCause(digest, now)
+      optimizationProposerAdmissible(digest, now)
       optimizationAdmission(digest, now)
       const vector = requests.vector()
       const digestSize = JSON.stringify(digest).length
@@ -4345,14 +4355,6 @@ export async function optimizationReadBudget(): Promise<void> {
       expect(rows.buildRows).toBe(0)
       expect(operator.detail.objective).toEqual(objectiveSummary(state, now))
       expect(operator.dashboardRow?.objectiveRow).toEqual(polled!.objectiveRow!)
-      measured.push({
-        vector,
-        digest: digestSize,
-        attempt: attemptVector,
-        migrated: migratedVector,
-        poll: pollVector,
-        objectiveRow: JSON.stringify(polled!.objectiveRow).length,
-      })
 
       // 2. Idle reads read zero event rows.
       rows.reset()
@@ -4397,10 +4399,121 @@ export async function optimizationReadBudget(): Promise<void> {
 
       // 6. No attempt log was read at any point.
       expect(attemptRows()).toEqual([])
+
+      // Settle the attempts used by the upstream context-read checks before
+      // exercising the stop duty at its four-attempt concurrency bound.
+      for (const attempt of [
+        { proposal: 'p-live', ticket: live },
+        { proposal: 'p-moved', ticket: moved },
+      ]) {
+        await store.append(node, {
+          actor: DISPATCHER,
+          type: 'attempt.settled',
+          payload: { attempt, outcome: 'declined' },
+        })
+      }
+
+      // 7. A stopped node with concurrency attempts in flight: one never
+      // built, one aborted, two holding a pending abort. The stop duty reads
+      // only the two non-terminal attempt builds.
+      const inFlight = [1, 2, 3, 4].map((k) => attempts + k)
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: { request: 'stopping', proposals: inFlight.map(proposal) },
+      })
+      for (const i of inFlight.slice(1)) {
+        const slug = `attempt-${i}`
+        await store.createBuild({ slug, repo, branch: `ab/${slug}`, ticket: proposal(i).ticket })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo,
+            ticket: proposal(i).ticket,
+            baseBranch: 'ab-node/opt-node',
+            target: { ticket: { source: 'fake', id: 'NODE' }, build: node },
+          },
+        })
+        await store.append(slug, {
+          actor: humanActor('op'),
+          type: 'build.abort-requested',
+          payload: {},
+        })
+      }
+      await store.append(`attempt-${inFlight[1]}`, {
+        actor: DISPATCHER,
+        type: 'build.aborted',
+        payload: {},
+      })
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.stopped',
+        payload: { cause: 'operator', mode: 'abort' },
+      })
+      const repoView = new RepoViewStore(store, { repo })
+      const deps = {
+        store: repoView,
+        clock: () => now,
+        migrations: { migrations: [] },
+        ticketSource: 'fake',
+      }
+      const listing = async () => {
+        const digests = await readBuildDigests(store, repo)
+        return (await store.listBuilds())
+          .filter((record) => record.repo === repo)
+          .map((record) => ({ record, digest: digests.get(record.slug)! }))
+      }
+      const stopTick = async () => {
+        const builds = await listing()
+        const before = (await readBuildFacts(store, node)).value.state
+        rows.reset()
+        requests.restore()
+        const counted = memoryStoreRequestCounter(store)
+        const wrote = await enforceOptimizationStop(
+          deps,
+          builds.find((b) => b.record.slug === node)!.record,
+          before,
+          builds,
+        )
+        const cost = { wrote, vector: counted.vector() }
+        counted.restore()
+        return cost
+      }
+      // The first tick settles the unbuilt and the aborted attempts.
+      expect((await stopTick()).wrote).toBe(true)
+      const touched = attemptRows().map(([slug]) => slug)
+      expect(
+        touched.every((slug) =>
+          [inFlight[2], inFlight[3]].map((i) => `attempt-${i}`).includes(slug),
+        ),
+      ).toBe(true)
+      const settled = (await readBuildFacts(store, node)).value.state.optimization!
+      expect(settled.inFlight.map((a) => a.proposal)).toEqual([
+        `p${inFlight[2]}`,
+        `p${inFlight[3]}`,
+      ])
+      // Idle ticks: reduced reads of the two pending-abort attempts, no rows.
+      await stopTick()
+      const idle = await stopTick()
+      expect(idle.wrote).toBe(false)
+      expect(rows.buildRows).toBe(0)
+      // One saved reduced value per non-terminal attempt build, nothing else.
+      expect(idle.vector).toEqual({ getReducerValue: settled.inFlight.length })
+      measured.push({
+        vector,
+        digest: digestSize,
+        attempt: attemptVector,
+        migrated: migratedVector,
+        poll: pollVector,
+        objectiveRow: JSON.stringify(polled!.objectiveRow).length,
+        stopVector: idle.vector,
+      })
     } finally {
       requests.restore()
     }
   }
+  expect(measured[1]!.stopVector).toEqual(measured[0]!.stopVector)
   expect(measured[1]!.vector).toEqual(measured[0]!.vector)
   expect(measured[1]!.attempt).toEqual(measured[0]!.attempt)
   expect(measured[1]!.migrated).toEqual(measured[0]!.migrated)
