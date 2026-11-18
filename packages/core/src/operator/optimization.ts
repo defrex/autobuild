@@ -1,10 +1,20 @@
 import { humanActor, type Via } from '../events/envelope'
-import type { EventPayload } from '../events/payloads'
+import {
+  unmeasuredSettlementPolicySchema,
+  type EventPayload,
+  type UnmeasuredSettlementPolicy,
+} from '../events/payloads'
+import { settleAttempt } from '../kernel/attempt-settlement'
+import { mergedAttemptMeasurement } from '../kernel/landing-measurement'
 import type { BuildState } from '../kernel/reducer'
 import {
   optimizationCompletionBlocker,
   optimizationElapsedHours,
+  optimizationPendingCleanups,
   optimizationStopEligibility,
+  optimizationUnmeasuredMerges,
+  type PendingCleanupView,
+  type UnmeasuredMergeView,
   type OptimizationState,
   type OptimizationStopEligibility,
 } from '../kernel/optimization'
@@ -32,6 +42,11 @@ export interface ObjectiveProgress {
   stopped?: OptimizationState['stopped']
   /** Once stopped: what still keeps the node from completing, if anything. */
   completionBlocker?: string
+  /** In-flight attempts that merged without a landing measurement of their
+   * merged head. Each holds its concurrency slot until an operator settles it. */
+  unmeasuredMerges: UnmeasuredMergeView[]
+  /** Settled attempts whose published build branch still awaits deletion. */
+  pendingCleanups: PendingCleanupView[]
 }
 
 export interface ObjectiveView {
@@ -67,6 +82,8 @@ export function objectiveView(slug: string, state: OptimizationState, now: Date)
           ? { completionBlocker: blocker }
           : {}
       })(),
+      unmeasuredMerges: optimizationUnmeasuredMerges(state),
+      pendingCleanups: optimizationPendingCleanups(state),
     },
   }
 }
@@ -193,5 +210,98 @@ export async function stopObjective(input: {
       payload: { cause: 'operator', mode },
     })
     if (event) return { slug, cause: 'operator', mode }
+  }
+}
+
+/**
+ * Settle an in-flight attempt that merged without a landing measurement of
+ * its merged head (SPEC §15.7), under an explicit policy. `attempt` names its
+ * proposal id or its build. `release-unmeasured` records
+ * `attempt.settled {merged-unmeasured}`: the slot is released exactly once,
+ * the measurement stays absent, and no value, baseline or plateau moves.
+ * Works on a stopped node; refused on a terminal one. Reads the node's and
+ * the attempt build's reduced facts, never an event log.
+ */
+export async function settleUnmeasuredAttempt(input: {
+  store: BuildStore
+  repo: string
+  slug: string
+  attempt: string
+  policy: string
+  note?: string
+  user: string
+  via?: Via
+}): Promise<{
+  slug: string
+  proposal: string
+  build: string
+  outcome: 'merged-unmeasured'
+  policy: UnmeasuredSettlementPolicy
+}> {
+  const { store, repo, slug } = input
+  const parsed = unmeasuredSettlementPolicySchema.safeParse(input.policy)
+  if (!parsed.success)
+    throw new RouteRefusalError({
+      kind: 'validation',
+      error: `unknown settlement policy "${input.policy}"; expected one of: ${unmeasuredSettlementPolicySchema.options.join(', ')}`,
+    })
+  const policy = parsed.data
+  const refuse = (error: string): never => {
+    throw new RouteRefusalError({ kind: 'conflict', error })
+  }
+  await requireRouteBuild(store, repo, slug)
+  const state = (await readBuildFacts(store, slug)).value.state
+  const optimization = requireOptimization(slug, state)
+  requireRunning(slug, state, 'its attempts can no longer be settled')
+  const entry = optimization.inFlight.find(
+    (attempt) =>
+      attempt.proposal === input.attempt || attempt.unmeasuredMerge?.build === input.attempt,
+  )
+  if (entry === undefined)
+    return refuse(
+      `"${input.attempt}" is not an in-flight attempt of node "${slug}": it already settled, was never proposed, or is unknown; see \`ab objective ${slug}\``,
+    )
+  const merge = entry.unmeasuredMerge
+  if (merge === undefined)
+    return refuse(
+      `attempt ${entry.proposal} of node "${slug}" has not merged without a landing measurement; only an attempt \`ab objective\` lists as an unmeasured merge can be settled this way`,
+    )
+  // Revalidate against the attempt build's current facts before writing.
+  const child = (await readBuildFacts(store, merge.build)).value.state
+  if (child.target?.build !== slug || child.prState !== 'merged')
+    refuse(`build ${merge.build} is not a merged attempt of node "${slug}"`)
+  if (merge.sha !== undefined && child.mergedSha !== merge.sha)
+    refuse(
+      `build ${merge.build} merged as ${child.mergedSha ?? 'an unrecorded head'}, not ${merge.sha}`,
+    )
+  if (
+    child.mergedSha !== undefined &&
+    mergedAttemptMeasurement(child.landingMeasurement, slug, child.mergedSha).kind === 'measured'
+  )
+    refuse(
+      `build ${merge.build}'s merged head has a valid landing measurement; the dispatcher settles it accepted`,
+    )
+  const settled = await settleAttempt(
+    store,
+    slug,
+    { proposal: entry.proposal, ticket: entry.ticket, build: merge.build },
+    'merged-unmeasured',
+    {
+      policy,
+      ...(merge.sha !== undefined ? { mergedSha: merge.sha } : {}),
+      ...(input.note !== undefined && input.note.trim() !== '' ? { note: input.note } : {}),
+      actor: humanActor(input.user, input.via),
+    },
+  )
+  if (!settled)
+    refuse(
+      `attempt ${entry.proposal} of node "${slug}" settled concurrently; see \`ab objective ${slug}\``,
+    )
+  return {
+    slug,
+    proposal: entry.proposal,
+    build: merge.build,
+    outcome: 'merged-unmeasured',
+    policy,
   }
 }
