@@ -5,6 +5,7 @@ import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
 import { NO_DISPATCHER_RUN_LINE, activeCounterText } from './configuration'
 import { treeVocabulary, consentQueue } from './tree'
+import { objectiveElapsedHours, objectiveParts, type ObjectiveRow } from './objective-row'
 /**
  * The dashboard's other pure half: model → `string[]`. No terminal, no state,
  * no I/O — `live.ts` owns the writer, this owns the pixels.
@@ -222,6 +223,33 @@ function packLines(tokens: string[], width: number, indent: string): string[] {
   return lines.map((l) => truncate(l, width))
 }
 
+/**
+ * An objective row as `packLines` tokens. A field that fits the line stays one
+ * token, with a `·` token between fields so a line breaks between them; a
+ * field wider than the line falls back to word tokens, so wrapping, not
+ * truncation, carries large measured values.
+ */
+function objectiveTokens(
+  row: ObjectiveRow,
+  now: number,
+  width: number,
+  indent: string,
+  color: boolean,
+): string[] {
+  const room = width - indent.length
+  const tokens: string[] = []
+  const segments = objectiveParts(row, objectiveElapsedHours(row, new Date(now)))
+  segments.forEach((parts, index) => {
+    const stopped = row.stopped !== undefined && index === segments.length - 1
+    for (const part of parts) {
+      if (tokens.length > 0) tokens.push('·')
+      const words = visibleLength(part) <= room ? [part] : part.split(/\s+/)
+      tokens.push(...words.map((word) => (stopped ? paint(word, 'yellow', color) : word)))
+    }
+  })
+  return tokens
+}
+
 // ── Steps ────────────────────────────────────────────────────────────────────
 
 const GLYPH: Record<PipelineStep['state'], string> = {
@@ -425,6 +453,10 @@ function renderBuild(
         '  ',
       ),
     )
+    if (build.objectiveRow)
+      lines.push(
+        ...packLines(objectiveTokens(build.objectiveRow, now, width, '  ', color), width, '  '),
+      )
     lines.push(
       ...packLines(
         row.steps.map((s) => renderStep(s, color, now)),
@@ -812,6 +844,14 @@ function detailBody(
     field('Integration', detail.destination)
     const progress = integrationProgress(build.integrationRow, color)
     body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
+    if (build.objectiveRow)
+      body.push(
+        ...packLines(
+          ['Objective', ...objectiveTokens(build.objectiveRow, opts.now, width, '  ', color)],
+          width,
+          '  ',
+        ),
+      )
     field(handPushedLabel, handPushedText(detail.handPushedCommits))
     field('Branch', `${detail.branch} · restack ${detail.restack}`)
     field(
