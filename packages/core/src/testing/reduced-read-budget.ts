@@ -1674,10 +1674,10 @@ export async function sampledMeasurementReadBudget(opts: {
         metrics.historicalRows = 0
         attemptWrites = 0
         await dispatcher.tick({ acceptNewWork: false })
-        for (const slug of attempts) expect(await opts.decided(slug, request)).toBe(true)
         expect(attemptWrites).toBe(attempts.length)
         expect(nodeReads - idleNodeReads).toBe(attempts.length)
         expect(metrics.historicalRows).toBe(0)
+        for (const slug of attempts) expect(await opts.decided(slug, request)).toBe(true)
         // Idle ticks after the decisions, on this and on a fresh dispatcher.
         for (const make of [() => dispatcher, opts.dispatcher, () => dispatcher]) {
           const ticking = make()
@@ -1949,12 +1949,18 @@ async function seedBuildFiller(
   length: number,
 ): Promise<void> {
   const events = buildEventRows(store, slug)
-  while (events.length < length)
-    await store.append(slug, {
-      actor: humanActor('budget'),
-      type: 'build.auto-merge-cancelled',
-      payload: {},
-    })
+  if (events.length >= length) return
+  // One validated append, copied in bulk; the last append is real again so
+  // the build's and repository's change positions advance as usual.
+  const filler = {
+    actor: humanActor('budget'),
+    type: 'build.auto-merge-cancelled' as const,
+    payload: {},
+  }
+  const template = await store.append(slug, filler)
+  while (events.length < length - 1)
+    events.push({ ...template, seq: events.length + 1 } as (typeof events)[number])
+  if (events.length < length) await store.append(slug, filler)
 }
 
 function buildEventRows(

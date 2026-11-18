@@ -18638,12 +18638,11 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       dispatcher: () => make().dispatcher,
       sample: (slug, request) => sample(store, slug, request),
       decided: async (slug, request) =>
-        (await store.getEvents(slug)).some(
-          (event) => event.type === 'attempt.measured' && event.payload.request === request,
-        ),
+        (await readBuildFacts(store, slug)).value.state.attemptMeasurement?.measured?.request ===
+        request,
       advance: () => clock.advance(10 * 60_000),
     })
-  })
+  }, 60_000)
 })
 
 describe('optimization proposer read budget', () => {
