@@ -16,6 +16,7 @@ import { nativeSessionHandleSchema } from './native-session'
  */
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
+import { pathSelectorSchema } from '../config/path-selectors'
 import {
   commandMetricSchema,
   objectiveEpsilonSchema,
@@ -639,6 +640,64 @@ const optimizationPayloadSchemas = {
   }),
 } as const
 
+const panelOrderSchema = z.enum(['candidate-first', 'baseline-first'])
+const panelPreferenceSchema = z.enum(['A', 'B', 'tie'])
+const panelJudge = z.number().int().min(1)
+const nonblank = z
+  .string()
+  .min(1)
+  .refine((text) => text.trim() !== '', 'must not be blank')
+
+/** One judge panel run on the host build's log (SPEC §13.1.1, §15.3). The
+ * A/B order is recorded only in kernel facts; the judge's own fact,
+ * `panel.preferred`, carries none. */
+const panelPayloadSchemas = {
+  'panel.started': z.strictObject({
+    panel: z.string().min(1),
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    purpose: z.string().min(1),
+    rubric: z.string().min(1),
+    harness: z.array(pathSelectorSchema).min(1),
+    judges: z.number().int().min(1).max(20),
+  }),
+  'panel.judge-started': z.strictObject({
+    panel: z.string().min(1),
+    judge: panelJudge,
+    session: z.string().min(1),
+    order: panelOrderSchema,
+    runner: z.string().min(1),
+    model: z.string().min(1).optional(),
+    account: selectedAccountSchema.optional(),
+  }),
+  /** The judge's typed terminal, written through its write-only credential. */
+  'panel.preferred': z.strictObject({
+    panel: z.string().min(1),
+    judge: panelJudge,
+    session: z.string().min(1),
+    preference: panelPreferenceSchema,
+    reason: nonblank,
+  }),
+  /** The durable judgment: index, order, preference and reason together. */
+  'panel.judged': z.strictObject({
+    panel: z.string().min(1),
+    judge: panelJudge,
+    session: z.string().min(1),
+    order: panelOrderSchema,
+    preference: panelPreferenceSchema,
+    reason: nonblank,
+  }),
+  'panel.judge-ended': z.strictObject({
+    panel: z.string().min(1),
+    judge: panelJudge,
+    session: z.string().min(1),
+    outcome: z.enum(['completed', 'no-terminal', 'failed', 'expired', 'interrupted', 'reclaimed']),
+    error: z.string().optional(),
+    transcript: artifactRefSchema.optional(),
+  }),
+} as const
+
 export const eventPayloadSchemas = {
   'build.compatibility-deferred': z.strictObject({
     boundary: z.number().int().positive(),
@@ -753,6 +812,7 @@ export const eventPayloadSchemas = {
   }),
   'node.opened': z.strictObject({ sha: z.string().min(1) }),
   ...optimizationPayloadSchemas,
+  ...panelPayloadSchemas,
   'node.writer-reserved': z.strictObject({
     id: z.string().min(1),
     operation: z.enum(['restack', 'landing']),

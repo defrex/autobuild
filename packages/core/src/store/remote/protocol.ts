@@ -536,6 +536,13 @@ export const delegateCredentialBodySchema = z.discriminatedUnion('kind', [
     session: z.string().min(1),
   }),
   z.strictObject({
+    kind: z.literal('build-judge'),
+    id: z.string().min(1),
+    session: z.string().min(1),
+    panel: z.string().min(1),
+    judge: z.number().int().min(1),
+  }),
+  z.strictObject({
     kind: z.literal('harvest-runner'),
     execution: z.string().min(1),
     repo: z.string().min(1),

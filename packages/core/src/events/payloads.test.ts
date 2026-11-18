@@ -1924,3 +1924,93 @@ function measuredFact() {
     decision: 'improved',
   }
 }
+
+describe('judge panel facts', () => {
+  const preferred = (payload: Record<string, unknown>) =>
+    validateEventWrite({
+      actor: agentActor('judge', 's_j1'),
+      type: 'panel.preferred',
+      payload: {
+        panel: 'panel-1',
+        judge: 1,
+        session: 's_j1',
+        preference: 'A',
+        reason: 'A follows the rubric',
+        ...payload,
+      },
+    })
+
+  test('a judge records a preference with a reason', () => {
+    expect(preferred({}).payload).toMatchObject({ preference: 'A', judge: 1 })
+    expect(preferred({ preference: 'tie' }).payload).toMatchObject({ preference: 'tie' })
+  })
+
+  test('a blank reason, an unknown preference, judge 0 and an order are refused', () => {
+    expect(() => preferred({ reason: '   ' })).toThrow()
+    expect(() => preferred({ reason: '' })).toThrow()
+    expect(() => preferred({ preference: 'C' })).toThrow()
+    expect(() => preferred({ judge: 0 })).toThrow()
+    expect(() => preferred({ order: 'candidate-first' })).toThrow()
+  })
+
+  test('only a judge agent records a preference; the kernel records the rest', () => {
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'panel.preferred',
+        payload: { panel: 'p', judge: 1, session: 's', preference: 'A', reason: 'r' },
+      }),
+    ).toThrow()
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('judge', 's'),
+        type: 'panel.judged',
+        payload: {
+          panel: 'p',
+          judge: 1,
+          session: 's',
+          order: 'candidate-first',
+          preference: 'A',
+          reason: 'r',
+        },
+      }),
+    ).toThrow()
+  })
+
+  test('a run starts with 1 to 20 judges and a harness', () => {
+    const started = (payload: Record<string, unknown>) =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'panel.started',
+        payload: {
+          panel: 'p',
+          candidate: 'c'.repeat(40),
+          baseline: 'b'.repeat(40),
+          harnessPin: 'a'.repeat(40),
+          purpose: 'clear prose',
+          rubric: 'evals/rubric.md',
+          harness: ['evals/**'],
+          judges: 5,
+          ...payload,
+        },
+      })
+    expect(started({}).type).toBe('panel.started')
+    expect(() => started({ judges: 0 })).toThrow()
+    expect(() => started({ judges: 21 })).toThrow()
+    expect(() => started({ harness: [] })).toThrow()
+    expect(() => started({ order: 'candidate-first' })).toThrow()
+  })
+
+  test('every panel fact is decisive', () => {
+    for (const type of [
+      'panel.started',
+      'panel.judge-started',
+      'panel.preferred',
+      'panel.judged',
+      'panel.judge-ended',
+    ] as const) {
+      expect(eventPayloadSchemas[type]).toBeDefined()
+      expect(buildEventPolicy[type]).toBe('decisive')
+    }
+  })
+})

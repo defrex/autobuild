@@ -9,6 +9,7 @@ import {
   MissingAmbientContextError,
   parseAbPhase,
   resolveAmbientReadSession,
+  resolveJudgeCliEnv,
   resolveCliEnv,
   resolveHarvestCliEnv,
 } from './env'
@@ -228,4 +229,42 @@ test('build context directories validate explicit routing and fallback', () => {
   for (const path of ['', '../outside', '.ab/plan', '.ab/implement/child', '/tmp/context']) {
     expect(() => resolveCliEnv({ ...FULL_ENV, AB_CONTEXT_DIR: path })).toThrow('AB_CONTEXT_DIR')
   }
+})
+
+describe('resolveJudgeCliEnv', () => {
+  const base = { AB_STORE: '/store', AB_JUDGE: 'b-1:panel-1:3', AB_SESSION: 's_9' }
+
+  test('parses the judge identity', () => {
+    expect(resolveJudgeCliEnv({ ...base, AB_TOKEN: 'tok' })).toEqual({
+      store: '/store',
+      build: 'b-1',
+      panel: 'panel-1',
+      judge: 3,
+      session: 's_9',
+      token: 'tok',
+      contextDir: '.ab/judge',
+    })
+  })
+
+  test('names the format for a malformed identity', () => {
+    for (const raw of ['b-1:panel-1', 'b-1:panel-1:0', 'b:p:x', 'a:b:c:1'])
+      expect(() => resolveJudgeCliEnv({ ...base, AB_JUDGE: raw })).toThrow(
+        "'<build>:<panel>:<judge>'",
+      )
+  })
+
+  test('any judge marker refuses ambient reads', () => {
+    expect(() => resolveAmbientReadSession({ AB_JUDGE: 'b:p:1' })).toThrow(
+      'a judge session has no read authority',
+    )
+    expect(() =>
+      resolveAmbientReadSession({
+        AB_JUDGE: '',
+        AB_STORE: '/store',
+        AB_BUILD: 'b',
+        AB_PHASE: 'implement@1',
+        AB_SESSION: 's',
+      }),
+    ).toThrow(InvalidAmbientContextError)
+  })
 })
