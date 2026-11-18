@@ -5,7 +5,11 @@ import {
 } from '../kernel/node-verification-context'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { describeIssueLinks } from '../kernel/issue-keywords'
-import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
+import {
+  readBuildFacts,
+  readOptimizationLedger,
+  type CurrentBuildFacts,
+} from '../store/reduced-reads'
 /**
  * The `ab context` materializer (SPEC §8.3): a phase-scoped hydration of the
  * gitignored `.ab/` scratch dir. Everything derives from
@@ -127,6 +131,9 @@ export interface ContextManifest {
   }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
+  /** Propose: the open request this session answers. The workspace is its
+   * head's tree; `room` caps the proposals `ab propose` accepts. */
+  optimization?: { request: string; head: string; room: number }
   /** The feedback this phase occurrence was started with (§15.3, §10). */
   verifyStageFailure?: import('../kernel/verify-stage-state').VerifyStageFailure
   verifyReports?: { step: string; report: import('../ontology').ArtifactRef; path: string }[]
@@ -786,6 +793,66 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
           'with the freshly resolved base SHA — the runner must record the phase start before launching the session',
       )
     }
+  }
+
+  // The proposer's inputs (SPEC §13.1.1): the effective objective, progress
+  // against it, and the attempt ledger with near misses flagged. The ledger
+  // is one explicit history read, bounded by the attempts budget.
+  if (inputs.optimization === true) {
+    const optimization = state.optimization
+    const proposal = optimization?.proposal
+    if (optimization === undefined || proposal === undefined || proposal.deposited !== undefined)
+      throw new Error(
+        `${phase}@${round} context requires an open proposal request on ${build}; none is open`,
+      )
+    await writeDerived(
+      'objective.json',
+      `${JSON.stringify(
+        {
+          revision: optimization.revision,
+          revisedFields: optimization.revisedFields,
+          objective: optimization.objective,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    await writeDerived(
+      'progress.json',
+      `${JSON.stringify(
+        {
+          starting: optimization.starting,
+          current: optimization.current,
+          best: optimization.best,
+          threshold: optimization.objective.target.threshold,
+          attempts: optimization.attempts,
+          inFlight: optimization.inFlight.length,
+          plateau: optimization.plateau,
+          emptyProposals: optimization.emptyProposals,
+          openedAt: optimization.openedAt,
+          request: { id: proposal.id, head: proposal.head, room: proposal.room },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    const ledger = (await readOptimizationLedger(store, build)).value
+    await writeDerived(
+      'ledger.json',
+      `${JSON.stringify(
+        {
+          settled: ledger.entries,
+          inFlight: optimization.inFlight.map((attempt) => ({
+            proposal: attempt.proposal,
+            ticket: attempt.ticket,
+            ...(ledger.pending[attempt.proposal] ?? {}),
+          })),
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    manifest.optimization = { request: proposal.id, head: proposal.head, room: proposal.room }
   }
 
   if (inputs.stepConfig === true && isVerifyPhase(phase)) {

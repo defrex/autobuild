@@ -1,5 +1,5 @@
 import { validateEventWrite, type AbEvent, type EventWrite } from '../../events/catalog'
-import { DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../../events/envelope'
 import type { AttemptOutcome, UnmeasuredMergeReason } from '../../events/payloads'
 import type { CommandMetric, Objective } from '../../objective'
 
@@ -225,6 +225,60 @@ export class OptimizationLogBuilder {
     })
   }
 
+  /** A proposal request alone, left open. */
+  request(id: string, room: number, head = OPTIMIZATION_SHA('a')): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'optimization.proposal-requested',
+      payload: { id, head, room, budgetUsed: { attempts: 0, hours: 0 } },
+    })
+  }
+
+  /** The proposer's deposit for an open request. */
+  deposit(request: string, round: number, ids: readonly string[], rev = 0): this {
+    return this.push({
+      actor: agentActor('propose', 'sess-propose'),
+      type: 'propose.completed',
+      payload: { round, request, proposals: [...ids], artifact: { kind: 'attempts', rev } },
+    })
+  }
+
+  /** The dispatcher's filing of a deposited request. */
+  file(request: string, ids: readonly string[], reason?: string): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request,
+        proposals: ids.map((id) => ({
+          id,
+          ticket: { source: 'file', id: `T-${id}` },
+          title: `Attempt ${id}`,
+          strategy: `strategy ${id}`,
+        })),
+        ...(reason !== undefined ? { reason } : {}),
+      },
+    })
+  }
+
+  withdraw(request: string, reason: 'stopped' | 'budget' | 'concurrency'): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'optimization.proposal-withdrawn',
+      payload: { request, reason },
+    })
+  }
+
+  defer(
+    reason: EventWrite<'optimization.proposal-deferred'>['payload']['reason'] = 'paused',
+  ): this {
+    return this.push({
+      actor: DISPATCHER,
+      type: 'optimization.proposal-deferred',
+      payload: { reason },
+    })
+  }
+
   settle(
     proposal: string,
     outcome: AttemptOutcome,
@@ -343,7 +397,12 @@ export function optimizationLog(): AbEvent[] {
     .propose('r2', [], 'out of ideas')
     .propose('r3', ['a4'])
     .stop('plateau', 'drain')
-    .settle('a4', 'stopped').events
+    .settle('a4', 'stopped')
+    .request('r4', 1)
+    .withdraw('r4', 'stopped')
+    .defer('paused')
+    .request('r5', 1)
+    .deposit('r5', 5, ['a5']).events
 }
 
 /** A panel node log, for the panel's value fields. */

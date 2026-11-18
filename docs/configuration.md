@@ -2365,7 +2365,7 @@ opt-in:
 `AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test packages/core/src/ports/runner/codex.live.integration.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
-`code-review`, `finalize`, and `reconcile`). Agent verify steps and agent
+`code-review`, `finalize`, `reconcile`, and an optimization node's `propose`). Agent verify steps and agent
 finalize post-steps both route by their logical step name. The verify step's
 configured skill name remains a deprecated alias for existing configurations
 and will be removed in a future release. Repository judgments use `harvest` and
