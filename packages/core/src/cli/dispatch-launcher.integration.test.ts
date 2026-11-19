@@ -155,47 +155,95 @@ if pid == 0:
  os.environ['TERM'] = 'xterm-256color'
  os.execlp('bash', 'bash', '--noprofile', '--norc', '-i')
 output = b''
-def until(marker, timeout=40):
+def drain(wait=.05):
  global output
+ if select.select([fd], [], [], wait)[0]: output += os.read(fd, 65536)
+def until(marker, timeout=40):
  deadline = time.monotonic() + timeout
  while marker not in output:
   if time.monotonic() > deadline: raise Exception('missing '+repr(marker)+' in '+repr(output[-3000:]))
-  if select.select([fd], [], [], .05)[0]: output += os.read(fd, 65536)
+  drain()
+def wait_for(label, predicate, timeout, detail=lambda: ''):
+ deadline = time.monotonic() + timeout
+ while True:
+  value = predicate()
+  if value: return value
+  if time.monotonic() > deadline: raise Exception(label+' within '+str(timeout)+'s; '+detail()+'; output '+repr(output[-3000:]))
+  drain(.02)
+def children(parent):
+ try:
+  with open('/proc/'+str(parent)+'/task/'+str(parent)+'/children') as f: return [int(p) for p in f.read().split()]
+ except OSError: return []
+def stat(p):
+ try:
+  with open('/proc/'+str(p)+'/stat') as f: s = f.read()
+ except OSError: return None
+ return s[s.rindex(')')+2:].split()
+def state(p):
+ s = stat(p)
+ return s[0] if s else None
+def cmdline(p):
+ try:
+  with open('/proc/'+str(p)+'/cmdline', 'rb') as f: return f.read().replace(bytes(1), b' ')
+ except OSError: return b''
+def tree(p, depth=0):
+ return ' '*depth+str(p)+'('+str(state(p))+') '+repr(cmdline(p)[-80:])+'; '+''.join(tree(c, depth+1) for c in children(p))
+def wait_state(label, pids, stopped, timeout=20):
+ def settled():
+  for p in pids:
+   if state(p) is None: raise Exception(label+': pid '+str(p)+' exited')
+  return all((state(p) == 'T') == stopped for p in pids)
+ wait_for(label, settled, timeout, lambda: 'states '+', '.join(str(p)+'='+str(state(p)) for p in pids))
+def roles():
+ def find():
+  launchers = children(pid)
+  if len(launchers) != 1 or b'bin/ab.ts' not in cmdline(launchers[0]): return None
+  kernels = [k for c in children(launchers[0]) for k in children(c) if b'ab-dispatch-kernel.ts' in cmdline(k)]
+  return len(kernels) == 1 and (launchers[0], kernels[0])
+ launcher, kernel = wait_for('kernel spawned', find, 20, lambda: tree(pid))
+ generation = int((stat(kernel) or ['', '0'])[1])
+ assert generation in children(launcher) and b'ab-dispatch-generation.ts' in cmdline(generation), tree(pid)
+ return launcher, generation, kernel
+RAW = termios.ICANON | termios.ECHO | termios.ISIG
+def raw(): return termios.tcgetattr(fd)[3] & RAW == 0
 try:
  until(b'SHELL_READY> ')
- def mode(raw):
+ def mode(raw_expected):
   global output
-  if raw:
-   time.sleep(.35)
-   flags = termios.tcgetattr(fd)[3]
-   assert flags & (termios.ICANON | termios.ECHO | termios.ISIG) == 0, repr(flags)
+  if raw_expected:
+   wait_for('raw mode restored', raw, 20, lambda: repr(termios.tcgetattr(fd)[3]))
   else:
    # Bash readline itself disables ICANON/ECHO at the prompt. Inspect the
    # shell's restored settings in a foreground command instead.
    output = b''
-   probe = "import termios,time; time.sleep(.35); mask=termios.ICANON|termios.ECHO|termios.ISIG; flags=termios.tcgetattr(0)[3]; assert flags & mask == mask, repr(flags); print('COOKED_'+'OK')"
+   probe = "import termios,time; mask=termios.ICANON|termios.ECHO|termios.ISIG; ok=any(termios.tcgetattr(0)[3] & mask == mask or time.sleep(.05) for _ in range(200)); print('COOKED'+'_OK' if ok else 'COOKED'+'_BAD '+repr(termios.tcgetattr(0)[3]))"
    os.write(fd, (shlex.join(['python3', '-c', probe])+'\\n').encode())
-   until(b'COOKED_OK')
+   wait_for('cooked probe', lambda: b'COOKED_OK' in output or b'COOKED_BAD' in output, 40)
+   assert b'COOKED_OK' in output, repr(output)
    until(b'SHELL_READY> ')
  output = b''
  command = shlex.join(sys.argv[2:])
  os.write(fd, (command+'\\n').encode())
  until(b'\\x1b[?1049h')
- time.sleep(.5)
- def children(parent):
-  with open('/proc/'+str(parent)+'/task/'+str(parent)+'/children') as f: return [int(p) for p in f.read().split()]
- launcher = children(pid)[0]
- generation = children(launcher)[0]
- kernel = children(generation)[0]
+ launcher, generation, kernel = roles()
+ # With ISIG still on, ^Z would stop the whole foreground group, kernel included.
+ wait_for('dashboard raw mode', raw, 20, lambda: repr(termios.tcgetattr(fd)[3]))
+ wait_state('generation running', [generation], False)
  output = b''
  os.write(fd, b'\\x1a')
- until(b'SHELL_READY> ', 5)
+ wait_state('presentation job stopped after Ctrl-Z (launcher must stop on SIGTSTP)', [generation, launcher], True)
+ until(b'SHELL_READY> ', 20)
  assert b'Stopped' in output, output
+ # The job is confirmed stopped, so this window samples a settled kernel.
+ for _ in range(20):
+  assert state(kernel) is not None, 'kernel exited while suspended'
+  assert state(kernel) != 'T', 'kernel stopped with the presentation job'
+  time.sleep(.05)
  mode(False)
- with open('/proc/'+str(kernel)+'/stat') as f: assert f.read().split(') ')[1][0] != 'T'
  output = b''
  os.write(fd, b'fg\\n')
- until(b'\\x1b[?1049h', 5)
+ wait_state('presentation job resumed after fg', [launcher, generation], False)
+ until(b'\\x1b[?1049h', 20)
  mode(True)
  output = b''
  os.write(fd, b'\\x03')
@@ -212,8 +260,7 @@ try:
  output = b''
  os.write(fd, (command+'\\n').encode())
  until(b'\\x1b[?1049h')
- time.sleep(.3)
- generation = children(children(pid)[0])[0]
+ generation = roles()[1]
  output = b''
  os.kill(generation, signal.SIGKILL)
  until(b'SHELL_READY> ')
