@@ -149,6 +149,13 @@ describe('the node starting measurement', () => {
     })
   })
 
+  test('a launched node runner attaches for the measurement and records it', async () => {
+    const { store, runner } = await fixture(scriptedExec({ baseline: [10], candidate: [10] }), NODE)
+    await runner.attach()
+    expect(await runner.step()).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: PIN })
+    expect(types(await store.getEvents(NODE))).toContain('optimization.baseline-measured')
+  })
+
   test('a zero median with a relative epsilon raises the noise check first, and still opens', async () => {
     const { store, internals } = await fixture(
       scriptedExec({ baseline: [-1], candidate: [1] }),
