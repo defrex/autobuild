@@ -1733,6 +1733,72 @@ test('a build runner issues a write-only judge grant bound to one judge session'
     ).status,
   ).toBe(403)
 
+  // Every other route family is refused too, read or write: snapshots, session
+  // and stream routes, and further credential issuance for any target.
+  for (const [path, body, method] of [
+    ['/builds/one/snapshots/buildReadFacts'],
+    [`/repos/${encodeURIComponent(A)}/snapshots/repositoryFacts`],
+    ['/builds/one/snapshots/buildReadFacts', { cursor: 1, value: {} }, 'PUT'],
+    ['/sessions/s_j1'],
+    ['/sessions/s_j1/events'],
+    ['/sessions/s_j1/events', sampleEventWrite()],
+    ['/streams/builds'],
+    ['/builds/one/streams/events'],
+    ['/builds/one/stream-seed?cursor=1'],
+    ['/builds/one/ticket-assets?kind=design&name=x'],
+    [`/repos/${encodeURIComponent(A)}/events`, sampleEventWrite()],
+  ] as const) {
+    const response = await f.server.fetch(request(path, judge, body, method))
+    expect(response.status).toBe(403)
+  }
+  for (const other of [
+    { kind: 'build-phase', id: 'one', session: 's_j1' },
+    { kind: 'build-runner', id: 'one' },
+    { ...target, judge: 2, session: 's_j2' },
+  ])
+    expect((await f.issue(judge, other)).status).toBe(403)
+  // Ticket and operator surfaces refuse the judge grant before any backend.
+  const { createOperatorServer } = await import('./operator-server')
+  const operator = createOperatorServer({
+    store: f.store,
+    projects: f.projects,
+    auth: f.auth,
+    secret,
+    clock: f.clock,
+  })
+  const beforeOperator = await f.store.getRepoEvents(A)
+  expect(
+    (
+      await operator.fetch(
+        request(`/operator/v1/repos/${encodeURIComponent(A)}/tools/repository.forge_clear`, judge, {
+          repo: A,
+          forge: 'github',
+          reason: 'judge',
+          actor: { kind: 'human', user: 'owner' },
+        }),
+      )
+    ).status,
+  ).toBe(403)
+  expect(await f.store.getRepoEvents(A)).toEqual(beforeOperator)
+  let ticketsOpened = false
+  const tickets = createTicketServer({
+    secret,
+    auth: f.auth,
+    sourceFor: () => {
+      ticketsOpened = true
+      return new FakeTicketSource([])
+    },
+  })
+  for (const operation of ['list-ready', 'get', 'create'])
+    expect(
+      (
+        await tickets.fetch(
+          request(`/tickets/${operation}`, judge, { context: { teamKey: 'TEAM' }, input: {} }),
+        )
+      ).status,
+    ).toBe(403)
+  expect(ticketsOpened).toBe(false)
+
   const preferred = (payload: Record<string, unknown> = {}, session = 's_j1') => ({
     actor: { kind: 'agent', role: 'judge', session },
     type: 'panel.preferred',
@@ -1805,4 +1871,93 @@ test('a judge grant retires once its build terminates', async () => {
   await f.store.append('one', { actor: kernel, type: 'build.aborted', payload: {} })
   f.advance(60_000)
   expect((await f.server.fetch(request('/builds/one', judge))).status).toBe(401)
+})
+
+test('racing judge preferences record one durable event; distinct sessions each record', async () => {
+  const f = await fixture()
+  const kernel = { kind: 'kernel' } as const
+  await f.store.append('one', {
+    actor: kernel,
+    type: 'panel.started',
+    payload: {
+      panel: 'panel-1',
+      candidate: 'c'.repeat(40),
+      baseline: 'b'.repeat(40),
+      harnessPin: 'a'.repeat(40),
+      purpose: 'clearer prose',
+      rubric: 'evals/rubric.md',
+      harness: ['evals/**'],
+      judges: 3,
+    },
+  })
+  const tokens: Record<number, string> = {}
+  for (const judge of [1, 2, 3]) {
+    const session = `s_j${judge}`
+    await f.store.append('one', {
+      actor: kernel,
+      type: 'panel.judge-started',
+      payload: { panel: 'panel-1', judge, session, order: 'candidate-first', runner: 'fake' },
+    })
+    const issued = await f.issue(f.token, {
+      kind: 'build-judge',
+      id: 'one',
+      session,
+      panel: 'panel-1',
+      judge,
+    })
+    tokens[judge] = (await issued.json()).token as string
+  }
+  const preferred = (judge: number, preference: string) => ({
+    actor: { kind: 'agent', role: 'judge', session: `s_j${judge}` },
+    type: 'panel.preferred',
+    payload: { panel: 'panel-1', judge, session: `s_j${judge}`, preference, reason: 'reasons' },
+  })
+  /** Hold the delegation reads made for the judges' conditional appends until
+   * both racers have read, so each decides on the same facts. */
+  const barrier = () => {
+    const read = f.store.getReducerValue.bind(f.store)
+    let waiting = 0
+    let release!: () => void
+    const both = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    f.store.getReducerValue = async (scope, request) => {
+      const judging = new Error().stack?.includes('appendJudgePreference') ?? false
+      const value = await read(scope, request)
+      if (judging && waiting < 2) {
+        waiting += 1
+        if (waiting === 2) release()
+        await both
+      }
+      return value
+    }
+    return () => {
+      f.store.getReducerValue = read
+      // Both racers read before either appended.
+      expect(waiting).toBe(2)
+    }
+  }
+  const post = (judge: number, preference: string) =>
+    f.server.fetch(request('/builds/one/events', tokens[judge]!, preferred(judge, preference)))
+  const durable = async () =>
+    (await f.store.getEvents('one')).filter((event) => event.type === 'panel.preferred')
+
+  // Distinct authorized sessions racing are each recorded.
+  let restore = barrier()
+  const distinct = await Promise.all([post(1, 'A'), post(2, 'tie')])
+  restore()
+  expect(distinct.map((response) => response.status)).toEqual([201, 201])
+
+  // One session racing two different preferences records exactly one.
+  restore = barrier()
+  const same = await Promise.all([post(3, 'A'), post(3, 'B')])
+  restore()
+  expect(same.map((response) => response.status).sort()).toEqual([201, 403])
+  const lost = same.find((response) => response.status === 403)!
+  expect(JSON.stringify(await lost.json())).toContain('already recorded')
+  expect((await durable()).map((event) => event.payload.session).sort()).toEqual([
+    's_j1',
+    's_j2',
+    's_j3',
+  ])
 })

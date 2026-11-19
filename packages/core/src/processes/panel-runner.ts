@@ -12,6 +12,13 @@
  * to the repository. Every Git and shell operation goes through the injected
  * `Exec`, so the sequence is unit-testable.
  *
+ * Nothing the judge inherits may name a protected location: the workspace,
+ * its checkout, its Git common directory, the main checkout, or a local store.
+ * The scratch base is checked against them before any material is written,
+ * each root again after materialization (with Git discovery that fails
+ * closed), and the judge's `ab` is a self-contained launcher written beside
+ * the roots, never a path into the distribution.
+ *
  * Nothing here writes to the store: `BuildRunner.runPanel` supplies the
  * durable steps through `PanelLoopHooks`.
  */
@@ -33,6 +40,7 @@ import {
   type PanelRunState,
   type PanelSide,
 } from '../kernel/panel'
+import { sessionEnv, type JudgeLaunch } from '../ports/runner/session-env'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 
 /** Longest output tail a failure carries. */
@@ -53,6 +61,11 @@ export const JUDGE_SKILL_INSTALLS = [
 /** The judge's scratch directory in its root (`AB_CONTEXT_DIR`). */
 export const JUDGE_CONTEXT_DIR = '.ab/judge'
 export const JUDGE_BRIEF = `${JUDGE_CONTEXT_DIR}/brief.json`
+/** Where `ab judge prefer` saves a local judge's preference for the runner to
+ * commit (the judge holds no store). */
+export const JUDGE_PREFERENCE_OUTBOX = `${JUDGE_CONTEXT_DIR}/preference.json`
+/** The launcher's name in the judge's launcher directory. */
+export const JUDGE_LAUNCHER_NAME = 'ab'
 
 const GIT_CONFIG = ['-c', 'core.autocrlf=false', '-c', 'core.symlinks=true']
 /** Resolves `$TMPDIR`, or `/tmp` when it is unset or empty, to a real path. */
@@ -86,11 +99,16 @@ function digest(...parts: Array<string | number>): string {
 export interface PanelDeps {
   exec: Exec
   /** The ambient environment whose `GIT_*` keys every Git command clears, so
-   * no inherited repository selection leaks in. Defaults to `process.env`. */
+   * no inherited repository selection leaks in, and from which the judge's
+   * filtered `PATH` is derived. Defaults to `process.env`. */
   ambientEnv?: Readonly<Record<string, string | undefined>>
   /** The distribution's install form of `ab-judge`, used when the harness pin
    * predates the vendored copy. */
   distributionSkill: () => Promise<string>
+  /** The self-contained, judge-only `ab` launcher's text. */
+  judgeLauncher: () => Promise<string>
+  /** The running distribution's root, which the launcher must not name. */
+  distributionRoot?: string
 }
 
 export interface PanelVariants {
@@ -103,7 +121,11 @@ export interface PanelVariants {
 }
 
 export interface PanelPaths {
+  /** The real scratch base every other path is under. */
+  base: string
   material: string
+  /** The directory holding the judge's `ab` launcher, beside the roots. */
+  launcherDir: string
   judgeRoot(judge: number): string
 }
 
@@ -130,6 +152,164 @@ async function realPath(exec: Exec, path: string): Promise<string> {
   return result.stdout.trim()
 }
 
+/** Resolves `$1` physically whether it names a directory or a file; prints
+ * nothing when it does not exist. */
+export const REAL_ENTRY_PROBE =
+  'if [ -d "$1" ]; then cd -P "$1" && pwd -P; ' +
+  'elif [ -e "$1" ]; then d=$(cd -P "$(dirname "$1")" && pwd -P) && printf "%s/%s\\n" "$d" "$(basename "$1")"; fi'
+
+/** Every location a judge must not be able to find through anything it
+ * inherits, as real paths: the workspace, its checkout, its Git common
+ * directory, the main checkout that owns that directory, and a local store. */
+export async function judgeProtectedPaths(
+  deps: PanelDeps,
+  workspacePath: string,
+  localStore?: string,
+): Promise<string[]> {
+  const located = await deps.exec(
+    ['git', 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
+    { cwd: workspacePath, env: gitEnv(deps) },
+  )
+  if (located.exitCode !== 0)
+    throw new PanelPreparationFailure('locating the workspace repository failed', tail(located))
+  const [toplevel, common] = located.stdout.trim().split('\n')
+  const candidates = [workspacePath, toplevel, common]
+  if (common !== undefined && /\/\.git\/?$/.test(common))
+    candidates.push(common.replace(/\/\.git\/?$/, ''))
+  if (localStore !== undefined && localStore !== '') candidates.push(localStore)
+  const out = new Set<string>()
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === '') continue
+    const real = await deps.exec(['sh', '-c', REAL_ENTRY_PROBE, 'sh', candidate], {})
+    const resolved = real.exitCode === 0 ? real.stdout.trim() : ''
+    out.add(resolved !== '' ? resolved : candidate)
+    // The lexical spelling is protected too: it reaches the same place.
+    if (candidate.startsWith('/')) out.add(candidate.replace(/(.)\/+$/, '$1'))
+  }
+  return [...out]
+}
+
+/** Prints, one line per argument, the physical location the absolute path
+ * reaches: every symlink it passes through followed, and any part that does
+ * not exist appended to its deepest existing ancestor's real path. Prints an
+ * empty line when a path cannot be resolved. */
+export const PHYSICAL_PATHS_PROBE = `for p in "$@"; do
+  rest=; r=; hops=0
+  while :; do
+    if [ -d "$p" ]; then r=$(cd -P "$p" 2>/dev/null && pwd -P) || r=; break; fi
+    if [ -L "$p" ]; then
+      hops=$((hops + 1)); [ "$hops" -le 40 ] || { r=; break; }
+      t=$(readlink "$p") || { r=; break; }
+      case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+      continue
+    fi
+    rest=/$(basename "$p")$rest; p=$(dirname "$p")
+  done
+  if [ -n "$r" ]; then printf "%s%s\\n" "\${r%/}" "$rest"; else printf "\\n"; fi
+done`
+
+/** Paths per resolution probe, well inside one command line's limit. */
+const PHYSICAL_PATHS_BATCH = 256
+
+/** One absolute path an ambient value carries, and the spelling to hide when
+ * it reaches a protected location: the piece of the value it starts in, so
+ * an embedded path such as `-I/alias/include` is hidden by a spelling
+ * bounded by separators. */
+interface AmbientPath {
+  path: string
+  spelling: string
+}
+
+/** Every absolute path an ambient value or `PATH` entry carries: in the whole
+ * value, each line, and each piece between separators, the path from the
+ * first `/` on. */
+function ambientPaths(ambient: Readonly<Record<string, string | undefined>>): AmbientPath[] {
+  const found = new Map<string, AmbientPath>()
+  for (const value of Object.values(ambient)) {
+    if (value === undefined) continue
+    for (const spelling of [value, ...value.split(/\r?\n/), ...value.split(/[\s:;,='"]+/)]) {
+      const at = spelling.indexOf('/')
+      const path = at === -1 ? '' : spelling.slice(at)
+      // A multiline path is found line by line: the probe answers in lines.
+      if (path === '' || path === '/' || /[\r\n]/.test(path)) continue
+      found.set(`${path}\0${spelling}`, { path, spelling })
+    }
+  }
+  return [...found.values()]
+}
+
+/** The lexical spellings in the ambient environment that reach a protected
+ * location but are not already hidden by the real paths: a symlinked
+ * checkout, a symlinked ancestor, a link to a file inside it, or a path
+ * embedded after a prefix such as `-I`. Hiding them as well keeps an
+ * inherited value such as `INIT_CWD=/work/alias` or `CFLAGS=-I/work/alias`
+ * from leading a judge back into the repository. A path that cannot be
+ * resolved is hidden too. */
+export async function judgeAmbientAliases(
+  deps: PanelDeps,
+  protectedPaths: readonly string[],
+): Promise<string[]> {
+  const aliases = new Set<string>()
+  const unresolved: AmbientPath[] = []
+  for (const found of ambientPaths(deps.ambientEnv ?? process.env)) {
+    if (insideProtected(found.path, protectedPaths) === undefined) unresolved.push(found)
+    // A literal path the real locations name only behind a prefix.
+    else if (found.spelling !== found.path) aliases.add(found.spelling)
+  }
+  const paths = [...new Set(unresolved.map((found) => found.path))]
+  const physical = new Map<string, string>()
+  for (let at = 0; at < paths.length; at += PHYSICAL_PATHS_BATCH) {
+    const batch = paths.slice(at, at + PHYSICAL_PATHS_BATCH)
+    const result = await deps.exec(['sh', '-c', PHYSICAL_PATHS_PROBE, 'sh', ...batch], {})
+    const lines = result.stdout.split('\n').slice(0, -1)
+    if (result.exitCode !== 0 || lines.length !== batch.length)
+      throw new PanelPreparationFailure(
+        "resolving the inherited environment's paths failed",
+        tail(result),
+      )
+    batch.forEach((path, index) => {
+      physical.set(path, lines[index]!)
+    })
+  }
+  for (const found of unresolved) {
+    const resolved = physical.get(found.path)!
+    if (resolved === '' || insideProtected(resolved, protectedPaths) !== undefined)
+      aliases.add(found.spelling)
+  }
+  return [...aliases]
+}
+
+/** The protected location `path` is at or under, if any. */
+export function insideProtected(
+  path: string,
+  protectedPaths: readonly string[],
+): string | undefined {
+  return protectedPaths.find((root) => path === root || path.startsWith(`${root}/`))
+}
+
+/** Refuse a scratch location that is protected, or from which Git finds a
+ * repository. Discovery crosses filesystem boundaries, and only a clean
+ * "not a git repository" counts as outside: any other failure refuses. */
+async function scratchRefusal(
+  deps: PanelDeps,
+  path: string,
+  what: string,
+  protectedPaths: readonly string[],
+): Promise<string | undefined> {
+  const real = await realPath(deps.exec, path)
+  if (insideProtected(real, protectedPaths) !== undefined)
+    return `${what} is inside the repository, its Git directory or the local store; point TMPDIR outside any repository`
+  const found = await deps.exec(['git', 'rev-parse', '--git-dir'], {
+    cwd: path,
+    env: gitEnv(deps, { GIT_DISCOVERY_ACROSS_FILESYSTEM: '1' }),
+  })
+  if (found.exitCode === 0)
+    return `${what} is inside a git repository; point TMPDIR outside any repository`
+  if (!/not a git repository/i.test(found.stderr))
+    return `${what} could not be proven to be outside every git repository; point TMPDIR outside any repository`
+  return undefined
+}
+
 /** The deterministic, side-free paths of one panel: no path names a SHA, the
  * candidate or the baseline. A rerun on the same build and panel reuses them,
  * so a crashed predecessor's leftovers are cleared. */
@@ -139,9 +319,89 @@ export async function panelPaths(exec: Exec, build: string, panel: string): Prom
     throw new PanelPreparationFailure('cannot resolve the temporary directory', tail(result))
   const tmp = result.stdout.trim()
   return {
+    base: tmp,
     material: `${tmp}/autobuild-panel-${digest(build, panel)}`,
+    launcherDir: `${tmp}/autobuild-judge-bin-${digest(build, panel, 'bin')}`,
     judgeRoot: (judge) => `${tmp}/autobuild-judge-${digest(build, panel, judge)}`,
   }
+}
+
+/** Code units per launcher write. */
+const LAUNCHER_CHUNK = 32 * 1024
+
+/** Write the judge's `ab` launcher into its own directory, refusing launcher
+ * text that names a protected location or the distribution. */
+export async function writeJudgeLauncher(
+  deps: PanelDeps,
+  dir: string,
+  protectedPaths: readonly string[],
+): Promise<void> {
+  const text = await deps.judgeLauncher()
+  const named = [...protectedPaths, ...(deps.distributionRoot ? [deps.distributionRoot] : [])]
+  if (named.some((path) => path !== '' && path !== '/' && text.includes(path)))
+    throw new PanelPreparationFailure(
+      'the judge launcher names the repository or the Autobuild distribution; refusing to expose it to a judge',
+    )
+  await deps.exec(['rm', '-rf', dir], {})
+  const path = `${dir}/${JUDGE_LAUNCHER_NAME}`
+  // One environment value is limited to 128 KiB, so the launcher is written
+  // in chunks small enough at three UTF-8 bytes per code unit.
+  for (let at = 0, first = true; at < text.length || first; first = false) {
+    let end = Math.min(text.length, at + LAUNCHER_CHUNK)
+    const last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1
+    const result = await deps.exec(
+      [
+        'sh',
+        '-c',
+        `mkdir -p "$(dirname "$1")" && printf %s "$AB_FILE_CONTENT" ${first ? '>' : '>>'} "$1"`,
+        'sh',
+        path,
+      ],
+      { env: { AB_FILE_CONTENT: text.slice(at, end) } },
+    )
+    if (result.exitCode !== 0)
+      throw new PanelPreparationFailure(`writing ${path} failed`, tail(result))
+    at = end
+  }
+  const made = await deps.exec(['chmod', '0755', path], {})
+  if (made.exitCode !== 0)
+    throw new PanelPreparationFailure('making the judge launcher executable failed', tail(made))
+}
+
+/** Prints the path `$2` resolves to through PATH `$1`, then its physical
+ * path with every symlink followed; exits non-zero when it is not found or
+ * cannot be resolved. */
+export const EXECUTABLE_PROBE = `p=$( (PATH=$1; command -v "$2") ) || exit 3
+case $p in /*) ;; *) exit 3 ;; esac
+printf "%s\\n" "$p"
+hops=0
+while [ -L "$p" ]; do
+  hops=$((hops + 1)); [ "$hops" -le 40 ] || exit 4
+  t=$(readlink "$p") || exit 4
+  case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+done
+d=$(cd -P "$(dirname "$p")" && pwd -P) || exit 4
+printf "%s/%s\\n" "$d" "$(basename "$p")"`
+
+/** Refuse a judge launch whose interpreter or runtime executable is missing
+ * from the judge's filtered PATH or resolves only inside a protected
+ * location, which would name it in the judge's process arguments. */
+export async function checkJudgeExecutables(
+  deps: PanelDeps,
+  executables: readonly string[],
+  launch: JudgeLaunch,
+): Promise<string | undefined> {
+  const path = sessionEnv({ AB_JUDGE: 'probe' }, deps.ambientEnv ?? process.env, launch).PATH!
+  for (const name of executables) {
+    const found = await deps.exec(['sh', '-c', EXECUTABLE_PROBE, 'judge-exec', path, name], {})
+    if (found.exitCode !== 0)
+      return `the judge's ${name} executable was not found outside the repository; install it outside any repository`
+    const resolved = found.stdout.split('\n').filter((line) => line !== '')
+    if (resolved.some((entry) => insideProtected(entry, launch.hide) !== undefined))
+      return `the judge's ${name} executable resolves only inside a protected location; install it outside the repository`
+  }
+  return undefined
 }
 
 /** Write one file through the shell, its content passed in the environment. */
@@ -331,27 +591,18 @@ for link do
   case $p in "$root" | "$root"/*) ;; *) printf "%s\\n" "$link" ;; esac
 done' sh "$1" {} +`
 
-/** Refuse a judge root inside the workspace, one from which Git finds any
- * repository, or one holding a checked-out symlink that resolves outside it,
- * which could lead a judge back to the repository. Internal links are kept.
- * Returns the refusal, or undefined. */
+/** Refuse a judge root inside a protected location, one from which Git finds
+ * or cannot rule out a repository, or one holding a checked-out symlink that
+ * resolves outside it, which could lead a judge back to the repository.
+ * Internal links are kept. Returns the refusal, or undefined. */
 export async function checkJudgeRoot(
   deps: PanelDeps,
   root: string,
-  workspacePath: string,
+  protectedPaths: readonly string[],
 ): Promise<string | undefined> {
-  const [rootPath, workspace] = [
-    await realPath(deps.exec, root),
-    await realPath(deps.exec, workspacePath),
-  ]
-  if (rootPath === workspace || rootPath.startsWith(`${workspace}/`))
-    return 'judge root is inside the workspace; point TMPDIR outside any repository'
-  const found = await deps.exec(['git', 'rev-parse', '--git-dir'], {
-    cwd: root,
-    env: gitEnv(deps),
-  })
-  if (found.exitCode === 0)
-    return 'judge root is inside a git repository; point TMPDIR outside any repository'
+  const refusal = await scratchRefusal(deps, root, 'judge root', protectedPaths)
+  if (refusal !== undefined) return refusal
+  const rootPath = await realPath(deps.exec, root)
   const links = await deps.exec(['sh', '-c', ESCAPING_LINKS_PROBE, 'judge-links', rootPath], {})
   if (links.exitCode !== 0)
     throw new PanelPreparationFailure('checking the judge root for symlinks failed', tail(links))
@@ -371,7 +622,9 @@ export async function removePanelPaths(
   judges: number,
 ): Promise<void> {
   const roots = Array.from({ length: judges }, (_, index) => paths.judgeRoot(index + 1))
-  await deps.exec(['rm', '-rf', paths.material, ...roots], {}).catch(() => undefined)
+  await deps
+    .exec(['rm', '-rf', paths.material, paths.launcherDir, ...roots], {})
+    .catch(() => undefined)
 }
 
 // ── The run loop ─────────────────────────────────────────────────────────────
@@ -387,11 +640,18 @@ export interface PanelLoopHooks {
   read(): Promise<PanelRunState>
   /** Record a saved preference's judgment without a session. */
   complete(judged: EventPayload<'panel.judged'>): Promise<void>
-  /** Close a crashed predecessor's judge session. */
-  reclaim(judge: number, session: string): Promise<void>
-  /** Start the judge's session in its sealed root; resolves with its outcome
-   * once `panel.judged` (if any) and `panel.judge-ended` are recorded. */
-  launch(judge: number, order: PanelOrder, root: string): Promise<PanelJudgeOutcome>
+  /** Close a crashed predecessor's judge session, first committing any
+   * preference it saved in its root. */
+  reclaim(judge: number, session: string, root: string): Promise<void>
+  /** Start the judge's session in its sealed root with its launch context;
+   * resolves with its outcome once `panel.judged` (if any) and
+   * `panel.judge-ended` are recorded. */
+  launch(
+    judge: number,
+    order: PanelOrder,
+    root: string,
+    judgeLaunch: JudgeLaunch,
+  ): Promise<PanelJudgeOutcome>
   random(): number
   shutdownSignal?: AbortSignal
 }
@@ -402,6 +662,10 @@ export interface PanelRunInput extends PanelVariants {
   purpose: string
   rubric: string
   judges: number
+  /** A local store's path, protected like the repository. */
+  localStore?: string
+  /** The judge runtime's executable, when it spawns one by name. */
+  runtimeExecutable?: string
 }
 
 /**
@@ -416,11 +680,30 @@ export async function runPanelJudges(
 ): Promise<PanelResult> {
   let paths: PanelPaths | undefined
   try {
+    const protectedPaths = await judgeProtectedPaths(deps, input.workspacePath, input.localStore)
     paths = await panelPaths(deps.exec, input.build, input.panel)
+    // Before anything is written: material holds a path to the common
+    // directory, so the base itself must be outside every protected location.
+    const base = await scratchRefusal(deps, paths.base, 'the judge scratch base', protectedPaths)
+    if (base !== undefined) return { kind: 'failed', reason: base }
+    // Nothing the judge inherits may name a protected location, whether by
+    // its real path or by a symlinked spelling found in the environment.
+    const hide = [...protectedPaths, ...(await judgeAmbientAliases(deps, protectedPaths))]
+    const launch: JudgeLaunch = { hide, binDir: paths.launcherDir }
+    const executables = await checkJudgeExecutables(
+      deps,
+      ['bun', ...(input.runtimeExecutable !== undefined ? [input.runtimeExecutable] : [])],
+      launch,
+    )
+    if (executables !== undefined) return { kind: 'failed', reason: executables }
+    await writeJudgeLauncher(deps, paths.launcherDir, protectedPaths)
+    const judgeRoots = paths
     for (;;) {
       let run = await hooks.read()
+      for (const { judge, session } of awaitingReclaim(run))
+        await hooks.reclaim(judge, session, judgeRoots.judgeRoot(judge))
+      run = await hooks.read()
       for (const judged of completable(run)) await hooks.complete(judged)
-      for (const { judge, session } of awaitingReclaim(run)) await hooks.reclaim(judge, session)
       run = await hooks.read()
       for (const judge of pendingJudges(run)) {
         const failures = countedFailures(run, judge)
@@ -449,11 +732,11 @@ export async function runPanelJudges(
       }
       await sealPanelMaterial(deps, material)
       for (const { root } of wave) {
-        const refusal = await checkJudgeRoot(deps, root, input.workspacePath)
+        const refusal = await checkJudgeRoot(deps, root, protectedPaths)
         if (refusal !== undefined) return { kind: 'failed', reason: refusal }
       }
       const outcomes = await Promise.all(
-        wave.map(({ judge, order, root }) => hooks.launch(judge, order, root)),
+        wave.map(({ judge, order, root }) => hooks.launch(judge, order, root, launch)),
       )
       if (outcomes.includes('interrupted') || hooks.shutdownSignal?.aborted)
         return { kind: 'interrupted' }
