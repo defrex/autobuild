@@ -180,9 +180,31 @@ test('operator demand advances nested nodes through kernel restacks', async (mak
   }
 }, 30_000)
 
-test('node conflict runner resolves the source build with its own spec and plan', async (makeHarness) => {
+test(
+  'node conflict runner resolves the source build with its own spec and plan',
+  (makeHarness) => nodeConflictRunner(makeHarness, false),
+  30_000,
+)
+
+test(
+  'node conflict runner starts on a fresh generation after its flagged workspace is replaced',
+  (makeHarness) => nodeConflictRunner(makeHarness, true),
+  30_000,
+)
+
+/** With `flagged`, the provider is a recovery-capable git worktree whose
+ * node's first provision finds a half-created environment, the hosted
+ * provider's `cleanup-required` (#995). */
+async function nodeConflictRunner(
+  makeHarness: Parameters<Parameters<typeof test>[1]>[0],
+  flagged: boolean,
+) {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
+  const { GitWorktreeProvider } = await import('../ports/workspace/git-worktree')
+  const { WorkspaceCleanupRequired } = await import('../ports/types')
+  const recoveryCalls: string[] = []
+  let nodeProvisions = 0
   let sourceSlug = ''
   let ownerSlug = ''
   let sourceSpec = ''
@@ -190,6 +212,50 @@ test('node conflict runner resolves the source build with its own spec and plan'
   const h = await makeHarness({
     localGitForge: true,
     configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 1'),
+    ...(flagged
+      ? {
+          createWorkspaceProvider: ({ repoRoot, worktreeRoot }) => {
+            const inner = new GitWorktreeProvider({ root: worktreeRoot })
+            return new Proxy(inner, {
+              get: (target, key, receiver) => {
+                if (key === 'preservation') return async () => ({ outcome: 'absent' as const })
+                if (key === 'recovery')
+                  return {
+                    fence: async () => {
+                      recoveryCalls.push('fence')
+                      return { outcome: 'confirmed' as const }
+                    },
+                    reap: async (handle: { ref: string }) => {
+                      recoveryCalls.push(`reap:${handle.ref}`)
+                      return {
+                        outcome: 'confirmed' as const,
+                        snapshots: { outcome: 'confirmed' as const, deleted: 0 },
+                      }
+                    },
+                  }
+                if (key === 'provision')
+                  return async (input: Parameters<typeof inner.provision>[0]) => {
+                    if (input.branch.startsWith('ab-node/') && nodeProvisions++ === 0)
+                      throw new WorkspaceCleanupRequired(
+                        {
+                          provider: target.name,
+                          ref: 'half-created',
+                          // The local-git forge reads through the open
+                          // checkout, so the stale handle names a real one.
+                          path: repoRoot,
+                          branch: input.branch,
+                          base: { source: 'existing', sha: '0'.repeat(40) },
+                        },
+                        new Error('provisioned marker missing'),
+                      )
+                    return target.provision(input)
+                  }
+                return Reflect.get(target, key, receiver)
+              },
+            })
+          },
+        }
+      : {}),
     handlers: {
       ...happyHandlers(),
       reconcile: async (cli) => {
@@ -221,6 +287,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
     await h.dispatcher.tick()
     h.clock.advance(60_000)
     await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
     const records = await h.store.listBuilds()
     const owner = records.find((r) => r.ticket?.id === 'NODE')!
     const source = records.find((r) => r.ticket?.id === 'CHILD')!
@@ -263,9 +330,37 @@ test('node conflict runner resolves the source build with its own spec and plan'
     await h.dispatcher.tick()
     await h.dispatcher.tick()
     await h.dispatcher.drainProvisioning()
+    for (let i = 0; flagged && i < 10 && h.launched.at(-1)?.slug !== owner.slug; i++) {
+      h.clock.advance(30_000)
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+    }
     expect(h.launched.at(-1)?.slug).toBe(owner.slug)
     await h.runLatest()
     expect(resolved).toBe(1)
+    if (flagged) {
+      const types = (await h.events(owner.slug)).map((event) => event.type)
+      const flaggedAt = types.indexOf('workspace.cleanup-required')
+      expect(flaggedAt).toBeGreaterThan(0)
+      const order = [
+        'workspace.fenced',
+        'infrastructure.cleanup-attempted',
+        'workspace.released',
+        'workspace.provisioned',
+        'reconcile.started',
+      ].map((type) => types.indexOf(type as (typeof types)[number], flaggedAt))
+      expect(order.every((index) => index > flaggedAt)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      expect(ofType(await h.events(owner.slug), 'workspace.released')[0]?.payload).toMatchObject({
+        ref: 'half-created',
+        reason: 'replacement',
+      })
+      // Leaf worktrees are reaped too once the provider is recovery-capable.
+      expect(recoveryCalls.filter((call) => call.startsWith('reap:half'))).toEqual([
+        'reap:half-created',
+      ])
+      return
+    }
     // A dead local supervisor can leave execution.started after the resolver
     // receipt; no provider command id exists to settle it out of process.
     const { readBuildFacts } = await import('../store/reduced-reads')
@@ -295,7 +390,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
   } finally {
     await h.cleanup()
   }
-}, 30_000)
+}
 
 for (const waiting of ['blocked', 'paused'] as const)
   test(`capacity five launches an answered existing node conflict with three ${waiting} descendants`, async (makeHarness) => {
