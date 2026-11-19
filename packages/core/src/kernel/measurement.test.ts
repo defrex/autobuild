@@ -8,6 +8,7 @@ import {
   panelObjective,
 } from './generators/optimization-log'
 import {
+  attemptPanelId,
   baselineMeasurementDue,
   baselineSummary,
   decideSampledMeasurement,
@@ -17,13 +18,17 @@ import {
   measurementDelta,
   median,
   noiseExceeded,
+  panelDecision,
   parseLsTree,
   parseMeasurementOutput,
   pendingMeasurementRequest,
   sampledMeasurement,
   sampleOrder,
   type TreeEntry,
+  unmeasurable,
 } from './measurement'
+import { panelWinRate } from './panel'
+import type { PanelMetric } from '../objective'
 import { reduceBuild } from './reducer'
 
 function node(): OptimizationLogBuilder {
@@ -418,20 +423,197 @@ describe('decideSampledMeasurement', () => {
     ).toEqual({ refusal: expect.stringContaining('pins the harness at') })
   })
 
-  test('a panel, a missing objective, a missing starting value or another metric refuses', () => {
+  test('a missing objective, a missing starting value, another metric or a win rate refuses', () => {
     const sampled = samples({ baseline: 50, candidate: 40 })
     const refusal = (node: ReturnType<typeof reduceBuild>, req = request) => {
       const decided = decideSampledMeasurement(node, req, sampled)
       return 'refusal' in decided ? decided.refusal : undefined
     }
     expect(refusal(reduceBuild(node().events))).toContain('no accepted objective')
-    expect(refusal(reduceBuild(opened(panelObjective()).events))).toContain('panel')
+    expect(refusal(reduceBuild(opened(panelObjective()).events))).toContain('differs from the node')
     expect(refusal(reduceBuild(opened().events))).toContain('no starting measurement')
+    const winRate = sampledMeasurement(
+      reduceBuild(attempt().requestMeasurement('m1').panelSampled('m1', 0.8).events),
+    )!
+    const decided = decideSampledMeasurement(
+      reduceBuild(opened().baseline(1, 50, 0).events),
+      request,
+      winRate,
+    )
+    expect(decided).toEqual({ refusal: expect.stringContaining('win rate for a command ruler') })
     expect(
       refusal(reduceBuild(opened().baseline(1, 50, 0).events), {
         ...request,
         metric: { ...commandMetric(), command: 'other' },
       }),
     ).toContain('differs from the node')
+  })
+})
+
+describe('panel acceptance', () => {
+  const metric = panelObjective().metric as PanelMetric
+  const request = {
+    id: 'm1',
+    node: 'opt-node',
+    candidate: OPTIMIZATION_SHA('c'),
+    baseline: OPTIMIZATION_SHA('a'),
+    harnessPin: OPTIMIZATION_SHA('a'),
+    revision: 1,
+    metric,
+    purpose: panelObjective().purpose,
+  }
+  const judged = (winRate: number) =>
+    sampledMeasurement(
+      reduceBuild(
+        attempt()
+          .requestMeasurement('m1', 'opt-node', 1, undefined, metric)
+          .panelSampled('m1', winRate).events,
+      ),
+    )!
+
+  test('a win rate reaching 0.5 + ε improves, despite float error at the boundary', () => {
+    // 3 of 5 judges: 0.6 - 0.5 is 0.09999999999999998 in floats.
+    const won = { order: 'candidate-first', preference: 'A' } as const
+    const lost = { order: 'candidate-first', preference: 'B' } as const
+    const tie = { order: 'baseline-first', preference: 'tie' } as const
+    expect(panelDecision(panelWinRate([won, won, won, lost, lost]), 0.1)).toBe('improved')
+    expect(panelDecision(0.5, 0.05)).toBe('no-improvement')
+    expect(panelDecision(0.55, 0.05)).toBe('improved')
+    expect(panelDecision(0.5999, 0.1)).toBe('no-improvement')
+    // Ties count as half: two wins and a tie of four is 0.625.
+    const ties = panelWinRate([won, won, tie, lost])
+    expect(ties).toBe(0.625)
+    expect(panelDecision(ties, 0.1)).toBe('improved')
+    expect(panelDecision(ties, 0.2)).toBe('no-improvement')
+  })
+
+  test('decides a win rate against the node’s current ε without a starting value', () => {
+    const measuring = opened(panelObjective())
+    expect(decideSampledMeasurement(reduceBuild(measuring.events), request, judged(0.6))).toEqual({
+      measured: {
+        request: 'm1',
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: 1,
+        samples: 5,
+        winRate: 0.6,
+        delta: expect.closeTo(0.1) as unknown as number,
+        decision: 'improved',
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+    // A quick revision while the judges ran applies: ε 0.2 rejects 0.6.
+    const revised = measuring.revise({ epsilon: { absolute: 0.2 } }, 2)
+    const decided = decideSampledMeasurement(reduceBuild(revised.events), request, judged(0.6))
+    expect('measured' in decided && decided.measured.decision).toBe('no-improvement')
+    expect('measured' in decided && decided.measured.medians).toBeUndefined()
+  })
+
+  test('reports a starting spread beside the delta when the node has one', () => {
+    const node = reduceBuild(opened(panelObjective()).baseline(1, 0.5, 0.04).events)
+    const decided = decideSampledMeasurement(node, request, judged(0.4))
+    expect('measured' in decided && decided.measured).toMatchObject({
+      winRate: 0.4,
+      decision: 'no-improvement',
+      spread: 0.04,
+    })
+  })
+
+  test('medians, another panel, purpose, an old ruler or a moved pin refuse', () => {
+    const node = reduceBuild(opened(panelObjective()).events)
+    const refusal = (
+      req: Parameters<typeof decideSampledMeasurement>[1],
+      sampled = judged(0.8),
+      at = node,
+    ) => {
+      const decided = decideSampledMeasurement(at, req, sampled)
+      return 'refusal' in decided ? decided.refusal : undefined
+    }
+    const medians = sampledMeasurement(
+      reduceBuild(
+        attempt().requestMeasurement('m1').sampled('m1', { baseline: 1, candidate: 2 }).events,
+      ),
+    )!
+    expect(refusal(request, medians)).toContain('sampled medians for a panel ruler')
+    expect(refusal({ ...request, metric: { ...metric, rubric: 'evals/other.md' } })).toContain(
+      'differs from the node',
+    )
+    expect(refusal({ ...request, metric: { ...metric, judges: 3 } })).toContain(
+      'differs from the node',
+    )
+    expect(refusal({ ...request, metric: { ...metric, harness: ['other/**'] } })).toContain(
+      'differs from the node',
+    )
+    expect(refusal({ ...request, purpose: 'something else' })).toContain('purpose that differs')
+    const reruled = reduceBuild(
+      opened(panelObjective()).accept(
+        { ...panelObjective(), metric: { ...metric, judges: 7 } },
+        2,
+        1,
+      ).events,
+    )
+    expect(refusal(request, judged(0.8), reruled)).toContain('older than the current ruler')
+    const repinned = reduceBuild(
+      opened(panelObjective()).accept(panelObjective(), 2, 1, OPTIMIZATION_SHA('b')).events,
+    )
+    expect(refusal({ ...request, revision: 2 }, judged(0.8), repinned)).toContain(
+      'pins the harness at',
+    )
+  })
+
+  test('a panel node is measurable without a starting value', () => {
+    expect(unmeasurable(reduceBuild(opened(panelObjective()).events), request)).toBeUndefined()
+    expect(
+      unmeasurable(reduceBuild(opened(panelObjective()).events), { ...request, metric: undefined }),
+    ).toBeUndefined()
+  })
+})
+
+describe('attemptPanelId', () => {
+  const metric = panelObjective().metric as PanelMetric
+  const requested = () => attempt().requestMeasurement('m1', 'opt-node', 1, undefined, metric)
+  const escalate = (log: OptimizationLogBuilder, id: string, phase: 'measurement' | 'implement') =>
+    log.push({
+      actor: { kind: 'kernel' },
+      type: 'escalation.raised',
+      payload: {
+        id,
+        phase,
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question: 'judge again?',
+      },
+    })
+  const answer = (log: OptimizationLogBuilder, id: string) =>
+    log.push({
+      actor: humanActor('ada'),
+      type: 'escalation.answered',
+      payload: { id, answer: 'judge again', resolution: 'guidance' },
+    })
+  const panelId = (log: OptimizationLogBuilder) => {
+    const state = reduceBuild(log.events)
+    return attemptPanelId(state, state.attemptMeasurement!.request!)
+  }
+
+  test('a crash or an open escalation keeps the panel; an answer starts a fresh one', () => {
+    const log = requested()
+    expect(panelId(log)).toBe('attempt-m1')
+    escalate(log, 'esc-1', 'measurement')
+    expect(panelId(log)).toBe('attempt-m1')
+    answer(log, 'esc-1')
+    const first = log.events.length
+    expect(panelId(log)).toBe(`attempt-m1-a${first}`)
+    escalate(log, 'esc-2', 'measurement')
+    answer(log, 'esc-2')
+    expect(panelId(log)).toBe(`attempt-m1-a${log.events.length}`)
+  })
+
+  test('escalations answered before the request are ignored', () => {
+    const log = attempt()
+    escalate(log, 'esc-0', 'measurement')
+    answer(log, 'esc-0')
+    log.requestMeasurement('m1', 'opt-node', 1, undefined, metric)
+    expect(panelId(log)).toBe('attempt-m1')
   })
 })

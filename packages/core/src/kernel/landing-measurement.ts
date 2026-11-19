@@ -16,6 +16,7 @@ import type { TicketRef } from '../ontology'
 import type { OptimizationState } from './optimization'
 import type { BuildState } from './reducer'
 import { escalationsBeyondJanitor } from './janitor-failure'
+import { PANEL_WIN_RATE_TOLERANCE } from './measurement'
 
 export type MeasurementRequest = EventPayload<'attempt.measurement-requested'> & { seq: number }
 export type MeasurementResult = EventPayload<'attempt.measured'> & { seq: number }
@@ -73,14 +74,21 @@ export type LandingClass = 'land' | 'no-improvement' | 'regressed'
 /**
  * Classify a measurement from its recorded delta and the effective ε. An
  * attempt must improve by at least ε; any other child must not make the
- * metric worse by more than ε. The recorded `decision` is informational.
+ * metric worse by more than ε. A panel's win rate must reach 0.5 + ε for an
+ * attempt and 0.5 − ε for any other child, with the same float tolerance as
+ * its recorded decision. The recorded `decision` is informational.
  */
 export function classifyLanding(
   objective: Pick<Objective, 'target'>,
   rule: LandingRule,
-  measured: Pick<EventPayload<'attempt.measured'>, 'medians' | 'delta'>,
+  measured: Pick<EventPayload<'attempt.measured'>, 'medians' | 'winRate' | 'delta'>,
 ): LandingClass {
   const epsilon = measurementThreshold(objective, measured)
+  if (measured.winRate !== undefined) {
+    const winRate = measured.winRate + PANEL_WIN_RATE_TOLERANCE
+    if (rule === 'improve') return winRate >= 0.5 + epsilon ? 'land' : 'no-improvement'
+    return winRate >= 0.5 - epsilon ? 'land' : 'regressed'
+  }
   if (rule === 'improve') return measured.delta >= epsilon ? 'land' : 'no-improvement'
   return measured.delta >= -epsilon ? 'land' : 'regressed'
 }
