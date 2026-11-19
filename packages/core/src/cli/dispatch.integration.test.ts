@@ -10241,7 +10241,7 @@ runtime = "claude"
 
       expect(fx.err).toEqual([
         'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime, model, and args never reach a session.',
-        'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, judge, plan, plan-review, reconcile, slug, upgrade',
+        'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, judge, plan, plan-review, propose, reconcile, slug, upgrade',
       ])
       for (const line of out) expect(line).not.toContain('[roles.')
     } finally {
@@ -10289,7 +10289,7 @@ runtime = "claude"
 
       expect(fx.err).toEqual([
         'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime, model, and args never reach a session.',
-        'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, judge, plan, plan-review, reconcile, slug, upgrade',
+        'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, judge, plan, plan-review, propose, reconcile, slug, upgrade',
         'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
       ])
       // Scripted stdout consumers stay clean.

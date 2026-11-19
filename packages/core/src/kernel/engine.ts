@@ -4,6 +4,7 @@ import { verifyBudgetExhaustedQuestion } from './verify-budget'
 import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
+import { proposeRunDue, proposeStarted } from './optimization'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
  * phase per the transition table, invoke the AgentRunner with `/{skill}
@@ -117,6 +118,8 @@ export type Decision =
       verifyStageFailure?: number
       /** Present iff phase === 'reconcile'; execution resolves its base (§15.7). */
       reconcile?: { attempt: number }
+      /** Present iff phase === 'propose': the open request it answers. */
+      propose?: { request: string; head: string }
     }
   | VerifyAction
   | {
@@ -340,11 +343,30 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
         reconcile: { attempt },
       }
     }
+    if (proposeStarted(state) && proposeRunDue(state.optimization)) {
+      const proposal = state.optimization!.proposal!
+      return {
+        kind: 'run-phase',
+        phase: 'propose',
+        round: proposal.round,
+        propose: { request: proposal.id, head: proposal.head },
+      }
+    }
     if (baselineMeasurementDue(state))
       return {
         kind: 'measure-baseline',
         revision: state.optimization!.revision,
         harnessPin: state.optimization!.accepted.harnessPin,
+      }
+    // The proposer (SPEC §13.1.1): the dispatcher admitted a session for
+    // the open request; a deposited or withdrawn one falls through.
+    const proposal = state.optimization?.proposal
+    if (proposal !== undefined && proposeRunDue(state.optimization))
+      return {
+        kind: 'run-phase',
+        phase: 'propose',
+        round: proposal.round,
+        propose: { request: proposal.id, head: proposal.head },
       }
     const cycle = state.integration?.cycle
     if (!integrationCurrent(state) || cycle?.config !== integrationConfig(config))

@@ -149,6 +149,11 @@ export interface BuildDigest {
    * raise) — the one signal that makes the dispatcher's release stage
    * consider the build. */
   ticketWait?: BuildDigestTicketWait
+  /** A node's optimization signal: `false` for a plain node, absent for a
+   * leaf. The one signal that makes the dispatcher's proposer stage and the
+   * attempt creation hold read a node; absent on a node only in an older
+   * peer's answer, so read it through `digestOptimization`. */
+  optimization?: false | import('../kernel/optimization').OptimizationSignal
   /** Ascending-seq `{seq, ts}` pairs for every `observation.recorded` in the
    * build's log; `ts` is the event envelope timestamp (AUT-521: the harvest
    * pressure gate measures drift from the oldest unclaimed occurrence's ts,

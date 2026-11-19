@@ -84,7 +84,7 @@ import { abWatch, WATCH_USAGE } from './watch'
 import { abWait, WAIT_USAGE } from './wait'
 import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
-import { done, escalate, verdict, waitOn } from './terminals'
+import { done, escalate, propose, verdict, waitOn } from './terminals'
 import { abTicket, lazyTicketSource, openTicketSource } from './ticket'
 import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { abUpgrade, type ResolveConflict } from './upgrade'
@@ -1774,6 +1774,24 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
               ? `implement produced no commits over its base — escalation ${(event.payload as { id: string }).id} recorded (seq ${event.seq}); this session is complete, do not run another terminal`
               : `${event.type} recorded (seq ${event.seq})`,
       )
+      return 0
+    }
+
+    case 'propose': {
+      const session = requireSession(command, deps)
+      const usage = 'usage: ab propose <file> | ab propose --none <reason> (§8.2)'
+      const parsed = parseArgs(rest, { none: 'value' }, usage)
+      const none = stringFlag(parsed, 'none')
+      if (
+        parsed.positionals.length > 1 ||
+        (parsed.positionals.length === 1) === (none !== undefined)
+      )
+        throw new Error(usage)
+      const event = await propose(
+        session,
+        none !== undefined ? { none } : { file: parsed.positionals[0]! },
+      )
+      stdout(`${event.type} recorded (seq ${event.seq})`)
       return 0
     }
 
