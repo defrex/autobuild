@@ -1495,6 +1495,12 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'pr.conflicted':
         prState = 'conflicted'
         break
+      case 'propose.started':
+        start({ phase: 'propose', round: event.payload.round, seq: event.seq })
+        break
+      case 'propose.completed':
+        complete('propose', event.seq, { round: event.payload.round })
+        break
       case 'reconcile.started':
         reconcileAttempts = Math.max(reconcileAttempts, event.payload.attempt)
         start({

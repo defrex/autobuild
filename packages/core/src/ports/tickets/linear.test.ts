@@ -534,6 +534,53 @@ describe('LinearTicketSource', () => {
     expect(input.id).toBe(reservedId)
   })
 
+  test('create with readyAssignee assigns the issue to the resolved user', async () => {
+    const viewer = { id: 'user-me', name: 'Pat', email: 'p@example.com' }
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { viewer } } },
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issueCreate: { success: true, issue: gqlIssue() } } } },
+    ])
+    await makeSource(fetchFn).create(
+      { title: 'X', body: 'y', labels: ['autobuild'] },
+      { state: 'Ready', readyAssignee: 'me' },
+    )
+    expect(calls).toHaveLength(3)
+    expect(calls[2]?.variables).toMatchObject({
+      input: { assigneeId: 'user-me', stateId: 'st-ready', labelIds: ['lb-auto'] },
+    })
+  })
+
+  test('create with a readyAssignee naming no user writes nothing', async () => {
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { users: { nodes: [] } } } }])
+    const error = await rejectionOf(
+      makeSource(fetchFn).create(
+        { title: 'X', body: 'y' },
+        { readyAssignee: 'nobody@example.com' },
+      ),
+    )
+    expect(error.message).toContain('readyAssignee "nobody@example.com" matches no Linear user')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('an adopted idempotent create is assigned to the readyAssignee', async () => {
+    const reservedId = crypto.randomUUID()
+    const viewer = { id: 'user-me', name: 'Pat', email: 'p@example.com' }
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { viewer } } },
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issueCreate: { success: false, issue: null } } } },
+      { body: { data: { issue: gqlIssue({ id: reservedId, identifier: 'ENG-88' }) } } },
+      { body: { data: { issueUpdate: { success: true } } } },
+    ])
+    const adopted = await makeSource(fetchFn).create(
+      { title: 'X', body: 'y' },
+      { idempotencyKey: reservedId, readyAssignee: 'me' },
+    )
+    expect(adopted.ref.id).toBe('ENG-88')
+    expect(calls[4]?.variables).toEqual({ id: reservedId, input: { assigneeId: 'user-me' } })
+  })
+
   test('a duplicate idempotent create adopts the exact reserved issue id', async () => {
     const reservedId = crypto.randomUUID()
     const { fetchFn, calls } = fakeLinear([
