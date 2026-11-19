@@ -2405,7 +2405,10 @@ policy, so final quota/usage/billing exhaustion parks immediately while a final
 availability failure consumes one existing bounded attempt. `session.started`
 records each selected runtime/model and substitution cause, and an exhausted
 failure records every tried target and verbatim error for policy escalation.
-The chain applies to core phases, agent verify/finalize steps, and Harvest.
+The chain applies to core phases, agent verify/finalize steps, Harvest, and
+the judge sessions of a judge panel. A judge's alternate runs in the same judge
+root and order; its start is `panel.judge-started` rather than
+`session.started`, and only the chain's last failure counts toward the judge.
 Tool-free one-shot completions such as slug and upgrade use only the primary.
 
 For build sessions, the kernel starts the captured role budget after the durable

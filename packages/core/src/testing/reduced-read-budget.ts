@@ -5045,236 +5045,134 @@ export async function optimizationReadBudget(): Promise<void> {
 }
 
 /**
- * Panel progress selection (SPEC §15.5). For a panel node whose history is
- * 100 and 100,000 events of accepted attempts each measured for progress:
+ * Judge panel sessions (SPEC §13.1.1) on the build's session rows. With a
+ * short and a padded build log, each holding a panel whose judges fell back
+ * from their primary to an alternate:
  *
- * 1. idle selection (`progressMeasurementDue`, `nodeMeasurementDue`, slot
- *    request, capacity and the engine decision) reads zero event rows with an
- *    identical request vector at both sizes;
- * 2. a new accepted settlement costs exactly its own node row, after which
- *    progress is due for its head, the node requests a runner and the engine
- *    decides `measure-progress`;
- * 3. the recorded progress costs its own row and clears the selection, and
- *    the landing gate holds (`wait-progress`) and then lands from the same
- *    digest with no extra reads.
+ * 1. an idle terminal dashboard poll and an operator build-detail read read
+ *    zero event rows, with an identical request vector at both lengths;
+ * 2. the reduced panel state counts a substituted failure as no failure; and
+ * 3. the polled session rows carry each judge session with its phase and
+ *    stream, and nothing that names the order a judge was given.
  */
-export async function panelProgressReadBudget(): Promise<void> {
+export async function judgePanelSessionReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
-  const { panelObjective } = await import('../kernel/generators/optimization-log')
-  const { nodeMeasurementDue, progressMeasurementDue } = await import('../kernel/measurement')
-  const { occupiesCapacity, slotRequest, strandedNodeWorkspace } = await import(
-    '../kernel/dispatch-capacity'
-  )
-  const { landingMeasurementGate } = await import('../kernel/landing-measurement')
-  const repo = '/budget/panel-progress'
-  const node = 'panel-node'
-  const sha = (n: number) => n.toString(16).padStart(40, '0')
+  const { PanelLogBuilder, panelStarted } = await import('../kernel/generators/panel-log')
+  const { countedFailures } = await import('../kernel/panel')
+  const { getOperatorBuild } = await import('../operator/query')
+  const repo = '/budget/judge-panel'
+  const slug = 'attempt-panel'
   const now = new Date('2026-11-18T00:00:00Z')
   const config = parseConfig(
     '[tickets]\nsource="fake"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
   )
-  const ticket = (i: number) => ({ source: 'fake', id: `A-${i}` })
-  const measured: {
-    idle: Record<string, number>
-    accepted: Record<string, number>
-    rows: number[]
-  }[] = []
-  for (const events of [100, 100_000]) {
+  const { verify: _verify, finalize: _finalize, ...root } = config
+  const measured: Array<{ poll: Record<string, number>; operator: Record<string, number> }> = []
+  for (const padding of [10, 10_000]) {
     const store = new MemoryBuildStore()
     await store.ensureRepo(repo)
-    await store.createBuild({ slug: node, repo, branch: 'ab-node/panel-node' })
-    await store.append(node, {
+    const configArtifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'budget-run',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+      },
+    })
+    await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+    await store.append(slug, {
       actor: DISPATCHER,
       type: 'build.created',
-      payload: { repo, ticket: { source: 'fake', id: 'NODE' }, baseBranch: 'main', kind: 'node' },
+      payload: { repo, ticket: { source: 'fake', id: 'PANEL' }, baseBranch: 'main' },
     })
-    await store.append(node, {
-      actor: DISPATCHER,
-      type: 'optimization.objective-accepted',
-      payload: {
-        objective: { ...panelObjective(), budget: { maxAttempts: 1_000_000 } },
-        revision: 1,
-        harnessPin: sha(1),
-        specRev: 0,
-      },
-    })
-    await store.append(node, { actor: DISPATCHER, type: 'node.opened', payload: { sha: sha(1) } })
-    await store.append(node, {
-      actor: KERNEL,
-      type: 'optimization.baseline-measured',
-      payload: {
-        revision: 1,
-        head: sha(1),
-        harnessPin: sha(1),
-        samples: 5,
-        median: 0.5,
-        spread: 0,
-      },
-    })
-    const accept = (i: number) =>
-      store.append(node, {
-        actor: DISPATCHER,
-        type: 'attempt.settled',
-        payload: {
-          attempt: { proposal: `p${i}`, ticket: ticket(i) },
-          outcome: 'accepted',
-          measurement: { revision: 1, baseline: 0.5, candidate: 0.6, delta: 0.1 },
-          head: sha(i + 2),
-        },
-      })
-    const progress = (i: number) =>
-      store.append(node, {
+    for (let i = 0; i < padding; i++)
+      await store.append(slug, {
         actor: KERNEL,
-        type: 'optimization.progress-measured',
-        payload: { revision: 1, head: sha(i + 2), start: sha(1), winRate: 0.6, judges: 5 },
+        type: 'observation.recorded',
+        payload: { id: `obs-${i}`, kind: 'followup', summary: `budget padding ${i}` },
       })
-    // Cycles of one proposal, its acceptance and its progress.
-    const cycles = Math.floor((events - 4) / 3)
-    for (let i = 0; i < cycles; i++) {
-      await store.append(node, {
-        actor: DISPATCHER,
-        type: 'optimization.attempts-proposed',
-        payload: {
-          request: `r${i}`,
-          proposals: [{ id: `p${i}`, ticket: ticket(i), title: `Attempt ${i}`, strategy: 's' }],
-        },
-      })
-      await accept(i)
-      await progress(i)
+    const log = new PanelLogBuilder(slug).started(panelStarted({ judges: 2 }))
+    for (const judge of [1, 2]) {
+      const primary = `s_${judge}a`
+      const alternate = `s_${judge}b`
+      log
+        .judgeStarted(judge, primary, 'candidate-first', 'panel-1', {
+          runner: 'codex',
+          stream: `st_${primary}`,
+        })
+        .ended(judge, primary, 'failed')
+        .substituted(
+          judge,
+          alternate,
+          'candidate-first',
+          { session: primary, index: 0, runner: 'codex' },
+          { runner: 'claude', stream: `st_${alternate}` },
+        )
+        .ended(judge, alternate, 'failed')
     }
-    await store.append(node, {
-      actor: DISPATCHER,
-      type: 'optimization.attempts-proposed',
-      payload: {
-        request: 'r-next',
-        proposals: [{ id: `p${cycles}`, ticket: ticket(cycles), title: 'Next', strategy: 's' }],
+    for (const event of log.events) await store.append(slug, event)
+
+    const record = (await store.getBuild(slug))!
+    const single = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listBuildsForRepo') return async () => [record]
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
       },
-    })
-    const record = (await store.getBuild(node))!
-    // Warm-up: the reduced key is computed once and saved.
-    await readBuildFacts(store, node)
+    }) as BuildStore
+    const dashboard = new DashboardBuildPollCache(
+      {
+        listBuildsForRepo: async () => [record],
+        getEvents: store.getEvents.bind(store),
+        getReducerValue: store.getReducerValue.bind(store),
+      },
+      repo,
+      config,
+    )
+    // Warm-up: each reduced key is computed once and saved.
+    await dashboard.refresh()
+    await getOperatorBuild({ store: single, repo, slug, now })
     const rows = memoryRepositoryReadCounter(store, repo)
     const requests = memoryStoreRequestCounter(store)
-    const select = async () => {
-      const facts = (await readBuildFacts(store, node)).value
-      const build = { record, state: facts.state, workspace: false }
-      return {
-        due: progressMeasurementDue(facts.state),
-        node: nodeMeasurementDue(facts.state),
-        request: slotRequest(build, now),
-        occupies: occupiesCapacity(build, now),
-        decision: decideNextFromFacts(facts.state, facts.log, config),
-        digest: facts.state.optimization!,
-      }
-    }
-    const gate = (digest: Parameters<typeof landingMeasurementGate>[0]['digest']) =>
-      landingMeasurementGate({
-        digest,
-        attempt: 'in-flight',
-        lm: {
-          request: {
-            id: 'm',
-            node,
-            candidate: sha(0xfff),
-            baseline: sha(0xffe),
-            harnessPin: sha(1),
-            revision: 1,
-            seq: 1,
-          },
-          result: {
-            request: 'm',
-            candidate: sha(0xfff),
-            baseline: sha(0xffe),
-            harnessPin: sha(1),
-            revision: 1,
-            samples: 5,
-            winRate: 0.9,
-            delta: 0.4,
-            decision: 'improved',
-            seq: 2,
-          },
-          overtakes: 0,
-        },
-        candidate: sha(0xfff),
-        nodeHead: sha(0xffe),
-        self: 'attempt',
-      })
     try {
-      // 1. Idle selection: zero event rows, repeatedly.
-      for (let repeat = 0; repeat < 5; repeat++) {
-        const idle = await select()
-        expect(idle.due).toBeUndefined()
-        expect(idle.node).toBe(false)
-        expect(idle.request).toBeUndefined()
-        expect(idle.occupies).toBe(false)
-        expect(idle.decision).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
-        expect(gate(idle.digest)).toBe('land')
-      }
-      expect(rows.buildRows).toBe(0)
-      const idle = requests.vector()
-      const rowCounts = [rows.buildRows]
-
-      // 2. A new acceptance costs its own row and makes progress due.
-      await accept(cycles)
+      // 1. Idle reads: zero event rows.
       rows.reset()
       requests.reset()
-      const due = await select()
-      expect(rows.buildRows).toBe(1)
-      rowCounts.push(rows.buildRows)
-      expect(due.due).toEqual({
-        revision: 1,
-        head: sha(cycles + 2),
-        start: sha(1),
-        harnessPin: sha(1),
-      })
-      expect(due.node).toBe(true)
-      expect(due.request).toBe('verification')
-      expect(due.decision).toMatchObject({ kind: 'measure-progress', head: sha(cycles + 2) })
-      // Proposer arbitration uses these same reduced facts, with no reads:
-      // an unstarted request waits, an admitted session finishes, and neither
-      // cleanup path can release a workspace still owed a panel.
-      const facts = (await readBuildFacts(store, node)).value
-      const state = structuredClone(facts.state)
-      state.optimization!.proposal = {
-        id: 'waiting',
-        head: sha(cycles + 2),
-        room: 1,
-        requestedAt: now.toISOString(),
-        round: 100,
-      }
-      const shared = { record, state, workspace: true }
-      const before = requests.vector()
-      for (let repeat = 0; repeat < 5; repeat++) {
-        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('verification')
-        expect(decideNextFromFacts(state, facts.log, config).kind).toBe('measure-progress')
-        expect(strandedNodeWorkspace(shared, now)).toBe(false)
-        state.currentPhase = { phase: 'propose', round: 100, seq: state.lastSeq }
-        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('propose')
-        expect(decideNextFromFacts(state, facts.log, config)).toMatchObject({
-          kind: 'run-phase',
-          phase: 'propose',
-        })
-        expect(strandedNodeWorkspace(shared, now)).toBe(false)
-        delete state.currentPhase
-      }
-      expect(rows.buildRows).toBe(1)
-      expect(gate(due.digest)).toBe('wait-progress')
-      expect(requests.vector()).toEqual(before)
-      const accepted = requests.vector()
-
-      // 3. Recorded progress costs its own row and clears the selection.
-      await progress(cycles)
-      rows.reset()
-      const cleared = await select()
-      expect(rows.buildRows).toBe(1)
-      expect(cleared.due).toBeUndefined()
-      expect(cleared.node).toBe(false)
-      expect(gate(cleared.digest)).toBe('land')
-      rows.reset()
-      await select()
+      const polled = (await dashboard.refresh()).builds.find((build) => build.slug === slug)
+      const poll = requests.vector()
       expect(rows.buildRows).toBe(0)
-      rowCounts.push(rows.buildRows)
-      measured.push({ idle, accepted, rows: rowCounts })
+      rows.reset()
+      requests.reset()
+      const operator = await getOperatorBuild({ store: single, repo, slug, now })
+      const operatorVector = requests.vector()
+      expect(rows.buildRows).toBe(0)
+      expect(operator.detail.slug).toBe(slug)
+
+      // 2. Each launch fell back once and exhausted: one counted failure.
+      rows.reset()
+      const panel = (await readBuildFacts(store, slug)).value.state.panel!
+      expect(rows.buildRows).toBe(0)
+      expect(countedFailures(panel, 1)).toEqual(['failed'])
+      expect(countedFailures(panel, 2)).toEqual(['failed'])
+
+      // 3. The session rows name each judge session's target and stream.
+      const sessions = polled!.sessions ?? []
+      expect(
+        sessions.map((session) => [session.id, session.phase, session.runtime, session.stream]),
+      ).toEqual([
+        ['s_1a', 'judge:panel-1:1', 'codex', 'st_s_1a'],
+        ['s_1b', 'judge:panel-1:1', 'claude', 'st_s_1b'],
+        ['s_2a', 'judge:panel-1:2', 'codex', 'st_s_2a'],
+        ['s_2b', 'judge:panel-1:2', 'claude', 'st_s_2b'],
+      ])
+      expect(JSON.stringify(sessions)).not.toContain('first')
+      measured.push({ poll, operator: operatorVector })
     } finally {
       requests.restore()
     }
@@ -5770,4 +5668,242 @@ export async function judgePreferenceReadBudget() {
   expect(small.refused.rows).toBeLessThanOrEqual(1)
   expect(large).toEqual(small)
   return { small, large }
+}
+
+/**
+ * Panel progress selection (SPEC §15.5). For a panel node whose history is
+ * 100 and 100,000 events of accepted attempts each measured for progress:
+ *
+ * 1. idle selection (`progressMeasurementDue`, `nodeMeasurementDue`, slot
+ *    request, capacity and the engine decision) reads zero event rows with an
+ *    identical request vector at both sizes;
+ * 2. a new accepted settlement costs exactly its own node row, after which
+ *    progress is due for its head, the node requests a runner and the engine
+ *    decides `measure-progress`;
+ * 3. the recorded progress costs its own row and clears the selection, and
+ *    the landing gate holds (`wait-progress`) and then lands from the same
+ *    digest with no extra reads.
+ */
+export async function panelProgressReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { panelObjective } = await import('../kernel/generators/optimization-log')
+  const { nodeMeasurementDue, progressMeasurementDue } = await import('../kernel/measurement')
+  const { occupiesCapacity, slotRequest, strandedNodeWorkspace } = await import(
+    '../kernel/dispatch-capacity'
+  )
+  const { landingMeasurementGate } = await import('../kernel/landing-measurement')
+  const repo = '/budget/panel-progress'
+  const node = 'panel-node'
+  const sha = (n: number) => n.toString(16).padStart(40, '0')
+  const now = new Date('2026-11-18T00:00:00Z')
+  const config = parseConfig(
+    '[tickets]\nsource="fake"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const ticket = (i: number) => ({ source: 'fake', id: `A-${i}` })
+  const measured: {
+    idle: Record<string, number>
+    accepted: Record<string, number>
+    rows: number[]
+  }[] = []
+  for (const events of [100, 100_000]) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await store.createBuild({ slug: node, repo, branch: 'ab-node/panel-node' })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: 'NODE' }, baseBranch: 'main', kind: 'node' },
+    })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: { ...panelObjective(), budget: { maxAttempts: 1_000_000 } },
+        revision: 1,
+        harnessPin: sha(1),
+        specRev: 0,
+      },
+    })
+    await store.append(node, { actor: DISPATCHER, type: 'node.opened', payload: { sha: sha(1) } })
+    await store.append(node, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: {
+        revision: 1,
+        head: sha(1),
+        harnessPin: sha(1),
+        samples: 5,
+        median: 0.5,
+        spread: 0,
+      },
+    })
+    const accept = (i: number) =>
+      store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: { proposal: `p${i}`, ticket: ticket(i) },
+          outcome: 'accepted',
+          measurement: { revision: 1, baseline: 0.5, candidate: 0.6, delta: 0.1 },
+          head: sha(i + 2),
+        },
+      })
+    const progress = (i: number) =>
+      store.append(node, {
+        actor: KERNEL,
+        type: 'optimization.progress-measured',
+        payload: { revision: 1, head: sha(i + 2), start: sha(1), winRate: 0.6, judges: 5 },
+      })
+    // Cycles of one proposal, its acceptance and its progress.
+    const cycles = Math.floor((events - 4) / 3)
+    for (let i = 0; i < cycles; i++) {
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: `r${i}`,
+          proposals: [{ id: `p${i}`, ticket: ticket(i), title: `Attempt ${i}`, strategy: 's' }],
+        },
+      })
+      await accept(i)
+      await progress(i)
+    }
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: 'r-next',
+        proposals: [{ id: `p${cycles}`, ticket: ticket(cycles), title: 'Next', strategy: 's' }],
+      },
+    })
+    const record = (await store.getBuild(node))!
+    // Warm-up: the reduced key is computed once and saved.
+    await readBuildFacts(store, node)
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    const select = async () => {
+      const facts = (await readBuildFacts(store, node)).value
+      const build = { record, state: facts.state, workspace: false }
+      return {
+        due: progressMeasurementDue(facts.state),
+        node: nodeMeasurementDue(facts.state),
+        request: slotRequest(build, now),
+        occupies: occupiesCapacity(build, now),
+        decision: decideNextFromFacts(facts.state, facts.log, config),
+        digest: facts.state.optimization!,
+      }
+    }
+    const gate = (digest: Parameters<typeof landingMeasurementGate>[0]['digest']) =>
+      landingMeasurementGate({
+        digest,
+        attempt: 'in-flight',
+        lm: {
+          request: {
+            id: 'm',
+            node,
+            candidate: sha(0xfff),
+            baseline: sha(0xffe),
+            harnessPin: sha(1),
+            revision: 1,
+            seq: 1,
+          },
+          result: {
+            request: 'm',
+            candidate: sha(0xfff),
+            baseline: sha(0xffe),
+            harnessPin: sha(1),
+            revision: 1,
+            samples: 5,
+            winRate: 0.9,
+            delta: 0.4,
+            decision: 'improved',
+            seq: 2,
+          },
+          overtakes: 0,
+        },
+        candidate: sha(0xfff),
+        nodeHead: sha(0xffe),
+        self: 'attempt',
+      })
+    try {
+      // 1. Idle selection: zero event rows, repeatedly.
+      for (let repeat = 0; repeat < 5; repeat++) {
+        const idle = await select()
+        expect(idle.due).toBeUndefined()
+        expect(idle.node).toBe(false)
+        expect(idle.request).toBeUndefined()
+        expect(idle.occupies).toBe(false)
+        expect(idle.decision).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+        expect(gate(idle.digest)).toBe('land')
+      }
+      expect(rows.buildRows).toBe(0)
+      const idle = requests.vector()
+      const rowCounts = [rows.buildRows]
+
+      // 2. A new acceptance costs its own row and makes progress due.
+      await accept(cycles)
+      rows.reset()
+      requests.reset()
+      const due = await select()
+      expect(rows.buildRows).toBe(1)
+      rowCounts.push(rows.buildRows)
+      expect(due.due).toEqual({
+        revision: 1,
+        head: sha(cycles + 2),
+        start: sha(1),
+        harnessPin: sha(1),
+      })
+      expect(due.node).toBe(true)
+      expect(due.request).toBe('verification')
+      expect(due.decision).toMatchObject({ kind: 'measure-progress', head: sha(cycles + 2) })
+      // Proposer arbitration uses these same reduced facts, with no reads:
+      // an unstarted request waits, an admitted session finishes, and neither
+      // cleanup path can release a workspace still owed a panel.
+      const facts = (await readBuildFacts(store, node)).value
+      const state = structuredClone(facts.state)
+      state.optimization!.proposal = {
+        id: 'waiting',
+        head: sha(cycles + 2),
+        room: 1,
+        requestedAt: now.toISOString(),
+        round: 100,
+      }
+      const shared = { record, state, workspace: true }
+      const before = requests.vector()
+      for (let repeat = 0; repeat < 5; repeat++) {
+        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('verification')
+        expect(decideNextFromFacts(state, facts.log, config).kind).toBe('measure-progress')
+        expect(strandedNodeWorkspace(shared, now)).toBe(false)
+        state.currentPhase = { phase: 'propose', round: 100, seq: state.lastSeq }
+        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('propose')
+        expect(decideNextFromFacts(state, facts.log, config)).toMatchObject({
+          kind: 'run-phase',
+          phase: 'propose',
+        })
+        expect(strandedNodeWorkspace(shared, now)).toBe(false)
+        delete state.currentPhase
+      }
+      expect(rows.buildRows).toBe(1)
+      expect(gate(due.digest)).toBe('wait-progress')
+      expect(requests.vector()).toEqual(before)
+      const accepted = requests.vector()
+
+      // 3. Recorded progress costs its own row and clears the selection.
+      await progress(cycles)
+      rows.reset()
+      const cleared = await select()
+      expect(rows.buildRows).toBe(1)
+      expect(cleared.due).toBeUndefined()
+      expect(cleared.node).toBe(false)
+      expect(gate(cleared.digest)).toBe('land')
+      rows.reset()
+      await select()
+      expect(rows.buildRows).toBe(0)
+      rowCounts.push(rows.buildRows)
+      measured.push({ idle, accepted, rows: rowCounts })
+    } finally {
+      requests.restore()
+    }
+  }
+  expect(measured[1]).toEqual(measured[0])
 }

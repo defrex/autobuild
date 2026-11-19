@@ -52,9 +52,20 @@ export function panelWinRate(
   return total / judgments.length
 }
 
+/** One judge session start: the order it was given, the target that ran
+ * it, its stream and, for an alternate, the session it substitutes. */
+export interface PanelJudgeStart {
+  session: string
+  order: PanelOrder
+  runner: string
+  model?: string
+  stream?: string
+  substitutes?: string
+}
+
 export interface PanelJudgeState {
   /** Every session started for this judge, with the order it was given. */
-  starts: Array<{ session: string; order: PanelOrder }>
+  starts: PanelJudgeStart[]
   ended: Array<{ session: string; outcome: PanelJudgeOutcome }>
   preferred?: { session: string; preference: PanelPreference; reason: string }
   judged?: EventPayload<'panel.judged'>
@@ -104,7 +115,16 @@ export function advancePanel(
   const judge = judgeState(run, event.payload.judge)
   switch (event.type) {
     case 'panel.judge-started':
-      judge.starts.push({ session: event.payload.session, order: event.payload.order })
+      judge.starts.push({
+        session: event.payload.session,
+        order: event.payload.order,
+        runner: event.payload.runner,
+        ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
+        ...(event.payload.stream !== undefined ? { stream: event.payload.stream } : {}),
+        ...(event.payload.substitution !== undefined
+          ? { substitutes: event.payload.substitution.failed.session }
+          : {}),
+      })
       break
     case 'panel.preferred':
       judge.preferred ??= {
@@ -139,13 +159,17 @@ export function pendingJudges(run: PanelRunState): number[] {
   })
 }
 
-/** Sessions started and never ended: a crashed predecessor's. */
-export function awaitingReclaim(run: PanelRunState): Array<{ judge: number; session: string }> {
-  const out: Array<{ judge: number; session: string }> = []
+/** Sessions started and never ended: a crashed predecessor's, with the
+ * stream the reclaim closes. */
+export function awaitingReclaim(
+  run: PanelRunState,
+): Array<{ judge: number; session: string; stream?: string }> {
+  const out: Array<{ judge: number; session: string; stream?: string }> = []
   for (const judge of judgeIndexes(run)) {
     const state = judgeOf(run, judge)
-    for (const { session } of state.starts)
-      if (!state.ended.some((ended) => ended.session === session)) out.push({ judge, session })
+    for (const { session, stream } of state.starts)
+      if (!state.ended.some((ended) => ended.session === session))
+        out.push({ judge, session, ...(stream !== undefined ? { stream } : {}) })
   }
   return out
 }
@@ -171,10 +195,15 @@ export function completable(run: PanelRunState): Array<EventPayload<'panel.judge
   return out
 }
 
-/** Failures that count against a judge's attempts. */
+/** Failures that count against a judge's attempts. A session a later start
+ * substitutes is not counted: only an exhausted provider chain consumes an
+ * attempt (SPEC §8.4). */
 export function countedFailures(run: PanelRunState, judge: number): PanelJudgeOutcome[] {
-  return judgeOf(run, judge)
-    .ended.map((ended) => ended.outcome)
+  const state = judgeOf(run, judge)
+  const substituted = new Set(state.starts.flatMap((start) => start.substitutes ?? []))
+  return state.ended
+    .filter((ended) => !substituted.has(ended.session))
+    .map((ended) => ended.outcome)
     .filter((outcome) => COUNTED_FAILURES.has(outcome))
 }
 
