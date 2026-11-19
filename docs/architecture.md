@@ -350,8 +350,9 @@ records the run's kernel facts, the order in `panel.judge-started` before each
 session, and `panel.judged` after it. Its `runJudge` runs the `judge` role's
 primary-first chain: each target is its own judge session in the same root and
 order, opens its own build-scoped session stream through `openSessionStream`
-and closes it before `panel.judge-ended`. Only an exhausted chain is a counted
-failure. `cli/dashboard/facts.ts` keeps an order-free list of judge sessions
+and closes it before `panel.judge-ended`. A failure that a later target
+substitutes is not counted; the final failed, no-terminal or expired session is,
+including a failure no alternate may follow. `cli/dashboard/facts.ts` keeps an order-free list of judge sessions
 that `projectSessions` merges into the build's session rows. A judge session's only store authority is
 write-only: `packages/core/src/store/judge-authority.ts` is the shared rule
 (one `panel.preferred` for its own panel, judge and session, while that session

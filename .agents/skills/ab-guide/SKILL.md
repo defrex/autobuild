@@ -212,8 +212,9 @@ kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
 they are given reveals which variant is the candidate. A judge whose primary
 target fails with an alternate-eligible failure runs again on the `judge`
-role's next alternate, as its own session in the same root and order; only an
-exhausted chain counts against the judge. Each judge session streams like any
+role's next alternate, as its own session in the same root and order. A
+substituted failure does not count against the judge; the chain's final failed,
+no-terminal or expired session does, including a failure no alternate may follow. Each judge session streams like any
 build session and shows among the build's session rows as role `judge`, phase
 `judge:<panel>:<judge>`. A resumed run reuses
 recorded preferences and reruns only judges without one. Nothing runs a panel
@@ -1312,7 +1313,9 @@ an alternate; only a successful primary can remain live for producer revisions.
 Only chain exhaustion writes the phase failure, and
 the final failure controls retry behavior. Substitution starts and exhausted
 failures retain the targets and verbatim errors durably. Core phases, agent
-verify/finalize, and Harvest use the chain; tool-free one-shots do not.
+verify/finalize, Harvest, and judge sessions use the chain (a judge records
+each target on its own `panel.judge-started`, not `session.started`); tool-free
+one-shots do not.
 
 A build phase session that reaches its captured budget is aborted and ended
 best-effort. The kernel records retryable `phase.failed` with `phase session
