@@ -19233,9 +19233,8 @@ describe('a node flagged cleanup-required is replaced like a leaf (#995)', () =>
     const events = await store.getEvents(slug)
     const flaggedAt = events.findIndex((e) => e.type === 'workspace.cleanup-required')
     expect(flaggedAt).toBeGreaterThan(0)
-    expect(
-      events.slice(flaggedAt + 1).find((e) => e.type === 'infrastructure.failed')?.payload,
-    ).toMatchObject({ operation: 'provision', cleanupPending: true })
+    // Adopting a teardown abandonment that must be replaced is uncharged.
+    expect(events.some((e) => e.type === 'infrastructure.failed')).toBe(false)
     const after = events.slice(flaggedAt).map((e) => e.type)
     const order = [
       'workspace.fenced',
