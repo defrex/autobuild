@@ -12061,6 +12061,10 @@
         "refused": {
           "type": "4",
           "optional": true
+        },
+        "observedHead": {
+          "type": "4",
+          "optional": true
         }
       }
     },
