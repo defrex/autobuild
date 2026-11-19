@@ -18,11 +18,15 @@ import {
   measurementDelta,
   measurementRequestStatus,
   median,
+  nodeMeasurementDue,
+  nodePanelEscalationId,
+  nodePanelId,
   noiseExceeded,
   panelDecision,
   parseLsTree,
   parseMeasurementOutput,
   pendingMeasurementRequest,
+  progressMeasurementDue,
   sampledMeasurement,
   sampleOrder,
   type TreeEntry,
@@ -196,8 +200,14 @@ describe('baselineMeasurementDue', () => {
     expect(baselineMeasurementDue(reduceBuild(log.events))).toBe(false)
   })
 
-  test('a panel, a stopped node, a paused or blocked node and a terminal node are never due', () => {
-    expect(baselineMeasurementDue(reduceBuild(opened(panelObjective()).events))).toBe(false)
+  test('an opened panel node without a starting value is due for its self-comparison', () => {
+    expect(baselineMeasurementDue(reduceBuild(opened(panelObjective()).events))).toBe(true)
+    expect(
+      baselineMeasurementDue(reduceBuild(opened(panelObjective()).baseline(1, 0.5, 0).events)),
+    ).toBe(false)
+  })
+
+  test('a stopped node, a paused or blocked node and a terminal node are never due', () => {
     expect(baselineMeasurementDue(reduceBuild(opened().stop('operator', 'abort').events))).toBe(
       false,
     )
@@ -225,6 +235,138 @@ describe('baselineMeasurementDue', () => {
     expect(baselineMeasurementDue(reduceBuild(answered.events))).toBe(true)
     const aborted = opened().push({ actor: { kind: 'kernel' }, type: 'build.aborted', payload: {} })
     expect(baselineMeasurementDue(reduceBuild(aborted.events))).toBe(false)
+  })
+})
+
+describe('progressMeasurementDue', () => {
+  const A = OPTIMIZATION_SHA('c')
+  const B = OPTIMIZATION_SHA('d')
+  const PIN = OPTIMIZATION_SHA('a')
+  const accepted = { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 }
+  const started = () => opened(panelObjective()).baseline(1, 0.5, 0).propose('r', ['p1', 'p2'])
+  const due = (log: OptimizationLogBuilder) => progressMeasurementDue(reduceBuild(log.events))
+
+  test('not due before a starting value', () => {
+    const log = opened(panelObjective())
+      .propose('r', ['p1'])
+      .settle('p1', 'accepted', accepted, undefined, { head: A })
+    expect(due(log)).toBeUndefined()
+    expect(nodeMeasurementDue(reduceBuild(log.events))).toBe(true)
+  })
+
+  test('due for an accepted head, cleared by its progress', () => {
+    const log = started().settle('p1', 'accepted', accepted, undefined, { head: A })
+    expect(due(log)).toEqual({ revision: 1, head: A, start: PIN, harnessPin: PIN })
+    expect(nodeMeasurementDue(reduceBuild(log.events))).toBe(true)
+    log.progress(1, 0.7, A)
+    expect(due(log)).toBeUndefined()
+    expect(nodeMeasurementDue(reduceBuild(log.events))).toBe(false)
+  })
+
+  test('not due for a settlement without a head, nor for a command node', () => {
+    expect(due(started().settle('p1', 'accepted', accepted))).toBeUndefined()
+    const command = opened()
+      .baseline(1, 50, 1)
+      .propose('r', ['p1'])
+      .settle(
+        'p1',
+        'accepted',
+        { revision: 1, baseline: 50, candidate: 40, delta: 10 },
+        undefined,
+        { head: A },
+      )
+    expect(due(command)).toBeUndefined()
+    expect(reduceBuild(command.events).optimization?.progressQueue).toBeUndefined()
+  })
+
+  test('two acceptances before any panel are each measured, oldest first', () => {
+    const log = started()
+      .settle('p1', 'accepted', accepted, undefined, { head: A })
+      .settle('p2', 'accepted', accepted, undefined, { head: B })
+    expect(due(log)?.head).toBe(A)
+    log.progress(1, 0.6, A)
+    expect(due(log)?.head).toBe(B)
+    log.progress(1, 0.7, B)
+    expect(due(log)).toBeUndefined()
+  })
+
+  test('an acceptance during a running panel stays queued behind it', () => {
+    const log = started().settle('p1', 'accepted', accepted, undefined, { head: A })
+    expect(due(log)?.head).toBe(A)
+    log.settle('p2', 'accepted', accepted, undefined, { head: B }).progress(1, 0.6, A)
+    expect(due(log)?.head).toBe(B)
+    expect(reduceBuild(log.events).optimization?.current).toBe(0.6)
+  })
+
+  test('a duplicate settlement head is queued once', () => {
+    const log = started()
+      .settle('p1', 'accepted', accepted, undefined, { head: A })
+      .settle('p2', 'accepted', accepted, undefined, { head: A })
+    expect(reduceBuild(log.events).optimization?.progressQueue).toEqual([A])
+  })
+
+  test('progress under an old ruler or from another start is ignored', () => {
+    const log = started()
+      .settle('p1', 'accepted', accepted, undefined, { head: A })
+      .progress(1, 0.9, A, B)
+    expect(due(log)?.head).toBe(A)
+    expect(reduceBuild(log.events).optimization?.current).toBe(0.5)
+    const changed = panelObjective()
+    if (changed.metric.kind === 'panel') changed.metric.rubric = 'evals/other.md'
+    const repinned = started()
+      .settle('p1', 'accepted', accepted, undefined, { head: A })
+      .accept(changed, 2, 1, B)
+      .progress(1, 0.9, A)
+    const state = reduceBuild(repinned.events)
+    expect(state.optimization?.progressQueue).toBeUndefined()
+    expect(state.optimization?.current).toBe(0.5)
+    expect(progressMeasurementDue(state)).toBeUndefined()
+    expect(baselineMeasurementDue(state)).toBe(true)
+  })
+
+  test('due while stopped and draining; not when paused, blocked or terminal', () => {
+    const queued = () => started().settle('p1', 'accepted', accepted, undefined, { head: A })
+    expect(due(queued().stop('operator', 'drain'))?.head).toBe(A)
+    const paused = queued()
+      .push({ actor: humanActor('ada'), type: 'build.pause-requested', payload: {} })
+      .push({ actor: { kind: 'kernel' }, type: 'build.paused', payload: {} })
+    expect(due(paused)).toBeUndefined()
+    const blocked = queued().push({
+      actor: { kind: 'kernel' },
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-1',
+        phase: 'measurement',
+        source: 'policy',
+        policyCause: 'measurement-failed',
+        question: 'q',
+      },
+    })
+    expect(due(blocked)).toBeUndefined()
+    const aborted = queued().push({ actor: { kind: 'kernel' }, type: 'build.aborted', payload: {} })
+    expect(due(aborted)).toBeUndefined()
+  })
+})
+
+describe('nodePanelId', () => {
+  test('an answer to the failure escalation advances the generation; an open one does not', () => {
+    const answered = (ids: string[]) => ({
+      answeredEscalations: ids.map((id) => ({ id }) as never),
+    })
+    expect(nodePanelId(answered([]), 'baseline-1-x')).toBe('baseline-1-x-r0')
+    expect(nodePanelEscalationId('baseline-1-x-r0')).toBe('node-panel-failed-baseline-1-x-r0')
+    expect(nodePanelId(answered(['node-panel-failed-baseline-1-x-r0']), 'baseline-1-x')).toBe(
+      'baseline-1-x-r1',
+    )
+    expect(
+      nodePanelId(
+        answered(['node-panel-failed-baseline-1-x-r0', 'node-panel-failed-baseline-1-x-r1']),
+        'baseline-1-x',
+      ),
+    ).toBe('baseline-1-x-r2')
+    expect(nodePanelId(answered(['node-panel-failed-progress-1-x-r0']), 'baseline-1-x')).toBe(
+      'baseline-1-x-r0',
+    )
   })
 })
 
