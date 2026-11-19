@@ -31,9 +31,9 @@ import {
 } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import {
-  judgeLifecycleFacts,
-  judgeWriteRefusal,
-  type BuildDelegationFacts,
+  appendJudgePreference,
+  JudgePreferenceContentionError,
+  judgeScopeRefusal,
 } from '@defrex/autobuild/remote-store'
 import { randomBytes } from 'node:crypto'
 import {
@@ -693,7 +693,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * A `build-judge` grant is write-only (SPEC §13.1.1): it may append exactly
    * one `panel.preferred` for its own build, panel, judge and session while
    * that session is open. Every read, including reducer values, artifacts,
-   * streams and build listings, is refused before any other route logic.
+   * streams and build listings, is refused before any other route logic. This
+   * guard checks only the request's shape and the write's scope; the session's
+   * lifecycle is checked atomically with the append (`judgeAppend`).
    */
   async function authorizeJudgeRequest(
     req: Request,
@@ -716,15 +718,39 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     } catch {
       throw new RequestError(400, 'validation', 'invalid JSON')
     }
-    const facts = (
-      await store.getReducerValue({ kind: 'build', slug: grant.id }, { reducer: 'buildDelegation' })
-    ).value as unknown as BuildDelegationFacts
-    const refusal = judgeWriteRefusal(
-      { build: grant.id, panel: grant.panel!, judge: grant.judge!, session: grant.session! },
+    const refusal = judgeScopeRefusal(
+      judgeGrantScope(grant),
       body as { type?: unknown; actor?: unknown; payload?: unknown },
-      judgeLifecycleFacts(facts, grant.session!),
     )
     if (refusal !== undefined) throw new MachineAuthError(403, refusal)
+  }
+
+  function judgeGrantScope(grant: Extract<MachinePrincipal, { kind: 'delegated' }>['delegation']): {
+    build: string
+    panel: string
+    judge: number
+    session: string
+  } {
+    return { build: grant.id, panel: grant.panel!, judge: grant.judge!, session: grant.session! }
+  }
+
+  /** A judge's one preference (AUT-1245): the lifecycle read and the append
+   * are one conditional step, so concurrent requests from one session record
+   * at most one preference. The loser gets the same refusal a sequential
+   * retry gets; sustained contention is a retryable conflict. */
+  async function judgeAppend(
+    grant: Extract<MachinePrincipal, { kind: 'delegated' }>['delegation'],
+    write: EventWrite,
+  ): Promise<Response> {
+    try {
+      const result = await appendJudgePreference(store, judgeGrantScope(grant), write)
+      if (result.kind === 'refused') throw new MachineAuthError(403, result.reason)
+      return json(201, result.event)
+    } catch (error) {
+      if (error instanceof JudgePreferenceContentionError)
+        return fail(409, 'conflict', error.message)
+      throw error
+    }
   }
 
   // Project credentials retain runner authority; delegated phase claims also
@@ -1324,6 +1350,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const body = await readBody(req, eventWriteWireSchema)
 
         const actor = enforceVia(scope, body.actor)
+        if (scope?.kind === 'delegated' && scope.delegation.kind === 'build-judge')
+          return judgeAppend(scope.delegation, { ...body, actor } as EventWrite)
         return json(201, await store.append(slug, { ...body, actor } as EventWrite))
       }
       case 'POST events/conditional': {
