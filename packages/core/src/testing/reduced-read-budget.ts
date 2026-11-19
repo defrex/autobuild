@@ -1735,12 +1735,15 @@ export async function sampledMeasurementReadBudget(opts: {
 }
 
 /** Backing store traffic during one measured window: calls by method and by
- * build slug, returned bytes, and event rows read from any build log. */
+ * build slug, returned bytes, event rows read from any build log, each named
+ * by its build and sequence, and rows read from any repository journal. */
 export interface StoreReadMetrics {
   calls: Record<string, number>
   slugs: Record<string, number>
   bytes: number
   rows: number
+  read: { slug: string; seq: number }[]
+  repoRows: number
 }
 
 const STORE_WRITES = new Set([
@@ -1758,30 +1761,58 @@ export async function measureStoreReads(
   store: import('../store/memory').MemoryBuildStore,
   run: () => Promise<void>,
 ): Promise<StoreReadMetrics> {
-  const metrics: StoreReadMetrics = { calls: {}, slugs: {}, bytes: 0, rows: 0 }
+  const metrics: StoreReadMetrics = {
+    calls: {},
+    slugs: {},
+    bytes: 0,
+    rows: 0,
+    read: [],
+    repoRows: 0,
+  }
   const builds: Map<string, { events: import('../events/catalog').AbEvent[] }> = Reflect.get(
     store,
     'builds',
   )
   const restore: (() => void)[] = []
-  const slice = Array.prototype.slice
-  for (const build of builds.values()) {
-    const events = build.events
-    events.slice = function (start?: number, end?: number) {
-      const result = slice.call(this, start, end) as typeof events
-      metrics.rows += result.length
-      return result
+  // The memory store hands out log rows through `slice` (reducer advances,
+  // pages) and `filter` (`getEvents`, `getRepoEvents`). Both return a fresh
+  // array, so a row is counted once however the caller narrows it further.
+  const count = <E extends { seq: number }>(events: E[], read: (rows: E[]) => void) => {
+    for (const method of ['slice', 'filter'] as const) {
+      const original = Array.prototype[method] as (...args: unknown[]) => E[]
+      Object.defineProperty(events, method, {
+        configurable: true,
+        writable: true,
+        value(this: E[], ...args: unknown[]) {
+          const result = original.apply(this, args)
+          read(result)
+          return result
+        },
+      })
+      restore.push(() => Reflect.deleteProperty(events, method))
     }
-    restore.push(() => Reflect.deleteProperty(events, 'slice'))
   }
+  const repositories: Map<string, { events: { seq: number }[] }> = Reflect.get(store, 'repos')
+  for (const repository of repositories.values())
+    count(repository.events, (rows) => {
+      metrics.repoRows += rows.length
+    })
+  for (const [slug, build] of builds)
+    count(build.events, (rows) => {
+      metrics.rows += rows.length
+      for (const event of rows) metrics.read.push({ slug, seq: event.seq })
+    })
   const names = Object.getOwnPropertyNames(Object.getPrototypeOf(store)).filter(
     (name) => name !== 'constructor' && typeof Reflect.get(store, name) === 'function',
   )
+  // Bytes are what the store returns to its caller; a call the store makes
+  // to itself returns its own internal state, which is not traffic.
+  const inside = new AsyncLocalStorage<true>()
   for (const name of names) {
     const own = Object.getOwnPropertyDescriptor(store, name)
     const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
-    const measure = (result: unknown) => {
-      if (!STORE_WRITES.has(name))
+    const measure = (internal: boolean) => (result: unknown) => {
+      if (!internal && !STORE_WRITES.has(name))
         metrics.bytes += Buffer.byteLength(
           JSON.stringify(result, (_key, value) =>
             value instanceof Uint8Array ? value.byteLength : value,
@@ -1800,8 +1831,9 @@ export async function measureStoreReads(
             : undefined
       if (slug !== undefined && builds.has(slug))
         metrics.slugs[slug] = (metrics.slugs[slug] ?? 0) + 1
-      const result = original.apply(store, args)
-      return result instanceof Promise ? result.then(measure) : measure(result)
+      const internal = inside.getStore() === true
+      const result = inside.run(true, () => original.apply(store, args))
+      return result instanceof Promise ? result.then(measure(internal)) : measure(internal)(result)
     })
     restore.push(() =>
       own ? Object.defineProperty(store, name, own) : Reflect.deleteProperty(store, name),
@@ -1813,6 +1845,62 @@ export async function measureStoreReads(
     for (const undo of restore) undo()
   }
   return metrics
+}
+
+/** The tripwire `measureStoreReads` gives budget proofs: every public path
+ * that returns build or repository log rows is counted, each row once. A
+ * reducer advance reads only its new rows; a full `getEvents` or
+ * `getRepoEvents` reads the history and is seen doing so. */
+export async function storeReadMetricsTripwire(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const store = new MemoryBuildStore()
+  const repo = 'tripwire/repo'
+  const slug = 'tripwire-build'
+  await store.ensureRepo(repo)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'tripwire-run',
+      pid: 1,
+      roleWarnings: [],
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 },
+    },
+  })
+  await store.createBuild({ slug, repo })
+  const scope = { kind: 'build', slug } as const
+  const request = { reducer: 'buildReadFacts' } as const
+  await store.getReducerValue(scope, request)
+  const historical = (await store.getEvents(slug)).map((event) => event.seq)
+  const repoHistory = (await store.getRepoEvents(repo)).length
+  expect(repoHistory).toBeGreaterThan(0)
+
+  const builds = await measureStoreReads(store, async () => {
+    await store.getEvents(slug)
+  })
+  expect(builds.read).toEqual(historical.map((seq) => ({ slug, seq })))
+  expect(builds.rows).toBe(historical.length)
+  const since = await measureStoreReads(store, async () => {
+    await store.getEvents(slug, historical.at(-1))
+  })
+  expect(since.rows).toBe(0)
+  const repository = await measureStoreReads(store, async () => {
+    await store.getRepoEvents(repo)
+  })
+  expect(repository.repoRows).toBe(repoHistory)
+  expect(repository.rows).toBe(0)
+
+  // A reducer advancing over one new row reads that row, once.
+  const appended = await store.append(slug, {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'tripwire', host: 'host' },
+  })
+  const advance = await measureStoreReads(store, async () => {
+    await store.getReducerValue(scope, request)
+  })
+  expect(advance.read).toEqual([{ slug, seq: appended.seq }])
+  expect(advance.repoRows).toBe(0)
 }
 
 function writes(metrics: StoreReadMetrics): number {
