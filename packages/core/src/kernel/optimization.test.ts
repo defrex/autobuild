@@ -1193,6 +1193,12 @@ test('the landing gate and the rejected-role sweep have bounded read cost', asyn
   const { optimizationLandingReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationLandingReadBudget()
 }, 120_000)
+
+test('the store read tripwire sees historical build and repository rows', async () => {
+  const { storeReadMetricsTripwire } = await import('../testing/reduced-read-budget')
+  await storeReadMetricsTripwire()
+})
+
 test('a second propose terminal for the round is refused', () => {
   const log = new OptimizationLogBuilder()
     .accept(commandObjective(), 1)

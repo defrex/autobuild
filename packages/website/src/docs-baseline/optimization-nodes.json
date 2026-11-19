@@ -1,0 +1,38 @@
+{
+  "path": "/docs/optimization-nodes/",
+  "label": "Optimization",
+  "title": "Optimization nodes",
+  "group": "concepts",
+  "description": "Let a node propose, measure and land its own attempts toward a metric or a judge panel, within a budget you approve once.",
+  "textHash": "25c6c9d5130bde9c5e8335a36eb26912355c2e908a8536289fc19e8427a5e566",
+  "headings": [
+    "When to use one",
+    "A run, end to end",
+    "The marker",
+    "The objective",
+    "Refusals",
+    "Grooming an optimization node",
+    "Opening",
+    "Revisions",
+    "Measurement",
+    "Judge panels",
+    "Events",
+    "Progress",
+    "Where progress appears",
+    "Proposer phase",
+    "Attempts",
+    "Landing and settlement",
+    "Stopping and completion",
+    "Landing the node"
+  ],
+  "code": [
+    "```autobuild-objective\npurpose = \"\"\"\np95 latency of the catalog search query, because users wait on it at every\nkeystroke. Results, their order and the query's semantics must not change.\n\"\"\"\n\n[metric]\nkind = \"command\"                 # or \"panel\"\ncommand = \"bun bench/search.ts\"  # prints one JSON object: {\"value\": <number>}\ndirection = \"minimize\"\nsamples = 7                      # paired runs per side\nharness = [\"bench/search/**\", \"bench/fixtures/catalog.sql\"]\n\n[target]\nthreshold = 40                   # milliseconds; optional\nepsilon = { relative = 0.03 }    # or { absolute = 2 }\n\n[budget]                         # at least one limit is required\nmaxAttempts = 60\nmaxHours = 24\n\n[stop]\nplateau = { attempts = 12 }      # optional\nmode = \"abort\"                   # or \"drain\"; default \"abort\"\n\n[proposer]\nconcurrency = 4                  # attempts in flight\n```",
+    "[metric]\nkind = \"panel\"\njudges = 5\nrubric = \"evals/prose-rubric.md\"   # a harness path\nharness = [\"evals/**\"]",
+    "ab objective <node> [--threshold n] [--epsilon n|n%] [--max-attempts n] \\\n  [--max-hours n] [--plateau n] [--stop-mode abort|drain] [--concurrency n] \\\n  [--json] [--store <ref>]\nab objective <node> --stop [--drain | --abort] [--json] [--store <ref>]",
+    "objective 50 → 44 (minimize) · threshold 35 · noise ±1.5\nattempts 1 accepted · 3 rejected · 0 running\nbudget 4/60 attempts · 3.1/24 hours\nstopped plateau (drain)",
+    "{\"proposals\": [{\"id\": \"batch-index-lookups\", \"title\": \"…\", \"strategy\": \"…\", \"body\": \"…\"}], \"reason\": \"…\"}",
+    "publication rejected: an optimization attempt must not change its harness (the measurement's ruler):\n  bench/search/run.ts\nRevert these paths to the contribution base, commit, then retry 'ab done'.",
+    "ab done --no-improvement \"<what was tried and why it did not help>\" [--notes <file>]",
+    "ab objective <node> --settle-unmeasured <proposal|build> --policy release-unmeasured [--note <text>]"
+  ]
+}
