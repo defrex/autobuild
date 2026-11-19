@@ -14,7 +14,7 @@ import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { reduceBuild } from '../kernel/reducer'
 import { steppingClock } from '../testing/fixed'
-import { BuildRunner } from './build-runner'
+import { BuildRunner, type BuildRunnerOpts } from './build-runner'
 
 const PIN = 'a'.repeat(40)
 const NEW_PIN = 'b'.repeat(40)
@@ -60,7 +60,21 @@ function scriptedExec(
   }
 }
 
+/** Records heartbeat registrations so no test here arms the real-clock interval. */
+function fakeHeartbeat() {
+  const scheduled: number[] = []
+  let cancelled = 0
+  const schedule: NonNullable<BuildRunnerOpts['scheduleHeartbeat']> = (_beat, intervalMs) => {
+    scheduled.push(intervalMs)
+    return () => {
+      cancelled += 1
+    }
+  }
+  return { schedule, scheduled, cancelled: () => cancelled }
+}
+
 async function fixture(exec: Exec, slug: string) {
+  const heartbeat = fakeHeartbeat()
   const store = new MemoryBuildStore()
   await store.createBuild({ slug: NODE, repo: 'repo', branch: `ab/${NODE}` })
   await store.append(NODE, {
@@ -112,12 +126,14 @@ async function fixture(exec: Exec, slug: string) {
       commit: 'unknown',
       source: { kind: 'package', location: '/autobuild' },
     },
+    opts: { scheduleHeartbeat: heartbeat.schedule },
   })
   const internals = runner as unknown as {
     measureBaseline(decision: Extract<Decision, { kind: 'measure-baseline' }>): Promise<void>
     runMeasurement(decision: Extract<Decision, { kind: 'run-measurement' }>): Promise<void>
+    stopHeartbeat(): void
   }
-  return { store, runner, internals }
+  return { store, runner, internals, heartbeat }
 }
 
 const types = (events: AbEvent[]) => events.map((event) => event.type)
@@ -150,10 +166,23 @@ describe('the node starting measurement', () => {
   })
 
   test('a launched node runner attaches for the measurement and records it', async () => {
-    const { store, runner } = await fixture(scriptedExec({ baseline: [10], candidate: [10] }), NODE)
-    await runner.attach()
-    expect(await runner.step()).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: PIN })
-    expect(types(await store.getEvents(NODE))).toContain('optimization.baseline-measured')
+    const { store, runner, internals, heartbeat } = await fixture(
+      scriptedExec({ baseline: [10], candidate: [10] }),
+      NODE,
+    )
+    try {
+      await runner.attach()
+      expect(heartbeat.scheduled).toEqual([15_000])
+      expect(await runner.step()).toEqual({
+        kind: 'measure-baseline',
+        revision: 1,
+        harnessPin: PIN,
+      })
+      expect(types(await store.getEvents(NODE))).toContain('optimization.baseline-measured')
+    } finally {
+      internals.stopHeartbeat()
+    }
+    expect(heartbeat.cancelled()).toBe(1)
   })
 
   test('a zero median with a relative epsilon raises the noise check first, and still opens', async () => {
