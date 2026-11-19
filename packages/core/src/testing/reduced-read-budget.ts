@@ -1735,12 +1735,14 @@ export async function sampledMeasurementReadBudget(opts: {
 }
 
 /** Backing store traffic during one measured window: calls by method and by
- * build slug, returned bytes, and event rows read from any build log. */
+ * build slug, returned bytes, and event rows read from any build log, each
+ * named by its build and sequence. */
 export interface StoreReadMetrics {
   calls: Record<string, number>
   slugs: Record<string, number>
   bytes: number
   rows: number
+  read: { slug: string; seq: number }[]
 }
 
 const STORE_WRITES = new Set([
@@ -1758,18 +1760,19 @@ export async function measureStoreReads(
   store: import('../store/memory').MemoryBuildStore,
   run: () => Promise<void>,
 ): Promise<StoreReadMetrics> {
-  const metrics: StoreReadMetrics = { calls: {}, slugs: {}, bytes: 0, rows: 0 }
+  const metrics: StoreReadMetrics = { calls: {}, slugs: {}, bytes: 0, rows: 0, read: [] }
   const builds: Map<string, { events: import('../events/catalog').AbEvent[] }> = Reflect.get(
     store,
     'builds',
   )
   const restore: (() => void)[] = []
   const slice = Array.prototype.slice
-  for (const build of builds.values()) {
+  for (const [slug, build] of builds) {
     const events = build.events
     events.slice = function (start?: number, end?: number) {
       const result = slice.call(this, start, end) as typeof events
       metrics.rows += result.length
+      for (const event of result) metrics.read.push({ slug, seq: event.seq })
       return result
     }
     restore.push(() => Reflect.deleteProperty(events, 'slice'))

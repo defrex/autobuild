@@ -33,12 +33,11 @@ import {
 const test = scenarioScope({ test: bunTest, afterEach })
 
 // The node holds a slot of its own for its starting measurement and the
-// proposer, beside two attempts in flight. Idle node polling is a clocked branch check with its own proven bound
-// (`nodePollingReadBudget`); a day between checks keeps it out of the idle
-// window, so the window measures the optimization node's own per-tick work.
-const CONFIG = CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
-  .replace('readyState = "Ready"', 'readyState = "Ready"\nrejectedState = "Rejected"')
-  .replace('stallRounds = 3', 'stallRounds = 3\nnodeIdlePollSeconds = 86400')
+// proposer, beside two attempts in flight.
+const CONFIG = CONFIG_TOML.replace('capacity = 2', 'capacity = 4').replace(
+  'readyState = "Ready"',
+  'readyState = "Ready"\nrejectedState = "Rejected"',
+)
 
 /** The pinned ruler: three points better per file under `app/gains/`,
  * deterministic so the noise check never fires. */
@@ -206,23 +205,60 @@ async function runLaunches(
   }
 }
 
-/** Every write so far: each build's log and the repository journal. */
-async function written(h: E2eHarness) {
+/** Every write so far: each build's log and the repository journal,
+ * optionally without the idle node checkpoints a due poll records. */
+async function written(h: E2eHarness, checkpoints = true) {
   let count = (await h.store.getRepoStateEvents(h.origin)).length
-  for (const record of await h.store.listBuilds()) count += (await h.events(record.slug)).length
+  for (const record of await h.store.listBuilds())
+    count += (await h.events(record.slug)).filter(
+      (event) => checkpoints || event.type !== 'node.poll-checked',
+    ).length
   return count
 }
 
-/** Tick `advance` apart until a pass writes nothing. */
+/** Tick `advance` apart until a pass writes nothing but idle checkpoints. */
 async function settle(h: E2eHarness, advance: number) {
   for (let i = 0; i < 6; i++) {
-    const before = await written(h)
+    const before = await written(h, false)
     h.clock.advance(advance)
     await h.dispatcher.tick()
     await runLaunches(h)
-    if ((await written(h)) === before) return
+    if ((await written(h, false)) === before) return
   }
   throw new Error('the repository never settled')
+}
+
+/** Settles past the node's quiet period at the default idle cadence, then
+ * measures it idle: a tick between checks reads no event rows and writes
+ * nothing, and a due idle check (two hours on) records its one
+ * `node.poll-checked`, as SPEC requires, and reads back only that row. */
+async function expectIdleReadBudget(h: E2eHarness, slug: string) {
+  await settle(h, 60_000)
+  await settle(h, 15 * 60_000)
+  const between = async () => {
+    const before = await written(h)
+    h.clock.advance(60_000)
+    const metrics = await measureStoreReads(h.store, async () => {
+      await h.dispatcher.tick()
+    })
+    expect(metrics.rows).toBe(0)
+    expect(await written(h)).toBe(before)
+  }
+  await between()
+  const before = await written(h)
+  const from = (await h.events(slug)).length
+  h.clock.advance(2 * 3_600_000)
+  const metrics = await measureStoreReads(h.store, async () => {
+    await h.dispatcher.tick()
+  })
+  const checkpoint = (await h.events(slug)).slice(from)
+  expect(types(checkpoint)).toEqual(['node.poll-checked'])
+  expect(await written(h)).toBe(before + 1)
+  expect(metrics.rows).toBeGreaterThan(0)
+  expect(metrics.read.filter((row) => row.slug !== slug || row.seq !== checkpoint[0]!.seq)).toEqual(
+    [],
+  )
+  await between()
 }
 
 /** Tick and run launches until `until` holds. */
@@ -421,19 +457,7 @@ test('a command optimization node runs from opening to landing', async (makeHarn
         ['stall-1', 'stall-2'].map(async (id) => (await buildOf(h, filedNow.get(id)!))!),
       )
     })
-    // Settle until a pass writes nothing, then past the node's quiet period
-    // so its polling has gone idle too.
-    await settle(h, 60_000)
-    await settle(h, 15 * 60_000)
-    const idleFrom = (await h.events(node.slug)).length
-    for (const advance of [60_000, 2 * 3_600_000]) {
-      h.clock.advance(advance)
-      const metrics = await measureStoreReads(h.store, async () => {
-        await h.dispatcher.tick()
-      })
-      expect(metrics.rows).toBe(0)
-    }
-    expect(await h.events(node.slug)).toHaveLength(idleFrom)
+    await expectIdleReadBudget(h, node.slug)
 
     // Landing waits for a stop; raising the threshold past the head value
     // stops the node in its abort mode.
@@ -756,21 +780,13 @@ test('a panel node accepts by win rate and stops on a win-rate threshold against
     ])
     expect(reduceBuild(stoppedEvents).optimization).toMatchObject({ current: 0.8 })
 
-    // The stopped node completes and waits for consent: idle, it reads no
-    // event rows on a tick.
+    // The stopped node completes and waits for consent: idle, a tick reads
+    // no event rows beyond its due check's own checkpoint.
     await judged(
       async () => ofType(await h.events(node.slug), 'integration.prepared').length > 0,
       'node completion',
     )
-    await settle(h, 60_000)
-    await settle(h, 15 * 60_000)
-    for (const advance of [60_000, 2 * 3_600_000]) {
-      h.clock.advance(advance)
-      const metrics = await measureStoreReads(h.store, async () => {
-        await h.dispatcher.tick()
-      })
-      expect(metrics.rows).toBe(0)
-    }
+    await expectIdleReadBudget(h, node.slug)
     expect(types(await h.events(node.slug))).not.toContain('build.land-requested')
     expect(h.cliErrors).toEqual([])
   } finally {
