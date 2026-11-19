@@ -47,11 +47,37 @@ export class PanelLogBuilder {
     return this.push({ actor: KERNEL, type: 'panel.started', payload })
   }
 
-  judgeStarted(judge: number, session: string, order: PanelOrder, panel = 'panel-1'): this {
+  judgeStarted(
+    judge: number,
+    session: string,
+    order: PanelOrder,
+    panel = 'panel-1',
+    target: Partial<
+      Pick<EventPayload<'panel.judge-started'>, 'runner' | 'model' | 'stream' | 'substitution'>
+    > = {},
+  ): this {
     return this.push({
       actor: KERNEL,
       type: 'panel.judge-started',
-      payload: { panel, judge, session, order, runner: 'scripted' },
+      payload: { panel, judge, session, order, runner: 'scripted', ...target },
+    })
+  }
+
+  /** An alternate judge session replacing `failed`, the chain entry at
+   * `index`, after an alternate-eligible failure. */
+  substituted(
+    judge: number,
+    session: string,
+    order: PanelOrder,
+    failed: { session: string; index: number; runner: string },
+    target: { runner: string; stream?: string } = { runner: 'backup' },
+  ): this {
+    return this.judgeStarted(judge, session, order, 'panel-1', {
+      ...target,
+      substitution: {
+        failed: { ...failed, error: 'provider overloaded', cause: 'availability' },
+        selectedIndex: failed.index + 1,
+      },
     })
   }
 

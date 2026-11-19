@@ -1184,6 +1184,11 @@ test('panel progress selection reads zero idle event rows at 100 and 100,000 eve
   await panelProgressReadBudget()
 }, 120_000)
 
+test('judge panel sessions on the session rows have bounded read cost', async () => {
+  const { judgePanelSessionReadBudget } = await import('../testing/reduced-read-budget')
+  await judgePanelSessionReadBudget()
+}, 120_000)
+
 test('the landing gate and the rejected-role sweep have bounded read cost', async () => {
   const { optimizationLandingReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationLandingReadBudget()

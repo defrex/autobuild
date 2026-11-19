@@ -785,6 +785,11 @@ const panelPayloadSchemas = {
     runner: z.string().min(1),
     model: z.string().min(1).optional(),
     account: selectedAccountSchema.optional(),
+    /** The session's build-scoped stream (`session:<id>`), when one opened. */
+    stream: z.string().min(1).optional(),
+    /** Present when an earlier target of the judge role's chain failed with
+     * an alternate-eligible failure and this target replaces it. */
+    substitution: providerSubstitutionSchema.optional(),
   }),
   /** The judge's typed terminal, written through its write-only credential. */
   'panel.preferred': z.strictObject({
