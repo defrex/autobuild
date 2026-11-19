@@ -1,6 +1,6 @@
 /**
  * Paired, harness-pinned objective measurement (SPEC §13.1.1, RFC 0005 §7.3,
- * §7.4): the deterministic math and the two reduced-state selectors the
+ * §7.4): the deterministic math and the reduced-state selectors the
  * engine and dispatch capacity share. Nothing here performs I/O; the paired
  * execution itself lives in `processes/measurement-runner.ts`.
  */
@@ -332,21 +332,75 @@ export function attemptPanelId(state: BuildState, request: { id: string; seq: nu
   return answered === undefined ? `attempt-${request.id}` : `attempt-${request.id}-a${answered}`
 }
 
-/** An opened optimization node with a command objective has no starting
- * value under its current ruler. Read from reduced state alone. A panel's
- * starting value is defined, never measured here. */
-export function baselineMeasurementDue(state: BuildState): boolean {
-  const optimization = state.optimization
+/** Whether an opened optimization node may run a node measurement now: not
+ * terminal, paused or blocked, with no pending commands. */
+function nodeMeasurable(state: BuildState): boolean {
   return (
     state.kind === 'node' &&
     state.nodeOpened !== undefined &&
-    optimization !== undefined &&
-    optimization.objective.metric.kind === 'command' &&
-    optimization.starting === undefined &&
-    optimization.stopped === undefined &&
+    state.optimization !== undefined &&
     !terminal(state) &&
     state.status !== 'paused' &&
     state.status !== 'blocked' &&
     state.pendingCommands.length === 0
   )
+}
+
+/** An opened optimization node has no starting value under its current
+ * ruler. Read from reduced state alone. A command samples its pin against
+ * itself; a panel judges its pin against itself, and its starting value is
+ * 0.5 by definition. */
+export function baselineMeasurementDue(state: BuildState): boolean {
+  const optimization = state.optimization
+  return (
+    nodeMeasurable(state) &&
+    optimization!.starting === undefined &&
+    optimization!.stopped === undefined
+  )
+}
+
+/** The progress panel a panel node owes: its oldest landed head without a
+ * recorded `progress-measured`, judged against the starting head. Read from
+ * reduced state alone. Not gated on a stop, so a draining node still records
+ * the progress of an attempt that lands. */
+export function progressMeasurementDue(
+  state: BuildState,
+): { revision: number; head: string; start: string; harnessPin: string } | undefined {
+  if (!nodeMeasurable(state)) return undefined
+  const optimization = state.optimization!
+  const head = optimization.progressQueue?.[0]
+  if (
+    optimization.objective.metric.kind !== 'panel' ||
+    optimization.starting === undefined ||
+    head === undefined
+  )
+    return undefined
+  return {
+    revision: optimization.revision,
+    head,
+    start: optimization.starting.head,
+    harnessPin: optimization.accepted.harnessPin,
+  }
+}
+
+/** Whether a node needs its runner for a measurement, starting or progress.
+ * Every runner-admission site asks this. */
+export function nodeMeasurementDue(state: BuildState): boolean {
+  return baselineMeasurementDue(state) || progressMeasurementDue(state) !== undefined
+}
+
+/** The deterministic id of the escalation a failed node panel raises. */
+export function nodePanelEscalationId(panelId: string): string {
+  return `node-panel-failed-${panelId}`
+}
+
+/** The id of a node panel for `base`: generation `g` is the number of
+ * answered failure escalations for this base, so a crash before an answer
+ * resumes the same run, and an answer starts a new run with fresh judges.
+ * Bounded by the answers to this one panel. */
+export function nodePanelId(state: Pick<BuildState, 'answeredEscalations'>, base: string): string {
+  const answered = new Set(state.answeredEscalations.map((escalation) => escalation.id))
+  let generation = 0
+  while (answered.has(nodePanelEscalationId(`${base}-r${generation}`))) generation += 1
+  return `${base}-r${generation}`
 }

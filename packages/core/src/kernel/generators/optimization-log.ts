@@ -308,7 +308,7 @@ export class OptimizationLogBuilder {
     outcome: AttemptOutcome,
     measurement?: { revision: number; baseline: number; candidate: number; delta: number },
     note?: string,
-    extra: Pick<EventWrite<'attempt.settled'>['payload'], 'policy' | 'mergedSha'> & {
+    extra: Pick<EventWrite<'attempt.settled'>['payload'], 'policy' | 'mergedSha' | 'head'> & {
       branch?: string
     } = {},
   ): this {
@@ -376,14 +376,20 @@ export class OptimizationLogBuilder {
     })
   }
 
-  progress(revision: number, winRate: number): this {
+  /** A panel node's progress: `head` against the starting head `start`. */
+  progress(
+    revision: number,
+    winRate: number,
+    head = OPTIMIZATION_SHA('c'),
+    start = OPTIMIZATION_SHA('a'),
+  ): this {
     return this.push({
       actor: KERNEL,
       type: 'optimization.progress-measured',
       payload: {
         revision,
-        head: OPTIMIZATION_SHA('c'),
-        start: OPTIMIZATION_SHA('a'),
+        head,
+        start,
         winRate,
         judges: 5,
       },
@@ -429,13 +435,27 @@ export function optimizationLog(): AbEvent[] {
     .deposit('r5', 5, ['a5']).events
 }
 
-/** A panel node log, for the panel's value fields. */
+/** A panel node log, for the panel's value fields: one accepted head
+ * measured for progress and one still queued. */
 export function panelOptimizationLog(): AbEvent[] {
   return new OptimizationLogBuilder('panel-node')
     .accept(panelObjective(), 1)
     .baseline(1, 0.55, 0.05)
-    .propose('r1', ['p1'])
-    .settle('p1', 'accepted', { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 })
+    .propose('r1', ['p1', 'p2'])
+    .settle(
+      'p1',
+      'accepted',
+      { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 },
+      undefined,
+      { head: OPTIMIZATION_SHA('c') },
+    )
+    .settle(
+      'p2',
+      'accepted',
+      { revision: 1, baseline: 0.5, candidate: 0.6, delta: 0.1 },
+      undefined,
+      { head: OPTIMIZATION_SHA('d') },
+    )
     .progress(1, 0.7).events
 }
 
