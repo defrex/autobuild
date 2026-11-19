@@ -10,13 +10,7 @@ import type { ReducerValueRequest, ReducerValue } from './reducer-values'
  * store to a single operator session's record.
  */
 import type { ReducerSnapshot, SnapshotScope } from './snapshots'
-import type { BuildDelegationFacts } from '../kernel/service-facts'
-import {
-  judgeLifecycleFacts,
-  judgeScopeRefusal,
-  judgeWriteRefusal,
-  type JudgeScope,
-} from './judge-authority'
+import { appendJudgePreference, judgeScopeRefusal, type JudgeScope } from './judge-authority'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -765,25 +759,26 @@ export interface JudgeSessionStore extends BuildStore {
  * A local store handle for one judge session: it appends exactly one
  * `panel.preferred` for its own panel, judge and session, and refuses every
  * read. The local store has no server, so this in-process guard is the
- * authority; it reads the lifecycle facts through the inner, unwrapped store.
+ * authority; it checks and appends atomically through the inner, unwrapped
+ * store. The runner never hands a judge a store path (a local judge writes its
+ * preference outbox instead); this guards a hand-set `AB_STORE`.
  */
 export function scopeLocalStoreToJudgeSession(
   store: BuildStore,
   scope: JudgeScope,
 ): JudgeSessionStore {
-  return judgeStore(store, scope, async (slug, event) => {
-    if (slug !== scope.build)
-      throw judgeError(scope, 'append', `a judge session may write only build ${scope.build}`)
-    const facts = (
-      await store.getReducerValue(
-        { kind: 'build', slug: scope.build },
-        { reducer: 'buildDelegation' },
-      )
-    ).value as unknown as BuildDelegationFacts
-    const refusal = judgeWriteRefusal(scope, event, judgeLifecycleFacts(facts, scope.session))
-    if (refusal !== undefined) throw judgeError(scope, 'append', refusal)
-    return store.append(slug, event)
-  })
+  return judgeStore(
+    store,
+    scope,
+    async <T extends EventType>(slug: string, event: EventWrite<T>) => {
+      if (slug !== scope.build)
+        throw judgeError(scope, 'append', `a judge session may write only build ${scope.build}`)
+      const result = await appendJudgePreference(store, scope, event)
+      if (result.kind === 'refused') throw judgeError(scope, 'append', result.reason)
+      // The rule admitted only `panel.preferred`, so `T` is that type.
+      return result.event as unknown as EventEnvelope<T>
+    },
+  )
 }
 
 /**
