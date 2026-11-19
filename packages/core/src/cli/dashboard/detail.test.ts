@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../../events/catalog'
+import { KERNEL } from '../../events/envelope'
+import { PanelLogBuilder, panelStarted } from '../../kernel/generators/panel-log'
 import { projectSessions } from './detail'
+import { dashboardFactsReducer } from './facts'
 
 function event(seq: number, type: AbEvent['type'], payload: unknown): AbEvent {
   return {
@@ -248,5 +251,98 @@ test('pause cause and remote fallback remain visible on the suspended session', 
     cause: 'pause',
     fallbackReason: 'workspace-not-local-git-worktree',
     transcript: { kind: 'transcript', rev: 0 },
+  })
+})
+
+describe('projectSessions: judge sessions (SPEC §13.1.1)', () => {
+  const log = new PanelLogBuilder('drilldown')
+    .push({
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_plan', role: 'plan', runner: 'claude', phase: 'plan', round: 1 },
+    })
+    .started(panelStarted({ judges: 3 }))
+    .judgeStarted(1, 's_j1', 'candidate-first', 'panel-1', { runner: 'codex', stream: 'st_j1' })
+    .ended(1, 's_j1', 'failed')
+    .substituted(
+      1,
+      's_j1b',
+      'candidate-first',
+      { session: 's_j1', index: 0, runner: 'codex' },
+      { runner: 'claude', stream: 'st_j1b' },
+    )
+    .preferred(1, 's_j1b', 'A')
+    .judged(1, 's_j1b', 'candidate-first', 'A')
+    .push({
+      actor: KERNEL,
+      type: 'panel.judge-ended',
+      payload: {
+        panel: 'panel-1',
+        judge: 1,
+        session: 's_j1b',
+        outcome: 'completed',
+        transcript: { kind: 'transcript', rev: 3 },
+      },
+    })
+    .judgeStarted(2, 's_j2', 'baseline-first', 'panel-1', { model: 'gpt-x' })
+    .ended(2, 's_j2', 'reclaimed')
+    .judgeStarted(3, 's_j3', 'baseline-first', 'panel-1', { stream: 'st_j3' })
+  const facts = dashboardFactsReducer.reduce(log.events)
+
+  test('judge facts carry the target and stream but never the order', () => {
+    expect(facts.judgeSessions.map((judge) => [judge.session, judge.status])).toEqual([
+      ['s_j1', 'ended'],
+      ['s_j1b', 'ended'],
+      ['s_j2', 'reclaimed'],
+      ['s_j3', 'open'],
+    ])
+    expect(JSON.stringify(facts.judgeSessions)).not.toContain('first')
+  })
+
+  test('judge rows merge in log order with phase sessions', () => {
+    const sessions = projectSessions(facts.sessionEvents, undefined, facts.judgeSessions)
+    expect(
+      sessions.map((session) => [
+        session.id,
+        session.role,
+        session.phase,
+        session.runtime,
+        session.status,
+        session.stream,
+        session.streamStatus,
+      ]),
+    ).toEqual([
+      ['s_plan', 'plan', 'plan', 'claude', 'open', undefined, 'closed'],
+      ['s_j1', 'judge', 'judge:panel-1:1', 'codex', 'ended', 'st_j1', 'closed'],
+      ['s_j1b', 'judge', 'judge:panel-1:1', 'claude', 'ended', 'st_j1b', 'closed'],
+      ['s_j2', 'judge', 'judge:panel-1:2', 'scripted', 'reclaimed', undefined, 'closed'],
+      ['s_j3', 'judge', 'judge:panel-1:3', 'scripted', 'open', 'st_j3', 'open'],
+    ])
+    expect(sessions[2]?.transcript).toEqual({ kind: 'transcript', rev: 3 })
+    expect(sessions[3]?.model).toBe('gpt-x')
+    const serialized = JSON.stringify(sessions)
+    expect(serialized).not.toContain('first')
+    expect(serialized).not.toContain('order')
+  })
+
+  test('a stream record is authoritative for a judge row', () => {
+    const sessions = projectSessions(
+      [],
+      [
+        {
+          id: 'st_store',
+          scope: { kind: 'build', build: 'drilldown' },
+          label: 'session:s_j3',
+          format: 'ai-ui-message-stream/v1',
+          status: 'closed',
+          createdAt: 't',
+        },
+      ],
+      facts.judgeSessions,
+    )
+    expect(sessions.find((session) => session.id === 's_j3')).toMatchObject({
+      stream: 'st_store',
+      streamStatus: 'closed',
+    })
   })
 })

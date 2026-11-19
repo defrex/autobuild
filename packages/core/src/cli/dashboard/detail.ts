@@ -1,5 +1,6 @@
 import type { AbEvent } from '../../events/catalog'
 import type { StreamRecord } from '../../store/types'
+import type { JudgeSessionFact } from './facts'
 
 export interface SessionUsage {
   inputTokens: number
@@ -36,11 +37,14 @@ export interface DashboardSession {
  * append-only facts without introducing transition state. `streams` is the
  * optional authoritative enrichment from `listStreams` on the build scope:
  * records whose label matches `session:<id>` supply each session's stream id
- * and open/closed status.
+ * and open/closed status. `judgeSessions` are a panel's judge sessions
+ * (`dashboardFacts.judgeSessions`): they become rows with role `judge` and
+ * phase `judge:<panel>:<judge>`, merged in log order.
  */
 export function projectSessions(
   events: readonly AbEvent[],
   streams?: readonly StreamRecord[],
+  judgeSessions: readonly JudgeSessionFact[] = [],
 ): DashboardSession[] {
   const streamsByLabel = new Map<string, StreamRecord>()
   if (streams !== undefined) {
@@ -140,5 +144,25 @@ export function projectSessions(
     open.delete(started.id)
   }
 
-  return sessions
+  if (judgeSessions.length === 0) return sessions
+  for (const judge of judgeSessions) {
+    const record = streamsByLabel.get(`session:${judge.session}`)
+    sessions.push({
+      id: judge.session,
+      role: 'judge',
+      phase: `judge:${judge.panel}:${judge.judge}`,
+      runtime: judge.runner,
+      ...(judge.model !== undefined ? { model: judge.model } : {}),
+      startedSeq: judge.startedSeq,
+      status: judge.status,
+      ...(judge.transcript !== undefined ? { transcript: { ...judge.transcript } } : {}),
+      ...(record !== undefined
+        ? { stream: record.id, streamStatus: record.status }
+        : {
+            ...(judge.stream !== undefined ? { stream: judge.stream } : {}),
+            streamStatus: judge.stream !== undefined && judge.status === 'open' ? 'open' : 'closed',
+          }),
+    })
+  }
+  return sessions.sort((a, b) => a.startedSeq - b.startedSeq)
 }

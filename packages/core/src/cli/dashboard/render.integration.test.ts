@@ -3,7 +3,11 @@
  * the operator can SEE is assertable here without a terminal.
  */
 import { describe, expect, test } from 'bun:test'
+import { KERNEL } from '../../events/envelope'
+import { PanelLogBuilder, panelStarted } from '../../kernel/generators/panel-log'
 import { cellWidth } from './cells'
+import { projectSessions } from './detail'
+import { dashboardFactsReducer } from './facts'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
@@ -2640,6 +2644,67 @@ describe('renderDashboard: build detail and transcript views', () => {
       { color: false, width: 200 },
     ).join('\n')
     expect(out).toContain('stream st_1f2e (open)')
+  })
+
+  test('judge session rows name their panel, judge, target, status and stream', () => {
+    const log = new PanelLogBuilder(detailedBuild.slug)
+      .push({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_impl',
+          role: 'implement',
+          runner: 'pi',
+          phase: 'implement',
+          round: 1,
+        },
+      })
+      .started(panelStarted({ judges: 2 }))
+      .judgeStarted(1, 's_j1', 'candidate-first', 'panel-1', { runner: 'codex', stream: 'st_j1' })
+      .ended(1, 's_j1', 'failed')
+      .substituted(
+        1,
+        's_j1b',
+        'candidate-first',
+        { session: 's_j1', index: 0, runner: 'codex' },
+        { runner: 'claude', stream: 'st_j1b' },
+      )
+      .ended(1, 's_j1b', 'completed')
+      .judgeStarted(2, 's_j2', 'baseline-first', 'panel-1', { runner: 'codex', stream: 'st_j2' })
+    const facts = dashboardFactsReducer.reduce(log.events)
+    const withJudges = {
+      ...detailedBuild,
+      blockers: [],
+      sessions: projectSessions(facts.sessionEvents, undefined, facts.judgeSessions),
+    }
+    for (const width of [70, 120]) {
+      const out = rd(
+        {
+          ...model([withJudges]),
+          selection: { kind: 'build', slug: withJudges.slug },
+          view: { kind: 'detail', slug: withJudges.slug, sessionId: 's_impl', scroll: 0 },
+        },
+        { color: false, width, height: 200 },
+      ).join('\n')
+      const flat = out.replace(/\s+/g, ' ')
+      const rows = [
+        'judge phase judge:panel-1:1 runtime codex ended stream st_j1 (closed)',
+        'judge phase judge:panel-1:1 runtime claude ended stream st_j1b (closed)',
+        'judge phase judge:panel-1:2 runtime codex open stream st_j2 (open)',
+      ]
+      let at = flat.indexOf('implement phase implement round 1 runtime pi open')
+      expect(at).toBeGreaterThanOrEqual(0)
+      for (const row of rows) {
+        const next = flat.indexOf(row)
+        expect(next).toBeGreaterThan(at)
+        at = next
+      }
+      const judgeLines = out.split('\n').filter((line) => line.includes('judge'))
+      for (const line of judgeLines) {
+        expect(line).not.toContain('first')
+        expect(line).not.toContain('candidate')
+      }
+    }
   })
 
   test('detail keeps complete multiline messages and scroll reaches both ends', () => {

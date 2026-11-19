@@ -1156,6 +1156,11 @@ test('the stop and admission inputs and the ledger have bounded read cost', asyn
   await optimizationReadBudget()
 }, 120_000)
 
+test('judge panel sessions on the session rows have bounded read cost', async () => {
+  const { judgePanelSessionReadBudget } = await import('../testing/reduced-read-budget')
+  await judgePanelSessionReadBudget()
+}, 120_000)
+
 test('the landing gate and the rejected-role sweep have bounded read cost', async () => {
   const { optimizationLandingReadBudget } = await import('../testing/reduced-read-budget')
   await optimizationLandingReadBudget()
