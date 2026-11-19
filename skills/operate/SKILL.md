@@ -512,7 +512,8 @@ Treat every default-watch record as a call to act:
 - `optimization.noise-exceeded`: an optimization node's ε is below the noise
   its starting measurement found, so its gate could accept noise. Tell the
   human both numbers; raising ε (`ab objective <node> --epsilon …`) or
-  `metric.samples` (a spec revision) is their call. The node keeps running.
+  `metric.samples`, or `metric.judges` for a panel (a spec revision), is their
+  call. The node keeps running.
 - `build.merge-decision`: diagnose the current merge-gate deferral or unsafe
   forge outcome. Consent and hold decisions use only `build.consent-ready`.
 - Harvest escalation or recovery exhaustion: inspect harvest status and resolve
@@ -761,7 +762,8 @@ when to stop, and landing the result.
   eligibility, and, once stopped, the cause, mode and what still blocks
   completion. It also lists every `unmeasured merge` and every `branch cleanup
   pending`, each of which holds a concurrency slot; `ab build status <node>`
-  prints the same lines.
+  prints the same lines. A panel node’s current value is its latest recorded
+  win rate against the starting head.
 - **Settle an unmeasured merge** when a human merged an attempt on the forge
   and the merged head was never measured. The attempt stays in flight, holding
   its slot, and a stopped node cannot complete while it remains. Measured

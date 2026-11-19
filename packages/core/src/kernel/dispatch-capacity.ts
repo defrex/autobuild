@@ -4,7 +4,7 @@ import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
-import { baselineMeasurementDue, pendingMeasurementRequest } from './measurement'
+import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
@@ -91,7 +91,7 @@ export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
 }
 
 /** An optimization node's workspace that no work owns: no runner, no open
- * execution, no baseline measurement, proposal, restack or integration cycle or intent, and no pause, block
+ * execution, no starting or progress measurement, proposal, restack or integration cycle or intent, and no pause, block
  * or command holding it. Filing releases the proposer's workspace after its
  * record clears the proposal; this is the durable condition that recovers a
  * release the record outlived (a crash, a failed release, a live lease at
@@ -104,7 +104,7 @@ export function strandedNodeWorkspace(build: CapacityBuild, now: Date): boolean 
     !terminal(state) &&
     state.optimization !== undefined &&
     state.optimization.proposal === undefined &&
-    !baselineMeasurementDue(state) &&
+    !nodeMeasurementDue(state) &&
     state.integration?.cycle === undefined &&
     state.sessions.open.length === 0 &&
     build.workspace &&
@@ -143,7 +143,7 @@ export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   if (state.kind !== 'node') return !parkedLeaf(build, now)
   return (
     !!state.nodeRestack?.conflict ||
-    ((integrationNeedsRunner(state) || baselineMeasurementDue(state)) && allocated(build, now)) ||
+    ((integrationNeedsRunner(state) || nodeMeasurementDue(state)) && allocated(build, now)) ||
     (proposeRunDue(state.optimization) && allocated(build, now))
   )
 }
@@ -192,8 +192,8 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
     return undefined
   if (state.nodeRestack?.conflict) return state.openEscalations.length ? undefined : 'reconcile'
   if (proposeStarted(state)) return 'propose'
-  // The starting measurement is admitted as a re-verify is.
-  if (baselineMeasurementDue(state)) return 'verification'
+  // A node measurement (starting or progress) is admitted as a re-verify is.
+  if (nodeMeasurementDue(state)) return 'verification'
   // A stale request (stopped, spent or shrunk below its room) reserves
   // nothing; the dispatcher withdraws it. A started session was admitted
   // already and resumes whatever its eligibility.
