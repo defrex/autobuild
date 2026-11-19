@@ -81,6 +81,10 @@ const tickCountersSchema = z.strictObject({
    * work this tick. Added with durable supervision; optional so historical
    * tick facts replay. */
   provisioning: z.number().int().nonnegative().optional(),
+  /** Builds whose provisioning start was deferred because the bounded
+   * invocation's remaining budget was shorter than the provider's
+   * provisioning estimate. Optional so historical tick facts replay. */
+  provisioningDeferred: z.number().int().nonnegative().optional(),
   /** Operator sandboxes idly stopped this tick. Added with the operator
    * sandbox; optional so historical tick facts replay. */
   sandboxIdleStops: z.number().int().nonnegative().optional(),

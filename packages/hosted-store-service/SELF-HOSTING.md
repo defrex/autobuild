@@ -170,7 +170,9 @@ budget unset or set it to at most about 280.
 The route is a generated file that the builder will not let you edit, so an
 installed deployment cannot raise the 300 second duration today, even on a
 plan that allows longer functions. Work that does not finish in one invocation
-resumes on the next tick.
+resumes on the next tick. Provisioning that would not fit the remaining budget
+waits for the next invocation, and provisioning cut off at the budget resumes
+there.
 
 ### Check the endpoint
 

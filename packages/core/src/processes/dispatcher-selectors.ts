@@ -63,12 +63,16 @@ export interface ProvisionMarker {
   generation: number
   ts: string
   seq: number
+  /** The latest attempt was abandoned at a recorded dispatcher teardown. */
+  abandoned?: 'teardown'
 }
 
-export const PROVISION_MARKER_REDUCER_VERSION = 1
+export const PROVISION_MARKER_REDUCER_VERSION = 2
 
 /** The latest `workspace.provision-started` not yet followed by a
- * provisioned/released fact — an open provisioning marker. */
+ * provisioned/released fact — an open provisioning marker. A later
+ * `provision-started` replaces it, so `abandoned` describes only the latest
+ * attempt. */
 export const provisionMarkerReducer = defineReducer<
   { marker: ProvisionMarker | null },
   AbEvent,
@@ -85,6 +89,12 @@ export const provisionMarkerReducer = defineReducer<
         (event.type === 'workspace.provisioned' || event.type === 'workspace.released')
       ) {
         acc.marker = null
+      } else if (
+        acc.marker !== null &&
+        event.type === 'dispatch.failed' &&
+        event.payload.abandoned === 'teardown'
+      ) {
+        acc.marker.abandoned = 'teardown'
       }
     }
   },

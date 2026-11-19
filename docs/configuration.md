@@ -1427,7 +1427,13 @@ after a provision timeout, is flagged `cleanup-required` and never launched into
 The dispatcher releases it automatically, recording an empty
 `workspace.commits-lost` when no checkout exists, or `workspace.commits-preserved`
 when a checkout that never started executing lacks its objects, and provisions
-the next generation.
+the next generation. A sandbox whose provisioning a dispatcher teardown cut off
+is different: the next invocation verifies it and finishes it in the same
+generation. If it cannot be finished, it is released and replaced without
+consuming `maxInfrastructureAttempts`. A bounded dispatcher invocation does not
+start provisioning with less than about 150 s of budget left; it records
+`provisioningDeferred` in the tick report and leaves the build to the next
+invocation.
 
 The representative actual-provider check is opt-in and must point at an
 independent consuming repository whose `autobuild.toml` selects the universal
@@ -2830,7 +2836,7 @@ Optional. Every field receives its own default. All are positive integers except
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget.
+**Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget. Provisioning abandoned at a recorded dispatcher teardown never consumes it.
 
 **Constraints:** safe integer; > 0
 
