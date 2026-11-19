@@ -106,9 +106,9 @@ import {
 } from '../kernel/optimization'
 import { proposalsDocumentSchema } from '../ontology'
 import {
-  baselineMeasurementDue,
   decideSampledMeasurement,
   measurementThreshold,
+  nodeMeasurementDue,
   sampledMeasurement,
 } from '../kernel/measurement'
 import {
@@ -1932,14 +1932,14 @@ export class Dispatcher {
       // fit current state, unless its session was already admitted.
       if (
         proposeRunDue(launchState.optimization) &&
-        (proposeStarted(launchState) || !baselineMeasurementDue(launchState))
+        (proposeStarted(launchState) || !nodeMeasurementDue(launchState))
       ) {
         if (
           !proposeStarted(launchState) &&
           !proposeAdmissible(launchState.optimization, this.deps.clock())
         )
           return 'already-active'
-      } else if (!integrationCurrent(launchState) && !baselineMeasurementDue(launchState))
+      } else if (!integrationCurrent(launchState) && !nodeMeasurementDue(launchState))
         return 'already-active'
     }
     if (launched.has(slug)) return 'already-active'
@@ -3528,7 +3528,7 @@ export class Dispatcher {
     const waiting = builds.filter(
       (build) =>
         slotRequest(build, now) === 'verification' ||
-        (baselineMeasurementDue(build.state) &&
+        (nodeMeasurementDue(build.state) &&
           !proposeStarted(build.state) &&
           slotRequest({ ...build, workspace: false }, now) === 'verification'),
     )
@@ -3545,8 +3545,7 @@ export class Dispatcher {
       await withForgeRequestContext({ build: record.slug }, async () => {
         try {
           if (!(await this.nodeHasCapacity(record.slug))) return
-          if (baselineMeasurementDue(state))
-            await this.prepareBaselineMeasurement(record, report, launched)
+          if (nodeMeasurementDue(state)) await this.prepareNodeMeasurement(record, report, launched)
           else await this.prepareIntegration(record, state, report, launched)
         } catch (error) {
           rethrowAuthorityLapse(error)
@@ -3626,7 +3625,7 @@ export class Dispatcher {
         launched.has(record.slug) ||
         this.hasLiveExecutionLease(record) ||
         build.provisioning ||
-        (baselineMeasurementDue(state) && !proposeStarted(state))
+        (nodeMeasurementDue(state) && !proposeStarted(state))
       )
         continue
       await withForgeRequestContext({ build: record.slug }, async () => {
@@ -3701,15 +3700,15 @@ export class Dispatcher {
     return { holds }
   }
 
-  /** Provision a workspace for the starting measurement. */
-  private async prepareBaselineMeasurement(
+  /** Provision a workspace for a starting or progress measurement. */
+  private async prepareNodeMeasurement(
     record: BuildRecord,
     report: TickReport,
     launched: Set<string>,
   ): Promise<void> {
     if (!record.branch || !this.accountsAvailable()) return
     const facts = (await readBuildFacts(this.store, record.slug)).value
-    if (!baselineMeasurementDue(facts.state)) return
+    if (!nodeMeasurementDue(facts.state)) return
     await this.provisionNodeAndLaunch(record, facts, report, launched)
   }
 
@@ -4280,6 +4279,7 @@ export class Dispatcher {
         return this.closeSettledAttempt(record, workspacePath, pr)
       case 'pending':
       case 'wait-turn':
+      case 'wait-progress':
       case 'stale':
         return { kind: 'wait' }
     }
@@ -4307,7 +4307,7 @@ export class Dispatcher {
         attempt.node,
         { ...identity, build: record.slug },
         'accepted',
-        { measurement: settlementMeasurement(measured.result) },
+        { measurement: settlementMeasurement(measured.result), head: sha },
       )
       return
     }
@@ -7194,8 +7194,11 @@ export class Dispatcher {
       state.kind === 'node' &&
       (!integrationCurrent(state) || facts.workspace === null) &&
       decision.kind !== 'wait' &&
-      // An ended or crashed starting measurement re-attaches to its workspace.
-      !(decision.kind === 'measure-baseline' && facts.workspace !== null)
+      // An ended or crashed node measurement re-attaches to its workspace.
+      !(
+        (decision.kind === 'measure-baseline' || decision.kind === 'measure-progress') &&
+        facts.workspace !== null
+      )
     )
       return // cascade owns node runner admission
     // Raw history, read at most once and only by a branch that acts on it.

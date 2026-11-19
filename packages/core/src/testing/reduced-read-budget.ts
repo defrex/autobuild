@@ -5362,6 +5362,244 @@ export async function optimizationReadBudget(): Promise<void> {
 }
 
 /**
+ * Panel progress selection (SPEC §15.5). For a panel node whose history is
+ * 100 and 100,000 events of accepted attempts each measured for progress:
+ *
+ * 1. idle selection (`progressMeasurementDue`, `nodeMeasurementDue`, slot
+ *    request, capacity and the engine decision) reads zero event rows with an
+ *    identical request vector at both sizes;
+ * 2. a new accepted settlement costs exactly its own node row, after which
+ *    progress is due for its head, the node requests a runner and the engine
+ *    decides `measure-progress`;
+ * 3. the recorded progress costs its own row and clears the selection, and
+ *    the landing gate holds (`wait-progress`) and then lands from the same
+ *    digest with no extra reads.
+ */
+export async function panelProgressReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { panelObjective } = await import('../kernel/generators/optimization-log')
+  const { nodeMeasurementDue, progressMeasurementDue } = await import('../kernel/measurement')
+  const { occupiesCapacity, slotRequest, strandedNodeWorkspace } = await import(
+    '../kernel/dispatch-capacity'
+  )
+  const { landingMeasurementGate } = await import('../kernel/landing-measurement')
+  const repo = '/budget/panel-progress'
+  const node = 'panel-node'
+  const sha = (n: number) => n.toString(16).padStart(40, '0')
+  const now = new Date('2026-11-18T00:00:00Z')
+  const config = parseConfig(
+    '[tickets]\nsource="fake"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const ticket = (i: number) => ({ source: 'fake', id: `A-${i}` })
+  const measured: {
+    idle: Record<string, number>
+    accepted: Record<string, number>
+    rows: number[]
+  }[] = []
+  for (const events of [100, 100_000]) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await store.createBuild({ slug: node, repo, branch: 'ab-node/panel-node' })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: 'NODE' }, baseBranch: 'main', kind: 'node' },
+    })
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: { ...panelObjective(), budget: { maxAttempts: 1_000_000 } },
+        revision: 1,
+        harnessPin: sha(1),
+        specRev: 0,
+      },
+    })
+    await store.append(node, { actor: DISPATCHER, type: 'node.opened', payload: { sha: sha(1) } })
+    await store.append(node, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: {
+        revision: 1,
+        head: sha(1),
+        harnessPin: sha(1),
+        samples: 5,
+        median: 0.5,
+        spread: 0,
+      },
+    })
+    const accept = (i: number) =>
+      store.append(node, {
+        actor: DISPATCHER,
+        type: 'attempt.settled',
+        payload: {
+          attempt: { proposal: `p${i}`, ticket: ticket(i) },
+          outcome: 'accepted',
+          measurement: { revision: 1, baseline: 0.5, candidate: 0.6, delta: 0.1 },
+          head: sha(i + 2),
+        },
+      })
+    const progress = (i: number) =>
+      store.append(node, {
+        actor: KERNEL,
+        type: 'optimization.progress-measured',
+        payload: { revision: 1, head: sha(i + 2), start: sha(1), winRate: 0.6, judges: 5 },
+      })
+    // Cycles of one proposal, its acceptance and its progress.
+    const cycles = Math.floor((events - 4) / 3)
+    for (let i = 0; i < cycles; i++) {
+      await store.append(node, {
+        actor: DISPATCHER,
+        type: 'optimization.attempts-proposed',
+        payload: {
+          request: `r${i}`,
+          proposals: [{ id: `p${i}`, ticket: ticket(i), title: `Attempt ${i}`, strategy: 's' }],
+        },
+      })
+      await accept(i)
+      await progress(i)
+    }
+    await store.append(node, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: 'r-next',
+        proposals: [{ id: `p${cycles}`, ticket: ticket(cycles), title: 'Next', strategy: 's' }],
+      },
+    })
+    const record = (await store.getBuild(node))!
+    // Warm-up: the reduced key is computed once and saved.
+    await readBuildFacts(store, node)
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    const select = async () => {
+      const facts = (await readBuildFacts(store, node)).value
+      const build = { record, state: facts.state, workspace: false }
+      return {
+        due: progressMeasurementDue(facts.state),
+        node: nodeMeasurementDue(facts.state),
+        request: slotRequest(build, now),
+        occupies: occupiesCapacity(build, now),
+        decision: decideNextFromFacts(facts.state, facts.log, config),
+        digest: facts.state.optimization!,
+      }
+    }
+    const gate = (digest: Parameters<typeof landingMeasurementGate>[0]['digest']) =>
+      landingMeasurementGate({
+        digest,
+        attempt: 'in-flight',
+        lm: {
+          request: {
+            id: 'm',
+            node,
+            candidate: sha(0xfff),
+            baseline: sha(0xffe),
+            harnessPin: sha(1),
+            revision: 1,
+            seq: 1,
+          },
+          result: {
+            request: 'm',
+            candidate: sha(0xfff),
+            baseline: sha(0xffe),
+            harnessPin: sha(1),
+            revision: 1,
+            samples: 5,
+            winRate: 0.9,
+            delta: 0.4,
+            decision: 'improved',
+            seq: 2,
+          },
+          overtakes: 0,
+        },
+        candidate: sha(0xfff),
+        nodeHead: sha(0xffe),
+        self: 'attempt',
+      })
+    try {
+      // 1. Idle selection: zero event rows, repeatedly.
+      for (let repeat = 0; repeat < 5; repeat++) {
+        const idle = await select()
+        expect(idle.due).toBeUndefined()
+        expect(idle.node).toBe(false)
+        expect(idle.request).toBeUndefined()
+        expect(idle.occupies).toBe(false)
+        expect(idle.decision).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+        expect(gate(idle.digest)).toBe('land')
+      }
+      expect(rows.buildRows).toBe(0)
+      const idle = requests.vector()
+      const rowCounts = [rows.buildRows]
+
+      // 2. A new acceptance costs its own row and makes progress due.
+      await accept(cycles)
+      rows.reset()
+      requests.reset()
+      const due = await select()
+      expect(rows.buildRows).toBe(1)
+      rowCounts.push(rows.buildRows)
+      expect(due.due).toEqual({
+        revision: 1,
+        head: sha(cycles + 2),
+        start: sha(1),
+        harnessPin: sha(1),
+      })
+      expect(due.node).toBe(true)
+      expect(due.request).toBe('verification')
+      expect(due.decision).toMatchObject({ kind: 'measure-progress', head: sha(cycles + 2) })
+      // Proposer arbitration uses these same reduced facts, with no reads:
+      // an unstarted request waits, an admitted session finishes, and neither
+      // cleanup path can release a workspace still owed a panel.
+      const facts = (await readBuildFacts(store, node)).value
+      const state = structuredClone(facts.state)
+      state.optimization!.proposal = {
+        id: 'waiting',
+        head: sha(cycles + 2),
+        room: 1,
+        requestedAt: now.toISOString(),
+        round: 100,
+      }
+      const shared = { record, state, workspace: true }
+      const before = requests.vector()
+      for (let repeat = 0; repeat < 5; repeat++) {
+        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('verification')
+        expect(decideNextFromFacts(state, facts.log, config).kind).toBe('measure-progress')
+        expect(strandedNodeWorkspace(shared, now)).toBe(false)
+        state.currentPhase = { phase: 'propose', round: 100, seq: state.lastSeq }
+        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('propose')
+        expect(decideNextFromFacts(state, facts.log, config)).toMatchObject({
+          kind: 'run-phase',
+          phase: 'propose',
+        })
+        expect(strandedNodeWorkspace(shared, now)).toBe(false)
+        delete state.currentPhase
+      }
+      expect(rows.buildRows).toBe(1)
+      expect(gate(due.digest)).toBe('wait-progress')
+      expect(requests.vector()).toEqual(before)
+      const accepted = requests.vector()
+
+      // 3. Recorded progress costs its own row and clears the selection.
+      await progress(cycles)
+      rows.reset()
+      const cleared = await select()
+      expect(rows.buildRows).toBe(1)
+      expect(cleared.due).toBeUndefined()
+      expect(cleared.node).toBe(false)
+      expect(gate(cleared.digest)).toBe('land')
+      rows.reset()
+      await select()
+      expect(rows.buildRows).toBe(0)
+      rowCounts.push(rows.buildRows)
+      measured.push({ idle, accepted, rows: rowCounts })
+    } finally {
+      requests.restore()
+    }
+  }
+  expect(measured[1]).toEqual(measured[0])
+}
+
+/**
  * The measurement landing gate and the rejected-role sweep (AUT-1226) have
  * bounded read cost, at 10 and at 1,000 settled attempts plus 2,000 terminal
  * builds in the repository, each poll from a fresh dispatcher:
