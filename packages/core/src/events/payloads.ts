@@ -643,12 +643,19 @@ const optimizationPayloadSchemas = {
       /** `merged-unmeasured` only: the merged head, when it was recorded. */
       mergedSha: sha.optional(),
       note: z.string().max(4000).optional(),
+      /** The node head an `accepted` attempt landed as; progress panels
+       * measure it. */
+      head: sha.optional(),
     })
     .refine(
       (settled) =>
         (settled.outcome !== 'accepted' && settled.outcome !== 'no-improvement') ||
         settled.measurement !== undefined,
       'an accepted or no-improvement settlement requires its measurement',
+    )
+    .refine(
+      (settled) => settled.outcome === 'accepted' || settled.head === undefined,
+      'only an accepted settlement records the head it landed as',
     )
     .refine(
       (settled) =>

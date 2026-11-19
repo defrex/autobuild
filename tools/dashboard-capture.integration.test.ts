@@ -206,7 +206,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         current: 44,
         threshold: 35,
         noise: 1.6,
-        attempts: { filed: 4, accepted: 1, rejected: 1, running: 2 },
+        attempts: { filed: 4, accepted: 1, rejected: 1, unmeasured: 0, running: 2 },
         budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-07-15T06:10:00.000Z' },
       })
       const lines = frame.text.split('\n')

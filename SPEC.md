@@ -3393,24 +3393,37 @@ from. An opened optimization node therefore always has an accepted objective. A
 retried opening after a crash between the two facts records no second
 acceptance.
 
-A command node then measures its opening head against itself (see
-**Measurement**) and records `optimization.baseline-measured {revision, head,
-harnessPin, samples, median, spread, report}`: the starting value is the
-median of every sample and the spread is the distance between the two sides'
-medians. The engine decides `measure-baseline` for an opened, unstopped
-command node with no starting value under its current ruler, ahead of
-integration work and behind escalations, pause, abort and a node reconcile.
-The dispatcher admits it as it admits a node verification: the node requests
-a `verification` slot, is provisioned a workspace, and releases that
-workspace once no measurement, integration cycle, restack or reconcile needs
-it. A panel's starting value is defined, not measured here.
+Every optimization node then measures its opening head against itself and
+records `optimization.baseline-measured {revision, head, harnessPin, samples,
+median, spread, report?}`. A command node samples it (see **Measurement**):
+the starting value is the median of every sample and the spread is the
+distance between the two sides' medians. A panel node runs one judge panel
+(see **Judge panels**) of its harness pin against itself and records the
+self-comparison win rate as `median`, the judge count as `samples`, no
+`report`, and `|winRate − 0.5|` as `spread`; its starting value is 0.5. The
+engine decides `measure-baseline` for an opened, unstopped node with no
+starting value under its current ruler, ahead of integration work and behind
+escalations, pause, abort and a node reconcile.
+
+After each accepted attempt a panel node measures its progress: one panel of
+the head the attempt landed as (the `head` of its `attempt.settled`) against
+the starting head, recorded as `optimization.progress-measured {revision,
+head, start, winRate, judges}`. The engine decides `measure-progress {revision,
+head, start, harnessPin}` for the oldest landed head without a recorded
+progress, right after `measure-baseline` in precedence and ahead of
+integration work. It is not gated on a stop, so a draining node still records
+the progress of an attempt that lands. The dispatcher admits either
+measurement as it admits a node verification: the node requests a
+`verification` slot, is provisioned a workspace, and releases that workspace
+once no measurement, integration cycle, restack or reconcile needs it.
 
 **Noise check.** When ε in metric units (absolute, or relative × |median|) is
 strictly smaller than the starting spread, the runner first records advisory
 `optimization.noise-exceeded {revision, head, harnessPin, median, spread,
-epsilon, effectiveEpsilon}`, then the starting value. The fact is default
-watch attention naming both numbers. The node still opens; raising ε or
-`samples` is the operator's decision. A relative ε over a zero median is 0, so
+epsilon, effectiveEpsilon}`, then the starting value. A panel's spread is the
+self-comparison's distance from 0.5 and its ε is absolute. The fact is default
+watch attention naming both numbers. The node still opens; raising ε, or
+`samples` for a command and `judges` for a panel, is the operator's decision. A relative ε over a zero median is 0, so
 any positive spread exceeds it. Writing the attention first means a crash
 between the two facts measures and raises again rather than losing it.
 
@@ -3590,10 +3603,16 @@ has no open escalation other than a janitor one. While another child holds the
 turn, a candidate neither requests a measurement nor lands. When several
 qualify, the first in proposal order holds it.
 
+**Progress first.** While a panel node's digest holds a landed head that owes
+a progress panel, a child that would otherwise land waits (`wait-progress`);
+its measurement may still be requested and run. The node head therefore never
+moves past an unmeasured accepted head under kernel control.
+
 **Settlement.** Every attempt settles exactly once, on the node's log, by the
 dispatcher path that ends it: `accepted` when it merges, with the measurement
 of the merged head; `no-improvement` at the gate; `aborted` when an operator
-aborts it or a human closes its PR without merging. `declined` is recorded when an implementer declines as described above;
+aborts it or a human closes its PR without merging. An `accepted` settlement
+records the merged SHA as `head`, the node head it landed as. `declined` is recorded when an implementer declines as described above;
 `stopped` is recorded by the stopping rules (RFC 0005 §9). The
 write is conditional on the node log and the attempt still being in flight.
 Each settlement other than `accepted` and `merged-unmeasured` leaves a pending
@@ -3722,10 +3741,11 @@ run `ab merge` once it is ready.
 absolute scores drift between sessions and crowd the top of the scale: each
 judge says which of two variants is better. `BuildRunner.runPanel` runs one
 panel over two heads, a candidate and a baseline, under one harness pin, and
-returns the candidate's win rate. No caller runs it yet; the callers that will
-accept attempts and measure a node's noise and progress record their decisions
-in `attempt.measured.winRate`, `optimization.baseline-measured` and
-`optimization.progress-measured`. A run records `panel.started` with its
+returns the candidate's win rate. The node runner calls it for a panel node's
+starting measurement and its progress, with panel ids
+`baseline-<ruler>-<pin>-r<g>` and `progress-<ruler>-<head>-r<g>`; attempt
+acceptance by win rate is a separate caller that records
+`attempt.measured.winRate`. A run records `panel.started` with its
 inputs and no order. For each pending judge it draws an order
 (`candidate-first` or `baseline-first`) and materializes a fresh judge root in
 the system temporary directory holding the two variants as plain trees `A/`
@@ -3773,6 +3793,13 @@ order. A judge outcome of `no-terminal`, `failed` or `expired` counts as a
 failure; after two counted failures for one judge the run fails, naming the
 judge and its last outcome. `interrupted` (shutdown) and `reclaimed` do not
 count. A run that cannot prepare its variants fails with the Git output tail.
+
+A failed node panel records no value and raises the kernel escalation
+`node-panel-failed-<panel>` with policy cause `measurement-failed`. The
+generation `g` in a node panel's id is the number of answered failure
+escalations for its base, derived from reduced state: a restart before the
+answer resumes the same run, and an answer starts a new run with no counted
+judge failures.
 
 Proposing attempts is designed in RFC 0005 §5. The facts are catalogued in
 §15.3 and their derived state in §15.5.
@@ -4090,7 +4117,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?}` (`metric` the node's command metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians: {candidate, baseline}, report}`; `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
@@ -4300,9 +4327,15 @@ an optimization node's own log, absent until the first
   spread comes from the baseline fact;
 - `current`: for a command, the candidate value of the latest `accepted`
   settlement under the current ruler, else the starting value; for a panel, the
-  latest `optimization.progress-measured` win rate under the current ruler,
+  latest `optimization.progress-measured` win rate under the current ruler and
+  against the current starting head,
   else 0.5. `best` is the best value in the objective's direction under the
   current ruler;
+- `progressQueue`, a panel node's landed heads (`attempt.settled.head` of
+  `accepted` settlements) without a `progress-measured` under the current
+  ruler, oldest first, absent when empty. A new ruler clears it. It is
+  bounded: the landing gate holds the node's next child while it is non-empty,
+  so it holds at most one head under kernel control;
 - `attempts {filed, accepted, rejected, unmeasured}`, where `filed` counts
   proposed tickets, `rejected` counts `no-improvement`, `declined`, `stopped`
   and `aborted` settlements, and `unmeasured` counts `merged-unmeasured` ones;
@@ -4327,7 +4360,8 @@ an optimization node's own log, absent until the first
 Pure selectors over the digest take the current time. Elapsed hours run from
 `openedAt`. Stop eligibility is computed per cause: threshold when `current` has
 reached `target.threshold` in the objective's direction (a panel compares its
-win rate, which it maximizes); plateau when `plateau` ≥ `stop.plateau.attempts`;
+recorded progress, the head's win rate against the starting head, which it
+maximizes); plateau when `plateau` ≥ `stop.plateau.attempts`;
 budget when `filed` ≥ `maxAttempts` or elapsed hours ≥ `maxHours`. Admission
 reports whether the node stopped, the attempts the budget still allows (none
 without `maxAttempts`), and the concurrency slots held neither by an in-flight
@@ -4351,10 +4385,13 @@ raise refused after sampling. Pure selectors read it alone:
 `pendingMeasurementRequest` is the latest request that is neither sampled nor
 measured on a nonterminal leaf, the runner's work; `sampledMeasurement` is the
 latest request's samples when neither measured nor refused, the dispatcher's
-work. `baselineMeasurementDue` reads the node digest: opened, a command
-metric, no `starting`, not stopped, not terminal, paused or blocked, and no
-pending command. Engine, capacity and the dispatcher's decision read only
-these reduced values, so an idle tick reads no event rows; deciding one sampled
+work. `baselineMeasurementDue` reads the node digest: opened, no `starting`,
+not stopped, not terminal, paused or blocked, and no pending command.
+`progressMeasurementDue` is the first `progressQueue` head of an opened panel
+node with a `starting` value, under the same conditions except that a stop
+does not withhold it. `nodeMeasurementDue` is either; slot requests, capacity,
+cascade admission, workspace release and the runner read it. Engine, capacity
+and the dispatcher's decision read only these reduced values, so an idle tick reads no event rows; deciding one sampled
 request costs one reduced read of its node, once.
 
 **Judge panel.** A build that runs a judge panel embeds `panel`, bounded to its
