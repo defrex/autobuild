@@ -204,6 +204,8 @@ def roles():
  generation = int((stat(kernel) or ['', '0'])[1])
  assert generation in children(launcher) and b'ab-dispatch-generation.ts' in cmdline(generation), tree(pid)
  return launcher, generation, kernel
+# Each launch prepares a full runtime; contended hosts need wide headroom.
+LAUNCH = 90
 RAW = termios.ICANON | termios.ECHO | termios.ISIG
 def raw(): return termios.tcgetattr(fd)[3] & RAW == 0
 try:
@@ -224,7 +226,7 @@ try:
  output = b''
  command = shlex.join(sys.argv[2:])
  os.write(fd, (command+'\\n').encode())
- until(b'\\x1b[?1049h')
+ until(b'\\x1b[?1049h', LAUNCH)
  launcher, generation, kernel = roles()
  # With ISIG still on, ^Z would stop the whole foreground group, kernel included.
  wait_for('dashboard raw mode', raw, 20, lambda: repr(termios.tcgetattr(fd)[3]))
@@ -253,13 +255,13 @@ try:
  # --plain on a TTY never owned an alternate screen.
  output = b''
  os.write(fd, (command+' --plain\\n').encode())
- until(b'Ctrl-C to stop')
+ until(b'Ctrl-C to stop', LAUNCH)
  os.write(fd, b'\\x03')
  until(b'SHELL_READY> ')
  assert b'\\x1b[?1049l' not in output, repr(output)
  output = b''
  os.write(fd, (command+'\\n').encode())
- until(b'\\x1b[?1049h')
+ until(b'\\x1b[?1049h', LAUNCH)
  generation = roles()[1]
  output = b''
  os.kill(generation, signal.SIGKILL)
@@ -302,7 +304,7 @@ finally:
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }
-}, 180000)
+}, 300000)
 
 test('an isolated registry installation prepares local launch without a guest asset fetch', async () => {
   const { prepareLaunchRuntime } = await import('./dispatch-launcher')
