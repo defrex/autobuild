@@ -149,6 +149,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
 import {
+  attemptPanelId,
   baselineMeasurementDue,
   baselineSummary,
   effectiveEpsilon,
@@ -158,6 +159,7 @@ import {
 } from '../kernel/measurement'
 import { runPairedMeasurement, type MeasurementResult } from './measurement-runner'
 import { JUDGE_ROLE } from '../config/roles'
+import type { PanelMetric } from '../objective'
 import type { PanelJudgeOutcome, PanelOrder } from '../kernel/panel'
 import { installedSkillName } from '../skills'
 import { distributionRoot } from '../distribution'
@@ -2959,10 +2961,11 @@ export class BuildRunner {
     )
   }
 
-  /** A requested paired measurement of this attempt: sample both sides and
-   * record the samples. The runner holds only this build's store, so the
-   * decision against the node's ε and spread is the dispatcher's, recorded
-   * as `attempt.measured` after sampling (SPEC §13.1.1). */
+  /** A requested measurement of this attempt: sample both sides, a
+   * command's paired runs or a judge panel, and record the samples. The
+   * runner holds only this build's store, so the decision against the node's
+   * ε and spread is the dispatcher's, recorded as `attempt.measured` after
+   * sampling (SPEC §13.1.1). */
   private async runMeasurement(decision: RunMeasurementDecision): Promise<void> {
     const { store, slug } = this.deps
     const { request } = decision
@@ -2972,8 +2975,12 @@ export class BuildRunner {
     const metric = request.metric
     if (metric === undefined) {
       await this.raiseMeasurementEscalation(
-        `Measurement request ${request.id} names no command metric, so it cannot be sampled. Answer once a fresh request names the node's metric, or abort the attempt.`,
+        `Measurement request ${request.id} names no metric, so it cannot be sampled. Answer once a fresh request names the node's metric, or abort the attempt.`,
       )
+      return
+    }
+    if (metric.kind === 'panel') {
+      await this.runPanelMeasurement(request, metric)
       return
     }
     const result = await this.pairedMeasurement({
@@ -3007,6 +3014,74 @@ export class BuildRunner {
           revision: request.revision,
           samples: metric.samples,
           medians: { baseline: median(result.baseline), candidate: median(result.candidate) },
+          report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+  }
+
+  /** A requested panel measurement of this attempt: one judge panel of the
+   * attempt's head against the node head, recorded as `attempt.sampled`
+   * with the win rate. The panel id survives a crash and changes after an
+   * answered measurement escalation, so an answer judges afresh. */
+  private async runPanelMeasurement(
+    request: RunMeasurementDecision['request'],
+    metric: PanelMetric,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    const purpose = request.purpose
+    if (purpose === undefined) {
+      await this.raiseMeasurementEscalation(
+        `Measurement request ${request.id} names a judge panel without the objective purpose, so it cannot be judged. Answer once a fresh request names the purpose, or abort the attempt.`,
+      )
+      return
+    }
+    const state = (await readBuildFacts(store, slug)).value.state
+    const recorded = state.attemptMeasurement?.request
+    if (recorded?.id !== request.id) return
+    const id = attemptPanelId(state, recorded)
+    const result = await this.runPanel({
+      id,
+      candidate: request.candidate,
+      baseline: request.baseline,
+      harnessPin: request.harnessPin,
+      purpose,
+      rubric: metric.rubric,
+      harness: metric.harness,
+      judges: metric.judges,
+    })
+    if (result.kind === 'interrupted') return
+    // A newer request supersedes this panel; the engine decides again.
+    const after = pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)
+    if (after?.id !== request.id) return
+    if (result.kind === 'failed') {
+      await this.raiseMeasurementEscalation(
+        `Judge panel ${id} for measurement request ${request.id} failed: ${result.reason}. ` +
+          `Output: ${result.outputTail || '(no output)'}. ` +
+          'Fix the judge runtime, rubric or harness, then answer to judge again.',
+      )
+      return
+    }
+    const report = {
+      kind: 'panel',
+      panel: id,
+      winRate: result.winRate,
+      judgments: result.judgments,
+    }
+    await store.appendWithArtifacts(
+      slug,
+      [{ kind: MEASUREMENT_SAMPLES_ARTIFACT, content: JSON.stringify(report, null, 2) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'attempt.sampled',
+        payload: {
+          request: request.id,
+          candidate: request.candidate,
+          baseline: request.baseline,
+          harnessPin: request.harnessPin,
+          revision: request.revision,
+          samples: metric.judges,
+          winRate: result.winRate,
           report: { kind: MEASUREMENT_SAMPLES_ARTIFACT, rev: deposited[0]!.revision },
         },
       }),

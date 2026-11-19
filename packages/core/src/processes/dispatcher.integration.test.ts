@@ -19653,4 +19653,175 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       advance: () => clock.advance(10 * 60_000),
     })
   }, 120_000)
+
+  const panelMetric = {
+    kind: 'panel' as const,
+    judges: 5,
+    rubric: 'evals/rubric.md',
+    harness: ['evals/**'],
+  }
+  const panelObjective = {
+    purpose: 'clearer onboarding prose',
+    metric: panelMetric,
+    target: { epsilon: { absolute: 0.1 } },
+    budget: { maxAttempts: 10 },
+    stop: { mode: 'abort' as const },
+    proposer: { concurrency: 1 },
+  }
+
+  /** A panel node: it has no starting measurement and needs none. */
+  async function seedPanelNode(store: BuildStore, forge: FakeForge): Promise<void> {
+    forge.seedBranch(`ab-node/${NODE}`, PIN)
+    await store.createBuild({ slug: NODE, repo: REPO, branch: `ab-node/${NODE}` })
+    await store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'NODE' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      },
+    })
+    await store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: { objective: panelObjective, revision: 1, harnessPin: PIN, specRev: 0 },
+    })
+    await store.append(NODE, { actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+  }
+
+  /** A panel request and its judges' progress, short of a win rate. */
+  async function judging(store: BuildStore, slug: string, request: string): Promise<void> {
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id: request,
+        node: NODE,
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        metric: panelMetric,
+        purpose: panelObjective.purpose,
+      },
+    })
+    const panel = `attempt-${request}`
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'panel.started',
+      payload: {
+        panel,
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        purpose: panelObjective.purpose,
+        rubric: panelMetric.rubric,
+        harness: panelMetric.harness,
+        judges: panelMetric.judges,
+      },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'panel.judge-started',
+      payload: {
+        panel,
+        judge: 1,
+        session: `s-${request}`,
+        order: 'candidate-first',
+        runner: 'fake',
+      },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'panel.judged',
+      payload: {
+        panel,
+        judge: 1,
+        session: `s-${request}`,
+        order: 'candidate-first',
+        preference: 'A',
+        reason: 'clearer',
+      },
+    })
+  }
+
+  async function judged(store: BuildStore, slug: string, request: string, winRate = 0.8) {
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'attempt.sampled',
+      payload: {
+        request,
+        candidate: CANDIDATE,
+        baseline: PIN,
+        harnessPin: PIN,
+        revision: 1,
+        samples: 5,
+        winRate,
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+  }
+
+  test('a panel request carries the metric and purpose; its win rate is decided against the current ε', async () => {
+    const h = harness()
+    await seedPanelNode(h.store, h.forge)
+    const slug = await parkedAttempt(h, 'attempt-a1', 1)
+    await judging(h.store, slug, 'm1')
+    await judged(h.store, slug, 'm1', 0.6)
+    // Revised while the judges ran: ε 0.1 → 0.2 turns 0.6 into no improvement.
+    await h.store.append(NODE, {
+      actor: humanActor('ada'),
+      type: 'optimization.objective-revised',
+      payload: { changes: { epsilon: { absolute: 0.2 } }, revision: 2 },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const [measured, ...rest] = await decisions(h.store, slug)
+    expect(rest).toEqual([])
+    expect(measured).toMatchObject({
+      actor: DISPATCHER,
+      type: 'attempt.measured',
+      payload: {
+        request: 'm1',
+        samples: 5,
+        winRate: 0.6,
+        delta: expect.closeTo(0.1) as unknown as number,
+        decision: 'no-improvement',
+        report: { kind: 'measurement-samples', rev: 0 },
+      },
+    })
+    expect(measured!.payload).not.toHaveProperty('medians')
+    expect(measured!.payload).not.toHaveProperty('spread')
+  })
+
+  test('waiting for and deciding a panel stay bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const first = harness({ store, clock })
+    const make = () =>
+      harness({ store, clock, forge: first.forge, wrapTickets: () => first.tickets })
+    await seedPanelNode(store, first.forge)
+    const attempts = [
+      await parkedAttempt(first, 'attempt-a1', 1),
+      await parkedAttempt(first, 'attempt-a2', 2),
+    ]
+    await sampledMeasurementReadBudget({
+      store,
+      node: NODE,
+      attempts,
+      dispatcher: () => make().dispatcher,
+      progress: (slug, request) => judging(store, slug, request),
+      sample: (slug, request) => judged(store, slug, request),
+      decided: async (slug, request) =>
+        (await store.getEvents(slug)).some(
+          (event) =>
+            event.type === 'attempt.measured' &&
+            event.payload.request === request &&
+            event.payload.winRate === 0.8,
+        ),
+      advance: () => clock.advance(10 * 60_000),
+    })
+  }, 120_000)
 })
