@@ -165,10 +165,18 @@ import { installedSkillName } from '../skills'
 import { distributionRoot } from '../distribution'
 import {
   JUDGE_CONTEXT_DIR,
+  JUDGE_PREFERENCE_OUTBOX,
   runPanelJudges,
   type PanelResult,
   type PanelRunInput,
 } from './panel-runner'
+import type { JudgeLaunch } from '../ports/runner/session-env'
+import {
+  appendJudgePreference,
+  JUDGE_PREFERENCE_OUTBOX_BYTES,
+  judgePreferenceOutboxSchema,
+} from '../store/judge-authority'
+import { bundleJudgeLauncher } from './judge-launcher'
 
 export { publicationPending } from './publication-state'
 
@@ -265,6 +273,10 @@ export interface BuildRunnerDeps {
    * root when the harness pin predates the vendored copy. Defaults to the
    * running distribution's `skills/judge`. */
   judgeSkill?: () => Promise<string>
+  /** The self-contained judge-only `ab` launcher's text, written into each
+   * panel's scratch launcher directory. Defaults to bundling the running
+   * distribution's judge entry. */
+  judgeLauncher?: () => Promise<string>
   /** Remote publication stays behind the kernel-owned Forge port (D7). */
   forge: Forge
   ids: IdSource
@@ -3129,8 +3141,12 @@ export class BuildRunner {
         throw new Error(`panel ${input.id} was superseded by another run`)
       return run
     }
+    const runtime = this.boundaryResolver.resolve(JUDGE_ROLE).runner
+    const localStore = this.judgeLocalStore()
     const run: PanelRunInput = {
       workspacePath: this.deps.workspacePath,
+      ...(localStore !== undefined ? { localStore } : {}),
+      ...(runtime.executable !== undefined ? { runtimeExecutable: runtime.executable } : {}),
       build: slug,
       panel: input.id,
       candidate: input.candidate,
@@ -3145,6 +3161,8 @@ export class BuildRunner {
       {
         exec: this.deps.exec,
         distributionSkill: this.deps.judgeSkill ?? distributionJudgeSkill,
+        judgeLauncher: this.deps.judgeLauncher ?? bundleJudgeLauncher,
+        distributionRoot: distributionRoot(),
       },
       run,
       {
@@ -3156,14 +3174,19 @@ export class BuildRunner {
             payload: judged,
           } satisfies EventWrite<'panel.judged'>)
         },
-        reclaim: async (judge, session) => {
+        reclaim: async (judge, session, root) => {
+          // A preference the crashed session saved is committed while its
+          // session is still open, then completed like any saved preference.
+          if (!this.judgeStoreIsRemote())
+            await this.commitJudgeOutbox(input.id, judge, session, root, { onlyOwn: true })
           await store.append(slug, {
             actor: KERNEL,
             type: 'panel.judge-ended',
             payload: { panel: input.id, judge, session, outcome: 'reclaimed' },
           } satisfies EventWrite<'panel.judge-ended'>)
         },
-        launch: (judge, order, root) => this.runJudge(input.id, judge, order, root),
+        launch: (judge, order, root, judgeLaunch) =>
+          this.runJudge(input.id, judge, order, root, judgeLaunch),
         random: this.deps.random ?? Math.random,
         ...(this.deps.shutdownSignal !== undefined
           ? { shutdownSignal: this.deps.shutdownSignal }
@@ -3181,6 +3204,7 @@ export class BuildRunner {
     judge: number,
     order: PanelOrder,
     root: string,
+    judgeLaunch: JudgeLaunch,
   ): Promise<PanelJudgeOutcome> {
     const { store, slug, ids, shutdownSignal } = this.deps
     const session = ids('s')
@@ -3216,6 +3240,7 @@ export class BuildRunner {
         ...(args.length > 0 ? { args } : {}),
         ...(account !== undefined ? { account } : {}),
         env: await this.judgeSessionEnv(panel, judge, session),
+        judgeLaunch,
         signal,
       })
       handle = turn.session
@@ -3239,6 +3264,11 @@ export class BuildRunner {
       } catch {
         // Best-effort: the judge's outcome below is still recorded.
       }
+    // A local judge saved its preference in its root; commit it while the
+    // session is still open, before the reduced read below finds it.
+    const outboxError = this.judgeStoreIsRemote()
+      ? undefined
+      : await this.commitJudgeOutbox(panel, judge, session, root)
 
     const state = (await readBuildFacts(store, slug)).value.state.panel
     const recorded = state?.started.panel === panel ? state.judges[String(judge)] : undefined
@@ -3259,7 +3289,10 @@ export class BuildRunner {
         } satisfies EventWrite<'panel.judged'>)
       outcome = 'completed'
       error = undefined
-    } else if (outcome === 'completed') outcome = 'no-terminal'
+    } else {
+      if (outcome === 'completed') outcome = 'no-terminal'
+      if (outboxError !== undefined) error = error ?? outboxError
+    }
 
     const ended = (artifact?: { kind: string; rev: number }): EventWrite<'panel.judge-ended'> => ({
       actor: KERNEL,
@@ -3299,10 +3332,28 @@ export class BuildRunner {
     return outcome
   }
 
+  /** Whether judges reach a remote store (a write-only grant) rather than
+   * the local store (a preference outbox the runner commits). */
+  private judgeStoreIsRemote(): boolean {
+    const store = this.deps.sessionEnv?.AB_STORE
+    return store !== undefined && /^https?:/i.test(store)
+  }
+
+  /** The local store's path, which no judge may learn. */
+  private judgeLocalStore(): string | undefined {
+    const store = this.deps.sessionEnv?.AB_STORE
+    return store !== undefined && store !== '' && store !== 'local' && !this.judgeStoreIsRemote()
+      ? store
+      : undefined
+  }
+
   /**
-   * A judge session's scoped environment: the store, a write-only credential
-   * for a remote store, and the judge identity. There is no `AB_BUILD` and no
-   * `AB_PHASE`, and the runner's own token never passes through.
+   * A judge session's scoped environment: the judge identity and, for a
+   * remote store, its URL and a write-only credential. A local judge gets no
+   * store at all: its preference goes to an outbox in its root. There is no
+   * `AB_BUILD` and no `AB_PHASE`, and the runner's own token never passes
+   * through. A delegation failure throws, so the judge never launches with a
+   * weaker environment.
    */
   private async judgeSessionEnv(
     panel: string,
@@ -3310,19 +3361,18 @@ export class BuildRunner {
     session: string,
   ): Promise<Record<string, string>> {
     const parent = this.deps.sessionEnv ?? {}
-    const token =
-      parent.AB_STORE && /^https?:/i.test(parent.AB_STORE)
-        ? await (this.deps.delegateCredential ?? delegateCredential)(
-            parent.AB_STORE,
-            parent.AB_TOKEN,
-            { kind: 'build-judge', id: this.deps.slug, session, panel, judge },
-          )
-        : undefined
+    const remote = this.judgeStoreIsRemote()
+    const token = remote
+      ? await (this.deps.delegateCredential ?? delegateCredential)(
+          parent.AB_STORE!,
+          parent.AB_TOKEN,
+          { kind: 'build-judge', id: this.deps.slug, session, panel, judge },
+        )
+      : undefined
     const env: Record<string, string> = {
       AB_ACCOUNT_CREDENTIAL_ENVS: JSON.stringify(
         Object.values(this.boundaryConfig.accounts).map((account) => account.credentialEnv),
       ),
-      AB_STORE: 'local',
       ...parent,
     }
     delete env.AB_TOKEN
@@ -3330,6 +3380,7 @@ export class BuildRunner {
     delete env.AB_PHASE
     delete env.AB_REPO
     delete env.AB_HARVEST
+    if (!remote) delete env.AB_STORE
     return {
       ...env,
       ...(token !== undefined ? { AB_TOKEN: token } : {}),
@@ -3337,6 +3388,57 @@ export class BuildRunner {
       AB_SESSION: session,
       AB_CONTEXT_DIR: JUDGE_CONTEXT_DIR,
     }
+  }
+
+  /**
+   * Commit a local judge's saved preference (SPEC §13.1.1): read its outbox
+   * from the judge's root, validate it, and append it atomically as the
+   * judge session. A missing outbox does nothing; a preference this session
+   * already recorded is success. Returns the reason a present outbox was not
+   * committed. With `onlyOwn`, an outbox naming another session is left for
+   * that session's own reclaim.
+   */
+  private async commitJudgeOutbox(
+    panel: string,
+    judge: number,
+    session: string,
+    root: string,
+    opts: { onlyOwn?: boolean } = {},
+  ): Promise<string | undefined> {
+    const read = await this.deps.exec(
+      [
+        'sh',
+        '-c',
+        'if [ -f "$1" ]; then printf 1; head -c "$2" "$1"; else printf 0; fi',
+        'judge-outbox',
+        `${root}/${JUDGE_PREFERENCE_OUTBOX}`,
+        String(JUDGE_PREFERENCE_OUTBOX_BYTES + 1),
+      ],
+      {},
+    )
+    if (read.exitCode !== 0 || read.stdout.startsWith('0')) return undefined
+    const text = read.stdout.slice(1)
+    if (text.length > JUDGE_PREFERENCE_OUTBOX_BYTES)
+      return 'the saved judge preference is larger than 64 KiB'
+    let saved: ReturnType<typeof judgePreferenceOutboxSchema.parse>
+    try {
+      saved = judgePreferenceOutboxSchema.parse(JSON.parse(text))
+    } catch {
+      return 'the saved judge preference is malformed'
+    }
+    if (opts.onlyOwn && saved.session !== session) return undefined
+    const result = await appendJudgePreference(
+      this.deps.store,
+      { build: this.deps.slug, panel, judge, session },
+      {
+        actor: agentActor('judge', session),
+        type: 'panel.preferred',
+        payload: saved,
+      },
+    )
+    if (result.kind === 'recorded') return undefined
+    if (result.reason === 'this judge already recorded its preference') return undefined
+    return `the saved judge preference was refused: ${result.reason}`
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
