@@ -33,6 +33,18 @@ async function scratch(prefix: string): Promise<string> {
 const REACT = JSON.stringify(Bun.resolveSync('react', import.meta.dir))
 const HARNESS = JSON.stringify(join(import.meta.dir, 'client-harness.tsx'))
 
+const POLL_OK = (ms: number) => `export function Page() {
+  const [text, setText] = useState('loading')
+  useEffect(() => {
+    const load = () =>
+      void fetch('/api/web/ok').then((response) => response.json()).then((value) => setText(value.text))
+    load()
+    const timer = setInterval(load, ${ms})
+    return () => clearInterval(timer)
+  }, [])
+  return createElement('p', null, text)
+}`
+
 const CASES: Record<string, { body: string; expected?: string }> = {
   'top-level': {
     body: `const hasher = new Bun.CryptoHasher('sha256')
@@ -73,7 +85,43 @@ export function Page() { return createElement('p', null, String(hasher)) }`,
   return createElement('p', null, text)
 }`,
   },
+  // A busy but healthy page: repeat polls, late frames and late timers model a
+  // loaded verify host, and each one starved the old tick-count settle check.
+  'steady-poll': { body: POLL_OK(100) },
+  'slow-frames': {
+    body: `const raf = globalThis.requestAnimationFrame.bind(globalThis)
+globalThis.requestAnimationFrame = (callback) => { setTimeout(() => raf(callback), 1_000); return 0 }
+${POLL_OK(300)}`,
+  },
+  'slow-timers': {
+    body: `const later = globalThis.setTimeout.bind(globalThis)
+globalThis.setTimeout = (callback, ms = 0, ...args) => later(callback, ms + 400, ...args)
+${POLL_OK(300)}`,
+  },
+  // Pages that never settle: each fails within its bound and names the wait.
+  'new-requests': {
+    body: `export function Page() {
+  useEffect(() => {
+    let i = 0
+    const timer = setInterval(() => void fetch(\`/api/web/ok?n=\${i++}\`), 100)
+    return () => clearInterval(timer)
+  }, [])
+  return createElement('p', null, 'polling')
+}`,
+    expected:
+      'harness did not settle within 3000 ms: still waiting for quiet after new request GET /api/web/ok?n=',
+  },
+  'no-frames': {
+    body: `globalThis.requestAnimationFrame = () => 0
+export function Page() { return createElement('p', null, 'no frames') }`,
+    expected: 'harness did not settle within 3000 ms: still waiting for animation frame',
+  },
 }
+const UNSETTLED = ['new-requests', 'no-frames']
+const UNSETTLED_BOUND_MS = 3_000
+// Bundling, Chromium launch and teardown on a loaded host; under the 10 s
+// debugger request timeout a drain waiting on the page's frames would hit.
+const UNSETTLED_TOLERANCE_MS = 7_000
 
 test.skipIf(!enabled)(
   'a page that throws while loading fails with the browser error, and a clean page passes',
@@ -105,14 +153,38 @@ mountClientPage({ route: '/${name}', pathname: '/${name}', render: () => createE
 `,
         )
       }
+      const fixtures = {
+        responses: { 'GET /api/web/ok': { status: 200, body: { text: 'served' } } },
+      }
       const results = await checkClientPages({
         chromium,
         outDir: join(root, 'out'),
         appDir,
         harnessDir,
-        fixtures: { responses: { 'GET /api/web/ok': { status: 200, body: { text: 'served' } } } },
+        fixtures,
+        routes: Object.keys(CASES)
+          .filter((name) => !UNSETTLED.includes(name))
+          .map((name) => `/${name}`),
         timeoutMs: 10_000,
       })
+      for (const name of UNSETTLED) {
+        const started = performance.now()
+        const unsettled = await checkClientPages({
+          chromium,
+          outDir: join(root, `out-${name}`),
+          appDir,
+          harnessDir,
+          fixtures,
+          routes: [`/${name}`],
+          timeoutMs: UNSETTLED_BOUND_MS,
+        })
+        const elapsed = performance.now() - started
+        expect({ name, within: elapsed < UNSETTLED_BOUND_MS + UNSETTLED_TOLERANCE_MS }).toEqual({
+          name,
+          within: true,
+        })
+        results.push(...unsettled)
+      }
       const byRoute = new Map(results.map((result) => [result.route, result]))
       for (const [name, { expected }] of Object.entries(CASES)) {
         const result = byRoute.get(`/${name}`) as ClientPageResult
@@ -152,6 +224,27 @@ test.skipIf(!enabled)(
     }
   },
   300_000,
+)
+
+test.skipIf(!enabled)(
+  'real polling pages settle under CPU contention',
+  async () => {
+    const chromium = requireChromium()
+    const root = await scratch('app-load-contention-')
+    try {
+      const results = await checkClientPages({
+        chromium,
+        outDir: root,
+        routes: ['/done', '/'],
+        cpuThrottlingRate: 6,
+      })
+      expect(results.map((result) => result.route).sort()).toEqual(['/', '/done'])
+      expect(results.filter((result) => result.errors.length > 0)).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+  120_000,
 )
 
 test.skipIf(!enabled)(

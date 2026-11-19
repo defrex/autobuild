@@ -225,6 +225,9 @@ async function withChromiumPage<T>(
       '--disable-extensions',
       '--run-all-compositor-stages-before-draw',
       '--disable-features=PaintHolding',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
       '--force-device-scale-factor=1',
       '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=0',
@@ -432,7 +435,23 @@ export interface ClientHarnessState {
   rendered: boolean
   /** `METHOD path?query` requests with no fixture response. */
   unserved: string[]
+  /** Every request in order, repeat polls included. */
   requests: string[]
+  /** The settle condition still unmet, such as `animation frame`; empty once settled. */
+  waiting: string
+  /** Settle checks run so far. */
+  ticks: number
+  /** Animation frames the settle check has seen. */
+  frames: number
+  /** Distinct request keys seen; only a key's first request resets quiet. */
+  distinct: number
+}
+
+/** Why a harness that never settled is still unsettled, on one line. */
+export function settleTimeoutMessage(harness: ClientHarnessState | null, boundMs: number): string {
+  const prefix = `harness did not settle within ${boundMs} ms`
+  if (!harness) return `${prefix}: the harness never started`
+  return `${prefix}: still waiting for ${harness.waiting || 'settle'} (ticks ${harness.ticks}, frames ${harness.frames}, requests ${harness.requests.length}, distinct ${harness.distinct})`
 }
 
 export interface ClientLoadResult {
@@ -445,14 +464,16 @@ export interface ClientLoadResult {
 /**
  * Load a client harness page in Chromium and report every browser error it
  * raised while loading: module evaluation, first render, effects and their
- * rejections. Waits for the harness to settle, then one macrotask and two
- * frames more so late rejections arrive before judging.
+ * rejections. Waits for the harness to settle, then, for a settled page, one
+ * macrotask and two frames more so late rejections arrive before judging. A
+ * page that never settled is not waited on again: its frames may never come.
+ * `cpuThrottlingRate` slows the page's CPU, for contention tests.
  */
 export async function loadClientPage(
   chromium: string,
   url: string,
   profile: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; cpuThrottlingRate?: number } = {},
 ): Promise<ClientLoadResult> {
   const exceptions = new Map<number, ClientException>()
   const onEvent = (method: string, params: Record<string, unknown>) => {
@@ -484,13 +505,18 @@ export async function loadClientPage(
     { width: 1280, height: 900, profile },
     async ({ send, evaluate, assertLive }) => {
       await send('Runtime.enable')
+      // A background page gets no frames and the dashboard stops polling.
+      await send('Page.bringToFront')
+      if (opts.cpuThrottlingRate !== undefined)
+        await send('Emulation.setCPUThrottlingRate', { rate: opts.cpuThrottlingRate })
       const navigation = await send('Page.navigate', { url })
       if (navigation.errorText) throw Error(navigation.errorText)
       const state = () =>
         evaluate(
           "({ harness: globalThis.__autobuildHarness ?? null, complete: document.readyState === 'complete' })",
         ) as Promise<{ harness: ClientHarnessState | null; complete: boolean }>
-      const bound = Date.now() + (opts.timeoutMs ?? 20_000)
+      const boundMs = opts.timeoutMs ?? 20_000
+      const bound = Date.now() + boundMs
       let current = await state()
       let harness = current.harness
       let timeout: string | undefined
@@ -503,16 +529,17 @@ export async function loadClientPage(
           if (Date.now() - failedAt >= 500) break
         } else failedAt = undefined
         if (Date.now() >= bound) {
-          timeout = `harness did not settle: ${JSON.stringify(harness)}`
+          timeout = settleTimeoutMessage(harness, boundMs)
           break
         }
         await Bun.sleep(50)
         current = await state()
         harness = current.harness
       }
-      await evaluate(
-        'new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 0))',
-      )
+      if (harness?.settled)
+        await evaluate(
+          'new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 0))',
+        )
       harness = (await state()).harness ?? harness
       return {
         exceptions: [...exceptions.values()],

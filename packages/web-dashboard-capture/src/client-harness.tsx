@@ -45,13 +45,11 @@ declare global {
   var __autobuildHarness: ClientHarnessState | undefined
 }
 
-const QUIET_TICKS = 3
+const QUIET_MS = 150
 const TICK_MS = 50
 
-function Mounted({ state, children }: { state: ClientHarnessState; children: ReactNode }) {
-  useEffect(() => {
-    state.mounted = true
-  }, [state])
+function Mounted({ onMount, children }: { onMount: () => void; children: ReactNode }) {
+  useEffect(onMount, [onMount])
   return children
 }
 
@@ -70,10 +68,15 @@ function stubRouter(navigations: string[]): AppRouterInstance {
   }
 }
 
-function frames(count: number): Promise<void> {
+function frames(count: number, onFrame: () => void): Promise<void> {
   return new Promise((resolve) => {
     const step = (left: number) =>
-      left === 0 ? resolve() : requestAnimationFrame(() => step(left - 1))
+      left === 0
+        ? resolve()
+        : requestAnimationFrame(() => {
+            onFrame()
+            step(left - 1)
+          })
     step(count)
   })
 }
@@ -88,9 +91,18 @@ export function mountClientPage(page: ClientPageHarness): void {
     rendered: false,
     unserved: [],
     requests: [],
+    waiting: 'mount',
+    ticks: 0,
+    frames: 0,
+    distinct: 0,
   }
   globalThis.__autobuildHarness = state
-  let inFlight = 0
+  // Only a key's first request counts toward quiet: a repeat poll of a key the
+  // page already loaded is not a load still in progress.
+  const known = new Set<string>()
+  const firstInFlight = new Set<string>()
+  let lastNewKey = ''
+  let quietSince = performance.now()
   const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const url = new URL(raw, 'http://harness.invalid')
@@ -99,7 +111,14 @@ export function mountClientPage(page: ClientPageHarness): void {
     const key = `${method} ${path}`
     state.requests.push(key)
     const fixture = fixtures.responses[key] ?? fixtures.responses[`${method} ${url.pathname}`]
-    inFlight += 1
+    const first = !known.has(key)
+    if (first) {
+      known.add(key)
+      state.distinct = known.size
+      firstInFlight.add(key)
+      lastNewKey = key
+      quietSince = performance.now()
+    }
     try {
       // Answer asynchronously, like the network would.
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -115,7 +134,10 @@ export function mountClientPage(page: ClientPageHarness): void {
         headers: { 'content-type': 'application/json' },
       })
     } finally {
-      inFlight -= 1
+      if (first) {
+        firstInFlight.delete(key)
+        quietSince = performance.now()
+      }
     }
   }
   window.fetch = fixtureFetch as typeof fetch
@@ -123,6 +145,10 @@ export function mountClientPage(page: ClientPageHarness): void {
   const root = document.getElementById('root')
   if (!root) throw new Error('client harness: the page has no #root element')
   const navigations: string[] = []
+  const onMount = () => {
+    state.mounted = true
+    quietSince = performance.now()
+  }
   createRoot(root, {
     // Hand React-handled errors back to the browser so the debugger sees them.
     onUncaughtError: (error) => reportError(error),
@@ -134,7 +160,7 @@ export function mountClientPage(page: ClientPageHarness): void {
         <PathnameContext.Provider value={page.pathname}>
           <PathParamsContext.Provider value={page.params ?? {}}>
             <ThemeProvider>
-              <Mounted state={state}>{page.render()}</Mounted>
+              <Mounted onMount={onMount}>{page.render()}</Mounted>
             </ThemeProvider>
           </PathParamsContext.Provider>
         </PathnameContext.Provider>
@@ -142,25 +168,39 @@ export function mountClientPage(page: ClientPageHarness): void {
     </AppRouterContext.Provider>,
   )
 
-  // Settled: mounted, nothing in flight, no new request for a few ticks, and
-  // two frames painted. Polling intervals keep running; the loader stops here.
-  let quiet = 0
-  let seen = 0
+  // Settled: mounted, no first-time request in flight, no new request key for
+  // QUIET_MS of wall time, and two frames painted. Repeat polls of known keys
+  // never reset quiet, and quiet is measured in time, so late ticks and frames
+  // on a loaded host cannot starve it. Polling keeps running; the loader stops
+  // here. `waiting` names the condition still unmet.
+  const pending = (): string | undefined => {
+    if (!state.mounted) return 'mount'
+    const [inFlight] = firstInFlight
+    if (inFlight !== undefined) return `first request in flight: ${inFlight}`
+    if (performance.now() - quietSince < QUIET_MS)
+      return lastNewKey ? `quiet after new request ${lastNewKey}` : 'quiet after mount'
+    return undefined
+  }
   const tick = async () => {
-    const fresh = state.requests.length !== seen
-    seen = state.requests.length
-    quiet = state.mounted && inFlight === 0 && !fresh ? quiet + 1 : 0
-    if (quiet < QUIET_TICKS) {
+    state.ticks += 1
+    const unmet = pending()
+    if (unmet !== undefined) {
+      state.waiting = unmet
       setTimeout(tick, TICK_MS)
       return
     }
-    await frames(2)
-    if (inFlight !== 0 || state.requests.length !== seen) {
-      quiet = 0
+    const distinctBefore = known.size
+    state.waiting = 'animation frame'
+    await frames(2, () => {
+      state.frames += 1
+    })
+    if (known.size !== distinctBefore || firstInFlight.size > 0) {
+      state.waiting = pending() ?? `quiet after new request ${lastNewKey}`
       setTimeout(tick, TICK_MS)
       return
     }
     state.rendered = root.childElementCount > 0 && (root.textContent ?? '').trim().length > 0
+    state.waiting = ''
     state.settled = true
   }
   setTimeout(tick, TICK_MS)
