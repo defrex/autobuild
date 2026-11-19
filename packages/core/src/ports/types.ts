@@ -578,6 +578,10 @@ export interface WorkspaceProvider {
   readonly sandboxPublication?: WorkspacePublication
   /** Optional only for remote/disposable providers. */
   readonly recovery?: WorkspaceRecovery
+  /** The provider's expected wall time for one `provision` call. A bounded
+   * dispatcher invocation won't start provisioning with less budget
+   * remaining. Absent means no gate. */
+  readonly provisionEstimateMs?: number
   provision(opts: {
     repo: string
     baseBranch: string
@@ -598,6 +602,12 @@ export interface WorkspaceProvider {
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */
     generation?: number
+    /** The previous attempt at this exact generation was abandoned at a
+     * recorded dispatcher teardown and its lease is gone. A provider that can
+     * verify the partial environment may finish it in place. Otherwise, or on
+     * any doubt, it throws `WorkspaceCleanupRequired` as for any incomplete
+     * environment. Never expose an unverified environment. */
+    adoptAbandoned?: boolean
   }): Promise<WorkspaceProvisionResult>
   release(handle: WorkspaceHandle): Promise<void>
 }
