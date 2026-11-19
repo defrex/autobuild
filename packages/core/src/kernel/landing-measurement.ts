@@ -16,6 +16,7 @@ import type { TicketRef } from '../ontology'
 import type { OptimizationState } from './optimization'
 import type { BuildState } from './reducer'
 import { escalationsBeyondJanitor } from './janitor-failure'
+import { measurementDecision, measurementThreshold } from './measurement'
 
 export type MeasurementRequest = EventPayload<'attempt.measurement-requested'> & { seq: number }
 export type MeasurementResult = EventPayload<'attempt.measured'> & { seq: number }
@@ -55,23 +56,12 @@ export function advanceLandingMeasurement(
   return acc
 }
 
-/** The ε in effect for one measurement: absolute, or relative to the
- * baseline median's magnitude. A panel accepts only an absolute ε. */
-export function measurementThreshold(
-  objective: Pick<Objective, 'target'>,
-  measured: Pick<EventPayload<'attempt.measured'>, 'medians'>,
-): number {
-  const { epsilon } = objective.target
-  return epsilon.relative !== undefined
-    ? epsilon.relative * Math.abs(measured.medians?.baseline ?? 0)
-    : (epsilon.absolute ?? 0)
-}
-
 export type LandingRule = 'improve' | 'non-regress'
 export type LandingClass = 'land' | 'no-improvement' | 'regressed'
 
 /**
- * Classify a measurement from its recorded delta and the effective ε. An
+ * Classify a measurement from its recorded delta and the effective ε
+ * (`measurementThreshold`, the same ε the recorded decision uses). An
  * attempt must improve by at least ε; any other child must not make the
  * metric worse by more than ε. The recorded `decision` is informational.
  */
@@ -81,7 +71,8 @@ export function classifyLanding(
   measured: Pick<EventPayload<'attempt.measured'>, 'medians' | 'delta'>,
 ): LandingClass {
   const epsilon = measurementThreshold(objective, measured)
-  if (rule === 'improve') return measured.delta >= epsilon ? 'land' : 'no-improvement'
+  if (rule === 'improve')
+    return measurementDecision(measured.delta, epsilon) === 'improved' ? 'land' : 'no-improvement'
   return measured.delta >= -epsilon ? 'land' : 'regressed'
 }
 
