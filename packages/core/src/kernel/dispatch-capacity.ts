@@ -3,7 +3,7 @@ import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
 import { waitParked, waitResumeDue } from './ticket-wait'
-import { baselineMeasurementDue, pendingMeasurementRequest } from './measurement'
+import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
@@ -111,7 +111,7 @@ export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   if (state.kind !== 'node') return !parkedLeaf(build, now)
   return (
     !!state.nodeRestack?.conflict ||
-    ((integrationNeedsRunner(state) || baselineMeasurementDue(state)) && allocated(build, now))
+    ((integrationNeedsRunner(state) || nodeMeasurementDue(state)) && allocated(build, now))
   )
 }
 
@@ -157,8 +157,8 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
   )
     return undefined
   if (state.nodeRestack?.conflict) return state.openEscalations.length ? undefined : 'reconcile'
-  // The starting measurement is admitted as a re-verify is.
-  if (baselineMeasurementDue(state)) return 'verification'
+  // A node measurement (starting or progress) is admitted as a re-verify is.
+  if (nodeMeasurementDue(state)) return 'verification'
   if (integrationAdmissible(state) && integrationNeedsRunner(state)) return 'verification'
   return undefined
 }

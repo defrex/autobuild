@@ -91,8 +91,8 @@ import {
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
 import {
-  baselineMeasurementDue,
   decideSampledMeasurement,
+  nodeMeasurementDue,
   sampledMeasurement,
 } from '../kernel/measurement'
 import {
@@ -1909,7 +1909,7 @@ export class Dispatcher {
       launchState.kind === 'node' &&
       !launchState.nodeRestack?.conflict &&
       !integrationCurrent(launchState) &&
-      !baselineMeasurementDue(launchState)
+      !nodeMeasurementDue(launchState)
     )
       return 'already-active'
     if (launched.has(slug)) return 'already-active'
@@ -3492,8 +3492,7 @@ export class Dispatcher {
       await withForgeRequestContext({ build: record.slug }, async () => {
         try {
           if (!(await this.nodeHasCapacity(record.slug))) return
-          if (baselineMeasurementDue(state))
-            await this.prepareBaselineMeasurement(record, report, launched)
+          if (nodeMeasurementDue(state)) await this.prepareNodeMeasurement(record, report, launched)
           else await this.prepareIntegration(record, state, report, launched)
         } catch (error) {
           rethrowAuthorityLapse(error)
@@ -3506,22 +3505,23 @@ export class Dispatcher {
     await this.releaseMeasuredNodeWorkspaces(builds, now, report, launched)
   }
 
-  /** Provision a workspace for an optimization node's starting measurement
-   * and launch its runner. The measurer fetches the pinned commit itself, so
-   * the workspace's revision does not matter. */
-  private async prepareBaselineMeasurement(
+  /** Provision a workspace for an optimization node's measurement (its
+   * starting measurement, or a panel's progress) and launch its runner. The
+   * measurer fetches the commits it compares itself, so the workspace's
+   * revision does not matter. */
+  private async prepareNodeMeasurement(
     record: BuildRecord,
     report: TickReport,
     launched: Set<string>,
   ): Promise<void> {
     if (!record.branch || !this.accountsAvailable()) return
     const facts = (await readBuildFacts(this.store, record.slug)).value
-    if (!baselineMeasurementDue(facts.state)) return
+    if (!nodeMeasurementDue(facts.state)) return
     await this.provisionNodeAndLaunch(record, facts, report, launched)
   }
 
-  /** Release the workspace an optimization node held for its starting
-   * measurement once nothing else needs it: no measurement due, no
+  /** Release the workspace an optimization node held for a node measurement
+   * once nothing else needs it: no measurement due, no
    * integration cycle, no node restack or reconcile, no runner. Reads reduced
    * state only; the raw read happens only for a node it releases. */
   private async releaseMeasuredNodeWorkspaces(
@@ -3541,7 +3541,7 @@ export class Dispatcher {
         this.hasLiveExecutionLease(record) ||
         this.continuations.has(record.slug) ||
         state.openExecution !== undefined ||
-        baselineMeasurementDue(state) ||
+        nodeMeasurementDue(state) ||
         state.integration?.cycle !== undefined ||
         state.integration?.intent !== undefined ||
         state.nodeRestack?.conflict !== undefined ||
@@ -3842,6 +3842,7 @@ export class Dispatcher {
         return this.closeSettledAttempt(record, workspacePath, pr)
       case 'pending':
       case 'wait-turn':
+      case 'wait-progress':
       case 'stale':
         return { kind: 'wait' }
     }
@@ -3869,7 +3870,7 @@ export class Dispatcher {
         attempt.node,
         { ...identity, build: record.slug },
         'accepted',
-        { measurement: settlementMeasurement(measured.result) },
+        { measurement: settlementMeasurement(measured.result), head: sha },
       )
       return
     }
@@ -6691,8 +6692,11 @@ export class Dispatcher {
       state.kind === 'node' &&
       (!integrationCurrent(state) || facts.workspace === null) &&
       decision.kind !== 'wait' &&
-      // An ended or crashed starting measurement re-attaches to its workspace.
-      !(decision.kind === 'measure-baseline' && facts.workspace !== null)
+      // An ended or crashed node measurement re-attaches to its workspace.
+      !(
+        (decision.kind === 'measure-baseline' || decision.kind === 'measure-progress') &&
+        facts.workspace !== null
+      )
     )
       return // cascade owns node runner admission
     // Raw history, read at most once and only by a branch that acts on it.
