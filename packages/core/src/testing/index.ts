@@ -117,3 +117,6 @@ export { retainReplay, restoreReplay } from '../kernel/replay-retention'
 export { restoreChange, type RestackDeps } from '../kernel/reconcile-restack'
 export { inspectGitCandidate } from '../ports/workspace/commit-preservation'
 export { kernelGitUnavailableDetail } from '../kernel/kernel-git'
+// The judge's self-contained launcher, for seam tests that run it against a
+// hosted store.
+export { bundleJudgeLauncher } from '../processes/judge-launcher'

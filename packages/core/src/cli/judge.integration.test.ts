@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { distributionRoot } from '../distribution'
+import { bundleJudgeLauncher } from '../processes/judge-launcher'
 import { KERNEL } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import { scopeLocalStoreToJudgeSession } from '../store/phase-session'
@@ -179,4 +181,100 @@ describe('ab judge', () => {
       reason: 'A tie: both meet every criterion equally.',
     })
   })
+})
+
+describe("ab judge with no store (a local store's outbox)", () => {
+  const outboxEnv: JudgeCliEnv = { ...env }
+  delete outboxEnv.store
+
+  async function outboxCli(argv: string[], workspacePath: string) {
+    const out: string[] = []
+    const err: string[] = []
+    const code = await runCli(argv, {
+      workspacePath,
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+      judgeEnv: outboxEnv,
+      judgeRedact: (text) => text.replaceAll('sk-secret', '[REDACTED]'),
+    })
+    return { code, out: out.join('\n'), err: err.join('\n') }
+  }
+
+  test('prefer saves the preference once to the outbox; a second or racing call is refused', async () => {
+    const root = await judgeRoot()
+    const first = await outboxCli(
+      ['judge', 'prefer', 'B', '--reason', 'B is clearer; sk-secret leaked'],
+      root,
+    )
+    expect(first.code).toBe(0)
+    expect(first.out).toContain('panel.preferred saved: B')
+    const outbox = join(root, '.ab', 'judge', 'preference.json')
+    expect(JSON.parse(await readFile(outbox, 'utf8'))).toEqual({
+      panel: PANEL,
+      judge: 1,
+      session: SESSION,
+      preference: 'B',
+      reason: 'B is clearer; [REDACTED] leaked',
+    })
+    const second = await outboxCli(['judge', 'prefer', 'A', '--reason', 'changed'], root)
+    expect(second.code).not.toBe(0)
+    expect(second.err).toContain('already recorded its preference')
+
+    const raced = await judgeRoot()
+    const results = await Promise.all(
+      ['A', 'B'].map((preference) =>
+        outboxCli(['judge', 'prefer', preference, '--reason', `prefers ${preference}`], raced),
+      ),
+    )
+    expect(results.map((result) => result.code).sort()).toEqual([0, 1])
+  })
+})
+
+describe('the bundled judge launcher', () => {
+  test('runs context and outbox prefer, and refuses every other command', async () => {
+    const root = await judgeRoot()
+    const bin = await directory(join(tmpdir(), 'ab-judge-bin-'))
+    const launcher = join(bin, 'ab')
+    const text = await bundleJudgeLauncher()
+    expect(text.startsWith('#!/usr/bin/env bun\n')).toBe(true)
+    for (const named of [distributionRoot(), process.cwd()]) expect(text).not.toContain(named)
+    await writeFile(launcher, text)
+    await chmod(launcher, 0o755)
+    const bunDir = dirname(Bun.which('bun')!)
+    const run = async (args: string[]) => {
+      const proc = Bun.spawn([launcher, ...args], {
+        cwd: root,
+        env: {
+          PATH: `${bin}:${bunDir}:/usr/bin:/bin`,
+          AB_JUDGE: `${BUILD}:${PANEL}:1`,
+          AB_SESSION: SESSION,
+          AB_CONTEXT_DIR: '.ab/judge',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      return { stdout, stderr, code }
+    }
+    const context = await run(['judge', 'context', '--json'])
+    expect(context.code).toBe(0)
+    expect(JSON.parse(context.stdout).allowedTerminals).toEqual(['prefer'])
+    const prefer = await run(['judge', 'prefer', 'tie', '--reason', 'both equal'])
+    expect(prefer.code).toBe(0)
+    expect(
+      JSON.parse(await readFile(join(root, '.ab', 'judge', 'preference.json'), 'utf8')),
+    ).toMatchObject({ session: SESSION, preference: 'tie', reason: 'both equal' })
+    const again = await run(['judge', 'prefer', 'A', '--reason', 'again'])
+    expect(again.code).toBe(1)
+    expect(again.stderr).toContain('already recorded its preference')
+    for (const args of [['status'], ['context'], ['done']]) {
+      const refused = await run(args)
+      expect(refused.code).toBe(2)
+      expect(refused.stderr).toContain("a judge session may run only 'ab judge context'")
+    }
+  }, 60_000)
 })
