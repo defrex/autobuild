@@ -417,6 +417,8 @@ export interface CheckClientPagesOptions {
   /** Only these routes; defaults to every discovered page. */
   routes?: readonly string[]
   timeoutMs?: number
+  /** Chromium CPU slowdown factor, for contention tests. */
+  cpuThrottlingRate?: number
 }
 
 /** Mount every page in Chromium and report each page's browser errors. */
@@ -449,7 +451,7 @@ export async function checkClientPages(
       options.chromium,
       pathToFileURL(htmlPath).href,
       join(options.outDir, `chromium-${slug}`),
-      { timeoutMs: options.timeoutMs },
+      { timeoutMs: options.timeoutMs, cpuThrottlingRate: options.cpuThrottlingRate },
     )
     const root = options.appDir ?? APP_DIR
     results.push({
