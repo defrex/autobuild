@@ -202,13 +202,23 @@ try:
  until(b'SHELL_READY> ')
  assert output.count(b'\\x1b[?1049l') == 1, repr(output)
  mode(False)
- # --plain on a TTY never owned an alternate screen.
+ # --plain on a TTY never owned an alternate screen. Bash itself toggles
+ # bracketed paste around each command line, so only launcher-only modes count.
  output = b''
  os.write(fd, (command+' --plain\\n').encode())
  until(b'Ctrl-C to stop')
  os.write(fd, b'\\x03')
  until(b'SHELL_READY> ')
- assert b'\\x1b[?1049l' not in output, repr(output)
+ for unowned in (b'\\x1b[?1049l', b'\\x1b[?1004l', b'\\x1b[<1u'):
+  assert unowned not in output, repr(output)
+ # A genuine --plain failure still restores no mode the launcher never enabled.
+ output = b''
+ os.write(fd, (command+' --plain\\n').encode())
+ until(b'Ctrl-C to stop')
+ os.kill(children(children(pid)[0])[0], signal.SIGKILL)
+ until(b'SHELL_READY> ')
+ for unowned in (b'\\x1b[?1049l', b'\\x1b[?1004l', b'\\x1b[<1u'):
+  assert unowned not in output, repr(output)
  output = b''
  os.write(fd, (command+'\\n').encode())
  until(b'\\x1b[?1049h')
