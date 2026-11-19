@@ -35,6 +35,7 @@ const COMMANDS = [
   'issue',
   'done',
   'verdict',
+  'propose',
   'escalate',
   'wait-on',
   'harvest',
@@ -371,6 +372,7 @@ describe('layered CLI help catalog', () => {
         'exactly one terminal',
         'harness path is refused',
       ],
+      propose: ['propose <file>', '--none <reason>', 'never create tickets', 'exactly one'],
       verdict: [
         'approve|revise|escalate|pass|fail|skip',
         '--findings',

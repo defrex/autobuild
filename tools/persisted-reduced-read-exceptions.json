@@ -643,5 +643,9 @@
   "packages/core/src/kernel/reducer.ts::foldBuild::advanceOptimization": {
     "kind": "reduction",
     "reason": "Incrementally folds the same single incoming event into the nested optimization digest accumulator; no current-state replay or store read."
+  },
+  "packages/core/src/store/digest.ts::buildDigestReducer/fold::advanceOptimization": {
+    "kind": "reduction",
+    "reason": "Registered incremental build-digest definition; folds each delta event handed to it by the persisted prefix into the nested optimization accumulator."
   }
 }
