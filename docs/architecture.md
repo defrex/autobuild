@@ -363,7 +363,11 @@ symlinked spelling of one, or one embedded after a prefix such as `-I`, is
 scrubbed too.
 `BuildRunner.runPanel` records the run's kernel facts, the order in
 `panel.judge-started` before each session, and `panel.judged` after it, and
-commits a local judge's preference outbox. `BuildRunner.runMeasurement`
+commits a local judge's preference outbox. Its `runJudge` runs the `judge`
+role's primary-first provider chain for one judge, opening a session stream
+per judge session and closing it before `panel.judge-ended`; the panel loop
+hands each launch a preflight that checks an alternate's executable against
+the run's filtered `PATH` and protected locations before it starts. `BuildRunner.runMeasurement`
 calls it for an attempt's panel measurement request, under the panel id `attemptPanelId`
 derives in `packages/core/src/kernel/measurement.ts`, and records the win rate
 in `attempt.sampled`; the dispatcher decides it against the node's current ε

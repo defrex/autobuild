@@ -223,8 +223,10 @@ win rate counts ties as half. Judges can read nothing: with a remote store
 they hold a write-only credential, and with a local store they save the
 preference for the runner to record. Nothing they are given, including their
 self-contained `ab`, names the repository or reveals which variant is the
-candidate. A resumed run reuses recorded preferences and reruns only judges
-without one. An attempt on a panel objective is accepted when its win rate
+candidate. Each judge follows the `judge` role's provider alternates, each
+target a separate judge session with its own stream in the same root and
+order; only the chain's last failure counts. A resumed run reuses recorded
+preferences and reruns only judges without one. An attempt on a panel objective is accepted when its win rate
 against the current node head reaches 0.5 + ε; otherwise it settles
 `no-improvement`. A panel node judges its opening head against itself for its noise
 check (its starting value is 0.5), and after each accepted attempt judges the
@@ -1323,7 +1325,8 @@ an alternate; only a successful primary can remain live for producer revisions.
 Only chain exhaustion writes the phase failure, and
 the final failure controls retry behavior. Substitution starts and exhausted
 failures retain the targets and verbatim errors durably. Core phases, agent
-verify/finalize, and Harvest use the chain; tool-free one-shots do not.
+verify/finalize, Harvest and judge sessions use the chain; tool-free one-shots
+do not.
 
 A build phase session that reaches its captured budget is aborted and ended
 best-effort. The kernel records retryable `phase.failed` with `phase session
