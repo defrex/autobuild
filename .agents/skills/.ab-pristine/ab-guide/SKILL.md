@@ -209,12 +209,14 @@ under the `judge` role. Each judge compares two harness-pinned variants,
 labeled `A/` and `B/` in an order drawn per judge, in its own root outside
 any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
-win rate counts ties as half. Judges hold a write-only credential and nothing
-they are given reveals which variant is the candidate. A resumed run reuses
-recorded preferences and reruns only judges without one. An attempt on a
-panel objective is accepted when its win rate against the current node head
-reaches 0.5 + ε; otherwise it settles `no-improvement`. A panel node records
-no noise check or progress yet. See
+win rate counts ties as half. Judges can read nothing: with a remote store
+they hold a write-only credential, and with a local store they save the
+preference for the runner to record. Nothing they are given, including their
+self-contained `ab`, names the repository or reveals which variant is the
+candidate. A resumed run reuses recorded preferences and reruns only judges
+without one. An attempt on a panel objective is accepted when its win rate
+against the current node head reaches 0.5 + ε; otherwise it settles
+`no-improvement`. A panel node records no noise check or progress yet. See
 [judge panels](references/optimization-nodes.md#judge-panels).
 
 **Optimization landing.** A child of an optimization node lands only with a
