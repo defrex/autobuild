@@ -1070,6 +1070,11 @@ export const eventPayloadSchemas = {
     stage: dispatchStage,
     attempt,
     error: z.string().min(1),
+    /** Written only by dispatcher teardown of an in-flight provisioning
+     * continuation. It costs no infrastructure attempt and makes the next
+     * supervisor finish the same workspace generation. Optional so
+     * historical facts replay. */
+    abandoned: z.literal('teardown').optional(),
   }),
   /** Durable boundary preventing duplicate ticket notifications on recovery. */
   'dispatch.comment-posted': empty,

@@ -237,6 +237,15 @@ export const VERCEL_LIFETIME_MARGIN_MS = 5 * 60 * 1000
  * much per observation; the next tick retries. */
 export const VERCEL_OBSERVE_WAIT_MS = 5_000
 
+/** The expected wall time of one build `provision`: clone, Bun, system steps,
+ * distribution, dependencies, runtime installs and a snapshot stop typically
+ * take two to three minutes. A bounded dispatcher invocation won't start
+ * provisioning with less budget left. It errs low: an estimate too high would
+ * starve builds whenever pre-dispatch tick work is slow, while one slightly
+ * too low only costs an uncharged teardown abandonment the next invocation
+ * finishes. */
+export const VERCEL_PROVISION_ESTIMATE_MS = 150_000
+
 /** The snapshot rows that hold billed storage. `deleted`/`failed` rows hold
  * none and are never purge targets. */
 const LIVE_SNAPSHOT_STATUS = 'created'
@@ -1277,6 +1286,9 @@ export interface VercelSandboxProviderOptions {
   /** Test seam: the bound on the observation path's wait on a command whose
    * lookup shows no exit. Defaults to `VERCEL_OBSERVE_WAIT_MS`. */
   observeWaitMs?: number
+  /** Test seam: the expected wall time of one `provision`. Defaults to
+   * `VERCEL_PROVISION_ESTIMATE_MS`. */
+  provisionEstimateMs?: number
   /** The repository's raw `[commands].setup` shell string, run once at the end
    * of a fresh operator-sandbox provision (never on resume). Set once at
    * construction; never per call. */
@@ -1331,6 +1343,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private readonly origins = new Map<string, ReturnType<typeof cleanGithubOrigin>>()
   private readonly sessions = new Map<string, VercelSandboxHandle>()
   private readonly observeWaitMs: number
+  readonly provisionEstimateMs: number
 
   /** The archive bytes this provider installs: the injected `packageArchive`
    * seam when set, else the per-process memoized running distribution
@@ -1360,6 +1373,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
     this.observeWaitMs = options.observeWaitMs ?? VERCEL_OBSERVE_WAIT_MS
+    // Constructor-body assignment, never a field initializer (see the
+    // `useDefineForClassFields` note on `sandboxPublication`).
+    this.provisionEstimateMs = options.provisionEstimateMs ?? VERCEL_PROVISION_ESTIMATE_MS
     this.buildExecution = {
       start: (input, auth) => this.start(input, auth),
       observe: (identity) =>
@@ -1508,6 +1524,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     /** Ignored: a sandbox clone never holds archive refs, so restoration here
      * always fetches each exact ref from origin, whatever the forge. */
     restorationArchives?: 'local' | 'remote'
+    adoptAbandoned?: boolean
   }): Promise<WorkspaceProvisionResult> {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
       this.options.storeRef,
@@ -1604,7 +1621,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           }
           await sandbox.stop({ signal: this.operationSignal() })
         }
-      } else {
+      } else if (!opts.adoptAbandoned) {
         // A named VM without the marker is a crashed/legacy provisioning
         // attempt. Never expose its potentially unscrubbed checkout to agents.
         throw new WorkspaceCleanupRequired(
@@ -1617,6 +1634,40 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           },
           new Error('incomplete provisioning marker'),
         )
+      } else {
+        // The dispatcher recorded this generation's attempt as abandoned at
+        // its own teardown, and its lease is gone. Finish the same sandbox in
+        // place, but only after verification; any doubt still reaps it.
+        try {
+          // Quiesce first: stopping ends any command the dead invocation left
+          // running, and the persistent guest resumes on the next command.
+          await sandbox.stop({ signal: this.operationSignal() })
+          const checkout = await sandbox.runCommand({
+            cmd: 'test',
+            args: ['-e', `${VERCEL_WORKSPACE_PATH}/.git`],
+          })
+          if (checkout.exitCode !== 0)
+            throw new Error('abandoned provisioning left no checkout to finish')
+          checkedOut = await this.completeProvisioning(sandbox, {
+            origin,
+            branch: opts.branch,
+            base,
+            distributionIdentity,
+            scopedToken,
+            verifyClean: true,
+          })
+        } catch (error) {
+          throw new WorkspaceCleanupRequired(
+            {
+              provider: this.name,
+              ref: name,
+              path: VERCEL_WORKSPACE_PATH,
+              branch: opts.branch,
+              base: { source: 'remote', sha: base },
+            },
+            error,
+          )
+        }
       }
     }
 
@@ -1658,60 +1709,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       })
       try {
         await relocateCheckout(sandbox, origin.directory)
-        await commandOrThrow(sandbox, {
-          cmd: 'git',
-          args: ['checkout', '-B', opts.branch, base],
-          cwd: VERCEL_WORKSPACE_PATH,
+        checkedOut = await this.completeProvisioning(sandbox, {
+          origin,
+          branch: opts.branch,
+          base,
+          distributionIdentity,
+          scopedToken,
         })
-        const head = await checkedOutBranchHead(sandbox, opts.branch, this.operationSignal())
-        if (head !== base)
-          throw new Error(`checked out ${opts.branch} at ${head}, expected selected base ${base}`)
-        checkedOut = head
-        await commandOrThrow(sandbox, {
-          cmd: 'git',
-          args: ['remote', 'set-url', 'origin', origin.url],
-          cwd: VERCEL_WORKSPACE_PATH,
-        })
-        for (const key of [
-          'credential.helper',
-          'http.extraheader',
-          `http.${origin.url}.extraheader`,
-        ]) {
-          const result = await sandbox.runCommand({
-            cmd: 'git',
-            args: ['config', '--local', '--unset-all', key],
-            cwd: VERCEL_WORKSPACE_PATH,
-          })
-          if (result.exitCode !== 0 && result.exitCode !== 5)
-            throw new Error(`failed to scrub git config ${key}`)
-        }
-        await provisionBun(sandbox, this.options.config.image)
-        await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-        const archive = await this.archiveBytes()
-        await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
-        // Repository dependencies precede branch-owned package plugin loading.
-        // The fixed bootstrap supports the consuming repository's lockfile; its
-        // configured setup command still runs at every runner attachment.
-        await commandOrThrow(sandbox, {
-          cmd: 'sh',
-          args: [
-            '-c',
-            `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
-          ],
-          cwd: VERCEL_WORKSPACE_PATH,
-        })
-        await bootstrapRuntimes(
-          sandbox,
-          this.options.config,
-          { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
-          currentRuntimeReferences(this.options.runtimeReferences),
-          true,
-        )
-        await commandOrThrow(sandbox, {
-          cmd: 'touch',
-          args: [VERCEL_PROVISIONED_MARKER],
-        })
-        await sandbox.stop({ signal: this.operationSignal() })
       } catch (error) {
         throw new WorkspaceCleanupRequired(
           {
@@ -1761,6 +1765,86 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
       ...(restorationSkipped.length ? { restorationSkipped } : {}),
     }
+  }
+
+  /** The idempotent post-create sequence: branch checkout at the selected
+   * base, credential scrub, toolchain, distribution, dependencies, runtimes,
+   * then the completion marker and a snapshot stop. Shared by a fresh create
+   * and by finishing a teardown-abandoned attempt in place. Returns the
+   * verified checked-out head. */
+  private async completeProvisioning(
+    sandbox: VercelSandboxHandle,
+    input: {
+      origin: ReturnType<typeof cleanGithubOrigin>
+      branch: string
+      base: string
+      distributionIdentity: string
+      scopedToken: string
+      /** Require no tracked modifications before the marker is written. */
+      verifyClean?: boolean
+    },
+  ): Promise<string> {
+    const { origin, branch, base, distributionIdentity, scopedToken } = input
+    await commandOrThrow(sandbox, {
+      cmd: 'git',
+      args: ['checkout', '-B', branch, base],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    const head = await checkedOutBranchHead(sandbox, branch, this.operationSignal())
+    if (head !== base)
+      throw new Error(`checked out ${branch} at ${head}, expected selected base ${base}`)
+    if (input.verifyClean) {
+      // A finished abandoned attempt must not expose tracked edits the dead
+      // invocation may have left behind.
+      const diff = await sandbox.runCommand({
+        cmd: 'git',
+        args: ['diff', '--quiet', 'HEAD', '--'],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      if (diff.exitCode !== 0) throw new Error('abandoned provisioning left tracked modifications')
+    }
+    await commandOrThrow(sandbox, {
+      cmd: 'git',
+      args: ['remote', 'set-url', 'origin', origin.url],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    for (const key of ['credential.helper', 'http.extraheader', `http.${origin.url}.extraheader`]) {
+      const result = await sandbox.runCommand({
+        cmd: 'git',
+        args: ['config', '--local', '--unset-all', key],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      if (result.exitCode !== 0 && result.exitCode !== 5)
+        throw new Error(`failed to scrub git config ${key}`)
+    }
+    await provisionBun(sandbox, this.options.config.image)
+    await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
+    const archive = await this.archiveBytes()
+    await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
+    // Repository dependencies precede branch-owned package plugin loading.
+    // The fixed bootstrap supports the consuming repository's lockfile; its
+    // configured setup command still runs at every runner attachment.
+    await commandOrThrow(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
+      ],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    await bootstrapRuntimes(
+      sandbox,
+      this.options.config,
+      { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
+      currentRuntimeReferences(this.options.runtimeReferences),
+      true,
+    )
+    await commandOrThrow(sandbox, {
+      cmd: 'touch',
+      args: [VERCEL_PROVISIONED_MARKER],
+    })
+    await sandbox.stop({ signal: this.operationSignal() })
+    return head
   }
 
   async release(handle: WorkspaceHandle): Promise<void> {
