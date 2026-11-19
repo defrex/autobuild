@@ -1899,6 +1899,21 @@ describe('github assignees', () => {
     expect(github.count('user')).toBe(1)
   })
 
+  test('a create with readyAssignee adds that user to the named assignees once', async () => {
+    const { github, source, issueWrites } = assigneeSetup('alice')
+    github.assignable.add('alice')
+    github.assignable.add('bob')
+    const ticket = await source.create(
+      { title: 't', body: 'b', assignees: ['bob', 'alice'] },
+      { state: 'ready', readyAssignee: 'me' },
+    )
+    expect(ticket.assignees).toEqual(['bob', 'alice'])
+    expect(issueWrites()[0]!.assignees).toEqual(['bob', 'alice'])
+    expect(
+      (await source.listReady({ state: 'ready', assignee: 'me' })).tickets.map((t) => t.ref.id),
+    ).toEqual([ticket.ref.id])
+  })
+
   test('a create without assignees sends none', async () => {
     const { github, source, issueWrites } = assigneeSetup()
     const ticket = await source.create({ title: 't', body: 'b' })

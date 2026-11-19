@@ -673,7 +673,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 45
+export const BUILD_REDUCER_VERSION = 46
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1482,6 +1482,12 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'pr.conflicted':
         prState = 'conflicted'
+        break
+      case 'propose.started':
+        start({ phase: 'propose', round: event.payload.round, seq: event.seq })
+        break
+      case 'propose.completed':
+        complete('propose', event.seq, { round: event.payload.round })
         break
       case 'reconcile.started':
         reconcileAttempts = Math.max(reconcileAttempts, event.payload.attempt)
