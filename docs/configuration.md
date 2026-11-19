@@ -2370,7 +2370,7 @@ finalize post-steps both route by their logical step name. The verify step's
 configured skill name remains a deprecated alias for existing configurations
 and will be removed in a future release. Repository judgments use `harvest` and
 `harvest-review`; each judge session of an optimization objective's judge panel
-uses `judge`; `slug` and `upgrade` configure tool-free one-shot judgments.
+uses `judge`, including its `alternates`; `slug` and `upgrade` configure tool-free one-shot judgments.
 Arbitrary additional role keys are accepted, but only a name selected by one of
 these routes affects a session.
 
@@ -2405,7 +2405,9 @@ policy, so final quota/usage/billing exhaustion parks immediately while a final
 availability failure consumes one existing bounded attempt. `session.started`
 records each selected runtime/model and substitution cause, and an exhausted
 failure records every tried target and verbatim error for policy escalation.
-The chain applies to core phases, agent verify/finalize steps, and Harvest.
+The chain applies to core phases, agent verify/finalize steps, Harvest, and
+judge sessions. A judge records each target as its own `panel.judge-started`
+rather than `session.started`, with the same substitution evidence.
 Tool-free one-shot completions such as slug and upgrade use only the primary.
 
 For build sessions, the kernel starts the captured role budget after the durable

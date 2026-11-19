@@ -46,6 +46,12 @@ the diff and not to decide applicability again.
    legibly: starting → current value, threshold, noise, accepted, rejected and
    running attempts, and budget, wrapped rather than truncated in the
    70-column detail.
+   The judge-sessions wide and narrow frames must show each judge row
+   legibly: role `judge`, phase `judge:panel-1:<n>`, the runtime of each
+   target (judge 1's substituted `codex` session followed by its `claude`
+   alternate), its status, and its stream id with open or closed status.
+   Long lines wrap rather than truncate at 70 columns, and nothing names a
+   candidate or baseline side.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
    including `headline-happy-wide.png`. Judge the images themselves. The `.txt`
    files are human evidence and may help identify a frame, but they are not a
@@ -98,6 +104,10 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:capacity-wide:png .ab/dashboard-frames/capacity-wide.png --attach
    ab artifact put dashboard-frame:native-sessions:text .ab/dashboard-frames/native-sessions.txt --attach
    ab artifact put dashboard-frame:native-sessions:png .ab/dashboard-frames/native-sessions.png --attach
+   ab artifact put dashboard-frame:judge-sessions:text .ab/dashboard-frames/judge-sessions.txt --attach
+   ab artifact put dashboard-frame:judge-sessions:png .ab/dashboard-frames/judge-sessions.png --attach
+   ab artifact put dashboard-frame:judge-sessions-narrow:text .ab/dashboard-frames/judge-sessions-narrow.txt --attach
+   ab artifact put dashboard-frame:judge-sessions-narrow:png .ab/dashboard-frames/judge-sessions-narrow.png --attach
    ab artifact put dashboard-frame:forge-readiness-wide:text .ab/dashboard-frames/forge-readiness-wide.txt --attach
    ab artifact put dashboard-frame:forge-readiness-wide:png .ab/dashboard-frames/forge-readiness-wide.png --attach
    ab artifact put dashboard-frame:forge-readiness-narrow:text .ab/dashboard-frames/forge-readiness-narrow.txt --attach
