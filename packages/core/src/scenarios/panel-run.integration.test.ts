@@ -652,7 +652,7 @@ describe('a judge panel run', () => {
 })
 
 describe('symlinked spellings of a protected location', () => {
-  test('inherited values reaching the checkout through a symlinked checkout or ancestor are dropped', async () => {
+  test('inherited values reaching the checkout through a symlinked checkout or ancestor, embedded or multiline, are dropped', async () => {
     const repo = await repository()
     const outside = await directory(join(tmpdir(), 'ab-panel-alias-'))
     const checkoutAlias = join(outside, 'checkout-alias')
@@ -671,6 +671,11 @@ describe('symlinked spellings of a protected location', () => {
       VIA_ANCESTOR: `--root=${join(viaAncestor, 'evals')}`,
       FILE_LINK: join(outside, 'links/doc'),
       UNRELATED: join(outside, 'links'),
+      CFLAGS: `-O2 -I${join(checkoutAlias, 'include')}`,
+      CPPFLAGS: `-isystem${join(viaAncestor, 'include')}`,
+      LITERAL_FLAGS: `-I${join(repo.workspace, 'include')}`,
+      MULTILINE: `root=${checkoutAlias}\nmode=development`,
+      UNRELATED_FLAGS: `-I${join(outside, 'links')}`,
     }
     const deps = {
       exec: spawnExec,
@@ -690,7 +695,12 @@ describe('symlinked spellings of a protected location', () => {
     expect(env.npm_package_json).toBeUndefined()
     expect(env.VIA_ANCESTOR).toBeUndefined()
     expect(env.FILE_LINK).toBeUndefined()
+    expect(env.CFLAGS).toBeUndefined()
+    expect(env.CPPFLAGS).toBeUndefined()
+    expect(env.LITERAL_FLAGS).toBeUndefined()
+    expect(env.MULTILINE).toBeUndefined()
     expect(env.UNRELATED).toBe(join(outside, 'links'))
+    expect(env.UNRELATED_FLAGS).toBe(`-I${join(outside, 'links')}`)
     expect(env.PATH).toBe('/scratch/autobuild-judge-bin-x:/usr/bin')
   })
 })

@@ -211,33 +211,55 @@ done`
 /** Paths per resolution probe, well inside one command line's limit. */
 const PHYSICAL_PATHS_BATCH = 256
 
-/** Every absolute path an ambient value or `PATH` entry carries: the whole
- * value, and each piece between separators. */
-function ambientPathTokens(ambient: Readonly<Record<string, string | undefined>>): string[] {
-  const tokens = new Set<string>()
+/** One absolute path an ambient value carries, and the spelling to hide when
+ * it reaches a protected location: the piece of the value it starts in, so
+ * an embedded path such as `-I/alias/include` is hidden by a spelling
+ * bounded by separators. */
+interface AmbientPath {
+  path: string
+  spelling: string
+}
+
+/** Every absolute path an ambient value or `PATH` entry carries: in the whole
+ * value, each line, and each piece between separators, the path from the
+ * first `/` on. */
+function ambientPaths(ambient: Readonly<Record<string, string | undefined>>): AmbientPath[] {
+  const found = new Map<string, AmbientPath>()
   for (const value of Object.values(ambient)) {
-    if (value === undefined || value.includes('\n')) continue
-    for (const token of [value, ...value.split(/[\s:;,='"]+/)])
-      if (token.startsWith('/') && token !== '/') tokens.add(token)
+    if (value === undefined) continue
+    for (const spelling of [value, ...value.split(/\r?\n/), ...value.split(/[\s:;,='"]+/)]) {
+      const at = spelling.indexOf('/')
+      const path = at === -1 ? '' : spelling.slice(at)
+      // A multiline path is found line by line: the probe answers in lines.
+      if (path === '' || path === '/' || /[\r\n]/.test(path)) continue
+      found.set(`${path}\0${spelling}`, { path, spelling })
+    }
   }
-  return [...tokens]
+  return [...found.values()]
 }
 
 /** The lexical spellings in the ambient environment that reach a protected
- * location only through a symlink: a symlinked checkout, a symlinked
- * ancestor, or a link to a file inside it. Hiding them as well keeps an
- * inherited value such as `INIT_CWD=/work/alias` from leading a judge back
- * into the repository. A path that cannot be resolved is hidden too. */
+ * location but are not already hidden by the real paths: a symlinked
+ * checkout, a symlinked ancestor, a link to a file inside it, or a path
+ * embedded after a prefix such as `-I`. Hiding them as well keeps an
+ * inherited value such as `INIT_CWD=/work/alias` or `CFLAGS=-I/work/alias`
+ * from leading a judge back into the repository. A path that cannot be
+ * resolved is hidden too. */
 export async function judgeAmbientAliases(
   deps: PanelDeps,
   protectedPaths: readonly string[],
 ): Promise<string[]> {
-  const tokens = ambientPathTokens(deps.ambientEnv ?? process.env).filter(
-    (token) => insideProtected(token, protectedPaths) === undefined,
-  )
-  const aliases: string[] = []
-  for (let at = 0; at < tokens.length; at += PHYSICAL_PATHS_BATCH) {
-    const batch = tokens.slice(at, at + PHYSICAL_PATHS_BATCH)
+  const aliases = new Set<string>()
+  const unresolved: AmbientPath[] = []
+  for (const found of ambientPaths(deps.ambientEnv ?? process.env)) {
+    if (insideProtected(found.path, protectedPaths) === undefined) unresolved.push(found)
+    // A literal path the real locations name only behind a prefix.
+    else if (found.spelling !== found.path) aliases.add(found.spelling)
+  }
+  const paths = [...new Set(unresolved.map((found) => found.path))]
+  const physical = new Map<string, string>()
+  for (let at = 0; at < paths.length; at += PHYSICAL_PATHS_BATCH) {
+    const batch = paths.slice(at, at + PHYSICAL_PATHS_BATCH)
     const result = await deps.exec(['sh', '-c', PHYSICAL_PATHS_PROBE, 'sh', ...batch], {})
     const lines = result.stdout.split('\n').slice(0, -1)
     if (result.exitCode !== 0 || lines.length !== batch.length)
@@ -245,13 +267,16 @@ export async function judgeAmbientAliases(
         "resolving the inherited environment's paths failed",
         tail(result),
       )
-    batch.forEach((token, index) => {
-      const physical = lines[index]!
-      if (physical === '' || insideProtected(physical, protectedPaths) !== undefined)
-        aliases.push(token)
+    batch.forEach((path, index) => {
+      physical.set(path, lines[index]!)
     })
   }
-  return aliases
+  for (const found of unresolved) {
+    const resolved = physical.get(found.path)!
+    if (resolved === '' || insideProtected(resolved, protectedPaths) !== undefined)
+      aliases.add(found.spelling)
+  }
+  return [...aliases]
 }
 
 /** The protected location `path` is at or under, if any. */

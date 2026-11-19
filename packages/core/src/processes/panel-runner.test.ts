@@ -3,6 +3,7 @@ import type { EventPayload } from '../events/payloads'
 import { PanelLogBuilder, panelStarted } from '../kernel/generators/panel-log'
 import { advancePanel, type PanelOrder, type PanelRunState } from '../kernel/panel'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
+import { sessionEnv } from '../ports/runner/session-env'
 import {
   TMPDIR_PROBE,
   checkJudgeRoot,
@@ -533,6 +534,9 @@ describe('protected locations', () => {
       FLAGS: '--dir=/link/ws/sub --other',
       CONFIG: '/home/me/config.json',
       DIRECT: '/ws/inside',
+      CFLAGS: '-O2 -I/alias/include',
+      LITERAL: '-isystem/ws/include',
+      MULTILINE: 'root=/alias\nmode=development',
     }
     const physical = {
       '/alias': '/ws',
@@ -540,21 +544,34 @@ describe('protected locations', () => {
       '/alias/package.json': '/ws/package.json',
       '/link/ws/sub': '/ws/sub',
       '/home/me/config.json': '/home/me/config.json',
+      '/alias/include': '/ws/include',
     }
     const calls: Call[] = []
     const aliases = await judgeAmbientAliases(deps(scriptedExec({ calls, physical }), ambient), [
       '/ws',
       '/ws/.git',
     ])
+    // An embedded path is hidden by the piece it starts in, and a multiline
+    // value line by line.
     expect(aliases.sort()).toEqual([
+      '-I/alias/include',
+      '-O2 -I/alias/include',
+      '-isystem/ws/include',
       '/alias',
       '/alias/node_modules/.bin',
       '/alias/package.json',
       '/link/ws/sub',
+      'root=/alias',
     ])
     // A path already naming a protected location needs no resolution.
     const probe = calls.find((call) => call.cmd[2] === PHYSICAL_PATHS_PROBE)!
     expect(probe.cmd).not.toContain('/ws/inside')
+    expect(probe.cmd.slice(4).some((arg) => arg.includes('\n'))).toBe(false)
+    const env = sessionEnv({ AB_JUDGE: 'b:p:1' }, ambient, {
+      hide: ['/ws', '/ws/.git', ...aliases],
+      binDir: '/scratch/bin',
+    })
+    expect(Object.keys(env).sort()).toEqual(['AB_JUDGE', 'CONFIG', 'PATH'])
 
     // A path that cannot be resolved is hidden, failing closed.
     expect(

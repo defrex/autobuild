@@ -321,8 +321,9 @@ supplies names a protected location.
 - The judge's inherited environment is scrubbed: every value that names a
   protected location is dropped, such as `INIT_CWD` or `npm_package_json`, and
   so is every `PATH` entry under one. A path counts whether it names the real
-  location or reaches it through a symlinked checkout, ancestor or file, and a
-  path that cannot be resolved is dropped as well. This can also drop a provider variable
+  location or reaches it through a symlinked checkout, ancestor or file, and
+  whether it stands alone, follows a prefix such as `-I`, or sits on one line
+  of a multiline value; a path that cannot be resolved is dropped as well. This can also drop a provider variable
   whose value points inside the repository. Keep runtime credentials and tools
   outside it.
 - The judge's `ab` is a self-contained, judge-only launcher written beside the
