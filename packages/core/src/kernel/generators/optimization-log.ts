@@ -392,7 +392,12 @@ export function attemptMeasurementLog(): AbEvent[] {
         question: 'request m2 sampled a superseded ruler',
       },
     })
-    .requestMeasurement('m3').events
+    .requestMeasurement('m3')
+    .push({
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'ab/opt-node', sha: OPTIMIZATION_SHA('d') },
+    }).events
 }
 
 /** A child of an optimization node whose head the node moved under: two

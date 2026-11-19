@@ -13,7 +13,6 @@ import {
   classifyLanding,
   landingMeasurementGate,
   measurementApplies,
-  measurementThreshold,
   mergedAttemptMeasurement,
   selectTurnHolder,
   settlementMeasurement,
@@ -21,6 +20,7 @@ import {
   type LandingMeasurementState,
   type TurnCandidate,
 } from './landing-measurement'
+import { measurementThreshold } from './measurement'
 import { optimizationReducer, type OptimizationState } from './optimization'
 import { reduceBuild } from './reducer'
 

@@ -6,7 +6,7 @@
  */
 import { compilePathSelectors } from '../config/path-selectors'
 import type { EventPayload } from '../events/payloads'
-import type { CommandMetric, ObjectiveEpsilon } from '../objective'
+import type { CommandMetric, Objective, ObjectiveEpsilon } from '../objective'
 import type { BuildState } from './reducer'
 
 /** One command run's ceiling, applied to every sample run and every setup
@@ -38,6 +38,17 @@ export function effectiveEpsilon(epsilon: ObjectiveEpsilon, baselineMedian: numb
   return epsilon.relative !== undefined
     ? epsilon.relative * Math.abs(baselineMedian)
     : (epsilon.absolute ?? 0)
+}
+
+/** The ε in effect for one measurement: absolute, or relative to the
+ * baseline median's magnitude. A panel accepts only an absolute ε. The one
+ * definition shared by the landing gate's classification and the recorded
+ * `attempt.measured` decision. */
+export function measurementThreshold(
+  objective: Pick<Objective, 'target'>,
+  measured: Pick<EventPayload<'attempt.measured'>, 'medians'>,
+): number {
+  return effectiveEpsilon(objective.target.epsilon, measured.medians?.baseline ?? 0)
 }
 
 /** An attempt improved when its delta reaches ε. */
@@ -140,18 +151,40 @@ function terminal(state: BuildState): boolean {
   return state.status === 'done' || state.status === 'aborted'
 }
 
-/** A leaf's latest measurement request that has not been sampled or
- * measured yet: the attempt runner's work. Read from reduced state alone. */
-export function pendingMeasurementRequest(
-  state: BuildState,
-): EventPayload<'attempt.measurement-requested'> | undefined {
+export type MeasurementRequestStatus =
+  | { kind: 'due'; request: EventPayload<'attempt.measurement-requested'> }
+  | {
+      kind: 'superseded'
+      request: EventPayload<'attempt.measurement-requested'>
+      observedHead: string
+    }
+
+/** The latest unsampled, unmeasured request on a nonterminal leaf, and
+ * whether the child has since observed its node head move past the request's
+ * baseline. Read from reduced state alone. */
+export function measurementRequestStatus(state: BuildState): MeasurementRequestStatus | undefined {
   const measurement = state.attemptMeasurement
   const request = measurement?.request
   if (request === undefined || state.kind === 'node' || terminal(state)) return undefined
   if (measurement?.measured?.request === request.id) return undefined
   if (measurement?.sampled?.request === request.id) return undefined
   const { seq: _seq, ...payload } = request
-  return payload
+  const observedHead = measurement?.observedHead
+  return observedHead !== undefined && observedHead !== request.baseline
+    ? { kind: 'superseded', request: payload, observedHead }
+    : { kind: 'due', request: payload }
+}
+
+/** A leaf's latest measurement request that has not been sampled or
+ * measured yet and whose baseline is still the node head the child last
+ * observed: the attempt runner's work. A request superseded by a later
+ * `target.moved` is skipped; the landing gate requests a current one once the
+ * child is restacked. Read from reduced state alone. */
+export function pendingMeasurementRequest(
+  state: BuildState,
+): EventPayload<'attempt.measurement-requested'> | undefined {
+  const status = measurementRequestStatus(state)
+  return status?.kind === 'due' ? status.request : undefined
 }
 
 /** The samples of a leaf's latest request that await their decision: the
@@ -218,7 +251,7 @@ export function decideSampledMeasurement(
   const metric = optimization.objective.metric as CommandMetric
   const { medians } = sampled
   const delta = measurementDelta(metric.direction, medians.baseline, medians.candidate)
-  const epsilon = effectiveEpsilon(optimization.objective.target.epsilon, medians.baseline)
+  const epsilon = measurementThreshold(optimization.objective, { medians })
   return {
     measured: {
       request: sampled.request,
