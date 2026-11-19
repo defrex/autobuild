@@ -6,13 +6,8 @@ import {
   sourceContent,
   type SourceLaunch,
 } from './dispatch-upgrade-source'
-import {
-  FOCUS_REPORTING_MODE,
-  KITTY_KEYBOARD_MODE,
-  BRACKETED_PASTE_MODE,
-  ALTERNATE_SCREEN_MODE,
-  HIDDEN_CURSOR_MODE,
-} from './terminal-restore'
+import { parseDispatchArgs } from './dispatch-args'
+import { operatorStopped, restoreLauncherTerminal } from './dispatch-launch-stop'
 import { watchPresentationJob } from './dispatch-presentation-job'
 import { dirname, basename, resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -79,6 +74,8 @@ export async function prepareLaunchRuntime(
   })
 }
 export async function launchDispatcher(argv: string[]): Promise<number> {
+  // The caller already parsed this argv; only presentation matters here.
+  const { plain } = parseDispatchArgs(argv.slice(1), process.env)
   const checkout = await resolveMainRepo(process.cwd(), gitExec)
   // Keep the public installation pathname rather than its realpath into Bun's version store.
   const entry = resolve(process.argv[1] ?? '')
@@ -128,6 +125,10 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
   const lineage = randomUUID()
   const children = new Set<Child>()
   let signal: NodeJS.Signals | undefined
+  const stopped = (record: Child) =>
+    record.result?.reason === 'stopped' ||
+    record.result?.reason === 'handoff' ||
+    operatorStopped(signal, record.child.signalCode)
   const stopping = new AbortController()
   const listeners = GENERATION_SIGNALS.map((name) => ({
     name,
@@ -407,16 +408,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       if (pending && active.result && projection.accepted && !projection.released) {
         active.job?.close()
         active.job = undefined
-        if (process.stdin.isTTY) process.stdin.setRawMode(false)
-        if (process.stdout.isTTY)
-          for (const mode of [
-            FOCUS_REPORTING_MODE,
-            KITTY_KEYBOARD_MODE,
-            BRACKETED_PASTE_MODE,
-            ALTERNATE_SCREEN_MODE,
-            HIDDEN_CURSOR_MODE,
-          ])
-            process.stdout.write(mode.restore)
+        restoreLauncherTerminal(plain, process.stdin, process.stdout)
         await reader(active, '--recover-terminal-release')
       }
 
@@ -499,19 +491,15 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           correlation: handoff.correlation,
         }
       }
-      if (active.result?.reason === 'failed' && !pending && recovery) {
+      if (
+        active.result?.reason === 'failed' &&
+        !operatorStopped(signal, active.child.signalCode) &&
+        !pending &&
+        recovery
+      ) {
         const action = recovery.budget.failed(active.launch.run!, Date.now())
         if (action) {
-          if (process.stdin.isTTY) process.stdin.setRawMode(false)
-          if (process.stdout.isTTY)
-            for (const mode of [
-              FOCUS_REPORTING_MODE,
-              KITTY_KEYBOARD_MODE,
-              BRACKETED_PASTE_MODE,
-              ALTERNATE_SCREEN_MODE,
-              HIDDEN_CURSOR_MODE,
-            ])
-              process.stdout.write(mode.restore)
+          restoreLauncherTerminal(plain, process.stdin, process.stdout)
           active.job?.close()
           const context = {
             predecessor: recovery.previous.launch.run!,
@@ -585,26 +573,20 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
   } catch (error) {
     if (!signal) throw error
   } finally {
-    for (const record of children)
-      if (!record.result)
-        try {
-          record.child.kill(signal ?? 'SIGTERM')
-        } catch {}
+    // The listener already forwarded an operator signal; repeating it only
+    // races the generation's graceful exit.
+    if (!signal)
+      for (const record of children)
+        if (!record.result)
+          try {
+            record.child.kill('SIGTERM')
+          } catch {}
     await Promise.all([...children].map((record) => record.exited))
-    if (active?.result?.reason === 'stopped' || active?.result?.reason === 'handoff') clean = true
+    if (active && stopped(active)) clean = true
     for (const { name, listener } of listeners) process.removeListener(name, listener)
     // A preflight process never owns restoration. Only failure of the active
     // presentation owner requires the launcher's last-resort cleanup.
-    if (!clean && active && process.stdin.isTTY) process.stdin.setRawMode(false)
-    if (!clean && active && process.stdout.isTTY)
-      for (const mode of [
-        FOCUS_REPORTING_MODE,
-        KITTY_KEYBOARD_MODE,
-        BRACKETED_PASTE_MODE,
-        ALTERNATE_SCREEN_MODE,
-        HIDDEN_CURSOR_MODE,
-      ])
-        process.stdout.write(mode.restore)
+    if (!clean && active) restoreLauncherTerminal(plain, process.stdin, process.stdout)
     for (const root of protectedRoots) releasePreparedRuntime(root)
     pruneRuntimes(dirname(dirname(runtime.root)))
   }
