@@ -6,7 +6,7 @@ import { afterEach, expect, test as bunTest } from 'bun:test'
 import { join } from 'node:path'
 import { controlBuild } from '../cli/build-control'
 import type { AbEvent } from '../events/catalog'
-import { humanActor, KERNEL } from '../events/envelope'
+import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import {
   baselineMeasurementDue,
   pendingMeasurementRequest,
@@ -14,6 +14,7 @@ import {
 } from '../kernel/measurement'
 import { reduceBuild } from '../kernel/reducer'
 import { reviseObjective, stopObjective } from '../operator/optimization'
+import { readBuildFacts } from '../store/reduced-reads'
 import { measureStoreReads } from '../testing/reduced-read-budget'
 import {
   CONFIG_TOML,
@@ -205,14 +206,21 @@ async function runLaunches(
   }
 }
 
+/** Each build's log as the memory store holds it, read in place: `h.events`
+ * clones a whole log, which costs seconds once the idle budget has padded the
+ * node's to 100,000 events. Callers never modify it. */
+function logs(h: E2eHarness): Map<string, { events: AbEvent[] }> {
+  return Reflect.get(h.store, 'builds')
+}
+
 /** Every write so far: each build's log and the repository journal,
  * optionally without the idle node checkpoints a due poll records. */
 async function written(h: E2eHarness, checkpoints = true) {
   let count = (await h.store.getRepoStateEvents(h.origin)).length
-  for (const record of await h.store.listBuilds())
-    count += (await h.events(record.slug)).filter(
-      (event) => checkpoints || event.type !== 'node.poll-checked',
-    ).length
+  for (const { events } of logs(h).values())
+    count += checkpoints
+      ? events.length
+      : events.filter((event) => event.type !== 'node.poll-checked').length
   return count
 }
 
@@ -228,37 +236,60 @@ async function settle(h: E2eHarness, advance: number) {
   throw new Error('the repository never settled')
 }
 
-/** Settles past the node's quiet period at the default idle cadence, then
- * measures it idle: a tick between checks reads no event rows and writes
- * nothing, and a due idle check (two hours on) records its one
- * `node.poll-checked`, as SPEC requires, and reads back only that row. */
+/** The idle read budget at the default idle cadence, with the node's log
+ * padded to at least 100 and then 100,000 prior events. A tick on which
+ * nothing changes reads zero event rows. The one exception, and exactly this
+ * bound: a tick whose node poll check is due appends `node.poll-checked`
+ * (SPEC §13) and may read back only the row it appended in that same tick, a
+ * count identical at both lengths, and never a historical row of any log. */
 async function expectIdleReadBudget(h: E2eHarness, slug: string) {
-  await settle(h, 60_000)
-  await settle(h, 15 * 60_000)
-  const between = async () => {
+  /** One measured tick. Any row at or below a log's last sequence before the
+   * tick is historical and fails it, as does any repository journal row. */
+  const tick = async (advance: number) => {
+    const boundary = new Map<string, number>()
+    for (const [build, { events }] of logs(h)) boundary.set(build, events.at(-1)?.seq ?? 0)
     const before = await written(h)
-    h.clock.advance(60_000)
+    h.clock.advance(advance)
     const metrics = await measureStoreReads(h.store, async () => {
       await h.dispatcher.tick()
     })
-    expect(metrics.rows).toBe(0)
-    expect(await written(h)).toBe(before)
+    expect(metrics.read.filter((row) => row.seq <= (boundary.get(row.slug) ?? 0))).toEqual([])
+    expect(metrics.repoRows).toBe(0)
+    return { metrics, wrote: (await written(h)) - before, after: boundary.get(slug)! }
   }
-  await between()
-  const before = await written(h)
-  const from = (await h.events(slug)).length
-  h.clock.advance(2 * 3_600_000)
-  const metrics = await measureStoreReads(h.store, async () => {
-    await h.dispatcher.tick()
-  })
-  const checkpoint = (await h.events(slug)).slice(from)
-  expect(types(checkpoint)).toEqual(['node.poll-checked'])
-  expect(await written(h)).toBe(before + 1)
-  expect(metrics.rows).toBeGreaterThan(0)
-  expect(metrics.read.filter((row) => row.slug !== slug || row.seq !== checkpoint[0]!.seq)).toEqual(
-    [],
-  )
-  await between()
+  /** Between checks nothing changes: zero rows read, nothing written. */
+  const quiet = async () => {
+    const { metrics, wrote } = await tick(60_000)
+    expect(metrics.rows).toBe(0)
+    expect(wrote).toBe(0)
+  }
+  await settle(h, 60_000)
+  const costs: { rows: number; calls: Record<string, number> }[] = []
+  for (const prior of [100, 100_000]) {
+    const { checkedAt: _checkedAt, ...payload } = (await readBuildFacts(h.store, slug)).value.state
+      .nodePolling!
+    for (let length = logs(h).get(slug)!.events.length; length < prior; length++)
+      await h.store.append(slug, { actor: DISPATCHER, type: 'node.poll-checked', payload })
+    expect(logs(h).get(slug)!.events.length).toBeGreaterThanOrEqual(prior)
+    // Saved reduced values advance over the padding once, and the settling
+    // pass past the quiet period ends on a due check, so the next minute is
+    // between checks.
+    await settle(h, 15 * 60_000)
+    await quiet()
+    const due = await tick(2 * 3_600_000)
+    const appended = logs(h)
+      .get(slug)!
+      .events.filter((event) => event.seq > due.after)
+    expect(types(appended)).toEqual(['node.poll-checked'])
+    expect(due.wrote).toBe(1)
+    expect(due.metrics.rows).toBeGreaterThan(0)
+    expect(
+      due.metrics.read.filter((row) => row.slug !== slug || row.seq !== appended[0]!.seq),
+    ).toEqual([])
+    costs.push({ rows: due.metrics.rows, calls: due.metrics.calls })
+    await quiet()
+  }
+  expect(costs[1]).toEqual(costs[0]!)
 }
 
 /** Tick and run launches until `until` holds. */

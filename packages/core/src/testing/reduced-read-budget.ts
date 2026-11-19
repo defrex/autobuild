@@ -1735,14 +1735,15 @@ export async function sampledMeasurementReadBudget(opts: {
 }
 
 /** Backing store traffic during one measured window: calls by method and by
- * build slug, returned bytes, and event rows read from any build log, each
- * named by its build and sequence. */
+ * build slug, returned bytes, event rows read from any build log, each named
+ * by its build and sequence, and rows read from any repository journal. */
 export interface StoreReadMetrics {
   calls: Record<string, number>
   slugs: Record<string, number>
   bytes: number
   rows: number
   read: { slug: string; seq: number }[]
+  repoRows: number
 }
 
 const STORE_WRITES = new Set([
@@ -1760,13 +1761,30 @@ export async function measureStoreReads(
   store: import('../store/memory').MemoryBuildStore,
   run: () => Promise<void>,
 ): Promise<StoreReadMetrics> {
-  const metrics: StoreReadMetrics = { calls: {}, slugs: {}, bytes: 0, rows: 0, read: [] }
+  const metrics: StoreReadMetrics = {
+    calls: {},
+    slugs: {},
+    bytes: 0,
+    rows: 0,
+    read: [],
+    repoRows: 0,
+  }
   const builds: Map<string, { events: import('../events/catalog').AbEvent[] }> = Reflect.get(
     store,
     'builds',
   )
   const restore: (() => void)[] = []
   const slice = Array.prototype.slice
+  const repositories: Map<string, { events: unknown[] }> = Reflect.get(store, 'repos')
+  for (const repository of repositories.values()) {
+    const events = repository.events
+    events.slice = function (start?: number, end?: number) {
+      const result = slice.call(this, start, end) as typeof events
+      metrics.repoRows += result.length
+      return result
+    }
+    restore.push(() => Reflect.deleteProperty(events, 'slice'))
+  }
   for (const [slug, build] of builds) {
     const events = build.events
     events.slice = function (start?: number, end?: number) {
@@ -1780,11 +1798,14 @@ export async function measureStoreReads(
   const names = Object.getOwnPropertyNames(Object.getPrototypeOf(store)).filter(
     (name) => name !== 'constructor' && typeof Reflect.get(store, name) === 'function',
   )
+  // Bytes are what the store returns to its caller; a call the store makes
+  // to itself returns its own internal state, which is not traffic.
+  const inside = new AsyncLocalStorage<true>()
   for (const name of names) {
     const own = Object.getOwnPropertyDescriptor(store, name)
     const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
-    const measure = (result: unknown) => {
-      if (!STORE_WRITES.has(name))
+    const measure = (internal: boolean) => (result: unknown) => {
+      if (!internal && !STORE_WRITES.has(name))
         metrics.bytes += Buffer.byteLength(
           JSON.stringify(result, (_key, value) =>
             value instanceof Uint8Array ? value.byteLength : value,
@@ -1803,8 +1824,9 @@ export async function measureStoreReads(
             : undefined
       if (slug !== undefined && builds.has(slug))
         metrics.slugs[slug] = (metrics.slugs[slug] ?? 0) + 1
-      const result = original.apply(store, args)
-      return result instanceof Promise ? result.then(measure) : measure(result)
+      const internal = inside.getStore() === true
+      const result = inside.run(true, () => original.apply(store, args))
+      return result instanceof Promise ? result.then(measure(internal)) : measure(internal)(result)
     })
     restore.push(() =>
       own ? Object.defineProperty(store, name, own) : Reflect.deleteProperty(store, name),
