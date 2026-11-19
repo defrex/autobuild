@@ -117,8 +117,18 @@ test('debugger requests forward protocol events and still resolve replies', asyn
 })
 
 test('client load errors name each exception and harness failure on one line', async () => {
-  const { clientLoadErrors } = await import('./full-document')
-  const harness = { mounted: true, settled: true, rendered: true, unserved: [], requests: [] }
+  const { clientLoadErrors, settleTimeoutMessage } = await import('./full-document')
+  const harness = {
+    mounted: true,
+    settled: true,
+    rendered: true,
+    unserved: [],
+    requests: [],
+    waiting: '',
+    ticks: 4,
+    frames: 2,
+    distinct: 0,
+  }
   expect(
     clientLoadErrors({
       exceptions: [
@@ -147,4 +157,24 @@ test('client load errors name each exception and harness failure on one line', a
   expect(clientLoadErrors({ exceptions: [], timeout: 'harness did not settle: null' })).toEqual([
     'harness did not settle: null',
   ])
+  expect(
+    settleTimeoutMessage(
+      {
+        ...harness,
+        settled: false,
+        rendered: false,
+        requests: ['GET /a', 'GET /a'],
+        distinct: 1,
+        waiting: 'animation frame',
+        ticks: 3,
+        frames: 0,
+      },
+      20_000,
+    ),
+  ).toBe(
+    'harness did not settle within 20000 ms: still waiting for animation frame (ticks 3, frames 0, requests 2, distinct 1)',
+  )
+  expect(settleTimeoutMessage(null, 3_000)).toBe(
+    'harness did not settle within 3000 ms: the harness never started',
+  )
 })
