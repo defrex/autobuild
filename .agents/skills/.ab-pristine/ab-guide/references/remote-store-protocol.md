@@ -795,6 +795,21 @@ older service that omits `ticketWait` yields no automatic release: open waits
 then end only when an operator answers them, and the client never rebuilds the
 field from events.
 
+`optimization` is present on every node digest and absent on a leaf's. It is
+`false` for a plain node. For an optimization node it is a bounded summary of
+the node's own optimization facts: `stopped?` and `measured?` (each `true` when
+set), `inFlight`, `concurrency`, `attemptRoom?` (absent without an attempts
+budget), `emptyProposals`, `openedAt`, `maxHours?`, `proposal?: {request,
+deposited?: {ids, at}}`, and `wakeSeq?` and `deferredSeq?`, the sequences of
+the latest fact that can clear a proposer deferral and of the latest
+`optimization.proposal-deferred`. A dispatcher selects nodes to request
+proposals for, file proposals from and stop as exhausted from this member
+alone. The member is additive and keeps the protocol version. A node digest
+without it is an older service's answer: the client fails the proposer stage
+and the attempt-creation hold closed with a typed capability error, proposing
+nothing and withholding every ready ticket that carries a creation key for
+that pass, and it never falls back to reading each node's facts.
+
 The digest is derived from the event log on every call — the server persists
 nothing and there is no refresh step. Protocol version `3` reshaped the
 digest's `observations` from bare sequence numbers to `{seq, ts}` pairs and
