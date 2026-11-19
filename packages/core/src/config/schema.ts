@@ -800,7 +800,7 @@ documentFields(policySchema, {
   maxSetupAttempts:
     'Bound consecutive workspace setup failures before a setup-targeted policy escalation.',
   maxInfrastructureAttempts:
-    'Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget.',
+    'Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget. Provisioning abandoned at a recorded dispatcher teardown never consumes it.',
   maxReconcileAttempts:
     'Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound.',
   maxReviewRounds:

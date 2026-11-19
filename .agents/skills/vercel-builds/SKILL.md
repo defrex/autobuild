@@ -247,6 +247,10 @@ next-generation provision. Do not delete it by hand. Manual deletion is only for
 that keeps recording `infrastructure.failed` or `infrastructure.cleanup-attempted` with
 `outcome: "unknown"` for the same environment.
 
+A `dispatch.failed` with `abandoned: "teardown"` is a normal pause, not a cleanup cycle: the next
+invocation finishes it, and the expected trail is a second `workspace.provision-started` for the
+same generation, then `workspace.provisioned`.
+
 If automatic cleanup keeps failing, use the exact environment identity from durable events when
 querying the Vercel team/project. Do not delete by a title prefix or guess. Confirm the original,
 replacement, and completed environment identities are absent and retain the matching
