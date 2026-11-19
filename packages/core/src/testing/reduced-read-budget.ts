@@ -1760,10 +1760,12 @@ function instrumentBuildRows(
 }
 
 /** A stale build whose open workspace is flagged `cleanup-required` and whose
- * preservation keeps failing re-enters the sweep's reap branch on every pass.
- * Each pass must read only the tail it appended itself, the same number of
- * reduced reads at 100 and 100,000 events, and nothing at all once the build
- * is healthy again. Fresh dispatchers retain no per-process cache. */
+ * preservation keeps failing re-enters a reap on every pass: the sweep's reap
+ * branch for a leaf, the verification tail's replacement for a node. Each pass
+ * records exactly one failure (the paths never both reap in one tick), must
+ * read only the tail it appended itself, the same number of reduced reads at
+ * 100 and 100,000 events, and nothing at all once the build is healthy again.
+ * Fresh dispatchers retain no per-process cache. */
 export async function flaggedWorkspaceSweepReadBudget(opts: {
   store: import('../store/memory').MemoryBuildStore
   slug: string

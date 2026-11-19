@@ -4820,6 +4820,33 @@ export class Dispatcher {
     return this.deps.retiredWorkspaces?.find((provider) => provider.name === open.provider) ?? null
   }
 
+  /** A workspace a provider flagged `cleanup-required` is fenced, cleaned up
+   * and released before its build's next generation is provisioned (leaf
+   * dispatch retry, node verification and node conflict tails alike).
+   * Returns the facts to continue from, or `undefined` when this tick must
+   * stop: a foreign continuation holds a live lease, or the reap failed,
+   * which is already durable against the build. */
+  private async replaceFlaggedWorkspace(
+    record: BuildRecord,
+    facts: CurrentBuildFacts,
+    launched: Set<string> | undefined,
+  ): Promise<CurrentBuildFacts | undefined> {
+    const flagged = openWorkspace(facts)
+    if (
+      flagged === null ||
+      !cleanupRequiredWorkspace(facts) ||
+      this.workspaceOwner(flagged)?.recovery === undefined
+    )
+      return facts
+    if (this.hasLiveExecutionLease(record)) return undefined
+    if (!(await this.reapStaleWorkspace(record.slug, facts, 'replacement'))) {
+      // Also keeps this tick's sweep from reaping the same build again.
+      launched?.add(record.slug)
+      return undefined
+    }
+    return (await readBuildFacts(this.store, record.slug)).value
+  }
+
   /** Fence and remove a stale remote environment. A replacement is created
    * only after exact-name cleanup is durably acknowledged. */
   private async reapStaleWorkspace(
@@ -5191,23 +5218,13 @@ export class Dispatcher {
         return this.completeDispatchBoundaries(record, seed, report, launched)
 
       stage = 'workspace'
-      const flagged = openWorkspace(events)
-      if (
-        flagged !== null &&
-        cleanupRequiredWorkspace(events) &&
-        this.workspaceOwner(flagged)?.recovery !== undefined
-      ) {
-        // A retry never launches into a flagged environment: release it, then
-        // provision the next generation below. A live lease means a foreign
-        // continuation still owns the build.
-        if (this.hasLiveExecutionLease(record)) return 'parked'
-        if (!(await this.reapStaleWorkspace(record.slug, events, 'replacement'))) {
-          // The failure is already durable against this build.
-          launched.add(record.slug)
-          return 'parked'
-        }
-        events = (await readBuildFacts(store, record.slug)).value
-      }
+      // A retry never launches into a flagged environment: release it, then
+      // provision the next generation below. A live lease means a foreign
+      // continuation still owns the build; a failed reap is already durable
+      // against it.
+      const replaced = await this.replaceFlaggedWorkspace(record, events, launched)
+      if (replaced === undefined) return 'parked'
+      events = replaced
       if (openWorkspace(events) === null) {
         if (this.deps.workspaces.recovery !== undefined) {
           // Recovery-capable provider: durable marker + tracked background
@@ -7248,11 +7265,17 @@ export class Dispatcher {
 
         if (!this.accountsAvailable()) return
         if (!(await this.nodeHasCapacity(record.slug))) return
-        if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
-          const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
+        // `launch()` refuses a flagged workspace and leaves the reap to its
+        // callers; this is the node's caller for conflict work.
+        const current = await this.replaceFlaggedWorkspace(record, facts, launched)
+        if (current === undefined) return
+        if (openWorkspace(current) === null && this.deps.workspaces.recovery) {
+          const kicked = await this.ensureProvisionContinuation(record, current, 'launch')
           if (kicked === 'kicked') report.provisioning += 1
+          // After a reap, this tick's sweep leaves the replacement alone.
+          if (kicked === 'kicked' && current !== facts) launched.add(record.slug)
         } else {
-          if (openWorkspace(facts) === null) {
+          if (openWorkspace(current) === null) {
             const handle = await this.provisionWorkspace(record.slug, {
               repo: checkout,
               baseBranch: state.baseBranch!,
@@ -7502,10 +7525,16 @@ export class Dispatcher {
     state = (await this.store.buildFacts(record.slug)).state
     if (!integrationCurrent(state)) return
     if (!this.accountsAvailable()) return
-    const facts = (await readBuildFacts(this.store, record.slug)).value
+    // `launch()` refuses a flagged workspace and leaves the reap to its
+    // callers; this is the node's caller for verification work.
+    const read = (await readBuildFacts(this.store, record.slug)).value
+    const facts = await this.replaceFlaggedWorkspace(record, read, launched)
+    if (facts === undefined) return
     if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
       const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
       if (kicked === 'kicked') report.provisioning++
+      // After a reap, this tick's sweep leaves the replacement alone.
+      if (kicked === 'kicked' && facts !== read) launched.add(record.slug)
       return
     }
     if (openWorkspace(facts) === null) {

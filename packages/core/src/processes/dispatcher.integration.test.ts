@@ -47,7 +47,13 @@ import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { LinearTicketSource } from '../ports/tickets/linear'
-import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
+import {
+  NoCommitsBetweenBranchesError,
+  TicketSourceRateLimitError,
+  WorkspaceCleanupRequired,
+} from '../ports/types'
+import { RepositoryAuthorityLapsed } from '../cli/repo-lease'
+import { recordInfrastructureFailure } from './infrastructure-failure-budget'
 import type { Forge, Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -18796,4 +18802,336 @@ describe('dispatcher — ticket waits', () => {
     expect(h.launches).toContain(WAITER)
     expect(h.tickets.claims).not.toContain('D')
   })
+})
+
+/** A recovery-capable provider for a node's verification workspace whose
+ * provisions follow a script: the incident's first call never settles until
+ * the test says so, the second finds the half-created `g0` and raises
+ * `cleanup-required`, and later calls provision `g${generation}`. */
+function scriptedNodeWorkspaceFixture(
+  opts: {
+    reap?: () => Promise<never>
+    preservation?: () => Promise<never>
+    provisioned?: number
+  } = {},
+) {
+  const calls: string[] = []
+  let provisions = opts.provisioned ?? 0
+  let settleFirst: ((error: unknown) => void) | undefined
+  const provider: WorkspaceProvider = {
+    name: 'flagged-fixture',
+    preservation: async () => {
+      calls.push('preserve')
+      if (opts.preservation) return opts.preservation()
+      return { outcome: 'absent' }
+    },
+    recovery: {
+      fence: async () => {
+        calls.push('fence')
+        return { outcome: 'confirmed' }
+      },
+      reap: async (handle) => {
+        calls.push(`reap:${handle.ref}`)
+        if (opts.reap) return opts.reap()
+        return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
+      },
+    },
+    provision: async (input) => {
+      provisions++
+      calls.push(`provision:${provisions}:g${input.generation ?? 0}`)
+      if (provisions === 1)
+        return new Promise<never>((_, reject) => {
+          settleFirst = reject
+        })
+      if (provisions === 2)
+        throw new WorkspaceCleanupRequired(
+          {
+            provider: 'flagged-fixture',
+            ref: 'g0',
+            path: '/vercel/sandbox/workspace',
+            branch: input.branch,
+            base: { source: 'existing', sha: BASE_SHA },
+          },
+          new Error('provisioned marker missing'),
+        )
+      return {
+        provider: 'flagged-fixture',
+        ref: `g${input.generation ?? 0}`,
+        path: '/vercel/sandbox/workspace',
+        branch: input.branch,
+        base: { source: 'existing', sha: BASE_SHA },
+      }
+    },
+    release: async () => {},
+  }
+  return { provider, calls, settleFirst: (error: unknown) => settleFirst?.(error) }
+}
+
+describe('a node flagged cleanup-required is replaced like a leaf (#995)', () => {
+  const toml = [
+    '[commands]',
+    'test = "true"',
+    '[verify]',
+    'steps = ["unit"]',
+    '[verify.unit]',
+    'kind = "check"',
+    'command = "test"',
+  ].join('\n')
+
+  /** An opened node with a current verification cycle on `fixture`. */
+  async function openNodeWithVerification(fixture: { provider: WorkspaceProvider }, extra = '') {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const tickets = new FakeTicketSource([readyTicket('N', { kind: 'node' })])
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    forge.remoteBranches.set('main', BASE_SHA)
+    const workspaceOf: Record<string, string | undefined> = {}
+    const launchedAt: string[] = []
+    const build = () =>
+      harness({
+        store,
+        clock,
+        toml: `${toml}\n${extra}`,
+        wrapTickets: () => tickets,
+        dispatchForge: forge,
+        forge,
+        workspaceProvider: fixture.provider,
+        opts: { leaseTtlMs: 120_000 },
+        onLaunch: async (slug) => {
+          const facts = (await readBuildFacts(store, slug)).value
+          workspaceOf[slug] = facts.workspace?.ref
+          launchedAt.push(`${slug}@${facts.workspace?.ref}`)
+        },
+      })
+    const opener = build()
+    await opener.dispatcher.tick()
+    await opener.dispatcher.tick({ acceptNewWork: false })
+    const slug = (await store.listBuilds())[0]!.slug
+    const { integrationConfig } = await import('../kernel/integration-state')
+    const before = (await readBuildFacts(store, slug)).value.state
+    expect(before.kind).toBe('node')
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['merged-child'] },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.prepared',
+      payload: {
+        id: 'cycle',
+        head: before.nodeComparison!.headSha,
+        parent: before.nodeComparison!.parentSha,
+        config: integrationConfig(parseConfig(withReadyState(`${toml}\n${extra}`))),
+      },
+    })
+    return { clock, store, slug, build, launchedAt }
+  }
+
+  const types = async (store: BuildStore, slug: string) =>
+    (await store.getEvents(slug)).map((event) => event.type)
+
+  test('teardown abandonment, then cleanup-required, then a fresh generation runs verification', async () => {
+    const fixture = scriptedNodeWorkspaceFixture()
+    const { clock, store, slug, build, launchedAt } = await openNodeWithVerification(fixture)
+    const a = build()
+    for (let i = 0; i < 5 && !fixture.calls.length; i++) {
+      clock.advance(30_000)
+      await a.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(fixture.calls).toEqual(['provision:1:g0'])
+    await a.dispatcher.stopProvisioning()
+    const abandoned = (await store.getEvents(slug)).filter((e) => e.type === 'dispatch.failed')
+    expect(abandoned.at(-1)?.payload).toMatchObject({
+      error: expect.stringContaining('abandoned at dispatcher teardown'),
+    })
+    // The dead process's continuation exits without writing any facts.
+    fixture.settleFirst(new RepositoryAuthorityLapsed())
+    await a.dispatcher.drainProvisioning()
+
+    const b = build()
+    for (let i = 0; i < 20 && !launchedAt.length; i++) {
+      clock.advance(30_000)
+      await b.dispatcher.tick({ acceptNewWork: false })
+      await b.dispatcher.drainProvisioning()
+    }
+    const events = await store.getEvents(slug)
+    const flaggedAt = events.findIndex((e) => e.type === 'workspace.cleanup-required')
+    expect(flaggedAt).toBeGreaterThan(0)
+    expect(
+      events.slice(flaggedAt + 1).find((e) => e.type === 'infrastructure.failed')?.payload,
+    ).toMatchObject({ operation: 'provision', cleanupPending: true })
+    const after = events.slice(flaggedAt).map((e) => e.type)
+    const order = [
+      'workspace.fenced',
+      'infrastructure.cleanup-attempted',
+      'workspace.released',
+      'workspace.provision-started',
+      'workspace.provisioned',
+    ].map((type) => after.indexOf(type as (typeof after)[number]))
+    expect(order.every((index) => index >= 0)).toBe(true)
+    expect([...order].sort((x, y) => x - y)).toEqual(order)
+    expect(
+      events.find((e, i) => i > flaggedAt && e.type === 'workspace.released')?.payload,
+    ).toMatchObject({
+      reason: 'replacement',
+    })
+    expect(
+      events.filter((e, i) => i > flaggedAt && e.type === 'workspace.provision-started').at(-1)
+        ?.payload,
+    ).toMatchObject({ generation: 1 })
+    expect(events.filter((e) => e.type === 'workspace.provisioned').at(-1)?.payload).toMatchObject({
+      ref: 'g1',
+    })
+    expect(fixture.calls.indexOf('reap:g0')).toBeLessThan(fixture.calls.indexOf('provision:3:g1'))
+    expect(launchedAt).toEqual([`${slug}@g1`])
+  })
+
+  /** Append the tail the incident left on the node: an adopted provision
+   * that found the half-created `g0`, then the retryable failure. */
+  async function seedIncidentTail(store: BuildStore, slug: string, maxAttempts = 5) {
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provision-started',
+      payload: { provider: 'flagged-fixture', branch: `ab/${slug}`, generation: 0 },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.cleanup-required',
+      payload: {
+        provider: 'flagged-fixture',
+        ref: 'g0',
+        path: '/vercel/sandbox/workspace',
+        remote: true,
+        branch: `ab/${slug}`,
+        base: { source: 'existing', sha: BASE_SHA },
+      },
+    })
+    await recordInfrastructureFailure(
+      { store, ids: sequentialIds() },
+      {
+        slug,
+        events: (await readBuildFacts(store, slug)).value,
+        maxAttempts,
+        provider: 'flagged-fixture',
+        workspaceRef: 'g0',
+        instance: 'dispatcher-recovery',
+        operation: 'provision',
+        error: new Error('workspace g0 requires dispatcher-authorized cleanup'),
+        cleanupPending: true,
+      },
+    )
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'dispatch.failed',
+      payload: { stage: 'workspace', attempt: 2, error: 'workspace g0 requires cleanup' },
+    })
+  }
+
+  test('a node already stuck with cleanupPending recovers on a fresh dispatcher', async () => {
+    const fixture = scriptedNodeWorkspaceFixture({ provisioned: 2 })
+    const { clock, store, slug, build, launchedAt } = await openNodeWithVerification(fixture)
+    await seedIncidentTail(store, slug)
+    expect((await readBuildFacts(store, slug)).value.workspace?.ref).toBe('g0')
+    const dispatcher = build().dispatcher
+    for (let i = 0; i < 20 && !launchedAt.length; i++) {
+      clock.advance(30_000)
+      await dispatcher.tick({ acceptNewWork: false })
+      await dispatcher.drainProvisioning()
+    }
+    expect(fixture.calls).toEqual(['fence', 'preserve', 'reap:g0', 'provision:3:g1'])
+    const tail = await types(store, slug)
+    const flaggedAt = tail.indexOf('workspace.cleanup-required')
+    for (const type of [
+      'workspace.fenced',
+      'infrastructure.cleanup-attempted',
+      'workspace.released',
+      'workspace.provisioned',
+    ] as const)
+      expect(tail.indexOf(type, flaggedAt)).toBeGreaterThan(flaggedAt)
+    expect(launchedAt).toEqual([`${slug}@g1`])
+  })
+
+  test('a node whose stale-workspace cleanup keeps failing ends in operator attention', async () => {
+    const fixture = scriptedNodeWorkspaceFixture({
+      provisioned: 2,
+      reap: async () => {
+        throw new Error('sandbox delete failed: 503')
+      },
+    })
+    const { clock, store, slug, build, launchedAt } = await openNodeWithVerification(
+      fixture,
+      '[policy]\nmaxInfrastructureAttempts = 3',
+    )
+    await seedIncidentTail(store, slug, 3)
+    const dispatcher = build().dispatcher
+    const escalated = async () =>
+      (await store.getEvents(slug)).some((event) => event.type === 'escalation.raised')
+    for (let i = 0; i < 20 && !(await escalated()); i++) {
+      clock.advance(30_000)
+      await dispatcher.tick({ acceptNewWork: false })
+      await dispatcher.drainProvisioning()
+    }
+    const events = await store.getEvents(slug)
+    const raised = events.filter((event) => event.type === 'escalation.raised')
+    expect(raised).toHaveLength(1)
+    expect(raised[0]!.payload).toMatchObject({
+      policyCause: 'infrastructure-failure-limit',
+      question: expect.stringContaining('maxInfrastructureAttempts (3) exhausted'),
+    })
+    expect(
+      events
+        .filter((event) => event.type === 'infrastructure.failed')
+        .map((event) => (event.payload as { attempt: number }).attempt),
+    ).toEqual([1, 2, 3])
+    expect(fixture.calls.filter((call) => call.startsWith('provision'))).toEqual([])
+    expect(launchedAt).toEqual([])
+    expect((await readBuildFacts(store, slug)).value.state.openEscalations).toHaveLength(1)
+    // The open escalation stops the node paths from retrying a replacement;
+    // the generic sweep's `blocked` reap of an escalated build is its own.
+    const seen = events.length
+    for (let i = 0; i < 5; i++) {
+      clock.advance(30_000)
+      await dispatcher.tick({ acceptNewWork: false })
+      await dispatcher.drainProvisioning()
+    }
+    const later = (await store.getEvents(slug)).slice(seen)
+    expect(
+      later.filter(
+        (event) =>
+          event.type === 'workspace.commits-lost' &&
+          String((event.payload as { reason?: string }).reason).startsWith('replacement'),
+      ),
+    ).toEqual([])
+    expect(later.some((event) => event.type === 'workspace.provision-started')).toBe(false)
+    expect(launchedAt).toEqual([])
+  })
+
+  test('node flagged workspace replacement read budget stays bounded at 100 and 100,000 events', async () => {
+    const fixture = scriptedNodeWorkspaceFixture({
+      provisioned: 2,
+      preservation: async () => {
+        throw new Error('chdir /vercel/sandbox/workspace: no such file or directory')
+      },
+    })
+    const { clock, store, slug, build, launchedAt } = await openNodeWithVerification(
+      fixture,
+      '[policy]\nmaxInfrastructureAttempts = 1000',
+    )
+    await seedIncidentTail(store, slug, 1000)
+    await flaggedWorkspaceSweepReadBudget({
+      store: store as MemoryBuildStore,
+      slug,
+      dispatcher: () => build().dispatcher,
+      advance: () => clock.advance(10 * 60_000),
+      effects: () => ({
+        reaps: fixture.calls.filter((call) => call.startsWith('reap')).length,
+        launches: launchedAt.length,
+      }),
+    })
+    // Preservation fails before any reap; nothing is provisioned or launched.
+    expect(fixture.calls.filter((call) => call !== 'fence' && call !== 'preserve')).toEqual([])
+    expect(launchedAt).toEqual([])
+  }, 60_000)
 })
