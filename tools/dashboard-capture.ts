@@ -12,6 +12,7 @@ import { OPTIMIZATION_NODE_SLUG, optimizationNodeCapture } from './optimization-
 import { ticketWaitCapture, ticketWaitSlug } from './ticket-wait-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
+import { judgeSessionCapture } from './judge-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
 import { readinessChecks } from '../packages/core/src/ports/forge/readiness'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
@@ -74,6 +75,8 @@ export interface FrameSpec {
    * opens that row's detail view. */
   ticketWait?: 'list' | 'detail'
   nativeSessions?: boolean
+  /** Overlay a judge panel's sessions on the detail build's session rows. */
+  judgeSessions?: boolean
   verifyStages?: boolean
   accountCredentials?: 'missing' | 'recovered'
   forgeReadiness?: boolean
@@ -435,6 +438,24 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     nativeSessions: true,
     detail: { slug: 'plan-blocked-dashboard', scroll: Number.MAX_SAFE_INTEGER },
     requires: ['suspended', 'resumed'],
+  },
+  {
+    id: 'judge-sessions',
+    scenario: 'mixed',
+    columns: 120,
+    rows: 35,
+    judgeSessions: true,
+    detail: { slug: 'plan-blocked-dashboard', scroll: Number.MAX_SAFE_INTEGER },
+    requires: ['judge:panel-1:1', 'judge:panel-1:3', 'runtime claude', 'stream'],
+  },
+  {
+    id: 'judge-sessions-narrow',
+    scenario: 'mixed',
+    columns: 70,
+    rows: 35,
+    judgeSessions: true,
+    detail: { slug: 'plan-blocked-dashboard', scroll: Number.MAX_SAFE_INTEGER },
+    requires: ['judge:panel-1:1', 'judge:panel-1:3', 'runtime claude', 'stream'],
   },
   {
     id: 'session-live',
@@ -2018,6 +2039,9 @@ async function capturePaint(
               : undefined,
             ...(spec.nativeSessions && build.slug === spec.detail?.slug
               ? { sessions: nativeSessionCapture() }
+              : {}),
+            ...(spec.judgeSessions && build.slug === spec.detail?.slug
+              ? { sessions: judgeSessionCapture() }
               : {}),
           }
         }),

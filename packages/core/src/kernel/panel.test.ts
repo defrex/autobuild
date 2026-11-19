@@ -134,6 +134,60 @@ describe('panel run state', () => {
     expect(countedFailures(run, 2)).toEqual(['expired'])
   })
 
+  test('a substituted failure is not counted; an exhausted chain counts once', () => {
+    const run = fold(
+      new PanelLogBuilder()
+        .started(panelStarted({ judges: 2 }))
+        .judgeStarted(1, 's_1', 'candidate-first', 'panel-1', { stream: 'st_1' })
+        .ended(1, 's_1', 'failed')
+        .substituted(1, 's_2', 'candidate-first', { session: 's_1', index: 0, runner: 'scripted' })
+        .judge(2, 's_3', 'baseline-first', 'A')
+        .ended(1, 's_2', 'failed'),
+    )
+    expect(run.judges['1']?.starts).toEqual([
+      { session: 's_1', order: 'candidate-first', runner: 'scripted', stream: 'st_1' },
+      { session: 's_2', order: 'candidate-first', runner: 'backup', substitutes: 's_1' },
+    ])
+    expect(countedFailures(run, 1)).toEqual(['failed'])
+    expect(countedFailures(run, 2)).toEqual([])
+    expect(pendingJudges(run)).toEqual([1])
+  })
+
+  test('two exhausted launches reach the attempt limit', () => {
+    const run = fold(
+      new PanelLogBuilder()
+        .started(panelStarted({ judges: 1 }))
+        .judgeStarted(1, 's_1', 'candidate-first')
+        .ended(1, 's_1', 'failed')
+        .substituted(1, 's_2', 'candidate-first', { session: 's_1', index: 0, runner: 'scripted' })
+        .ended(1, 's_2', 'failed')
+        .judgeStarted(1, 's_3', 'baseline-first')
+        .ended(1, 's_3', 'failed')
+        .substituted(1, 's_4', 'baseline-first', { session: 's_3', index: 0, runner: 'scripted' })
+        .ended(1, 's_4', 'no-terminal'),
+    )
+    expect(countedFailures(run, 1)).toEqual(['failed', 'no-terminal'])
+    expect(countedFailures(run, 1).length).toBe(PANEL_JUDGE_ATTEMPTS)
+  })
+
+  test('a dangling session is reclaimed with its stream', () => {
+    const run = fold(
+      new PanelLogBuilder()
+        .started(panelStarted({ judges: 1 }))
+        .judgeStarted(1, 's_1', 'candidate-first')
+        .ended(1, 's_1', 'failed')
+        .substituted(
+          1,
+          's_2',
+          'candidate-first',
+          { session: 's_1', index: 0, runner: 'scripted' },
+          { runner: 'backup', stream: 'st_2' },
+        )
+        .judgeStarted(1, 's_x', 'baseline-first', 'panel-0', { stream: 'st_x' }),
+    )
+    expect(awaitingReclaim(run)).toEqual([{ judge: 1, session: 's_2', stream: 'st_2' }])
+  })
+
   test('a stale panel id is ignored and a new run replaces the latest', () => {
     const log = new PanelLogBuilder()
       .started()
@@ -142,7 +196,9 @@ describe('panel run state', () => {
       .preferred(1, 's_x', 'A', 'stale', 'panel-0')
     const run = fold(log)
     expect(run.started.panel).toBe('panel-1')
-    expect(run.judges['1']?.starts).toEqual([{ session: 's_1', order: 'candidate-first' }])
+    expect(run.judges['1']?.starts).toEqual([
+      { session: 's_1', order: 'candidate-first', runner: 'scripted' },
+    ])
     expect(run.judges['1']?.preferred).toBeUndefined()
 
     log.started(panelStarted({ panel: 'panel-2', judges: 1 }))

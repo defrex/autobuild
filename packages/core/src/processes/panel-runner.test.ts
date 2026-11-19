@@ -144,7 +144,8 @@ function hooks(
     binDir: string
     hide: readonly string[]
   }>
-  reclaimed: Array<{ judge: number; session: string; root: string }>
+  reclaimed: Array<{ judge: number; session: string; root: string; stream?: string }>
+  preflights: Array<(executable: string) => Promise<string | undefined>>
 } {
   let next = 100
   const launched: Array<{
@@ -154,10 +155,12 @@ function hooks(
     binDir: string
     hide: readonly string[]
   }> = []
-  const reclaimed: Array<{ judge: number; session: string; root: string }> = []
+  const reclaimed: Array<{ judge: number; session: string; root: string; stream?: string }> = []
+  const preflights: Array<(executable: string) => Promise<string | undefined>> = []
   return {
     launched,
     reclaimed,
+    preflights,
     async read(): Promise<PanelRunState> {
       let run: PanelRunState | undefined
       for (const event of log.events) run = advancePanel(run, event)
@@ -166,11 +169,12 @@ function hooks(
     async complete(judged: EventPayload<'panel.judged'>) {
       log.judged(judged.judge, judged.session, judged.order, judged.preference, judged.reason)
     },
-    async reclaim(judge, session, root) {
-      reclaimed.push({ judge, session, root })
+    async reclaim(judge, session, root, stream) {
+      reclaimed.push({ judge, session, root, ...(stream !== undefined ? { stream } : {}) })
       log.ended(judge, session, 'reclaimed')
     },
-    async launch(judge, order, root, judgeLaunch) {
+    async launch(judge, order, root, judgeLaunch, preflight) {
+      preflights.push(preflight)
       launched.push({ judge, order, root, binDir: judgeLaunch.binDir, hide: judgeLaunch.hide })
       next += 1
       const session = `s_${next}`
@@ -526,6 +530,34 @@ describe('protected locations', () => {
     expect(h.launched).toEqual([])
   })
 
+  test("each launch gets a preflight that checks an alternate against the run's protections", async () => {
+    const calls: Call[] = []
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    await runPanelJudges(
+      deps(
+        scriptedExec({
+          calls,
+          executables: { codex: ['/usr/local/bin/codex', '/ws/node_modules/codex/cli.js'] },
+        }),
+        { PATH: '/ws/node_modules/.bin:/usr/bin' },
+      ),
+      { ...INPUT, judges: 1 },
+      h,
+    )
+    const preflight = h.preflights[0]!
+    expect(await preflight('backup')).toBeUndefined()
+    const refused = await preflight('codex')
+    expect(refused).toContain(
+      "the judge's codex executable resolves only inside a protected location",
+    )
+    expect(refused).not.toContain('/ws')
+    // It searches the same filtered PATH as the primary's check.
+    const probes = calls.filter((call) => call.cmd[2] === EXECUTABLE_PROBE)
+    expect(probes.at(-1)!.cmd[4]).toBe(probes[0]!.cmd[4])
+    expect(probes.at(-1)!.cmd[4]).not.toContain('/ws')
+  })
+
   test('an inherited path reaching a protected location through a symlink is hidden as well', async () => {
     const ambient = {
       PATH: '/usr/bin:/alias/node_modules/.bin',
@@ -635,7 +667,7 @@ describe('the panel loop', () => {
       .judge(1, 's_1', 'candidate-first', 'A')
       .judgeStarted(2, 's_2', 'baseline-first')
       .preferred(2, 's_2', 'A', 'saved')
-      .judgeStarted(3, 's_3', 'candidate-first')
+      .judgeStarted(3, 's_3', 'candidate-first', 'panel-1', { stream: 'st_3' })
     const h = hooks(log, async () => 'tie')
     const result = await runPanelJudges(deps(scriptedExec({ calls })), { ...INPUT, judges: 3 }, h)
     expect(h.launched.map((launch) => launch.judge)).toEqual([3])
@@ -649,9 +681,9 @@ describe('the panel loop', () => {
     expect((result as { winRate: number }).winRate).toBe(0.5)
     // Reclaim gets each crashed session's deterministic root, before the saved
     // preference is completed, so a preference imported then completes too.
-    expect(h.reclaimed.map(({ judge, session }) => [judge, session])).toEqual([
-      [2, 's_2'],
-      [3, 's_3'],
+    expect(h.reclaimed.map(({ judge, session, stream }) => [judge, session, stream])).toEqual([
+      [2, 's_2', undefined],
+      [3, 's_3', 'st_3'],
     ])
     expect(h.reclaimed[0]!.root).toMatch(/^\/tmp\/t\/autobuild-judge-[0-9a-f]{16}$/)
     const reclaimedAt = log.events.findIndex(
