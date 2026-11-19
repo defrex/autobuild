@@ -148,19 +148,24 @@ objective, revision 1, a `harnessPin` equal to the node's opening commit, and
 the spec revision it was parsed from. It is recorded before `node.opened`, so an
 opened optimization node always has an accepted objective.
 
-A command node then measures its opening head against itself, with the
-objective's pairing and sample count (see [Measurement](#measurement)), and
+Every optimization node then measures its opening head against itself and
 records `optimization.baseline-measured` with the starting value and the noise
-spread. The dispatcher admits that run as it admits a node verification: the
+spread. A command node uses the objective's pairing and sample count (see
+[Measurement](#measurement)). A panel node runs one
+[judge panel](#judge-panels) of its harness pin against itself: its starting
+value is 0.5, and its spread is the distance of that self-comparison win rate
+from 0.5. The dispatcher admits that run as it admits a node verification: the
 node takes a runner slot, gets a workspace for the run, and releases it once
 the starting value is recorded.
 
 **Noise check.** When ε, in metric units, is smaller than the measured spread,
-the gate would accept noise. The node records `optimization.noise-exceeded`
-naming both numbers, which `ab watch` reports as attention. The node still
-opens: raise `target.epsilon` with `ab objective`, or raise `metric.samples`
-with a spec revision. A relative ε over a starting value of 0 is 0, so any
-spread exceeds it.
+the gate would accept noise. A panel's ε is a win-rate margin, compared with
+the self-comparison's distance from 0.5. The node records
+`optimization.noise-exceeded` naming both numbers, which `ab watch` reports as
+attention. The node still opens: raise `target.epsilon` with `ab objective`,
+or raise `metric.samples` (a command) or `metric.judges` (a panel) with a spec
+revision. A relative ε over a starting value of 0 is 0, so any spread exceeds
+it.
 
 ## Revisions
 
@@ -204,8 +209,8 @@ records `optimization.objective-accepted` again with the next revision. When the
 metric changed, or the purpose of a panel (judges read it), it pins the harness
 again at the current node head and starts a new ruler: earlier measurements stay
 in history but are never compared with new ones, and the node measures the new
-pin against itself for a new starting value and noise check. Otherwise the pin
-is unchanged.
+pin against itself for a new starting value and noise check; a panel node runs
+a new self-comparison panel. Otherwise the pin is unchanged.
 
 A quick revision is never written back to the ticket. `ab ticket show` prints
 the effective objective of an open optimization node and marks each field that
@@ -294,13 +299,26 @@ the answer, because sampling the same request again cannot succeed.
 
 A panel objective is measured by agent judges instead of a command. A panel
 run compares two heads, a candidate and a baseline, under one harness pin, and
-returns the candidate's win rate. Attempt acceptance runs one to measure each
-attempt on a panel objective (see [Measurement](#measurement) and [Landing and
-settlement](#landing-and-settlement)), and records the decision in
-`attempt.measured.winRate`. A panel node records no baseline noise check and
-no `optimization.progress-measured` yet. Those callers will record their
-decisions in `optimization.baseline-measured` and
-`optimization.progress-measured`.
+returns the candidate's win rate. A panel node runs one for its starting
+measurement (its pin against itself; see [Opening](#opening)) and one for its
+progress after each accepted attempt. Attempt acceptance runs a panel against the current node head and records
+its decision in `attempt.measured.winRate` (see [Measurement](#measurement)
+and [Landing and settlement](#landing-and-settlement)).
+
+**Progress.** After each accepted attempt the node runs one panel: the head the
+attempt landed as (the candidate) against the starting head (the baseline). It
+records the win rate as `optimization.progress-measured`, which becomes the
+node's current value; a panel threshold is that win rate. Every accepted head
+gets its own panel, in landing order. While a progress panel is owed, the
+node's next child waits to land (landing verdict `wait-progress`), so the node
+head never moves past an unmeasured head. Progress is measured while a node
+drains after a stop, too.
+
+**Node panel failures.** A failed starting or progress panel records no value.
+The node escalates with target `measurement` and policy cause
+`measurement-failed`, naming the judge and its last outcome. A restart before
+the answer resumes the same run. Answering it runs a new panel with fresh
+judges.
 
 **The run.** `panel.started` records the run's inputs: the candidate, the
 baseline, the harness pin, the purpose, the rubric path, the harness and the
@@ -383,7 +401,7 @@ Every judge root is removed when the run ends.
 | `attempt.measured` | attempt | request, candidate, baseline, harnessPin, revision, samples, medians or win rate, delta, decision, spread, report |
 | `optimization.progress-measured` | node | revision, head, starting head, win rate, judges |
 | `implement.declined` | attempt | round, reason, artifact? (agent) |
-| `attempt.settled` | node | attempt (proposal, ticket, build, branch?), outcome, measurement (revision, baseline, candidate, delta), policy?, mergedSha?, note |
+| `attempt.settled` | node | attempt (proposal, ticket, build, branch?), outcome, measurement (revision, baseline, candidate, delta), policy?, mergedSha?, note, head (accepted only) |
 | `attempt.merged-unmeasured` | node | proposal, ticket, build, merged head (sha?), reason, measuredCandidate? |
 | `optimization.stopped` | node | cause, mode |
 | `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
@@ -403,7 +421,9 @@ and `no-improvement` carry a `branch` to clean up. A `reason` is `absent`,
 `stale-head`, `unrelated` or `unresolvable`; only `unresolvable` lacks the
 merged head. `cause` is
 `threshold`, `plateau`, `budget`, `exhausted` or `operator`. `report`,
-`spread` and a request's `metric` are optional: older facts lack them.
+`spread`, a request's `metric` and a settlement's `head` are optional: older
+facts lack them. `head` is the node head an `accepted` attempt landed as, which
+a panel node's progress panel measures.
 `attempt.sampled` records samples, never a decision; `attempt.measured` is the
 decision.
 The panel facts live on the log of the build that runs the panel. `order` is
@@ -421,11 +441,12 @@ revision, starting at 1; measurement facts carry the revision they ran under.
 Progress is derived from the node's log, never recorded:
 
 - **Starting value and noise spread** from the baseline measurement under the
-  current ruler. A panel's starting value is 0.5.
+  current ruler. A panel's starting value is 0.5, and its spread comes from
+  the self-comparison panel.
 - **Current value**: for a command, the candidate value of the latest accepted
-  attempt, else the starting value; for a panel, the head's latest win rate
-  against the starting head, else 0.5. **Best value** in the objective's
-  direction.
+  attempt, else the starting value; for a panel, the latest
+  `optimization.progress-measured` win rate against the starting head, else
+  0.5. **Best value** in the objective's direction.
 - **Attempts**: filed, accepted, rejected (no-improvement, declined, stopped or
   aborted), merged unmeasured (released by an operator) and running. Two kinds
   of attempt still occupy a concurrency slot: settled attempts whose ticket has
@@ -590,6 +611,9 @@ on that measured node head.
 - **Turn.** An attempt overtaken by sibling landings three consecutive times
   gets the next turn. Later candidates neither request measurements nor land
   until it lands, closes, or escalates.
+- **Progress first.** While a panel node owes a progress panel for an accepted
+  head, a child that would otherwise land waits (`wait-progress`). Its
+  measurement may still run; it lands once the progress is recorded.
 
 `ab watch` and `ab build status <child>` print the recorded measurement: a
 command's medians or a panel's win rate, the delta and the decision, such as
@@ -601,7 +625,7 @@ candidate:
 
 | How the attempt ends | Outcome | Ticket role |
 |---|---|---|
-| Merged into the node, with a measurement of the merged head | `accepted` | done |
+| Merged into the node, with a measurement of the merged head; records the merged head | `accepted` | done |
 | Landing measurement shows no improvement | `no-improvement` | rejected |
 | Proposer declines it | `declined` | rejected |
 | Node stops | `stopped` | rejected |
@@ -660,7 +684,7 @@ any point lands real, verified progress.
 
 | Cause | When |
 |---|---|
-| `threshold` | The node head's current value has reached `target.threshold` in the objective's direction. |
+| `threshold` | The node head's current value has reached `target.threshold` in the objective's direction; for a panel, the head's recorded win rate against the starting head. |
 | `plateau` | `stop.plateau.attempts` consecutive `no-improvement` or `declined` settlements. |
 | `budget` | Attempts filed reached `maxAttempts`, or hours since the first acceptance reached `maxHours`. |
 | `exhausted` | The proposer has nothing left to try. |
@@ -732,7 +756,9 @@ meant to change.
 command several times on the same tree first. If the median moves by more than
 your ε between identical runs, raise ε or `samples`. The node checks this when
 it opens: its starting measurement raises `optimization.noise-exceeded` when ε
-is below the measured spread. A relative ε suits
+is below the measured spread. A panel node judges its opening head against
+itself the same way; raise ε or `judges` if that panel strays from 0.5 by more
+than ε. A relative ε suits
 metrics whose scale may change; an absolute ε suits metrics with a natural
 unit. A panel's ε is a win-rate margin above 0.5, such as 0.1.
 

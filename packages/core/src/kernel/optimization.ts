@@ -98,6 +98,12 @@ export interface OptimizationState {
   current?: number
   /** The best value in the objective's direction under the current ruler. */
   best?: number
+  /** A panel node's landed heads (`attempt.settled.head` of `accepted`
+   * settlements under the current ruler) that have no `progress-measured`
+   * yet, oldest first; absent when empty. Bounded: the landing gate holds the
+   * next attempt while it is non-empty, so it holds at most one head under
+   * kernel control. */
+  progressQueue?: string[]
   attempts: {
     /** Tickets proposed, which the attempts budget counts. */
     filed: number
@@ -154,6 +160,7 @@ function startRuler(state: OptimizationState, revision: number) {
   delete state.starting
   delete state.current
   delete state.best
+  delete state.progressQueue
   if (state.objective.metric.kind === 'panel') {
     state.current = 0.5
     state.best = 0.5
@@ -216,11 +223,16 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         // Advisory attention only: the starting value arrives with the
         // `baseline-measured` fact written after it.
         break
-      case 'optimization.progress-measured':
+      case 'optimization.progress-measured': {
         if (event.payload.revision < state.rulerRevision) break
+        if (event.payload.start !== state.starting?.head) break
         state.current = event.payload.winRate
         state.best = better(state.objective, state.best, event.payload.winRate)
+        const queue = state.progressQueue?.filter((head) => head !== event.payload.head) ?? []
+        if (queue.length > 0) state.progressQueue = queue
+        else delete state.progressQueue
         break
+      }
       case 'optimization.attempts-proposed':
         state.attempts.filed += event.payload.proposals.length
         state.emptyProposals = event.payload.proposals.length === 0 ? state.emptyProposals + 1 : 0
@@ -262,6 +274,13 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
           ) {
             state.current = measurement.candidate
             state.best = better(state.objective, state.best, measurement.candidate)
+          }
+          // A panel's settlement win rate is against the previous head, not
+          // the start: its progress comes from a panel of the landed head.
+          const head = event.payload.head
+          if (state.objective.metric.kind === 'panel' && head !== undefined) {
+            state.progressQueue ??= []
+            if (!state.progressQueue.includes(head)) state.progressQueue.push(head)
           }
           break
         }
@@ -324,7 +343,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 4,
+  version: 5,
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
