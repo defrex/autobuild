@@ -1233,7 +1233,8 @@ export class BuildRunner {
       attaching.kind === 'node' &&
       !attaching.nodeRestack?.conflict &&
       !proposeRunDue(attaching.optimization) &&
-      !integrationCurrent(attaching)
+      !integrationCurrent(attaching) &&
+      !nodeMeasurementDue(attaching)
     )
       throw new Error('integration runners require a reserved node conflict')
     const config = await this.captureConfig()
