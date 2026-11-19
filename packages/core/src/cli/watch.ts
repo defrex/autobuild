@@ -517,6 +517,14 @@ function singleLine(value: string): string {
 
 const SUMMARY_MAX = 200
 
+function panelNode(state: BuildState | null): boolean {
+  return state?.optimization?.objective.metric.kind === 'panel'
+}
+
+function percent(rate: number): string {
+  return `${+(rate * 100).toFixed(1)}%`
+}
+
 /**
  * A payload-derived one-liner per attention type; unknown types (custom
  * `--event` globs) get a compact single-line payload.
@@ -536,11 +544,18 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
         p.epsilon.relative !== undefined
           ? `relative ${p.epsilon.relative} of median ${p.median}`
           : 'absolute'
-      return `Noise exceeds ε on ${event.build}: starting spread ${p.spread} > ε ${p.effectiveEpsilon} (${epsilon}); the node continues — raise target.epsilon or metric.samples`
+      const remedy = panelNode(state) ? 'metric.judges' : 'metric.samples'
+      return `Noise exceeds ε on ${event.build}: starting spread ${p.spread} > ε ${p.effectiveEpsilon} (${epsilon}); the node continues — raise target.epsilon or ${remedy}`
     }
     case 'optimization.baseline-measured': {
       const p = event.payload
+      if (panelNode(state))
+        return `starting win rate 50%; self-comparison win rate ${percent(p.median)}, noise spread ${p.spread} (${p.samples} judges, harness ${p.harnessPin.slice(0, 7)})`
       return `starting value ${p.median}, noise spread ${p.spread} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)})`
+    }
+    case 'optimization.progress-measured': {
+      const p = event.payload
+      return `win rate ${percent(p.winRate)} against starting head ${p.start.slice(0, 7)} at head ${p.head.slice(0, 7)} (${p.judges} judges)`
     }
     case 'attempt.sampled': {
       const p = event.payload

@@ -28,7 +28,8 @@ export interface StoredEvent {
 // Revision 5 retains the optional preparation creation key.
 // Revision 6 retains the optional role profile on build creation and session starts.
 // Revision 7 retains the optional abort destination and hand-back report fields.
-export const READ_DECODER_REVISION = 7
+// Revision 8 retains the optional landed head on accepted attempt settlements.
+export const READ_DECODER_REVISION = 8
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

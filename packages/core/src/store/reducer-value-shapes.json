@@ -1626,6 +1626,10 @@
           "type": "60",
           "optional": true
         },
+        "progressQueue": {
+          "type": "7",
+          "optional": true
+        },
         "attempts": {
           "type": "141",
           "optional": false
@@ -26037,6 +26041,10 @@
           "optional": true
         },
         "note": {
+          "type": "4",
+          "optional": true
+        },
+        "head": {
           "type": "4",
           "optional": true
         }
