@@ -310,6 +310,10 @@ export interface AttemptMeasurementState {
    * `measurement-failed` escalation after sampling). It waits for a fresh
    * request. */
   refused?: string
+  /** The node head the child last observed (`target.moved`) after `request`.
+   * A new request clears it. When it differs from the request's baseline,
+   * the request is superseded and is never sampled. */
+  observedHead?: string
 }
 
 export interface BuildState {
@@ -673,7 +677,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 45
+export const BUILD_REDUCER_VERSION = 46
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -866,11 +870,19 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
     }
     if (isOptimizationEvent(event))
       acc.optimization = advanceOptimization(acc.optimization, [event])
-    if (event.type === 'attempt.measurement-requested')
+    if (event.type === 'attempt.measurement-requested') {
+      const { observedHead: _observedHead, ...measurement } = acc.attemptMeasurement ?? {}
       acc.attemptMeasurement = {
-        ...acc.attemptMeasurement,
+        ...measurement,
         request: { ...structuredClone(event.payload), seq: event.seq },
       }
+    }
+    if (
+      event.type === 'target.moved' &&
+      acc.kind !== 'node' &&
+      acc.attemptMeasurement?.request !== undefined
+    )
+      acc.attemptMeasurement = { ...acc.attemptMeasurement, observedHead: event.payload.sha }
     if (event.type === 'attempt.sampled')
       acc.attemptMeasurement = {
         ...acc.attemptMeasurement,
