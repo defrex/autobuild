@@ -944,8 +944,10 @@ compares; "scores 1–10 on clarity" does not. Name what must not be traded away
 and say that text written for the judges rather than for the reader counts
 against a variant. Keep the rubric and any fixtures the judges read inside the
 harness, so the pin fixes them. Choose `judges` for cost against noise: each
-judge is one agent session per comparison, and more judges narrow the win
-rate's spread. Five suits most prose; use more when a single preference
+judge costs one agent session per comparison when its primary target succeeds,
+and more judges narrow the win rate's spread. A judge that falls back to
+provider alternates, or is retried after a failure, runs one more session for
+each alternate or retry. Five suits most prose; use more when a single preference
 should not decide an ε of 0.1. See [judge panels](#judge-panels).
 
 **Choose a budget you would sign off on unattended.** It is the limit a human
