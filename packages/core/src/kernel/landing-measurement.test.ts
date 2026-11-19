@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
+import type { Objective } from '../objective'
 import {
   OptimizationLogBuilder,
   OPTIMIZATION_SHA as sha,
+  commandMetric,
   commandObjective,
   panelObjective,
 } from './generators/optimization-log'
@@ -13,7 +15,6 @@ import {
   classifyLanding,
   landingMeasurementGate,
   measurementApplies,
-  measurementThreshold,
   mergedAttemptMeasurement,
   selectTurnHolder,
   settlementMeasurement,
@@ -21,6 +22,7 @@ import {
   type LandingMeasurementState,
   type TurnCandidate,
 } from './landing-measurement'
+import { decideSampledMeasurement, measurementThreshold } from './measurement'
 import { optimizationReducer, type OptimizationState } from './optimization'
 import { reduceBuild } from './reducer'
 
@@ -163,6 +165,122 @@ describe('classification', () => {
       delta: 0.2,
     })
   })
+})
+
+describe('the recorded decision and the gate share one threshold', () => {
+  // Each case is only inputs: the test asserts the recorded decision agrees
+  // with the gate's classification, never what either should be.
+  const node = (epsilon: Objective['target']['epsilon']) =>
+    reduceBuild(
+      new OptimizationLogBuilder()
+        .push({
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            repo: 'repo',
+            ticket: { source: 'file', id: 'node' },
+            baseBranch: 'main',
+            kind: 'node',
+          },
+        })
+        .accept(commandObjective({ target: { threshold: 40, epsilon } }), 1)
+        .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+        .baseline(1, 50, 0.4).events,
+    )
+  const absolute = 2
+  const relative = 0.03
+  const nudges = [0, 1e-9, -1e-9]
+  const cases = [
+    ...[...nudges.map((n) => absolute + n), -absolute].map((delta) => ({
+      epsilon: { absolute },
+      baseline: 50,
+      delta,
+    })),
+    ...[50, -50, 0].flatMap((baseline) =>
+      nudges.map((n) => ({
+        epsilon: { relative },
+        baseline,
+        delta: relative * Math.abs(baseline) + n,
+      })),
+    ),
+  ]
+  for (const { epsilon, baseline, delta } of cases)
+    test(`${JSON.stringify(epsilon)}, baseline median ${baseline}, delta ${delta}`, () => {
+      const state = node(epsilon)
+      const medians = { baseline, candidate: baseline - delta }
+      const request = {
+        id: 'm1',
+        node: 'opt-node',
+        candidate: HEAD,
+        baseline: NODE,
+        harnessPin: PIN,
+        revision: 1,
+        metric: commandMetric(),
+      }
+      const decided = decideSampledMeasurement(state, request, {
+        request: 'm1',
+        candidate: HEAD,
+        baseline: NODE,
+        harnessPin: PIN,
+        revision: 1,
+        samples: 7,
+        medians,
+        report: { kind: 'measurement-samples', rev: 0 },
+      })
+      if (!('measured' in decided)) throw new Error(decided.refusal)
+      const { measured } = decided
+      const objective = state.optimization!.objective
+      expect(measured.decision).toBe(
+        classifyLanding(objective, 'improve', measured) === 'land' ? 'improved' : 'no-improvement',
+      )
+    })
+})
+
+test('panel recorded decisions and landing agree at win-rate boundaries', () => {
+  const objective = panelObjective()
+  const state = reduceBuild(
+    new OptimizationLogBuilder()
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          ticket: { source: 'file', id: 'node' },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      .accept(objective, 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } }).events,
+  )
+  const request = {
+    id: 'm1',
+    node: 'opt-node',
+    candidate: HEAD,
+    baseline: NODE,
+    harnessPin: PIN,
+    revision: 1,
+    metric: objective.metric,
+    purpose: objective.purpose,
+  }
+  for (const winRate of [0.5999, 3 / 5, 0.6001]) {
+    const decided = decideSampledMeasurement(state, request, {
+      request: 'm1',
+      candidate: HEAD,
+      baseline: NODE,
+      harnessPin: PIN,
+      revision: 1,
+      samples: 5,
+      winRate,
+      report: { kind: 'measurement-samples', rev: 0 },
+    })
+    if (!('measured' in decided)) throw new Error(decided.refusal)
+    expect(decided.measured.decision).toBe(
+      classifyLanding(objective, 'improve', decided.measured) === 'land'
+        ? 'improved'
+        : 'no-improvement',
+    )
+  }
 })
 
 describe('freshness', () => {

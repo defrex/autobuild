@@ -314,6 +314,60 @@ describe('an attempt measurement', () => {
     ).toHaveLength(1)
   })
 
+  async function moveNodeHead(store: MemoryBuildStore, sha: string) {
+    await store.append(ATTEMPT, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: `ab/${NODE}`, sha },
+    })
+  }
+
+  test('a request whose baseline the child saw superseded is never sampled', async () => {
+    let runs = 0
+    const exec = scriptedExec({ baseline: [10], candidate: [9] }, async () => {
+      runs += 1
+    })
+    const { store, internals } = await fixture(exec, ATTEMPT)
+    const payload = await request(store)
+    await moveNodeHead(store, 'b'.repeat(40))
+    await internals.runMeasurement({ kind: 'run-measurement', request: payload })
+    expect(runs).toBe(0)
+    expect(types(await store.getEvents(ATTEMPT))).not.toContain('attempt.sampled')
+  })
+
+  test('an unchanged observed baseline still samples', async () => {
+    const { store, internals } = await fixture(
+      scriptedExec({ baseline: [10], candidate: [9] }),
+      ATTEMPT,
+    )
+    const payload = await request(store)
+    await moveNodeHead(store, PIN)
+    await internals.runMeasurement({
+      kind: 'run-measurement',
+      request: { ...payload, metric: { ...metric, samples: 1 } },
+    })
+    expect((await store.getEvents(ATTEMPT)).at(-1)!.type).toBe('attempt.sampled')
+  })
+
+  test('a head move during sampling still records the samples, for the landing gate to reject', async () => {
+    let store!: MemoryBuildStore
+    const exec = scriptedExec({ baseline: [10], candidate: [9] }, async (run) => {
+      if (run === 1) await moveNodeHead(store, 'b'.repeat(40))
+    })
+    const built = await fixture(exec, ATTEMPT)
+    store = built.store
+    const payload = await request(store)
+    await built.internals.runMeasurement({
+      kind: 'run-measurement',
+      request: { ...payload, metric: { ...metric, samples: 1 } },
+    })
+    const events = await store.getEvents(ATTEMPT)
+    expect(events.at(-1)).toMatchObject({
+      type: 'attempt.sampled',
+      payload: { request: 'm1', baseline: PIN },
+    })
+  })
+
   test('a request without a metric, or a failing command, escalates without samples', async () => {
     const missing = await fixture(scriptedExec({ baseline: [], candidate: [] }), ATTEMPT)
     await missing.internals.runMeasurement({
