@@ -303,7 +303,9 @@ cached answers too. Legacy peers remain functional with full reads.
 The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
 shell prompt and `fg` resumes only the presentation; the kernel keeps running.
 Terminal restoration by the launcher is a fallback for abnormal termination,
-never a second alternate-screen exit after a clean generation stop.
+never a second alternate-screen exit after a clean generation stop. A
+generation that exits from the stop signal the launcher itself received is a
+clean stop, and in `--plain` mode the launcher restores no terminal mode.
 Automatic upgrades default on (`[upgrade] automatic = true`). The resident
 kernel checks immediately and every 60 seconds independently of dispatch ticks.
 It resolves the root manifest and Bun lock from a single authoritative base
