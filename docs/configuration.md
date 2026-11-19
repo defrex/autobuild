@@ -4004,7 +4004,7 @@ pre-attempt index and reports the original Git failure; merged worktree files
 remain in place and the merge's exit status is unchanged. Upgrade never pushes
 or rewrites history.
 
-Autobuild now installs 13 skills; only `ab-spec`, `ab-tickets`, `ab-guide`,
+Autobuild now installs 14 skills; only `ab-spec`, `ab-tickets`, `ab-guide`,
 and `ab-operate` are model-invocable. The setup reference is an ordinary support file in the
 editable/pristine `ab-guide` tree and participates in the same three-way
 upgrade merge as every other vendored file.
