@@ -387,8 +387,8 @@ export interface PanelLoopHooks {
   read(): Promise<PanelRunState>
   /** Record a saved preference's judgment without a session. */
   complete(judged: EventPayload<'panel.judged'>): Promise<void>
-  /** Close a crashed predecessor's judge session. */
-  reclaim(judge: number, session: string): Promise<void>
+  /** Close a crashed predecessor's judge session and its stream, if any. */
+  reclaim(judge: number, session: string, stream?: string): Promise<void>
   /** Start the judge's session in its sealed root; resolves with its outcome
    * once `panel.judged` (if any) and `panel.judge-ended` are recorded. */
   launch(judge: number, order: PanelOrder, root: string): Promise<PanelJudgeOutcome>
@@ -420,7 +420,8 @@ export async function runPanelJudges(
     for (;;) {
       let run = await hooks.read()
       for (const judged of completable(run)) await hooks.complete(judged)
-      for (const { judge, session } of awaitingReclaim(run)) await hooks.reclaim(judge, session)
+      for (const { judge, session, stream } of awaitingReclaim(run))
+        await hooks.reclaim(judge, session, stream)
       run = await hooks.read()
       for (const judge of pendingJudges(run)) {
         const failures = countedFailures(run, judge)
