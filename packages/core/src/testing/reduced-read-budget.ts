@@ -1693,12 +1693,17 @@ export async function ticketWaitIdleReadBudget(opts: {
  * sample, append nothing and read zero historical event rows, at 100 and
  * 100,000 events on every attempt and on the node. `sample` appends a fresh
  * request and its samples to one attempt; `decided` names the fact the
- * dispatcher must have written for it. */
+ * dispatcher must have written for it. With `progress`, which appends the
+ * request and partial sampling work (a judge panel's facts) first, ticks
+ * while the samples are pending append nothing, read zero historical rows
+ * and read the node equally often at every history length, and `sample`
+ * then appends only the samples. */
 export async function sampledMeasurementReadBudget(opts: {
   store: import('../store/memory').MemoryBuildStore
   node: string
   attempts: string[]
   dispatcher: () => Dispatcher
+  progress?: (slug: string, request: string) => Promise<void>
   sample: (slug: string, request: string) => Promise<void>
   decided: (slug: string, request: string) => Promise<boolean>
   advance: () => void
@@ -1725,6 +1730,7 @@ export async function sampledMeasurementReadBudget(opts: {
     if (attempts.includes(slug)) attemptWrites++
     return appendIfCurrent(slug, expected, event)
   }) as typeof store.appendIfCurrent
+  let pendingNodeReads: number | undefined
   try {
     for (const length of [100, 100_000]) {
       for (const slug of [node, ...attempts]) await seedBuildFiller(store, slug, length)
@@ -1744,8 +1750,27 @@ export async function sampledMeasurementReadBudget(opts: {
         return instrumentBuildRows(store, slug, () => boundary, metrics)
       })
       const request = `m-${length}`
-      for (const slug of attempts) await opts.sample(slug, request)
       try {
+        if (opts.progress !== undefined) {
+          for (const slug of attempts) await opts.progress(slug, request)
+          // Waiting for the samples: no decision, no write, no history.
+          for (const make of [() => dispatcher, opts.dispatcher]) {
+            const ticking = make()
+            opts.advance()
+            nodeReads = 0
+            metrics.historicalRows = 0
+            attemptWrites = 0
+            await ticking.tick({ acceptNewWork: false })
+            for (const slug of attempts) expect(await opts.decided(slug, request)).toBe(false)
+            expect(attemptWrites).toBe(0)
+            // The landing gate's per-child reads of a pending request: the
+            // same on every tick, dispatcher and history length.
+            pendingNodeReads ??= nodeReads
+            expect(nodeReads).toBe(pendingNodeReads)
+            expect(metrics.historicalRows).toBe(0)
+          }
+        }
+        for (const slug of attempts) await opts.sample(slug, request)
         // The deciding tick: one node read per sampled request, once.
         opts.advance()
         nodeReads = 0

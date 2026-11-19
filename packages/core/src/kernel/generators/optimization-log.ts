@@ -1,7 +1,7 @@
 import { validateEventWrite, type AbEvent, type EventWrite } from '../../events/catalog'
 import { DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
 import type { AttemptOutcome, UnmeasuredMergeReason } from '../../events/payloads'
-import type { CommandMetric, Objective } from '../../objective'
+import type { CommandMetric, Objective, ObjectiveMetric } from '../../objective'
 
 export const OPTIMIZATION_SHA = (char: string) => char.repeat(40)
 
@@ -133,7 +133,8 @@ export class OptimizationLogBuilder {
     node = 'opt-node',
     revision = 1,
     candidate = OPTIMIZATION_SHA('c'),
-    metric?: CommandMetric,
+    metric?: ObjectiveMetric,
+    purpose = panelObjective().purpose,
   ) {
     return this.push({
       actor: DISPATCHER,
@@ -146,6 +147,29 @@ export class OptimizationLogBuilder {
         harnessPin: OPTIMIZATION_SHA('a'),
         revision,
         ...(metric !== undefined ? { metric } : {}),
+        ...(metric?.kind === 'panel' ? { purpose } : {}),
+      },
+    })
+  }
+
+  /** An attempt runner's judge panel win rate, on the attempt's own log. */
+  panelSampled(
+    request: string,
+    winRate: number,
+    opts: { revision?: number; judges?: number } = {},
+  ) {
+    return this.push({
+      actor: KERNEL,
+      type: 'attempt.sampled',
+      payload: {
+        request,
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: opts.revision ?? 1,
+        samples: opts.judges ?? 5,
+        winRate,
+        report: { kind: 'measurement-samples', rev: 0 },
       },
     })
   }

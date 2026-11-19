@@ -3809,8 +3809,9 @@ export class Dispatcher {
             baseline: nodeHead!,
             harnessPin: digest.accepted.harnessPin,
             revision: digest.revision,
-            ...(digest.objective.metric.kind === 'command'
-              ? { metric: digest.objective.metric }
+            metric: digest.objective.metric,
+            ...(digest.objective.metric.kind === 'panel'
+              ? { purpose: digest.objective.purpose }
               : {}),
           },
         })
@@ -6620,10 +6621,11 @@ export class Dispatcher {
   }
 
   /**
-   * Decide a parked attempt's sampled measurement (SPEC §13.1.1). The
-   * attempt's runner holds only its own build, so it records the samples and
-   * the dispatcher records `attempt.measured` against the node's ε and
-   * starting spread as they stand now, or a `policy/measurement-failed`
+   * Decide a parked attempt's sampled measurement (SPEC §13.1.1): a
+   * command's medians or a judge panel's win rate. The attempt's runner
+   * holds only its own build, so it records the samples and the dispatcher
+   * records `attempt.measured` against the node's ε and starting spread as
+   * they stand now, or a `policy/measurement-failed`
    * escalation when the node's ruler or harness pin moved past the request.
    *
    * Cost: the sampled-but-undecided check reads the reduced state the sweep

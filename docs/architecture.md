@@ -348,7 +348,13 @@ removes that material before any session starts and refuses a root inside the
 workspace or any Git repository; its loop completes saved preferences, reclaims
 dangling sessions and launches each wave concurrently. `BuildRunner.runPanel`
 records the run's kernel facts, the order in `panel.judge-started` before each
-session, and `panel.judged` after it. A judge session's only store authority is
+session, and `panel.judged` after it. `BuildRunner.runMeasurement` calls it for
+an attempt's panel measurement request, under the panel id `attemptPanelId`
+derives in `packages/core/src/kernel/measurement.ts`, and records the win rate
+in `attempt.sampled`; the dispatcher decides it against the node's current ε
+there too (`decideSampledMeasurement`, `panelDecision`), and
+`packages/core/src/kernel/landing-measurement.ts` classifies the recorded win
+rate for landing. A judge session's only store authority is
 write-only: `packages/core/src/store/judge-authority.ts` is the shared rule
 (one `panel.preferred` for its own panel, judge and session, while that session
 is open), applied in process by the local and remote wrappers in

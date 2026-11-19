@@ -7,6 +7,7 @@ import {
   type ObjectiveSummary,
 } from './dashboard/objective-row'
 import { isOptimizationEvent } from '../kernel/optimization'
+import { measurementText } from './measurement-text'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { OPERATOR_HEARTBEAT_MS, operatorIdentitySchema } from '../store/operator-presence'
@@ -566,16 +567,12 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
     }
     case 'attempt.sampled': {
       const p = event.payload
-      return `sampled candidate ${p.medians.candidate} vs baseline ${p.medians.baseline} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)}); the dispatcher decides against the node's ε`
+      return p.medians
+        ? `sampled candidate ${p.medians.candidate} vs baseline ${p.medians.baseline} (${p.samples} samples per side, harness ${p.harnessPin.slice(0, 7)}); the dispatcher decides against the node's ε`
+        : `judged win rate ${p.winRate} (${p.samples} judges, harness ${p.harnessPin.slice(0, 7)}); the dispatcher decides against the node's ε`
     }
-    case 'attempt.measured': {
-      const p = event.payload
-      const values = p.medians
-        ? `candidate ${p.medians.candidate} vs baseline ${p.medians.baseline}`
-        : `win rate ${p.winRate}`
-      const noise = p.spread !== undefined ? ` (noise ±${p.spread})` : ''
-      return `${values}: delta ${p.delta}${noise} → ${p.decision}`
-    }
+    case 'attempt.measured':
+      return measurementText(event.payload)
     case 'target.rewritten':
       return `Upstream rewrite on ${event.payload.branch}: ${event.payload.previousSha} → ${event.payload.sha}; automatic adoption withheld`
     case 'verify.cancelled':
