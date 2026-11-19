@@ -33,6 +33,8 @@ Leaves run the [normal build pipeline](builds.md). A node collects, verifies, me
 - **Repair** a failed node check with a child ticket targeting the node.
 - **Merge** closes admission; a node isn't a perpetual staging branch.
 
+A node whose spec declares an objective is an [optimization node](optimization-nodes.md): it proposes, measures and lands its own attempts toward a metric or a judge panel, then waits for you to land it.
+
 
 ## One identity per leaf change
 
