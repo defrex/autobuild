@@ -140,7 +140,7 @@ export interface DigestAcc {
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 16
+export const BUILD_DIGEST_REDUCER_VERSION = 17
 
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */

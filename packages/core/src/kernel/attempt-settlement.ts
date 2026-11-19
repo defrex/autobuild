@@ -31,6 +31,8 @@ export interface SettledAttempt {
 }
 
 export interface SettlementOptions {
+  /** The node head an accepted attempt landed as. */
+  head?: string
   measurement?: EventPayload<'attempt.settled'>['measurement']
   note?: string
   /** `merged-unmeasured` only. */
@@ -50,7 +52,7 @@ export async function settleAttempt(
   outcome: AttemptOutcome,
   options: SettlementOptions = {},
 ): Promise<boolean> {
-  const { measurement, note, policy, mergedSha } = options
+  const { measurement, note, policy, mergedSha, head } = options
   while (true) {
     const state = (await readBuildFacts(store, node)).value.state
     if (!state.optimization?.inFlight.some((entry) => entry.proposal === attempt.proposal))
@@ -70,6 +72,7 @@ export async function settleAttempt(
         ...(policy !== undefined ? { policy } : {}),
         ...(mergedSha !== undefined ? { mergedSha } : {}),
         ...(note !== undefined ? { note: note.slice(0, 4000) } : {}),
+        ...(head !== undefined ? { head } : {}),
       },
     })
     if (written) return true

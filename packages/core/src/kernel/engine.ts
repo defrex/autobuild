@@ -46,7 +46,11 @@ import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer
 import { stalledChains, type FindingChain } from './stall'
 import { pendingWaitRequest, waitGuidance, waitResumeRestackCycle } from './ticket-wait'
 import { leafRestackedBase } from './leaf-restack-state'
-import { baselineMeasurementDue, pendingMeasurementRequest } from './measurement'
+import {
+  baselineMeasurementDue,
+  pendingMeasurementRequest,
+  progressMeasurementDue,
+} from './measurement'
 
 // ── The decision contract ────────────────────────────────────────────────────
 
@@ -144,6 +148,15 @@ export type Decision =
        * itself under the current ruler (SPEC §13.1.1). */
       kind: 'measure-baseline'
       revision: number
+      harnessPin: string
+    }
+  | {
+      /** A panel node's progress: its head after an accepted attempt
+       * against the starting head (SPEC §13.1.1). */
+      kind: 'measure-progress'
+      revision: number
+      head: string
+      start: string
       harnessPin: string
     }
   | {
@@ -361,6 +374,8 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
         revision: state.optimization!.revision,
         harnessPin: state.optimization!.accepted.harnessPin,
       }
+    const progress = progressMeasurementDue(state)
+    if (progress) return { kind: 'measure-progress', ...progress }
     // The proposer (SPEC §13.1.1): the dispatcher admitted a session for
     // the open request; a deposited or withdrawn one falls through.
     const proposal = state.optimization?.proposal
