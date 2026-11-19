@@ -1,17 +1,70 @@
+---
+title: "Optimization nodes"
+group: "concepts"
+description: "Let a node propose, measure and land its own attempts toward a metric or a judge panel, within a budget you approve once."
+label: "Optimization"
+order: 4.5
+---
+
 # Optimization nodes
 
 An optimization node is a node whose spec declares an objective: a metric, a
-direction or a judge panel, a target, a budget and a purpose. The objective is
-the only marker. The ticket's `kind` stays `node`, and no label, ticket state or
-source setting marks it. Because the marker makes a node file and dispatch its
-own work, the rules below leave no room for a false positive and no silent
-fallback in either direction.
+direction or a judge panel, a target, a budget and a purpose. Instead of
+collecting children a human filed, it proposes its own attempts, measures each
+one against its current head with a ruler the attempts cannot edit, lands only
+the ones that improve it, and moves the rest to the rejected role. It stops on
+a threshold, a plateau, its budget or your word, and then lands like any other
+node, once you approve it.
 
-This reference is the contract: how the marker is found, the objective schema,
-what refuses an objective, how a node and its attempts are measured, how the
+This page covers when to use one, how a run goes from start to finish, how to
+write the objective, and then the full contract: how the marker is found, what
+refuses an objective, how a node and its attempts are measured, how the
 objective is revised, which facts the log records, what is derived from them,
-how the node proposes its own attempts, and how it stops and completes. It ends
-with grooming guidance.
+how the node proposes its own attempts, and how it stops and completes. The
+objective is the only marker. The ticket's `kind` stays `node`, and no label,
+ticket state or source setting marks it. Because the marker makes a node file
+and dispatch its own work, the rules below leave no room for a false positive
+and no silent fallback in either direction.
+
+## When to use one
+
+Use an optimization node when:
+
+- the goal is to improve a number, or a judgment two variants can be compared
+  on, rather than to ship a known change;
+- you don't know which strategy will work, and many independent tries are
+  cheaper than deciding up front;
+- a harness that attempts cannot edit can measure the code being improved.
+
+Don't use one when the change is already known (file a work ticket or a plain
+node), when two identical runs disagree by more than the gain you care about
+(see the noise check under [opening](#opening)), when success needs
+product judgment no rubric captures, or when your ticket source has no
+rejected role.
+
+## A run, end to end
+
+1. You groom the node ticket with an objective block; see
+   [grooming an optimization node](#grooming-an-optimization-node).
+2. The dispatcher [opens](#opening) the node and pins the harness at its
+   opening commit.
+3. The node measures its opening head against itself for a starting value and
+   runs the [noise check](#opening).
+4. The [proposer](#proposer-phase) reads the objective and the ledger of
+   earlier attempts and proposes strategies; the dispatcher files each as a
+   ready attempt ticket that targets the node.
+5. Each [attempt](#attempts) builds like any work ticket: plan, review,
+   implement, review, verify.
+6. The [landing gate](#landing-and-settlement) measures each attempt against
+   the current node head, ratchet-style. An attempt lands only when it
+   improves the head; a sibling that lands first makes the others measure
+   again.
+7. Attempts that don't improve the head, or that their implementer declines,
+   close unmerged and their tickets move to the rejected role.
+8. The node [stops](#stopping-and-completion) on its threshold, a plateau,
+   its budget, an empty proposal or your `ab objective <node> --stop`.
+9. Once nothing is in flight, the node completes and verifies.
+10. You [land it](#landing-the-node) with `ab merge <node>`.
 
 ## The marker
 
@@ -141,6 +194,77 @@ any spec authoring. A refusal bounces the ticket back to triage with a comment
 naming every reason and creates no build. A refused node never opens as a plain
 node instead. Fix the block, or file the ticket with `--kind node`, and move it
 to ready again.
+
+## Grooming an optimization node
+
+The node ticket is still a spec-standard charter, with what and why,
+acceptance criteria, out of scope and evidence. The block adds what to
+improve and when to stop.
+
+### Writing the purpose
+
+Write the purpose for an agent that will try to game the number. Say why
+the metric matters, what it stands in for, and what must not change while it
+moves: behavior, output, semantics, interfaces. "p95 latency of catalog search,
+because users wait on it at every keystroke; results and their order must not
+change" is a purpose. "Make search faster" is not.
+
+### Choosing the harness
+
+Choose the harness as everything that decides the number. Include the
+measurement command's script, its fixtures and datasets, and a panel's rubric.
+The harness is the ruler, pinned at the node's opening commit (`harnessPin`),
+not the code under improvement, so leave that code out. Keep selectors narrow:
+a harness that covers the code being optimized pins the very code attempts are
+meant to change.
+
+### Choosing ε and the noise check
+
+Choose ε above the noise. ε is the smallest gain worth landing. Run the
+command several times on the same tree first. If the median moves by more than
+your ε between identical runs, raise ε or `samples`. The node checks this when
+it opens: its starting measurement raises `optimization.noise-exceeded` when ε
+is below the measured spread. A panel node judges its opening head against
+itself the same way; raise ε or `judges` if that panel strays from 0.5 by more
+than ε. A relative ε suits
+metrics whose scale may change; an absolute ε suits metrics with a natural
+unit. A panel's ε is a win-rate margin above 0.5, such as 0.1.
+
+When the check fires, `ab watch` reports the node's
+`optimization.noise-exceeded` as attention, naming ε and the spread. The node
+still opens and runs. Raise ε in place with `ab objective <node> --epsilon …`
+(see [revisions](#revisions)), or raise `samples` or `judges` with a spec
+revision, before the gate starts accepting noise.
+
+### Writing a panel rubric
+
+Write a panel's rubric for comparing two variants. Judges see two
+variants side by side and say which is better, so write criteria a reader can
+apply to a pair: "which explains the setup steps in fewer, clearer sentences"
+compares; "scores 1–10 on clarity" does not. Name what must not be traded away,
+and say that text written for the judges rather than for the reader counts
+against a variant. Keep the rubric and any fixtures the judges read inside the
+harness, so the pin fixes them. Choose `judges` for cost against noise: each
+judge costs one agent session per comparison when its primary target succeeds,
+and more judges narrow the win rate's spread. A judge that falls back to
+provider alternates, or is retried after a failure, runs one more session for
+each alternate or retry. Five suits most prose; use more when a single preference
+should not decide an ε of 0.1. See [judge panels](#judge-panels).
+
+### Choosing a budget
+
+Choose a budget you would sign off on unattended. It is the limit a human
+approves once for the whole run. `maxAttempts` bounds cost; `maxHours` bounds wall-clock
+time. Set a plateau when a run of failed strategies should end the search
+early. Set a threshold only when there is a value at which you would stop
+looking. Use `concurrency` above 1 only when attempts are independent enough to
+run side by side.
+
+### Configure the rejected role
+
+Configure the rejected role first. The ticket source must name
+`[tickets].rejectedState`, or the node is refused. Every attempt that does not
+land ends there.
 
 ## Opening
 
@@ -548,7 +672,7 @@ measured delta and closing note. A **near miss** is a `no-improvement`
 settlement that improved by less than ε (0 < delta < ε, with a relative ε
 scaled by the baseline's magnitude).
 
-### Where progress appears
+## Where progress appears
 
 Every surface shows the same objective row, read from the node's digest alone:
 
@@ -908,55 +1032,10 @@ node. Stopping is not consent: once the node is ready, land it with
 `ab merge <node>`. `ab merge` refuses an optimization node that has not
 stopped, or whose attempts are still in flight, and names which.
 
-## Grooming an optimization node
+## Landing the node
 
-The node ticket is still a spec-standard charter, with what and why,
-acceptance criteria, out of scope and evidence. The block adds what to
-improve and when to stop.
-
-**Write the purpose for an agent that will try to game the number.** Say why
-the metric matters, what it stands in for, and what must not change while it
-moves: behavior, output, semantics, interfaces. "p95 latency of catalog search,
-because users wait on it at every keystroke; results and their order must not
-change" is a purpose. "Make search faster" is not.
-
-**Choose the harness as everything that decides the number.** Include the
-measurement command's script, its fixtures and datasets, and a panel's rubric.
-The harness is the ruler, pinned at the node's opening commit (`harnessPin`),
-not the code under improvement, so leave that code out. Keep selectors narrow:
-a harness that covers the code being optimized pins the very code attempts are
-meant to change.
-
-**Choose ε above the noise.** ε is the smallest gain worth landing. Run the
-command several times on the same tree first. If the median moves by more than
-your ε between identical runs, raise ε or `samples`. The node checks this when
-it opens: its starting measurement raises `optimization.noise-exceeded` when ε
-is below the measured spread. A panel node judges its opening head against
-itself the same way; raise ε or `judges` if that panel strays from 0.5 by more
-than ε. A relative ε suits
-metrics whose scale may change; an absolute ε suits metrics with a natural
-unit. A panel's ε is a win-rate margin above 0.5, such as 0.1.
-
-**Write a panel's rubric for comparing two variants.** Judges see two
-variants side by side and say which is better, so write criteria a reader can
-apply to a pair: "which explains the setup steps in fewer, clearer sentences"
-compares; "scores 1–10 on clarity" does not. Name what must not be traded away,
-and say that text written for the judges rather than for the reader counts
-against a variant. Keep the rubric and any fixtures the judges read inside the
-harness, so the pin fixes them. Choose `judges` for cost against noise: each
-judge costs one agent session per comparison when its primary target succeeds,
-and more judges narrow the win rate's spread. A judge that falls back to
-provider alternates, or is retried after a failure, runs one more session for
-each alternate or retry. Five suits most prose; use more when a single preference
-should not decide an ε of 0.1. See [judge panels](#judge-panels).
-
-**Choose a budget you would sign off on unattended.** It is the limit a human
-approves once for the whole run. `maxAttempts` bounds cost; `maxHours` bounds wall-clock
-time. Set a plateau when a run of failed strategies should end the search
-early. Set a threshold only when there is a value at which you would stop
-looking. Use `concurrency` above 1 only when attempts are independent enough to
-run side by side.
-
-**Configure the rejected role first.** The ticket source must name
-`[tickets].rejectedState`, or the node is refused. Every attempt that does not
-land ends there.
+`ab merge <node>` approves the node's branch: the verified accumulation of
+every accepted attempt, each of which improved the head it landed on, plus any
+children filed by hand. Rejected attempts never reach the node branch, because
+the landing gate closes them unmerged. The node then lands into its target
+like any other node; see [integration trees](integration-tree.md).
