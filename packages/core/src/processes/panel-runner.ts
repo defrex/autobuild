@@ -180,7 +180,7 @@ export async function judgeProtectedPaths(
   const out = new Set<string>()
   for (const candidate of candidates) {
     if (candidate === undefined || candidate === '') continue
-    const real = await deps.exec(['sh', '-c', REAL_ENTRY_PROBE, 'sh', candidate], {})
+    const real = await deps.exec(['sh', '-c', REAL_ENTRY_PROBE, 'judge-real', candidate], {})
     const resolved = real.exitCode === 0 ? real.stdout.trim() : ''
     out.add(resolved !== '' ? resolved : candidate)
     // The lexical spelling is protected too: it reaches the same place.
@@ -260,7 +260,7 @@ export async function judgeAmbientAliases(
   const physical = new Map<string, string>()
   for (let at = 0; at < paths.length; at += PHYSICAL_PATHS_BATCH) {
     const batch = paths.slice(at, at + PHYSICAL_PATHS_BATCH)
-    const result = await deps.exec(['sh', '-c', PHYSICAL_PATHS_PROBE, 'sh', ...batch], {})
+    const result = await deps.exec(['sh', '-c', PHYSICAL_PATHS_PROBE, 'judge-paths', ...batch], {})
     const lines = result.stdout.split('\n').slice(0, -1)
     if (result.exitCode !== 0 || lines.length !== batch.length)
       throw new PanelPreparationFailure(
@@ -355,7 +355,7 @@ export async function writeJudgeLauncher(
         'sh',
         '-c',
         `mkdir -p "$(dirname "$1")" && printf %s "$AB_FILE_CONTENT" ${first ? '>' : '>>'} "$1"`,
-        'sh',
+        'judge-launcher',
         path,
       ],
       { env: { AB_FILE_CONTENT: text.slice(at, end) } },

@@ -45,7 +45,7 @@ import {
   judgeProtectedPaths,
   type PanelResult,
 } from '../processes/panel-runner'
-import { sessionEnv } from '../ports/runner/session-env'
+import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 
 const directory = temporaryDirectories(afterEach)
 const SLUG = 'attempt-panel'
@@ -347,7 +347,12 @@ describe('a judge panel run', () => {
       expect(ctx.opts.env.AB_TOKEN).toBeUndefined()
       const path = ctx.opts.env.PATH!.split(':')
       expect(path[0]).toMatch(/\/autobuild-judge-bin-[0-9a-f]{16}$/)
-      expect(path.some((entry) => entry.startsWith(distributionRoot()))).toBe(false)
+      // The distribution's own agent bin is replaced, and no entry reaches a
+      // protected location. Entries under a distribution outside the build's
+      // repository, such as `bun run`'s `node_modules/.bin`, may pass.
+      expect(path).not.toContain(AGENT_BIN_DIR)
+      for (const forbidden of [repo.workspace, repo.commonDir, repo.store])
+        expect(path.some((entry) => entry.startsWith(forbidden))).toBe(false)
 
       // `ab` is the scratch launcher: its content names nothing protected,
       // and its process runs as `bun <launcher> judge …`. A `bun` shim after
