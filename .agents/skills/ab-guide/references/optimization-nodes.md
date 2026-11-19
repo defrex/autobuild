@@ -413,6 +413,13 @@ judge starts. A local judge's saved preference that is malformed, or names
 another judge or session, ends that judge as `no-terminal` with the reason.
 Every judge root and the launcher directory are removed when the run ends.
 
+Judge-session evidence accepts optional `stream` and provider `substitution`
+fields on `panel.judge-started`. The dashboard projects these starts into
+session rows attributed to the panel and judge, without the blinded order.
+The isolated judge launcher currently uses only the primary target and does
+not open session streams; alternate launching and stream production require
+the subsequent reviewed implementation.
+
 ## Events
 
 | Event | Log | Facts |
@@ -439,7 +446,7 @@ Every judge root and the launcher directory are removed when the run ends.
 | `attempt.branch-deleted` | node | proposal, build, branch |
 | `attempt.branch-cleanup-failed` | node | proposal, build?, branch, error |
 | `panel.started` | panel host | panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges |
-| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account? |
+| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account?, stream?, substitution? |
 | `panel.preferred` | panel host | panel, judge, session, preference, reason (agent) |
 | `panel.judged` | panel host | panel, judge, session, order, preference, reason |
 | `panel.judge-ended` | panel host | panel, judge, session, outcome, error?, transcript? |
