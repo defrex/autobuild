@@ -93,6 +93,7 @@ import {
 import {
   baselineMeasurementDue,
   decideSampledMeasurement,
+  measurementThreshold,
   sampledMeasurement,
 } from '../kernel/measurement'
 import {
@@ -152,7 +153,6 @@ import { landIntoNode, settleClosedNode, preflightNodeLanding } from '../kernel/
 import {
   landingMeasurementGate,
   harnessEscalationId,
-  measurementThreshold,
   regressionEscalationId,
   selectTurnHolder,
   mergedAttemptMeasurement,

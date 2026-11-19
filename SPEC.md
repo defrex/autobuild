@@ -3555,17 +3555,24 @@ authoritative (`packages/core/src/kernel/measurement.ts` for the math,
 - *Decision.* A side's value is its median (the mean of the two middle values
   for an even count). The delta is direction-aware (§15.5). ε in metric units
   is `absolute`, or `relative × |baseline median|`. A delta ≥ ε is `improved`;
-  anything less is `no-improvement`. Significance tests are not applied. A
-  panel's delta is `winRate − 0.5` with ties counted as half, and its ε is
+  anything less is `no-improvement`. Significance tests are not applied. One
+  definition of this effective ε serves both the recorded `decision` and the
+  landing gate's classification, so the two cannot disagree on the same
+  measurement. A panel's delta is `winRate − 0.5` with ties counted as half, and its ε is
   absolute: a win rate ≥ 0.5 + ε is `improved`, compared with a 1e-9 float
   tolerance so that, for example, 3 of 5 judges meets ε 0.1.
 - *Attempts.* `attempt.measurement-requested` names the candidate, baseline,
   harness pin, objective revision and, additively, the node's `metric`, a
   command or a panel; a panel request also carries the objective `purpose`,
   which its judges read. The engine decides `run-measurement` for a leaf at `wait
-  awaiting-pr` whose latest request is neither sampled nor measured, so
-  restack, re-verify and reconcile keep precedence, and the dispatcher admits
-  it as a re-verify (§12). The attempt's runner holds only its own build, so it
+  awaiting-pr` whose latest request is neither sampled nor measured and whose
+  baseline is still the node head the child last observed, so restack,
+  re-verify and reconcile keep precedence, and the dispatcher admits it as a
+  re-verify (§12). A request whose baseline a later `target.moved` superseded
+  is skipped: it gets no runner and no slot, and the landing gate records a
+  current request once the child is restacked. Samples already running when
+  the head moves are still recorded and decided, and the gate rejects the
+  result as stale. The attempt's runner holds only its own build, so it
   samples in the attempt's workspace and records kernel `attempt.sampled
   {request, candidate, baseline, harnessPin, revision, samples, medians,
   report}`, which carries no decision. A panel request is sampled by one judge
@@ -3611,7 +3618,8 @@ candidate head, whose `baseline` is exactly the node head it lands on, whose
 `harnessPin` is the accepted pin, and whose `revision` is at least the ruler
 revision. A restack changes the candidate and a sibling landing moves the node
 head, so either makes a result stale by construction and the dispatcher records
-a new request on the child's log. A clean restack keeps verification; it never
+a new request on the child's log. An unsampled request whose baseline the
+child has already seen superseded is skipped rather than measured. A clean restack keeps verification; it never
 keeps a measurement. A request is recorded only once the candidate sits on the
 observed node head. The node writer is never held during a measurement, and its
 guarded merge is guarded on the measured baseline: under the writer
@@ -4407,10 +4415,12 @@ settled attempts are in the ledger.
 **Attempt measurement.** A leaf's build state embeds `attemptMeasurement`,
 bounded to the latest `attempt.measurement-requested` (`request`), the latest
 `attempt.sampled` (`sampled`), the latest `attempt.measured` (`measured
-{request}`) and `refused`, the request whose samples a `measurement-failed`
-raise refused after sampling. Pure selectors read it alone:
-`pendingMeasurementRequest` is the latest request that is neither sampled nor
-measured on a nonterminal leaf, the runner's work; `sampledMeasurement` is the
+{request}`), `refused`, the request whose samples a `measurement-failed`
+raise refused after sampling, and `observedHead`, the sha of the latest
+`target.moved` after the latest request (a new request clears it). Pure
+selectors read it alone: `pendingMeasurementRequest` is the latest request
+that is neither sampled nor measured on a nonterminal leaf and whose baseline
+is still `observedHead` when one is recorded, the runner's work; `sampledMeasurement` is the
 latest request's samples when neither measured nor refused, the dispatcher's
 work. `baselineMeasurementDue` reads the node digest: opened, a command
 metric, no `starting`, not stopped, not terminal, paused or blocked, and no
