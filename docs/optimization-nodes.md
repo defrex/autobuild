@@ -302,7 +302,18 @@ decisions in `optimization.baseline-measured` and
 baseline, the harness pin, the purpose, the rubric path, the harness and the
 judge count. Every judge then runs in its own session, all of them at once,
 under the `judge` role. Judges are build sessions, so the build's profile
-applies to them.
+applies to them, and so do the role's `alternates`: when a judge's primary
+target fails with an availability or exhaustion failure, the next target runs
+the same judge in the same root with the same order. Each target is its own
+judge session with its own `panel.judge-started`, which for an alternate
+carries `substitution` naming the failed session. A successful primary starts
+no alternate, and neither does budget expiry, shutdown or a credential failure.
+
+**Watching a judge.** Each judge session streams live like any other build
+session. It appears among the build's session rows in the terminal dashboard
+with role `judge`, phase `judge:<panel>:<judge>`, the runtime that ran it and
+its stream, so a fallback shows as two rows for one judge. Nothing in the row
+or the stream names the judge's order.
 
 **Blind, pinned variants.** Each judge gets a fresh root in the system
 temporary directory, outside any repository. The root holds the two variants
@@ -352,12 +363,13 @@ recorded judgments, so ties count as half.
 **Resumption.** A run resumed after a crash or restart keeps every recorded
 judgment. A judge whose preference was saved before the crash is completed
 from that preference and its recorded order without a new session. A dangling
-session is closed as `reclaimed`. Only judges with no recorded preference run
+session is closed as `reclaimed`, and its stream closes `aborted`. Only judges with no recorded preference run
 again, each with a freshly drawn order.
 
 **Failures.** A judge's turn that ends without a preference (`no-terminal`),
 fails (`failed`) or exceeds the session budget (`expired`) counts as a
-failure. After two counted failures for one judge, the run fails and names the
+failure. A failed session that an alternate replaced does not count: only the
+last session of a judge's provider chain can. After two counted failures for one judge, the run fails and names the
 judge and its last outcome. A shutdown records `interrupted`, which does not
 count. A run that cannot prepare its variants fails with the Git output tail.
 A variant holding a committed symlink that resolves outside its judge root
@@ -386,7 +398,7 @@ Every judge root is removed when the run ends.
 | `attempt.branch-deleted` | node | proposal, build, branch |
 | `attempt.branch-cleanup-failed` | node | proposal, build?, branch, error |
 | `panel.started` | panel host | panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges |
-| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account? |
+| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account?, stream?, substitution? |
 | `panel.preferred` | panel host | panel, judge, session, preference, reason (agent) |
 | `panel.judged` | panel host | panel, judge, session, order, preference, reason |
 | `panel.judge-ended` | panel host | panel, judge, session, outcome, error?, transcript? |
