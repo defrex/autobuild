@@ -203,6 +203,7 @@ const MISSING_CLI_MESSAGE =
 
 export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'claude'
+  readonly executable = 'claude'
 
   private readonly runCli: ClaudeCliRunFn
   private readonly runCliStream: ClaudeCliStreamFn | undefined
@@ -448,7 +449,11 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     if (opts.stream !== undefined) args.push(CLAUDE_INCLUDE_PARTIAL_ARG)
     args.push(...(opts.args ?? []), CLAUDE_PROMPT_BOUNDARY, prompt)
 
-    const env = accountEnvironment(sessionEnv(opts.env), opts.account, opts.model)
+    const env = accountEnvironment(
+      sessionEnv(opts.env, process.env, opts.judgeLaunch),
+      opts.account,
+      opts.model,
+    )
     return await withAccountSettings(env, opts.account, async (settingsArgs) => {
       args.unshift(...settingsArgs)
       const invocation: ClaudeCliInvocation = {

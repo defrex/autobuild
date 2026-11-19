@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
-import { AGENT_BIN_DIR, sessionEnv } from './session-env'
+import { AGENT_BIN_DIR, namesPath, sessionEnv } from './session-env'
 
 describe('sessionEnv', () => {
   test('copies defined ambient variables and overlays scoped values', () => {
@@ -79,5 +79,84 @@ describe('sessionEnv', () => {
       { AB_STRAY: 'x', GIT_DIR: '/ws/.git', PWD: '/ws' },
     )
     expect(env).toMatchObject({ AB_STRAY: 'x', GIT_DIR: '/ws/.git', PWD: '/ws' })
+  })
+})
+
+describe('judge launch', () => {
+  const launch = { hide: ['/repo', '/repo/.git', '/store'], binDir: '/tmp/autobuild-judge-bin-1' }
+  const scoped = { AB_JUDGE: 'b:p:1', AB_SESSION: 's_1', AB_CONTEXT_DIR: '.ab/judge' }
+
+  test('namesPath matches a path, not a sibling or a suffix', () => {
+    expect(namesPath('/repo', '/repo')).toBe(true)
+    expect(namesPath('/repo/package.json', '/repo')).toBe(true)
+    expect(namesPath(`/bin${delimiter}/repo/node_modules/.bin`, '/repo')).toBe(true)
+    expect(namesPath('{"cwd":"/repo"}', '/repo')).toBe(true)
+    expect(namesPath('--prefix=/repo', '/repo')).toBe(true)
+    expect(namesPath('/repo-other', '/repo')).toBe(false)
+    expect(namesPath('/repo2/x', '/repo')).toBe(false)
+    expect(namesPath('/repo.bak', '/repo')).toBe(false)
+    expect(namesPath('/x/repo', '/repo')).toBe(false)
+    expect(namesPath('anything', '/')).toBe(false)
+  })
+
+  test('drops every ambient value naming a hidden location', () => {
+    const env = sessionEnv(
+      scoped,
+      {
+        INIT_CWD: '/repo',
+        npm_package_json: '/repo/package.json',
+        npm_config_local_prefix: '/repo',
+        BUN_INSTALL_CACHE_DIR: '/repo/.git/cache',
+        STORE_HINT: 'file:/store/db',
+        SIBLING: '/repo-other/tools',
+        HOME: '/home/me',
+        ANTHROPIC_API_KEY: 'secret',
+      },
+      launch,
+    )
+    for (const key of [
+      'INIT_CWD',
+      'npm_package_json',
+      'npm_config_local_prefix',
+      'BUN_INSTALL_CACHE_DIR',
+      'STORE_HINT',
+    ])
+      expect(key in env).toBe(false)
+    expect(env).toMatchObject({
+      SIBLING: '/repo-other/tools',
+      HOME: '/home/me',
+      ANTHROPIC_API_KEY: 'secret',
+      ...scoped,
+    })
+  })
+
+  test('the launcher directory replaces the distribution one and hidden PATH entries go', () => {
+    const env = sessionEnv(
+      scoped,
+      {
+        PATH: [
+          '/usr/bin',
+          '/repo/node_modules/.bin',
+          AGENT_BIN_DIR,
+          '/repo-other/bin',
+          '',
+          '/store/bin',
+          '/opt/bun/bin',
+        ].join(delimiter),
+      },
+      launch,
+    )
+    expect(env.PATH).toBe(
+      [launch.binDir, '/usr/bin', '/repo-other/bin', '/opt/bun/bin'].join(delimiter),
+    )
+  })
+
+  test('without a judge launch, or outside a judge session, output is unchanged', () => {
+    const ambient = { PATH: `/repo/node_modules/.bin${delimiter}/usr/bin`, INIT_CWD: '/repo' }
+    expect(sessionEnv(scoped, ambient)).toEqual(sessionEnv(scoped, ambient, undefined))
+    expect(sessionEnv(scoped, ambient).INIT_CWD).toBe('/repo')
+    expect(sessionEnv({ AB_BUILD: 'b' }, ambient, launch)).toEqual(
+      sessionEnv({ AB_BUILD: 'b' }, ambient),
+    )
   })
 })
