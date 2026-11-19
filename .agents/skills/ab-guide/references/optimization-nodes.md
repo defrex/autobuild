@@ -414,13 +414,16 @@ recorded judgments, so ties count as half.
 **Resumption.** A run resumed after a crash or restart keeps every recorded
 judgment. A dangling session is closed as `reclaimed`. A preference a local
 judge saved before the crash is committed first, while its session is still
-open. A judge whose preference was recorded is completed from that preference
+open. A dangling session's stream, if it has one, is closed after that
+commit and before the `reclaimed` end. A judge whose preference was recorded is completed from that preference
 and its recorded order without a new session. Only judges with no recorded preference run
 again, each with a freshly drawn order.
 
 **Failures.** A judge's turn that ends without a preference (`no-terminal`),
 fails (`failed`) or exceeds the session budget (`expired`) counts as a
-failure. After two counted failures for one judge, the run fails and names the
+failure. A failure that a provider alternate replaced does not count; only the
+last session of a judge's chain does. An alternate whose executable is
+refused is not started, and the failure it would have replaced counts. After two counted failures for one judge, the run fails and names the
 judge and its last outcome. A shutdown records `interrupted`, which does not
 count. A run that cannot prepare its variants fails with the Git output tail.
 A variant holding a committed symlink that resolves outside its judge root
@@ -430,6 +433,30 @@ inside one, and a launcher that would name one also fail the run before any
 judge starts. A local judge's saved preference that is malformed, or names
 another judge or session, ends that judge as `no-terminal` with the reason.
 Every judge root and the launcher directory are removed when the run ends.
+
+**Provider alternates.** A judge launch follows the `judge` role's provider
+alternates under the same eligibility rules as a build phase: an availability
+or exhaustion failure, or a thrown start, moves to the next target; a
+credentials or configuration failure, a failed credential delegation, an
+expired budget and a shutdown do not. Each target is its own judge session in
+the same root and with the same order, with its own `panel.judge-started`
+(whose `substitution` names the failed session), credential, stream and
+transcript. Before an alternate launches, its executable is checked against
+the judge's filtered `PATH` and protected locations, like the primary's; a
+refused alternate is not started, ends the chain, and its reason is appended
+to the failed session's error. An alternate starts only after the failed
+session's saved preference is settled and its `panel.judge-ended` is recorded,
+and never after any preference, saved outbox or unreadable outbox for that
+judge.
+
+**Watching a judge.** A judge session streams like any other build session
+when its runtime can stream: the stream's session identity carries the `judge`
+role, the runtime and the phase `judge:<panel>:<judge>`, and never the order,
+a side or the root. Its id is recorded on `panel.judge-started`, and it closes
+before `panel.judge-ended`, `completed` when the session preferred and
+`aborted` otherwise. The dashboard's session rows show each judge session,
+including replaced ones, attributed to the panel and judge, without the
+blinded order.
 
 ## Events
 
@@ -457,7 +484,7 @@ Every judge root and the launcher directory are removed when the run ends.
 | `attempt.branch-deleted` | node | proposal, build, branch |
 | `attempt.branch-cleanup-failed` | node | proposal, build?, branch, error |
 | `panel.started` | panel host | panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges |
-| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account? |
+| `panel.judge-started` | panel host | panel, judge, session, order, runner, model?, account?, stream?, substitution? |
 | `panel.preferred` | panel host | panel, judge, session, preference, reason (agent) |
 | `panel.judged` | panel host | panel, judge, session, order, preference, reason |
 | `panel.judge-ended` | panel host | panel, judge, session, outcome, error?, transcript? |
@@ -917,8 +944,10 @@ compares; "scores 1–10 on clarity" does not. Name what must not be traded away
 and say that text written for the judges rather than for the reader counts
 against a variant. Keep the rubric and any fixtures the judges read inside the
 harness, so the pin fixes them. Choose `judges` for cost against noise: each
-judge is one agent session per comparison, and more judges narrow the win
-rate's spread. Five suits most prose; use more when a single preference
+judge costs one agent session per comparison when its primary target succeeds,
+and more judges narrow the win rate's spread. A judge that falls back to
+provider alternates, or is retried after a failure, runs one more session for
+each alternate or retry. Five suits most prose; use more when a single preference
 should not decide an ε of 0.1. See [judge panels](#judge-panels).
 
 **Choose a budget you would sign off on unattended.** It is the limit a human

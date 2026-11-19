@@ -31,15 +31,21 @@ import { DISPATCHER } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { labelSides, type PanelOrder } from '../kernel/panel'
 import { FakeForge } from '../ports/forge/fake'
-import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
+import {
+  ScriptedAgentRunner,
+  defaultTurnResult,
+  failedTurnResult,
+  type ScriptContext,
+} from '../ports/runner/fake'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { distributionRoot } from '../distribution'
 import { bundleJudgeLauncher } from '../processes/judge-launcher'
-import type { BuildStore } from '../store/types'
+import type { BuildScopedStore, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import { temporaryDirectories } from '../testing/temp-directories'
-import { BuildRunner, type PanelRequest } from '../processes/build-runner'
+import { BuildRunner, type BuildRunnerDeps, type PanelRequest } from '../processes/build-runner'
+import type { RuntimeRegistration } from '../ports/runner/runtime'
 import {
   judgeAmbientAliases,
   judgeProtectedPaths,
@@ -223,18 +229,34 @@ function runnerFor(
   random: () => number,
   generation = 1,
   alive: () => boolean = () => true,
+  extra: {
+    roles?: string
+    runtimes?: BuildRunnerDeps['runtimes']
+    streams?: boolean
+    wrapStore?: (store: BuildScopedStore) => BuildScopedStore
+  } = {},
 ) {
+  const openSessionStream: RuntimeRegistration['openSessionStream'] = async (sink, info) =>
+    sink.open(`session:${info.session}`)
   // A dead process runs nothing, so it cleans nothing up either.
   const exec: Exec = (cmd, opts) =>
     alive()
       ? spawnExec(cmd, { ...opts, env: { ...opts.env, TMPDIR: tmp } })
       : Promise.reject(new Error('process crashed'))
   return new BuildRunner({
-    store: (store as MemoryBuildStore).scopeBuild(SLUG),
+    store: (extra.wrapStore ?? ((scoped) => scoped))((store as MemoryBuildStore).scopeBuild(SLUG)),
     config: parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n' +
+        (extra.roles ?? ''),
     ),
-    runtimes: { scripted: { runner: agent, servesModels: [''] } },
+    runtimes: {
+      scripted: {
+        runner: agent,
+        servesModels: [''],
+        ...(extra.streams ? { openSessionStream } : {}),
+      },
+      ...extra.runtimes,
+    },
     workspacePath: repo.workspace,
     branch: `ab/${SLUG}`,
     slug: SLUG,
@@ -653,6 +675,165 @@ describe('a judge panel run', () => {
     // 4: tie → 0.5.
     expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 4)
     expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+  })
+})
+
+describe('judge provider alternates and session streams', () => {
+  const JUDGE_ALTERNATE =
+    '\n[roles.judge]\nruntime = "scripted"\nalternates = [{ runtime = "backup" }]\n'
+  const streamOpener: RuntimeRegistration['openSessionStream'] = async (sink, info) =>
+    sink.open(`session:${info.session}`)
+
+  test('a failed primary falls back to a streaming alternate; every judge session streams', async () => {
+    const repo = await repository()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    const primary = new ScriptedAgentRunner({
+      script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
+    })
+    const backup = judges(async (_ctx, _judge, cli) => {
+      expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
+    })
+    // Each stream is closed by the time its session's end lands.
+    const openAtEnd: string[] = []
+    const checkClosed = async (target: BuildStore, session: string) => {
+      const started = (await target.getEvents(SLUG)).find(
+        (event) => event.type === 'panel.judge-started' && event.payload.session === session,
+      ) as (AbEvent & { type: 'panel.judge-started' }) | undefined
+      const stream = started?.payload.stream
+      if (stream === undefined || (await target.getStream(stream))?.status !== 'closed')
+        openAtEnd.push(session)
+    }
+    const result = await runnerFor(
+      store,
+      repo,
+      primary,
+      tmp,
+      () => 0.1,
+      1,
+      () => true,
+      {
+        roles: JUDGE_ALTERNATE,
+        streams: true,
+        runtimes: {
+          backup: { runner: backup, servesModels: [''], openSessionStream: streamOpener },
+        },
+        wrapStore: (scoped) =>
+          new Proxy(scoped, {
+            get(target, property, receiver) {
+              const member = Reflect.get(target, property, receiver)
+              if (property === 'append')
+                return async (slug: string, write: Parameters<BuildStore['append']>[1]) => {
+                  if (write.type === 'panel.judge-ended')
+                    await checkClosed(target, (write.payload as { session: string }).session)
+                  return target.append(slug, write)
+                }
+              // A judge's transcript deposit carries its end.
+              if (property === 'appendWithArtifacts')
+                return async (...args: Parameters<BuildStore['appendWithArtifacts']>) => {
+                  const session = args[1][0]?.metadata?.session
+                  if (typeof session === 'string') await checkClosed(target, session)
+                  return target.appendWithArtifacts(...args)
+                }
+              return member
+            },
+          }),
+      },
+    ).runPanel(request(repo, 2))
+    expect(result.kind).toBe('judged')
+    expect(openAtEnd).toEqual([])
+
+    const events = panelEvents(await store.getEvents(SLUG))
+    const starts = events.flatMap((event) =>
+      event.type === 'panel.judge-started' ? [event.payload] : [],
+    )
+    expect(starts).toHaveLength(4)
+    expect(starts.every((start) => start.stream !== undefined)).toBe(true)
+    for (const judge of [1, 2]) {
+      const [failed, alternate] = starts.filter((start) => start.judge === judge)
+      expect(failed!.runner).toBe('scripted')
+      expect(alternate).toMatchObject({
+        runner: 'backup',
+        order: failed!.order,
+        substitution: { failed: { session: failed!.session, index: 0 }, selectedIndex: 1 },
+      })
+      expect((await store.getStream(failed!.stream!))?.outcome).toBe('aborted')
+      expect((await store.getStream(alternate!.stream!))?.outcome).toBe('completed')
+    }
+
+    const streams = await store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams).toHaveLength(4)
+    for (const start of starts) {
+      const artifact = await store.getArtifact(SLUG, `stream:${start.stream}`)
+      const document = JSON.parse(new TextDecoder().decode(artifact!.content))
+      const parts = document.flatMap((message: { parts: unknown[] }) => message.parts)
+      expect(parts[0]).toMatchObject({
+        type: 'data-ab-session',
+        data: {
+          session: start.session,
+          role: 'judge',
+          runner: start.runner,
+          phase: `judge:panel-1:${start.judge}`,
+        },
+      })
+      // Nothing streamed names the blinded order, a side or the root.
+      const streamed = JSON.stringify(parts)
+      for (const forbidden of ['candidate', 'baseline', tmp, repo.workspace])
+        expect(streamed).not.toContain(forbidden)
+    }
+  })
+
+  test('an alternate whose executable is found only inside the repository is never started', async () => {
+    const repo = await repository()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    const bin = join(repo.workspace, 'node_modules', '.bin')
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, 'fake-backup-runtime'), '#!/bin/sh\nexit 0\n')
+    await chmod(join(bin, 'fake-backup-runtime'), 0o755)
+    const primary = new ScriptedAgentRunner({
+      script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
+    })
+    const backup = judges(() => {
+      throw new Error('no alternate may start')
+    }, 'fake-backup-runtime')
+    const previous = process.env.PATH
+    process.env.PATH = `${bin}:${previous ?? ''}`
+    let result: PanelResult
+    try {
+      result = await runnerFor(
+        store,
+        repo,
+        primary,
+        tmp,
+        () => 0.1,
+        1,
+        () => true,
+        {
+          roles: JUDGE_ALTERNATE,
+          runtimes: { backup: { runner: backup, servesModels: [''] } },
+        },
+      ).runPanel(request(repo, 1))
+    } finally {
+      process.env.PATH = previous
+    }
+    expect(result).toEqual({
+      kind: 'failed',
+      reason: 'judge 1 failed 2 times; last outcome failed',
+    })
+    expect(backup.sessions.size).toBe(0)
+    const events = panelEvents(await store.getEvents(SLUG))
+    expect(
+      events.flatMap((event) =>
+        event.type === 'panel.judge-started' ? [event.payload.runner] : [],
+      ),
+    ).toEqual(['scripted', 'scripted'])
+    const ended = events.find((event) => event.type === 'panel.judge-ended')!
+    const error = (ended.payload as { error: string }).error
+    expect(error).toContain(
+      "alternate 1 (backup) refused: the judge's fake-backup-runtime executable was not found outside the repository",
+    )
+    expect(error).not.toContain(repo.workspace)
   })
 })
 
