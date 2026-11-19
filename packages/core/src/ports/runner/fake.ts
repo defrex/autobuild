@@ -136,7 +136,7 @@ export class ScriptedAgentRunner implements AgentRunner {
         // Scripts observe the same effective launch environment as production
         // adapters; the journal below intentionally retains the caller's raw
         // start options as the session identity.
-        opts: { ...opts, env: sessionEnv(opts.env) },
+        opts: { ...opts, env: sessionEnv(opts.env, process.env, opts.judgeLaunch) },
         session,
         turn: 1,
         history: [],
@@ -173,7 +173,7 @@ export class ScriptedAgentRunner implements AgentRunner {
     const scoped = opts?.env !== undefined ? { ...journal.opts.env, ...opts.env } : journal.opts.env
     const turnOpts = {
       ...journal.opts,
-      env: sessionEnv(scoped),
+      env: sessionEnv(scoped, process.env, journal.opts.judgeLaunch),
       stream: opts?.stream,
       onNativeSession: opts?.onNativeSession,
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),

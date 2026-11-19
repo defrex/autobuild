@@ -5853,3 +5853,101 @@ export async function optimizationLandingReadBudget(): Promise<void> {
   }
   expect(vectors[1]).toEqual(vectors[0]!)
 }
+
+/** AUT-1245: a judge's atomic preference write is one served delegation read
+ * and one conditional append per uncontended attempt, the same request vector
+ * at 100 and 100,000 build events, and zero historical event rows once the
+ * key's one-time reduction is saved. A refused retry costs one read and only
+ * the new rows since the saved cursor. No path reads the log. */
+export async function judgePreferenceReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { appendJudgePreference } = await import('../store/judge-authority')
+  const { sampleBuildInput } = await import('../store/contract')
+  const { agentActor } = await import('../events/envelope')
+  const repo = 'acme/judge-budget'
+  const build = 'judge-budget'
+  const scope = { build, panel: 'panel-1', judge: 1, session: 's_judge' }
+  const write = (preference: 'A' | 'B') => ({
+    actor: agentActor('judge', scope.session),
+    type: 'panel.preferred' as const,
+    payload: {
+      panel: scope.panel,
+      judge: scope.judge,
+      session: scope.session,
+      preference,
+      reason: 'A follows the rubric',
+    },
+  })
+  const results: Array<{
+    recorded: { vector: Record<string, number>; rows: number }
+    refused: { vector: Record<string, number>; rows: number }
+  }> = []
+  for (const filler of [100, 100_000]) {
+    const store = new MemoryBuildStore()
+    await store.createBuild({ ...sampleBuildInput(build), repo })
+    await store.ensureRepo(repo)
+    await store.append(build, {
+      actor: KERNEL,
+      type: 'panel.started',
+      payload: {
+        panel: scope.panel,
+        candidate: 'c'.repeat(40),
+        baseline: 'b'.repeat(40),
+        harnessPin: 'a'.repeat(40),
+        purpose: 'clear prose',
+        rubric: 'evals/rubric.md',
+        harness: ['evals/**'],
+        judges: 1,
+      },
+    })
+    await store.append(build, {
+      actor: KERNEL,
+      type: 'panel.judge-started',
+      payload: {
+        panel: scope.panel,
+        judge: scope.judge,
+        session: scope.session,
+        order: 'candidate-first',
+        runner: 'scripted',
+      },
+    })
+    for (let i = 0; i < filler; i++)
+      await store.append(build, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: { id: `obs-${i}`, kind: 'followup', summary: `budget padding ${i}` },
+      })
+    // The one-time reduction of this (build, buildDelegation) key.
+    await store.getReducerValue({ kind: 'build', slug: build }, { reducer: 'buildDelegation' })
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    try {
+      const measure = async (preference: 'A' | 'B') => {
+        rows.reset()
+        requests.reset()
+        const result = await appendJudgePreference(store, scope, write(preference))
+        return { result, vector: requests.vector(), rows: rows.buildRows }
+      }
+      const recorded = await measure('A')
+      expect(recorded.result.kind).toBe('recorded')
+      const refused = await measure('B')
+      expect(refused.result).toEqual({
+        kind: 'refused',
+        reason: 'this judge already recorded its preference',
+      })
+      results.push({
+        recorded: { vector: recorded.vector, rows: recorded.rows },
+        refused: { vector: refused.vector, rows: refused.rows },
+      })
+    } finally {
+      requests.restore()
+    }
+  }
+  const [small, large] = results as [(typeof results)[0], (typeof results)[0]]
+  expect(small.recorded.vector).toEqual({ appendIfCurrent: 1, getReducerValue: 1 })
+  expect(small.refused.vector).toEqual({ getReducerValue: 1 })
+  expect(small.recorded.rows).toBe(0)
+  expect(small.refused.rows).toBeLessThanOrEqual(1)
+  expect(large).toEqual(small)
+  return { small, large }
+}

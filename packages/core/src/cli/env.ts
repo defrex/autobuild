@@ -39,9 +39,10 @@ export interface CliEnv {
 }
 
 /** A judge session's ambient identity (SPEC §13.1.1): write-only, with no
- * build phase. `AB_JUDGE` is `<build>:<panel>:<judge>`. */
+ * build phase. `AB_JUDGE` is `<build>:<panel>:<judge>`. Only a remote store
+ * is named: a local judge saves its preference to an outbox in its root. */
 export interface JudgeCliEnv {
-  store: string
+  store?: string
   build: string
   panel: string
   judge: number
@@ -172,7 +173,7 @@ const JUDGE_FORMAT = "'<build>:<panel>:<judge>' (e.g. 'my-build:panel-1:3')"
 const DEFAULT_JUDGE_CONTEXT_DIR = '.ab/judge'
 
 export function resolveJudgeCliEnv(env: Record<string, string | undefined>): JudgeCliEnv {
-  const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
+  const store = env.AB_STORE
   const raw = requireVar(env, 'AB_JUDGE', `the judge identity in the format ${JUDGE_FORMAT}`)
   const session = requireVar(env, 'AB_SESSION', 'the session id')
   const match = /^([^:]+):([^:]+):([1-9]\d*)$/.exec(raw)
@@ -181,7 +182,7 @@ export function resolveJudgeCliEnv(env: Record<string, string | undefined>): Jud
   const token = env.AB_TOKEN
   const contextDir = env.AB_CONTEXT_DIR
   return {
-    store,
+    ...(store !== undefined && store !== '' ? { store } : {}),
     build: match[1]!,
     panel: match[2]!,
     judge: Number(match[3]),

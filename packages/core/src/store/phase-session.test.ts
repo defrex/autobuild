@@ -503,6 +503,37 @@ describe('judge session scope', () => {
     expect(late.message).toContain('has ended')
   })
 
+  test('local: two racing preferences from one session record one durable event', async () => {
+    const underlying = await judging()
+    const read = underlying.getReducerValue.bind(underlying)
+    let waiting = 0
+    let release!: () => void
+    const both = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    underlying.getReducerValue = async (scope, request) => {
+      const value = await read(scope, request)
+      if (waiting < 2) {
+        waiting += 1
+        if (waiting === 2) release()
+        await both
+      }
+      return value
+    }
+    const store = scopeLocalStoreToJudgeSession(underlying, scope)
+    const outcomes = await Promise.allSettled([
+      store.append(BUILD, preference()),
+      store.append(BUILD, preference({ preference: 'B' })),
+    ])
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected'])
+    const lost = outcomes.find((outcome) => outcome.status === 'rejected') as PromiseRejectedResult
+    expect(lost.reason).toBeInstanceOf(PhaseSessionError)
+    expect((lost.reason as Error).message).toContain('already recorded its preference')
+    expect(
+      (await underlying.getEvents(BUILD)).filter((event) => event.type === 'panel.preferred'),
+    ).toHaveLength(1)
+  })
+
   test('remote: the append is posted with no read; the server owns the lifecycle', async () => {
     const { store: inner, calls } = counting(await judging())
     const store = scopeRemoteStoreToJudgeSession(inner, scope)

@@ -24,6 +24,7 @@ import {
   scopeRemoteStoreToJudgeSession,
 } from '../store/phase-session'
 import { openProductionSessionStore } from './store-opening'
+import { judgeAccountRedaction } from './judge'
 import { processTerminal, processTerminalInput } from './terminal'
 import type { TerminalRestoreProcess } from './terminal-restore'
 import type { DashboardRendererResolver } from './dashboard/render'
@@ -155,8 +156,18 @@ export async function runDirectBinary(
       console.error(error instanceof Error ? error.message : String(error))
       return 1
     }
+    const judgeRedact = judgeAccountRedaction(process.env)
+    // A local judge holds no store: its preference goes to its outbox.
+    if (judgeEnv.store === undefined)
+      return runCli(argv, {
+        ...unscopedDeps,
+        judgeEnv,
+        ...(judgeRedact !== undefined ? { judgeRedact } : {}),
+      })
     // A judge's store handle appends its one preference and refuses every
-    // read; a remote server is the authority behind the same refusals.
+    // read; a remote server is the authority behind the same refusals. A
+    // local store path is never set by the runner; set by hand, it is guarded
+    // the same way.
     const inner = openProductionStore(judgeEnv.store, judgeEnv.token)
     const scope = {
       build: judgeEnv.build,

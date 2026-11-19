@@ -3,6 +3,7 @@ export type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness
 import type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { BuildStore } from '../store/types'
 import { ForgeRejection, isForgeRejection } from './forge-failure'
+import type { JudgeLaunch } from './runner/session-env'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
  * The kernel and processes depend only on these types; adapters live in
@@ -1101,6 +1102,11 @@ export interface AgentStartOpts {
   /** Live session stream, present only when the resolved runtime declared
    * the streaming capability (SPEC §9). A turn without it emits no parts. */
   stream?: SessionStreamEmitter
+  /** A judge session's launch (SPEC §13.1.1): the protected locations nothing
+   * the judge inherits may name, and its scratch launcher directory. Adapters
+   * pass it to `sessionEnv`, and refuse the start when a launch argument
+   * they cannot relocate would name a protected location. */
+  judgeLaunch?: JudgeLaunch
 }
 
 /** The inputs a runtime's start prompt depends on; no env, workspace or signal. */
@@ -1133,6 +1139,10 @@ export interface AgentContinueOpts {
 
 export interface AgentRunner {
   readonly name: string
+  /** The executable the adapter spawns by bare name through the session
+   * env's PATH, when it spawns one; a judge launch refuses one that resolves
+   * only inside a protected location. */
+  readonly executable?: string
   resume?(
     handle: NativeSessionHandle,
     message: string,
