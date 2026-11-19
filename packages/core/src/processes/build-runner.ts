@@ -238,6 +238,9 @@ export interface BuildRunnerOpts {
   leaseTtlMs?: number
   /** Test seam for phase-session deadlines. Production uses an unref'ed timer. */
   scheduleSessionBudget?: (expire: () => void, delayMs: number) => () => void
+  /** Test seam for the lease keep-alive. Production uses an unref'ed interval;
+   * returns a cancel. */
+  scheduleHeartbeat?: (beat: () => void, intervalMs: number) => () => void
   /** Session streams (SPEC §9): open one stream per session bracket for
    * runtimes that declare the streaming capability. Default true. A failing
    * stream path never fails a turn; disabling reproduces the event log
@@ -424,6 +427,12 @@ function interruptionMessage(
 
 function sessionBudgetError(seconds: number): string {
   return `phase session budget expired after ${seconds} seconds`
+}
+
+function defaultHeartbeatScheduler(beat: () => void, intervalMs: number): () => void {
+  const timer = setInterval(beat, intervalMs)
+  timer.unref?.()
+  return () => clearInterval(timer)
 }
 
 function defaultSessionBudgetScheduler(expire: () => void, delayMs: number): () => void {
@@ -1031,7 +1040,7 @@ export class BuildRunner {
   private readonly streamSessions: boolean
   private readonly onDiagnostic: (message: string) => void
   private attached = false
-  private heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  private cancelHeartbeat: (() => void) | undefined
   /** Set when a heartbeat reports the lease lapsed (§7.4): the store never
    * renews an expired lease, so the holder must re-claim before doing any
    * more work — or stop, because the sweep may already have launched a
@@ -1307,7 +1316,8 @@ export class BuildRunner {
     // then keep-alive. Setup runs under this heartbeat so a slow install cannot
     // outlive the claimed lease.
     await store.heartbeat(slug, instance)
-    this.heartbeatTimer = setInterval(() => {
+    const scheduleHeartbeat = this.deps.opts?.scheduleHeartbeat ?? defaultHeartbeatScheduler
+    this.cancelHeartbeat = scheduleHeartbeat(() => {
       store.heartbeat(slug, instance).then(
         (alive) => {
           if (!alive) this.leaseLost = true
@@ -1318,7 +1328,6 @@ export class BuildRunner {
         },
       )
     }, this.heartbeatMs)
-    this.heartbeatTimer.unref?.()
 
     const setup = config.commands.setup
     if (setup !== undefined) {
@@ -5900,9 +5909,9 @@ export class BuildRunner {
   }
 
   private stopHeartbeat(): void {
-    if (this.heartbeatTimer !== undefined) {
-      clearInterval(this.heartbeatTimer)
-      this.heartbeatTimer = undefined
+    if (this.cancelHeartbeat !== undefined) {
+      this.cancelHeartbeat()
+      this.cancelHeartbeat = undefined
     }
   }
 
