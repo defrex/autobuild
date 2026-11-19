@@ -376,7 +376,10 @@ for every holder of the store: the hosted `build-judge` route, the kernel's
 outbox commit and the local wrapper in `packages/core/src/store/phase-session.ts`.
 `packages/core/src/cli/judge.ts` implements `ab judge context` (no store read)
 and `ab judge prefer`, and any read command run with `AB_JUDGE` set fails
-before opening a store.
+before opening a store. The node runner calls
+`runPanel` for a panel node's starting self-comparison and for its progress
+after each accepted attempt, selected by `baselineMeasurementDue` and
+`progressMeasurementDue` in `packages/core/src/kernel/measurement.ts`.
 
 **Phase decisions.** `packages/core/src/kernel/phases.ts` owns the phase table,
 `packages/core/src/kernel/engine.ts` the deterministic transitions;

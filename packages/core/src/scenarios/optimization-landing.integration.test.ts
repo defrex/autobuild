@@ -256,6 +256,7 @@ test('an improved attempt requests its first measurement, then lands only on its
         attempt: { proposal: 'p-A1', ticket: expect.objectContaining({ id: 'A1' }), build: child },
         outcome: 'accepted',
         measurement: { revision: 1, baseline: 50, candidate: 48, delta: 2 },
+        head: childState.pr!.headSha,
       },
     ])
     const digest = (await stateOf(h, node.slug)).optimization!

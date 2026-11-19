@@ -83,7 +83,7 @@ export const executionProgress = {
   'attempt.measurement-requested': 'bookkeeping',
   'attempt.sampled': 'progress',
   'attempt.measured': 'progress',
-  'optimization.progress-measured': 'bookkeeping',
+  'optimization.progress-measured': 'progress',
   'attempt.settled': 'bookkeeping',
   'optimization.stopped': 'bookkeeping',
   'attempt.ticket-rejected': 'bookkeeping',

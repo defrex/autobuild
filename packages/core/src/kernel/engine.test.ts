@@ -4438,3 +4438,159 @@ describe('baseline and proposer ordering after a ruler change', () => {
     expect(decideNext(log.events, config)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
   })
 })
+
+describe('decideNext: panel node starting measurement and progress', () => {
+  const pin = 'a'.repeat(40)
+  const head = 'c'.repeat(40)
+  const objective = {
+    purpose: 'clearer prose',
+    metric: { kind: 'panel' as const, judges: 3, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+    target: { threshold: 0.8, epsilon: { absolute: 0.1 } },
+    budget: { maxAttempts: 5 },
+    stop: { mode: 'drain' as const },
+    proposer: { concurrency: 1 },
+  }
+  const opened: EventWrite[] = [
+    ev('build.created', {
+      ticket: { source: 'linear', id: 'ENG-8' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      kind: 'node',
+    }),
+    ev('optimization.objective-accepted', { objective, revision: 1, harnessPin: pin, specRev: 0 }),
+    ev('node.opened', { sha: pin }),
+  ]
+  const accepted: EventWrite[] = [
+    ...opened,
+    ev('optimization.baseline-measured', {
+      revision: 1,
+      head: pin,
+      harnessPin: pin,
+      samples: 3,
+      median: 0.5,
+      spread: 0,
+    }),
+    ev('optimization.proposal-requested', {
+      id: 'r1',
+      head: pin,
+      room: 1,
+      budgetUsed: { attempts: 0, hours: 0 },
+    }),
+    ev('optimization.attempts-proposed', {
+      request: 'r1',
+      proposals: [
+        { id: 'p1', ticket: { source: 'linear', id: 'ENG-9' }, title: 'One', strategy: 's' },
+      ],
+    }),
+    ev('attempt.settled', {
+      attempt: { proposal: 'p1', ticket: { source: 'linear', id: 'ENG-9' } },
+      outcome: 'accepted',
+      measurement: { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 },
+      head,
+    }),
+  ]
+
+  test('an opened panel node judges its harness pin against itself first', () => {
+    expect(decide(opened)).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
+  })
+
+  test('an accepted head is judged against the starting head', () => {
+    expect(decide(accepted)).toEqual({
+      kind: 'measure-progress',
+      revision: 1,
+      head,
+      start: pin,
+      harnessPin: pin,
+    })
+  })
+
+  test.each([false, true])(
+    'progress waits for an admitted proposer only: started=%s',
+    (started) => {
+      const request = ev('optimization.proposal-requested', {
+        id: 'r2',
+        head,
+        room: 1,
+        budgetUsed: { attempts: 1, hours: 0 },
+      })
+      const pending = [...accepted, request]
+      if (started) pending.push(ev('propose.started', { round: 2, request: 'r2' }))
+      expect(decide(pending)).toMatchObject(
+        started
+          ? { kind: 'run-phase', phase: 'propose', round: 2 }
+          : { kind: 'measure-progress', head },
+      )
+      if (started) {
+        pending.push(
+          ev('propose.completed', {
+            round: 2,
+            request: 'r2',
+            artifact: { kind: 'attempts', rev: 2 },
+            proposals: ['p2'],
+          }),
+        )
+        pending.push(
+          ev('optimization.attempts-proposed', {
+            request: 'r2',
+            proposals: [
+              { id: 'p2', ticket: { source: 'linear', id: 'ENG-10' }, title: 'Two', strategy: 's' },
+            ],
+          }),
+        )
+        expect(decide(pending)).toMatchObject({ kind: 'measure-progress', head })
+        pending.push(
+          ev('optimization.proposal-requested', {
+            id: 'r3',
+            head,
+            room: 1,
+            budgetUsed: { attempts: 2, hours: 0 },
+          }),
+        )
+      }
+      pending.push(
+        ev('optimization.progress-measured', {
+          revision: 1,
+          head,
+          start: pin,
+          winRate: 0.7,
+          judges: 3,
+        }),
+      )
+      expect(decide(pending)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
+    },
+  )
+
+  test('recorded progress falls through to integration', () => {
+    expect(
+      decide([
+        ...accepted,
+        ev('optimization.progress-measured', {
+          revision: 1,
+          head,
+          start: pin,
+          winRate: 0.7,
+          judges: 3,
+        }),
+      ]),
+    ).toEqual(wait('awaiting-pr'))
+  })
+
+  test('a blocker or pause outranks progress', () => {
+    expect(
+      decide([
+        ...accepted,
+        ev('escalation.raised', {
+          id: 'esc-p',
+          phase: 'measurement',
+          source: 'policy',
+          policyCause: 'measurement-failed',
+          question: 'judges failed',
+        }),
+      ]),
+    ).toEqual(wait('blocked'))
+    expect(decide([...accepted, ev('build.pause-requested', {})])).toEqual({
+      kind: 'acknowledge',
+      command: 'pause',
+    })
+  })
+})
