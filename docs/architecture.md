@@ -25,7 +25,11 @@ disagree, the code is authoritative.
    forward. Pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
-   that gate explicitly with `[tickets].proposalState`.
+   that gate explicitly with `[tickets].proposalState` for its own harvest.
+   An optimization node's attempts are the one other path: grooming the
+   node's objective, purpose, budget and stop policy is the dispatch decision
+   for the attempts its proposer files, so within that budget they go
+   straight to Ready. The gate still holds for all other generated work.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## Pipeline
@@ -1721,6 +1725,9 @@ compatibility facade. Metadata is excluded from hosted persistence/protocols.
 
 The product dispatcher owns the workspace-free node lifecycle:
 spec → node.opening → node.opened → collecting → complete → verify:* → consent → merge.
+An optimization node measures its starting value after opening and then
+repeats propose → collecting: an `ab-propose` session deposits proposals and
+the dispatcher files each as an attempt ticket targeting the node.
 The ordinary work pipeline is unchanged. `build.created` freezes kind, target
 ticket/build identity and resolved parent in `baseBranch`. Integration facts
 are projected by the shared reducer and digests, including collecting/empty

@@ -725,7 +725,7 @@ describe('roleKeyWarnings — the one message set', () => {
     )
     expect(lines[1]).toBe(
       'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, ' +
-        'implement, judge, plan, plan-review, reconcile, slug, upgrade',
+        'implement, judge, plan, plan-review, propose, reconcile, slug, upgrade',
     )
     expect(lines[2]).toContain('[roles.ab-verify-e2e] should be [roles.e2e]')
   })
@@ -788,7 +788,7 @@ skill = "ab-release-notes"
     `\n[profiles.${name}]\nlabel = "${name}"\n${entries}`
   const VALID_PROFILE =
     'Valid profile role keys: code-review, e2e, finalize, implement, plan, plan-review, ' +
-    'reconcile, release-notes'
+    'propose, reconcile, release-notes'
   const EXTENSIONS = (table: string): string =>
     `autobuild.toml: ${table} declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.`
 

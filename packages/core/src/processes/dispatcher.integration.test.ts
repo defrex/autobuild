@@ -5,9 +5,11 @@ import {
   flaggedWorkspaceSweepReadBudget,
   parkedSweepReadBudget,
   ticketWaitIdleReadBudget,
+  optimizationProposerReadBudget,
   provisionContinuationGuardReadBudget,
   sampledMeasurementReadBudget,
 } from '../testing/reduced-read-budget'
+import { commandObjective } from '../kernel/generators/optimization-log'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
@@ -19320,7 +19322,7 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     expect(state.attemptMeasurement?.refused).toBe('m1')
   })
 
-  test('a node due its starting measurement gets a workspace and runner, then releases it', async () => {
+  test('a baseline workspace is retained for a pending proposer and released after both owners finish', async () => {
     const h = harness()
     h.forge.seedBranch(`ab-node/${NODE}`, PIN)
     await h.store.createBuild({ slug: NODE, repo: REPO, branch: `ab-node/${NODE}` })
@@ -19351,8 +19353,22 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     })
     h.clock.advance(10 * 60_000)
     await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await types()).not.toContain('workspace.released')
+    expect(await types()).toContain('optimization.proposal-requested')
+    const proposal = (await readBuildFacts(h.store, NODE)).value.state.optimization!.proposal!
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: { request: proposal.id, proposals: [], reason: 'No further strategies' },
+    })
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.stopped',
+      payload: { cause: 'operator', mode: 'abort' },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
     expect(await types()).toContain('workspace.released')
-    expect(h.launches).toEqual([NODE])
   })
 
   test('idle ticks stay bounded at 100 and 100,000 events', async () => {
@@ -19374,13 +19390,11 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       dispatcher: () => make().dispatcher,
       sample: (slug, request) => sample(store, slug, request),
       decided: async (slug, request) =>
-        (await store.getEvents(slug)).some(
-          (event) => event.type === 'attempt.measured' && event.payload.request === request,
-        ),
+        (await readBuildFacts(store, slug)).value.state.attemptMeasurement?.measured?.request ===
+        request,
       advance: () => clock.advance(10 * 60_000),
     })
-  }, 120_000)
-
+  }, 60_000)
   const panelMetric = {
     kind: 'panel' as const,
     judges: 5,
@@ -19549,6 +19563,218 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
             event.payload.winRate === 0.8,
         ),
       advance: () => clock.advance(10 * 60_000),
+    })
+  }, 120_000)
+})
+
+describe('optimization proposer read budget', () => {
+  test('idle, refused and capacity-waiting optimization nodes cost no recurring reads', async () => {
+    await optimizationProposerReadBudget({
+      sizes: [2, 40],
+      setup: async (size) => {
+        const clock = manualClock()
+        const store = new MemoryBuildStore({ clock })
+        // The unrelated leaves and one busy leaf fill every slot, so every
+        // proposal request waits.
+        const make = () => harness({ store, clock, toml: `capacity = ${size + 1}\n` })
+        const h = make()
+        const forges = [h.forge]
+        await seedBuild(h, { slug: 'busy', ticketId: 'BUSY' })
+        await store.claimLease('busy', 'runner-busy', 365 * 24 * 60 * 60_000)
+        const node = async (
+          slug: string,
+          objective: ReturnType<typeof commandObjective> | null = commandObjective({
+            budget: { maxAttempts: 20_000 },
+          }),
+        ) => {
+          await store.createBuild({
+            slug,
+            repo: REPO,
+            ticket: { source: 'fake', id: slug, title: slug },
+            branch: `ab/${slug}`,
+          })
+          for (const forge of forges) forge.seedBranch(`ab/${slug}`, BASE_SHA)
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'build.created',
+            payload: {
+              ticket: { source: 'fake', id: slug, title: slug },
+              repo: REPO,
+              baseBranch: 'main',
+              kind: 'node',
+            },
+          })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'node.opened',
+            payload: { sha: BASE_SHA },
+          })
+          if (objective === null) return
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'optimization.objective-accepted',
+            payload: { objective, revision: 1, harnessPin: BASE_SHA, specRev: 0 },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'optimization.baseline-measured',
+            payload: {
+              revision: 1,
+              head: BASE_SHA,
+              harnessPin: BASE_SHA,
+              samples: 5,
+              median: 50,
+              spread: 1,
+            },
+          })
+        }
+        const request = (slug: string, room: number) =>
+          store.append(slug, {
+            actor: DISPATCHER,
+            type: 'optimization.proposal-requested',
+            payload: {
+              id: `req-${slug}`,
+              head: BASE_SHA,
+              room,
+              budgetUsed: { attempts: 0, hours: 0 },
+            },
+          })
+        const waiting: string[] = []
+        for (let index = 0; index < size; index += 1) {
+          await node(`plain-${index}`, null)
+          await seedBuild(h, { slug: `leaf-${index}`, ticketId: `LEAF-${index}`, attached: true })
+          const refused = `refused-${index}`
+          await node(refused)
+          const kind = index % 3
+          await store.append(
+            refused,
+            kind === 0
+              ? { actor: KERNEL, type: 'build.paused', payload: {} }
+              : kind === 1
+                ? {
+                    actor: KERNEL,
+                    type: 'escalation.raised',
+                    payload: {
+                      id: `esc-${index}`,
+                      phase: 'reconcile',
+                      source: 'agent',
+                      question: 'q',
+                    },
+                  }
+                : { actor: humanActor('ada'), type: 'build.pause-requested', payload: {} },
+          )
+          const wait = `waiting-${index}`
+          await node(wait)
+          await request(wait, 4)
+          waiting.push(wait)
+        }
+        // Idle: an expired hours budget, full concurrency, stopped, and a long
+        // settled history.
+        await node('idle-expired', commandObjective({ budget: { maxHours: 1 } }))
+        clock.advance(2 * 3_600_000)
+        await node('idle-full', commandObjective({ proposer: { concurrency: 1 } }))
+        await request('idle-full', 1)
+        await store.append('idle-full', {
+          actor: DISPATCHER,
+          type: 'optimization.attempts-proposed',
+          payload: {
+            request: 'req-idle-full',
+            proposals: [
+              { id: 'a', ticket: { source: 'fake', id: 'A' }, title: 'a', strategy: 's' },
+            ],
+          },
+        })
+        // A filed node whose proposer workspace outlived its record: the
+        // first pass releases it, and it costs nothing after.
+        await node('stranded', commandObjective({ proposer: { concurrency: 1 } }))
+        await request('stranded', 1)
+        await store.append('stranded', {
+          actor: DISPATCHER,
+          type: 'workspace.provisioned',
+          payload: {
+            provider: 'fake',
+            ref: '/ws/ab/stranded',
+            branch: 'ab/stranded',
+            base: { source: 'remote', sha: BASE_SHA },
+          },
+        })
+        await store.append('stranded', {
+          actor: DISPATCHER,
+          type: 'optimization.attempts-proposed',
+          payload: {
+            request: 'req-stranded',
+            proposals: [
+              { id: 'a', ticket: { source: 'fake', id: 'S' }, title: 'a', strategy: 's' },
+            ],
+          },
+        })
+        await node('idle-stopped')
+        await store.append('idle-stopped', {
+          actor: DISPATCHER,
+          type: 'optimization.stopped',
+          payload: { cause: 'operator', mode: 'abort' },
+        })
+        await node('idle-history')
+        for (let attempt = 0; attempt < size * 50; attempt += 1) {
+          await store.append('idle-history', {
+            actor: DISPATCHER,
+            type: 'optimization.attempts-proposed',
+            payload: {
+              request: `history-${attempt}`,
+              proposals: [
+                {
+                  id: `h${attempt}`,
+                  ticket: { source: 'fake', id: `H${attempt}` },
+                  title: 't',
+                  strategy: 's',
+                },
+              ],
+            },
+          })
+          await store.append('idle-history', {
+            actor: DISPATCHER,
+            type: 'attempt.settled',
+            payload: {
+              attempt: { proposal: `h${attempt}`, ticket: { source: 'fake', id: `H${attempt}` } },
+              outcome: 'declined',
+            },
+          })
+        }
+        await store.append('idle-history', {
+          actor: DISPATCHER,
+          type: 'optimization.stopped',
+          payload: { cause: 'budget', mode: 'drain' },
+        })
+        const launches: string[] = []
+        return {
+          store,
+          dispatcher: () => {
+            const fresh = make()
+            forges.push(fresh.forge)
+            fresh.forge.seedBranch('ab/refused-0', BASE_SHA)
+            const launch = fresh.launches
+            const push = launch.push.bind(launch)
+            launch.push = (...slugs: string[]) => {
+              launches.push(...slugs)
+              return push(...slugs)
+            }
+            return fresh.dispatcher
+          },
+          advance: (ms) => clock.advance(ms),
+          wake: async () => {
+            await store.append('refused-0', { actor: KERNEL, type: 'build.resumed', payload: {} })
+            return 'refused-0'
+          },
+          release: async () => {
+            // The warm passes released the stranded workspace once.
+            const stranded = await store.getEvents('stranded')
+            expect(stranded.filter((event) => event.type === 'workspace.released')).toHaveLength(1)
+            await store.append('busy', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+            return [...waiting, 'refused-0']
+          },
+          launches: () => launches,
+        }
+      },
     })
   }, 120_000)
 })

@@ -476,6 +476,25 @@ export class LinearTicketSource implements TicketSource {
     return data.users.nodes[0] ?? null
   }
 
+  private async readyAssigneeId(operation: string, assignee: string): Promise<string> {
+    const user = await this.resolveAssignee(assignee)
+    if (user === null)
+      throw new Error(
+        `linear ${operation}: readyAssignee "${assignee}" matches no Linear user — nothing was written`,
+      )
+    return user.id
+  }
+
+  private async assignIssue(operation: string, issueId: string, assigneeId: string): Promise<void> {
+    const data = await this.gql<{ issueUpdate: { success: boolean } }>(
+      operation,
+      UPDATE_ISSUE_MUTATION,
+      { id: issueId, input: { assigneeId } },
+    )
+    if (!data.issueUpdate.success)
+      throw new Error(`linear ${operation}: issueUpdate failed assigning "${issueId}"`)
+  }
+
   /** `ab init --validate`: who a `readyAssignee` value names. */
   async describeReadyAssignee(assignee: string): Promise<string> {
     const user = await this.resolveAssignee(assignee)
@@ -701,6 +720,11 @@ export class LinearTicketSource implements TicketSource {
         ? draft.target
         : await this.validateTree(reservedId, draft)
     const labels = this.effectiveLabels(draft.kind, draft.labels, [])
+    // Resolved before any write: an unknown user creates nothing.
+    const assigneeId =
+      opts.readyAssignee === undefined
+        ? undefined
+        : await this.readyAssigneeId('create', opts.readyAssignee)
     const team = await this.getTeamInfo('create')
     const labelIds = await Promise.all(
       (labels ?? []).map((label) => this.ensureLabelId('create', label, team)),
@@ -725,6 +749,7 @@ export class LinearTicketSource implements TicketSource {
     if (canonicalTarget != null)
       input.parentId = await this.resolveIssueId('create', canonicalTarget)
     if (reservedId !== undefined) input.id = reservedId
+    if (assigneeId !== undefined) input.assigneeId = assigneeId
     // `normal` needs nothing: Linear creates issues with No priority.
     if (draft.priority === 'urgent') input.priority = LINEAR_URGENT
 
@@ -748,6 +773,14 @@ export class LinearTicketSource implements TicketSource {
       // exact reserved issue and send it through the same blocker completion
       // path as a fresh create.
       issue = await this.adoptCreatedIssue(reservedId)
+      // The first attempt's create may predate the ready assignee or have
+      // been made without it; assigning is idempotent.
+      if (issue !== null && assigneeId !== undefined)
+        await this.assignIssue(
+          'create',
+          this.requiredIssueId('create', reservedId, issue),
+          assigneeId,
+        )
     }
     if (issue === null) {
       if (createError !== undefined) throw createError

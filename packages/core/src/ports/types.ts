@@ -204,6 +204,11 @@ export interface TicketCreateOptions {
    * a key. Other sources ignore it. Callers must pass the same value on every
    * retry. */
   idempotencyKeyReservedAt?: string
+  /** A `[tickets].readyAssignee` value. The source assigns the created or
+   * adopted ticket to that user, so a listing with the same
+   * `criteria.assignee` includes it, or fails without recording a create.
+   * Only sources declaring `readyAssignee` receive it. */
+  readyAssignee?: string
 }
 
 /** Editable ticket fields. Omitted fields are preserved; state is deliberately

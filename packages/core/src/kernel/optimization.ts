@@ -26,6 +26,11 @@ import type { TicketRef } from '../ontology'
 import { defineReducer } from './incremental'
 export { optimizationCompletionBlocker } from './integration-state'
 import type { BuildState } from './reducer'
+import { direction, HOUR_MS, optimizationAdmission } from './optimization-admission'
+
+// The admission selectors live in a module with no reducer machinery, so the
+// browser dashboards can import them through dispatch capacity.
+export * from './optimization-admission'
 
 /** One proposed attempt that has not settled. Admission caps these at the
  * objective's concurrency, so the list is bounded. */
@@ -117,6 +122,12 @@ export interface OptimizationState {
   plateau: number
   /** Consecutive proposals that returned no attempts. */
   emptyProposals: number
+  /** Proposal requests recorded; the propose phase's round counter. */
+  requests: number
+  /** The open proposal request: recorded by the dispatcher, deposited by the
+   * proposer, closed by the filing's `attempts-proposed` or, before any
+   * deposit, a withdrawal. At most one; `ids` are at most `room`. */
+  proposal?: OpenProposal
   stopped?: { cause: OptimizationStopCause; mode: 'abort' | 'drain'; at: string }
   /** Tickets of attempts settled `stopped`, which the claim gate refuses.
    * Bounded: only attempts in flight at the stop settle `stopped`, and
@@ -124,13 +135,19 @@ export interface OptimizationState {
   stoppedTickets?: TicketRef[]
 }
 
+export interface OpenProposal {
+  id: string
+  head: string
+  /** The attempts this request may deposit, fixed when it was recorded. */
+  room: number
+  requestedAt: string
+  round: number
+  deposited?: { artifact: { kind: string; rev: number }; ids: string[]; at: string }
+}
+
 /** The digest accumulator, embedded in BuildAcc. Undefined until the first
  * acceptance. */
 export type OptimizationAcc = OptimizationState | undefined
-
-function direction(objective: Objective): 'minimize' | 'maximize' {
-  return objective.metric.kind === 'command' ? objective.metric.direction : 'maximize'
-}
 
 function better(objective: Objective, a: number | undefined, b: number): number {
   if (a === undefined) return b
@@ -138,10 +155,11 @@ function better(objective: Objective, a: number | undefined, b: number): number 
 }
 
 /** Whether `event` is a node-log fact the digest folds. */
-export function isOptimizationEvent(event: Pick<AbEvent, 'type'>): boolean {
+export function isOptimizationEvent(event: { type: string }): boolean {
   return (
     event.type.startsWith('optimization.') ||
     event.type === 'attempt.settled' ||
+    event.type === 'propose.completed' ||
     event.type === 'attempt.ticket-rejected' ||
     event.type === 'attempt.merged-unmeasured' ||
     event.type === 'attempt.branch-deleted' ||
@@ -180,6 +198,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
           rejections: [],
           plateau: 0,
           emptyProposals: 0,
+          requests: 0,
         }
         startRuler(state, event.payload.revision)
         continue
@@ -221,7 +240,31 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         state.current = event.payload.winRate
         state.best = better(state.objective, state.best, event.payload.winRate)
         break
+      case 'optimization.proposal-requested':
+        state.requests += 1
+        state.proposal = {
+          id: event.payload.id,
+          head: event.payload.head,
+          room: event.payload.room,
+          requestedAt: event.ts,
+          round: state.requests,
+        }
+        break
+      case 'propose.completed':
+        if (state.proposal?.id === event.payload.request && !state.proposal.deposited)
+          state.proposal.deposited = {
+            artifact: { ...event.payload.artifact },
+            ids: [...event.payload.proposals],
+            at: event.ts,
+          }
+        break
+      case 'optimization.proposal-withdrawn':
+        // A deposit is a commitment: only an undeposited request withdraws.
+        if (state.proposal?.id === event.payload.request && !state.proposal.deposited)
+          delete state.proposal
+        break
       case 'optimization.attempts-proposed':
+        if (state.proposal?.id === event.payload.request) delete state.proposal
         state.attempts.filed += event.payload.proposals.length
         state.emptyProposals = event.payload.proposals.length === 0 ? state.emptyProposals + 1 : 0
         for (const proposal of event.payload.proposals)
@@ -324,7 +367,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 4,
+  version: 5,
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
@@ -332,81 +375,6 @@ export const optimizationReducer = defineReducer<
   },
   finish: (acc) => (acc.state === undefined ? null : structuredClone(acc.state)),
 })
-
-const HOUR_MS = 3_600_000
-
-export function optimizationElapsedHours(state: OptimizationState, now: Date): number {
-  return Math.max(0, (now.getTime() - Date.parse(state.openedAt)) / HOUR_MS)
-}
-
-export interface OptimizationStopEligibility {
-  threshold: boolean
-  plateau: boolean
-  budget: boolean
-  budgetCause?: 'attempts' | 'hours'
-}
-
-/** Which stop causes the digest makes eligible at `now` (RFC 0005 §9.1). */
-export function optimizationStopEligibility(
-  state: OptimizationState,
-  now: Date,
-): OptimizationStopEligibility {
-  const { objective } = state
-  const threshold = objective.target.threshold
-  const reached =
-    threshold !== undefined &&
-    state.current !== undefined &&
-    (direction(objective) === 'minimize' ? state.current <= threshold : state.current >= threshold)
-  const plateauLimit = objective.stop.plateau?.attempts
-  const budgetCause =
-    objective.budget.maxAttempts !== undefined &&
-    state.attempts.filed >= objective.budget.maxAttempts
-      ? ('attempts' as const)
-      : objective.budget.maxHours !== undefined &&
-          optimizationElapsedHours(state, now) >= objective.budget.maxHours
-        ? ('hours' as const)
-        : undefined
-  return {
-    threshold: reached,
-    plateau: plateauLimit !== undefined && state.plateau >= plateauLimit,
-    budget: budgetCause !== undefined,
-    ...(budgetCause !== undefined ? { budgetCause } : {}),
-  }
-}
-
-export type OptimizationAutomaticStopCause = Exclude<
-  OptimizationStopCause,
-  'exhausted' | 'operator'
->
-
-/** The cause the dispatcher records as `optimization.stopped` at `now`, in
- * precedence threshold, plateau, budget; undefined once the node has
- * stopped. The effective objective is folded into the digest, so a revised
- * threshold, budget or plateau applies on the next evaluation. */
-export function optimizationStopCause(
-  state: OptimizationState,
-  now: Date,
-): OptimizationAutomaticStopCause | undefined {
-  if (state.stopped !== undefined) return undefined
-  const eligibility = optimizationStopEligibility(state, now)
-  return eligibility.threshold
-    ? 'threshold'
-    : eligibility.plateau
-      ? 'plateau'
-      : eligibility.budget
-        ? 'budget'
-        : undefined
-}
-
-/** Whether a proposer session may be admitted at `now`. The proposer phase
- * (RFC 0005 §5.1) must admit through this predicate: it is false once the
- * node has stopped or any stop cause is eligible, and otherwise requires
- * attempts-budget room and a free concurrency slot. */
-export function optimizationProposerAdmissible(state: OptimizationState, now: Date): boolean {
-  if (state.stopped !== undefined || optimizationStopCause(state, now) !== undefined) return false
-  const admission = optimizationAdmission(state, now)
-  return admission.attemptRoom !== 0 && admission.slots > 0
-}
 
 /** What the stop enforcer knows about one in-flight attempt's newest build. */
 export interface OptimizationAttemptBuild {
@@ -459,29 +427,6 @@ export function optimizationStopActions(
     if (node.stopped.mode === 'abort' || !started) actions.abort.push({ slug: build.slug, reason })
   }
   return actions
-}
-
-export interface OptimizationAdmission {
-  stopped: boolean
-  /** Attempts the budget still allows; null without an attempts budget. */
-  attemptRoom: number | null
-  /** Concurrency slots held neither by an in-flight attempt nor by a settled
-   * attempt whose rejected-role move is pending. A tracker that keeps
-   * refusing the move therefore stalls proposals instead of accumulating
-   * pending rejections. */
-  slots: number
-}
-
-export function optimizationAdmission(state: OptimizationState, _now: Date): OptimizationAdmission {
-  const max = state.objective.budget.maxAttempts
-  return {
-    stopped: state.stopped !== undefined,
-    attemptRoom: max === undefined ? null : Math.max(0, max - state.attempts.filed),
-    slots: Math.max(
-      0,
-      state.objective.proposer.concurrency - state.inFlight.length - state.rejections.length,
-    ),
-  }
 }
 
 function ticketKey(ref: TicketRef): string {
@@ -673,3 +618,138 @@ export const optimizationLedgerReducer = defineReducer<
   },
   finish: (acc) => structuredClone(acc),
 })
+
+/**
+ * Node-log facts that can clear a `ProposerBlocker`. A node whose proposer
+ * was deferred is read again only once one of these lands after the
+ * deferral. A superset is safe: an extra wake costs one read and one write
+ * per real fact, never a recurring read.
+ */
+export const PROPOSER_WAKE_EVENT_TYPES = [
+  // paused: a resume acknowledgement.
+  'build.resumed',
+  // command: the acknowledgements that drain pending operator commands.
+  'build.paused',
+  'build.aborted',
+  // blocked: what closes an open escalation.
+  'escalation.answered',
+  'escalation.raised',
+  'wait.ended',
+  'build.janitor-recovered',
+  'verify.cancelled',
+  // restack: the replay receipts and settlement that clear a node writer.
+  'node.item-replayed',
+  'node.writer-settled',
+  'reconcile.completed',
+  // integration: a landing intent abandons or lands.
+  'integration.abandoned',
+  'integration.landed',
+  // landing: a pull request opens again.
+  'pr.opened',
+  'pr.closed',
+  'pr.merged',
+  // Every optimization fact except the deferral itself: settlements and
+  // revisions change room.
+  'optimization.objective-accepted',
+  'optimization.objective-revised',
+  'optimization.baseline-measured',
+  'optimization.progress-measured',
+  'optimization.proposal-requested',
+  'optimization.proposal-withdrawn',
+  'optimization.attempts-proposed',
+  'optimization.stopped',
+  'propose.completed',
+  'attempt.settled',
+  'attempt.ticket-rejected',
+] as const satisfies readonly AbEvent['type'][]
+
+const WAKE_TYPES = new Set<string>(PROPOSER_WAKE_EVENT_TYPES)
+
+export function isProposerWakeEvent(event: { type: string }): boolean {
+  return WAKE_TYPES.has(event.type)
+}
+
+/**
+ * The bounded optimization signal a node's build digest carries: exactly
+ * what the dispatcher's proposer stage and the creation hold need to decide,
+ * without reading the build, whether a node has due work. Constant size in
+ * history; `deposited.ids` is at most the request's room.
+ */
+export interface OptimizationSignal {
+  stopped?: true
+  /** A starting value exists under the current ruler. */
+  measured?: true
+  inFlight: number
+  concurrency: number
+  /** Attempts the budget still allows; absent without an attempts budget. */
+  attemptRoom?: number
+  emptyProposals: number
+  openedAt: string
+  maxHours?: number
+  proposal?: { request: string; deposited?: { ids: string[]; at: string } }
+  /** seq of the latest fact that can clear a proposer blocker. */
+  wakeSeq?: number
+  /** seq of the latest `optimization.proposal-deferred`. */
+  deferredSeq?: number
+}
+
+export function optimizationSignal(
+  state: OptimizationState,
+  seqs: { wakeSeq?: number; deferredSeq?: number } = {},
+): OptimizationSignal {
+  const { attemptRoom, slots } = optimizationAdmission(state, new Date(0))
+  const maxHours = state.objective.budget.maxHours
+  const proposal = state.proposal
+  return {
+    ...(state.stopped !== undefined ? { stopped: true as const } : {}),
+    ...(state.starting !== undefined ? { measured: true as const } : {}),
+    inFlight: state.inFlight.length,
+    concurrency: state.inFlight.length + slots,
+    ...(attemptRoom !== null ? { attemptRoom } : {}),
+    emptyProposals: state.emptyProposals,
+    openedAt: state.openedAt,
+    ...(maxHours !== undefined ? { maxHours } : {}),
+    ...(proposal !== undefined
+      ? {
+          proposal: {
+            request: proposal.id,
+            ...(proposal.deposited !== undefined
+              ? { deposited: { ids: [...proposal.deposited.ids], at: proposal.deposited.at } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(seqs.wakeSeq !== undefined ? { wakeSeq: seqs.wakeSeq } : {}),
+    ...(seqs.deferredSeq !== undefined ? { deferredSeq: seqs.deferredSeq } : {}),
+  }
+}
+
+/** Which due work a node's digest signal shows, at `now`. `request` is a
+ * candidate only: the dispatcher reads the build to confirm admission. A
+ * deferred node shows no request or filing until a wake fact follows its
+ * deferral, so an unchanged refused node costs no read. */
+export function signalDue(
+  signal: OptimizationSignal,
+  now: Date,
+  compatibilityDeferred = false,
+): 'exhausted' | 'filing' | 'request' | undefined {
+  if (signal.emptyProposals >= 2 && !signal.stopped) return 'exhausted'
+  const deferred =
+    signal.deferredSeq !== undefined &&
+    (signal.wakeSeq === undefined || signal.wakeSeq < signal.deferredSeq)
+  if (signal.proposal?.deposited !== undefined) return deferred ? undefined : 'filing'
+  if (
+    !deferred &&
+    signal.proposal === undefined &&
+    !signal.stopped &&
+    signal.measured &&
+    signal.inFlight < signal.concurrency &&
+    signal.attemptRoom !== 0 &&
+    signal.emptyProposals < 2 &&
+    (signal.maxHours === undefined ||
+      (now.getTime() - Date.parse(signal.openedAt)) / HOUR_MS < signal.maxHours) &&
+    !compatibilityDeferred
+  )
+    return 'request'
+  return undefined
+}
