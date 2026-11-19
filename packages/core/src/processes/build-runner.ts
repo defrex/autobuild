@@ -3156,7 +3156,15 @@ export class BuildRunner {
             payload: judged,
           } satisfies EventWrite<'panel.judged'>)
         },
-        reclaim: async (judge, session) => {
+        reclaim: async (judge, session, stream) => {
+          if (stream !== undefined)
+            try {
+              await store.closeStream(stream, 'aborted')
+            } catch (error) {
+              this.onDiagnostic(
+                `judge stream "${stream}" failed to close on reclaim: ${errorMessage(error)}`,
+              )
+            }
           await store.append(slug, {
             actor: KERNEL,
             type: 'panel.judge-ended',
@@ -3172,131 +3180,209 @@ export class BuildRunner {
     )
   }
 
-  /** One judge session in its sealed root. Its order is durable in
-   * `panel.judge-started` before it starts; afterwards one reduced read
-   * finds its preference, recorded with the order as `panel.judged`.
-   * Failures inside the session become its outcome; store errors propagate. */
+  /** One judge launch in its sealed root: the `judge` role's primary, then
+   * each configured alternate after an alternate-eligible failure (SPEC §8.4).
+   * Every target is its own judge session in the same root and order, with
+   * its own start, credential, stream and transcript. Only the chain's last
+   * session settles the launch's outcome. Store errors propagate. */
   private async runJudge(
     panel: string,
     judge: number,
     order: PanelOrder,
     root: string,
   ): Promise<PanelJudgeOutcome> {
-    const { store, slug, ids, shutdownSignal } = this.deps
-    const session = ids('s')
     const resolved = this.boundaryResolver.resolve(JUDGE_ROLE)
-    const { runner, runtime, model, args, account, sessionBudgetSeconds } = resolved
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'panel.judge-started',
-      payload: {
-        panel,
-        judge,
-        session,
-        order,
-        runner: runtime,
-        ...(model !== undefined ? { model } : {}),
-        ...(account !== undefined ? { account } : {}),
-      },
-    } satisfies EventWrite<'panel.judge-started'>)
-
-    const budget = (this.deps.timeoutSignal ?? ((ms) => AbortSignal.timeout(ms)))(
-      sessionBudgetSeconds * 1000,
-    )
-    const signal = shutdownSignal ? AbortSignal.any([budget, shutdownSignal]) : budget
-    let outcome: PanelJudgeOutcome = 'completed'
-    let error: string | undefined
-    let handle: AgentSessionHandle | undefined
-    try {
-      const turn = await runner.start({
-        skill: installedSkillName('judge'),
-        invocation: panel,
-        workspacePath: root,
-        ...(model !== undefined ? { model } : {}),
-        ...(args.length > 0 ? { args } : {}),
-        ...(account !== undefined ? { account } : {}),
-        env: await this.judgeSessionEnv(panel, judge, session),
-        signal,
-      })
-      handle = turn.session
-      if (turn.result.kind === 'failed') {
-        outcome = 'failed'
-        error = turn.result.failure.message
-      }
-    } catch (caught) {
-      outcome = 'failed'
-      error = errorMessage(caught)
+    const targets: ResolvedRuntime[] = [resolved, ...resolved.alternates]
+    let substitution: ProviderAttempt | undefined
+    for (let index = 0; ; index += 1) {
+      const settled = await this.runJudgeSession(
+        { panel, judge, order, root },
+        targets[index]!,
+        index,
+        resolved.sessionBudgetSeconds,
+        substitution,
+      )
+      if (settled.substitutable === undefined || index + 1 >= targets.length) return settled.outcome
+      substitution = settled.substitutable
     }
-    if (shutdownSignal?.aborted) outcome = 'interrupted'
-    else if (budget.aborted) {
-      outcome = 'expired'
-      error = sessionBudgetError(sessionBudgetSeconds)
-    }
-    let transcript: Transcript | undefined
-    if (handle !== undefined)
-      try {
-        transcript = await runner.end(handle)
-      } catch {
-        // Best-effort: the judge's outcome below is still recorded.
-      }
+  }
 
-    const state = (await readBuildFacts(store, slug)).value.state.panel
-    const recorded = state?.started.panel === panel ? state.judges[String(judge)] : undefined
-    const preferred = recorded?.preferred?.session === session ? recorded.preferred : undefined
-    if (preferred !== undefined) {
-      if (recorded?.judged === undefined)
-        await store.append(slug, {
-          actor: KERNEL,
-          type: 'panel.judged',
-          payload: {
-            panel,
-            judge,
-            session,
-            order,
-            preference: preferred.preference,
-            reason: preferred.reason,
-          },
-        } satisfies EventWrite<'panel.judged'>)
-      outcome = 'completed'
-      error = undefined
-    } else if (outcome === 'completed') outcome = 'no-terminal'
-
-    const ended = (artifact?: { kind: string; rev: number }): EventWrite<'panel.judge-ended'> => ({
-      actor: KERNEL,
-      type: 'panel.judge-ended',
-      payload: {
-        panel,
-        judge,
-        session,
-        outcome,
-        ...(error !== undefined ? { error } : {}),
-        ...(artifact !== undefined ? { transcript: artifact } : {}),
-      },
+  /** One judge session on one chain target. Its order is durable in
+   * `panel.judge-started` before it starts; afterwards one reduced read
+   * finds its preference, recorded with the order as `panel.judged`. Its
+   * stream closes before `panel.judge-ended` lands. Failures inside the
+   * session become its outcome; an alternate-eligible failure also returns
+   * the attempt an alternate would substitute. */
+  private async runJudgeSession(
+    launch: { panel: string; judge: number; order: PanelOrder; root: string },
+    target: ResolvedRuntime,
+    index: number,
+    sessionBudgetSeconds: number,
+    substitution: ProviderAttempt | undefined,
+  ): Promise<{ outcome: PanelJudgeOutcome; substitutable?: ProviderAttempt }> {
+    const { store, slug, ids, shutdownSignal } = this.deps
+    const { panel, judge, order, root } = launch
+    const { runner, runtime, model, args, account } = target
+    const session = ids('s')
+    // SPEC §9: the stream names the panel and judge, never the order.
+    const streamBracket = await this.openSessionStream(target, {
+      session,
+      role: JUDGE_ROLE,
+      runner: runtime,
+      ...(model !== undefined ? { model } : {}),
+      phase: `judge:${panel}:${judge}`,
     })
-    if (transcript === undefined) await store.append(slug, ended())
-    else
-      await store.appendWithArtifacts(
-        slug,
-        [
-          {
-            kind: 'transcript',
-            content: transcript.content,
-            metadata: {
+    try {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'panel.judge-started',
+        payload: {
+          panel,
+          judge,
+          session,
+          order,
+          runner: runtime,
+          ...(model !== undefined ? { model } : {}),
+          ...(account !== undefined ? { account } : {}),
+          ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
+          ...(substitution !== undefined
+            ? { substitution: { failed: substitution, selectedIndex: index } }
+            : {}),
+        },
+      } satisfies EventWrite<'panel.judge-started'>)
+
+      const budget = (this.deps.timeoutSignal ?? ((ms) => AbortSignal.timeout(ms)))(
+        sessionBudgetSeconds * 1000,
+      )
+      const signal = shutdownSignal ? AbortSignal.any([budget, shutdownSignal]) : budget
+      let outcome: PanelJudgeOutcome = 'completed'
+      let error: string | undefined
+      let handle: AgentSessionHandle | undefined
+      let failure: AgentTurnFailure | undefined
+      let turnError: unknown
+      try {
+        const turn = await runner.start({
+          skill: installedSkillName('judge'),
+          invocation: panel,
+          workspacePath: root,
+          ...(model !== undefined ? { model } : {}),
+          ...(args.length > 0 ? { args } : {}),
+          ...(account !== undefined ? { account } : {}),
+          env: await this.judgeSessionEnv(panel, judge, session),
+          signal,
+          ...(streamBracket !== undefined ? { stream: streamBracket.sink } : {}),
+        })
+        handle = turn.session
+        if (turn.result.kind === 'failed') {
+          outcome = 'failed'
+          failure = turn.result.failure
+          error = failure.message
+        }
+      } catch (caught) {
+        outcome = 'failed'
+        turnError = caught
+        error = errorMessage(caught)
+      }
+      if (shutdownSignal?.aborted) outcome = 'interrupted'
+      else if (budget.aborted) {
+        outcome = 'expired'
+        error = sessionBudgetError(sessionBudgetSeconds)
+      }
+      let transcript: Transcript | undefined
+      if (handle !== undefined)
+        try {
+          transcript = await runner.end(handle)
+        } catch {
+          // Best-effort: the judge's outcome below is still recorded.
+        }
+
+      const state = (await readBuildFacts(store, slug)).value.state.panel
+      const recorded = state?.started.panel === panel ? state.judges[String(judge)] : undefined
+      const preferred = recorded?.preferred?.session === session ? recorded.preferred : undefined
+      if (preferred !== undefined) {
+        if (recorded?.judged === undefined)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'panel.judged',
+            payload: {
               panel,
               judge,
               session,
-              role: JUDGE_ROLE,
-              runner: runtime,
-              ...((transcript.metadata.model ?? model)
-                ? { model: transcript.metadata.model ?? model }
-                : {}),
-              usage: transcript.metadata.usage,
+              order,
+              preference: preferred.preference,
+              reason: preferred.reason,
             },
-          },
-        ],
-        (deposited) => ended({ kind: deposited[0]!.kind, rev: deposited[0]!.revision }),
-      )
-    return outcome
+          } satisfies EventWrite<'panel.judged'>)
+        outcome = 'completed'
+        error = undefined
+      } else if (outcome === 'completed') outcome = 'no-terminal'
+
+      // The build-phase chain's predicate (SPEC §8.4): a thrown turn is an
+      // availability failure; budget expiry and shutdown never substitute.
+      const substitutable: ProviderAttempt | undefined =
+        outcome === 'failed' &&
+        (turnError !== undefined || (failure !== undefined && isAlternateEligible(failure)))
+          ? {
+              index,
+              session,
+              runner: runtime,
+              ...(account !== undefined ? { account } : {}),
+              ...(model !== undefined ? { model } : {}),
+              error: error ?? 'failed',
+              ...(turnError !== undefined
+                ? { cause: 'availability' as const }
+                : failure?.cause !== undefined
+                  ? { cause: failure.cause }
+                  : {}),
+            }
+          : undefined
+
+      // Close must land no later than `panel.judge-ended`.
+      if (streamBracket !== undefined)
+        await streamBracket.sink.close(outcome === 'completed' ? 'completed' : 'aborted')
+      const ended = (artifact?: {
+        kind: string
+        rev: number
+      }): EventWrite<'panel.judge-ended'> => ({
+        actor: KERNEL,
+        type: 'panel.judge-ended',
+        payload: {
+          panel,
+          judge,
+          session,
+          outcome,
+          ...(error !== undefined ? { error } : {}),
+          ...(artifact !== undefined ? { transcript: artifact } : {}),
+        },
+      })
+      if (transcript === undefined) await store.append(slug, ended())
+      else
+        await store.appendWithArtifacts(
+          slug,
+          [
+            {
+              kind: 'transcript',
+              content: transcript.content,
+              metadata: {
+                panel,
+                judge,
+                session,
+                role: JUDGE_ROLE,
+                runner: runtime,
+                ...((transcript.metadata.model ?? model)
+                  ? { model: transcript.metadata.model ?? model }
+                  : {}),
+                usage: transcript.metadata.usage,
+              },
+            },
+          ],
+          (deposited) => ended({ kind: deposited[0]!.kind, rev: deposited[0]!.revision }),
+        )
+      return { outcome, ...(substitutable !== undefined ? { substitutable } : {}) }
+    } catch (caught) {
+      this.closeBracketStream(streamBracket, 'aborted')
+      throw caught
+    }
   }
 
   /**

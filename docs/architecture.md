@@ -353,7 +353,13 @@ derives in `packages/core/src/kernel/measurement.ts`, and records the win rate
 in `attempt.sampled`; the dispatcher decides it against the node's current ε
 there too (`decideSampledMeasurement`, `panelDecision`), and
 `packages/core/src/kernel/landing-measurement.ts` classifies the recorded win
-rate for landing. A judge session's only store authority is
+rate for landing. Its `runJudge` runs the `judge` role's
+primary-first chain: each target is its own judge session in the same root and
+order, opens its own build-scoped session stream through `openSessionStream`
+and closes it before `panel.judge-ended`. A failure that a later target
+substitutes is not counted; the final failed, no-terminal or expired session is,
+including a failure no alternate may follow. `cli/dashboard/facts.ts` keeps an order-free list of judge sessions
+that `projectSessions` merges into the build's session rows. A judge session's only store authority is
 write-only: `packages/core/src/store/judge-authority.ts` is the shared rule
 (one `panel.preferred` for its own panel, judge and session, while that session
 is open), applied in process by the local and remote wrappers in
@@ -1333,8 +1339,8 @@ behavioral assertions against every implementation:
 
 `packages/core/src/ports/runner/routing.ts` eagerly resolves every role's primary, ordered
 alternate targets, and independently inherited build-session budget.
-`build-runner.ts` and `harvest-runner.ts` own the deterministic
-primary-first attempt loop: each substitution opens a new session bracket,
+`build-runner.ts` (phase, finalize and judge sessions) and `harvest-runner.ts`
+own the deterministic primary-first attempt loop: each substitution opens a new session bracket,
 records provenance on its start, and only complete-chain exhaustion consumes an
 existing phase/session attempt. A suspended harvest turn first tries its recorded
 route, then the remaining targets in configured order; provider evidence retains
