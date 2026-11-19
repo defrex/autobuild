@@ -130,7 +130,8 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
   // wait has ended, to resume the phase that declared it.
   if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined
   if (state.prState === 'conflicted') return 'reconcile'
-  // A requested optimization measurement is admitted as a re-verify is.
+  // A requested optimization measurement is admitted as a re-verify is. A
+  // superseded request asks for no slot: the gate requests a current one.
   if (
     build.restackDue ||
     epilogueUnsettled(state) ||

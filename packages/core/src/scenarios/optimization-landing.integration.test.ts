@@ -406,6 +406,46 @@ test('a sibling landing makes a measurement stale: the attempt restacks and meas
   }
 }, 30_000)
 
+test('a request a sibling landing superseded before sampling is skipped, never measured', async (makeHarness) => {
+  const { h, node } = await setup(makeHarness as never, ['A1', 'A2'])
+  try {
+    await tick(h)
+    const first = await slugOf(h, 'A1')
+    const second = await slugOf(h, 'A2')
+    await toPr(h, first)
+    await toPr(h, second)
+    await tick(h)
+    const [stale] = await requests(h, second)
+    expect(stale).toBeDefined()
+    // Only the first is measured; the second's request is still unsampled.
+    await measure(h, first, 3)
+    await tick(h)
+    expect((await stateOf(h, first)).outcome).toBe('merged')
+    const moved = await git(['rev-parse', node.branch!], h.origin)
+    expect(moved).not.toBe(stale!.payload.baseline)
+    await driveToRequest(h, second, 2)
+    const events = await h.events(second)
+    // The stale request was never sampled and raised no measurement failure.
+    expect(
+      ofType(events, 'attempt.sampled').filter((e) => e.payload.request === stale!.payload.id),
+    ).toEqual([])
+    expect(
+      ofType(events, 'escalation.raised').filter(
+        (e) => e.payload.policyCause === 'measurement-failed',
+      ),
+    ).toEqual([])
+    const again = (await requests(h, second)).at(-1)!.payload
+    expect(again.id).not.toBe(stale!.payload.id)
+    expect(again.baseline).toBe(moved)
+    await measure(h, second, 2)
+    await tick(h)
+    expect((await stateOf(h, second)).outcome).toBe('merged')
+    expect((await settled(h, node.slug)).map((s) => s.outcome)).toEqual(['accepted', 'accepted'])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
 test('no improvement closes the PR, settles once and moves the ticket to rejected', async (makeHarness) => {
   const { h, node } = await setup(makeHarness as never, ['A1'])
   try {

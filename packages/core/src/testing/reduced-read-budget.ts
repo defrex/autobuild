@@ -3,6 +3,7 @@ import { reducerValueForClient } from '../store/remote/compatibility'
 import { RELEASED_CLIENTS } from '../store/remote/released-clients'
 import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
 import { decideNextFromFacts } from '../kernel/engine'
+import { slotRequest, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { proveTargetLineage } from '../kernel/target-lineage'
 import { nodeRestackLog } from '../kernel/generators/node-restack-log'
 import { REPLACED_HEADS_CAP } from '../kernel/read-facts'
@@ -5357,6 +5358,26 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     await completed('attempt-0')
     await settle('p0', live[0]!, 'attempt-0', 'declined')
     await settle('p1', live[1]!, 'attempt-1', 'aborted')
+    // A child holding an unsampled request whose baseline a later
+    // `target.moved` superseded (stage 7).
+    await created('stale-child', undefined, node)
+    await store.append('stale-child', {
+      actor: DISPATCHER,
+      type: 'attempt.measurement-requested',
+      payload: {
+        id: 'stale',
+        node,
+        candidate: 'c'.repeat(40),
+        baseline: sha,
+        harnessPin: sha,
+        revision: 1,
+      },
+    })
+    await store.append('stale-child', {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: `ab/${node}`, sha: 'd'.repeat(40) },
+    })
 
     const forge = new FakeForge()
     const dispatcher = () =>
@@ -5384,6 +5405,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
     // Warm-up: each reduced key is computed once and saved.
     await nodeState()
     for (let i = 0; i < concurrency; i++) await readBuildFacts(store, `attempt-${i}`)
+    await readBuildFacts(store, 'stale-child')
     await readBuildDigests(store, repo)
     const nodeRecord = (await store.getBuild(node))!
     const rows = memoryRepositoryReadCounter(store, repo)
@@ -5392,6 +5414,7 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       refused: [],
       gate: [],
       cleanup: [],
+      superseded: [],
     }
     try {
       // 1. Nothing pending: zero requests.
@@ -5578,6 +5601,27 @@ export async function optimizationLandingReadBudget(): Promise<void> {
       expect(state.optimization!.rejections.map((entry) => entry.proposal)).toEqual(['p2'])
       expect((await tickets.get(cleanupTicket.id))?.state).toBe('Rejected')
       expect(forge.deleteBranchCalls.map((c) => c.branch)).toEqual(Array(4).fill('ab/attempt-4'))
+
+      // 7. A superseded measurement request: capacity assembly from a fresh
+      // dispatcher asks no slot for it, reads zero event rows and appends
+      // nothing, at the same cost every poll.
+      const staleLog = (await store.getEvents('stale-child')).length
+      // Earlier stages changed other builds; one assembly advances their
+      // saved values before nothing changes.
+      await call(dispatcher(), 'capacityBuilds')
+      for (let poll = 0; poll < 3; poll++) {
+        const d = dispatcher()
+        rows.reset()
+        requests.reset()
+        const builds = await call<CapacityBuild[]>(d, 'capacityBuilds')
+        const child = builds.find((build) => build.record.slug === 'stale-child')!
+        expect(child.state.attemptMeasurement?.observedHead).toBe('d'.repeat(40))
+        expect(slotRequest(child, new Date('2026-11-18T00:00:00Z'))).toBeUndefined()
+        expect(rows.buildRows).toBe(0)
+        measured.superseded!.push({ ...requests.vector(), buildFacts: rows.buildFactsCalls })
+      }
+      expect(new Set(measured.superseded!.map((v) => JSON.stringify(v))).size).toBe(1)
+      expect((await store.getEvents('stale-child')).length).toBe(staleLog)
     } finally {
       requests.restore()
     }

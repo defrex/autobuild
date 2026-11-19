@@ -508,6 +508,23 @@ test('a parked attempt with a pending measurement request is admitted as a re-ve
   expect(slotRequest(leaf, now)).toBeUndefined()
 })
 
+test('a superseded measurement request asks for no slot; an unchanged baseline still does', () => {
+  const leaf = finished('a', { settled: 10 })
+  leaf.state.attemptMeasurement = {
+    request: { ...measurementRequest, seq: 11 },
+    observedHead: 'b'.repeat(40),
+  }
+  expect(slotRequest(leaf, now)).toBeUndefined()
+  const superseded = dispatchCapacity([leaf], 2, now)
+  expect(superseded.waitingBuilds).toBeUndefined()
+  expect(superseded.occupied).toBe(0)
+  leaf.state.attemptMeasurement.observedHead = measurementRequest.baseline
+  expect(slotRequest(leaf, now)).toBe('verification')
+  const unchanged = dispatchCapacity([leaf], 2, now)
+  expect(unchanged.waitingBuilds).toEqual([{ slug: 'a', request: 'verification' }])
+  expect(unchanged.occupied).toBe(0)
+})
+
 function measuringNode(slug: string): CapacityBuild {
   const node = build(slug, 'node')
   node.state.nodeOpened = { sha: 'a'.repeat(40) }
