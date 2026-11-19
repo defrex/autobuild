@@ -1738,3 +1738,278 @@ test('a half-provisioned sandbox whose clone lacks the base is released without 
   expect((await readBuildFacts(store, slug)).value.state.openEscalations).toEqual([])
   expect(await provisioned()).toBeDefined()
 })
+
+/** Bounded hosted invocations over the real provider: each invocation is a
+ * fresh Dispatcher and provider over one store, facade and manual clock, a
+ * tick under a 240 s `deadlineAt`, and a teardown at the deadline. The guest
+ * double keeps per-name checkout, marker and Bun state; `gate` holds one
+ * provisioning command until the test rejects it. */
+async function boundedInvocations(slug: string) {
+  const path = await mkdtemp(join(tmpdir(), `ab-vercel-${slug}-`))
+  const config = parseConfig(
+    '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nmaxInfrastructureAttempts = 1\nmaxDispatchAttempts = 10\n',
+  )
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  const branch = `ab/${slug}`
+  const forge = new FakeForge({ headSha: SHA })
+  forge.seedBranch('main', BASE)
+  const ticket = { source: 'fake', id: 'T-1', title: slug }
+  await store.createBuild({ slug, repo: path, branch, ticket })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo: path, baseBranch: 'main', ticket },
+  })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
+  })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: BASE },
+  })
+  const tickets = new FakeTicketSource([])
+  await tickets.create({ title: slug, body: '', labels: [] }, { requestedId: 'T-1' })
+
+  const created: string[] = []
+  const launchedInto: Array<string | undefined> = []
+  const guests = new Map<
+    string,
+    { checkout: boolean; provisioned: boolean; head: string; bun: string; stamp?: string }
+  >()
+  const sandboxes = new Map<string, VercelSandboxHandle>()
+  const control = {
+    /** Advanced on each `create`, modelling the provider's wall time. */
+    createMs: 0,
+    /** Blocks the matching provisioning command on the returned promise. */
+    gate: undefined as
+      | ((params: Record<string, unknown>) => Promise<never> | undefined)
+      | undefined,
+  }
+  const double = (name: string): VercelSandboxHandle => {
+    const guest = guests.get(name)!
+    return {
+      name,
+      getCommand: async () => {
+        throw new Error('no detached commands in this scenario')
+      },
+      runCommand: async (params) => {
+        const held = control.gate?.(params)
+        if (held !== undefined) return held
+        const args = (params.args as string[] | undefined) ?? []
+        if (params.cmd === 'test')
+          return {
+            exitCode: (
+              args[1] === `${VERCEL_WORKSPACE_PATH}/.git`
+                ? guest.checkout
+                : guest.provisioned
+            )
+              ? 0
+              : 1,
+          }
+        if (params.cmd === 'touch') guest.provisioned = true
+        if (params.cmd === VERCEL_BUN_EXECUTABLE && args[0] === '--version')
+          return { exitCode: 0, stdout: async () => `${guest.bun}\n` }
+        if (params.cmd === 'npm') {
+          const requested = args.find((arg) => arg.startsWith('bun@'))
+          if (requested !== undefined) guest.bun = requested.slice('bun@'.length)
+        }
+        if (params.cmd === 'cat' && args[0] === VERCEL_DISTRIBUTION_VERSION_MARKER)
+          return guest.stamp === undefined
+            ? { exitCode: 1 }
+            : { exitCode: 0, stdout: async () => guest.stamp! }
+        if (
+          params.cmd === 'sh' &&
+          args[1] === 'printf %s "$1" > "$2"' &&
+          args[4] === VERCEL_DISTRIBUTION_VERSION_MARKER
+        )
+          guest.stamp = args[3]
+        if (params.cmd === 'git' && args[0] === 'checkout' && args[1] === '-B')
+          guest.head = args[3]!
+        if (params.cmd === 'git' && args[0] === 'rev-parse' && args.includes('HEAD^{commit}'))
+          return { exitCode: 0, stdout: async () => `${guest.head}\n${guest.head}\n` }
+        if (params.cmd === 'git' && args.includes('--unset-all')) return { exitCode: 5 }
+        return { exitCode: 0 }
+      },
+      writeFiles: async () => {},
+      stop: async () => undefined,
+      delete: async () => {
+        sandboxes.delete(name)
+      },
+      update: async () => {},
+    }
+  }
+  const facade: VercelSandboxFacade = {
+    get: async (name) => sandboxes.get(name) ?? null,
+    create: async (input) => {
+      created.push(input.name)
+      clock.advance(control.createMs)
+      guests.set(input.name, { checkout: true, provisioned: false, head: BASE, bun: 'none' })
+      sandboxes.set(input.name, double(input.name))
+      return sandboxes.get(input.name)!
+    },
+    deleteByName: async (name) => (sandboxes.delete(name) ? 'confirmed' : 'absent'),
+    listSnapshots: async () => [],
+    deleteSnapshot: async () => {},
+  }
+  const exec: Exec = async (cmd) => {
+    if (cmd.includes('get-url'))
+      return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+    if (cmd.includes('ls-remote')) {
+      const ref = cmd.at(-1)
+      return {
+        stdout: ref === 'refs/heads/main' ? `${BASE}\t${ref}\n` : '',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    return { stdout: '', stderr: '', exitCode: 0 }
+  }
+  const BUDGET_MS = 240_000
+  /** One bounded invocation: `preTickMs` of earlier tick work, the tick, then
+   * provisioning drained or, past the deadline, torn down. */
+  const invoke = async (
+    opts: { preTickMs?: number; running?: Promise<void>; onDeadline?: () => void } = {},
+  ) => {
+    const start = clock().getTime()
+    const deadlineAt = start + BUDGET_MS
+    const dispatcher = new Dispatcher({
+      store,
+      config,
+      clock,
+      repo: path,
+      ids: sequentialIds(),
+      forge,
+      exec,
+      tickets,
+      workspaces: new VercelSandboxProvider({
+        config: {
+          image: 'vercel/sandbox/universal:latest',
+          vcpus: 4,
+          timeoutSeconds: 2700,
+          failoverRegions: [],
+          environmentVariables: [],
+        },
+        env: { GITHUB_TOKEN: 'publication-secret' },
+        storeRef: 'https://store.example.test',
+        storeToken: 'scoped-token',
+        delegateCredential: async () => 'delegated-token',
+        repo: path,
+        facade,
+        exec,
+        observeWaitMs: 25,
+        packageArchive: async () => new Uint8Array([1]),
+        runtimeReferences: [],
+      }),
+      launchRunner: async (launched) => {
+        launchedInto.push((await readBuildFacts(store, launched)).value.workspace?.ref)
+        return 'scheduled'
+      },
+    })
+    clock.advance(opts.preTickMs ?? 0)
+    const report = await dispatcher.tick({ acceptNewWork: false, deadlineAt })
+    await opts.running
+    if (opts.onDeadline !== undefined) {
+      // The provision is still running at the budget: tear it down.
+      clock.set(new Date(deadlineAt).toISOString())
+      await dispatcher.stopProvisioning()
+      opts.onDeadline()
+    }
+    await dispatcher.drainProvisioning()
+    if (clock().getTime() < deadlineAt) clock.set(new Date(deadlineAt).toISOString())
+    clock.advance(60_000)
+    return report
+  }
+  const events = () => store.getEvents(slug)
+  return { invoke, events, created, launchedInto, guests, control }
+}
+
+test('a provision the remaining budget cannot cover is deferred and launched by the next invocation', async () => {
+  const h = await boundedInvocations('budget-deferred')
+  h.control.createMs = 140_000
+
+  // Invocation 1: the claim lands 120 s in, under the 150 s estimate.
+  const first = await h.invoke({ preTickMs: 120_000 })
+  expect(first.provisioningDeferred).toBe(1)
+  expect(h.created).toEqual([])
+  // Invocation 2: a full budget covers the 140 s provision.
+  const second = await h.invoke()
+  expect(second.provisioning).toBe(1)
+  expect(h.created).toHaveLength(1)
+  expect(h.launchedInto).toEqual([h.created[0]])
+  const events = await h.events()
+  expect(events.filter((event) => event.type === 'infrastructure.failed')).toEqual([])
+  expect(events.filter((event) => event.type === 'escalation.raised')).toEqual([])
+})
+
+/** Invocation 1 provisions until the dependency install, which is still
+ * running at the deadline and rejects after teardown kills it. */
+async function abandonAtDependencyInstall(slug: string) {
+  const h = await boundedInvocations(slug)
+  let reject!: (error: Error) => void
+  let reached!: () => void
+  const running = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  h.control.gate = (params) => {
+    if (params.cmd !== 'sh' || !String((params.args as string[])[1]).includes('install'))
+      return undefined
+    reached()
+    return new Promise<never>((_, rejectHeld) => {
+      reject = rejectHeld
+    })
+  }
+  const first = await h.invoke({
+    running,
+    onDeadline: () => {
+      h.control.gate = undefined
+      reject(new Error('command killed'))
+    },
+  })
+  expect(first.provisioning).toBe(1)
+  const g0 = h.created[0]!
+  expect(h.guests.get(g0)).toMatchObject({ checkout: true, provisioned: false })
+  const torn = await h.events()
+  expect(torn.at(-1)?.payload).toMatchObject({ abandoned: 'teardown' })
+  return { h, g0 }
+}
+
+test('provisioning cut off at teardown is finished in the same generation by the next invocation', async () => {
+  const { h, g0 } = await abandonAtDependencyInstall('teardown-adopted')
+
+  await h.invoke()
+  expect(h.created).toEqual([g0])
+  expect(h.guests.get(g0)?.provisioned).toBe(true)
+  expect(h.launchedInto).toEqual([g0])
+  const events = await h.events()
+  expect(events.filter((event) => event.type === 'workspace.cleanup-required')).toEqual([])
+  expect(events.filter((event) => event.type === 'infrastructure.failed')).toEqual([])
+  expect(
+    events
+      .filter((event) => event.type === 'workspace.provision-started')
+      .map((event) => event.payload),
+  ).toEqual([
+    expect.objectContaining({ generation: 0 }),
+    expect.objectContaining({ generation: 0 }),
+  ])
+})
+
+test('an abandoned sandbox that cannot be finished is replaced without consuming an infrastructure attempt', async () => {
+  const { h, g0 } = await abandonAtDependencyInstall('teardown-replaced')
+  h.guests.get(g0)!.checkout = false
+
+  for (let n = 0; n < 4 && h.launchedInto.length === 0; n++) await h.invoke()
+  const events = await h.events()
+  expect(events.some((event) => event.type === 'workspace.cleanup-required')).toBe(true)
+  expect(events.findLast((event) => event.type === 'workspace.released')?.payload).toMatchObject({
+    ref: g0,
+  })
+  expect(h.created).toHaveLength(2)
+  expect(h.created[1]).toContain('-g1-')
+  expect(h.launchedInto).toEqual([h.created[1]])
+  expect(events.filter((event) => event.type === 'infrastructure.failed')).toEqual([])
+  expect(events.filter((event) => event.type === 'escalation.raised')).toEqual([])
+})
