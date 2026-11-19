@@ -35,6 +35,7 @@ import {
   VERCEL_DISTRIBUTION_VERSION_MARKER,
   VERCEL_LIFETIME_MARGIN_MS,
   VERCEL_PROVISIONED_MARKER,
+  VERCEL_PROVISION_ESTIMATE_MS,
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   harvestSandboxName,
@@ -1603,6 +1604,113 @@ describe('VercelSandboxProvider', () => {
     expect(incomplete.deletes).toBe(0)
     expect(created).toBe(false)
     expect(replacement.provisioned).toBe(false)
+  })
+
+  describe('finishing a teardown-abandoned attempt', () => {
+    const request = { repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }
+    /** A fresh create's commands, then the same sandbox left marker-less as a
+     * dispatcher teardown would leave it. */
+    async function abandoned(h: ReturnType<typeof harness>) {
+      await h.provider.provision(request)
+      const fresh = h.sandbox.commands.splice(0)
+      h.sandbox.provisioned = false
+      h.sandbox.checkout = true
+      h.sandbox.stops = 0
+      return fresh
+    }
+    const fromCheckout = (commands: Array<Record<string, unknown>>) =>
+      commands.slice(
+        commands.findIndex(
+          (command) => command.cmd === 'git' && (command.args as string[])[0] === 'checkout',
+        ),
+      )
+    const isDiff = (command: Record<string, unknown>) =>
+      command.cmd === 'git' && (command.args as string[])[0] === 'diff'
+
+    test('quiesces, verifies, and finishes the same sandbox with the fresh-create sequence', async () => {
+      const h = harness()
+      const fresh = await abandoned(h)
+      let firstGitAtStop: number | undefined
+      const stop = h.sandbox.stop.bind(h.sandbox)
+      h.sandbox.stop = async () => {
+        firstGitAtStop ??= h.sandbox.commands.filter((command) => command.cmd === 'git').length
+        await stop()
+      }
+
+      const workspace = await h.restart().provision({ ...request, adoptAbandoned: true })
+
+      expect(h.creates).toBe(1)
+      expect(firstGitAtStop).toBe(0)
+      expect(workspace.ref).toBe(h.createInput?.name as string)
+      expect(workspace.base.sha).toBe(SHA)
+      expect(h.sandbox.provisioned).toBe(true)
+      const finished = fromCheckout(h.sandbox.commands)
+      expect(finished.filter((command) => !isDiff(command))).toEqual(fromCheckout(fresh))
+      const touch = finished.findIndex((command) => command.cmd === 'touch')
+      expect(finished.findIndex(isDiff)).toBeGreaterThan(-1)
+      expect(finished.findIndex(isDiff)).toBeLessThan(touch)
+    })
+
+    test('reports cleanup-required and never marks a sandbox with no checkout', async () => {
+      const h = harness()
+      await abandoned(h)
+      h.sandbox.checkout = false
+
+      await expect(
+        h.restart().provision({ ...request, adoptAbandoned: true }),
+      ).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+      expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+      expect(h.sandbox.provisioned).toBe(false)
+      expect(h.creates).toBe(1)
+    })
+
+    test('reports cleanup-required when the checkout carries tracked modifications', async () => {
+      const h = harness()
+      await abandoned(h)
+      h.sandbox.failCommand = isDiff
+
+      await expect(
+        h.restart().provision({ ...request, adoptAbandoned: true }),
+      ).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+      expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+      expect(h.sandbox.provisioned).toBe(false)
+    })
+
+    test('without adoption the same marker-less sandbox is still cleanup-required', async () => {
+      const h = harness()
+      await abandoned(h)
+
+      await expect(h.restart().provision(request)).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+      expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+      expect(h.sandbox.stops).toBe(0)
+    })
+
+    test('an absent sandbox is simply created under the same generation', async () => {
+      const h = harness()
+      const workspace = await h.provider.provision({ ...request, adoptAbandoned: true })
+      expect(h.creates).toBe(1)
+      expect(workspace.ref).toBe(h.createInput?.name as string)
+      expect(h.sandbox.commands.some(isDiff)).toBe(false)
+    })
+  })
+
+  test('declares its provisioning estimate, overridable as a test seam', () => {
+    const base = {
+      config: {
+        image: 'vercel/sandbox/universal:latest',
+        vcpus: 4,
+        timeoutSeconds: 2700,
+        failoverRegions: [],
+        environmentVariables: [],
+      },
+      env: {},
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-store-token',
+      repo: '/repo',
+      facade: harness().facade,
+    }
+    expect(scopedProvider(base).provisionEstimateMs).toBe(VERCEL_PROVISION_ESTIMATE_MS)
+    expect(scopedProvider({ ...base, provisionEstimateMs: 1_000 }).provisionEstimateMs).toBe(1_000)
   })
 
   test('installs and preflights every referenced runtime before the marker and preflights again before launch', async () => {

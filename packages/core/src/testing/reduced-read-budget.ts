@@ -1957,6 +1957,105 @@ export async function provisionContinuationGuardReadBudget(opts: {
   })
 }
 
+/** A teardown-abandoned provisioning marker is adopted by the next
+ * invocation, and a bounded invocation without budget for the provision
+ * defers it. Both recur (every invocation), so each must read no seeded
+ * history and the same reduced values at 100 and 100,000 events. The budget
+ * gate is clock arithmetic: a deferring tick writes nothing for the build, and
+ * repeated deferrals cost the same each time. */
+export async function teardownAdoptionReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  /** Seeds a fresh build whose next tick kicks a remote provision
+   * continuation, and returns its slug. Called before filler. */
+  seed: (length: number) => Promise<string>
+  /** A fresh dispatcher per measured invocation: no per-process cache. */
+  dispatcher: () => Dispatcher
+  advance: () => void
+  now: () => number
+  /** The provider's provisioning estimate. */
+  estimateMs: number
+  /** The latest provision request the provider received. */
+  lastProvision: () => { adoptAbandoned?: boolean; generation?: number } | undefined
+}) {
+  const { store } = opts
+  type Measured = { reduced: Record<string, number>; appended: number }
+  const results: Record<number, { deferred: Measured[]; adopted: Measured }> = {}
+  for (const length of [100, 100_000]) {
+    const slug = await opts.seed(length)
+    await seedBuildFiller(store, slug, length)
+    const generation = (await readBuildFacts(store, slug)).value.workspaceGenerations
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provision-started',
+      payload: { provider: 'remote-test', branch: `ab/${slug}`, generation },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'dispatch.failed',
+      payload: {
+        stage: 'workspace',
+        attempt: 1,
+        error: 'provisioning abandoned at dispatcher teardown',
+        abandoned: 'teardown',
+      },
+    })
+    const short = () => opts.now() + opts.estimateMs - 1
+    // An unmeasured deferring tick writes no provisioning fact, only its own
+    // observations; then materialize every build-scoped value once, without a
+    // kicking tick, which would itself start the continuation being measured.
+    await opts.dispatcher().tick({ acceptNewWork: false, deadlineAt: short() })
+    expect((await readBuildFacts(store, slug)).value.provisionMarker).toMatchObject({
+      abandoned: 'teardown',
+      generation,
+    })
+    for (const reducer of ['buildDigest', 'baseBranchValue', 'publishedBranchHeadValue'])
+      await store.getReducerValue({ kind: 'build', slug }, { reducer })
+    await readDispatchBudget(store, slug, true)
+    const measure = async (deadlineAt?: () => number): Promise<Measured> => {
+      const boundary = buildEventRows(store, slug).at(-1)!.seq
+      const rows = { historicalRows: 0, tailRows: 0 }
+      const reduced: Record<string, number> = {}
+      const getReducerValue = store.getReducerValue.bind(store)
+      store.getReducerValue = async (scope, request) => {
+        if (scope.kind === 'build' && scope.slug === slug)
+          reduced[request.reducer] = (reduced[request.reducer] ?? 0) + 1
+        return getReducerValue(scope, request)
+      }
+      const restoreRows = instrumentBuildRows(store, slug, () => boundary, rows)
+      try {
+        opts.advance()
+        const dispatcher = opts.dispatcher()
+        await dispatcher.tick({
+          acceptNewWork: false,
+          ...(deadlineAt === undefined ? {} : { deadlineAt: deadlineAt() }),
+        })
+        await dispatcher.drainProvisioning()
+      } finally {
+        restoreRows()
+        Reflect.deleteProperty(store, 'getReducerValue')
+      }
+      expect(rows.historicalRows).toBe(0)
+      return { reduced, appended: buildEventRows(store, slug).at(-1)!.seq - boundary }
+    }
+    const deferred = [await measure(short), await measure(short)]
+    expect(deferred.map((tick) => tick.appended)).toEqual([0, 0])
+    expect(deferred[1]).toEqual(deferred[0]!)
+    const adopted = await measure()
+    expect(opts.lastProvision()).toMatchObject({ adoptAbandoned: true })
+    const types = buildEventRows(store, slug).map((event) => event.type)
+    expect(types).not.toContain('infrastructure.failed')
+    expect(types.at(-1)).toBe('workspace.provisioned')
+    results[length] = { deferred, adopted }
+  }
+  expect(results[100]).toEqual(results[100_000]!)
+  console.log('teardown adoption read budget', {
+    histories: [100, 100_000],
+    deferred: results[100_000]!.deferred[0],
+    adopted: results[100_000]!.adopted,
+    historicalRows: 0,
+  })
+}
+
 /** In-memory history seeding for preparation budgets; never used as a recurring read. */
 export async function seedPreparationHistory(
   store: BuildStore,

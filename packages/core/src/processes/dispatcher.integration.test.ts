@@ -6,6 +6,7 @@ import {
   parkedSweepReadBudget,
   ticketWaitIdleReadBudget,
   provisionContinuationGuardReadBudget,
+  teardownAdoptionReadBudget,
 } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
@@ -8170,10 +8171,234 @@ describe('Dispatcher durable supervision', () => {
     expect(events.findLast((event) => event.type === 'dispatch.failed')?.payload).toMatchObject({
       stage: 'workspace',
       error: expect.stringContaining('teardown'),
+      abandoned: 'teardown',
     })
     expect(events.some((event) => event.type === 'workspace.provisioned')).toBe(true)
     expect((await h.store.getBuild(slug))?.lease).toBeUndefined()
     expect(h.launches).toEqual([])
+  })
+
+  describe('teardown-abandoned provisioning', () => {
+    type ProvisionOpts = Parameters<WorkspaceProvider['provision']>[0]
+    /** A recovery-capable provider whose provision runs `script` per call. */
+    function scriptedProvider(
+      calls: ProvisionOpts[],
+      script: (opts: ProvisionOpts, call: number) => Promise<void>,
+      estimate?: number,
+    ): WorkspaceProvider {
+      return {
+        name: 'remote-test',
+        preservation: async () => ({ outcome: 'preserved', heads: [] }),
+        recovery: {
+          fence: async () => ({ outcome: 'confirmed' }),
+          reap: async () => ({
+            outcome: 'confirmed',
+            snapshots: { outcome: 'confirmed', deleted: 0 },
+          }),
+        },
+        ...(estimate === undefined ? {} : { provisionEstimateMs: estimate }),
+        async provision(opts) {
+          calls.push(opts)
+          await script(opts, calls.length)
+          return {
+            provider: 'remote-test',
+            ref: `sandbox-g${opts.generation ?? 0}`,
+            path: '/remote/workspace',
+            branch: opts.branch,
+            base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
+          }
+        },
+        async release() {},
+      }
+    }
+    const cleanupRequired = (opts: ProvisionOpts) =>
+      new WorkspaceCleanupRequired(
+        {
+          provider: 'remote-test',
+          ref: `sandbox-g${opts.generation ?? 0}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'remote', sha: BASE_SHA },
+        },
+        new Error('incomplete provisioning marker'),
+      )
+    async function seedQueued(h: ReturnType<typeof harness>, slug: string) {
+      const ticket = { source: 'fake' as const, id: `T-${slug}`, title: slug }
+      await h.store.createBuild({ slug, repo: REPO, ticket, branch: `ab/${slug}` })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: REPO, baseBranch: 'main' },
+      })
+    }
+    /** Invocation 1 kicks a provision that is still blocked at teardown; the
+     * blocked call then rejects late with `lateError`. */
+    async function abandonAtTeardown(lateError: (opts: ProvisionOpts) => unknown) {
+      const calls: ProvisionOpts[] = []
+      let reject!: (error: unknown) => void
+      const blocked = new Promise<void>((_, rejectBlocked) => {
+        reject = rejectBlocked
+      })
+      const first = harness({ workspaceProvider: scriptedProvider(calls, () => blocked) })
+      const slug = 'abandoned-provision'
+      await seedQueued(first, slug)
+      expect((await first.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+      await first.dispatcher.stopProvisioning()
+      reject(lateError(calls[0]!))
+      await first.dispatcher.drainProvisioning()
+      return { first, slug, calls }
+    }
+    const after = (events: AbEvent[], type: string) =>
+      events
+        .slice(events.findIndex((event) => event.type === 'workspace.provision-started'))
+        .filter((event) => event.type === type)
+
+    for (const [label, lateError] of [
+      ['cleanup-required', cleanupRequired],
+      ['plain error', () => new Error('guest command killed')],
+    ] as const) {
+      test(`a late ${label} after teardown records nothing; the next dispatcher finishes the same generation`, async () => {
+        const { first, slug } = await abandonAtTeardown(lateError)
+        const torn = await first.store.getEvents(slug)
+        expect(after(torn, 'dispatch.failed').map((event) => event.payload)).toEqual([
+          expect.objectContaining({ abandoned: 'teardown' }),
+        ])
+        expect(after(torn, 'workspace.cleanup-required')).toEqual([])
+        expect(after(torn, 'infrastructure.failed')).toEqual([])
+
+        const calls: ProvisionOpts[] = []
+        const second = harness({
+          store: first.store,
+          clock: first.clock,
+          tickets: [readyTicket(`T-${slug}`, { title: slug })],
+          workspaceProvider: scriptedProvider(calls, async () => {}),
+        })
+        expect((await second.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+        await second.dispatcher.drainProvisioning()
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.adoptAbandoned).toBe(true)
+        expect(calls[0]!.generation ?? 0).toBe(0)
+        const events = await second.store.getEvents(slug)
+        expect(events.filter((event) => event.type === 'workspace.provision-started')).toHaveLength(
+          2,
+        )
+        expect(
+          events.findLast((event) => event.type === 'workspace.provisioned')?.payload,
+        ).toMatchObject({ ref: 'sandbox-g0' })
+        expect(events.some((event) => event.type === 'workspace.cleanup-required')).toBe(false)
+        expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+        expect(second.launches).toEqual([slug])
+      })
+    }
+
+    test('an adoption the provider cannot finish is flagged for cleanup but uncharged', async () => {
+      const { first, slug } = await abandonAtTeardown(cleanupRequired)
+      const calls: ProvisionOpts[] = []
+      const second = harness({
+        store: first.store,
+        clock: first.clock,
+        workspaceProvider: scriptedProvider(calls, async (opts) => {
+          throw cleanupRequired(opts)
+        }),
+      })
+      await second.dispatcher.tick({ acceptNewWork: false })
+      await second.dispatcher.drainProvisioning()
+      expect(calls[0]!.adoptAbandoned).toBe(true)
+      const events = await second.store.getEvents(slug)
+      expect(events.some((event) => event.type === 'workspace.cleanup-required')).toBe(true)
+      expect(events.at(-1)?.type).toBe('dispatch.failed')
+      expect(events.at(-1)?.payload).not.toHaveProperty('abandoned')
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+    })
+
+    test('a crashed attempt without a teardown record is not adopted and stays charged', async () => {
+      const calls: ProvisionOpts[] = []
+      const h = harness({
+        workspaceProvider: scriptedProvider(calls, async (opts) => {
+          throw cleanupRequired(opts)
+        }),
+      })
+      const slug = 'crashed-provision'
+      await seedQueued(h, slug)
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'workspace.provision-started',
+        payload: { provider: 'remote-test', branch: `ab/${slug}`, generation: 0 },
+      })
+      expect(await h.store.claimLease(slug, 'crashed-provisioner', 100)).toBe(true)
+      h.clock.advance(101)
+
+      await h.dispatcher.tick({ acceptNewWork: false })
+      await h.dispatcher.drainProvisioning()
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.adoptAbandoned).toBeUndefined()
+      const events = await h.store.getEvents(slug)
+      expect(events.some((event) => event.type === 'workspace.cleanup-required')).toBe(true)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(true)
+    })
+
+    test('a bounded invocation defers provisioning its remaining budget cannot cover', async () => {
+      const estimate = 150_000
+      const kick = async (deadlineIn: number | undefined, withEstimate = true) => {
+        const calls: ProvisionOpts[] = []
+        const h = harness({
+          workspaceProvider: scriptedProvider(
+            calls,
+            async () => {},
+            withEstimate ? estimate : undefined,
+          ),
+        })
+        await seedQueued(h, 'budgeted')
+        const now = h.clock().getTime()
+        const report = await h.dispatcher.tick({
+          acceptNewWork: false,
+          ...(deadlineIn === undefined ? {} : { deadlineAt: now + deadlineIn }),
+        })
+        await h.dispatcher.drainProvisioning()
+        const started = (await h.store.getEvents('budgeted')).filter(
+          (event) => event.type === 'workspace.provision-started',
+        ).length
+        return { report, started, calls: calls.length }
+      }
+
+      const short = await kick(estimate - 1)
+      expect(short.report.provisioningDeferred).toBe(1)
+      expect(short.report.provisioning).toBe(0)
+      expect(short).toMatchObject({ started: 0, calls: 0 })
+      expect(await kick(estimate)).toMatchObject({
+        report: { provisioning: 1, provisioningDeferred: 0 },
+        started: 1,
+      })
+      expect(await kick(undefined)).toMatchObject({ report: { provisioning: 1 }, started: 1 })
+      expect(await kick(1, false)).toMatchObject({ report: { provisioning: 1 }, started: 1 })
+    })
+
+    test('the sweep reaps a stale generation, then defers its provision to a later invocation', async () => {
+      const calls: ProvisionOpts[] = []
+      const h = harness({
+        workspaceProvider: scriptedProvider(calls, async () => {}, 150_000),
+      })
+      const slug = await seedEndedThenMissing(h)
+
+      const report = await h.dispatcher.tick({
+        acceptNewWork: false,
+        deadlineAt: h.clock().getTime() + 60_000,
+      })
+      await h.dispatcher.drainProvisioning()
+      expect(report.provisioningDeferred).toBe(1)
+      const events = await h.store.getEvents(slug)
+      expect(events.findLast((e) => e.type === 'workspace.released')?.payload).toMatchObject({
+        ref: 'sandbox-g0',
+        reason: 'replacement',
+      })
+      expect(events.some((e) => e.type === 'workspace.provision-started')).toBe(false)
+      expect(calls).toEqual([])
+
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+      await h.dispatcher.drainProvisioning()
+      expect(calls).toHaveLength(1)
+      expect(h.launches).toEqual([slug])
+    })
   })
 })
 
@@ -10768,9 +10993,18 @@ test('recovered dispatch completion shares the guard before its first attachment
 // ── No-progress guard on provision continuation tails ───────────────────────
 
 /** A recovery-capable remote provider whose provisions always succeed. */
-function continuationProvider(operations: string[]): WorkspaceProvider {
+function continuationProvider(
+  operations: string[],
+  options: {
+    provisionEstimateMs?: number
+    calls?: Array<Parameters<WorkspaceProvider['provision']>[0]>
+  } = {},
+): WorkspaceProvider {
   return {
     name: 'remote-test',
+    ...(options.provisionEstimateMs === undefined
+      ? {}
+      : { provisionEstimateMs: options.provisionEstimateMs }),
     preservation: async () => ({ outcome: 'preserved', heads: [] }),
     recovery: {
       fence: async () => ({ outcome: 'confirmed' }),
@@ -10781,6 +11015,7 @@ function continuationProvider(operations: string[]): WorkspaceProvider {
     },
     async provision(opts) {
       operations.push('provision')
+      options.calls?.push(opts)
       return {
         provider: 'remote-test',
         ref: `sandbox-g${operations.length}`,
@@ -11189,6 +11424,45 @@ command = "run"
       launches: () => launches,
     })
     expect(launches).toBe(0)
+  }, 60_000)
+
+  test('teardown adoption and the provisioning budget gate stay bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const tickets: Ticket[] = []
+    const calls: Array<Parameters<WorkspaceProvider['provision']>[0]> = []
+    const estimate = 150_000
+    const build = (): Harness =>
+      harness({
+        store,
+        clock,
+        tickets,
+        workspaceProvider: continuationProvider([], { provisionEstimateMs: estimate, calls }),
+        opts: { leaseTtlMs: 0 },
+      })
+    await teardownAdoptionReadBudget({
+      store,
+      async seed(length) {
+        const slug = `adoption-${length}`
+        tickets.push(readyTicket(`T-${slug}`))
+        await seedBuild(build(), {
+          slug,
+          workspaceRef: 'sandbox-g0',
+          workspaceProvider: 'remote-test',
+        })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'workspace.released',
+          payload: { ref: 'sandbox-g0', reason: 'replacement' },
+        })
+        return slug
+      },
+      dispatcher: () => build().dispatcher,
+      advance: () => clock.advance(60_000),
+      now: () => clock().getTime(),
+      estimateMs: estimate,
+      lastProvision: () => calls.at(-1),
+    })
   }, 60_000)
 
   for (const table of ['verify', 'finalize'] as const) {
@@ -18959,9 +19233,8 @@ describe('a node flagged cleanup-required is replaced like a leaf (#995)', () =>
     const events = await store.getEvents(slug)
     const flaggedAt = events.findIndex((e) => e.type === 'workspace.cleanup-required')
     expect(flaggedAt).toBeGreaterThan(0)
-    expect(
-      events.slice(flaggedAt + 1).find((e) => e.type === 'infrastructure.failed')?.payload,
-    ).toMatchObject({ operation: 'provision', cleanupPending: true })
+    // Adopting a teardown abandonment that must be replaced is uncharged.
+    expect(events.some((e) => e.type === 'infrastructure.failed')).toBe(false)
     const after = events.slice(flaggedAt).map((e) => e.type)
     const order = [
       'workspace.fenced',

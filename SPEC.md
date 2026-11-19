@@ -4035,7 +4035,10 @@ cleanup records `workspace.commits-preserved` carrying forward earlier preserved
 heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
-releases it and provisions the next generation. A preservation or release
+releases it and provisions the next generation. Provisioning cut off by a
+recorded dispatcher teardown is the exception: the next invocation asks the
+provider to verify and finish the same generation, and if it cannot, the
+replacement consumes no infrastructure attempt. A preservation or release
 failure is recorded against its build, as an infrastructure failure or janitor
 attention, and never stops the dispatcher from advancing other builds.
 Fencing is revalidated after restart; a saved receipt alone never authorizes
