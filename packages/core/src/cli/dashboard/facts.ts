@@ -14,7 +14,7 @@ import type { AbEvent } from '../../events/catalog'
 import { defineReducer } from '../../kernel/incremental'
 import { verifyPhase } from '../../ontology'
 
-export const DASHBOARD_FACTS_REDUCER_VERSION = 3
+export const DASHBOARD_FACTS_REDUCER_VERSION = 4
 
 /** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
  * seq of the `*.started` event, so callers can scope by the same seq
@@ -45,6 +45,20 @@ type SessionEvent = Extract<
   { type: 'session.started' | 'session.ended' | 'session.suspended' | 'session.resumed' }
 >
 
+/** One judge session of a panel run (SPEC §13.1.1), for the session rows.
+ * The order the judge was given is a blinded kernel fact and never copied. */
+export interface JudgeSessionFact {
+  session: string
+  panel: string
+  judge: number
+  runner: string
+  model?: string
+  stream?: string
+  startedSeq: number
+  status: 'open' | 'ended' | 'reclaimed'
+  transcript?: { kind: string; rev: number }
+}
+
 export interface DashboardFacts {
   /** Seq of the latest event of each queued-row kind (`undefined` until seen). */
   created?: number
@@ -55,6 +69,8 @@ export interface DashboardFacts {
   latestFailure?: DispatchFailureFact
   /** The session brackets, in log order; `projectSessions` pairs them. */
   sessionEvents: SessionEvent[]
+  /** Judge sessions, in log order; `projectSessions` merges them as rows. */
+  judgeSessions: JudgeSessionFact[]
   intervals: Record<string, PhaseTiming>
   /** Timestamp of the latest `build.paused`. */
   pausedAt?: string
@@ -155,6 +171,7 @@ export const dashboardFactsReducer = defineReducer<DashboardFacts, AbEvent, Dash
   version: DASHBOARD_FACTS_REDUCER_VERSION,
   initial: () => ({
     sessionEvents: [],
+    judgeSessions: [],
     intervals: {},
     produced: {
       planCompleted: {},
@@ -197,6 +214,28 @@ export const dashboardFactsReducer = defineReducer<DashboardFacts, AbEvent, Dash
         case 'session.ended':
           acc.sessionEvents.push(event)
           break
+        case 'panel.judge-started':
+          acc.judgeSessions.push({
+            session: event.payload.session,
+            panel: event.payload.panel,
+            judge: event.payload.judge,
+            runner: event.payload.runner,
+            ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
+            ...(event.payload.stream !== undefined ? { stream: event.payload.stream } : {}),
+            startedSeq: event.seq,
+            status: 'open',
+          })
+          break
+        case 'panel.judge-ended': {
+          const ended = acc.judgeSessions.find(
+            (judge) => judge.session === event.payload.session && judge.status === 'open',
+          )
+          if (ended === undefined) break
+          ended.status = event.payload.outcome === 'reclaimed' ? 'reclaimed' : 'ended'
+          if (event.payload.transcript !== undefined)
+            ended.transcript = { ...event.payload.transcript }
+          break
+        }
         case 'build.paused':
           acc.pausedAt = event.ts
           break
