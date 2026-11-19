@@ -94,10 +94,11 @@ describe('settleAttempt', () => {
     expect(
       await settleAttempt(store, 'opt-node', { proposal: 'a', ticket }, 'accepted', {
         measurement: { ...measurement, candidate: 40, delta: 10 },
+        head: MERGED,
       }),
     ).toBe(true)
     expect(await settled(store)).toHaveLength(1)
-    expect((await settled(store))[0]!.payload).toMatchObject({ outcome: 'accepted' })
+    expect((await settled(store))[0]!.payload).toMatchObject({ outcome: 'accepted', head: MERGED })
   })
 
   test('an unknown proposal never settles', async () => {
