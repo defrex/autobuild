@@ -10,6 +10,7 @@ import {
   DISPATCH_LAUNCH_CONTEXT_ENV,
 } from '../packages/core/src/cli/dispatch-launch-contract'
 import { watchDispatchParent } from '../packages/core/src/cli/dispatch-parent-watch'
+import { holdDrainedStop } from '../packages/core/src/cli/dispatch-launch-stop'
 let code: number = GENERATION_EXITS.failed
 const readerMode = process.argv[2]?.startsWith('--read-') ?? false
 let presentationOwner = process.argv[2] !== '--preflight'
@@ -86,6 +87,7 @@ try {
   try {
     const { runDirectBinary } = await import('../packages/core/src/cli/binary-direct')
     const result = await runDirectBinary(process.argv.slice(2))
+    holdDrainedStop(() => process.exit(result === 0 ? GENERATION_EXITS.stopped : result))
     code =
       result === 0
         ? (await readHandoff(launch, process.argv.slice(2), process.env))
