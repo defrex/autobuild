@@ -464,6 +464,8 @@ test('real built docs are discovered at desktop and phone widths', async () => {
     ['docs/operating/index.html', 390],
     ['docs/operator-surfaces/index.html', 1440],
     ['docs/operator-surfaces/index.html', 390],
+    ['docs/optimization-nodes/index.html', 1440],
+    ['docs/optimization-nodes/index.html', 390],
     ['docs/plugin-authoring/index.html', 1440],
     ['docs/plugin-authoring/index.html', 390],
     ['docs/seams/index.html', 1440],

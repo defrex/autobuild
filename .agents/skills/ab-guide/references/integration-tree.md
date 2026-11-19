@@ -201,8 +201,9 @@ defaults to `abort` and proposer concurrency to 1. The ticket's kind stays
 `node`; no label or state marks it. A heading named "Objective", a `toml` block,
 prose, inline code, a fence nested inside another fence (a Markdown example of
 the block) and a block inside an HTML comment do not count. See
-[optimization nodes](optimization-nodes.md) for a valid example, the complete
-schema and the scanning rules.
+[optimization nodes](optimization-nodes.md) for when to use one, a run end to
+end, grooming guidance, a valid example, the complete schema and the scanning
+rules.
 
 The dispatcher checks the block when it prepares a claimed ticket, before spec
 authoring. Two or more blocks, an invalid block, a missing budget limit, a
