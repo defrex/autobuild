@@ -2271,7 +2271,7 @@ deterministic fail-safe.
   the failed conversation. Selection is non-sticky: every later phase, loop
   continuation, and retry starts from the primary. The final failure controls
   retry/permanent behavior. This applies to core phases, agent verify/finalize,
-  and Harvest, but not tool-free one-shots. Every selected runtime/model/args
+  Harvest and judge sessions (§13.1.1), but not tool-free one-shots. Every selected runtime/model/args
   tuple is recorded on `session.started`; fallback starts cite the preceding target and
   verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
   the complete ordered attempt list.
@@ -2341,7 +2341,10 @@ deterministic fail-safe.
   `{ kind: 'repo', repo }` instead of build-scoped, `harvest.session.started`
   carries the returned stream id, `phase` is spelled `harvest:<step>`, each
   revise round is its own bracket and its own stream, and a closed stream
-  finalizes onto the repository scope. Harvest journal events
+  finalizes onto the repository scope. A judge session (§13.1.1) streams the
+  same way on the build scope: its `phase` is spelled `judge:<panel>:<judge>`,
+  `panel.judge-started` carries the stream id, and the stream closes before
+  `panel.judge-ended`. Harvest journal events
   (`harvest.step.*`, `harvest.proposals.submitted`, `harvest.review.verdict`,
   and their kin) are deliberately not translated into parts — they are typed
   journal facts, observable via `ab watch --repository`, not harness output.
@@ -3921,6 +3924,18 @@ reason}`, the durable judgment, then `panel.judge-ended` with the outcome and
 the transcript. A preference for the candidate scores 1, a tie 0.5 and the
 baseline 0; the win rate is the mean over `panel.judged`.
 
+A judge launch follows the `judge` role's provider alternates under the §8.4
+eligibility rules; a credential delegation failure, an expired budget and a
+shutdown are not eligible. Each target is its own judge session in the same
+root and order, with its own `panel.judge-started` (its `substitution` naming
+the failed session), credential, stream and transcript. Each alternate's
+executable is checked like the primary's before it launches; a refused
+alternate is not started, ends the chain, and its reason is appended to the
+failed session's error. A fallback happens only after the failed session's
+preference is settled and its `panel.judge-ended` is recorded, and never after
+any preference or saved outbox for that judge; a preference that raced that
+end stops the chain and is completed like any saved preference.
+
 Nothing Autobuild gives a judge reveals which variant is the candidate: not its
 context, its environment, its labels, the location or names of its variant
 worktrees, its store credential, nor any git metadata reachable from its
@@ -3939,11 +3954,13 @@ sandbox is claimed.
 A run with the same panel id resumes from its recorded facts and refuses
 different inputs. A judge session started and never ended is closed as
 `reclaimed`, after any outbox preference it saved is committed while it is
-still open. A judge with a saved `panel.preferred` and no `panel.judged`
+still open; its stream, if any, is closed after that commit and before the
+`reclaimed` end. A judge with a saved `panel.preferred` and no `panel.judged`
 is then completed from that preference and its session's recorded order
 without a new session. Only judges with no preference run again, each with a fresh
 order. A judge outcome of `no-terminal`, `failed` or `expired` counts as a
-failure; after two counted failures for one judge the run fails, naming the
+failure, except a session that a later start's substitution replaced: only a
+chain's last failure counts; after two counted failures for one judge the run fails, naming the
 judge and its last outcome. `interrupted` (shutdown) and `reclaimed` do not
 count. A run that cannot prepare its variants fails with the Git output tail.
 
@@ -4560,9 +4577,7 @@ bounded by 20 judges. Pure selectors over it give the pending judges (no
 preference), the sessions awaiting reclaim, the saved preferences to complete
 and each judge's counted failures (excluding sessions named by a later
 start's substitution). Dashboard facts retain judge session attribution and
-evidence without the blinded order, and expose it through session rows.
-The isolated launcher uses only the primary target and does not yet produce
-judge streams or substitutions. The `buildDelegation` service value
+evidence without the blinded order, and expose it through session rows. The `buildDelegation` service value
 (version 2) folds `panel.judge-started` and `panel.judge-ended` into its
 session lifecycle beside `session.started` and `session.ended`, and records
 which judge sessions preferred, so a judge preference write is decided with

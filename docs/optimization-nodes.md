@@ -396,13 +396,16 @@ recorded judgments, so ties count as half.
 **Resumption.** A run resumed after a crash or restart keeps every recorded
 judgment. A dangling session is closed as `reclaimed`. A preference a local
 judge saved before the crash is committed first, while its session is still
-open. A judge whose preference was recorded is completed from that preference
+open. A dangling session's stream, if it has one, is closed after that
+commit and before the `reclaimed` end. A judge whose preference was recorded is completed from that preference
 and its recorded order without a new session. Only judges with no recorded preference run
 again, each with a freshly drawn order.
 
 **Failures.** A judge's turn that ends without a preference (`no-terminal`),
 fails (`failed`) or exceeds the session budget (`expired`) counts as a
-failure. After two counted failures for one judge, the run fails and names the
+failure. A failure that a provider alternate replaced does not count; only the
+last session of a judge's chain does. An alternate whose executable is
+refused is not started, and the failure it would have replaced counts. After two counted failures for one judge, the run fails and names the
 judge and its last outcome. A shutdown records `interrupted`, which does not
 count. A run that cannot prepare its variants fails with the Git output tail.
 A variant holding a committed symlink that resolves outside its judge root
@@ -413,12 +416,28 @@ judge starts. A local judge's saved preference that is malformed, or names
 another judge or session, ends that judge as `no-terminal` with the reason.
 Every judge root and the launcher directory are removed when the run ends.
 
-Judge-session evidence accepts optional `stream` and provider `substitution`
-fields on `panel.judge-started`. The dashboard projects these starts into
-session rows attributed to the panel and judge, without the blinded order.
-The isolated judge launcher currently uses only the primary target and does
-not open session streams; alternate launching and stream production require
-the subsequent reviewed implementation.
+**Provider alternates.** A judge launch follows the `judge` role's provider
+alternates under the same eligibility rules as a build phase: an availability
+or exhaustion failure, or a thrown start, moves to the next target; a
+credentials or configuration failure, a failed credential delegation, an
+expired budget and a shutdown do not. Each target is its own judge session in
+the same root and with the same order, with its own `panel.judge-started`
+(whose `substitution` names the failed session), credential, stream and
+transcript. Before an alternate launches, its executable is checked against
+the judge's filtered `PATH` and protected locations, like the primary's; a
+refused alternate is not started, ends the chain, and its reason is appended
+to the failed session's error. An alternate starts only after the failed
+session's saved preference is settled and its `panel.judge-ended` is recorded,
+and never after any preference or saved outbox for that judge.
+
+**Watching a judge.** A judge session streams like any other build session
+when its runtime can stream: the stream's session identity carries the `judge`
+role, the runtime and the phase `judge:<panel>:<judge>`, and never the order,
+a side or the root. Its id is recorded on `panel.judge-started`, and it closes
+before `panel.judge-ended`, `completed` when the session preferred and
+`aborted` otherwise. The dashboard's session rows show each judge session,
+including replaced ones, attributed to the panel and judge, without the
+blinded order.
 
 ## Events
 
