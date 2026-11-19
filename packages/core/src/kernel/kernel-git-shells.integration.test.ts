@@ -229,6 +229,10 @@ const DYNAMIC_SHELL_ALLOWLIST: Record<string, string> = {
     'configured objective measurement command in a scratch worktree',
   'processes/panel-runner.ts TMPDIR_PROBE': 'resolves the temporary directory; no Git',
   'processes/panel-runner.ts judge-links': 'finds symlinks escaping the sealed judge root; no Git',
+  'processes/panel-runner.ts judge-real': 'resolves a protected path physically; no Git',
+  'processes/panel-runner.ts judge-paths': 'resolves ambient paths physically; no Git',
+  'processes/panel-runner.ts judge-launcher': 'writes the judge launcher in chunks; no Git',
+  'processes/panel-runner.ts judge-exec': 'resolves a judge executable through PATH; no Git',
 }
 
 /** Sandbox-side scripts that name Git. They run inside the Vercel Sandbox VM
