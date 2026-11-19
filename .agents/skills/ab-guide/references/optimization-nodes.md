@@ -766,8 +766,12 @@ abort, so an operator abort before a stop remains `aborted`; an operator abort
 during drain is also `aborted`. Settlement is conditional on the attempt still
 being in flight, and the existing node sweep alone moves its ticket to rejected.
 
-An attempt with no build yet is cancelled and settles `stopped` in both modes. No proposer runs after
-a stop, and dispatch refuses an attempt ticket of a stopped node with
+An attempt with no build yet is cancelled and settles `stopped` in both modes. No new proposer
+session is admitted after a stop. A proposer session that had already started
+keeps the allowance it was granted and may finish or resume; its deposited
+proposals are filed and recorded, but the stopped node's attempt handling
+cancels and settles those attempts, so no fresh attempt work runs. Dispatch
+refuses an attempt ticket of a stopped node with
 `target optimization node <id> has stopped; attempt <ticket> is cancelled`.
 Children filed by hand, such as repair tickets, are still admitted.
 

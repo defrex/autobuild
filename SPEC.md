@@ -3813,7 +3813,10 @@ Dispatch refuses an attempt ticket of a stopped node, whether still in flight or
 settled `stopped`, with the diagnostic `target optimization node <id> has
 stopped; attempt <ticket> is cancelled`. Children filed any other way are still
 admitted. No proposer session is admitted once the node has stopped or any stop
-cause is eligible.
+cause is eligible. A proposer session that had already started keeps its granted
+allowance and may finish or resume; its deposited proposals are filed and
+recorded, and the stopped node's attempt handling cancels and settles those
+attempts, so no fresh attempt work runs.
 
 **Completion.** An optimization node is complete when it has stopped, no
 attempt is running or waiting to land, and its child enumeration satisfies the

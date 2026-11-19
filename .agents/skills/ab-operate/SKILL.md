@@ -787,7 +787,8 @@ when to stop, and landing the result.
   Abort cleanup uses the first request’s durable origin and settles each build
   once. `--stop --drain` cancels queued attempts
   and lets running ones finish and face the landing gate, so a nearly finished
-  improvement can still land. A stop is final: no proposer runs after it, and a
+  improvement can still land. A stop is final: no new proposer session starts
+  after it, attempts proposed by a session already running are cancelled, and a
   later revision does not restart the search.
 - **Land it** once it completes. A stopped node with no attempt running or
   waiting to land completes, verifies and appears in the consent queue like any

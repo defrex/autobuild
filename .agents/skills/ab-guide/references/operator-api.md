@@ -466,8 +466,9 @@ uses the same service as `ab objective <node> --stop` and records one human
 those cancelled or aborted by the stop settle `stopped`. An earlier operator
 abort remains `aborted`; abort cleanup uses the first request’s durable origin
 and settles each build once. Drain cancels queued attempts and lets running
-ones finish and face the landing gate. No proposer runs after a stop, and a stop
-is final. It refuses non-node builds, nodes with no accepted objective, terminal
+ones finish and face the landing gate. No new proposer session is admitted after
+a stop; one that had already started may finish, but the attempts it proposes
+are cancelled and settle `stopped`. A stop is final. It refuses non-node builds, nodes with no accepted objective, terminal
 nodes and a node that has already stopped, and enforces repository ownership.
 Stopping is not merge consent: once the node completes and verifies, land it
 with `builds.control` merge. The tool has no HTTP route.
