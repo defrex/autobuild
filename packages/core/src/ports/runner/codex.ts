@@ -214,6 +214,7 @@ const ONE_SHOT_DISABLED_FEATURES = [
 
 export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'codex'
+  readonly executable = 'codex'
 
   private readonly runCli: CodexCliRunFn
   private readonly runCliStream: CodexCliStreamFn | undefined
@@ -462,8 +463,16 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     if (opts.model !== undefined) args.push(CODEX_MODEL_ARG, opts.model)
     const provider =
       opts.account?.descriptor.kind === 'chatgpt-subscription'
-        ? await chatgptProvider(opts.account, sessionEnv(opts.env), opts.workspacePath)
-        : { env: sessionEnv(opts.env), args: [] as string[], close: async () => {} }
+        ? await chatgptProvider(
+            opts.account,
+            sessionEnv(opts.env, process.env, opts.judgeLaunch),
+            opts.workspacePath,
+          )
+        : {
+            env: sessionEnv(opts.env, process.env, opts.judgeLaunch),
+            args: [] as string[],
+            close: async () => {},
+          }
     args.push(...(opts.args ?? []), ...provider.args)
     if (resume !== undefined) args.push(resume)
     args.push(CODEX_PROMPT_BOUNDARY, prompt)
