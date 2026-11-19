@@ -710,3 +710,53 @@ test('cleanup keeps a workspace while measurement or a proposal owns it', () => 
   node.state.currentPhase = { phase: 'propose', round: 1, seq: 1 }
   expect(slotRequest({ ...node, workspace: false }, now)).toBe('propose')
 })
+
+test('a panel node owing progress requests verification and occupies while measuring', () => {
+  const node = measuringNode('node')
+  const panel = {
+    ...node.state.optimization!.objective,
+    metric: { kind: 'panel' as const, judges: 3, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+  }
+  node.state.optimization!.objective = panel
+  node.state.optimization!.starting = { value: 0.5, spread: 0, head: 'a'.repeat(40) }
+  expect(slotRequest(node, now)).toBeUndefined()
+  node.state.optimization!.progressQueue = ['c'.repeat(40)]
+  expect(slotRequest(node, now)).toBe('verification')
+  expect(occupiesCapacity(node, now)).toBe(false)
+  node.workspace = true
+  expect(slotRequest(node, now)).toBeUndefined()
+  expect(occupiesCapacity(node, now)).toBe(true)
+  node.workspace = false
+  node.state.status = 'paused'
+  expect(slotRequest(node, now)).toBeUndefined()
+})
+
+test('progress and proposer share workspace ownership and admission priority', () => {
+  const node = measuringNode('node')
+  const optimization = node.state.optimization!
+  optimization.objective.metric = {
+    kind: 'panel',
+    judges: 3,
+    rubric: 'evals/rubric.md',
+    harness: ['evals/**'],
+  }
+  optimization.starting = { value: 0.5, spread: 0, head: 'a'.repeat(40) }
+  optimization.progressQueue = ['c'.repeat(40)]
+  optimization.proposal = {
+    id: 'r2',
+    head: 'c'.repeat(40),
+    room: 1,
+    requestedAt: now.toISOString(),
+    round: 2,
+  }
+  expect(slotRequest(node, now)).toBe('verification')
+  node.workspace = true
+  expect(strandedNodeWorkspace(node, now)).toBe(false)
+  node.state.currentPhase = { phase: 'propose', round: 2, seq: 1 }
+  expect(slotRequest({ ...node, workspace: false }, now)).toBe('propose')
+  delete optimization.proposal
+  delete node.state.currentPhase
+  expect(strandedNodeWorkspace(node, now)).toBe(false)
+  delete optimization.progressQueue
+  expect(strandedNodeWorkspace(node, now)).toBe(true)
+})

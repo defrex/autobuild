@@ -1775,6 +1775,21 @@ describe('optimization event protocol', () => {
     invalid('attempt.branch-deleted', { ...cleanup, branch: '' })
   })
 
+  test('only an accepted settlement records the head it landed as', () => {
+    const measurement = { revision: 1, baseline: 0.5, candidate: 0.7, delta: 0.2 }
+    const head = 'c'.repeat(40)
+    const attempt = { proposal: 'a1', ticket }
+    expect(
+      valid('attempt.settled', { attempt, outcome: 'accepted', measurement, head }),
+    ).toMatchObject({ type: 'attempt.settled' })
+    // Older accepted facts carry no head.
+    expect(valid('attempt.settled', { attempt, outcome: 'accepted', measurement })).toMatchObject({
+      type: 'attempt.settled',
+    })
+    invalid('attempt.settled', { attempt, outcome: 'no-improvement', measurement, head })
+    invalid('attempt.settled', { attempt, outcome: 'declined', head })
+  })
+
   test('an attempt implementer declines with a bounded reason', () => {
     const actor = agentActor('implement', 's_1')
     expect(valid('implement.declined', { round: 1, reason: 'no gain' }, actor)).toMatchObject({

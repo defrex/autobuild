@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
+import type { BuildState } from '../kernel/reducer'
 import { BUILD_ATTENTION_EVENTS, summarizeEvent } from './watch'
 
 const sha = 'abcdef0123456789abcdef0123456789abcdef01'
@@ -115,4 +116,51 @@ test('a panel attempt reports its judged and decided win rate', () => {
   expect(summarizeEvent(event('attempt', 'attempt.measured', measured), null)).toBe(
     'win rate 0.8: delta 0.3 → improved',
   )
+})
+
+test('a panel node reports its self-comparison, judge remedy and progress', () => {
+  const state = { optimization: { objective: { metric: { kind: 'panel' } } } } as BuildState
+  expect(
+    summarizeEvent(
+      event('prose', 'optimization.baseline-measured', {
+        revision: 1,
+        head: sha,
+        harnessPin: sha,
+        samples: 3,
+        median: 2 / 3,
+        spread: 1 / 6,
+      }),
+      state,
+    ),
+  ).toBe(
+    `starting win rate 50%; self-comparison win rate 66.7%, noise spread ${1 / 6} (3 judges, harness abcdef0)`,
+  )
+  expect(
+    summarizeEvent(
+      event('prose', 'optimization.noise-exceeded', {
+        revision: 1,
+        head: sha,
+        harnessPin: sha,
+        median: 0.8,
+        spread: 0.3,
+        epsilon: { absolute: 0.1 },
+        effectiveEpsilon: 0.1,
+      }),
+      state,
+    ),
+  ).toBe(
+    'Noise exceeds ε on prose: starting spread 0.3 > ε 0.1 (absolute); the node continues — raise target.epsilon or metric.judges',
+  )
+  expect(
+    summarizeEvent(
+      event('prose', 'optimization.progress-measured', {
+        revision: 1,
+        head: 'c'.repeat(40),
+        start: sha,
+        winRate: 0.75,
+        judges: 4,
+      }),
+      state,
+    ),
+  ).toBe('win rate 75% against starting head abcdef0 at head ccccccc (4 judges)')
 })
