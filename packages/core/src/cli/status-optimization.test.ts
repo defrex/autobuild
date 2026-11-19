@@ -1,7 +1,12 @@
 /** `ab status` labels an optimization node as one (SPEC §13.1). */
 import { expect, test } from 'bun:test'
 import { DISPATCHER } from '../events/envelope'
-import { commandObjective } from '../kernel/generators/optimization-log'
+import {
+  commandObjective,
+  OPTIMIZATION_SHA,
+  OptimizationLogBuilder,
+  panelObjective,
+} from '../kernel/generators/optimization-log'
 import { MemoryBuildStore } from '../store/memory'
 import { buildVocabulary } from './dashboard/model'
 import { objectiveSegments, objectiveSummary } from './dashboard/objective-row'
@@ -90,4 +95,66 @@ test('a plain node and a work build project exactly as before', async () => {
   expect(table.join('\n')).toContain('integration empty')
   expect(buildVocabulary(reduceBuild(events))).not.toHaveProperty('optimization')
   expect(buildVocabulary(reduceBuild([]))).toEqual({ kind: 'work' })
+})
+
+async function measuredAttempt(panel: boolean) {
+  const store = new MemoryBuildStore()
+  const record = await store.createBuild({ slug: 'attempt-a1', repo: '/repo', branch: 'ab/a1' })
+  const log = new OptimizationLogBuilder('attempt-a1')
+    .push({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket: { source: 'file', id: 'T-a1' }, repo: '/repo', baseBranch: 'ab/node' },
+    })
+    .requestMeasurement(
+      'm1',
+      'node',
+      1,
+      undefined,
+      (panel ? panelObjective() : commandObjective()).metric,
+    )
+  if (panel)
+    log.push({
+      actor: DISPATCHER,
+      type: 'attempt.measured',
+      payload: {
+        request: 'm1',
+        candidate: OPTIMIZATION_SHA('c'),
+        baseline: OPTIMIZATION_SHA('a'),
+        harnessPin: OPTIMIZATION_SHA('a'),
+        revision: 1,
+        samples: 5,
+        winRate: 0.8,
+        delta: 0.3,
+        decision: 'improved',
+      },
+    })
+  else log.measured('m1', { baseline: 50, candidate: 44 }, { spread: 0.4 })
+  return { record, events: log.events }
+}
+
+test('an attempt shows its recorded win rate or medians in status', async () => {
+  const panel = await measuredAttempt(true)
+  const summary = summarize(panel.record, panel.events, now)
+  expect(summary.measurement).toEqual({
+    candidate: OPTIMIZATION_SHA('c'),
+    baseline: OPTIMIZATION_SHA('a'),
+    revision: 1,
+    delta: 0.3,
+    decision: 'improved',
+    winRate: 0.8,
+  })
+  expect(renderDetail(detail(panel.record, panel.events, now), now)).toContain(
+    `  measurement: win rate 0.8: delta 0.3 → improved (candidate ${'c'.repeat(7)} on ${'a'.repeat(7)})`,
+  )
+  const command = await measuredAttempt(false)
+  expect(summarize(command.record, command.events, now).measurement).toMatchObject({
+    medians: { baseline: 50, candidate: 44 },
+    spread: 0.4,
+  })
+  expect(renderDetail(detail(command.record, command.events, now), now)).toContain(
+    `  measurement: candidate 44 vs baseline 50: delta 6 (noise ±0.4) → improved (candidate ${'c'.repeat(7)} on ${'a'.repeat(7)})`,
+  )
+  const { record, events } = await node(true)
+  expect(summarize(record, events, now)).not.toHaveProperty('measurement')
 })
