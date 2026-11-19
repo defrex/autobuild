@@ -3542,8 +3542,8 @@ export class BuildRunner {
    * Commit a local judge's saved preference (SPEC §13.1.1): read its outbox
    * from the judge's root, validate it, and append it atomically as the
    * judge session. A missing outbox does nothing; a preference this session
-   * already recorded is success. Returns the reason a present outbox was not
-   * committed. With `onlyOwn`, an outbox naming another session is left for
+   * already recorded is success. Returns the reason a present, or unreadable,
+   * outbox was not committed. With `onlyOwn`, an outbox naming another session is left for
    * that session's own reclaim.
    */
   private async commitJudgeOutbox(
@@ -3564,7 +3564,11 @@ export class BuildRunner {
       ],
       {},
     )
-    if (read.exitCode !== 0 || read.stdout.startsWith('0')) return undefined
+    // Only a clean read of `0` proves absence. A failed read may hide a saved
+    // preference, so it is reported, which keeps an alternate out of the root.
+    if (read.exitCode !== 0)
+      return `the saved judge preference could not be read: ${read.stderr.trim() || `exit ${read.exitCode}`}`
+    if (read.stdout.startsWith('0')) return undefined
     const text = read.stdout.slice(1)
     if (text.length > JUDGE_PREFERENCE_OUTBOX_BYTES)
       return 'the saved judge preference is larger than 64 KiB'

@@ -428,7 +428,8 @@ the judge's filtered `PATH` and protected locations, like the primary's; a
 refused alternate is not started, ends the chain, and its reason is appended
 to the failed session's error. An alternate starts only after the failed
 session's saved preference is settled and its `panel.judge-ended` is recorded,
-and never after any preference or saved outbox for that judge.
+and never after any preference, saved outbox or unreadable outbox for that
+judge.
 
 **Watching a judge.** A judge session streams like any other build session
 when its runtime can stream: the stream's session identity carries the `judge`

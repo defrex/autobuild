@@ -45,6 +45,9 @@ const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', exitCode: 0 })
 /** Files under judge roots, shared by the scripted judges and the fake shell. */
 type Files = Map<string, string>
 
+/** Outbox content the fake shell finds present but fails to read. */
+const UNREADABLE = '\0unreadable'
+
 /** Git and shell plumbing for the materializer, answering every probe, with
  * judge roots' files held in `files` so outboxes round-trip. */
 function fakeExec(
@@ -73,6 +76,7 @@ function fakeExec(
       )
     if (cmd[0] === 'sh' && cmd[3] === 'judge-outbox') {
       const content = files.get(cmd[4]!)
+      if (content === UNREADABLE) return { stdout: '1', stderr: 'head: read error', exitCode: 1 }
       return ok(content === undefined ? '0' : `1${content}`)
     }
     if (cmd[0] === 'rm')
@@ -957,6 +961,30 @@ describe('BuildRunner judge provider alternates', () => {
         runtimes: { backup: { runner: backup.runner, servesModels: [''] } },
       }).runPanel({ ...REQUEST, judges: 1 })
       expect(backup.sessions.size).toBe(0)
+    }
+    // An outbox that exists but cannot be read may hold a saved preference:
+    // the failure counts with the read error and no alternate starts.
+    {
+      const store = await seeded()
+      const files: Files = new Map()
+      const agent = new ScriptedAgentRunner({
+        script: (ctx) => {
+          files.set(`${ctx.opts.workspacePath}/${JUDGE_PREFERENCE_OUTBOX}`, UNREADABLE)
+          return unavailable()
+        },
+      })
+      const backup = backupFor(files, () => defaultTurnResult())
+      await runnerFor(store, agent, {
+        files,
+        roles: JUDGE_ALTERNATE,
+        runtimes: { backup: { runner: backup.runner, servesModels: [''] } },
+      }).runPanel({ ...REQUEST, judges: 1 })
+      expect(backup.sessions.size).toBe(0)
+      const events = panelEvents(await store.getEvents(SLUG))
+      const started = events.filter((event) => event.type === 'panel.judge-started')
+      expect(started.some((event) => 'substitution' in event.payload)).toBe(false)
+      for (const event of events.filter((event) => event.type === 'panel.judge-ended'))
+        expect(event.payload).toMatchObject({ outcome: 'failed' })
     }
     // A remote judge that recorded its preference through the store, then
     // failed, starts no alternate either.

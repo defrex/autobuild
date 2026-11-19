@@ -3933,7 +3933,7 @@ executable is checked like the primary's before it launches; a refused
 alternate is not started, ends the chain, and its reason is appended to the
 failed session's error. A fallback happens only after the failed session's
 preference is settled and its `panel.judge-ended` is recorded, and never after
-any preference or saved outbox for that judge; a preference that raced that
+any preference, saved outbox or unreadable outbox for that judge; a preference that raced that
 end stops the chain and is completed like any saved preference.
 
 Nothing Autobuild gives a judge reveals which variant is the candidate: not its
