@@ -1300,10 +1300,17 @@ A durable ending never resurrects: recovered harvest work gets a new
 `harvest.execution.authorized` identity and token.
 
 A judge grant is write-only. Every read is refused with 403, including reducer
-values, artifacts, streams and build listings. Its one permitted request is
-`POST /builds/<id>/events` carrying a single `panel.preferred` attributed to its
-own judge session, for its own panel, judge and session, while that session is
-open and has not already preferred. Every other write is refused.
+values, artifacts, snapshots, sessions, streams and build listings, and so is
+every ticket, operator and credential-issuance request. Its one permitted
+request is `POST /builds/<id>/events` carrying a single `panel.preferred`
+attributed to its own judge session, for its own panel, judge and session,
+while that session is open and has not already preferred. Every other write is
+refused. The server checks the session and appends in one conditional step, so
+concurrent requests from one judge session record at most one preference. A
+losing request is refused with 403 ("this judge already recorded its
+preference"), exactly as a sequential retry is. If the build keeps advancing
+through repeated attempts, the request fails with 409 `conflict` and writes
+nothing; it may be retried. Requests from other judge sessions are unaffected.
 
 Other delegated grants keep same-project reads, including journals, artifacts,
 digests, bounded state, pinned assets and collections. Writes by a build grant

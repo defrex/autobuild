@@ -30,7 +30,7 @@ import {
   credentialFailure,
   missingExecutableFailure,
 } from './provider-error'
-import { createPiRpcSession, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
+import { createPiRpcSession, PI_BRIDGE_PATH, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
 import {
   abortPart,
   errorPart,
@@ -49,7 +49,7 @@ import {
   toolOutputPart,
 } from './stream-parts'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
-import { sessionEnv } from './session-env'
+import { namesPath, sessionEnv, type JudgeLaunch } from './session-env'
 
 export const MINIMUM_PI_VERSION = '0.84.3'
 const PI_TOOLS = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'] as const
@@ -400,6 +400,7 @@ function createPiTurnTranslator(emit: (parts: StreamPart[]) => void): PiTurnTran
 
 export class PiAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'pi'
+  readonly executable = 'pi'
   private readonly host: () => string
   private readonly createSessionFn: PiCreateSessionFn
   private readonly createSessionId: () => string
@@ -449,6 +450,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     const turnEvents: PiTurnEventHook = {}
     try {
       rejectSessionArgs(opts.args)
+      rejectJudgeExposure(opts.judgeLaunch)
       native = await this.createSessionFn({
         persistent: true,
         cwd: opts.workspacePath,
@@ -456,7 +458,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         tools: PI_TOOLS,
         args: opts.args ?? [],
         skill: opts.skill,
-        env: sessionEnv(opts.env),
+        env: sessionEnv(opts.env, process.env, opts.judgeLaunch),
         // Stream translation is per turn; the hook stays live for later
         // continued turns even when turn 1 streams nothing.
         onEvent: (event) => turnEvents.translator?.onEvent(event),
@@ -479,7 +481,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       turn = await this.runPrompt(
         native,
         prompt,
-        this.turnEnv(opts.env),
+        this.turnEnv(opts.env, opts.judgeLaunch),
         opts.signal,
         opts.stream,
         turnEvents,
@@ -533,7 +535,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     const turn = await this.runPrompt(
       state.session,
       message,
-      this.turnEnv(scoped),
+      this.turnEnv(scoped, state.opts.judgeLaunch),
       opts?.signal,
       opts?.stream,
       state.turnEvents,
@@ -727,8 +729,11 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       : { kind: 'failed', ...base, failure: turn.failure }
   }
 
-  private turnEnv(scoped: Record<string, string>): Record<string, string> {
-    return sessionEnv(scoped)
+  private turnEnv(
+    scoped: Record<string, string>,
+    judgeLaunch?: JudgeLaunch,
+  ): Record<string, string> {
+    return sessionEnv(scoped, process.env, judgeLaunch)
   }
 }
 
@@ -763,6 +768,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Pi loads the distribution's bridge extension by path, so its process argv
+ * names the distribution. A judge launch refuses it when that path lies in a
+ * protected location rather than expose it (SPEC §13.1.1). */
+function rejectJudgeExposure(judgeLaunch: JudgeLaunch | undefined): void {
+  if (judgeLaunch?.hide.some((path) => namesPath(PI_BRIDGE_PATH, path)))
+    throw new Error(
+      'the pi runtime loads its Autobuild bridge from inside a protected location, ' +
+        'which would expose it to a judge; install Autobuild outside the repository',
+    )
 }
 
 function rejectSessionArgs(args: readonly string[] = []): void {

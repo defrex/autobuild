@@ -346,25 +346,37 @@ pure half: each judge's A/B order, the candidate's score, the win rate with
 ties counted as half, and the latest run's reduced state (`BuildState.panel`).
 `packages/core/src/processes/panel-runner.ts` materializes each pending judge's
 root outside any repository from a private Git directory over the workspace's
-objects, pins every harness path, copies `ab-judge` from the harness pin,
-removes that material before any session starts and refuses a root inside the
-workspace or any Git repository; its loop completes saved preferences, reclaims
-dangling sessions and launches each wave concurrently. `BuildRunner.runPanel`
-records the run's kernel facts, the order in `panel.judge-started` before each
-session, and `panel.judged` after it. `BuildRunner.runMeasurement` calls it for
-an attempt's panel measurement request, under the panel id `attemptPanelId`
+objects, pins every harness path, copies `ab-judge` from the harness pin and
+removes that material before any session starts. It computes the protected
+locations (workspace, checkout, Git common directory, main checkout, local
+store), refuses a scratch base or root in one of them or inside any Git
+repository with fail-closed discovery, writes the judge-only launcher, and
+refuses an interpreter or runtime executable found only in a protected
+location. Its loop reclaims dangling sessions, completes saved preferences and
+launches each wave concurrently. `packages/core/src/cli/judge-entry.ts` is the
+judge-only `ab`, bundled into one file by
+`packages/core/src/processes/judge-launcher.ts`. `sessionEnv` in
+`packages/core/src/ports/runner/session-env.ts` builds the judge's launch
+environment, scrubbing every inherited value that names a protected location;
+`judgeAmbientAliases` in `panel-runner.ts` first resolves inherited paths so a
+symlinked spelling of one, or one embedded after a prefix such as `-I`, is
+scrubbed too.
+`BuildRunner.runPanel` records the run's kernel facts, the order in
+`panel.judge-started` before each session, and `panel.judged` after it, and
+commits a local judge's preference outbox. `BuildRunner.runMeasurement`
+calls it for an attempt's panel measurement request, under the panel id `attemptPanelId`
 derives in `packages/core/src/kernel/measurement.ts`, and records the win rate
 in `attempt.sampled`; the dispatcher decides it against the node's current ε
 there too (`decideSampledMeasurement`, `panelDecision`), and
 `packages/core/src/kernel/landing-measurement.ts` classifies the recorded win
-rate for landing. A judge session's only store authority is
-write-only: `packages/core/src/store/judge-authority.ts` is the shared rule
-(one `panel.preferred` for its own panel, judge and session, while that session
-is open), applied in process by the local and remote wrappers in
-`packages/core/src/store/phase-session.ts` and on the server by the hosted
-`build-judge` guard. `packages/core/src/cli/judge.ts` implements
-`ab judge context` (no store read) and `ab judge prefer`, and any read command
-run with `AB_JUDGE` set fails before opening a store.
+rate for landing. A judge session has no read authority: `packages/core/src/store/judge-authority.ts` is the shared rule (one
+`panel.preferred` for its own panel, judge and session, while that session is
+open). Its `appendJudgePreference` decides and appends in one conditional step
+for every holder of the store: the hosted `build-judge` route, the kernel's
+outbox commit and the local wrapper in `packages/core/src/store/phase-session.ts`.
+`packages/core/src/cli/judge.ts` implements `ab judge context` (no store read)
+and `ab judge prefer`, and any read command run with `AB_JUDGE` set fails
+before opening a store.
 
 **Phase decisions.** `packages/core/src/kernel/phases.ts` owns the phase table,
 `packages/core/src/kernel/engine.ts` the deterministic transitions;
