@@ -1525,13 +1525,18 @@ AB_TOKEN     # signed credential for this exact phase session (remote store)
 
 A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE`
 of `synthesize@N` or `review@N`. A judge session of a judge panel (§13.1.1)
-carries only `AB_STORE`, `AB_JUDGE` (`<build>:<panel>:<judge>`), `AB_SESSION`,
-`AB_CONTEXT_DIR` and, for a remote store, `AB_TOKEN`; it has no `AB_BUILD` and
-no `AB_PHASE`, and no inherited `AB_*`, `GIT_*`, `PWD` or `OLDPWD` value reaches
-it. A judge session has no read authority: its Store handle, local or remote,
-appends exactly one `panel.preferred` for its own panel, judge and session
-while that session is open and refuses every other operation, and any read
-command run with `AB_JUDGE` set fails before opening a Store. The AgentRunner
+carries only `AB_JUDGE` (`<build>:<panel>:<judge>`), `AB_SESSION`,
+`AB_CONTEXT_DIR` and, for a remote store only, `AB_STORE` and `AB_TOKEN`; it
+has no `AB_BUILD` and no `AB_PHASE`, no inherited `AB_*`, `GIT_*`, `PWD` or
+`OLDPWD` value, no inherited value naming a protected location (§13.1.1), and
+its `PATH` starts with its own scratch launcher directory instead of the
+distribution's. A judge session has no read authority. With a remote store its
+Store handle appends exactly one `panel.preferred` for its own panel, judge
+and session while that session is open and refuses every other operation.
+With a local store it holds no Store and never learns the store's path:
+`ab judge prefer` saves its preference to an outbox in its root, which the
+runner commits. Any read command run with `AB_JUDGE` set fails before opening
+a Store. The AgentRunner
 invocation argument is opaque: a build skill receives its slug; a harvest skill
 receives its run id; a judge skill receives its panel id.
 The CLI resolves identity from ambient auth. Every build process holds an
@@ -1602,8 +1607,12 @@ build runner alone may also issue a `build-judge` grant for a recorded
 `panel.judge-started` session, binding its panel and judge. That grant is
 write-only: the service refuses every read, and admits only one
 `panel.preferred` for its exact panel, judge and session while the session is
-open and has not already preferred. It retires 60 seconds after
-`panel.judge-ended`.
+open and has not already preferred. The service decides that write and
+appends it in one conditional step (`appendIfCurrent` at the delegation
+value's cursor, retried a bounded number of times), so concurrent requests from
+one judge session record at most one preference; the loser is refused like a
+sequential retry, and sustained contention is a 409 `conflict`. It retires 60
+seconds after `panel.judge-ended`.
 
 Delegated grants have no fixed wall-clock expiry. The service checks signed
 bindings against authoritative durable lifecycle facts on every request and
@@ -1813,9 +1822,10 @@ normally completed turn that ends **without** any terminal call is an infra
 failure: the runner emits
 `phase.failed {error: "no-terminal"}` and applies retry policy. A judge
 session is not a phase: it ends with exactly one `ab judge prefer`, which
-refuses a blank reason, an unknown preference and a second call; a judge turn
-without it records `panel.judge-ended {outcome: "no-terminal"}` under the
-panel's failure policy (§13.1.1).
+refuses a blank reason, an unknown preference and a second call, concurrent
+calls included; a judge turn without it, or whose saved outbox preference
+cannot be committed, records `panel.judge-ended {outcome: "no-terminal"}`
+under the panel's failure policy (§13.1.1).
 
 Provider/runtime-declared turn failures are a separate `AgentRunner` result
 (§9), never conflated with agent silence. When the selected role has declared
@@ -1989,7 +1999,11 @@ A judge session (§13.1.1) uses `ab judge context|prefer`. `ab judge context
 variants: {A, B}, purpose, rubric, allowedTerminals: ["prefer"]}`) into
 `$AB_CONTEXT_DIR` from the brief in the judge's root and the rubric under `A/`;
 it makes no Store read. `ab judge prefer <A|B|tie> (--reason <text> |
---reason-file <file>)` is the judge's terminal.
+--reason-file <file>)` is the judge's terminal: with a remote store it appends
+`panel.preferred` through the write-only grant; with a local store it creates
+`$AB_CONTEXT_DIR/preference.json` exclusively, so only one call succeeds, and
+the runner records it. Inside a judge session `ab` is the judge-only launcher,
+which runs these two commands and refuses every other.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
@@ -3915,19 +3929,33 @@ bytes, and a harness file the pin lacks is absent. The skill is read from the
 harness pin's `.agents/skills/ab-judge/SKILL.md`, or from the distribution
 when the pin predates it, so a candidate cannot rewrite its judges'
 instructions. That Git material lives outside every judge root and is removed
-before any judge session starts; the runner then refuses a root inside the
-workspace, one from which `git rev-parse --git-dir` finds a repository, or
-one holding a checked-out symlink that resolves outside the root, and fails
-the run with that cause. Symlinks that stay inside the root are kept. Every judge root is removed when the run
-ends.
+before any judge session starts.
+
+The protected locations are the workspace, its checkout, its Git common
+directory, the main checkout owning that directory, and a local store. Before
+any material is written, the runner refuses a temporary directory at or under
+one of them, or one from which Git discovery (across filesystem boundaries)
+does not report "not a git repository"; any other discovery result fails
+closed. After materialization it refuses a root that fails the same checks or
+holds a checked-out symlink resolving outside the root, and fails the run with
+that cause, which never names the path. Symlinks that stay inside the root are
+kept. The judge's `ab` is a self-contained, judge-only bundle written to a
+launcher directory beside the roots; the run refuses launcher text naming a
+protected location or the distribution, and refuses to launch when `bun` or
+the judge runtime's executable resolves only at or under a protected location
+through the judge's filtered `PATH`. A runtime adapter that would pass a
+protected path in its own launch arguments refuses the judge's start. Every
+judge root and the launcher directory are removed when the run ends.
 
 Each judge's order is recorded in the kernel fact `panel.judge-started` before
 its session starts, under the `judge` role and the build's profile, with the
 judge root as working directory; all pending judges run concurrently. The
-judge's environment and write-only Store handle are those of §8.1. The judge
+judge's environment and Store authority are those of §8.1. The judge
 runs `ab judge context` and ends with `ab judge prefer`, which records
 `panel.preferred {panel, judge, session, preference, reason}` without the
-order. After the turn the runner makes one reduced read and, when the session
+order, attributed to the judge session; a local judge's outbox is committed by
+the runner after the turn with the same atomic check the service applies.
+After the turn the runner makes one reduced read and, when the session
 preferred, records `panel.judged {panel, judge, session, order, preference,
 reason}`, the durable judgment, then `panel.judge-ended` with the outcome and
 the transcript. A preference for the candidate scores 1, a tie 0.5 and the
@@ -3937,15 +3965,23 @@ Nothing Autobuild gives a judge reveals which variant is the candidate: not its
 context, its environment, its labels, the location or names of its variant
 worktrees, its store credential, nor any git metadata reachable from its
 working directory. Nothing under the judge's root links back to the repository
-it was prepared from. This guarantee covers the channels Autobuild provides; a
-judge process deliberately reading the repository or store outside its root is
-the shared trust boundary of unconfined local agent sessions.
+it was prepared from, and nothing Autobuild supplies (environment, `PATH`,
+launcher content, launch arguments, working directory, scratch ancestry) names
+a protected location, whether by its real path or by a path that reaches it
+through a symlink, including a path embedded after a prefix such as `-I` or on
+one line of a multiline value; an inherited path that cannot be resolved is
+dropped too.
+This guarantee covers the channels Autobuild provides; a
+judge process deliberately searching the filesystem outside its root is the
+shared trust boundary of unconfined local agent sessions, and no general
+sandbox is claimed.
 
 A run with the same panel id resumes from its recorded facts and refuses
-different inputs. A judge with a saved `panel.preferred` and no `panel.judged`
-is completed from that preference and its session's recorded order without a
-new session. A judge session started and never ended is closed as
-`reclaimed`. Only judges with no preference run again, each with a fresh
+different inputs. A judge session started and never ended is closed as
+`reclaimed`, after any outbox preference it saved is committed while it is
+still open. A judge with a saved `panel.preferred` and no `panel.judged`
+is then completed from that preference and its session's recorded order
+without a new session. Only judges with no preference run again, each with a fresh
 order. A judge outcome of `no-terminal`, `failed` or `expired` counts as a
 failure; after two counted failures for one judge the run fails, naming the
 judge and its last outcome. `interrupted` (shutdown) and `reclaimed` do not
@@ -4564,8 +4600,9 @@ preference), the sessions awaiting reclaim, the saved preferences to complete
 and each judge's counted failures. The `buildDelegation` service value
 (version 2) folds `panel.judge-started` and `panel.judge-ended` into its
 session lifecycle beside `session.started` and `session.ended`, and records
-which judge sessions preferred, so the hosted judge guard decides a write with
-one reduced read.
+which judge sessions preferred, so a judge preference write is decided with
+one reduced read per conditional-append attempt, at the same cost at any log
+length.
 
 **Deltas, revisions and the ruler.** A positive `delta` is an improvement in
 the objective's direction: `baseline − candidate` when minimizing,
