@@ -2749,6 +2749,56 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     ).toEqual(wait('awaiting-pr'))
   })
 
+  // AUT-1226: a sibling landed and the child restacked and re-verified onto
+  // the new node head, so the request's baseline is gone. Before supersession
+  // was reduced, this decided `run-measurement` for the stale request.
+  const nodeHead = 'b'.repeat(40)
+  const restackedOnto = (sha: string): EventWrite[] => [
+    ev('target.moved', { branch: 'ab/opt-node', sha }),
+    ev('restack.completed', {
+      ...leafTransaction,
+      id: 'restack-moved',
+      targetBase: sha,
+      headSha: 'f'.repeat(40),
+      cycle: 22,
+    }),
+    ...verifyAllPass(2),
+  ]
+
+  test('a request whose baseline the child saw superseded runs no measurement', () => {
+    const requested = [...throughFinalize, ev('attempt.measurement-requested', measurementRequest)]
+    expect(decide([...requested, ...restackedOnto(nodeHead)])).toEqual(wait('awaiting-pr'))
+    // The landing gate's current request clears the supersession.
+    const current = { ...measurementRequest, id: 'm2', baseline: nodeHead }
+    expect(
+      decide([
+        ...requested,
+        ...restackedOnto(nodeHead),
+        ev('attempt.measurement-requested', current),
+      ]),
+    ).toEqual({ kind: 'run-measurement', request: current })
+  })
+
+  test('a request whose baseline is still the observed node head runs', () => {
+    expect(
+      decide([
+        ...throughFinalize,
+        ev('attempt.measurement-requested', measurementRequest),
+        ...restackedOnto(measurementRequest.baseline),
+      ]),
+    ).toEqual({ kind: 'run-measurement', request: measurementRequest })
+  })
+
+  test('a superseded request waits behind the restack it is due', () => {
+    expect(
+      decide([
+        ...throughFinalize,
+        ev('attempt.measurement-requested', measurementRequest),
+        ev('target.moved', { branch: 'ab/opt-node', sha: nodeHead }),
+      ]),
+    ).toMatchObject({ kind: 'restack', trigger: 'awaiting-landing' })
+  })
+
   test('a measurement never preempts reconcile, verification or a blocker', () => {
     const request = ev('attempt.measurement-requested', measurementRequest)
     expect(

@@ -16,6 +16,7 @@ import {
   harnessDiff,
   measurementDecision,
   measurementDelta,
+  measurementRequestStatus,
   median,
   noiseExceeded,
   panelDecision,
@@ -258,6 +259,76 @@ describe('pendingMeasurementRequest', () => {
     expect(
       pendingMeasurementRequest(reduceBuild(opened().requestMeasurement('m1').events)),
     ).toBeUndefined()
+  })
+})
+
+describe('measurementRequestStatus', () => {
+  const moved = (log: OptimizationLogBuilder, sha: string) =>
+    log.push({ actor: DISPATCHER, type: 'target.moved', payload: { branch: 'ab/opt-node', sha } })
+
+  test('a request with no later move is due', () => {
+    const state = reduceBuild(attempt().requestMeasurement('m1').events)
+    expect(measurementRequestStatus(state)).toMatchObject({ kind: 'due', request: { id: 'm1' } })
+  })
+
+  test('a move to the request’s own baseline leaves it due', () => {
+    const state = reduceBuild(
+      moved(attempt().requestMeasurement('m1'), OPTIMIZATION_SHA('a')).events,
+    )
+    expect(measurementRequestStatus(state)?.kind).toBe('due')
+    expect(pendingMeasurementRequest(state)?.id).toBe('m1')
+  })
+
+  test('a move past the baseline supersedes the request, and repeated polls agree', () => {
+    const state = reduceBuild(
+      moved(attempt().requestMeasurement('m1'), OPTIMIZATION_SHA('b')).events,
+    )
+    const status = measurementRequestStatus(state)
+    expect(status).toMatchObject({
+      kind: 'superseded',
+      request: { id: 'm1', baseline: OPTIMIZATION_SHA('a') },
+      observedHead: OPTIMIZATION_SHA('b'),
+    })
+    expect(pendingMeasurementRequest(state)).toBeUndefined()
+    expect(measurementRequestStatus(state)).toEqual(status)
+    expect(pendingMeasurementRequest(state)).toBeUndefined()
+  })
+
+  test('a new request after the move is due again', () => {
+    const log = moved(attempt().requestMeasurement('m1'), OPTIMIZATION_SHA('b')).requestMeasurement(
+      'm2',
+    )
+    const state = reduceBuild(log.events)
+    expect(state.attemptMeasurement?.observedHead).toBeUndefined()
+    expect(measurementRequestStatus(state)).toMatchObject({ kind: 'due', request: { id: 'm2' } })
+  })
+
+  test('a move before any request records nothing', () => {
+    const state = reduceBuild(
+      moved(attempt(), OPTIMIZATION_SHA('b')).requestMeasurement('m1').events,
+    )
+    expect(measurementRequestStatus(state)?.kind).toBe('due')
+  })
+
+  test('none once sampled or measured, on a terminal leaf, or on a node', () => {
+    const superseded = (log: OptimizationLogBuilder) => moved(log, OPTIMIZATION_SHA('b'))
+    const sampled = attempt()
+      .requestMeasurement('m1')
+      .sampled('m1', { baseline: 50, candidate: 44 })
+    expect(measurementRequestStatus(reduceBuild(superseded(sampled).events))).toBeUndefined()
+    const measured = attempt()
+      .requestMeasurement('m1')
+      .measured('m1', { baseline: 50, candidate: 44 })
+    expect(measurementRequestStatus(reduceBuild(superseded(measured).events))).toBeUndefined()
+    const aborted = superseded(attempt().requestMeasurement('m1')).push({
+      actor: { kind: 'kernel' },
+      type: 'build.aborted',
+      payload: {},
+    })
+    expect(measurementRequestStatus(reduceBuild(aborted.events))).toBeUndefined()
+    const nodeState = reduceBuild(superseded(opened().requestMeasurement('m1')).events)
+    expect(measurementRequestStatus(nodeState)).toBeUndefined()
+    expect(nodeState.attemptMeasurement?.observedHead).toBeUndefined()
   })
 })
 

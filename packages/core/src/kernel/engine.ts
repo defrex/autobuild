@@ -194,7 +194,8 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     config,
   )
   // A requested measurement runs only once the pipeline has nothing else to
-  // do, so restack, re-verify and reconcile keep their precedence over it.
+  // do, so restack, re-verify and reconcile keep their precedence over it. A
+  // request whose baseline a later `target.moved` superseded runs nothing.
   if (decision.kind === 'wait' && decision.reason === 'awaiting-pr' && state.kind !== 'node') {
     const request = pendingMeasurementRequest(state)
     if (request !== undefined) return { kind: 'run-measurement', request }
