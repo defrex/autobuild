@@ -16,11 +16,12 @@ import { runCli } from '../cli/main'
 import { resolveJudgeCliEnv } from '../cli/env'
 import { parseConfig } from '../config/load'
 import type { AbEvent } from '../events/catalog'
-import { DISPATCHER } from '../events/envelope'
+import { DISPATCHER, KERNEL } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { labelSides, type PanelOrder } from '../kernel/panel'
 import { FakeForge } from '../ports/forge/fake'
 import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { JUDGE_REFUSED_MEMBERS, scopeLocalStoreToJudgeSession } from '../store/phase-session'
@@ -183,14 +184,16 @@ function runnerFor(
   tmp: string,
   random: () => number,
   generation = 1,
+  routing: { roles?: string; runtimes?: RuntimeRegistry } = {},
 ) {
   const exec: Exec = (cmd, opts) => spawnExec(cmd, { ...opts, env: { ...opts.env, TMPDIR: tmp } })
   return new BuildRunner({
     store: (store as MemoryBuildStore).scopeBuild(SLUG),
     config: parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n' +
+        (routing.roles ?? ''),
     ),
-    runtimes: { scripted: { runner: agent, servesModels: [''] } },
+    runtimes: routing.runtimes ?? { scripted: { runner: agent, servesModels: [''] } },
     workspacePath: repo.workspace,
     branch: `ab/${SLUG}`,
     slug: SLUG,
@@ -497,5 +500,158 @@ describe('a judge panel run', () => {
     // 4: tie → 0.5.
     expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 4)
     expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+  })
+})
+
+describe('judge session streams', () => {
+  const streamed = (runner: ScriptedAgentRunner): RuntimeRegistry[string] => ({
+    runner,
+    servesModels: [''],
+    openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+  })
+  const ALTERNATES =
+    '\n[roles.judge]\nruntime = "scripted"\nalternates = [{ runtime = "backup" }]\n'
+  const SIDES = ['candidate-first', 'baseline-first', 'candidate', 'baseline']
+
+  test('every judge session streams with its attribution, closed before it ends', async () => {
+    const repo = await repository()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    // Record each judge stream's status at the moment its end is appended.
+    const statusAtEnd = new Map<string, string | undefined>()
+    const streamStatus = async (session: string) =>
+      (await store.listStreams({ kind: 'build', build: SLUG })).find(
+        (record) => record.label === `session:${session}`,
+      )?.status
+    const scoped = store.scopeBuild(SLUG)
+    const observing = new Proxy(scoped, {
+      get(target, member, receiver) {
+        const method = Reflect.get(target, member, receiver)
+        if (member === 'append')
+          return async (slug: string, write: { type: string; payload: { session?: string } }) => {
+            if (write.type === 'panel.judge-ended')
+              statusAtEnd.set(write.payload.session!, await streamStatus(write.payload.session!))
+            return method.call(target, slug, write)
+          }
+        if (member === 'appendWithArtifacts')
+          return async (...args: unknown[]) => {
+            const [artifact] = args[1] as Array<{ metadata: { session?: string; role?: string } }>
+            if (artifact?.metadata.role === 'judge')
+              statusAtEnd.set(
+                artifact.metadata.session!,
+                await streamStatus(artifact.metadata.session!),
+              )
+            return method.apply(target, args)
+          }
+        return typeof method === 'function' ? method.bind(target) : method
+      },
+    })
+    const observed = { ...store, scopeBuild: () => observing } as unknown as MemoryBuildStore
+    Object.setPrototypeOf(observed, Object.getPrototypeOf(store))
+
+    const prefer = async (cli: (argv: string[]) => Promise<number>) =>
+      expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
+    const backup = judges(store, async (_ctx, _judge, cli) => prefer(cli))
+    const failingFirst = judges(store, async (_ctx, judge, cli) => {
+      if (judge === 1) throw new Error('provider overloaded')
+      await prefer(cli)
+    })
+    const result = await runnerFor(observed, repo, failingFirst, tmp, () => 0.1, 1, {
+      roles: ALTERNATES,
+      runtimes: { scripted: streamed(failingFirst), backup: streamed(backup) },
+    }).runPanel(request(repo, 2))
+    expect(result.kind).toBe('judged')
+
+    const events = await store.getEvents(SLUG)
+    const starts = events.flatMap((event) =>
+      event.type === 'panel.judge-started' ? [event.payload] : [],
+    )
+    const ends = events.flatMap((event) =>
+      event.type === 'panel.judge-ended' ? [event.payload] : [],
+    )
+    expect(starts.map((start) => [start.judge, start.runner])).toEqual(
+      expect.arrayContaining([
+        [1, 'scripted'],
+        [1, 'backup'],
+        [2, 'scripted'],
+      ]),
+    )
+    expect(starts).toHaveLength(3)
+    const streams = await store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams).toHaveLength(3)
+    for (const start of starts) {
+      const record = streams.find((stream) => stream.label === `session:${start.session}`)!
+      expect(start.stream).toBe(record.id)
+      expect(record.status).toBe('closed')
+      const end = ends.find((ended) => ended.session === start.session)!
+      expect(record.outcome).toBe(end.outcome === 'completed' ? 'completed' : 'aborted')
+      expect(statusAtEnd.get(start.session)).toBe('closed')
+
+      const read = await store.readStream(record.id)
+      const parts = read.chunks.flatMap((chunk) => chunk.parts)
+      expect(parts[0]).toEqual({
+        type: 'data-ab-session',
+        data: {
+          session: start.session,
+          role: 'judge',
+          runner: start.runner,
+          phase: `judge:panel-1:${start.judge}`,
+        },
+      })
+      const info = JSON.stringify(parts.filter((part) => part.type.startsWith('data-ab-session')))
+      for (const side of SIDES) expect(info).not.toContain(side)
+    }
+    const substituted = starts.find((start) => start.runner === 'backup')!
+    const primary = starts.find((start) => start.judge === 1 && start.runner === 'scripted')!
+    expect(substituted.substitution?.failed.session).toBe(primary.session)
+    expect(streams.find((stream) => stream.id === primary.stream)?.outcome).toBe('aborted')
+    expect(streams.find((stream) => stream.id === substituted.stream)?.outcome).toBe('completed')
+  })
+
+  test("a reclaimed judge session's stream closes aborted", async () => {
+    const repo = await repository()
+    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+    const store = await seeded()
+    const panel = request(repo, 1)
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'panel.started',
+      payload: {
+        panel: panel.id,
+        candidate: panel.candidate,
+        baseline: panel.baseline,
+        harnessPin: panel.harnessPin,
+        purpose: panel.purpose,
+        rubric: panel.rubric,
+        harness: [...panel.harness],
+        judges: panel.judges,
+      },
+    })
+    const dangling = await store.createStream({ kind: 'build', build: SLUG }, 'session:s_dead')
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'panel.judge-started',
+      payload: {
+        panel: panel.id,
+        judge: 1,
+        session: 's_dead',
+        order: 'candidate-first',
+        runner: 'scripted',
+        stream: dangling.id,
+      },
+    })
+    const agent = judges(store, async (_ctx, _judge, cli) => {
+      expect(await cli(['judge', 'prefer', 'tie', '--reason', 'equally clear'])).toBe(0)
+    })
+    const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel(panel)
+    expect(result.kind).toBe('judged')
+    expect(await store.getStream(dangling.id)).toMatchObject({
+      status: 'closed',
+      outcome: 'aborted',
+    })
+    const reclaimed = (await store.getEvents(SLUG)).find(
+      (event) => event.type === 'panel.judge-ended' && event.payload.session === 's_dead',
+    )
+    expect(reclaimed?.payload).toMatchObject({ outcome: 'reclaimed' })
   })
 })

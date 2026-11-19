@@ -2106,6 +2106,35 @@ describe('judge panel facts', () => {
     expect(() => started({ order: 'candidate-first' })).toThrow()
   })
 
+  test('a judge session start may carry its stream and the substitution it makes', () => {
+    const started = (payload: Record<string, unknown>) =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'panel.judge-started',
+        payload: {
+          panel: 'p',
+          judge: 1,
+          session: 's2',
+          order: 'baseline-first',
+          runner: 'backup',
+          ...payload,
+        },
+      })
+    const failed = { index: 0, session: 's1', runner: 'primary', error: 'overloaded' }
+    const accepted = started({
+      stream: 'st-1',
+      substitution: { failed: { ...failed, cause: 'availability' }, selectedIndex: 1 },
+    })
+    expect(accepted.payload).toMatchObject({
+      stream: 'st-1',
+      substitution: { failed: { session: 's1', index: 0 }, selectedIndex: 1 },
+    })
+    expect(started({}).type).toBe('panel.judge-started')
+    expect(() => started({ substitution: { failed, selectedIndex: 2 } })).toThrow()
+    expect(() => started({ stream: '' })).toThrow()
+    expect(() => started({ substituted: true })).toThrow()
+  })
+
   test('every panel fact is decisive', () => {
     for (const type of [
       'panel.started',
