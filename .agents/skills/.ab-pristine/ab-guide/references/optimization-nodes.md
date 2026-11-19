@@ -260,6 +260,10 @@ harness pin are still the node's ruler, and records `attempt.measured` using
 the node's current ε and starting spread. A quick ε revision made while the
 samples ran therefore applies. A request whose ruler or pin was replaced
 while it was sampled records no decision; the attempt needs a fresh request.
+A request whose baseline is no longer the node head the attempt last observed
+is skipped before sampling: it takes no slot, and the landing gate requests a
+current pair once the attempt has restacked. The recorded decision and the
+landing gate use the same effective ε, so they always agree.
 
 **Failures.** None of these record a value or a decision:
 
@@ -549,7 +553,10 @@ on that measured node head.
 
 - **Freshness.** When a sibling lands first, the node head moves and the
   measurement no longer applies. The child restacks and a new measurement is
-  requested. A clean restack keeps verification; it never keeps a measurement.
+  requested. A request the child already saw superseded is never sampled, so
+  no paired measurement is spent on a pair that cannot land; samples already
+  running when the head moves are recorded and then rejected as stale.
+  A clean restack keeps verification; it never keeps a measurement.
   The node writer is never held while a measurement runs.
   A landing interrupted after its writer reservation publishes on recovery only
   while that pair still passes the gate; after a revision it does not pass, the
