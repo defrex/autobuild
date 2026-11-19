@@ -29,6 +29,7 @@ test('docs emit complete shared navigation and distinct metadata with rooted ass
     '/docs/builds/',
     '/docs/dispatcher/',
     '/docs/integration/',
+    '/docs/optimization-nodes/',
     '/docs/tickets/',
     '/docs/intake/',
     '/docs/skills/',
@@ -134,7 +135,15 @@ test('published pages keep navigation on-site and link only declared repository 
       ],
     ],
     ['docs/operating.md', ['docs/operator-api.md', 'docs/configuration.md#hooks']],
-    ['docs/tickets.md', ['docs/optimization-nodes.md']],
+    [
+      'docs/optimization-nodes.md',
+      [
+        'docs/operator-api.md#optimization-objective-revision',
+        'docs/spec-standard.md',
+        'docs/operator-api.md#optimization-stop',
+        'docs/integration-tree.md',
+      ],
+    ],
     ['docs/workspaces.md', ['docs/architecture.md#key-boundaries']],
     [
       'docs/troubleshooting.md',
