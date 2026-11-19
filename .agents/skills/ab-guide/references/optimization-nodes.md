@@ -922,7 +922,7 @@ candidate:
 |---|---|---|
 | Merged into the node, with a measurement of the merged head; records the merged head | `accepted` | done |
 | Landing measurement shows no improvement | `no-improvement` | rejected |
-| Proposer declines it | `declined` | rejected |
+| Its implementer declines it (`ab done --no-improvement`) | `declined` | rejected |
 | Node stops | `stopped` | rejected |
 | Operator abort, or a human closes its PR | `aborted` | rejected |
 | Merged without a measurement of the merged head, then released by an operator | `merged-unmeasured` | done |
