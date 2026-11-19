@@ -564,3 +564,23 @@ test('a node due its starting measurement requests verification and occupies whi
   node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
   expect(slotRequest(node, now)).toBeUndefined()
 })
+
+test('a panel node owing progress requests verification and occupies while measuring', () => {
+  const node = measuringNode('node')
+  const panel = {
+    ...node.state.optimization!.objective,
+    metric: { kind: 'panel' as const, judges: 3, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+  }
+  node.state.optimization!.objective = panel
+  node.state.optimization!.starting = { value: 0.5, spread: 0, head: 'a'.repeat(40) }
+  expect(slotRequest(node, now)).toBeUndefined()
+  node.state.optimization!.progressQueue = ['c'.repeat(40)]
+  expect(slotRequest(node, now)).toBe('verification')
+  expect(occupiesCapacity(node, now)).toBe(false)
+  node.workspace = true
+  expect(slotRequest(node, now)).toBeUndefined()
+  expect(occupiesCapacity(node, now)).toBe(true)
+  node.workspace = false
+  node.state.status = 'paused'
+  expect(slotRequest(node, now)).toBeUndefined()
+})
