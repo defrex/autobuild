@@ -210,7 +210,14 @@ labeled `A/` and `B/` in an order drawn per judge, in its own root outside
 any repository, and ends with `ab judge prefer <A|B|tie> --reason "…"`. The
 kernel records each judgment with its order in `panel.judged`; the candidate's
 win rate counts ties as half. Judges hold a write-only credential and nothing
-they are given reveals which variant is the candidate. A resumed run reuses
+they are given reveals which variant is the candidate. A judge whose primary
+target fails with an alternate-eligible failure runs again on the `judge`
+role's next alternate, as its own session in the same root and order. A
+substituted failure does not count against the judge; the chain's final failed,
+no-terminal or expired session does, including a failure no alternate may follow.
+Each judge session streams like any
+build session and shows among the build's session rows as role `judge`, phase
+`judge:<panel>:<judge>`. A resumed run reuses
 recorded preferences and reruns only judges without one. An attempt on a
 panel objective is accepted when its win rate against the current node head
 reaches 0.5 + ε; otherwise it settles `no-improvement`. A panel node records
@@ -1225,7 +1232,8 @@ The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
 its logical step name. A verify step's configured skill name remains a
 deprecated alias for existing configurations and will be removed in a future
 release. The repository workflow resolves `harvest` and `harvest-review`. Each
-judge session of an optimization objective's judge panel resolves `judge`. Two
+judge session of an optimization objective's judge panel resolves `judge`,
+including its alternates. Two
 non-phase judgments use the same runtime/model/args resolver: `slug` optionally
 proposes pre-build naming, and `upgrade` proposes a resolution only when a
 vendored skill merge conflicts. Both are tool-free one-shots and receive the
@@ -1307,7 +1315,9 @@ an alternate; only a successful primary can remain live for producer revisions.
 Only chain exhaustion writes the phase failure, and
 the final failure controls retry behavior. Substitution starts and exhausted
 failures retain the targets and verbatim errors durably. Core phases, agent
-verify/finalize, and Harvest use the chain; tool-free one-shots do not.
+verify/finalize, Harvest, and judge sessions use the chain (a judge records
+each target on its own `panel.judge-started`, not `session.started`); tool-free
+one-shots do not.
 
 A build phase session that reaches its captured budget is aborted and ended
 best-effort. The kernel records retryable `phase.failed` with `phase session
