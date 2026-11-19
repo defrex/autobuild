@@ -5,12 +5,18 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, humanActor } from '../events/envelope'
+import type { EventPayload } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import type { Decision } from '../kernel/engine'
 import type { PanelMetric } from '../objective'
 import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
-import { ScriptedAgentRunner, defaultTurnResult, type ScriptContext } from '../ports/runner/fake'
+import {
+  ScriptedAgentRunner,
+  defaultTurnResult,
+  failedTurnResult,
+  type ScriptContext,
+} from '../ports/runner/fake'
 import type { AgentTurnResult } from '../ports/types'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -18,6 +24,8 @@ import { scopeLocalStoreToJudgeSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import { BuildRunner, type PanelRequest } from './build-runner'
+import { countedFailures } from '../kernel/panel'
+import { readBuildFacts } from '../store/reduced-reads'
 import { TMPDIR_PROBE } from './panel-runner'
 
 const SLUG = 'attempt-a1'
@@ -91,7 +99,11 @@ async function seeded(): Promise<MemoryBuildStore> {
   await store.append(SLUG, {
     actor: DISPATCHER,
     type: 'build.created',
-    payload: { ticket: { source: 'file', id: 'T-a1' }, repo: 'repo', baseBranch: 'ab/node' },
+    payload: {
+      ticket: { source: 'file', id: 'T-a1' },
+      repo: 'repo',
+      baseBranch: 'ab/node',
+    },
   })
   return store
 }
@@ -99,21 +111,37 @@ async function seeded(): Promise<MemoryBuildStore> {
 function runnerFor(
   store: BuildStore,
   agent: ScriptedAgentRunner,
-  opts: { random?: () => number; shutdownSignal?: AbortSignal; ids?: () => string } = {},
+  opts: {
+    random?: () => number
+    shutdownSignal?: AbortSignal
+    ids?: () => string
+    roles?: string
+    runtimes?: Record<string, ScriptedAgentRunner>
+    timeoutSignal?: () => AbortSignal
+  } = {},
 ) {
   const config = parseConfig(
-    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n' +
+      (opts.roles ?? ''),
   )
   const ids = sequentialIds()
   return new BuildRunner({
     store: (store as MemoryBuildStore).scopeBuild(SLUG),
     config,
-    runtimes: { scripted: { runner: agent, servesModels: [''] } },
+    runtimes: {
+      scripted: { runner: agent, servesModels: [''] },
+      ...Object.fromEntries(
+        Object.entries(opts.runtimes ?? {}).map(([name, runner]) => [
+          name,
+          { runner, servesModels: [''] },
+        ]),
+      ),
+    },
     workspacePath: WORKSPACE,
     branch: `ab/${SLUG}`,
     slug: SLUG,
     exec,
-    timeoutSignal: () => new AbortController().signal,
+    timeoutSignal: opts.timeoutSignal ?? (() => new AbortController().signal),
     random: opts.random ?? (() => 0.25),
     judgeSkill: async () => 'distribution skill\n',
     ...(opts.shutdownSignal !== undefined ? { shutdownSignal: opts.shutdownSignal } : {}),
@@ -122,7 +150,11 @@ function runnerFor(
     clock: steppingClock(),
     instance: 'runner-1',
     host: 'test',
-    sessionEnv: { AB_STORE: '/store/local', AB_TOKEN: 'runner-token', AB_BUILD: SLUG },
+    sessionEnv: {
+      AB_STORE: '/store/local',
+      AB_TOKEN: 'runner-token',
+      AB_BUILD: SLUG,
+    },
     runtimeIdentity: {
       version: '0.0.0-test',
       commit: 'unknown',
@@ -142,7 +174,11 @@ describe('BuildRunner.runPanel', () => {
       release = resolve
     })
     const preferences: Array<'A' | 'B' | 'tie'> = ['A', 'B', 'tie']
-    const seen: Array<{ env: Record<string, string>; workspace: string; order?: string }> = []
+    const seen: Array<{
+      env: Record<string, string>
+      workspace: string
+      order?: string
+    }> = []
     const agent = judgeRunner(store, async (ctx, prefer) => {
       const judge = Number(ctx.opts.env.AB_JUDGE!.split(':')[2])
       // The order is durable before the session starts.
@@ -177,7 +213,11 @@ describe('BuildRunner.runPanel', () => {
     const judged = events.filter((event) => event.type === 'panel.judged')
     expect(
       judged.map((event) => {
-        const p = event.payload as { judge: number; order: string; preference: string }
+        const p = event.payload as {
+          judge: number
+          order: string
+          preference: string
+        }
         return [p.judge, p.order, p.preference]
       }),
     ).toEqual([
@@ -225,7 +265,10 @@ describe('BuildRunner.runPanel', () => {
       await prefer('A')
       return defaultTurnResult()
     })
-    const result = await runnerFor(store, agent).runPanel({ ...REQUEST, judges: 2 })
+    const result = await runnerFor(store, agent).runPanel({
+      ...REQUEST,
+      judges: 2,
+    })
     expect(result).toEqual({
       kind: 'failed',
       reason: 'judge 2 failed 2 times; last outcome no-terminal',
@@ -345,7 +388,11 @@ describe('BuildRunner.runPanel', () => {
     })
     await runnerFor(store, agent).runPanel({ ...REQUEST, judges: 1 })
     await expect(
-      runnerFor(store, agent).runPanel({ ...REQUEST, judges: 1, purpose: 'other' }),
+      runnerFor(store, agent).runPanel({
+        ...REQUEST,
+        judges: 1,
+        purpose: 'other',
+      }),
     ).rejects.toThrow('different inputs')
   })
 
@@ -356,7 +403,9 @@ describe('BuildRunner.runPanel', () => {
       controller.abort()
       return defaultTurnResult()
     })
-    const result = await runnerFor(store, agent, { shutdownSignal: controller.signal }).runPanel({
+    const result = await runnerFor(store, agent, {
+      shutdownSignal: controller.signal,
+    }).runPanel({
       ...REQUEST,
       judges: 1,
     })
@@ -537,5 +586,203 @@ describe('a panel attempt measurement', () => {
       phase: 'measurement',
       question: expect.stringContaining('without the objective purpose'),
     })
+  })
+})
+
+describe('BuildRunner.runPanel provider alternates', () => {
+  const ALTERNATES =
+    '\n[roles.judge]\nruntime = "scripted"\nalternates = [{ runtime = "backup" }]\n'
+  type Started = EventPayload<'panel.judge-started'>
+  type Ended = EventPayload<'panel.judge-ended'>
+  const starts = (events: AbEvent[]) =>
+    panelEvents(events)
+      .filter((event) => event.type === 'panel.judge-started')
+      .map((event) => event.payload as Started)
+  const ends = (events: AbEvent[]) =>
+    panelEvents(events)
+      .filter((event) => event.type === 'panel.judge-ended')
+      .map((event) => event.payload as Ended)
+  const preferring = (store: BuildStore) =>
+    judgeRunner(store, async (_ctx, prefer) => {
+      await prefer('A')
+      return defaultTurnResult()
+    })
+
+  test('a primary success launches no alternate', async () => {
+    const store = await seeded()
+    const backup = preferring(store)
+    const result = await runnerFor(store, preferring(store), {
+      roles: ALTERNATES,
+      runtimes: { backup },
+    }).runPanel({ ...REQUEST, judges: 2 })
+    expect(result.kind).toBe('judged')
+    const events = await store.getEvents(SLUG)
+    expect(starts(events).map((start) => [start.judge, start.runner])).toEqual([
+      [1, 'scripted'],
+      [2, 'scripted'],
+    ])
+    expect(starts(events).some((start) => start.substitution !== undefined)).toBe(false)
+    expect(backup.sessions.size).toBe(0)
+  })
+
+  for (const [name, primaryTurn] of [
+    [
+      'an availability failure',
+      () => failedTurnResult('provider overloaded', false, '', 'availability'),
+    ],
+    [
+      'a thrown turn',
+      () => {
+        throw new Error('provider unreachable')
+      },
+    ],
+  ] as const)
+    test(`${name} falls back to the alternate in the same root and order`, async () => {
+      const store = await seeded()
+      const primary = judgeRunner(store, primaryTurn)
+      const backup = preferring(store)
+      const result = await runnerFor(store, primary, {
+        roles: ALTERNATES,
+        runtimes: { backup },
+      }).runPanel({ ...REQUEST, judges: 1 })
+      expect(result.kind).toBe('judged')
+      const events = await store.getEvents(SLUG)
+      const [first, second] = starts(events)
+      expect(starts(events)).toHaveLength(2)
+      expect(first).toMatchObject({ runner: 'scripted' })
+      expect(first!.substitution).toBeUndefined()
+      expect(second).toMatchObject({
+        runner: 'backup',
+        order: first!.order,
+        substitution: {
+          failed: {
+            index: 0,
+            session: first!.session,
+            runner: 'scripted',
+            cause: 'availability',
+          },
+          selectedIndex: 1,
+        },
+      })
+      expect(ends(events).map((end) => [end.session, end.outcome])).toEqual([
+        [first!.session, 'failed'],
+        [second!.session, 'completed'],
+      ])
+      const primaryOpts = [...primary.sessions.values()][0]?.opts
+      const backupOpts = [...backup.sessions.values()][0]!.opts
+      expect(backupOpts.env.AB_SESSION).toBe(second!.session)
+      if (primaryOpts !== undefined) {
+        expect(primaryOpts.env.AB_SESSION).toBe(first!.session)
+        expect(backupOpts.workspacePath).toBe(primaryOpts.workspacePath)
+      }
+      const state = (await readBuildFacts(store, SLUG)).value.state.panel!
+      expect(countedFailures(state, 1)).toEqual([])
+      expect(state.judges['1']?.judged?.session).toBe(second!.session)
+    })
+
+  test('an exhausted chain counts one failure per launch', async () => {
+    const store = await seeded()
+    const failing = () =>
+      judgeRunner(store, () => failedTurnResult('provider overloaded', false, '', 'availability'))
+    const primary = failing()
+    const backup = failing()
+    const result = await runnerFor(store, primary, {
+      roles: ALTERNATES,
+      runtimes: { backup },
+    }).runPanel({ ...REQUEST, judges: 1 })
+    expect(result).toEqual({
+      kind: 'failed',
+      reason: 'judge 1 failed 2 times; last outcome failed',
+    })
+    const events = await store.getEvents(SLUG)
+    expect(starts(events).map((start) => start.runner)).toEqual([
+      'scripted',
+      'backup',
+      'scripted',
+      'backup',
+    ])
+    expect(ends(events).map((end) => end.outcome)).toEqual(['failed', 'failed', 'failed', 'failed'])
+    expect(primary.sessions.size).toBe(2)
+    expect(backup.sessions.size).toBe(2)
+  })
+
+  test('an ineligible failure starts no alternate', async () => {
+    const store = await seeded()
+    const primary = judgeRunner(store, () =>
+      failedTurnResult('bad credentials', true, '', 'credentials'),
+    )
+    const backup = preferring(store)
+    const result = await runnerFor(store, primary, {
+      roles: ALTERNATES,
+      runtimes: { backup },
+    }).runPanel({ ...REQUEST, judges: 1 })
+    expect(result.kind).toBe('failed')
+    expect(backup.sessions.size).toBe(0)
+    expect(starts(await store.getEvents(SLUG)).every((start) => start.runner === 'scripted')).toBe(
+      true,
+    )
+  })
+
+  test('budget expiry records expired and starts no alternate', async () => {
+    const store = await seeded()
+    const expired = new AbortController()
+    const primary = judgeRunner(store, () => {
+      expired.abort()
+      return failedTurnResult('scripted runner: turn aborted', false, '', 'availability')
+    })
+    const backup = preferring(store)
+    const result = await runnerFor(store, primary, {
+      roles: ALTERNATES,
+      runtimes: { backup },
+      timeoutSignal: () => expired.signal,
+    }).runPanel({ ...REQUEST, judges: 1 })
+    expect(result.kind).toBe('failed')
+    expect(backup.sessions.size).toBe(0)
+    expect(ends(await store.getEvents(SLUG)).map((end) => end.outcome)).toContain('expired')
+  })
+
+  test('a recorded preference wins over a later failure and starts no alternate', async () => {
+    const store = await seeded()
+    const primary = judgeRunner(store, async (_ctx, prefer) => {
+      await prefer('B')
+      return failedTurnResult('provider overloaded', false, '', 'availability')
+    })
+    const backup = preferring(store)
+    const result = await runnerFor(store, primary, {
+      roles: ALTERNATES,
+      runtimes: { backup },
+    }).runPanel({ ...REQUEST, judges: 1 })
+    expect(result.kind).toBe('judged')
+    expect(backup.sessions.size).toBe(0)
+    expect(ends(await store.getEvents(SLUG)).map((end) => end.outcome)).toEqual(['completed'])
+  })
+
+  test("each target's transcript names the runner that ran it", async () => {
+    const store = await seeded()
+    const primary = judgeRunner(store, () =>
+      failedTurnResult('provider overloaded', false, '', 'availability'),
+    )
+    const backup = preferring(store)
+    await runnerFor(store, primary, {
+      roles: ALTERNATES,
+      runtimes: { backup },
+    }).runPanel({
+      ...REQUEST,
+      judges: 1,
+    })
+    const events = await store.getEvents(SLUG)
+    const transcripts = await Promise.all(
+      ends(events).map(async (end) => {
+        const artifact = await store.getArtifact(SLUG, end.transcript!.kind, end.transcript!.rev)
+        return artifact!.meta.metadata as {
+          session: string
+          runner: string
+          role: string
+        }
+      }),
+    )
+    expect(transcripts.map(({ session, runner, role }) => [session, runner, role])).toEqual(
+      starts(events).map((start) => [start.session, start.runner, 'judge']),
+    )
   })
 })

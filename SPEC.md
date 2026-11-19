@@ -2231,7 +2231,7 @@ deterministic fail-safe.
   the failed conversation. Selection is non-sticky: every later phase, loop
   continuation, and retry starts from the primary. The final failure controls
   retry/permanent behavior. This applies to core phases, agent verify/finalize,
-  and Harvest, but not tool-free one-shots. Every selected runtime/model/args
+  Harvest and judge sessions (§13.1.1), but not tool-free one-shots. Every selected runtime/model/args
   tuple is recorded on `session.started`; fallback starts cite the preceding target and
   verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
   the complete ordered attempt list.
@@ -2301,7 +2301,11 @@ deterministic fail-safe.
   `{ kind: 'repo', repo }` instead of build-scoped, `harvest.session.started`
   carries the returned stream id, `phase` is spelled `harvest:<step>`, each
   revise round is its own bracket and its own stream, and a closed stream
-  finalizes onto the repository scope. Harvest journal events
+  finalizes onto the repository scope. A judge session (§13.1.1) streams the
+  same way: build-scoped, label `session:<sessionId>`, `phase` spelled
+  `judge:<panel>:<judge>` with no round and nothing naming the judge's order,
+  the stream id on `panel.judge-started`, and the stream closed before
+  `panel.judge-ended` lands. Harvest journal events
   (`harvest.step.*`, `harvest.proposals.submitted`, `harvest.review.verdict`,
   and their kin) are deliberately not translated into parts — they are typed
   journal facts, observable via `ab watch --repository`, not harness output.
@@ -3785,6 +3789,16 @@ reason}`, the durable judgment, then `panel.judge-ended` with the outcome and
 the transcript. A preference for the candidate scores 1, a tie 0.5 and the
 baseline 0; the win rate is the mean over `panel.judged`.
 
+A judge launch follows the `judge` role's alternates under the eligibility
+rules of §8.4 and §9: an eligible failure of one target starts the next in the
+same root and with the same order. Each target is its own judge session with
+its own `panel.judge-started`, which for an alternate carries `substitution`
+citing the failed target, its own credential, stream (§9) and transcript. A
+preference recorded before a failure, budget expiry and shutdown never start
+an alternate, and a successful primary starts none. Operators find each judge
+session, its target and its stream among the build's session rows, with role
+`judge` and phase `judge:<panel>:<judge>`.
+
 Nothing Autobuild gives a judge reveals which variant is the candidate: not its
 context, its environment, its labels, the location or names of its variant
 worktrees, its store credential, nor any git metadata reachable from its
@@ -3797,9 +3811,11 @@ A run with the same panel id resumes from its recorded facts and refuses
 different inputs. A judge with a saved `panel.preferred` and no `panel.judged`
 is completed from that preference and its session's recorded order without a
 new session. A judge session started and never ended is closed as
-`reclaimed`. Only judges with no preference run again, each with a fresh
+`reclaimed`, its stream closed `aborted`. Only judges with no preference run again, each with a fresh
 order. A judge outcome of `no-terminal`, `failed` or `expired` counts as a
-failure; after two counted failures for one judge the run fails, naming the
+failure, except a failed session that a later start substitutes: only an
+exhausted chain, a failure no alternate may follow, no terminal or expiry
+counts. After two counted failures for one judge the run fails, naming the
 judge and its last outcome. `interrupted` (shutdown) and `reclaimed` do not
 count. A run that cannot prepare its variants fails with the Git output tail.
 
@@ -4120,7 +4136,7 @@ with illustrative members:
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
-| Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
+| Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?, stream?, substitution?: {failed, selectedIndex}}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -4390,11 +4406,15 @@ request costs one reduced read of its node, once.
 
 **Judge panel.** A build that runs a judge panel embeds `panel`, bounded to its
 latest run: the `panel.started` payload and, per judge, every started session
-with its order, every ending outcome, the first `panel.preferred` and the
+with its order, runner, model, stream and the session it substitutes, every
+ending outcome, the first `panel.preferred` and the
 `panel.judged`. Events for any other panel id are ignored, so the value is
 bounded by 20 judges. Pure selectors over it give the pending judges (no
-preference), the sessions awaiting reclaim, the saved preferences to complete
-and each judge's counted failures. The `buildDelegation` service value
+preference), the sessions awaiting reclaim with their streams, the saved
+preferences to complete and each judge's counted failures, which skip a
+substituted session. The dashboard facts keep a compact, order-free list of
+judge sessions that the build's session rows show with role `judge` and phase
+`judge:<panel>:<judge>`. The `buildDelegation` service value
 (version 2) folds `panel.judge-started` and `panel.judge-ended` into its
 session lifecycle beside `session.started` and `session.ended`, and records
 which judge sessions preferred, so the hosted judge guard decides a write with
