@@ -68,6 +68,7 @@ import type { BuildFacts } from '../processes/repo-view'
 import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
+import { measurementText } from './measurement-text'
 import type { Actor } from '../events/envelope'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
@@ -133,6 +134,11 @@ export interface LeaseInfo {
   heartbeatAt?: string
 }
 
+export type MeasurementSummary = Pick<
+  EventPayload<'attempt.measured'>,
+  'candidate' | 'baseline' | 'revision' | 'delta' | 'decision' | 'medians' | 'winRate' | 'spread'
+>
+
 export interface BuildSummary {
   compatibility?: BuildState['compatibility']
   compatibilityDiagnostic?: string
@@ -143,6 +149,9 @@ export interface BuildSummary {
   /** An optimization node's objective progress, with elapsed budget hours
    * evaluated at the summary's `now`. */
   objective?: ObjectiveSummary
+  /** A child's recorded landing measurement for its latest request: a
+   * command's medians or a judge panel's win rate. */
+  measurement?: MeasurementSummary
   target?: string
   integration?: ReturnType<typeof buildVocabulary>['integration']
   integrationState?: BuildState['integration']
@@ -339,6 +348,22 @@ function leaseInfo(record: BuildRecord, now: Date): LeaseInfo {
   }
 }
 
+/** The child's recorded landing measurement, from reduced state alone. */
+function measurementSummary(state: BuildState): MeasurementSummary | undefined {
+  const result = state.landingMeasurement?.result
+  if (result === undefined) return undefined
+  return {
+    candidate: result.candidate,
+    baseline: result.baseline,
+    revision: result.revision,
+    delta: result.delta,
+    decision: result.decision,
+    ...(result.medians !== undefined ? { medians: { ...result.medians } } : {}),
+    ...(result.winRate !== undefined ? { winRate: result.winRate } : {}),
+    ...(result.spread !== undefined ? { spread: result.spread } : {}),
+  }
+}
+
 /**
  * The summary over an ALREADY-reduced state — so `detail` reduces the log
  * once and builds both projections from it, rather than reducing twice.
@@ -368,6 +393,7 @@ export function summarizeFrom(
   const attempt = active?.attempt
   const wait = ticketWaitStatus(state)
   const objective = objectiveSummary(state, now)
+  const measurement = measurementSummary(state)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -375,6 +401,7 @@ export function summarizeFrom(
       ? { objectiveRevision: state.optimization.revision }
       : {}),
     ...(objective !== undefined ? { objective } : {}),
+    ...(measurement !== undefined ? { measurement } : {}),
     ...((state.verify.running?.length ?? 0) > 1
       ? { runningVerifySteps: state.verify.running }
       : {}),
@@ -838,6 +865,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     for (const merge of d.unmeasuredMerges ?? []) lines.push(`    ${unmeasuredMergeText(merge)}`)
     for (const cleanup of d.pendingCleanups ?? []) lines.push(`    ${pendingCleanupText(cleanup)}`)
   }
+  if (d.measurement !== undefined)
+    lines.push(
+      `  measurement: ${measurementText(d.measurement)} (candidate ${d.measurement.candidate.slice(0, 7)} on ${d.measurement.baseline.slice(0, 7)})`,
+    )
   if (d.nodeRestack) {
     const node = d.nodeRestack
     const move = node.parentRequest ?? node.parentChange

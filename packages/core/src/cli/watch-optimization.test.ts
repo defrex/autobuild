@@ -95,3 +95,24 @@ test('a sampled line reports both medians and leaves the decision to the dispatc
   )
   expect(BUILD_ATTENTION_EVENTS as readonly string[]).not.toContain('attempt.sampled')
 })
+
+test('a panel attempt reports its judged and decided win rate', () => {
+  const sampled = {
+    request: 'm1',
+    candidate: sha,
+    baseline: sha,
+    harnessPin: sha,
+    revision: 1,
+    samples: 5,
+    winRate: 0.8,
+    report: { kind: 'measurement-samples', rev: 0 },
+  }
+  expect(summarizeEvent(event('attempt', 'attempt.sampled', sampled), null)).toBe(
+    `judged win rate 0.8 (5 judges, harness ${sha.slice(0, 7)}); the dispatcher decides against the node's ε`,
+  )
+  const { report: _report, ...rest } = sampled
+  const measured = { ...rest, delta: 0.3, decision: 'improved' }
+  expect(summarizeEvent(event('attempt', 'attempt.measured', measured), null)).toBe(
+    'win rate 0.8: delta 0.3 → improved',
+  )
+})
