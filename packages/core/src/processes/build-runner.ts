@@ -154,6 +154,7 @@ import {
   baselineSummary,
   effectiveEpsilon,
   median,
+  measurementRequestStatus,
   noiseExceeded,
   pendingMeasurementRequest,
 } from '../kernel/measurement'
@@ -2969,9 +2970,10 @@ export class BuildRunner {
   private async runMeasurement(decision: RunMeasurementDecision): Promise<void> {
     const { store, slug } = this.deps
     const { request } = decision
-    const pending = async () =>
-      pendingMeasurementRequest((await readBuildFacts(store, slug)).value.state)?.id === request.id
-    if (!(await pending())) return
+    const state = async () => (await readBuildFacts(store, slug)).value.state
+    // A request whose baseline the child already saw superseded is never
+    // started: the landing gate requests a current one after the restack.
+    if (pendingMeasurementRequest(await state())?.id !== request.id) return
     const metric = request.metric
     if (metric === undefined) {
       await this.raiseMeasurementEscalation(
@@ -2992,8 +2994,10 @@ export class BuildRunner {
       config: await this.captureConfig(),
     })
     if (result.kind === 'interrupted') return
-    // A newer request supersedes these samples; the engine decides again.
-    if (!(await pending())) return
+    // A newer request supersedes these samples; the engine decides again. A
+    // node head that moved during sampling does not: the samples are recorded
+    // and the landing gate's freshness check rejects them as stale.
+    if (measurementRequestStatus(await state())?.request.id !== request.id) return
     if (result.kind === 'failed') {
       await this.raiseMeasurementEscalation(
         this.failedMeasurementQuestion(`Measurement request ${request.id}`, result),
