@@ -12,7 +12,9 @@ import {
   insideProtected,
   REAL_ENTRY_PROBE,
   JUDGE_SKILL_INSTALLS,
+  judgeAmbientAliases,
   NEUTRAL_ATTRIBUTES,
+  PHYSICAL_PATHS_PROBE,
   PINNED_JUDGE_SKILL,
   runPanelJudges,
   type PanelDeps,
@@ -56,6 +58,9 @@ function scriptedExec(opts: {
   /** Where each executable resolves: [found, real]; absent = not found. */
   executables?: Record<string, [string, string] | null>
   escapingLinks?: string
+  /** Where an ambient path physically resolves; absent = to itself, '' =
+   * unresolvable. */
+  physical?: Record<string, string>
   failCheckout?: boolean
   onLaunchCheck?: () => void
 }): Exec {
@@ -65,6 +70,13 @@ function scriptedExec(opts: {
     if (cmd[0] === 'sh' && cmd[2] === 'cd "$1" && pwd -P') return ok(`${cmd[4]}\n`)
     if (cmd[0] === 'sh' && cmd[2] === REAL_ENTRY_PROBE) return ok(`${cmd[4]}\n`)
     if (cmd[0] === 'sh' && cmd[2] === ESCAPING_LINKS_PROBE) return ok(opts.escapingLinks ?? '')
+    if (cmd[0] === 'sh' && cmd[2] === PHYSICAL_PATHS_PROBE)
+      return ok(
+        cmd
+          .slice(4)
+          .map((path) => `${opts.physical?.[path] ?? path}\n`)
+          .join(''),
+      )
     if (cmd[0] === 'sh' && cmd[2] === EXECUTABLE_PROBE) {
       const name = cmd[5]!
       const found =
@@ -124,11 +136,23 @@ function hooks(
   launch: (judge: number, order: PanelOrder, root: string, session: string) => Promise<string>,
   random: () => number = () => 0.25,
 ): PanelLoopHooks & {
-  launched: Array<{ judge: number; order: PanelOrder; root: string; binDir: string }>
+  launched: Array<{
+    judge: number
+    order: PanelOrder
+    root: string
+    binDir: string
+    hide: readonly string[]
+  }>
   reclaimed: Array<{ judge: number; session: string; root: string }>
 } {
   let next = 100
-  const launched: Array<{ judge: number; order: PanelOrder; root: string; binDir: string }> = []
+  const launched: Array<{
+    judge: number
+    order: PanelOrder
+    root: string
+    binDir: string
+    hide: readonly string[]
+  }> = []
   const reclaimed: Array<{ judge: number; session: string; root: string }> = []
   return {
     launched,
@@ -146,7 +170,7 @@ function hooks(
       log.ended(judge, session, 'reclaimed')
     },
     async launch(judge, order, root, judgeLaunch) {
-      launched.push({ judge, order, root, binDir: judgeLaunch.binDir })
+      launched.push({ judge, order, root, binDir: judgeLaunch.binDir, hide: judgeLaunch.hide })
       next += 1
       const session = `s_${next}`
       log.judgeStarted(judge, session, order)
@@ -498,6 +522,73 @@ describe('protected locations', () => {
       h,
     )
     expect((result as { reason: string }).reason).toContain("the judge's pi executable")
+    expect(h.launched).toEqual([])
+  })
+
+  test('an inherited path reaching a protected location through a symlink is hidden as well', async () => {
+    const ambient = {
+      PATH: '/usr/bin:/alias/node_modules/.bin',
+      INIT_CWD: '/alias',
+      npm_package_json: '/alias/package.json',
+      FLAGS: '--dir=/link/ws/sub --other',
+      CONFIG: '/home/me/config.json',
+      DIRECT: '/ws/inside',
+    }
+    const physical = {
+      '/alias': '/ws',
+      '/alias/node_modules/.bin': '/ws/node_modules/.bin',
+      '/alias/package.json': '/ws/package.json',
+      '/link/ws/sub': '/ws/sub',
+      '/home/me/config.json': '/home/me/config.json',
+    }
+    const calls: Call[] = []
+    const aliases = await judgeAmbientAliases(deps(scriptedExec({ calls, physical }), ambient), [
+      '/ws',
+      '/ws/.git',
+    ])
+    expect(aliases.sort()).toEqual([
+      '/alias',
+      '/alias/node_modules/.bin',
+      '/alias/package.json',
+      '/link/ws/sub',
+    ])
+    // A path already naming a protected location needs no resolution.
+    const probe = calls.find((call) => call.cmd[2] === PHYSICAL_PATHS_PROBE)!
+    expect(probe.cmd).not.toContain('/ws/inside')
+
+    // A path that cannot be resolved is hidden, failing closed.
+    expect(
+      await judgeAmbientAliases(
+        deps(scriptedExec({ calls: [], physical: { '/home/me/config.json': '' } }), {
+          CONFIG: '/home/me/config.json',
+        }),
+        ['/ws'],
+      ),
+    ).toEqual(['/home/me/config.json'])
+
+    // Every launch hides the aliases with the real locations.
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    await runPanelJudges(
+      deps(scriptedExec({ calls: [], physical }), ambient),
+      { ...INPUT, judges: 1 },
+      h,
+    )
+    expect(h.launched[0]!.hide).toEqual(expect.arrayContaining(['/ws', '/alias', '/link/ws/sub']))
+  })
+
+  test('a failed resolution of the inherited paths fails the run before any session', async () => {
+    const scripted = scriptedExec({ calls: [] })
+    const exec: Exec = async (cmd, opts) =>
+      cmd[2] === PHYSICAL_PATHS_PROBE ? fail('sh: broken') : scripted(cmd, opts)
+    const log = new PanelLogBuilder().started(panelStarted({ judges: 1 }))
+    const h = hooks(log, async () => 'A')
+    const result = await runPanelJudges(
+      deps(exec, { INIT_CWD: '/alias' }),
+      { ...INPUT, judges: 1 },
+      h,
+    )
+    expect((result as { reason: string }).reason).toContain('inherited environment')
     expect(h.launched).toEqual([])
   })
 

@@ -183,8 +183,75 @@ export async function judgeProtectedPaths(
     const real = await deps.exec(['sh', '-c', REAL_ENTRY_PROBE, 'sh', candidate], {})
     const resolved = real.exitCode === 0 ? real.stdout.trim() : ''
     out.add(resolved !== '' ? resolved : candidate)
+    // The lexical spelling is protected too: it reaches the same place.
+    if (candidate.startsWith('/')) out.add(candidate.replace(/(.)\/+$/, '$1'))
   }
   return [...out]
+}
+
+/** Prints, one line per argument, the physical location the absolute path
+ * reaches: every symlink it passes through followed, and any part that does
+ * not exist appended to its deepest existing ancestor's real path. Prints an
+ * empty line when a path cannot be resolved. */
+export const PHYSICAL_PATHS_PROBE = `for p in "$@"; do
+  rest=; r=; hops=0
+  while :; do
+    if [ -d "$p" ]; then r=$(cd -P "$p" 2>/dev/null && pwd -P) || r=; break; fi
+    if [ -L "$p" ]; then
+      hops=$((hops + 1)); [ "$hops" -le 40 ] || { r=; break; }
+      t=$(readlink "$p") || { r=; break; }
+      case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+      continue
+    fi
+    rest=/$(basename "$p")$rest; p=$(dirname "$p")
+  done
+  if [ -n "$r" ]; then printf "%s%s\\n" "\${r%/}" "$rest"; else printf "\\n"; fi
+done`
+
+/** Paths per resolution probe, well inside one command line's limit. */
+const PHYSICAL_PATHS_BATCH = 256
+
+/** Every absolute path an ambient value or `PATH` entry carries: the whole
+ * value, and each piece between separators. */
+function ambientPathTokens(ambient: Readonly<Record<string, string | undefined>>): string[] {
+  const tokens = new Set<string>()
+  for (const value of Object.values(ambient)) {
+    if (value === undefined || value.includes('\n')) continue
+    for (const token of [value, ...value.split(/[\s:;,='"]+/)])
+      if (token.startsWith('/') && token !== '/') tokens.add(token)
+  }
+  return [...tokens]
+}
+
+/** The lexical spellings in the ambient environment that reach a protected
+ * location only through a symlink: a symlinked checkout, a symlinked
+ * ancestor, or a link to a file inside it. Hiding them as well keeps an
+ * inherited value such as `INIT_CWD=/work/alias` from leading a judge back
+ * into the repository. A path that cannot be resolved is hidden too. */
+export async function judgeAmbientAliases(
+  deps: PanelDeps,
+  protectedPaths: readonly string[],
+): Promise<string[]> {
+  const tokens = ambientPathTokens(deps.ambientEnv ?? process.env).filter(
+    (token) => insideProtected(token, protectedPaths) === undefined,
+  )
+  const aliases: string[] = []
+  for (let at = 0; at < tokens.length; at += PHYSICAL_PATHS_BATCH) {
+    const batch = tokens.slice(at, at + PHYSICAL_PATHS_BATCH)
+    const result = await deps.exec(['sh', '-c', PHYSICAL_PATHS_PROBE, 'sh', ...batch], {})
+    const lines = result.stdout.split('\n').slice(0, -1)
+    if (result.exitCode !== 0 || lines.length !== batch.length)
+      throw new PanelPreparationFailure(
+        "resolving the inherited environment's paths failed",
+        tail(result),
+      )
+    batch.forEach((token, index) => {
+      const physical = lines[index]!
+      if (physical === '' || insideProtected(physical, protectedPaths) !== undefined)
+        aliases.push(token)
+    })
+  }
+  return aliases
 }
 
 /** The protected location `path` is at or under, if any. */
@@ -594,7 +661,10 @@ export async function runPanelJudges(
     // directory, so the base itself must be outside every protected location.
     const base = await scratchRefusal(deps, paths.base, 'the judge scratch base', protectedPaths)
     if (base !== undefined) return { kind: 'failed', reason: base }
-    const launch: JudgeLaunch = { hide: protectedPaths, binDir: paths.launcherDir }
+    // Nothing the judge inherits may name a protected location, whether by
+    // its real path or by a symlinked spelling found in the environment.
+    const hide = [...protectedPaths, ...(await judgeAmbientAliases(deps, protectedPaths))]
+    const launch: JudgeLaunch = { hide, binDir: paths.launcherDir }
     const executables = await checkJudgeExecutables(
       deps,
       ['bun', ...(input.runtimeExecutable !== undefined ? [input.runtimeExecutable] : [])],

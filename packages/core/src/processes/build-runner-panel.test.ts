@@ -20,6 +20,7 @@ const LAUNCHER = '#!/usr/bin/env bun\nconsole.log("judge")\n'
 import {
   EXECUTABLE_PROBE,
   JUDGE_PREFERENCE_OUTBOX,
+  PHYSICAL_PATHS_PROBE,
   REAL_ENTRY_PROBE,
   TMPDIR_PROBE,
 } from './panel-runner'
@@ -44,6 +45,13 @@ function fakeExec(files: Files, alive: () => boolean = () => true): Exec {
     if (cmd[0] === 'sh' && cmd[2] === TMPDIR_PROBE) return ok('/tmp/t\n')
     if (cmd[0] === 'sh' && cmd[2] === 'cd "$1" && pwd -P') return ok(`${cmd[4]}\n`)
     if (cmd[0] === 'sh' && cmd[2] === REAL_ENTRY_PROBE) return ok(`${cmd[4]}\n`)
+    if (cmd[0] === 'sh' && cmd[2] === PHYSICAL_PATHS_PROBE)
+      return ok(
+        cmd
+          .slice(4)
+          .map((path) => `${path}\n`)
+          .join(''),
+      )
     if (cmd[0] === 'sh' && cmd[2] === EXECUTABLE_PROBE) return ok(`/usr/bin/${cmd[5]}\n`)
     if (cmd[0] === 'sh' && cmd[3] === 'judge-outbox') {
       const content = files.get(cmd[4]!)

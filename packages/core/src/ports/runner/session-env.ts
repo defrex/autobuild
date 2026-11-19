@@ -19,8 +19,10 @@ import { distributionPath } from '../../distribution'
 /** Private command directory shipped by this Autobuild distribution. */
 export const AGENT_BIN_DIR = distributionPath('bin', 'agent')
 
-/** A judge session's launch: the locations nothing it inherits may name, and
- * the scratch directory holding its self-contained `ab` launcher. */
+/** A judge session's launch: the locations nothing it inherits may name (the
+ * real paths, and every inherited spelling that reaches one through a
+ * symlink, resolved by the panel runner beforehand), and the scratch
+ * directory holding its self-contained `ab` launcher. */
 export interface JudgeLaunch {
   hide: readonly string[]
   binDir: string

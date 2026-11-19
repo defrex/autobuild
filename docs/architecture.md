@@ -353,7 +353,9 @@ launches each wave concurrently. `packages/core/src/cli/judge-entry.ts` is the
 judge-only `ab`, bundled into one file by
 `packages/core/src/processes/judge-launcher.ts`. `sessionEnv` in
 `packages/core/src/ports/runner/session-env.ts` builds the judge's launch
-environment, scrubbing every inherited value that names a protected location.
+environment, scrubbing every inherited value that names a protected location;
+`judgeAmbientAliases` in `panel-runner.ts` first resolves inherited paths so a
+symlinked spelling of one is scrubbed too.
 `BuildRunner.runPanel` records the run's kernel facts, the order in
 `panel.judge-started` before each session, and `panel.judged` after it, and
 commits a local judge's preference outbox. A judge session has no read

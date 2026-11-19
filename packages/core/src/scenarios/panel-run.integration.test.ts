@@ -22,7 +22,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { runCli } from '../cli/main'
 import { resolveJudgeCliEnv } from '../cli/env'
 import { parseConfig } from '../config/load'
@@ -40,7 +40,12 @@ import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import { temporaryDirectories } from '../testing/temp-directories'
 import { BuildRunner, type PanelRequest } from '../processes/build-runner'
-import type { PanelResult } from '../processes/panel-runner'
+import {
+  judgeAmbientAliases,
+  judgeProtectedPaths,
+  type PanelResult,
+} from '../processes/panel-runner'
+import { sessionEnv } from '../ports/runner/session-env'
 
 const directory = temporaryDirectories(afterEach)
 const SLUG = 'attempt-panel'
@@ -643,5 +648,49 @@ describe('a judge panel run', () => {
     // 4: tie → 0.5.
     expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 4)
     expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+  })
+})
+
+describe('symlinked spellings of a protected location', () => {
+  test('inherited values reaching the checkout through a symlinked checkout or ancestor are dropped', async () => {
+    const repo = await repository()
+    const outside = await directory(join(tmpdir(), 'ab-panel-alias-'))
+    const checkoutAlias = join(outside, 'checkout-alias')
+    const ancestorAlias = join(outside, 'ancestor-alias')
+    await symlink(repo.workspace, checkoutAlias)
+    await symlink(dirname(repo.workspace), ancestorAlias)
+    const viaAncestor = join(ancestorAlias, basename(repo.workspace))
+    await mkdir(join(outside, 'links'))
+    await symlink(join(repo.workspace, 'doc.md'), join(outside, 'links/doc'))
+    const ambient = {
+      PATH: ['/usr/bin', join(checkoutAlias, 'node_modules/.bin'), join(viaAncestor, 'bin')].join(
+        ':',
+      ),
+      INIT_CWD: checkoutAlias,
+      npm_package_json: join(checkoutAlias, 'package.json'),
+      VIA_ANCESTOR: `--root=${join(viaAncestor, 'evals')}`,
+      FILE_LINK: join(outside, 'links/doc'),
+      UNRELATED: join(outside, 'links'),
+    }
+    const deps = {
+      exec: spawnExec,
+      ambientEnv: ambient,
+      distributionSkill: async () => '',
+      judgeLauncher: async () => '',
+    }
+    // The checkout is named by its symlinked spelling, as a launch from it is.
+    const hide = await judgeProtectedPaths(deps, checkoutAlias, repo.store)
+    expect(hide).toEqual(expect.arrayContaining([repo.workspace, repo.commonDir, checkoutAlias]))
+    const aliases = await judgeAmbientAliases(deps, hide)
+    const env = sessionEnv({ AB_JUDGE: 'b:panel-1:1' }, ambient, {
+      hide: [...hide, ...aliases],
+      binDir: '/scratch/autobuild-judge-bin-x',
+    })
+    expect(env.INIT_CWD).toBeUndefined()
+    expect(env.npm_package_json).toBeUndefined()
+    expect(env.VIA_ANCESTOR).toBeUndefined()
+    expect(env.FILE_LINK).toBeUndefined()
+    expect(env.UNRELATED).toBe(join(outside, 'links'))
+    expect(env.PATH).toBe('/scratch/autobuild-judge-bin-x:/usr/bin')
   })
 })

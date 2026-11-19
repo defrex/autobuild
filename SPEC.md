@@ -3790,7 +3790,9 @@ worktrees, its store credential, nor any git metadata reachable from its
 working directory. Nothing under the judge's root links back to the repository
 it was prepared from, and nothing Autobuild supplies (environment, `PATH`,
 launcher content, launch arguments, working directory, scratch ancestry) names
-a protected location. This guarantee covers the channels Autobuild provides; a
+a protected location, whether by its real path or by a path that reaches it
+through a symlink; an inherited path that cannot be resolved is dropped too.
+This guarantee covers the channels Autobuild provides; a
 judge process deliberately searching the filesystem outside its root is the
 shared trust boundary of unconfined local agent sessions, and no general
 sandbox is claimed.
