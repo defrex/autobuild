@@ -5045,6 +5045,142 @@ export async function optimizationReadBudget(): Promise<void> {
 }
 
 /**
+ * Judge panel sessions (SPEC §13.1.1) on the build's session rows. With a
+ * short and a padded build log, each holding a panel whose judges fell back
+ * from their primary to an alternate:
+ *
+ * 1. an idle terminal dashboard poll and an operator build-detail read read
+ *    zero event rows, with an identical request vector at both lengths;
+ * 2. the reduced panel state counts a substituted failure as no failure; and
+ * 3. the polled session rows carry each judge session with its phase and
+ *    stream, and nothing that names the order a judge was given.
+ */
+export async function judgePanelSessionReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { PanelLogBuilder, panelStarted } = await import('../kernel/generators/panel-log')
+  const { countedFailures } = await import('../kernel/panel')
+  const { getOperatorBuild } = await import('../operator/query')
+  const repo = '/budget/judge-panel'
+  const slug = 'attempt-panel'
+  const now = new Date('2026-11-18T00:00:00Z')
+  const config = parseConfig(
+    '[tickets]\nsource="fake"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const { verify: _verify, finalize: _finalize, ...root } = config
+  const measured: Array<{ poll: Record<string, number>; operator: Record<string, number> }> = []
+  for (const padding of [10, 10_000]) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    const configArtifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'budget-run',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+      },
+    })
+    await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket: { source: 'fake', id: 'PANEL' }, baseBranch: 'main' },
+    })
+    for (let i = 0; i < padding; i++)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: { id: `obs-${i}`, kind: 'followup', summary: `budget padding ${i}` },
+      })
+    const log = new PanelLogBuilder(slug).started(panelStarted({ judges: 2 }))
+    for (const judge of [1, 2]) {
+      const primary = `s_${judge}a`
+      const alternate = `s_${judge}b`
+      log
+        .judgeStarted(judge, primary, 'candidate-first', 'panel-1', {
+          runner: 'codex',
+          stream: `st_${primary}`,
+        })
+        .ended(judge, primary, 'failed')
+        .substituted(
+          judge,
+          alternate,
+          'candidate-first',
+          { session: primary, index: 0, runner: 'codex' },
+          { runner: 'claude', stream: `st_${alternate}` },
+        )
+        .ended(judge, alternate, 'failed')
+    }
+    for (const event of log.events) await store.append(slug, event)
+
+    const record = (await store.getBuild(slug))!
+    const single = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listBuildsForRepo') return async () => [record]
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as BuildStore
+    const dashboard = new DashboardBuildPollCache(
+      {
+        listBuildsForRepo: async () => [record],
+        getEvents: store.getEvents.bind(store),
+        getReducerValue: store.getReducerValue.bind(store),
+      },
+      repo,
+      config,
+    )
+    // Warm-up: each reduced key is computed once and saved.
+    await dashboard.refresh()
+    await getOperatorBuild({ store: single, repo, slug, now })
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    try {
+      // 1. Idle reads: zero event rows.
+      rows.reset()
+      requests.reset()
+      const polled = (await dashboard.refresh()).builds.find((build) => build.slug === slug)
+      const poll = requests.vector()
+      expect(rows.buildRows).toBe(0)
+      rows.reset()
+      requests.reset()
+      const operator = await getOperatorBuild({ store: single, repo, slug, now })
+      const operatorVector = requests.vector()
+      expect(rows.buildRows).toBe(0)
+      expect(operator.detail.slug).toBe(slug)
+
+      // 2. Each launch fell back once and exhausted: one counted failure.
+      rows.reset()
+      const panel = (await readBuildFacts(store, slug)).value.state.panel!
+      expect(rows.buildRows).toBe(0)
+      expect(countedFailures(panel, 1)).toEqual(['failed'])
+      expect(countedFailures(panel, 2)).toEqual(['failed'])
+
+      // 3. The session rows name each judge session's target and stream.
+      const sessions = polled!.sessions ?? []
+      expect(
+        sessions.map((session) => [session.id, session.phase, session.runtime, session.stream]),
+      ).toEqual([
+        ['s_1a', 'judge:panel-1:1', 'codex', 'st_s_1a'],
+        ['s_1b', 'judge:panel-1:1', 'claude', 'st_s_1b'],
+        ['s_2a', 'judge:panel-1:2', 'codex', 'st_s_2a'],
+        ['s_2b', 'judge:panel-1:2', 'claude', 'st_s_2b'],
+      ])
+      expect(JSON.stringify(sessions)).not.toContain('first')
+      measured.push({ poll, operator: operatorVector })
+    } finally {
+      requests.restore()
+    }
+  }
+  expect(measured[1]).toEqual(measured[0])
+}
+
+/**
  * The measurement landing gate and the rejected-role sweep (AUT-1226) have
  * bounded read cost, at 10 and at 1,000 settled attempts plus 2,000 terminal
  * builds in the repository, each poll from a fresh dispatcher:

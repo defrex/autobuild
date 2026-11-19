@@ -640,17 +640,21 @@ export interface PanelLoopHooks {
   read(): Promise<PanelRunState>
   /** Record a saved preference's judgment without a session. */
   complete(judged: EventPayload<'panel.judged'>): Promise<void>
-  /** Close a crashed predecessor's judge session, first committing any
-   * preference it saved in its root. */
-  reclaim(judge: number, session: string, root: string): Promise<void>
-  /** Start the judge's session in its sealed root with its launch context;
-   * resolves with its outcome once `panel.judged` (if any) and
-   * `panel.judge-ended` are recorded. */
+  /** Close a crashed predecessor's judge session: settle any preference it
+   * saved in its root, close its stream, if any, then end it. */
+  reclaim(judge: number, session: string, root: string, stream?: string): Promise<void>
+  /** Start the judge's session in its sealed root with its launch context,
+   * following the judge role's provider alternates; resolves with the final
+   * session's outcome once `panel.judged` (if any) and every
+   * `panel.judge-ended` are recorded. `preflight` checks an alternate
+   * target's executable against this run's filtered PATH and protected
+   * locations before it launches. */
   launch(
     judge: number,
     order: PanelOrder,
     root: string,
     judgeLaunch: JudgeLaunch,
+    preflight: (executable: string) => Promise<string | undefined>,
   ): Promise<PanelJudgeOutcome>
   random(): number
   shutdownSignal?: AbortSignal
@@ -696,12 +700,13 @@ export async function runPanelJudges(
       launch,
     )
     if (executables !== undefined) return { kind: 'failed', reason: executables }
+    const preflight = (name: string) => checkJudgeExecutables(deps, [name], launch)
     await writeJudgeLauncher(deps, paths.launcherDir, protectedPaths)
     const judgeRoots = paths
     for (;;) {
       let run = await hooks.read()
-      for (const { judge, session } of awaitingReclaim(run))
-        await hooks.reclaim(judge, session, judgeRoots.judgeRoot(judge))
+      for (const { judge, session, stream } of awaitingReclaim(run))
+        await hooks.reclaim(judge, session, judgeRoots.judgeRoot(judge), stream)
       run = await hooks.read()
       for (const judged of completable(run)) await hooks.complete(judged)
       run = await hooks.read()
@@ -736,7 +741,7 @@ export async function runPanelJudges(
         if (refusal !== undefined) return { kind: 'failed', reason: refusal }
       }
       const outcomes = await Promise.all(
-        wave.map(({ judge, order, root }) => hooks.launch(judge, order, root, launch)),
+        wave.map(({ judge, order, root }) => hooks.launch(judge, order, root, launch, preflight)),
       )
       if (outcomes.includes('interrupted') || hooks.shutdownSignal?.aborted)
         return { kind: 'interrupted' }

@@ -734,7 +734,7 @@ export function projectBuildFromFacts(
       blockers: [],
       landing: state.landing,
       autoMerge: autoMergeDisplay(state),
-      sessions: projectSessions(dashboard.sessionEvents, streams),
+      sessions: projectSessions(dashboard.sessionEvents, streams, dashboard.judgeSessions),
     }
   }
 
@@ -792,7 +792,7 @@ export function projectBuildFromFacts(
       ...(state.pr !== undefined && state.prState !== undefined
         ? { pr: { url: state.pr.url, state: state.prState } }
         : {}),
-      sessions: projectSessions(dashboard.sessionEvents, streams),
+      sessions: projectSessions(dashboard.sessionEvents, streams, dashboard.judgeSessions),
     }
   }
 
@@ -1161,7 +1161,7 @@ export function projectBuildFromFacts(
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
-    sessions: projectSessions(dashboard.sessionEvents, streams),
+    sessions: projectSessions(dashboard.sessionEvents, streams, dashboard.judgeSessions),
   }
 }
 
