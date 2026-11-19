@@ -1006,7 +1006,10 @@ cleanup records `workspace.commits-preserved` carrying forward earlier preserved
 heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
-releases it and provisions the next generation. A preservation or release
+releases it and provisions the next generation. Provisioning cut off by a
+recorded dispatcher teardown is the exception: the next invocation asks the
+provider to verify and finish the same generation, and if it cannot, the
+replacement consumes no infrastructure attempt. A preservation or release
 failure is recorded against its build, as an infrastructure failure or janitor
 attention, and never stops the dispatcher from advancing other builds.
 Fencing is revalidated after restart; a saved receipt alone never authorizes
@@ -1330,7 +1333,7 @@ nonnegative integer so zero can disable that trigger.
 | `maxVerifyAttempts` | `3` | positive integer | Caps distinct failed verify cycles since the latest spec revision; passed and skipped cycles cost zero. |
 | `maxDispatchAttempts` | `3` | positive integer | Caps consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted policy escalation. |
-| `maxInfrastructureAttempts` | `3` | positive integer | Caps consecutive remote provider lifecycle failures before a setup-targeted policy escalation; a `retry` answer re-arms the budget. |
+| `maxInfrastructureAttempts` | `3` | positive integer | Caps consecutive remote provider lifecycle failures before a setup-targeted policy escalation; a `retry` answer re-arms the budget. Teardown-abandoned provisioning does not count. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
 | `maxReviewRounds` | `6` | positive integer | Default `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. When that cap parks a build, `ab answer <slug> --review-round-ceiling <n>` may replace it for only the escalation's loop and current spec revision. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |

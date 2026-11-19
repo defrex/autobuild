@@ -150,3 +150,5 @@ The suite certifies only the basic working copy. Remote execution adds trusted s
 
 - Publication reports confirmed SHA and cache tips and supports the required guarded rewrites.
 - Store grants go through the host's `delegateCredential` callback; never serialize host tokens into execution identity.
+- An optional `provisionEstimateMs` declares the expected wall time of one `provision`; a bounded dispatcher invocation does not start provisioning with less budget left.
+- `provision` may receive `adoptAbandoned` when the previous attempt at the same generation was cut off by a recorded dispatcher teardown. Finish that environment in place only after verifying it; otherwise throw `WorkspaceCleanupRequired`.

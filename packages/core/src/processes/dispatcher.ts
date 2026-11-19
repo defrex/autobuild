@@ -534,6 +534,10 @@ export interface TickReport {
    * background work this tick. The tick returns without awaiting it; the
    * continuation completes the remaining boundaries and the launch. */
   provisioning: number
+  /** Builds whose provisioning start was deferred because the bounded
+   * invocation's remaining budget was shorter than the provider's
+   * provisioning estimate. Nothing is written; a later invocation starts it. */
+  provisioningDeferred: number
   /** Dispatch (§12): builds created and launched. With durable supervision
    * this counts ACCEPTED dispatches — durable boundaries recorded — not
    * awaited launches: a dispatch whose remote provisioning continues in the
@@ -597,6 +601,7 @@ export function emptyTickReport(): TickReport {
     swept: 0,
     settled: 0,
     provisioning: 0,
+    provisioningDeferred: 0,
     dispatched: 0,
     authored: 0,
     bounced: 0,
@@ -1187,6 +1192,7 @@ export class Dispatcher {
   async tick(opts: TickOpts = {}): Promise<TickReport> {
     this.kernelGitUnavailable = undefined
     this.tickAbandonments = []
+    this.tickDeadlineAt = opts.deadlineAt
     this.availabilityEntries = undefined
     this.availabilityLandings = undefined
     this.availabilityLandingKey = undefined
@@ -1231,6 +1237,10 @@ export class Dispatcher {
       stop?.()
     }
   }
+
+  /** The current tick's invocation deadline, consulted by the provisioning
+   * budget gate. Undefined for unbounded (watch/foreground) ticks. */
+  private tickDeadlineAt: number | undefined
 
   /** Ticket preparations durably abandoned during the current tick. Drained
    * once by `tick()` into its report or its rejection, so later ticks never
@@ -2227,7 +2237,7 @@ export class Dispatcher {
       autoMergeDefaultSeq?: number
       assets?: PinnedAsset[]
     },
-  ): Promise<'kicked' | 'in-flight' | 'foreign-live' | 'slot-wait'> {
+  ): Promise<'kicked' | 'in-flight' | 'foreign-live' | 'slot-wait' | 'budget-wait'> {
     const slug = record.slug
     if (!this.accountsAvailable()) return 'in-flight'
     if (this.continuations.has(slug)) return 'in-flight'
@@ -2248,11 +2258,25 @@ export class Dispatcher {
       }
       // Expired lease, failed attempt, or an old lease-less marker: adopt.
     }
+    // A bounded invocation does not start provisioning it has no realistic
+    // time left to finish; a later invocation starts it with a full budget.
+    // Pure clock arithmetic: nothing is read or written.
+    const estimate = this.deps.workspaces.provisionEstimateMs
+    if (
+      estimate !== undefined &&
+      this.tickDeadlineAt !== undefined &&
+      this.tickDeadlineAt - this.deps.clock().getTime() < estimate
+    )
+      return 'budget-wait'
     // A finished leaf waits for a slot before its continuation reserves one.
     // Nothing is written: the wait costs no attempt and raises no attention.
     if (tail === 'launch' && !(await this.leafAdmission(slug))) return 'slot-wait'
     const branch = record.branch ?? `ab/${slug}`
     const generation = events.workspaceGenerations
+    // The latest attempt at this same generation was cut off by a recorded
+    // dispatcher teardown and its lease is gone (the liveness gate above):
+    // the provider may verify and finish it in place, uncharged.
+    const adoptAbandoned = marker?.abandoned === 'teardown' && marker.generation === generation
     if (this.deps.holdsRepoAuthority?.() === false) return 'in-flight'
     await this.store.append(slug, {
       actor: DISPATCHER,
@@ -2273,6 +2297,7 @@ export class Dispatcher {
       generation,
       seed,
       tail,
+      adoptAbandoned,
     }).catch(() => {
       // Detached work must never reject into the dispatcher process. Failure
       // recording can itself fail on a store outage; durable boundaries and
@@ -2304,6 +2329,7 @@ export class Dispatcher {
           }
         | undefined
       tail: 'dispatch' | 'launch'
+      adoptAbandoned: boolean
     },
   ): Promise<void> {
     const store = this.store
@@ -2340,23 +2366,28 @@ export class Dispatcher {
         return
       }
       const priorGenerations = events.workspaceGenerations
-      const handle = await this.provisionWorkspace(slug, {
-        // Local providers provision FROM the physical checkout; remote
-        // providers ignore the value (their host seams are injected).
-        repo: this.deps.checkout ?? this.deps.repo,
-        baseBranch:
-          events.state.kind === 'node' && events.state.integration?.cycle
-            ? input.branch
-            : baseBranchOf(events, config),
-        branch: input.branch,
-        ...(priorGenerations > 0 || input.generation > 0
-          ? {
-              publication: await this.confirmedWorkspacePublication(events, slug),
-              revision: events.state.integration?.cycle?.head ?? this.recoveryCheckpoint(events),
-              generation: Math.max(priorGenerations, input.generation),
-            }
-          : {}),
-      })
+      const handle = await this.provisionWorkspace(
+        slug,
+        {
+          // Local providers provision FROM the physical checkout; remote
+          // providers ignore the value (their host seams are injected).
+          repo: this.deps.checkout ?? this.deps.repo,
+          baseBranch:
+            events.state.kind === 'node' && events.state.integration?.cycle
+              ? input.branch
+              : baseBranchOf(events, config),
+          branch: input.branch,
+          ...(priorGenerations > 0 || input.generation > 0
+            ? {
+                publication: await this.confirmedWorkspacePublication(events, slug),
+                revision: events.state.integration?.cycle?.head ?? this.recoveryCheckpoint(events),
+                generation: Math.max(priorGenerations, input.generation),
+              }
+            : {}),
+          ...(input.adoptAbandoned ? { adoptAbandoned: true } : {}),
+        },
+        entry.controller.signal,
+      )
       // The provisioned fact is true and welcome even when a teardown signal
       // landed mid-call; the token check below still prevents a superseded
       // supervisor from launching.
@@ -2399,6 +2430,10 @@ export class Dispatcher {
       // A lapsed repository lease started nothing: no failure fact. The
       // finally releases the execution lease; the successor adopts the marker.
       if (isRepositoryAuthorityLapse(error)) return
+      // Teardown aborted this continuation and already recorded the
+      // abandonment; a late provider failure after it is not a new fact, and
+      // recording one would charge an attempt and spoil the adoptable marker.
+      if (entry.controller.signal.aborted) return
       // Dispatch boundaries own their failure facts and exhaustion repair.
       // A failed tail read/write leaves durable unfinished work for the next
       // tick; it is not another provider workspace failure. Replacement
@@ -2406,7 +2441,12 @@ export class Dispatcher {
       if (await this.holdForMissingAccounts(error)) return
       if (boundary === 'read' || boundary === 'dispatch') return
       const events = (await readBuildFacts(store, slug)).value
-      if (workspaces.recovery !== undefined) {
+      // Finishing a teardown-abandoned attempt that turns out unfinishable is
+      // uncharged: a teardown abandonment never counts toward
+      // `maxInfrastructureAttempts`. The cleanup-required fact still lets the
+      // sweep reap and replace it.
+      const uncharged = input.adoptAbandoned && error instanceof WorkspaceCleanupRequired
+      if (workspaces.recovery !== undefined && !uncharged) {
         const open = openWorkspace(events)
         const latestRef = events.latestRelease
         await this.recordInfrastructureFailure(slug, events, {
@@ -2483,6 +2523,7 @@ export class Dispatcher {
               attempt,
               error:
                 'provisioning abandoned at dispatcher teardown; the next supervisor adopts the open marker',
+              abandoned: 'teardown',
             },
           })
         }
@@ -4075,6 +4116,7 @@ export class Dispatcher {
         // never blocks on guest bootstrap.
         const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
         if (kicked === 'kicked') report.provisioning += 1
+        else if (kicked === 'budget-wait') report.provisioningDeferred += 1
         report.conflicted += 1
         return
       }
@@ -4723,9 +4765,13 @@ export class Dispatcher {
     }
   }
 
+  /** `signal` is a continuation's teardown token: a provider call that
+   * rejects after teardown records no cleanup fact, so the abandoned marker
+   * stays adoptable in the same generation. */
   private async provisionWorkspace(
     slug: string,
     input: Parameters<WorkspaceProvider['provision']>[0],
+    signal?: AbortSignal,
   ) {
     const facts = (await readBuildFacts(this.store, slug)).value
     const { restoration, superseded } = supersedeRestorationHeads(
@@ -4751,7 +4797,7 @@ export class Dispatcher {
       ]
       return skipped.length ? { ...handle, restorationSkipped: skipped } : handle
     } catch (error) {
-      if (error instanceof WorkspaceCleanupRequired) {
+      if (error instanceof WorkspaceCleanupRequired && signal?.aborted !== true) {
         await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'workspace.cleanup-required',
@@ -5233,6 +5279,7 @@ export class Dispatcher {
           // and the launch.
           const kicked = await this.ensureProvisionContinuation(record, events, 'dispatch', seed)
           if (kicked === 'kicked') report.provisioning += 1
+          else if (kicked === 'budget-wait') report.provisioningDeferred += 1
           launched.add(record.slug)
           return 'deferred'
         }
@@ -6041,7 +6088,7 @@ export class Dispatcher {
         if (kicked === 'kicked') {
           report.provisioning += 1
           report.swept += 1
-        }
+        } else if (kicked === 'budget-wait') report.provisioningDeferred += 1
         return
       }
     }
@@ -6064,8 +6111,10 @@ export class Dispatcher {
         report.swept += 1
         return
       }
+      if (kicked === 'budget-wait') report.provisioningDeferred += 1
       // In-flight or foreign-live: whoever owns the marker completes the
-      // boundaries and the launch; this tick performs neither.
+      // boundaries and the launch; this tick performs neither. A budget wait
+      // leaves both to a later invocation.
       return
     }
     try {
@@ -7272,6 +7321,7 @@ export class Dispatcher {
         if (openWorkspace(current) === null && this.deps.workspaces.recovery) {
           const kicked = await this.ensureProvisionContinuation(record, current, 'launch')
           if (kicked === 'kicked') report.provisioning += 1
+          else if (kicked === 'budget-wait') report.provisioningDeferred += 1
           // After a reap, this tick's sweep leaves the replacement alone.
           if (kicked === 'kicked' && current !== facts) launched.add(record.slug)
         } else {
@@ -7533,6 +7583,7 @@ export class Dispatcher {
     if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
       const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
       if (kicked === 'kicked') report.provisioning++
+      else if (kicked === 'budget-wait') report.provisioningDeferred++
       // After a reap, this tick's sweep leaves the replacement alone.
       if (kicked === 'kicked' && facts !== read) launched.add(record.slug)
       return
