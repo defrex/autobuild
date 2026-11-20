@@ -449,6 +449,29 @@ export const commandsSchema = openMap(
 )
 export type Commands = z.infer<typeof commandsSchema>
 
+// ── [[generated]] ────────────────────────────────────────────────────────────
+//
+// Generated outputs a declared command rebuilds. A restack replay whose
+// conflicts are all declared here is regenerated instead of reconciled by an
+// agent. Absence (not an empty default) preserves serialized config identity.
+
+export const generatedEntrySchema = z.strictObject({
+  paths: z
+    .array(pathSelectorSchema)
+    .min(1, 'paths must contain at least one repository-relative glob'),
+  command: z
+    .string()
+    .refine((value) => value.trim().length > 0, 'command must be a nonblank shell command'),
+})
+
+documentFields(generatedEntrySchema, {
+  paths:
+    'Generated files this entry owns. When selectors of several entries match a file, the first entry in declaration order owns it.',
+  command:
+    'Shell command, run with `sh -c` from the workspace root after `[commands].setup`, that rebuilds every file this entry owns.',
+})
+export type GeneratedEntry = z.infer<typeof generatedEntrySchema>
+
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
 
 export {
@@ -1314,6 +1337,7 @@ export const configRootSchema = z.strictObject({
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
   commands: commandsSchema,
+  generated: z.array(generatedEntrySchema).optional(),
   verify: verifySectionSchema,
   finalize: finalizeSectionSchema,
   // `default` is reserved inside this open map (§9). The schema preserves the
@@ -1355,6 +1379,8 @@ documentFields(configRootSchema, {
   pr: 'Pull request review image hosting configuration.',
   workspace: 'Workspace provider selector and provider-specific configuration.',
   commands: 'Named shell commands used by setup and deterministic checks.',
+  generated:
+    'Generated files that a declared command rebuilds. Restack replays that conflict only in these files are regenerated instead of reconciled by an agent.',
   verify:
     'Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
   finalize:
@@ -1409,6 +1435,20 @@ const normalizedConfigSchema = configRootSchema.transform((input, ctx) => {
 })
 
 export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => {
+  const generatedOwners = new Map<string, number>()
+  for (const [index, entry] of (config.generated ?? []).entries())
+    for (const [selectorIndex, selector] of entry.paths.entries()) {
+      const owner = generatedOwners.get(selector)
+      if (owner === undefined) {
+        generatedOwners.set(selector, index)
+        continue
+      }
+      ctx.addIssue({
+        code: 'custom',
+        path: ['generated', index, 'paths', selectorIndex],
+        message: `generated path selector ${JSON.stringify(selector)} is declared by both generated[${owner}] and generated[${index}]`,
+      })
+    }
   const { dispatchLeaseTimeoutSeconds: leaseTimeout, dispatchLeaseRenewalSeconds: leaseRenewal } =
     config.policy
   if (leaseRenewal >= leaseTimeout)

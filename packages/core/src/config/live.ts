@@ -27,6 +27,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
     config: 'restart',
   },
   commands: 'hot',
+  generated: 'hot',
   verify: 'hot',
   finalize: 'hot',
   roles: 'hot',

@@ -14,6 +14,10 @@ export interface LeafRestackState {
   distance?: EventPayload<'target.distance'>
   active?: EventPayload<'restack.prepared'>
   replay?: EventPayload<'restack.replayed'>
+  /** The active replay's `[[generated]]` regeneration fact. */
+  regeneration?: EventPayload<'restack.regenerated'>
+  /** The latest completed restack's resolved regeneration, for status. */
+  completedRegeneration?: EventPayload<'restack.regenerated'>
   intent?: EventPayload<'restack.publish-intended'>
   completed?: EventPayload<'restack.completed'>
   /** The latest pre-publication wait-resume fast-forward. */
@@ -83,17 +87,24 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         if (event.payload.operation === 'restack' && state.active?.id === event.payload.id) {
           state.active = { ...state.active, id: event.payload.replacementId }
           delete state.replay
+          delete state.regeneration
           delete state.intent
         }
         break
       case 'restack.prepared':
         state.active = event.payload
         delete state.replay
+        delete state.regeneration
         delete state.intent
         delete state.reconcileAttempt
         break
       case 'restack.replayed':
         if (event.payload.id === state.active?.id) state.replay = event.payload
+        break
+      case 'restack.regenerated':
+        // A re-pick of the same replay keeps its fact: a resolved head is
+        // adopted rather than regenerated or reconciled again.
+        if (event.payload.id === state.active?.id) state.regeneration = event.payload
         break
       case 'restack.publish-intended':
         if (event.payload.id === state.active?.id) state.intent = event.payload
@@ -111,6 +122,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         if (event.payload.restackId !== undefined && event.payload.restackId === state.active?.id) {
           delete state.active
           delete state.replay
+          delete state.regeneration
           delete state.intent
           delete state.reconcileAttempt
         }
@@ -125,8 +137,12 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         state.completed = event.payload
         state.gates[String(event.payload.cycle)] = event.payload
         if (state.active?.id === event.payload.id) {
+          if (state.regeneration?.outcome === 'resolved')
+            state.completedRegeneration = state.regeneration
+          else delete state.completedRegeneration
           delete state.active
           delete state.replay
+          delete state.regeneration
           delete state.intent
         }
         break
@@ -135,7 +151,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
 }
 
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 10,
+  version: 11,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

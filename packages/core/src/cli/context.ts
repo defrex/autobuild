@@ -26,7 +26,8 @@ import {
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
-import type { VerifyStepConfig } from '../config/schema'
+import type { GeneratedEntry, VerifyStepConfig } from '../config/schema'
+import { classifyGenerated } from '../kernel/generated-files'
 import {
   allowedTerminals,
   phaseSpecFor,
@@ -130,6 +131,15 @@ export interface ContextManifest {
   replay?: import('../events/payloads').EventPayload<'reconcile.prepared'> & {
     conflicted?: boolean
     needsCompletion: boolean
+  }
+  /** Reconcile: conflicted files the workspace's `[[generated]]` declares,
+   * with the command that rebuilds them. Never hand-merge these. */
+  generated?: { command: string; files: string[] }[]
+  /** Reconcile: the kernel's failed attempt to regenerate this replay. */
+  regeneration?: {
+    outcome: 'failed'
+    reason: string
+    commands: { command: string; files: string[] }[]
   }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
@@ -797,6 +807,33 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
 
+  if (phase === 'reconcile') {
+    const node = state.nodeRestack
+    const active = events.log.restack.active
+    const files = node?.conflict
+      ? node.conflict.files
+      : (events.reconcileReplay?.files ??
+        (active !== undefined &&
+        events.reconcileTransaction?.restackId === active.id &&
+        events.log.restack.replay?.id === active.id
+          ? events.log.restack.replay.files
+          : undefined))
+    const declarations = files?.length ? await generatedDeclarations(workspacePath) : []
+    const { groups } = classifyGenerated(files ?? [], declarations)
+    if (groups.length > 0) manifest.generated = groups
+    const failed = node?.conflict
+      ? node.regeneration
+      : active !== undefined && events.reconcileTransaction?.restackId === active.id
+        ? events.log.restack.regeneration
+        : undefined
+    if (failed?.outcome === 'failed' && failed.reason !== undefined)
+      manifest.regeneration = {
+        outcome: 'failed',
+        reason: failed.reason,
+        commands: failed.commands,
+      }
+  }
+
   // The proposer's inputs (SPEC §13.1.1): the effective objective, progress
   // against it, and the attempt ledger with near misses flagged. The ledger
   // is one explicit history read, bounded by the attempts budget.
@@ -917,6 +954,18 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
   return manifest
+}
+
+/** The workspace's `[[generated]]` declarations. A reconcile may run over
+ * a conflicted or absent autobuild.toml; then there is nothing to report. */
+async function generatedDeclarations(workspacePath: string): Promise<GeneratedEntry[]> {
+  const file = Bun.file(join(workspacePath, 'autobuild.toml'))
+  try {
+    if (!(await file.exists())) return []
+    return parseConfig(await file.text(), 'autobuild.toml', () => {}).generated ?? []
+  } catch {
+    return []
+  }
 }
 
 async function loadWorkspaceConfig(
