@@ -51,7 +51,9 @@ export interface DispatchCapacity {
 /** What a capacity projection needs to report open-PR backpressure: the
  * effective `[policy]` and whether the durable engagement fact is set. */
 export interface OpenPrBackpressureInput {
-  policy: Pick<PolicyConfig, 'maxOpenPrs' | 'resumeOpenPrs' | 'excludeHeldOpenPrs'> | undefined
+  policy:
+    | Partial<Pick<PolicyConfig, 'maxOpenPrs' | 'resumeOpenPrs' | 'excludeHeldOpenPrs'>>
+    | undefined
   engaged: boolean
 }
 

@@ -22,7 +22,9 @@ export interface OpenPrBackpressure extends OpenPrBackpressurePolicy {
 /** The configured watermarks, or `undefined` when `maxOpenPrs` is unset and
  * backpressure is disabled. `resumeOpenPrs` defaults to `maxOpenPrs - 1`. */
 export function openPrBackpressurePolicy(
-  policy: Pick<PolicyConfig, 'maxOpenPrs' | 'resumeOpenPrs' | 'excludeHeldOpenPrs'> | undefined,
+  policy:
+    | Partial<Pick<PolicyConfig, 'maxOpenPrs' | 'resumeOpenPrs' | 'excludeHeldOpenPrs'>>
+    | undefined,
 ): OpenPrBackpressurePolicy | undefined {
   if (policy?.maxOpenPrs === undefined) return undefined
   return {
