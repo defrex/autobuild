@@ -23,6 +23,8 @@ export const buildEventPolicy = {
   'landing.consent-revoked': 'decisive',
   'build.hold-requested': 'decisive',
   'build.land-requested': 'decisive',
+  // Decisive: a reader that ignored it would merge on revoked consent.
+  'build.reopened': 'decisive',
   'landing.command-acknowledged': 'decisive',
   'landing.native-enable-started': 'decisive',
   // Advisory: they record which landing route was taken and gate only

@@ -2141,3 +2141,66 @@ describe('buildContext — optimization attempts (RFC 0005 §6.1)', () => {
     expect(await abFile('objective.md')).toContain('## Purpose')
   })
 })
+
+describe('buildContext — a reopened settled leaf (SPEC §15.7)', () => {
+  async function seedReopened(): Promise<void> {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 4, url: 'https://forge/4', headSha: 'sha-head-1' } },
+    })
+    await store.append(BUILD, {
+      actor: humanActor('ada', { kind: 'mcp', client: 'test' }),
+      type: 'build.reopened',
+      payload: { feedback: 'rename the flag' },
+    })
+  }
+
+  test('implement and code-review get the reopen feedback as reopen.json', async () => {
+    await seedReopened()
+    const reopened = (await store.getEvents(BUILD)).at(-1)!
+    const expected = {
+      seq: reopened.seq,
+      user: 'ada',
+      via: { kind: 'mcp' as const, client: 'test' },
+      at: reopened.ts,
+      feedback: 'rename the flag',
+    }
+    const implement = await buildContext({
+      store,
+      env: makeEnv({ phase: 'implement', round: 2 }),
+      workspacePath: workspace,
+    })
+    expect(implement.reopen).toEqual(expected)
+    expect(implement.materialized['reopen.json']).toBe('derived')
+    expect(JSON.parse(await abFile('reopen.json'))).toEqual(expected)
+
+    await seedImplementRound(2, 'sha-head-2')
+    const review = await buildContext({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 2 }),
+      workspacePath: workspace,
+    })
+    expect(review.reopen).toEqual(expected)
+    expect(JSON.parse(await abFile('reopen.json'))).toEqual(expected)
+  })
+
+  test('a later escalation spec revision supersedes the reopen', async () => {
+    await seedReopened()
+    await store.putArtifact(BUILD, { kind: 'spec', content: '# Spec v2\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1 },
+    })
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 2 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.reopen).toBeUndefined()
+    expect(manifest.materialized['reopen.json']).toBeUndefined()
+  })
+})

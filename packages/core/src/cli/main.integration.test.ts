@@ -960,6 +960,77 @@ describe('runCli — sessionless build controls', () => {
     await local.close()
   })
 
+  async function settle(storeRef: string): Promise<void> {
+    const local = openLocalStore(storeRef)
+    const finalize = await local.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 3, url: 'https://forge/3', headSha: 'head' } },
+    })
+    await local.append(slug, {
+      actor: DISPATCHER,
+      type: 'pipeline.settled',
+      payload: { cycle: finalize.seq },
+    })
+    await local.close()
+  }
+
+  test('reopen refuses bad usage before any store open and confirms each route', async () => {
+    const storeRef = join(tmp, 'reopen-store')
+    await seedControlStore(storeRef, {})
+    await settle(storeRef)
+    for (const [args, message] of [
+      [['reopen', slug], 'a reopen needs --feedback, a spec revision, or both'],
+      [['reopen', slug, '--feedback', '  '], '--feedback must not be blank'],
+      [
+        ['reopen', slug, '--revise-spec', 'x.md', '--revise-spec-from-ticket'],
+        'mutually exclusive',
+      ],
+      [['reopen'], 'usage: ab reopen <slug>'],
+    ] as const) {
+      const d = controlDeps(join(tmp, 'never-opened'))
+      expect(await runCli([...args], d)).toBe(1)
+      expect(d.err.join('\n')).toContain(message)
+    }
+    expect(existsSync(join(tmp, 'never-opened'))).toBe(false)
+
+    const missing = controlDeps(storeRef)
+    expect(await runCli(['reopen', slug, '--revise-spec', join(tmp, 'absent.md')], missing)).toBe(1)
+    expect(missing.err.join('\n')).toContain('file not found')
+
+    const d = controlDeps(storeRef)
+    expect(await runCli(['reopen', slug, '--feedback', 'rename the flag'], d)).toBe(0)
+    expect(d.out).toEqual([
+      `build ${slug}: reopened; consent revoked; returning to implement with feedback — waiting for a slot`,
+    ])
+    const local = openLocalStore(storeRef)
+    expect((await local.getEvents(slug)).at(-1)).toMatchObject({
+      type: 'build.reopened',
+      actor: { kind: 'human', user: 'cli-op' },
+      payload: { feedback: 'rename the flag' },
+    })
+    await local.close()
+  })
+
+  test('reopen with a spec file records the revision and restarts from plan', async () => {
+    const storeRef = join(tmp, 'reopen-spec-store')
+    await seedControlStore(storeRef, {})
+    await settle(storeRef)
+    const specPath = join(tmp, 'reopen-spec.md')
+    await writeFile(
+      specPath,
+      '# Replacement\n\n## Acceptance criteria\n- It works.\n\n## Out of scope\n- Nothing.\n',
+    )
+    const d = controlDeps(storeRef)
+    expect(await runCli(['reopen', slug, '--revise-spec', specPath], d)).toBe(0)
+    expect(d.out).toEqual([
+      `build ${slug}: reopened; consent revoked; spec rev 0 recorded; restarting from plan — waiting for a slot`,
+    ])
+    const again = controlDeps(storeRef)
+    expect(await runCli(['reopen', slug, '--feedback', 'more'], again)).toBe(1)
+    expect(again.err.join('\n')).toContain('has not settled awaiting merge')
+  })
+
   test('hold records a trimmed reason and refuses a blank one before any write', async () => {
     const storeRef = join(tmp, 'hold-reason-store')
     await seedControlStore(storeRef, {})

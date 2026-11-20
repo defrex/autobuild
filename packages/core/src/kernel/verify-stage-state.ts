@@ -50,6 +50,7 @@ export function advanceVerifyStage(state: VerifyStageState, event: AbEvent): voi
     case 'verify.config-captured':
     case 'verify.config-superseded':
     case 'spec.revised':
+    case 'build.reopened':
     case 'reconcile.completed':
     case 'integration.prepared':
       state.cycle = event.seq

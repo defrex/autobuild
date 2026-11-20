@@ -56,6 +56,19 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       delete state.native
       delete state.fallback
       break
+    case 'build.reopened':
+      // Reopening revokes consent to the settled candidate; a hold stays in
+      // force. Native state is kept as applied-state evidence: the janitor
+      // cancels an armed auto-merge once the build is no longer ready.
+      if (state.command?.kind === 'land') {
+        delete state.command
+        delete state.acknowledgedSeq
+      }
+      delete state.decision
+      delete state.deferral
+      delete state.fallback
+      delete state.applicationFailure
+      break
     case 'landing.decided':
       delete state.applicationFailure
       delete state.deferral

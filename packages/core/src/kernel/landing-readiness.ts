@@ -4,6 +4,7 @@ import type { LeafRestackState } from './leaf-restack-state'
 import type { LandingCandidate } from './landing-policy'
 import { sameLandingCandidate } from './landing-state'
 import { escalationsBeyondJanitor } from './janitor-failure'
+import { reopenUnsettled } from './reopen'
 import { compatibilityDiagnostic, mixedVersionDeferred } from './mixed-version'
 import {
   integrationCurrent,
@@ -48,6 +49,7 @@ export function leafLandingDeclineReason(state: BuildState): string | undefined 
   if (escalationsBeyondJanitor(state).length) return 'the build has open escalations to answer'
   const command = actionableCommands(state)[0]
   if (command) return `a ${command.command} request awaits acknowledgement`
+  if (reopenUnsettled(state)) return 'the build was reopened and is re-running its pipeline'
   return undefined
 }
 

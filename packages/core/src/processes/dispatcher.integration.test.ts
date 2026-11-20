@@ -11298,6 +11298,42 @@ command = "run"
     clock.advance(120_000)
     await harness({ store, clock, forge: h.forge }).dispatcher.tick({ acceptNewWork: false })
     expect(await settled()).toEqual([1, 1, 1])
+    // One parked build was reopened and finished its re-run: it settles once
+    // more, and the measured idle sweeps below include it.
+    const reopened = slugs[1]!
+    await store.append(reopened, {
+      actor: humanActor('operator'),
+      type: 'build.reopened',
+      payload: { feedback: 'rename the flag' },
+    })
+    await store.append(reopened, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 2 },
+    })
+    await store.append(reopened, {
+      actor: agentActor('implement', 's_seed'),
+      type: 'implement.completed',
+      payload: {
+        round: 2,
+        commits: { base: 'sha-head-1', head: 'sha-head-2' },
+        artifact: { kind: 'implement-notes', rev: 1 },
+      },
+    })
+    await store.append(reopened, {
+      actor: agentActor('code-review', 's_seed'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 2,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'code-review', rev: 1 },
+      },
+    })
+    await store.append(reopened, { actor: KERNEL, type: 'finalize.completed', payload: { pr: PR } })
+    clock.advance(120_000)
+    await harness({ store, clock, forge: h.forge }).dispatcher.tick({ acceptNewWork: false })
+    expect(await settled()).toEqual([1, 2, 1])
     await parkedSweepReadBudget({
       store,
       slugs,
@@ -18013,6 +18049,54 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(freed.dispatched).toBe(0)
     expect(await h.store.listBuilds()).toHaveLength(2)
     expect(await slotWait(h, parked)).toBeUndefined()
+  })
+
+  test('a reopened parked build waits for a slot, cancels armed auto-merge and keeps its PR', async () => {
+    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+    const parked = await parkedBuild(h, 'a-parked', 2)
+    const busy = await busyBuild(h, 'b-busy')
+    await h.dispatcher.tick()
+    expect(await settlements(h, parked)).toBe(1)
+    // An armed native auto-merge, then the operator sends the build back.
+    h.forge.setPrState(2, { state: 'open', mergeable: null, nativeAutoMerge: true })
+    await h.store.append(parked, {
+      actor: DISPATCHER,
+      type: 'landing.native-applied',
+      payload: { enabled: true },
+    })
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug: parked,
+      user: 'operator',
+      action: { kind: 'reopen', feedback: 'rename the flag' },
+    })
+    const reopenSeq = (await h.store.getEvents(parked)).at(-1)!.seq
+
+    h.tickets.add(readyTicket('T-next'))
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    expect(h.launches).toEqual([])
+    expect(await slotWait(h, parked)).toBe('reopen')
+    expect(h.forge.autoMergeCalls.filter((call) => call.number === 2 && !call.enabled)).not.toEqual(
+      [],
+    )
+    const after = (await h.store.getEvents(parked)).filter((e) => e.seq > reopenSeq)
+    expect(after).toContainEqual(
+      expect.objectContaining({ type: 'landing.native-applied', payload: { enabled: false } }),
+    )
+    expect(after.map((e) => e.type)).not.toContain('pipeline.settled')
+    expect(await failures(h, parked)).toEqual([])
+
+    await finish(h, busy)
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    expect(h.launches).toEqual([parked])
+    expect(h.forge.closePrCalls).toEqual([])
+    const state = (await readBuildFacts(h.store, parked)).value.state
+    expect(state.prState).toBe('open')
+    expect(state.status).toBe('running')
+    expect(await h.store.listBuilds()).toHaveLength(2)
   })
 
   test('two waiting parked builds and one free slot admit exactly one', async () => {

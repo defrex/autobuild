@@ -93,6 +93,16 @@ function randomWrite(rand: () => number): EventWrite {
     () => w('runner.attached', { instance: 'runner-1', host: 'local' }),
     () => w('spec.imported', { artifact: ART('spec', 0), ticket: { source: 'linear', id: 'E-1' } }),
     () => w('spec.revised', { artifact: ART('spec', round), escalation: 1 }),
+    () =>
+      w(
+        'build.reopened',
+        pick(rand, [
+          { feedback: 'rename the flag' },
+          { spec: { artifact: ART('spec', round) } },
+          { feedback: 'and the docs', spec: { artifact: ART('spec', round), assets: [] } },
+        ]),
+      ),
+    () => w('spec.revised', { artifact: ART('spec', round), operator: { user: 'aron' } }),
     () => w('plan.started', { round }),
     () => w('plan.completed', { round, artifact: ART('plan', round) }),
     () => w('plan-review.started', { round }),

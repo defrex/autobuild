@@ -2577,7 +2577,9 @@ or a leaf restack's generated-file regeneration, touch a file those predicates m
 unless `<sha>` is the current candidate head. `ab hold <slug>` suppresses policy and withdraws consent;
 `--reason <text>` (1–2000 characters after trimming) records why, and status, merges, builds and
 both dashboards show it until a later hold or merge replaces it.
-The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
+`ab reopen <slug>` also revokes consent (a hold stays): it sends a finished,
+unmerged leaf back to implement with feedback, or to plan with a revised spec,
+on its existing branch and PR. The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
 are retired and return actionable errors; use merge rules and hold/merge.
 
 Global-row `h` re-reads the repository journal and appends the existing human
@@ -2650,6 +2652,7 @@ to the build's event log and apply the same write-time checks.
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
+| Reopen a finished leaf | `ab reopen <slug> [--feedback <text>] [--revise-spec <file> \| --revise-spec-from-ticket] [--store <ref>]` | CLI/tool request (`builds.reopen`); only for a leaf waiting for its merge decision. Feedback alone returns to implement; a spec revision restarts from plan; the PR and branch are kept. | `build.reopened`; with a spec, kernel `spec.revised` with operator provenance |
 | Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket (an optimization attempt instead settles `aborted` and its ticket moves to the rejected role) |
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
@@ -2809,7 +2812,8 @@ pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
-spec and its publication is confirmed.
+spec and its publication is confirmed. A settled, unmerged leaf awaiting merge
+revises without an escalation through `ab reopen`.
 A revision of an optimization node may change its `autobuild-objective` block
 but cannot remove it, and a revision of a plain node or a leaf cannot add one;
 both refusals record nothing.

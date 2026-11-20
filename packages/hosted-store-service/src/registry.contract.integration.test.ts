@@ -1283,6 +1283,7 @@ describe('agent tool registry contract', () => {
       },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
+      'builds.reopen': { repo, slug: 'demo', feedback: 'change it' },
       'repository.forge_clear': { repo, forge: 'github', reason: 'override' },
       'repository.settings': { repo, setting: 'intake', enabled: true },
       'repository.bulk_control': { repo, action: 'pause' },
