@@ -116,6 +116,7 @@ import { continuesVerifyCycle } from '../kernel/pr-summary'
 import { isPhaseTerminalEvent, PHASE_SPECS } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
+import { VERIFY_BASE_ENV } from '../kernel/verify-diff-base'
 import {
   verifyPhase,
   verifyReportKind,
@@ -661,7 +662,6 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
-import { VERIFY_BASE_ENV } from '../kernel/verify-diff-base'
 export {
   selectVerifyDiffBase,
   VERIFY_BASE_ENV,
