@@ -288,6 +288,12 @@ describe('operator behavioral parity contract', () => {
       direct: { kind: 'hold' },
       request: { action: 'hold' },
     },
+    {
+      name: 'hold with a reason',
+      seed: async () => {},
+      direct: { kind: 'hold', reason: '  waiting on T-2 ' },
+      request: { action: 'hold', reason: '  waiting on T-2 ' },
+    },
   ]
 
   for (const item of buildCases) {
@@ -564,6 +570,42 @@ describe('operator behavioral parity contract', () => {
     expect(await landed(toolStore)).toHaveLength(0)
     await control({ action: 'merge', head: 'head' })
     expect(await landed(toolStore)).toHaveLength(1)
+  })
+
+  test('a blank hold reason is refused with nothing written on HTTP and MCP', async () => {
+    const failed = (promise: Promise<unknown>) =>
+      promise.then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    const httpStore = await makeStore()
+    const toolStore = await makeStore()
+    const before = [
+      (await httpStore.getEvents(SLUG)).length,
+      (await toolStore.getEvents(SLUG)).length,
+    ]
+    expect(
+      await failed(api(httpStore).controlBuild(REPO, SLUG, { action: 'hold', reason: '  ' })),
+    ).toMatchObject({ kind: 'refusal', code: 'invalid-argument' })
+    const registry = buildRegistry({ store: toolStore, clock })
+    const control = (args: Record<string, unknown>) =>
+      registry.call('builds.control', { repo: REPO, slug: SLUG, ...args }, { identity: USER })
+    expect(
+      ((await failed(control({ action: 'hold', reason: '  ' }))) as RegistryError).body,
+    ).toMatchObject({ kind: 'refusal', code: 'invalid-argument' })
+    expect(
+      ((await failed(control({ action: 'pause', reason: 'why' }))) as RegistryError).body,
+    ).toEqual({
+      kind: 'validation',
+      error: '"reason" applies only to the abort and hold actions, not "pause"',
+    })
+    expect((await httpStore.getEvents(SLUG)).length).toBe(before[0]!)
+    expect((await toolStore.getEvents(SLUG)).length).toBe(before[1]!)
+    await control({ action: 'hold', reason: 'waiting on T-2' })
+    expect((await toolStore.getEvents(SLUG)).at(-1)).toMatchObject({
+      type: 'build.hold-requested',
+      payload: { reason: 'waiting on T-2' },
+    })
   })
 
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {

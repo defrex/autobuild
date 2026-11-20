@@ -352,7 +352,9 @@ const buildControlInput = z.strictObject({
   reason: z
     .string()
     .optional()
-    .describe('Abort only: why, 1–2000 characters; quoted in the hand-back ticket comment.'),
+    .describe(
+      'Abort or hold: why, 1–2000 characters after trimming; abort quotes it in the hand-back ticket comment, hold shows it wherever the hold is displayed.',
+    ),
 })
 
 const repositoryEventsInput = z.strictObject({
@@ -768,7 +770,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate, and an optional head binds consent to the reviewed head; hold withdraws merge consent.',
+    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate, and an optional head binds consent to the reviewed head; hold withdraws merge consent, with an optional reason.',
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {
@@ -791,8 +793,12 @@ export const TOOLS: readonly ToolEntry[] = [
             error: 'head must be a nonblank commit SHA without whitespace',
           })
       }
-      if (input.action !== 'abort' && (input.to !== undefined || input.reason !== undefined)) {
-        const error = `"to" and "reason" apply only to the abort action, not "${received.action}"`
+      if (input.action !== 'abort' && input.to !== undefined) {
+        const error = `"to" applies only to the abort action, not "${received.action}"`
+        throw new RegistryError('validation', error, { kind: 'validation', error })
+      }
+      if (input.action !== 'abort' && input.action !== 'hold' && input.reason !== undefined) {
+        const error = `"reason" applies only to the abort and hold actions, not "${received.action}"`
         throw new RegistryError('validation', error, { kind: 'validation', error })
       }
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
@@ -813,7 +819,12 @@ export const TOOLS: readonly ToolEntry[] = [
                     ...(input.to !== undefined ? { to: input.to } : {}),
                     ...(input.reason !== undefined ? { reason: input.reason } : {}),
                   }
-                : { kind: input.action }
+                : input.action === 'hold'
+                  ? {
+                      kind: 'hold',
+                      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+                    }
+                  : { kind: input.action }
       return controlBuild({
         store: ctx.store,
         ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),

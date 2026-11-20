@@ -14,8 +14,13 @@ function candidatePaths(state: BuildState): LandingPaths {
     : { recorded: false }
 }
 
+/** Why the operator held, while a hold that gave a reason stands. */
+export function holdReason(landing: BuildState['landing']): string | undefined {
+  return landing?.command?.kind === 'hold' ? landing.command.reason : undefined
+}
+
 export function landingPolicyDisplay(landing: BuildState['landing']): string {
-  if (landing?.command?.kind === 'hold') return 'held'
+  if (landing?.command?.kind === 'hold') return mergeVocabulary.held(holdReason(landing))
   return landing?.decision?.mode ?? 'policy pending'
 }
 
@@ -109,6 +114,8 @@ export const mergeVocabulary = {
   polling: 'polling',
   /** Settled: a human merges the PR on the forge. */
   humanMerge: 'awaits a human merge',
+  /** A standing hold, with the operator's reason when it gave one. */
+  held: (reason?: string) => (reason === undefined ? 'held' : `held — ${reason}`),
 } as const
 
 export function mergeSummary(build: {

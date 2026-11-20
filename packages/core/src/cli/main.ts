@@ -305,6 +305,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
       }
       if (result.event.type === 'build.abort-requested')
         return `build ${result.slug}: abort requested; ticket returns to ${result.event.payload.to ?? 'triage'}`
+      if (result.event.type === 'build.hold-requested' && result.event.payload.reason !== undefined)
+        return `build ${result.slug}: merge hold requested (reason: ${result.event.payload.reason})`
       return `build ${result.slug}: ${outcome[result.command]}`
     }
     case 'answered': {
@@ -1294,13 +1296,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'land': {
       if (command === 'land') stderr('ab land is deprecated; use ab merge')
       if (command === 'hold') {
-        const usage = 'usage: ab hold <slug> [--store <ref>]'
-        const parsed = parseArgs(rest, { store: 'value' }, usage)
+        const usage = 'usage: ab hold <slug> [--reason <text>] [--store <ref>]'
+        const parsed = parseArgs(rest, { store: 'value', reason: 'value' }, usage)
         if (parsed.positionals.length !== 1) throw new Error(usage)
+        const reason = stringFlag(parsed, 'reason')
         await runBuildControl(
           deps,
           parsed.positionals[0]!,
-          { kind: 'hold' },
+          { kind: 'hold', ...(reason !== undefined ? { reason } : {}) },
           stringFlag(parsed, 'store'),
         )
         return 0

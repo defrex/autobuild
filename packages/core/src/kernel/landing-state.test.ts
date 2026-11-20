@@ -39,11 +39,11 @@ const land = (seq: number) =>
     type: 'build.land-requested',
     payload: { decisionSeq: 1 },
   })
-const hold = (seq: number) =>
+const hold = (seq: number, reason?: string) =>
   event(seq, {
     actor: humanActor('operator'),
     type: 'build.hold-requested',
-    payload: {},
+    payload: reason === undefined ? {} : { reason },
   })
 const ack = (seq: number, commandSeq: number) =>
   event(seq, {
@@ -65,6 +65,30 @@ const deferred = (seq: number, replacement = candidate) =>
   })
 
 describe('durable landing state', () => {
+  test('a hold carries its reason until a later hold or merge replaces it', () => {
+    expect(buildReducer.reduce([decided(), hold(2, 'waiting on Q-1')]).landing?.command).toEqual({
+      kind: 'hold',
+      seq: 2,
+      reason: 'waiting on Q-1',
+    })
+    // Historical holds recorded no reason and reduce exactly as before.
+    expect(buildReducer.reduce([decided(), hold(2)]).landing?.command).toEqual({
+      kind: 'hold',
+      seq: 2,
+    })
+    expect(
+      buildReducer.reduce([decided(), hold(2, 'a'), land(3)]).landing?.command?.reason,
+    ).toBeUndefined()
+    expect(buildReducer.reduce([decided(), hold(2, 'a'), hold(3)]).landing?.command).toEqual({
+      kind: 'hold',
+      seq: 3,
+    })
+    expect(
+      buildReducer.reduce([decided(), hold(2, 'a'), hold(3, 'b')]).landing?.command?.reason,
+    ).toBe('b')
+    expect(landingAuthorized(buildReducer.reduce([decided(), hold(2, 'a')]).landing)).toBe(false)
+  })
+
   test('a path deferral folds; a later decision or accepted reparent clears it', () => {
     const next = { ...candidate, head: 'next' }
     const state = buildReducer.reduce([decided(), deferred(2, next)]).landing
@@ -111,8 +135,8 @@ describe('durable landing state', () => {
     expect(state?.acknowledgedSeq).toBeUndefined()
     expect(state?.decision).toBeUndefined()
     expect(landingAuthorized(state)).toBe(false)
-    const held = buildReducer.reduce([decided(), hold(2), ack(3, 2), moved]).landing
-    expect(held?.command).toEqual({ kind: 'hold', seq: 2 })
+    const held = buildReducer.reduce([decided(), hold(2, 'why'), ack(3, 2), moved]).landing
+    expect(held?.command).toEqual({ kind: 'hold', seq: 2, reason: 'why' })
     expect(held?.acknowledgedSeq).toBe(2)
     expect(landingAuthorized(held)).toBe(false)
     const replacement = event(5, {

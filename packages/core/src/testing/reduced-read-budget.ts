@@ -2726,7 +2726,7 @@ export async function nodePollingReadBudget(opts: {
     await store.append(slug, {
       actor: humanActor('budget'),
       type: 'build.hold-requested',
-      payload: {},
+      payload: { reason: 'budget' },
     })
     await opts.tick()
     const events = Reflect.get(store, 'builds').get(slug)

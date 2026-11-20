@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import type { EventWrite } from '../events/catalog'
 import { MemoryBuildStore } from '../store/memory'
-import { detail, renderDetail } from './status'
+import { detail, renderDetail, renderSummaries, summarize } from './status'
 
 const decided = (head: string): EventWrite<'landing.decided'> => ({
   actor: DISPATCHER,
@@ -76,6 +76,40 @@ test('a hold shows held', async () => {
     })
   })
   expect(lines).toContain('  merge:    held · current head aaa')
+})
+
+test('a hold with a reason shows it in detail, JSON and the build list until consent', async () => {
+  const store = new MemoryBuildStore()
+  const record = await store.createBuild({ slug: 'consent', repo: '/repo' })
+  await store.append(record.slug, finalized('aaa'))
+  const decision = await store.append(record.slug, decided('aaa'))
+  await store.append(record.slug, {
+    actor: humanActor('operator'),
+    type: 'build.hold-requested',
+    payload: { reason: 'waiting on Q-1\u001b[2J' },
+  })
+  const now = new Date('2026-11-16T00:00:00Z')
+  const events = await store.getEvents(record.slug)
+  const shown = detail(record, events, now)
+  expect(shown.tree?.holdReason).toBe('waiting on Q-1\u001b[2J')
+  expect(renderDetail(shown, now)).toContain(
+    '  merge:    held — waiting on Q-1\\u{1b}[2J · current head aaa',
+  )
+  const summary = summarize(record, events, now)
+  expect(summary.holdReason).toBe('waiting on Q-1\u001b[2J')
+  expect(renderSummaries([summary], now, '')).toContain('    merge held — waiting on Q-1\\u{1b}[2J')
+
+  await store.append(record.slug, {
+    actor: humanActor('operator'),
+    type: 'build.land-requested',
+    payload: { decisionSeq: decision.seq },
+  })
+  const released = await store.getEvents(record.slug)
+  expect(detail(record, released, now).tree?.holdReason).toBeNull()
+  expect(summarize(record, released, now).holdReason).toBeUndefined()
+  expect(renderSummaries([summarize(record, released, now)], now, '').join('\n')).not.toContain(
+    'held',
+  )
 })
 
 test('legacy consent has no recorded head', async () => {

@@ -140,6 +140,38 @@ test('CLI JSON is the operator queue and text names every selected entry', async
   expect(out.join('\n')).toContain('branch/selected')
 })
 
+test('a held entry carries its reason in JSON and text', async () => {
+  const { abLandings } = await import('../cli/landings')
+  const store = new MemoryBuildStore()
+  await ready(store, 'held', '/repo')
+  await store.append('held', {
+    actor: { kind: 'human', user: 'op' },
+    type: 'build.hold-requested',
+    payload: { reason: 'waiting on Q-1' },
+  })
+  const out: string[] = []
+  const opts = {
+    targetRepo: '/repo',
+    storeRef: STORE_REF,
+    env: {},
+    openStore: () => store,
+    stdout: (line: string) => out.push(line),
+    exec: async (cmd: readonly string[]) =>
+      cmd[1] === 'remote'
+        ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+        : { stdout: '/repo/.git\n/repo/.git\n/repo\n', stderr: '', exitCode: 0 },
+  }
+  await abLandings({ ...opts, json: true })
+  expect(JSON.parse(out[0]!)[0]).toMatchObject({
+    slug: 'held',
+    reason: 'held',
+    holdReason: 'waiting on Q-1',
+  })
+  out.length = 0
+  await abLandings(opts)
+  expect(out.join('\n')).toContain(' · held — waiting on Q-1 · ')
+})
+
 test('terminal inventory is skipped without hydrating finished build facts', async () => {
   const store = new MemoryBuildStore()
   for (let i = 0; i < 12; i++) {
