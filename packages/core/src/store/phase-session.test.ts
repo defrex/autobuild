@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { agentActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { harvestStartedWrite, sampleBuildInput, sampleEventWrite } from './contract'
 import { MemoryBuildStore } from './memory'
@@ -205,6 +205,158 @@ describe('local build-session scope', () => {
     expect(await underlying.getEvents(BUILD)).toEqual([])
     expect(await underlying.listArtifacts(BUILD, 'plan')).toEqual([])
     await store.close()
+  })
+})
+
+describe('local build-session scope — target reads (AUT-1279)', () => {
+  const NODE = 'node-n'
+  const CHILD = 'child-c'
+  const PLAIN = 'plain-p'
+
+  async function targeted(): Promise<MemoryBuildStore> {
+    const store = await seeded()
+    const created = (slug: string, extra: object) =>
+      store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: REPO,
+          ticket: { source: 'file', id: slug },
+          baseBranch: 'main',
+          ...extra,
+        },
+      })
+    for (const slug of [NODE, CHILD, PLAIN])
+      await store.createBuild({ ...sampleBuildInput(slug), repo: REPO })
+    await created(NODE, { kind: 'node' })
+    await created(CHILD, {
+      target: { ticket: { source: 'file', id: NODE }, build: NODE },
+    })
+    await created(PLAIN, {})
+    await created(OTHER_BUILD, {})
+    return store
+  }
+  const scopedTo = (store: BuildStore, id: string) =>
+    scopeLocalStoreToPhaseSession(store, {
+      kind: 'build',
+      id,
+      session: SESSION,
+    })
+  const nodeScope = { kind: 'build', slug: NODE } as const
+  const repoScope = { kind: 'repo', repo: REPO } as const
+
+  test("a targeted build reads its node's facts and its repository's facts and record", async () => {
+    const underlying = await targeted()
+    const store = scopedTo(underlying, CHILD)
+    expect(
+      (await store.getReducerValue(nodeScope, { reducer: 'buildReadFacts' })).cursor,
+    ).toBeGreaterThan(0)
+    expect(
+      (
+        await store.getReducerValue(repoScope, {
+          reducer: 'repositoryReadFacts',
+        })
+      ).cursor,
+    ).toBeGreaterThanOrEqual(0)
+    expect((await store.getRepo(REPO))?.repo).toBe(REPO)
+  })
+
+  test('every other foreign read and every foreign write stays refused', async () => {
+    const underlying = await targeted()
+    const store = scopedTo(underlying, CHILD)
+    const refused: Array<() => unknown | Promise<unknown>> = [
+      () => store.getReducerValue(nodeScope, { reducer: 'buildStreamSeed' }),
+      () =>
+        store.getReducerValue({ kind: 'build', slug: OTHER_BUILD }, { reducer: 'buildReadFacts' }),
+      () =>
+        store.getReducerValue(
+          { kind: 'repo', repo: OTHER_REPO },
+          { reducer: 'repositoryReadFacts' },
+        ),
+      () => store.getReducerValue(repoScope, { reducer: 'hostedHarvestAuthority' }),
+      () => store.getRepo(OTHER_REPO),
+      () => store.getReducerSnapshot(nodeScope, 'buildReadFacts', 1),
+      () =>
+        store.putReducerSnapshot(nodeScope, 'buildReadFacts', {
+          version: 1,
+          cursor: 0,
+          state: {},
+        } as never),
+      () => store.getEvents(NODE),
+      () => store.getArtifact(NODE, 'x'),
+      () => store.getBuild(NODE),
+      () => store.append(NODE, sampleEventWrite()),
+      () => store.appendIfCurrent(NODE, 0, sampleEventWrite()),
+      () => store.appendWithArtifacts(NODE, [], () => sampleEventWrite()),
+      () => store.putArtifact(NODE, { kind: 'x', content: 'x' }),
+      () => store.appendRepo(REPO, harvestStartedWrite()),
+      () => store.getRepoEvents(REPO),
+    ]
+    for (const call of refused) await authorityError(call)
+    expect(
+      (
+        await authorityError(() =>
+          store.getReducerValue(
+            { kind: 'build', slug: OTHER_BUILD },
+            { reducer: 'buildReadFacts' },
+          ),
+        )
+      ).message,
+    ).toBe(
+      `local phase-session store scoped to build "${CHILD}" and session "${SESSION}" forbids getReducerValue targeting build "${OTHER_BUILD}"`,
+    )
+    expect(await underlying.getEvents(NODE)).toHaveLength(1)
+  })
+
+  test('an untargeted build and the node itself gain no foreign reads', async () => {
+    const underlying = await targeted()
+    for (const id of [PLAIN, NODE]) {
+      const store = scopedTo(underlying, id)
+      const foreign = id === NODE ? CHILD : NODE
+      await authorityError(() =>
+        store.getReducerValue({ kind: 'build', slug: foreign }, { reducer: 'buildReadFacts' }),
+      )
+      await authorityError(() =>
+        store.getReducerValue(repoScope, { reducer: 'repositoryReadFacts' }),
+      )
+      await authorityError(() => store.getRepo(REPO))
+      expect(
+        (await store.getReducerValue({ kind: 'build', slug: id }, { reducer: 'buildReadFacts' }))
+          .cursor,
+      ).toBeGreaterThan(0)
+    }
+  })
+
+  test('the grant resolves once per handle and never for own-build reads', async () => {
+    const underlying = await targeted()
+    const store = scopedTo(underlying, CHILD)
+    const own = { kind: 'build', slug: CHILD } as const
+    const ownReads = () => {
+      let count = 0
+      const original = underlying.getReducerValue.bind(underlying)
+      underlying.getReducerValue = (scope, request) => {
+        if (scope.kind === 'build' && scope.slug === CHILD) count++
+        return original(scope, request)
+      }
+      return {
+        count: () => count,
+        restore: () => Reflect.deleteProperty(underlying, 'getReducerValue'),
+      }
+    }
+    const counter = ownReads()
+    try {
+      await store.getReducerValue(own, { reducer: 'buildReadFacts' })
+      await store.getReducerValue(own, { reducer: 'buildStreamSeed' })
+      expect(counter.count()).toBe(2)
+      await store.getReducerValue(nodeScope, { reducer: 'buildReadFacts' })
+      await store.getRepo(REPO)
+      await store.getReducerValue(repoScope, {
+        reducer: 'repositoryReadFacts',
+      })
+      expect(counter.count()).toBe(3)
+    } finally {
+      counter.restore()
+    }
   })
 })
 
