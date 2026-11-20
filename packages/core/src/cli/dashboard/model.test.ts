@@ -2565,7 +2565,7 @@ test('a waiting node row says it waits for a slot; red alerts and input rows are
   const decorated = decorateSlotWaits(rows, capacity)
   expect(decorated[0]!.integrationRow!.alert).toEqual({
     tone: 'yellow',
-    text: 'verification waiting for a slot ahead of new ticket claims',
+    text: 'verification waiting for a slot ahead of normal ticket claims',
   })
   expect(decorated[1]!.integrationRow!.alert).toEqual(conflict)
   expect(decorated[2]).toBe(rows[2]!)
@@ -2592,11 +2592,28 @@ test('a parked work row waiting for a slot carries a yellow alert; cached rows s
   })
   expect(decorated[0]!.alert).toEqual({
     tone: 'yellow',
-    text: 'reconcile waiting for a slot ahead of new ticket claims',
+    text: 'reconcile waiting for a slot ahead of normal ticket claims',
   })
   expect(decorated[0]!.integrationRow).toBeUndefined()
   expect(decorated[1]).toBe(rows[1]!)
   expect(rows).toEqual(before)
+})
+
+test('urgent waiting rows say they wait ahead of normal work', () => {
+  const rows = [{ slug: 'parked', steps: [] } as unknown as DashboardBuild, node('waiting')]
+  const decorated = decorateSlotWaits(rows, {
+    ...capacity,
+    waitingNodes: [{ slug: 'waiting', request: 'verification', priority: 'urgent' }],
+    waitingBuilds: [{ slug: 'parked', request: 'reconcile', priority: 'urgent' }],
+  })
+  expect(decorated[0]!.alert).toEqual({
+    tone: 'yellow',
+    text: 'urgent reconcile waiting for a slot ahead of normal work',
+  })
+  expect(decorated[1]!.integrationRow!.alert).toEqual({
+    tone: 'yellow',
+    text: 'urgent verification waiting for a slot ahead of normal work',
+  })
 })
 
 describe('ticket waits project as waiting, not blocked', () => {

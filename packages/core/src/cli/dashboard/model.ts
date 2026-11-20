@@ -14,6 +14,7 @@ import {
 import {
   dispatchCapacity,
   slotWaitText,
+  urgentClaimDemand,
   type DispatchCapacity,
 } from '../../kernel/dispatch-capacity'
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
@@ -1444,22 +1445,23 @@ export function decorateSlotWaits(
   rows: readonly DashboardBuild[],
   capacity: DispatchCapacity | undefined,
 ): DashboardBuild[] {
-  const waiting = new Map((capacity?.waitingNodes ?? []).map((node) => [node.slug, node.request]))
-  const parked = new Map(
-    (capacity?.waitingBuilds ?? []).map((build) => [build.slug, build.request]),
-  )
+  const waiting = new Map((capacity?.waitingNodes ?? []).map((node) => [node.slug, node]))
+  const parked = new Map((capacity?.waitingBuilds ?? []).map((build) => [build.slug, build]))
   if (!waiting.size && !parked.size) return [...rows]
   return rows.map((row) => {
     const leaf = parked.get(row.slug)
     if (leaf && !row.integrationRow && !row.alert)
-      return { ...row, alert: { tone: 'yellow', text: slotWaitText(leaf) } }
-    const request = waiting.get(row.slug)
-    if (!request || !row.integrationRow || row.integrationRow.alert) return row
+      return {
+        ...row,
+        alert: { tone: 'yellow', text: slotWaitText(leaf.request, leaf.priority ?? 'normal') },
+      }
+    const node = waiting.get(row.slug)
+    if (!node || !row.integrationRow || row.integrationRow.alert) return row
     return {
       ...row,
       integrationRow: {
         ...row.integrationRow,
-        alert: { tone: 'yellow', text: slotWaitText(request) },
+        alert: { tone: 'yellow', text: slotWaitText(node.request, node.priority ?? 'normal') },
       },
     }
   })
@@ -1547,6 +1549,7 @@ export function buildDashboard(
         : repositoryEvents.ticketMigrations,
       config.tickets.source,
     ),
+    Array.isArray(repositoryEvents) ? {} : { urgentClaims: urgentClaimDemand(repositoryEvents) },
   )
   const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(

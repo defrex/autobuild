@@ -4,7 +4,7 @@
  * dispatcher records the blocker on the build's ticket and parks the build
  * without a slot, so a ready ticket takes it at once with capacity 1. An
  * operator answer, or the dispatcher once every waited ticket completes,
- * ends the wait; the build is admitted ahead of new claims
+ * ends the wait; the build is admitted ahead of normal claims
  * and implement re-runs the same round, told what it waited on. A refused
  * wait re-runs the phase with the refusal and writes nothing to the ticket.
  * In-memory store, scripted agents, fake forge, real git worktrees.
@@ -68,7 +68,7 @@ function waitingHandlers(tickets: string[], seen: Guidance[], heads: string[] = 
   return handlers
 }
 
-test('a waiting build frees its slot, keeps its work, and resumes ahead of new claims', async () => {
+test('a waiting build frees its slot, keeps its work, and resumes ahead of normal claims', async () => {
   const seen: Guidance[] = []
   const heads: string[] = []
   const h = await makeHarness({
