@@ -38,8 +38,24 @@ import type { NativeSessionObserver } from '../ports/types'
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { integrationCurrent } from '../kernel/integration-state'
 import { proposeRunDue } from '../kernel/optimization'
-import { replayNodeChange } from '../kernel/node-restack'
-import { restoreReplay } from '../kernel/reconcile-restack'
+import { replayNodeChange, validateNodeChange } from '../kernel/node-restack'
+import {
+  adoptRegeneratedRestack,
+  generatedCleanPathspecs,
+  regenerateRestackConflict,
+  restoreReplay,
+} from '../kernel/reconcile-restack'
+import {
+  consentRevocation,
+  resolutionPathsFor,
+  revocableConsent,
+} from '../kernel/consent-revocation'
+import { classifyGenerated, generatedSelectors } from '../kernel/generated-files'
+import {
+  regenerateConflict,
+  RegenerationInterrupted,
+  regenerationReason,
+} from '../kernel/generated-regeneration'
 import { completeAutomaticReconcile } from '../kernel/leaf-restack-completion'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import { withBuildTrailer } from '../kernel/build-identity'
@@ -2062,20 +2078,56 @@ export class BuildRunner {
           })
         }
         for (const item of node.items) if (!item.dropped) await restoreReplay(this.deps, item.head)
-        await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
-        const reset = await this.deps.exec(['git', 'checkout', '--detach', conflict.base], {
-          cwd: this.deps.workspacePath,
-        })
-        if (reset.exitCode !== 0) throw new Error(reset.stderr)
-        const result = await replayNodeChange(
-          this.deps,
-          { ...active, oldHead: active.expected },
-          conflict.index,
-          conflict.base,
-        )
-        if (result.kind !== 'conflict')
-          throw new Error('reserved conflict no longer reproduces from frozen inputs')
+        const declarations = this.boundaryConfig.generated ?? []
+        const regeneration =
+          node.regeneration?.id === active.id &&
+          node.regeneration.index === conflict.index &&
+          node.regeneration.base === conflict.base
+            ? node.regeneration
+            : undefined
+        if (regeneration?.outcome === 'resolved' && regeneration.head !== undefined) {
+          // The resolved head was retained before its fact: finish the receipt.
+          await this.adoptRegeneratedNodeItem(change, conflict, regeneration.head)
+          return
+        }
+        const reproduce = async () => {
+          await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
+          if (declarations.length > 0)
+            for (const args of [
+              ['reset', '-q', '--hard'],
+              ['clean', '-q', '-fd', '--', ...generatedCleanPathspecs(declarations)],
+            ]) {
+              const cleaned = await this.deps.exec(['git', ...args], {
+                cwd: this.deps.workspacePath,
+              })
+              if (cleaned.exitCode !== 0) throw new Error(cleaned.stderr)
+            }
+          const reset = await this.deps.exec(['git', 'checkout', '--detach', conflict.base], {
+            cwd: this.deps.workspacePath,
+          })
+          if (reset.exitCode !== 0) throw new Error(reset.stderr)
+          const result = await replayNodeChange(
+            this.deps,
+            { ...active, oldHead: active.expected },
+            conflict.index,
+            conflict.base,
+          )
+          if (result.kind !== 'conflict')
+            throw new Error('reserved conflict no longer reproduces from frozen inputs')
+        }
+        await reproduce()
+        if (
+          declarations.length > 0 &&
+          regeneration === undefined &&
+          state.currentPhase?.phase !== 'reconcile'
+        ) {
+          const outcome = await this.regenerateNodeItem(change, conflict, declarations)
+          if (outcome === 'resolved') return
+          // The agent starts from the recorded conflict, not the failed attempt.
+          if (outcome === 'failed') await reproduce()
+        }
       } catch (error) {
+        if (error instanceof RegenerationInterrupted) return
         if (error instanceof StoreWriteTooLargeError) throw error
         await store.append(slug, {
           actor: KERNEL,
@@ -2104,6 +2156,107 @@ export class BuildRunner {
       producerPhase: 'reconcile',
       priorFailures: failures.count,
       isTerminal: (event) => event.type === 'reconcile.completed',
+    })
+  }
+
+  /**
+   * Regenerate one reproduced node item whose conflicts are all declared
+   * `[[generated]]` files. Resolved: validate, retain, record the fact and
+   * the item's receipt, with no reconcile session. Skipped and failed are
+   * recorded too; the item then falls back to an agent.
+   */
+  private async regenerateNodeItem(
+    change: EventPayload<'node.writer-reserved'>['changes'][number],
+    conflict: EventPayload<'node.item-conflicted'>,
+    declarations: NonNullable<Config['generated']>,
+  ): Promise<'resolved' | 'failed' | 'skipped'> {
+    const { store, slug } = this.deps
+    const files = conflict.files ?? []
+    const { groups, other } = classifyGenerated(files, declarations)
+    const commands = groups.map((group) => ({ command: group.command, files: group.files }))
+    const identity = { id: conflict.id, index: conflict.index, base: conflict.base }
+    if (files.length === 0 || other.length > 0) {
+      if (files.length > 0)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'node.item-regenerated',
+          payload: {
+            ...identity,
+            files,
+            commands,
+            outcome: 'skipped',
+            reason: regenerationReason(`conflicts outside [[generated]]: ${other.join(', ')}`),
+          },
+        })
+      return 'skipped'
+    }
+    let result = await regenerateConflict(
+      {
+        exec: this.deps.exec,
+        workspacePath: this.deps.workspacePath,
+        ...(this.deps.shutdownSignal ? { signal: this.deps.shutdownSignal } : {}),
+      },
+      { files, groups, selectors: generatedSelectors(declarations), identitySource: change.sha },
+    )
+    if (result.outcome === 'resolved') {
+      try {
+        await validateNodeChange(this.deps, change, conflict.base, result.head)
+      } catch (error) {
+        result = {
+          outcome: 'failed',
+          reason: regenerationReason(`regenerated replay is invalid: ${errorMessage(error)}`),
+        }
+      }
+    }
+    if (result.outcome === 'failed') {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'node.item-regenerated',
+        payload: { ...identity, files, commands, ...result },
+      })
+      return 'failed'
+    }
+    await retainReplay(this.deps, result.head, conflict.base)
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'node.item-regenerated',
+      payload: { ...identity, files, commands, ...result },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'node.item-replayed',
+      payload: { ...identity, head: result.head, dropped: false },
+    })
+    return 'resolved'
+  }
+
+  /** Finish a node item whose regeneration resolved before its receipt landed. */
+  private async adoptRegeneratedNodeItem(
+    change: EventPayload<'node.writer-reserved'>['changes'][number],
+    conflict: EventPayload<'node.item-conflicted'>,
+    head: string,
+  ): Promise<void> {
+    if (!(await restoreReplay(this.deps, head)))
+      throw new Error(`the regenerated node item ${head} was not retained`)
+    await this.deps.exec(['git', 'cherry-pick', '--abort'], { cwd: this.deps.workspacePath })
+    for (const args of [
+      ['reset', '-q', '--hard'],
+      ['checkout', '-q', '--detach', head],
+    ]) {
+      const result = await this.deps.exec(['git', ...args], { cwd: this.deps.workspacePath })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+    }
+    await validateNodeChange(this.deps, change, conflict.base, head)
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'node.item-replayed',
+      payload: {
+        id: conflict.id,
+        index: conflict.index,
+        base: conflict.base,
+        head,
+        dropped: false,
+      },
     })
   }
 
@@ -2330,7 +2483,33 @@ export class BuildRunner {
       facts = (await readBuildFacts(store, slug)).value
       transaction = facts.log.restack.active
       if (transaction === undefined) throw new Error('missing prepared automatic restack')
-      if (facts.log.restack.replay?.conflicted) return
+      if (facts.log.restack.replay?.conflicted) {
+        // Conflicts only in `[[generated]]` files are regenerated, not reconciled.
+        const declarations = this.boundaryConfig.generated ?? []
+        if (
+          declarations.length > 0 &&
+          facts.log.restack.regeneration === undefined &&
+          facts.log.restack.reconcileAttempt === undefined
+        ) {
+          await regenerateRestackConflict(
+            {
+              ...deps,
+              ...(this.deps.shutdownSignal ? { signal: this.deps.shutdownSignal } : {}),
+            },
+            transaction,
+            facts.log.restack.replay.files ?? [],
+            declarations,
+          )
+          facts = (await readBuildFacts(store, slug)).value
+        }
+        const regeneration = facts.log.restack.regeneration
+        if (regeneration?.outcome !== 'resolved' || regeneration.head === undefined) return
+        await adoptRegeneratedRestack(deps, transaction, regeneration.head)
+      }
+      const regenerated =
+        facts.log.restack.regeneration?.outcome === 'resolved'
+          ? facts.log.restack.regeneration
+          : undefined
       const result = await this.deps.exec(['git', 'rev-parse', 'HEAD'], {
         cwd: this.deps.workspacePath,
       })
@@ -2340,7 +2519,7 @@ export class BuildRunner {
         throw new Error('recovered automatic replay differs from its frozen publication intent')
       await retainReplay(deps, headSha, transaction.targetBase)
       const intent = { ...transaction, headSha }
-      await recordHeadPaths(
+      const recorded = await recordHeadPaths(
         {
           store,
           slug,
@@ -2353,8 +2532,37 @@ export class BuildRunner {
           head: headSha,
           destination: transaction.targetBase,
           state: facts.state,
+          // A regenerated replay resolved conflicts, like a reconcile does.
+          ...(regenerated === undefined
+            ? {}
+            : {
+                resolution: [
+                  {
+                    change: transaction.changeSha,
+                    parent: transaction.oldBase,
+                    onto: transaction.targetBase,
+                    head: headSha,
+                  },
+                ],
+              }),
         },
       )
+      const revocation =
+        regenerated !== undefined &&
+        recorded !== null &&
+        revocableConsent(facts.state.landing) &&
+        consentRevocation(facts.state.landing, {
+          source: 'reconcile',
+          previousHead: transaction.oldHead,
+          head: headSha,
+          resolution: await resolutionPathsFor(store, slug, recorded),
+        })
+      if (revocation)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'landing.consent-revoked',
+          payload: revocation,
+        })
       if (facts.log.restack.intent === undefined)
         await store.append(slug, {
           actor: KERNEL,
@@ -2409,7 +2617,8 @@ export class BuildRunner {
         error instanceof PublicationRetryPersistenceError
       )
         throw error
-      if (error instanceof AutomaticRewriteDeferred) return
+      if (error instanceof AutomaticRewriteDeferred || error instanceof RegenerationInterrupted)
+        return
       await this.failPhase(
         'reconcile',
         round,

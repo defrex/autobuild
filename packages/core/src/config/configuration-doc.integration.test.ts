@@ -398,6 +398,7 @@ const TABLE_HEADINGS: Record<string, string> = {
   pr: '`[pr]`',
   workspace: '`[workspace]`',
   commands: '`[commands]`',
+  generated: '`[[generated]]`',
   verify: '`[verify]` and `[verify.<step>]`',
   finalize: '`[finalize]` and `[finalize.<step>]`',
   roles: '`[roles]`',
