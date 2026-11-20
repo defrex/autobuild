@@ -221,6 +221,10 @@ committed unchanged.
   the outcome. A `resolved` replay's head is retained before the fact is
   written, and then publishes like a clean restack, so verification follows the
   clean-restack rules; the configured verify steps still check the result.
+  The regeneration counts as conflict resolution for merge consent: consent
+  given under a `paths` or `within` rule is revoked, with
+  `landing.consent-revoked`, when the regenerated files match it, even though
+  no reconcile session ran.
   After a crash or on a replacement workspace, the runner restores that
   retained head instead of rerunning the commands.
 - **Node item.** The item's runner regenerates in the node's execution sandbox,

@@ -329,8 +329,8 @@ Read events with a cursor or a small `--events` count; logs are long.
 - `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
   survives clean restacks and verification; use hold to withdraw it when work
   changes. Consent given under a `[[merge]]` rule with `paths` or `within`
-  predicates is revoked when a reconcile's own edits touch a file those
-  predicates match; `landing.consent-revoked` reports it.
+  predicates is revoked when a reconcile's own edits, or a leaf restack's
+  generated-file regeneration, touch a file those predicates match; `landing.consent-revoked` reports it.
   Read the matched policy, readiness, acknowledged command and gate deferral in
   build status before acting. Work the consent queue by checking completeness
   and current verification, then issuing merge for the chosen merge. A merge
