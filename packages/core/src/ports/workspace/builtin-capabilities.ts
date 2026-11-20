@@ -7,8 +7,10 @@
  * the builtin registrations by `plugins/registry.ts`.
  *
  * Import graph discipline: this module imports `config/schema.ts`,
- * `git-worktree.ts`, `vercel-sandbox.ts`, and the shared vercel capability
- * module; nothing imports it from `schema.ts`, so no cycle exists. The
+ * `git-worktree.ts`, and the shared vercel capability module; nothing
+ * imports it from `schema.ts`, so no cycle exists. `vercel-sandbox.ts` is
+ * loaded lazily by its factory, so the sandbox SDK stays out of every CLI
+ * startup. The
  * `vercel-sandbox` entry's capabilities are the shared
  * `VERCEL_SANDBOX_CAPABILITIES` object (AUT-517) — the plugin package
  * references the same object, so the declarations cannot drift. The
@@ -28,7 +30,6 @@ import type { VercelSandboxConfig, WorkspaceConfig } from '../../config/schema'
 import type { WorkspaceProviderCapabilities } from './provider-capabilities'
 import type { CreateWorkspaceProviderOptions } from './create'
 import { GitWorktreeProvider } from './git-worktree'
-import { VercelSandboxProvider } from './vercel-sandbox'
 import { VERCEL_SANDBOX_CAPABILITIES } from './vercel-capabilities'
 import type { WorkspaceProvider } from '../types'
 
@@ -66,7 +67,8 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
   },
   'vercel-sandbox': {
     capabilities: VERCEL_SANDBOX_CAPABILITIES,
-    builtinFactory(_config, opts, parsed) {
+    async builtinFactory(_config, opts, parsed) {
+      const { VercelSandboxProvider } = await import('./vercel-sandbox')
       // storeRef/storeToken are guaranteed present: the pre-split
       // storeRequirements check in createWorkspaceProvider ran before
       // construction.
