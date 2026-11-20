@@ -2804,8 +2804,18 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 
 ## `[policy]`
 
-Optional. Every field receives its own default. All are positive integers except
-`harvestMaxDrift`, which is nonnegative so zero can disable that trigger.
+Optional. Every field receives its own default unless noted. All are positive
+integers except `harvestMaxDrift`, which is nonnegative so zero can disable that
+trigger, and the open-PR backpressure keys: `maxOpenPrs` has no default (unset
+disables backpressure), `resumeOpenPrs` is a nonnegative integer that defaults
+to `maxOpenPrs - 1` and may not exceed it, and `excludeHeldOpenPrs` is a boolean
+that defaults to `false`.
+
+While open unmerged root PRs (leaves and integration nodes; not children of a
+node) reach `maxOpenPrs`, the dispatcher claims no new `normal`-priority
+ticket until the count drops to `resumeOpenPrs`. Urgent claims, in-flight
+builds, reconciles and landings continue; capacity is unchanged. `ab repository
+status` reports the state as `capacity.backpressure`.
 
 <!-- configuration-reference:policy -->
 
@@ -4047,6 +4057,9 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5
 harvestMaxDrift = 3
+# maxOpenPrs = 12
+# resumeOpenPrs = 9
+# excludeHeldOpenPrs = false
 
 [tickets]
 source = "file"
