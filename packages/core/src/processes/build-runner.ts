@@ -2899,6 +2899,7 @@ export class BuildRunner {
     let decision: Decision = initial
     let drain = false
     let terminalDrain = false
+    let landed = false
     try {
       for (;;) {
         const observed = revision
@@ -2980,8 +2981,9 @@ export class BuildRunner {
         const facts = (await readBuildFacts(store, slug)).value
         decision = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
         // A landing cancels open agent members as operator stops; let them end, not suspend.
+        landed = nodeLanded(facts.state)
         terminalDrain =
-          nodeLanded(facts.state) ||
+          landed ||
           (facts.state.status === 'running' &&
             facts.state.pendingCommands.length === 0 &&
             [...inFlight.keys()].every(
@@ -3002,7 +3004,9 @@ export class BuildRunner {
         // Fail-fast must reach whole-execution teardown even when an adapter
         // ignores abort. Its cancelled brackets are already durably ended;
         // the supervisor, rather than a per-member reaper, owns descendants.
-        if (entry.agent && decision.kind !== 'cancel-verify-stage') await entry.pending
+        // A landing releases the workspace once execution ends, so every
+        // aborted member, checks included, finishes before the stage returns.
+        if (landed || (entry.agent && decision.kind !== 'cancel-verify-stage')) await entry.pending
         for (const stream of entry.runner.bracketStreams.values())
           entry.runner.closeBracketStream(stream, 'aborted')
         await entry.runner.closeProducerSessions()

@@ -69,9 +69,12 @@ kind = "agent"
 skill = "verify-feature"
 `
 
-/** A verify command that runs until its signal aborts, or until released. */
-function blockingExec() {
+/** A verify command that runs until its signal aborts, or until released.
+ * `shutdownMs` delays the aborted command's exit, like a process that takes
+ * time to stop after its signal. */
+function blockingExec(shutdownMs = 0) {
   let started = false
+  let finished = false
   let signal: AbortSignal | undefined
   let release!: (result: ExecResult) => void
   const exec: Exec = async (cmd, opts) => {
@@ -82,9 +85,14 @@ function blockingExec() {
       signal = opts?.signal
       return new Promise<ExecResult>((resolve) => {
         release = resolve
-        signal?.addEventListener('abort', () =>
-          resolve({ stdout: '', stderr: 'killed', exitCode: 143 }),
-        )
+        signal?.addEventListener('abort', () => {
+          const exit = () => {
+            finished = true
+            resolve({ stdout: '', stderr: 'killed', exitCode: 143 })
+          }
+          if (shutdownMs === 0) exit()
+          else setTimeout(exit, shutdownMs)
+        })
       })
     }
     return { stdout: '', stderr: '', exitCode: 0 }
@@ -92,6 +100,7 @@ function blockingExec() {
   return {
     exec,
     started: () => started,
+    finished: () => finished,
     signal: () => signal,
     release: (result: ExecResult) => release(result),
   }
@@ -311,6 +320,28 @@ describe('a node landing ends its open verification', () => {
     const events = await store.getEvents(NODE)
     expect(types(events)).not.toContain('verify.completed')
     expect(types(events)).not.toContain('phase.failed')
+    expect(types(events)).not.toContain('session.suspended')
+  })
+
+  test('a landing keeps the stage open until a slow-stopping check has exited', async () => {
+    const config = parseConfig(STAGED_CONFIG)
+    const store = await preparedNode(config)
+    const command = blockingExec(50)
+    const agent = stuckAgent()
+    const heartbeat = manualHeartbeat()
+    const runner = runnerFor(store, config, command.exec, agent.runner, heartbeat.schedule)
+    const running = runner.run()
+    await until(
+      () => command.started() && agent.signal() !== undefined,
+      'both stage members to start',
+    )
+    await store.append(NODE, landing)
+    await until(() => command.signal()?.aborted === true, 'the check to be aborted')
+    expect(command.finished()).toBe(false)
+    await running
+    expect(command.finished()).toBe(true)
+    const events = await store.getEvents(NODE)
+    expect(types(events)).not.toContain('verify.completed')
     expect(types(events)).not.toContain('session.suspended')
   })
 })
