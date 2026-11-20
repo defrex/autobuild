@@ -130,3 +130,76 @@ test('verify entry requires restacking even before any target observation succee
     cycle: 6,
   })
 })
+
+test('declared generated files keep a conflicted replay with the runner until it records regeneration', () => {
+  const declared = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+test = "true"
+[[generated]]
+paths = ["gen.txt"]
+command = "true"
+[verify]
+steps = ["unit"]
+afterReconcile = false
+[verify.unit]
+kind = "check"
+command = "test"
+`)
+  const prepared = leafRestackLog()
+  const conflicted = event(
+    prepared.slice(0, prepared.findIndex((e) => e.type === 'restack.prepared') + 1),
+    'restack.replayed',
+    { id: leafTransaction.id, conflicted: true, files: ['gen.txt'] },
+  )
+  const restack = { kind: 'restack', trigger: 'verify-entry', cycle: 6 } as const
+  const reconcile = { kind: 'run-phase', phase: 'reconcile', round: 1 }
+  expect(decideNext(conflicted, config)).toMatchObject(reconcile)
+  expect(decideNext(conflicted, declared)).toEqual(restack)
+
+  const fact = (outcome: 'resolved' | 'failed' | 'skipped') => ({
+    id: leafTransaction.id,
+    files: ['gen.txt'],
+    commands: [{ command: 'true', files: ['gen.txt'] }],
+    outcome,
+    ...(outcome === 'resolved' ? { head: 'e'.repeat(40) } : { reason: 'no' }),
+  })
+  const resolved = event(conflicted, 'restack.regenerated', fact('resolved'))
+  expect(decideNext(resolved, declared)).toEqual(restack)
+  expect(decideNext(resolved, config)).toEqual(restack)
+  for (const outcome of ['failed', 'skipped'] as const)
+    expect(
+      decideNext(event(conflicted, 'restack.regenerated', fact(outcome)), declared),
+    ).toMatchObject(reconcile)
+  const started = event(conflicted, 'reconcile.started', {
+    attempt: 1,
+    baseSha: leafTransaction.targetBase,
+    restackId: leafTransaction.id,
+  })
+  expect(decideNext(started, declared)).toMatchObject(reconcile)
+
+  // A re-pick of the same replay keeps the resolved fact; completion keeps it for status.
+  const repicked = event(resolved, 'restack.replayed', {
+    id: leafTransaction.id,
+    conflicted: true,
+    files: ['gen.txt'],
+  })
+  expect(leafRestackReducer.reduce(repicked).regeneration?.outcome).toBe('resolved')
+  const completed = event(repicked, 'restack.completed', {
+    ...leafTransaction,
+    headSha: 'e'.repeat(40),
+  })
+  const state = leafRestackReducer.reduce(completed)
+  expect(state.regeneration).toBeUndefined()
+  expect(state.completedRegeneration?.commands).toEqual([{ command: 'true', files: ['gen.txt'] }])
+  checkIncremental(leafRestackReducer, completed)
+  const next = event(completed, 'restack.prepared', { ...leafTransaction, id: 'leaf-2' })
+  const plain = event(next, 'restack.completed', {
+    ...leafTransaction,
+    id: 'leaf-2',
+    headSha: 'f'.repeat(40),
+  })
+  expect(leafRestackReducer.reduce(plain).completedRegeneration).toBeUndefined()
+})

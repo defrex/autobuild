@@ -3326,8 +3326,15 @@ restack base. It reports reachable build identities separately from node-owned
 foreign commits above the durable boundary; inherited foreign history is excluded
 from the owned count.
 
-Only a conflicted replay item attaches the integration build's reconcile runner.
-Its context names the integration owner separately from the original source
+Only a conflicted replay item attaches the integration build's runner. When
+every conflicted path of the item is declared in `[[generated]]`, that runner
+regenerates it as a leaf does, in the node's execution workspace, and records
+`node.item-regenerated {id, index, base, files, commands, outcome, head?,
+reason?}`. A resolved item is validated and retained before its fact, then
+receives an ordinary `node.item-replayed` receipt with no `reconcile.started`
+or session; a resolved fact without a receipt is completed from the retained
+head on the next attempt. A skipped or failed item reproduces the original
+conflict and continues into reconcile. The reconcile runner's context names the integration owner separately from the original source
 build and supplies that source's pinned spec, approved plan and implement-notes.
 Missing source artifacts or invalid identities escalate. Foreign conflicts supply
 commit metadata and a diff, with escalation when intent is unclear. Completion
@@ -4341,7 +4348,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}` |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}` |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Propose (§5, §13.1.1) | Kernel `propose.started {round, request}`; agent `propose.completed {round, request, proposals, artifact}` (the deposited proposal ids and the `attempts` artifact) |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
@@ -4510,7 +4517,7 @@ identity without a fabricated finalize completion. All four facts are
 dispatcher-authored. Existing merged/closed PR, abort and completion facts close admission.
 
 Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
-`node.item-conflicted`, `node.item-replayed`, `node.publish-intended`,
+`node.item-conflicted`, `node.item-regenerated`, `node.item-replayed`, `node.publish-intended`,
 `node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
 restacking). Durable `node.restack-requested` facts retain operator/presence demand,
 including destination, sampled parent, dependent ticket and required identities.
@@ -5152,7 +5159,30 @@ branch tips and canonical message. Publication intent precedes guarded replaceme
 `restack.rewritten` retains archives and proven writes even if readback observes a
 later writer. Completion requires confirmed publication. Clean transactions start
 no agent and do not fabricate `reconcile.completed`. A conflicted replay is adopted
-by `reconcile.started {restackId}` without another collapse or target selection.
+by `reconcile.started {restackId}` without another collapse or target selection,
+unless it is regenerated.
+
+**Generated-file regeneration.** `[[generated]]` declares repository paths
+(path selectors; the first matching entry owns a file) and the shell command
+that rebuilds them. When every conflicted path of an automatic leaf replay is
+declared, the runner, before any reconcile attempt, re-establishes the recorded
+conflict, takes the target's side of each conflicted file, runs each owning
+command once in the build workspace, stages exactly the regenerated paths, and
+commits with the change's message and author; cleanly applied edits are
+committed unchanged. The command may write only declared paths, and no staged
+content may keep conflict markers. Exactly one `restack.regenerated {id, files,
+commands, outcome: resolved | failed | skipped, head?, reason?}` records the
+decision: `head` only when resolved (retained before the fact), `reason`
+otherwise. The engine routes a conflicted replay to `restack` while its fact is
+`resolved`, or while declarations exist, no fact is recorded and no reconcile
+attempt started; otherwise to `reconcile`. The engine never matches paths. A
+resolved replay publishes like a clean one and records head paths with its
+resolution; a replacement workspace restores the retained head instead of
+regenerating. `failed` and `skipped` commit nothing, leave no command output,
+and restore the recorded conflict for reconcile, whose context names the
+conflicted generated files with their commands (`generated`) and a failure's
+`regeneration.reason`, both read from the recorded fact's `commands`, never
+from the checkout's `autobuild.toml`. Repositories that declare nothing are unaffected.
 Resolver completion links back to the automatic transaction. Retained commit bytes
 and replay object packs recover disposable-workspace objects before publication.
 Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
@@ -5600,6 +5630,10 @@ typecheck = "bun run type-check"
 test = "bun run test"
 publish = "bun run publish"
 
+[[generated]]                   # optional: files a command rebuilds; restack
+paths = ["src/schema.json"]     # conflicts only in these are regenerated
+command = "bun run gen:schema"  # sh -c from the workspace root
+
 [verify]
 steps = ["types", "unit", "acceptance"]
 [verify.types]
@@ -5692,7 +5726,7 @@ decide where a build's effective configuration is composed from:
 | Class | Sections | Source at deposit |
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The execution checkout at each verification cycle; launch deposits use the branch head or recorded workspace base until a cycle capture exists. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
-| Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`), `[profiles]` (label-selected role overlays) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
+| Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`), `[profiles]` (label-selected role overlays), `[policy]` (budgets, retry bounds, stall and harvest knobs) and `[[generated]]` (restack regeneration declarations) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
 | Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `merge`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 Dispatcher lease sweeps may reuse parsed effective-config pins in a disposable

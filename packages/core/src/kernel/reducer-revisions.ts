@@ -13,4 +13,7 @@
  */
 export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   __ledger__: 'not a revision; append revisions below',
+  'leafRestack/shape/ga4knf62mj': 'AUT-1266 generated replay resolution state',
+  'nodeRestack/shape/8su0tli8be': 'AUT-1266 generated replay resolution state',
+  'executionNoProgress/fold/v2he1qwp0t': 'AUT-1266 regeneration events count as progress',
 }

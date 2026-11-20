@@ -41,6 +41,11 @@ export interface NodeRestackState {
   resolved?: number[]
   prepared?: EventPayload<'node.item-prepared'>
   conflict?: EventPayload<'node.item-conflicted'>
+  /** The latest `[[generated]]` regeneration attempt for the current item. */
+  regeneration?: EventPayload<'node.item-regenerated'>
+  /** Indexes of the latest reservation's items the kernel resolved by
+   * regeneration rather than an agent; kept after settlement for status. */
+  regenerated?: number[]
   intent?: EventPayload<'node.publish-intended'>
   rewritten?: EventPayload<'node.rewritten'>
   inventory?: EventPayload<'node.inventory'>
@@ -118,6 +123,8 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         state.contributionBoundaries[event.payload.expected] = event.payload.oldBase
         state.items = []
         delete state.resolved
+        delete state.regeneration
+        delete state.regenerated
         break
       case 'node.item-prepared':
         if (event.payload.id !== state.active?.id || event.payload.index !== state.items.length)
@@ -137,6 +144,17 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           throw new Error('node conflict does not match the prepared change')
         state.conflict = event.payload
         break
+      case 'node.item-regenerated': {
+        const current = state.conflict ?? state.prepared
+        if (
+          current !== undefined &&
+          event.payload.id === current.id &&
+          event.payload.index === current.index &&
+          event.payload.base === current.base
+        )
+          state.regeneration = event.payload
+        break
+      }
       case 'node.item-replayed':
         // A resolver can finish after its reservation was settled or after
         // another item advanced. Retain the fact without reviving that work
@@ -152,9 +170,16 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           throw new Error('dropped node change moved the replay prefix')
         if (state.conflict?.index === event.payload.index)
           state.resolved = [...(state.resolved ?? []), event.payload.index]
+        if (
+          state.regeneration?.outcome === 'resolved' &&
+          state.regeneration.index === event.payload.index &&
+          state.regeneration.head === event.payload.head
+        )
+          state.regenerated = [...(state.regenerated ?? []), event.payload.index]
         state.items.push(event.payload)
         delete state.prepared
         delete state.conflict
+        delete state.regeneration
         break
       case 'node.publish-intended':
         if (
@@ -217,6 +242,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         delete state.active
         delete state.prepared
         delete state.conflict
+        delete state.regeneration
         delete state.intent
         delete state.rewritten
         state.items = []
