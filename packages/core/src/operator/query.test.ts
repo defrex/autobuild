@@ -8,6 +8,7 @@ import type { Config } from '../config/schema'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { detail as projectDetail, statusFilter, summarize, type BuildSummary } from '../cli/status'
 import { reduceBuild } from '../kernel/reducer'
+import { capacityExplanation } from '../kernel/dispatch-capacity'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
@@ -450,6 +451,42 @@ describe('operator query wiring', () => {
       accumulatedMs: 0,
       runningSince: Date.parse('2026-09-02T00:00:10.000Z'),
     })
+  })
+
+  test('the operator dashboard reports open-PR backpressure from the effective policy', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const value = parseConfig(`
+capacity = 4
+[tickets]
+source = "file"
+readyState = "ready"
+[policy]
+maxOpenPrs = 2
+[verify]
+steps = []
+[finalize]
+steps = []
+`)
+    await publishRun(store, 'new', value)
+    for (const slug of ['open-a', 'open-b']) {
+      await createBuild(store, slug, 'active')
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: 1, url: `https://example.test/${slug}`, headSha: 'head' } },
+      })
+    }
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    expect(snapshot.model.capacity?.backpressure).toEqual({
+      active: true,
+      openPrs: 2,
+      maxOpenPrs: 2,
+      resumeOpenPrs: 1,
+      excludeHeld: false,
+    })
+    expect(capacityExplanation(snapshot.model.capacity)).toContain(
+      'open-PR backpressure: 2 open root PRs ≥ maxOpenPrs 2; normal claims paused until ≤ 1',
+    )
   })
 
   test('a pinned build projects its own pipeline and carries pipeline-source metadata', async () => {

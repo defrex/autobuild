@@ -378,6 +378,13 @@ out of ready to make room. Urgency never preempts a running build, and a blocked
 urgent ticket still waits on its blockers. A source that cannot store priority
 refuses `urgent` and names itself; tell the human.
 
+When ready tickets sit unclaimed with free slots, check
+`capacity.backpressure` in `ab repository status --json`. While `active` is
+true, `[policy].maxOpenPrs` open-PR backpressure is pausing normal claims
+until the open root PR count drains to `resumeOpenPrs`; urgent tickets still
+dispatch. Relieve it by getting PRs merged or closed (or, where the repository
+sets `excludeHeldOpenPrs`, by holding them), not by raising `capacity`.
+
 On GitHub tickets, `--assignees` on create or update sets who a ticket is
 assigned to (`me` is the credential owner; on update it replaces the set). Under
 `[tickets].readyAssignee` only the assigned person's dispatcher claims a ticket,
