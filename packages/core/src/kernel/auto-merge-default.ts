@@ -53,8 +53,6 @@ export function latestAutoMergeDefault(
   return pickAutoMergeDefault(autoMergeDefaultReducer.reduce(events), enabled)
 }
 
-export const AUTO_MERGE_DEFAULT_REDUCER_VERSION = 1
-
 /** The newest `dispatcher.auto-merge-default-set` fact in array order, overall
  * and per value — `latestAutoMergeDefault(events, enabled)` is a lookup in
  * this state, exact for any array order. */
@@ -69,7 +67,7 @@ export const autoMergeDefaultReducer = defineReducer<
   RepositoryEvent,
   AutoMergeDefaultFacts
 >({
-  version: AUTO_MERGE_DEFAULT_REDUCER_VERSION,
+  identity: 'autoMergeDefault',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

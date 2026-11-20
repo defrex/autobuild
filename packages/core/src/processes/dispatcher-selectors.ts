@@ -10,8 +10,6 @@ import { defineReducer } from '../kernel/incremental'
 
 export type OpenBuildWorkspace = EventPayload<'workspace.provisioned'>
 
-export const OPEN_BUILD_WORKSPACE_REDUCER_VERSION = 2
-
 /** Latest `workspace.provisioned` not followed by a `workspace.released` —
  * the reducer deliberately ignores workspace events (liveness is the
  * dispatcher's concern), so the janitor scans the raw log. */
@@ -20,7 +18,7 @@ export const openBuildWorkspaceReducer = defineReducer<
   AbEvent,
   OpenBuildWorkspace | null
 >({
-  version: OPEN_BUILD_WORKSPACE_REDUCER_VERSION,
+  identity: 'openBuildWorkspace',
   initial: () => ({ open: null }),
   fold(acc, events) {
     for (const event of events) {
@@ -36,8 +34,6 @@ export function openBuildWorkspace(events: readonly AbEvent[]): OpenBuildWorkspa
   return openBuildWorkspaceReducer.reduce(events)
 }
 
-export const BASE_BRANCH_REDUCER_VERSION = 2
-
 /** Creation freezes work bases; accepted node parent changes advance the
  * effective base. Missing creation facts leave callers' config fallback intact. */
 export const baseBranchReducer = defineReducer<
@@ -45,7 +41,7 @@ export const baseBranchReducer = defineReducer<
   AbEvent,
   string | undefined
 >({
-  version: BASE_BRANCH_REDUCER_VERSION,
+  identity: 'baseBranch',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -67,8 +63,6 @@ export interface ProvisionMarker {
   abandoned?: 'teardown'
 }
 
-export const PROVISION_MARKER_REDUCER_VERSION = 2
-
 /** The latest `workspace.provision-started` not yet followed by a
  * provisioned/released fact — an open provisioning marker. A later
  * `provision-started` replaces it, so `abandoned` describes only the latest
@@ -78,7 +72,7 @@ export const provisionMarkerReducer = defineReducer<
   AbEvent,
   ProvisionMarker | undefined
 >({
-  version: PROVISION_MARKER_REDUCER_VERSION,
+  identity: 'provisionMarker',
   initial: () => ({ marker: null }),
   fold(acc, events) {
     for (const event of events) {
@@ -101,8 +95,6 @@ export const provisionMarkerReducer = defineReducer<
   finish: (acc) => (acc.marker === null ? undefined : { ...acc.marker }),
 })
 
-export const RECOVERY_CHECKPOINT_REDUCER_VERSION = 4
-
 /** The commit a recovered workspace is re-cut from: the latest settled
  * publication head, else the first provisioned base. */
 export const recoveryCheckpointReducer = defineReducer<
@@ -110,7 +102,7 @@ export const recoveryCheckpointReducer = defineReducer<
   AbEvent,
   string | undefined
 >({
-  version: RECOVERY_CHECKPOINT_REDUCER_VERSION,
+  identity: 'recoveryCheckpoint',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

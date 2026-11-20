@@ -61,7 +61,7 @@ export const ticketMigrationsReducer = defineReducer<
   RepositoryEvent,
   TicketMigrations
 >({
-  version: 1,
+  identity: 'ticketMigrations',
   initial: () => ({ migrations: [] }),
   fold(acc, events) {
     for (const event of events)

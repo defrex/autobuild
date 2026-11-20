@@ -32085,6 +32085,10 @@
           "type": "4",
           "optional": true
         },
+        "optimization": {
+          "type": "2145",
+          "optional": true
+        },
         "terminal": {
           "type": "954",
           "optional": true
@@ -32119,10 +32123,6 @@
         },
         "ticketWait": {
           "type": "2139",
-          "optional": true
-        },
-        "optimization": {
-          "type": "2145",
           "optional": true
         },
         "reclaimPending": {

@@ -6,7 +6,7 @@ export const forgeHealthReducer = defineReducer<
   RepositoryEvent,
   ForgeDegradation | undefined
 >({
-  version: 1,
+  identity: 'forgeHealth',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -33,7 +33,7 @@ export const forgeCredentialLimitsReducer = defineReducer<
   RepositoryEvent,
   ForgeCredentialLimit[]
 >({
-  version: 1,
+  identity: 'forgeCredentialLimits',
   initial: () => ({ limits: {} }),
   fold(acc, events) {
     for (const event of events) {

@@ -37,9 +37,6 @@ export interface PublicationLedger {
   retries: PublicationRetryEvent[]
 }
 
-/** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 8
-
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
     case 'publication.requested':
@@ -188,7 +185,7 @@ export const publicationStateReducer: IncrementalReducer<
   AbEvent,
   PublicationView
 > = defineReducer<PublicationLedger, AbEvent, PublicationView>({
-  version: PUBLICATION_STATE_REDUCER_VERSION,
+  identity: 'publicationState',
   initial: () => ({ ledger: [], retries: [] }),
   fold(acc, events) {
     for (const event of events) {

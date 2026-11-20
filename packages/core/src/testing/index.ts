@@ -107,6 +107,10 @@ export {
 export { temporaryDirectories, temporaryOriginScratch } from './temp-directories'
 
 export { RELEASED_REDUCER_VALUES } from '../store/remote/released-reducer-values'
+// Reducer identity skew: the hosted suite derives a server identity one revision ahead.
+export { REDUCERS } from '../kernel/reducer-registry'
+export { deriveReducerVersion } from '../kernel/reducer-identity'
+export { REDUCER_REVISIONS } from '../kernel/reducer-revisions'
 export { projectReducerValue } from '../store/reducer-value-validation'
 
 export { placementReadBudget } from './reduced-read-budget'

@@ -1,5 +1,11 @@
 import { RELEASED_CLIENTS } from '@defrex/autobuild/remote-store'
-import { RELEASED_REDUCER_VALUES, projectReducerValue } from '@defrex/autobuild/testing'
+import {
+  RELEASED_REDUCER_VALUES,
+  REDUCERS,
+  REDUCER_REVISIONS,
+  deriveReducerVersion,
+  projectReducerValue,
+} from '@defrex/autobuild/testing'
 import { expect, test } from 'bun:test'
 import {
   MemoryBuildStore,
@@ -910,4 +916,72 @@ test('projecting a stream seed reads no more rows than serving it unprojected', 
     expect(await read(path, releasedHeaders('1.8.1'))).toBe(0)
     expect(await read(path, headers)).toBe(0)
   }
+})
+
+/** Answer as a server whose reducer identities carry one more ledger revision
+ * than this client's: only server-side reads see the revised identity. */
+function revisedServer(server: { fetch(request: Request): Promise<Response> }) {
+  return async (request: Request) => {
+    const restore: (() => void)[] = []
+    for (const [, name] of STREAM_SEEDS) {
+      const entry = REDUCERS[name]!.valueRead
+      if ('excluded' in entry) throw new Error(`${name} is not a value reducer`)
+      const create = entry.create
+      entry.create = (args) => {
+        const reducer = create(args)
+        const ledger = { ...REDUCER_REVISIONS, [`${reducer.identity}/fold/serverskew`]: 'skew' }
+        return {
+          ...reducer,
+          version: deriveReducerVersion({ identity: reducer.identity!, ledger }),
+        }
+      }
+      restore.push(() => {
+        entry.create = create
+      })
+    }
+    try {
+      return await server.fetch(request)
+    } finally {
+      for (const undo of restore) undo()
+    }
+  }
+}
+
+test('a server one ledger revision ahead keeps seeds typed, values canonical and releases frozen', async () => {
+  const { store, cursors } = await seedFixture()
+  const answer = revisedServer(createStoreServer({ store, secret }))
+  const calls: string[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init)
+    calls.push(`${request.method} ${new URL(request.url).pathname}`)
+    return answer(request)
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  const scopes = {
+    '/builds/mixed': { kind: 'build', slug: 'mixed' },
+    '/repos/repo': { kind: 'repo', repo: 'repo' },
+  } as const
+  for (const [path, reducer] of STREAM_SEEDS) {
+    const scope = scopes[path]
+    const local = REDUCERS[reducer]!.reducer.version
+    // The older client's seed identity disagrees: a typed failure, never a replay.
+    await expect(client.getStreamSeed(scope, cursors[path])).rejects.toBeInstanceOf(
+      ReducerValueIncompatibilityError,
+    )
+    // A named value is the server's canonical answer at its own identity.
+    const value = await client.getReducerValue(scope, { reducer })
+    expect(value.version).toBe(local + 1)
+    // Released clients still receive their frozen catalog version.
+    for (const released of supportedReleases()) {
+      const response = await answer(
+        new Request(`https://test${path}/stream-seed?cursor=${cursors[path]}`, {
+          headers: releasedHeaders(released),
+        }),
+      )
+      expect(response.status).toBe(200)
+      expect((await response.json()).version).toBe(frozenCatalog(released).versions[reducer]!)
+    }
+  }
+  expect(calls.filter((call) => call.startsWith('GET') && call.endsWith('/events'))).toEqual([])
+  expect(calls.every((call) => !call.includes('/events'))).toBe(true)
 })

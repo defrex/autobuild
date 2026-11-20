@@ -118,7 +118,7 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 7,
+  identity: 'dispatchUpgrade',
   initial: () => ({ runs: {}, holds: {}, lineages: {}, rollbackIds: [] }),
   fold(acc, events) {
     for (const event of events) {

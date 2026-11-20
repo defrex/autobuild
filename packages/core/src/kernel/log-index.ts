@@ -207,8 +207,6 @@ export interface LogIndex {
   guidanceDeliveries: GuidanceDelivery[]
 }
 
-export const LOG_INDEX_REDUCER_VERSION = 13
-
 type ReviewVerdictPayload = EventPayload<'plan-review.verdict'>
 
 type LoopName = 'plan' | 'code'
@@ -754,7 +752,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
 }
 
 export const logIndexReducer = defineReducer<LogIndexAcc, AbEvent, LogIndex>({
-  version: LOG_INDEX_REDUCER_VERSION,
+  identity: 'logIndex',
   initial: initialLogIndexAcc,
   fold: foldLogIndex,
   finish: finishLogIndex,

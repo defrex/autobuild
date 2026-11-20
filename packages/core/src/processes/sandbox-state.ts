@@ -53,9 +53,6 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
  * of an existing id keeps its position). */
 export type SandboxStatesAcc = MutableSnapshot[]
 
-/** Bump when `SandboxStatesAcc`'s shape or fold semantics change. */
-export const SANDBOX_STATES_REDUCER_VERSION = 1
-
 function foldSandboxStates(acc: SandboxStatesAcc, events: readonly RepositoryEvent[]): void {
   const byEnvironment = new Map<string, MutableSnapshot>(acc.map((s) => [s.environmentId, s]))
   for (const event of events) {
@@ -128,7 +125,7 @@ export const sandboxStatesReducer: IncrementalReducer<
   RepositoryEvent,
   SandboxEnvironmentSnapshot[]
 > = defineReducer({
-  version: SANDBOX_STATES_REDUCER_VERSION,
+  identity: 'sandboxStates',
   initial: (): SandboxStatesAcc => [],
   fold: foldSandboxStates,
   finish: (acc) => acc.map((s) => ({ ...s })),

@@ -169,8 +169,6 @@ type DeferralLedgerEntry =
   | { t: 'terminal'; seq: number }
   | { t: 'reconciled'; seq: number }
 
-export const CURRENT_DEFERRAL_OBSERVATION_REDUCER_VERSION = 1
-
 export interface DeferralLedger {
   entries: DeferralLedgerEntry[]
 }
@@ -180,7 +178,7 @@ export const currentDeferralObservationReducer = defineReducer<
   AbEvent,
   DeferralLedger
 >({
-  version: CURRENT_DEFERRAL_OBSERVATION_REDUCER_VERSION,
+  identity: 'currentDeferralObservation',
   initial: () => ({ entries: [] }),
   fold(acc, events) {
     for (const event of events) {

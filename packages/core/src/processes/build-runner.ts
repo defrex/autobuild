@@ -477,8 +477,6 @@ export interface PhaseFailureTally {
   lastProviderAttempts?: readonly ProviderAttempt[]
 }
 
-export const PHASE_FAILURES_REDUCER_VERSION = 3
-
 /**
  * phase.failed tally for one phase+round — D5's retry-guard input. A factory
  * because phase and round are parameters of the projection.
@@ -506,7 +504,7 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
     AbEvent,
     PhaseFailureTally
   >({
-    version: PHASE_FAILURES_REDUCER_VERSION,
+    identity: 'phaseFailures',
     initial: () => ({ raised: {}, owners: {}, cancelled: {}, count: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -578,8 +576,6 @@ export function phaseFailuresReducer(phase: Phase, round: number) {
   })
 }
 
-export const SETUP_STREAK_REDUCER_VERSION = 1
-
 /** Consecutive durable setup failures since the latest successful attachment
  * or explicit human answer. The accumulator keeps the boundary seq and the
  * failure seqs, so it is exact for any array order. */
@@ -588,7 +584,7 @@ export const setupStreakReducer = defineReducer<
   AbEvent,
   number
 >({
-  version: SETUP_STREAK_REDUCER_VERSION,
+  identity: 'setupStreak',
   initial: () => ({ escalations: [], boundary: 0, failures: [] }),
   fold(acc, events) {
     for (const event of events) {
@@ -612,8 +608,6 @@ export const setupStreakReducer = defineReducer<
   finish: (acc) => acc.failures.filter((seq) => seq > acc.boundary).length,
 })
 
-export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 5
-
 /** Latest event-checkpointed branch head that kernel plumbing published;
  * undefined while the build has none. */
 export const publishedBranchHeadReducer = defineReducer<
@@ -621,7 +615,7 @@ export const publishedBranchHeadReducer = defineReducer<
   AbEvent,
   string | undefined
 >({
-  version: PUBLISHED_BRANCH_HEAD_REDUCER_VERSION,
+  identity: 'publishedBranchHead',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -667,8 +661,6 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
-export const VERIFY_DIFF_BASE_REDUCER_VERSION = 3
-
 /**
  * The durable tree against which a conditional verifier evaluates the
  * branch's current HEAD, or undefined until a `workspace.provisioned` exists.
@@ -681,7 +673,7 @@ export const verifyDiffBaseReducer = defineReducer<
   AbEvent,
   string | undefined
 >({
-  version: VERIFY_DIFF_BASE_REDUCER_VERSION,
+  identity: 'verifyDiffBase',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

@@ -16,7 +16,7 @@ interface TerminalGuardAcc {
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
   return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string; waitHeld?: string }>({
-    version: 6,
+    identity: 'terminalGuard',
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
