@@ -359,7 +359,7 @@ export function buildControlConfirmation(result: BuildControlResult): string {
       if (result.completedEarlier)
         return `build ${result.slug}: completed the reopen recorded earlier${revision}; the arguments supplied now were not used`
       return result.route === 'plan'
-        ? `build ${result.slug}: reopened; consent revoked; spec${revision} recorded; restarting from plan — waiting for a slot`
+        ? `build ${result.slug}: reopened; consent revoked; ${result.specRev === undefined ? 'spec' : `spec rev ${result.specRev}`} recorded; restarting from plan — waiting for a slot`
         : `build ${result.slug}: reopened; consent revoked; returning to implement with feedback — waiting for a slot`
     }
     case 'answer-required':

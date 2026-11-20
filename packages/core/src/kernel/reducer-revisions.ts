@@ -27,4 +27,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/fold/un4t96vlnx': 'Reopen of a settled leaf (build.reopened)',
   'logIndex/fold/oj2ejk6qgb': 'Reopen of a settled leaf (build.reopened)',
   'executionNoProgress/fold/e37vc1wkgl': 'Reopen of a settled leaf (build.reopened)',
+  'terminalGuard/fold/stc1et9vcy': 'A reopen re-runs verify and finalize terminals',
 }
