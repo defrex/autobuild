@@ -8852,9 +8852,6 @@ export class Dispatcher {
     }
     if (
       unchangedFailure ||
-      // An empty owned range (everything already upstream) has nothing to verify.
-      comparison.ahead === 0 ||
-      comparison.headSha === comparison.parentSha ||
       state.integration?.landing ||
       !integrationComplete(state) ||
       state.nodeRestack?.active ||
@@ -8882,6 +8879,9 @@ export class Dispatcher {
       !integrationCurrent(state) ||
       state.integration?.cycle?.config !== integrationConfig(config)
     ) {
+      // An empty owned range (everything already upstream) has nothing to
+      // verify: never prepare a new cycle for it.
+      if (comparison.ahead === 0 || comparison.headSha === comparison.parentSha) return
       await this.observeIntegration(record.slug)
       state = (await this.store.buildFacts(record.slug)).state
       if (!integrationComplete(state)) return
