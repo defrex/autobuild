@@ -17,7 +17,7 @@ import { readBuildFacts } from '../store/reduced-reads'
  * normal runner and dispatcher consume them.
  */
 import type { AbEvent } from '../events/catalog'
-import type { AbortDestination, PinnedAsset } from '../events/payloads'
+import { CONTROL_REASON_LIMIT, type AbortDestination, type PinnedAsset } from '../events/payloads'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
 import { discardInFlight, type BuildState, type OpenEscalation } from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
@@ -29,7 +29,9 @@ import type { BuildStore } from '../store/types'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 /** Matches the hand-back report's reason bound. */
-export const ABORT_REASON_LIMIT = 2000
+export const ABORT_REASON_LIMIT = CONTROL_REASON_LIMIT
+/** The hold fact's schema bound. */
+export const HOLD_REASON_LIMIT = CONTROL_REASON_LIMIT
 
 const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'collecting', 'paused', 'blocked']
 
@@ -51,7 +53,11 @@ export type AnswerResolutionRequest =
   | { kind: 'revise-spec'; body: SpecBodySource }
 
 export type BuildControlAction =
-  | { kind: 'hold' }
+  | {
+      kind: 'hold'
+      /** Recorded on the hold and shown wherever the hold is. */
+      reason?: string
+    }
   | { kind: 'land'; head?: string }
   | { kind: 'pause' }
   | { kind: 'resume' }
@@ -576,6 +582,16 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     return { kind: 'command', slug: opts.slug, command: 'abort', event }
   }
 
+  const holdReason = opts.action.kind === 'hold' ? opts.action.reason?.trim() : undefined
+  if (
+    opts.action.kind === 'hold' &&
+    opts.action.reason !== undefined &&
+    (!holdReason || holdReason.length > HOLD_REASON_LIMIT)
+  )
+    throw new BuildControlError(
+      'invalid-argument',
+      `hold reason must be 1–${HOLD_REASON_LIMIT} characters after trimming; nothing was recorded`,
+    )
   activeState(opts.slug, state)
   switch (opts.action.kind) {
     case 'pause':
@@ -659,7 +675,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
             ? await opts.store.appendIfCurrent(opts.slug, current.lastSeq, {
                 actor,
                 type: 'build.hold-requested',
-                payload: {},
+                payload: holdReason !== undefined ? { reason: holdReason } : {},
               })
             : await opts.store.appendIfCurrent(opts.slug, current.lastSeq, {
                 actor,

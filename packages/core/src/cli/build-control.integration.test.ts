@@ -189,6 +189,30 @@ describe('controlBuild — shared durable controls', () => {
     await store.close()
   })
 
+  test('hold records a trimmed reason; a blank or over-long reason records nothing', async () => {
+    const store = await makeStore()
+    const hold = (action: BuildControlAction) =>
+      controlBuild({ store, repo: REPO, slug: SLUG, env: { USER: 'operator' }, action })
+    const before = (await store.getEvents(SLUG)).length
+    for (const reason of ['   ', '', 'x'.repeat(2001)]) {
+      const refused = await hold({ kind: 'hold', reason }).catch((error) => error)
+      expect(refused).toBeInstanceOf(BuildControlError)
+      expect((refused as BuildControlError).code).toBe('invalid-argument')
+    }
+    expect((await store.getEvents(SLUG)).length).toBe(before)
+
+    expect(await hold({ kind: 'hold', reason: '  waiting on T-2 ' })).toMatchObject({
+      kind: 'command',
+      command: 'hold',
+      event: { type: 'build.hold-requested', payload: { reason: 'waiting on T-2' } },
+    })
+    expect(reduceBuild(await store.getEvents(SLUG)).landing?.command?.reason).toBe('waiting on T-2')
+    // A later hold without a reason replaces the standing one.
+    await hold({ kind: 'hold' })
+    expect(reduceBuild(await store.getEvents(SLUG)).landing?.command?.reason).toBeUndefined()
+    await store.close()
+  })
+
   test('dashboard pause and resume derive from freshly reduced state', async () => {
     const store = await makeStore()
 

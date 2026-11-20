@@ -6,7 +6,7 @@ import {
   integrationCurrent,
   integrationCycleVerified,
 } from '../../kernel/integration-state'
-import { mergeVocabulary } from './landing-display'
+import { holdReason, mergeVocabulary } from './landing-display'
 import { awaitsConsent, currentCandidateHead, landingReady } from '../../kernel/landing-readiness'
 
 export const treeVocabulary = {
@@ -99,6 +99,8 @@ export function projectTree(
      * recorded; null without consent and for legacy consent. */
     consentedHead:
       state.landing?.command?.kind === 'land' ? (state.landing.command.head ?? null) : null,
+    /** Why the operator held, while a hold with a reason stands; otherwise null. */
+    holdReason: holdReason(state.landing) ?? null,
     reason: awaitsConsent(state, restack)
       ? state.landing?.command?.kind === 'hold'
         ? ('held' as const)

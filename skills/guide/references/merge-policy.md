@@ -53,6 +53,8 @@ is cancelled before the new head is published. Policy is live dispatcher
 configuration, separate from the pinned execution pipeline.
 
 `ab hold <slug>` suppresses merge and revokes consent, even before readiness.
+`--reason <text>` records why; status, merges, builds and both dashboards show it
+until a later hold or merge replaces it.
 `ab merge <slug>` requires readiness, clears hold and consents to this merge
 into its destination. Consent survives head replacement, clean restacking,
 verification and re-finalization until hold or completion; it approves the merge

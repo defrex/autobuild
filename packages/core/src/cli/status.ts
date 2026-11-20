@@ -6,6 +6,7 @@ import { projectHandPushed, handPushedText, type HandPushedChange } from './dash
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
+import { holdReason, mergeVocabulary } from './dashboard/landing-display'
 import { buildVocabulary } from './dashboard/model'
 import {
   objectiveSegments,
@@ -179,6 +180,8 @@ export interface BuildSummary {
   /** Set when the open ticket wait's escalation is the only one open: the
    * dashboards' `waiting` status. `status` stays the reducer's `blocked`. */
   waitOnly?: true
+  /** Why the operator held the merge, while a hold that gave one stands. */
+  holdReason?: string
 }
 
 export interface VerifyProgress {
@@ -411,6 +414,7 @@ export function summarizeFrom(
   const wait = ticketWaitStatus(state)
   const objective = objectiveSummary(state, now)
   const measurement = measurementSummary(state)
+  const heldBecause = holdReason(state.landing)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -464,6 +468,7 @@ export function summarizeFrom(
     ...(slotWait ? { slotWait } : {}),
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
+    ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
   }
 }
 
@@ -697,7 +702,7 @@ function healthWord(health: LeaseHealth): string {
 
 /** Preserve printable text while making terminal control bytes inert. Newlines
  * are split by the caller so multiline setup output remains readable. */
-function safeStatusText(value: string): string {
+export function safeStatusText(value: string): string {
   let displayed = ''
   for (const char of value) {
     const code = char.codePointAt(0)!
@@ -811,13 +816,22 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       prCell(summary),
     ])
   }
-  // An optimization node's objective progress rides on a continuation line
-  // under its row, so it costs the table's column alignment nothing.
+  // An optimization node's objective progress and a held merge's reason ride
+  // on continuation lines under the row, so they cost the table's column
+  // alignment nothing.
   return padColumns(rows).flatMap((line, index) => {
-    const objective = index === 0 ? undefined : summaries[index - 1]!.objective
-    return objective === undefined
-      ? [line]
-      : [line, `    ${objectiveSegments(objective, objective.elapsedHours).join(' · ')}`]
+    const summary = index === 0 ? undefined : summaries[index - 1]!
+    const objective = summary?.objective
+    const held = summary?.holdReason
+    return [
+      line,
+      ...(objective === undefined
+        ? []
+        : [`    ${objectiveSegments(objective, objective.elapsedHours).join(' · ')}`]),
+      ...(held === undefined
+        ? []
+        : [`    ${mergeVocabulary.label} ${safeStatusText(mergeVocabulary.held(held))}`]),
+    ]
   })
 }
 
@@ -993,7 +1007,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     const command = d.landing.command
     const consent =
       command?.kind === 'hold'
-        ? 'held'
+        ? safeStatusText(mergeVocabulary.held(d.tree.holdReason ?? undefined))
         : command?.kind === 'land'
           ? d.tree.consentedHead
             ? `consented at ${d.tree.consentedHead}`

@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import { nodeLandingPolicyDisplay, nodeLandingRuleDisplay } from './landing-display'
+import {
+  holdReason,
+  landingPolicyDisplay,
+  mergeVocabulary,
+  nodeLandingPolicyDisplay,
+  nodeLandingRuleDisplay,
+} from './landing-display'
 import { reduceBuild } from '../../kernel/reducer'
 import type { LandingRule } from '../../config/schema'
 
@@ -143,4 +149,14 @@ test("path rules predict from the cycle head's recorded paths, pending while unr
   ]
   expect(nodeLandingPolicyDisplay(recorded(['src/a.ts']), anyPath)).toBe('policy pending')
   expect(nodeLandingPolicyDisplay(recorded(['docs/a.md', 'src/a.ts']), anyPath)).toBe('auto')
+})
+
+test('a standing hold shows its reason; consent and reasonless holds do not', () => {
+  const held = { command: { kind: 'hold' as const, seq: 2, reason: 'waiting on Q-1' } }
+  expect(holdReason(held)).toBe('waiting on Q-1')
+  expect(landingPolicyDisplay(held)).toBe('held — waiting on Q-1')
+  expect(landingPolicyDisplay({ command: { kind: 'hold', seq: 2 } })).toBe('held')
+  expect(holdReason({ command: { kind: 'land', seq: 3 } })).toBeUndefined()
+  expect(holdReason(undefined)).toBeUndefined()
+  expect(mergeVocabulary.held()).toBe('held')
 })

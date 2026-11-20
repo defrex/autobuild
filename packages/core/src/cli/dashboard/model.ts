@@ -18,6 +18,7 @@ import {
 } from '../../kernel/dispatch-capacity'
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
+import { holdReason } from './landing-display'
 export { treeVocabulary, consentQueue } from './tree'
 import {
   currentLandingFallback,
@@ -1078,7 +1079,7 @@ export function projectBuildFromFacts(
   if (mergeCurrent && !landingAuthorized(state.landing)) {
     const reason =
       state.landing?.command?.kind === 'hold'
-        ? `Merge held — use ab merge ${record.slug} when ready to release the hold`
+        ? heldMergeReason(record.slug, holdReason(state.landing))
         : state.landing?.decision?.mode === 'consent'
           ? autoMergeConsentReason(record.slug)
           : 'Merge policy decision pending'
@@ -1621,4 +1622,10 @@ export function buildVocabulary(state: BuildState): {
         }
       : {}),
   }
+}
+
+/** The merge step's reason while a hold stands, quoting the hold's reason. */
+function heldMergeReason(slug: string, reason: string | undefined): string {
+  const release = `use ab merge ${slug} when ready to release the hold`
+  return reason === undefined ? `Merge held — ${release}` : `Merge held — ${reason}; ${release}`
 }

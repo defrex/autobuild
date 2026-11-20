@@ -892,7 +892,13 @@ function detailBody(
     field(mergeVocabulary.title, detail.landing)
   }
   if (build.kind !== 'integration')
-    body.push(`  ${mergeVocabulary.label} ${landingPolicyDisplay(build.landing)}`)
+    body.push(
+      ...wrapDisplay(
+        `${mergeVocabulary.label} ${landingPolicyDisplay(build.landing)}`,
+        width,
+        '  ',
+      ),
+    )
   const ceiling = reviewRoundCeilingText(build)
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)
