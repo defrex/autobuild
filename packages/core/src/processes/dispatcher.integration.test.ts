@@ -18634,6 +18634,79 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(h.launches).toEqual([parked])
     })
 
+    test('waiting parked builds and a refused deferred launch keep idle ticks bounded', async () => {
+      const { slotAdmissionReadBudget } = await import('../testing/reduced-read-budget')
+      let calls = 0
+      const h = harness({
+        toml: VERIFY_TOML,
+        // Only the busy build holds a lease; parked launches are refused
+        // leases, so a deferred build defers again on every tick.
+        onLaunch: (slug, store) => (slug === 'c-busy' ? claimOnLaunch(slug, store) : undefined),
+        wrapTickets: (source) => {
+          const listReady = source.listReady.bind(source)
+          source.listReady = async (...args: Parameters<typeof listReady>) => {
+            calls++
+            return listReady(...args)
+          }
+          return source
+        },
+      })
+      const normal = await conflictedParked(h, 'a-normal', 2)
+      const urgent = await conflictedParked(h, 'b-urgent', 3)
+      await setPriority(h, urgent, 'urgent')
+      const busy = await busyBuild(h, 'c-busy')
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([])
+      await slotAdmissionReadBudget({
+        store: h.store as MemoryBuildStore,
+        slug: normal,
+        tick: () => h.dispatcher.tick(),
+        listed: () => calls,
+        launched: () => h.launches.length,
+        advance: () => h.clock.advance(5_000),
+        advanceDue: () => h.clock.advance(60_000),
+        free: async () => {
+          await finish(h, busy)
+          await h.store.append(urgent, {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+        },
+      })
+      expect(h.launches).toEqual([normal])
+    }, 120_000)
+
+    test('an unchanged deferral key never reuses a stale urgent evaluation', async () => {
+      let refuse = true
+      const h = harness({
+        toml: VERIFY_TOML,
+        onLaunch: (slug, store) => (refuse ? undefined : claimOnLaunch(slug, store)),
+      })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      // Tick A: the forced scan finds no urgent ticket; the admitted launch
+      // is refused a runner, so the build stays parked under the same key.
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([parked])
+      // An urgent ticket becomes ready and launches succeed again, before
+      // the cadence is due and with no readiness change.
+      h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+      refuse = false
+      h.clock.advance(5_000)
+      // Tick B: the unchanged key suppresses the listing, so nothing
+      // authorizes the deferred launch.
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([parked])
+      expect(await buildFor(h, 'U1')).toBeUndefined()
+      // Tick C: the cadence-due scan claims the urgent ticket first.
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const urgent = await buildFor(h, 'U1')
+      expect(urgent).toBeDefined()
+      expect(h.launches).toEqual([parked, urgent!])
+      expect(await slotWait(h, parked)).toBe('reconcile')
+    })
+
     test('an unchanged deferral state lists again only when a scan is due on its own', async () => {
       let calls = 0
       // Launches never claim a lease, so the parked build stays parked and

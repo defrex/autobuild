@@ -768,6 +768,22 @@ test('ticket scan measurements validate counters and dispatcher ownership', () =
       payload: { ...payload, queued: -1 },
     }),
   ).toThrow()
+  // Urgent claim demand is a positive count, omitted when none.
+  expect(
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload: { ...payload, urgentWaiting: 2 },
+    }).payload,
+  ).toEqual({ ...payload, urgentWaiting: 2 })
+  for (const urgentWaiting of [0, -1, 1.5])
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-scan-completed',
+        payload: { ...payload, urgentWaiting },
+      }),
+    ).toThrow()
 })
 
 test('source degradation requires strict cause-specific reset evidence', () => {

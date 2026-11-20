@@ -213,6 +213,56 @@ describe('controlBuild — shared durable controls', () => {
     await store.close()
   })
 
+  test('priority records build.priority-set on an active build and refuses anything else', async () => {
+    const store = await makeStore()
+    const priority = (value: unknown) =>
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: { USER: 'operator' },
+        action: { kind: 'priority', priority: value as 'urgent' },
+      })
+    const before = (await store.getEvents(SLUG)).length
+    const invalid = await priority('high').catch((error) => error)
+    expect(invalid).toBeInstanceOf(BuildControlError)
+    expect((invalid as BuildControlError).code).toBe('invalid-argument')
+    expect((await store.getEvents(SLUG)).length).toBe(before)
+
+    expect(await priority('urgent')).toMatchObject({
+      kind: 'command',
+      command: 'priority',
+      event: {
+        type: 'build.priority-set',
+        payload: { priority: 'urgent' },
+        actor: { kind: 'human', user: 'operator' },
+      },
+    })
+    expect(reduceBuild(await store.getEvents(SLUG)).priority).toBe('urgent')
+    await priority('normal')
+    expect(reduceBuild(await store.getEvents(SLUG)).priority).toBe('normal')
+    await store.close()
+
+    // A terminal build is refused before any write.
+    const done = await makeStore()
+    await done.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    const count = (await done.getEvents(SLUG)).length
+    const refused = await controlBuild({
+      store: done,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'operator' },
+      action: { kind: 'priority', priority: 'urgent' },
+    }).catch((error) => error)
+    expect((refused as BuildControlError).code).toBe('inactive')
+    expect((await done.getEvents(SLUG)).length).toBe(count)
+    await done.close()
+  })
+
   test('dashboard pause and resume derive from freshly reduced state', async () => {
     const store = await makeStore()
 

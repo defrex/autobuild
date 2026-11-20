@@ -2599,6 +2599,23 @@ test('a parked work row waiting for a slot carries a yellow alert; cached rows s
   expect(rows).toEqual(before)
 })
 
+test('urgent waiting rows say they wait ahead of normal work', () => {
+  const rows = [{ slug: 'parked', steps: [] } as unknown as DashboardBuild, node('waiting')]
+  const decorated = decorateSlotWaits(rows, {
+    ...capacity,
+    waitingNodes: [{ slug: 'waiting', request: 'verification', priority: 'urgent' }],
+    waitingBuilds: [{ slug: 'parked', request: 'reconcile', priority: 'urgent' }],
+  })
+  expect(decorated[0]!.alert).toEqual({
+    tone: 'yellow',
+    text: 'urgent reconcile waiting for a slot ahead of normal work',
+  })
+  expect(decorated[1]!.integrationRow!.alert).toEqual({
+    tone: 'yellow',
+    text: 'urgent verification waiting for a slot ahead of normal work',
+  })
+})
+
 describe('ticket waits project as waiting, not blocked', () => {
   function waitWrites(): EventWrite[] {
     return [
