@@ -246,3 +246,47 @@ test('items a resolver finished after a conflict are resolved until the reservat
   state = nodeRestackReducer.advance(state, [reservation])
   expect(state.resolved).toBeUndefined()
 })
+
+test('items the kernel regenerated are counted separately until the next reservation', () => {
+  const regenerated = (outcome: 'resolved' | 'failed', head?: string) =>
+    event('node.item-regenerated', {
+      id: 'tx',
+      index: 1,
+      base: 'prefix',
+      files: ['gen.txt'],
+      commands: [{ command: 'true', files: ['gen.txt'] }],
+      outcome,
+      ...(head === undefined ? { reason: 'command failed' } : { head: head.padEnd(40, '0') }),
+    })
+  let state = nodeRestackReducer.advance(nodeRestackReducer.initial(), [
+    event('node.opened', { sha: 'initial' }),
+    reservation,
+    prepared(0, 'new-parent'),
+    receipt(0, 'new-parent', 'prefix'),
+    prepared(1, 'prefix'),
+    event('node.item-conflicted', { id: 'tx', index: 1, base: 'prefix', files: ['gen.txt'] }),
+    regenerated('failed'),
+  ])
+  expect(state.regeneration?.outcome).toBe('failed')
+  // A regeneration for another item is ignored.
+  state = nodeRestackReducer.advance(state, [
+    event('node.item-regenerated', { ...regenerated('failed').payload, index: 0 } as never),
+  ])
+  expect(state.regeneration?.index).toBe(1)
+  const head = 'a'.repeat(40)
+  state = nodeRestackReducer.advance(state, [
+    regenerated('resolved', head),
+    receipt(1, 'prefix', head),
+  ])
+  expect(state.regeneration).toBeUndefined()
+  expect(state.regenerated).toEqual([1])
+  expect(state.resolved).toEqual([1])
+  state = nodeRestackReducer.advance(state, [
+    event('node.publish-intended', { id: 'tx', head }),
+    event('node.rewritten', { id: 'tx', previous: 'old-head', head }),
+    event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
+  ])
+  expect(state.regenerated).toEqual([1])
+  state = nodeRestackReducer.advance(state, [reservation])
+  expect(state.regenerated).toBeUndefined()
+})

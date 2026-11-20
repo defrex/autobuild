@@ -4,7 +4,7 @@
   "title": "Repository configuration",
   "group": "reference",
   "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, merge policy, and editable skills.",
-  "textHash": "e0e9fe174a08ef5a1f35efd76a4f7cce4ba9478610633dede7a5e9716822ee0d",
+  "textHash": "4eba5c644deaeca395866cb65042629430897f26e54ae5acd501d01ad2076fd6",
   "headings": [
     "Commands and extension steps",
     "Roles, models, and limits",
