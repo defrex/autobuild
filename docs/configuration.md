@@ -2804,8 +2804,18 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 
 ## `[policy]`
 
-Optional. Every field receives its own default. All are positive integers except
-`harvestMaxDrift`, which is nonnegative so zero can disable that trigger.
+Optional. Every field receives its own default unless noted. All are positive
+integers except `harvestMaxDrift`, which is nonnegative so zero can disable that
+trigger, and the open-PR backpressure keys: `maxOpenPrs` has no default (unset
+disables backpressure), `resumeOpenPrs` is a nonnegative integer that defaults
+to `maxOpenPrs - 1` and may not exceed it, and `excludeHeldOpenPrs` is a boolean
+that defaults to `false`.
+
+While open unmerged root PRs (leaves and integration nodes; not children of a
+node) reach `maxOpenPrs`, the dispatcher claims no new `normal`-priority
+ticket until the count drops to `resumeOpenPrs`. Urgent claims, in-flight
+builds, reconciles and landings continue; capacity is unchanged. `ab repository
+status` reports the state as `capacity.backpressure`.
 
 <!-- configuration-reference:policy -->
 
@@ -3055,6 +3065,45 @@ Optional. Every field receives its own default. All are positive integers except
 **Description:** Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.
 
 **Constraints:** safe integer; ≥ 0
+
+#### `policy.maxOpenPrs`
+
+**TOML key:** `policy.maxOpenPrs`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.
+
+**Constraints:** safe integer; > 0
+
+#### `policy.resumeOpenPrs`
+
+**TOML key:** `policy.resumeOpenPrs`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Inert without `maxOpenPrs`.
+
+**Constraints:** safe integer; ≥ 0; Must not exceed `maxOpenPrs`.
+
+#### `policy.excludeHeldOpenPrs`
+
+**TOML key:** `policy.excludeHeldOpenPrs`
+
+- **Type:** `boolean`
+- **Default:** `false`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Leave PRs whose active landing command is `hold` out of the open-PR backpressure count. Inert without `maxOpenPrs`.
+
+**Constraints:** None beyond the input type.
 
 <!-- configuration-reference:/policy -->
 
@@ -4008,6 +4057,9 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5
 harvestMaxDrift = 3
+# maxOpenPrs = 12
+# resumeOpenPrs = 9
+# excludeHeldOpenPrs = false
 
 [tickets]
 source = "file"

@@ -467,6 +467,12 @@ async function dashboardFromView(
     config.capacity,
     opts.clock(),
     migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
+    {
+      openPrs: {
+        policy: config.policy,
+        engaged: repositoryEvents.openPrBackpressure !== undefined,
+      },
+    },
   )
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, records),
