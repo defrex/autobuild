@@ -1,6 +1,11 @@
 import { observeTarget } from './target-observation'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
-import { inspectIntegrationStack } from './integration-stack'
+import {
+  inspectIntegrationStack,
+  IntegrationStackViolation,
+  raiseIntegrationStackAttention,
+} from './integration-stack'
+import { nodeContributionBase } from './node-verification-context'
 import { integrationFailed } from './integration-state'
 import { janitorBlocked } from './janitor-failure'
 import type { BuildStore } from '../store/types'
@@ -190,7 +195,6 @@ export async function landIntoNode(
           'Leaf head is not one canonical change on the current node head; awaiting restack or human provenance review.',
         )
       }
-      if (deps.stack) await inspectIntegrationStack(deps.exec, workspacePath, expected, candidate)
       if (
         !deps.stack &&
         JSON.stringify(buildTrailers(message.stdout)) !== JSON.stringify([deps.slug])
@@ -198,6 +202,15 @@ export async function landIntoNode(
         throw new Error('node merge requires exactly one canonical source identity')
       if (deps.stack) {
         const source = (await readBuildFacts(store, deps.slug)).value.state
+        try {
+          await inspectIntegrationStack(deps.exec, workspacePath, expected, candidate, {
+            contributionBase: nodeContributionBase(source, candidate),
+          })
+        } catch (error) {
+          if (!(error instanceof IntegrationStackViolation)) throw error
+          await raiseIntegrationStackAttention(store, deps.slug, source, error)
+          return undefined
+        }
         if (source.nodeRestack?.parentRequest || source.nodeRestack?.parentChange) return undefined
         if (!source.integration?.intent) {
           const intended = await store.appendIfCurrent(deps.slug, source.lastSeq, {
