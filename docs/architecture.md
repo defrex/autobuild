@@ -790,6 +790,16 @@ boundary in the reducer and log index, independently of reconcile identity.
 The advisory `pipeline.settled` fact records that the engine reached a leaf's
 `wait awaiting-pr`; `kernel/dispatch-capacity.ts` reads it so a finished build
 parked for its merge decision holds no slot.
+Slot admission order (SPEC §12) is arithmetic in `kernel/dispatch-capacity.ts`:
+waiting entries carry the build's reduced `priority` (`build.created`,
+`build.priority-set`), `reservedAhead` counts the urgent reservations and the
+latest admission scan's `urgentWaiting` ahead of a normal waiter, and
+`intakeCapacity` gives urgent and normal claims separate budgets. The
+dispatcher's `leafAdmission`, `nodeHasCapacity` and proposer admission defer a
+normal waiter that fits while claims can run; `dispatch` forces that tick's
+admission scan once per deferral key, and `admitDeferredParked` retries the
+deferred admissions through their generic paths only after the scan completed
+its urgent decision.
 Ticket waits (SPEC §11) span four seams. `cli/terminals.ts` (`waitOn`, routed
 as `ab wait-on`) appends the agent's terminal `wait.requested`; the build
 digest marks it pending. The dispatcher's lease-sweep pass validates a pending

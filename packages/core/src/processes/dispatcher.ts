@@ -7873,10 +7873,11 @@ export class Dispatcher {
     // list now, once per deferral key; an unchanged key waits for a scan that
     // is due on its own.
     let force = false
+    let deferralBuilds: CapacityBuild[] | undefined
     if (this.deferredAdmissions.size > 0) {
+      deferralBuilds = await this.capacityBuilds(launched)
       const key = this.deferralKey(
-        dispatchCapacity(await this.capacityBuilds(launched), config.capacity, this.deps.clock())
-          .occupied,
+        dispatchCapacity(deferralBuilds, config.capacity, this.deps.clock()).occupied,
       )
       if (key !== this.lastForcedDeferralKey) {
         force = true
@@ -7894,7 +7895,8 @@ export class Dispatcher {
     // even while blocked or paused; a finished build parked for its merge
     // decision holds none. Capacity is per repo (§16.1) — another repo's
     // builds never consume this repo's slots.
-    const capacityBuilds = await this.capacityBuilds(launched)
+    // The checkpoint writes nothing, so a deferral's capacity read is current.
+    const capacityBuilds = deferralBuilds ?? (await this.capacityBuilds(launched))
     // A node awaiting verification, or a parked build that must run again,
     // reserves its slot ahead of claims of its own or a lower priority until
     // it is admitted; this only ever lowers the claim budgets. Urgent claims
