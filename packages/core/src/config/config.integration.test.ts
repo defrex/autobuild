@@ -173,6 +173,7 @@ describe('parseConfig — complete flattened surface', () => {
         janitorBackoffMaxSeconds: 300,
         nodeIdleAfterSeconds: 600,
         nodeIdlePollSeconds: 120,
+        excludeHeldOpenPrs: false,
       },
       tickets: {
         source: 'file',
@@ -230,6 +231,7 @@ describe('parseConfig — defaults', () => {
         janitorBackoffMaxSeconds: 300,
         nodeIdleAfterSeconds: 600,
         nodeIdlePollSeconds: 120,
+        excludeHeldOpenPrs: false,
       },
       tickets: { source: 'file', readyState: 'ready' },
       orchestrator: {
@@ -794,6 +796,7 @@ skill = "ab-verify-e2e"
       janitorBackoffMaxSeconds: 300,
       nodeIdleAfterSeconds: 600,
       nodeIdlePollSeconds: 120,
+      excludeHeldOpenPrs: false,
     })
   })
 })
