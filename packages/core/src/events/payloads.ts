@@ -284,6 +284,42 @@ const autoMergeDefaultObserved = z.strictObject({
 const round = z.number().int().positive()
 /** A forge issue number, shared by every issue-link fact. */
 const issueNumber = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+/** One `[[generated]]` command and the conflicted files it owns. */
+const regenerationCommand = z.strictObject({
+  command: z.string().min(1),
+  files: z.array(z.string().min(1)).min(1),
+})
+
+/** A replay's deterministic regeneration: which conflicted files, which
+ * declared commands, and whether the kernel resolved it (`head` is the
+ * retained replay commit), failed (falls back to reconcile with `reason`),
+ * or skipped it because some conflicted path is undeclared. */
+const regenerationShape = {
+  files: z.array(z.string().min(1)).min(1),
+  commands: z.array(regenerationCommand),
+  outcome: z.enum(['resolved', 'failed', 'skipped']),
+  head: gitOid.optional(),
+  reason: z.string().min(1).max(4000).optional(),
+}
+
+function refineRegeneration(
+  value: { outcome: 'resolved' | 'failed' | 'skipped'; head?: string; reason?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if ((value.outcome === 'resolved') !== (value.head !== undefined))
+    ctx.addIssue({
+      code: 'custom',
+      path: ['head'],
+      message: 'head is recorded exactly when regeneration resolved',
+    })
+  if ((value.outcome === 'resolved') === (value.reason !== undefined))
+    ctx.addIssue({
+      code: 'custom',
+      path: ['reason'],
+      message: 'reason is recorded exactly when regeneration did not resolve',
+    })
+}
+
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'branch', 'launch'])
 const infrastructureOperation = z.enum([
@@ -979,6 +1015,14 @@ export const eventPayloadSchemas = {
     index: z.number().int().nonnegative(),
     base: z.string().min(1),
   }),
+  'node.item-regenerated': z
+    .strictObject({
+      id: z.string().min(1),
+      index: z.number().int().nonnegative(),
+      base: z.string().min(1),
+      ...regenerationShape,
+    })
+    .superRefine(refineRegeneration),
   'node.publish-intended': z.strictObject({
     id: z.string().min(1),
     head: z.string().min(1),
@@ -1876,6 +1920,9 @@ export const eventPayloadSchemas = {
     conflicted: z.boolean(),
     files: z.array(z.string()).optional(),
   }),
+  'restack.regenerated': z
+    .strictObject({ id: z.string().min(1), ...regenerationShape })
+    .superRefine(refineRegeneration),
   'restack.publish-intended': leafRestackSchema.extend({ headSha: gitOid }),
   'restack.rewritten': leafRestackSchema.extend({
     headSha: gitOid,
