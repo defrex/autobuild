@@ -10,7 +10,7 @@ import type {
   InitValidationReport,
   WorkspaceReadinessContext,
 } from '../ports/workspace/provider-capabilities'
-import { validateVercelSandbox, type VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
+import type { VercelSandboxFacade, validateVercelSandbox } from '../ports/workspace/vercel-sandbox'
 import { gitText, parseGuestOutput } from './init-readiness-shared'
 import { hostedReadinessNames } from '../accounts/hosted-readiness'
 import { staticSecretRemedy } from './init-hosted-accounts'
@@ -85,8 +85,9 @@ export async function validateRemoteReadiness(
     )
   }
   let remote: Awaited<ReturnType<typeof validateVercelSandbox>>
+  const { validateVercelSandbox: validate } = await import('../ports/workspace/vercel-sandbox')
   try {
-    remote = await validateVercelSandbox({
+    remote = await validate({
       config: vercel,
       env: ctx.env,
       storeRef: ctx.storeRef,
