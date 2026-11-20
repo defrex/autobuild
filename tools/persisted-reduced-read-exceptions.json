@@ -67,10 +67,6 @@
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
   },
-  "packages/core/src/processes/build-runner.ts::selectVerifyDiffBase::reduce": {
-    "kind": "reduction",
-    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
-  },
   "packages/core/src/processes/dispatch-failure-budget.ts::dispatchFailureBudget::reduce": {
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
@@ -560,6 +556,10 @@
     "kind": "reduction",
     "reason": "Nested incremental leaf-restack fold consumes only the log-index delta; the log index and build facts are persisted by adapters."
   },
+  "packages/core/src/kernel/reducer-identity.ts::foldDigest::advance": {
+    "kind": "reduction",
+    "reason": "Pure identity digest fold over a caller-supplied corpus; reads no store and serves no current decision."
+  },
   "packages/core/src/kernel/reducer.ts::foldBuild::advanceNodeRestack": {
     "reason": "Incrementally folds the same single incoming event into the nested node transaction accumulator; no current-state replay or store read.",
     "kind": "reduction"
@@ -647,5 +647,9 @@
   "packages/core/src/store/digest.ts::buildDigestReducer/fold::advanceOptimization": {
     "kind": "reduction",
     "reason": "Registered incremental build-digest definition; folds each delta event handed to it by the persisted prefix into the nested optimization accumulator."
+  },
+  "packages/core/src/kernel/verify-diff-base.ts::selectVerifyDiffBase::reduce": {
+    "kind": "reduction",
+    "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
   }
 }

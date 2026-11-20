@@ -9,22 +9,28 @@ import {
   type ValueCacheRow,
 } from '../store/reducer-values'
 import {
+  BASE_RELATIVE_SKIPPED_PREFIX,
   LEGACY_REDUCER_VERSIONS,
   LEDGER_SENTINEL,
   REGENERATE_COMMAND,
   UNREGENERATED_COMBINATION_PREFIX,
   appendRevision,
   canonicalJson,
+  checkAgainstBase,
   checkIdentityRecords,
   deriveReducerVersion,
   evaluationCorpora,
+  foldDigest,
+  formatBaseRelativeSkipped,
   formatUnregeneratedCombination,
+  parseLedgerSource,
   parseRecordFile,
   parseRevisions,
   planRegeneration,
   recordKey,
   renderRecordFile,
   revisionSet,
+  unrevisedSinceBase,
   type CurrentIdentity,
   type IdentityRecord,
   type Ledger,
@@ -293,7 +299,7 @@ describe('identity records', () => {
     const notice = formatUnregeneratedCombination(result.unregeneratedCombinations[0]!)
     expect(notice.startsWith(`${UNREGENERATED_COMBINATION_PREFIX}: setupStreak`)).toBe(true)
     expect(notice).toContain(REGENERATE_COMMAND)
-    expect(notice).toContain('AUT-1274')
+    expect(notice).toContain('AB_VERIFY_BASE')
   })
 
   test('a fold change on an unregenerated combination is named until regeneration, then fails', () => {
@@ -459,5 +465,98 @@ describe('identity records', () => {
       [[A], { c1: d, c2: d }],
     ])
     expect(plan.archive).toEqual(['c2'])
+  })
+})
+
+describe('identity changes relative to the verify base', () => {
+  const BASE = 'b'.repeat(40)
+  const baseDigests = (digests: Record<string, string>) => new Map([[IDENTITY, digests]])
+  const againstBase = (now: CurrentIdentity, digests: Record<string, string>) =>
+    checkAgainstBase({ current: [now], base: BASE, baseDigests: baseDigests(digests) })
+  const ledgerSource = (keys: string[]) =>
+    keys.reduce((source, key) => {
+      const [identity, kind, id] = key.split('/') as [string, 'shape' | 'fold', string]
+      return appendRevision(source, { identity, kind, id, reason: 'why' })
+    }, BASE_SOURCE)
+
+  test('parseLedgerSource reads the keys, skips the sentinel and rejects malformed keys', () => {
+    expect(parseLedgerSource(ledgerSource([A, B]))).toEqual(new Set([A, B]))
+    expect(parseLedgerSource(BASE_SOURCE)).toEqual(new Set())
+    expect(() =>
+      parseLedgerSource(BASE_SOURCE.replace('}', "  'setupStreak/fold/short': 'why',\n}")),
+    ).toThrow('malformed reducer revision key')
+  })
+
+  test('a fold change after a clean combination fails against the base, though the records accept it', () => {
+    // Base: {a} and {b} merged into the ledger; records only at {a} and {b}.
+    const records = [record([A], { c1: 'a-digest' }), record([B], { c1: 'b-digest' })]
+    const changed = current([A, B], { c1: foldDigest(flipped, corpus, sha256) })
+    const byRecords = check(changed, records)
+    expect(byRecords.violations).toEqual([])
+    expect(byRecords.unregeneratedCombinations.map((entry) => entry.name)).toEqual([IDENTITY])
+    const targets = unrevisedSinceBase([changed], parseLedgerSource(ledgerSource([A, B])))
+    expect(targets.map((entry) => entry.name)).toEqual([IDENTITY])
+    // The base had no {a,b} record, so its digest comes from folding its own code.
+    const violations = againstBase(targets[0]!, {
+      c1: foldDigest(setupStreakReducer, corpus, sha256),
+    })
+    expect(violations.map((violation) => violation.kind)).toEqual(['changed-since-base'])
+    expect(violations[0]!.message).toContain(`${IDENTITY}: identity ${IDENTITY} folds corpus c1`)
+    expect(violations[0]!.message).toContain(BASE.slice(0, 12))
+    expect(violations[0]!.message).toContain('bun tools/reducer-revision.ts')
+  })
+
+  test('regenerating the changed digest at the head still fails against the base', () => {
+    const changedDigest = foldDigest(flipped, corpus, sha256)
+    const records = [
+      record([A], { c1: 'a-digest' }),
+      record([B], { c1: 'b-digest' }),
+      record([A, B], { c1: changedDigest }),
+    ]
+    const changed = current([A, B], { c1: changedDigest })
+    expect(check(changed, records)).toEqual({ violations: [], unregeneratedCombinations: [] })
+    expect(
+      againstBase(changed, { c1: foldDigest(setupStreakReducer, corpus, sha256) }).map(
+        (violation) => violation.kind,
+      ),
+    ).toEqual(['changed-since-base'])
+  })
+
+  test('a head that adds a revision over the base is exempt, so a restack needs no regeneration', () => {
+    const restacked = current([A, B], { c1: foldDigest(setupStreakReducer, corpus, sha256) })
+    expect(unrevisedSinceBase([restacked], parseLedgerSource(ledgerSource([B])))).toEqual([])
+  })
+
+  test('a behaviour-identical edit folds to the base digest and passes', () => {
+    const edited = current([A, B], { c1: foldDigest(refactored, corpus, sha256) })
+    expect(againstBase(edited, { c1: foldDigest(setupStreakReducer, corpus, sha256) })).toEqual([])
+  })
+
+  test('only corpus ids both sides hold are compared, and a reducer new at the head is skipped', () => {
+    const now = current([], { c1: 'same', headOnly: 'x' })
+    expect(againstBase(now, { c1: 'same', baseOnly: 'y' })).toEqual([])
+    expect(checkAgainstBase({ current: [now], base: BASE, baseDigests: new Map() })).toEqual([])
+  })
+
+  test('foldDigest stops at the chunk that throws and digests the accumulator it reached', () => {
+    const log = Array.from({ length: 30 }, (_, seq) => ({ seq }))
+    const throwing = {
+      initial: () => ({ n: 0 }),
+      advance(acc: { n: number }, events: readonly { seq: number }[]) {
+        if (events.some((event) => event.seq >= 24)) throw new Error('other domain')
+        return { n: acc.n + events.length }
+      },
+    }
+    const visited: unknown[] = []
+    const value = foldDigest(throwing, log, sha256, (acc) => visited.push(acc))
+    expect(visited).toEqual([{ n: 12 }, { n: 24 }])
+    expect(value).toBe(sha256(canonicalJson({ acc: { n: 24 }, threwAtChunk: 2 })).slice(0, 32))
+  })
+
+  test('a skipped base-relative clause is named, never silent', () => {
+    const notice = formatBaseRelativeSkipped('AB_VERIFY_BASE is not set')
+    expect(notice.startsWith(`${BASE_RELATIVE_SKIPPED_PREFIX}: AB_VERIFY_BASE is not set`)).toBe(
+      true,
+    )
   })
 })

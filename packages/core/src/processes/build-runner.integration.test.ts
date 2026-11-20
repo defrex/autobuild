@@ -60,6 +60,7 @@ import {
   parseNulChangedPaths,
   selectPublishedBranchHead,
   selectVerifyDiffBase,
+  VERIFY_BASE_ENV,
   type BuildRunnerOpts,
 } from './build-runner'
 
@@ -5205,6 +5206,95 @@ paths = ["web/**"]
       },
     })
     expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('refreshed-base')
+  })
+})
+
+describe('check commands receive the verify diff base', () => {
+  const config = (steps: string) => `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+unit = "bun test"
+[verify]
+steps = ${steps}
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+[verify.unit]
+kind = "check"
+command = "unit"
+`
+  /** A harness whose checks pass and record the environment each received. */
+  async function baseHarness(opts: { steps: string; paths?: string[] }) {
+    const received: Array<{ command: string; env: Record<string, string | undefined> }> = []
+    const h = await makeHarness({
+      configToml: config(opts.steps),
+      verifyDiffs: [{ paths: opts.paths ?? [] }],
+      checkExec: async (cmd, execOpts) => {
+        received.push({ command: cmd[2]!, env: { ...execOpts.env } })
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
+    return { h, received }
+  }
+  async function seedApproved(store: BuildStore): Promise<void> {
+    await seedPlanApproved(store)
+    await seedCodeApproved(store)
+  }
+
+  test('an unconditional leaf check receives the provisioned base', async () => {
+    const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
+    await seedApproved(h.store)
+    await h.br.step()
+    expect(received).toEqual([{ command: 'bun test', env: { [VERIFY_BASE_ENV]: '0'.repeat(40) } }])
+  })
+
+  test('after a completed reconcile a check receives the refreshed base', async () => {
+    const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'refreshed-base' },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('reconcile', 's_reconcile_1'),
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'merge-1', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    await seedApproved(h.store)
+    await h.br.step()
+    expect(received.map((entry) => entry.env[VERIFY_BASE_ENV])).toEqual(['refreshed-base'])
+  })
+
+  test('a matching conditional check receives the base its paths were diffed against', async () => {
+    const { h, received } = await baseHarness({
+      steps: '["dashboard", "unit"]',
+      paths: ['src/cli/dashboard/model.ts'],
+    })
+    await seedApproved(h.store)
+    await h.br.step()
+    const diff = h.execCalls.find((call) => call.cmd[0] === 'git' && call.cmd[1] === 'diff')
+    expect(received).toHaveLength(1)
+    expect(received[0]!.env[VERIFY_BASE_ENV]).toBe(diff!.cmd[5]!)
+    expect(diff!.cmd[5]).toBe('0'.repeat(40))
+  })
+
+  test('every member of a staged check receives the base', async () => {
+    const { h, received } = await baseHarness({
+      steps: '[["dashboard", "unit"]]',
+      paths: ['src/cli/dashboard/model.ts'],
+    })
+    await seedApproved(h.store)
+    await h.br.attach()
+    await h.br.step()
+    expect(received.map((entry) => entry.command).sort()).toEqual([
+      'bun test',
+      'bun test dashboard',
+    ])
+    for (const entry of received) expect(entry.env[VERIFY_BASE_ENV]).toBe('0'.repeat(40))
   })
 })
 
