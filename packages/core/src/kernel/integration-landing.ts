@@ -6,7 +6,13 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
-import { inspectIntegrationStack } from './integration-stack'
+import {
+  inspectIntegrationStack,
+  IntegrationStackViolation,
+  raiseIntegrationStackAttention,
+  type IntegrationStack,
+} from './integration-stack'
+import { nodeContributionBase } from './node-verification-context'
 import { acknowledgeNodeLanding } from './node-landing'
 import { nodeIssueLinksForForge, nodeIssueLinksPublished } from './node-issue-links'
 
@@ -49,6 +55,7 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
       return
     const existing = state.integration?.intent
     let landed: string | undefined
+    let stack: IntegrationStack | undefined
     if (existing) {
       // Readback precedes controls: a completed write must survive revocation.
       const pr = await forge.getPrState(workspacePath, deps.pr)
@@ -100,7 +107,17 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
         await abandon('Parent or head moved')
         return
       }
-      await inspectIntegrationStack(exec, workspacePath, parent, head)
+      try {
+        stack = await inspectIntegrationStack(exec, workspacePath, parent, head, {
+          contributionBase: nodeContributionBase(state, head),
+        })
+      } catch (error) {
+        if (!(error instanceof IntegrationStackViolation)) throw error
+        // Abandoning writes no escalation, so the facts read above still dedupe.
+        await abandon(error.message)
+        await raiseIntegrationStackAttention(store, slug, state, error)
+        return
+      }
       // Refresh the PR body to the final set (own links and children's
       // union) and confirm the readback before any merge request, even when
       // the published fact matches, so landing closes every fully resolved
@@ -206,7 +223,8 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
     await store.append(slug, {
       actor: DISPATCHER,
       type: 'pr.merged',
-      payload: { sha: landed, buildTrailerPresent: true },
+      // A hand-pushed-only range carries no trailer; a readback has no inspection.
+      payload: { sha: landed, buildTrailerPresent: stack ? stack.builds.length > 0 : true },
     })
     await acknowledgeNodeLanding(forge, workspacePath, deps.pr, landed)
   } finally {
@@ -238,9 +256,19 @@ export async function auditIntegrationLanding(
     trees.push(tree.stdout.trim())
   }
   const intent = state.integration?.intent
-  const identities = intent
-    ? await inspectIntegrationStack(deps.exec, deps.workspacePath, intent.parent, landing.head)
-    : []
+  let identities: string[] = []
+  let violation: IntegrationStackViolation | undefined
+  if (intent)
+    try {
+      identities = (
+        await inspectIntegrationStack(deps.exec, deps.workspacePath, intent.parent, landing.head, {
+          contributionBase: nodeContributionBase(state, landing.head),
+        })
+      ).builds
+    } catch (error) {
+      if (!(error instanceof IntegrationStackViolation)) throw error
+      violation = error
+    }
   const messages = intent
     ? await deps.exec(
         ['git', 'log', '--format=%B%x00', `${intent.parent}..${landing.landed}`, '--'],
@@ -254,7 +282,7 @@ export async function auditIntegrationLanding(
   const missing = identities.filter(
     (identity) => landedIdentities.filter((value) => value === identity).length !== 1,
   )
-  if (trees[0] !== trees[1] || missing.length) {
+  if (trees[0] !== trees[1] || missing.length || violation) {
     const id = `integration-audit-${landing.operation}`
     if (![...state.openEscalations, ...state.answeredEscalations].some((item) => item.id === id))
       await deps.store.append(deps.slug, {
@@ -264,7 +292,7 @@ export async function auditIntegrationLanding(
           id,
           phase: 'verify:integration',
           source: 'agent',
-          question: `Integration result requires attention: verified ${landing.head} (${trees[0]}), merged ${landing.landed} (${trees[1]}). Missing or duplicate identities: ${missing.join(', ') || 'none'}. The shared parent has not been rewritten.`,
+          question: `Integration result requires attention: verified ${landing.head} (${trees[0]}), merged ${landing.landed} (${trees[1]}). Missing or duplicate identities: ${missing.join(', ') || 'none'}.${violation ? ` Stack refused: ${violation.message}.` : ''} The shared parent has not been rewritten.`,
         },
       })
   }

@@ -177,7 +177,10 @@ file revokes it, and the new head needs fresh consent.
 
 Root-target leaves squash into one identity-bearing commit per build.
 Node-target children use serialized, exact-parent guarded fast-forwards;
-node-to-local-git-root merge also fast-forwards, preserving the contributions.
+node-to-local-git-root merge also fast-forwards, preserving each contribution and
+verified hand-pushed commit. A node stack that is non-linear, repeats or combines
+identities, or holds a commit the node does not own is refused once with operator
+attention naming the commit, not retried.
 Node-to-GitHub-root merge uses PR rebase merge guarded on verified head after
 a final parent freshness read. Enforced up-to-date protection provides a fenced
 merge; uncertainty is recorded as unfenced and requires immutable merged-tree

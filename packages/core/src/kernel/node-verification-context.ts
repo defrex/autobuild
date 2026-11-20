@@ -183,6 +183,19 @@ export function parseNodeVerificationContext(
   return { ...payload, index: payload.index as NodeVerificationIndex }
 }
 
+/** The boundary above which trailer-less first-parent commits are node-owned
+ * hand-pushed commits. Verification and landing share it so they agree. */
+export function nodeContributionBase(
+  state: Pick<BuildState, 'nodeRestack' | 'nodeOpened'>,
+  head: string,
+): string | undefined {
+  return (
+    state.nodeRestack?.contributionBoundaries?.[head] ??
+    state.nodeRestack?.contributionBase ??
+    state.nodeOpened?.sha
+  )
+}
+
 /** Called only from repository-authorized preparation, never from a guest. */
 export async function prepareNodeVerificationContext(
   store: BuildStore,
@@ -191,10 +204,7 @@ export async function prepareNodeVerificationContext(
   state: Pick<BuildState, 'nodeRestack' | 'nodeOpened'>,
   git: NodeGit,
 ): Promise<string> {
-  const contributionBase =
-    state.nodeRestack?.contributionBoundaries?.[cycle.head] ??
-    state.nodeRestack?.contributionBase ??
-    state.nodeOpened?.sha
+  const contributionBase = nodeContributionBase(state, cycle.head)
   if (!contributionBase)
     throw new Error(
       'node verification is missing its durable contribution boundary; restore node opening evidence',
