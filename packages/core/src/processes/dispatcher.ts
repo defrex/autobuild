@@ -74,6 +74,13 @@ import {
   type JanitorOperation,
 } from '../kernel/janitor-failure'
 import { KernelGitUnavailable, kernelGitUnavailableDetail } from '../kernel/kernel-git'
+import {
+  backpressureExplanation,
+  backpressureTransition,
+  openPrBackpressure,
+  openPrBackpressurePolicy,
+  openPrCount,
+} from '../kernel/open-pr-backpressure'
 import { isForgeFailure, isForgeRejection } from '../ports/forge-failure'
 import {
   ForgeRequestDeferred,
@@ -205,7 +212,7 @@ import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../st
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
-import { urgentFirst } from '../ports/tickets/priority'
+import { ticketPriority, urgentFirst } from '../ports/tickets/priority'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
@@ -7675,7 +7682,34 @@ export class Dispatcher {
     // A node awaiting verification, or a parked build that must run again,
     // reserves its slot ahead of new claims until it is admitted; this only
     // ever lowers the claim budget.
-    const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock())
+    // Open-PR backpressure gates new normal-priority claims only: admission,
+    // the janitor, reconciles, landings and urgent claims are untouched, and
+    // capacity accounting is unchanged. Engagement is a durable repository
+    // fact recorded only on transitions, so hysteresis survives restarts.
+    const engagement = this.store.repositoryFacts().openPrBackpressure
+    const engaged = engagement !== undefined
+    const backpressure = openPrBackpressure(
+      capacityBuilds,
+      openPrBackpressurePolicy(config.policy),
+      engaged,
+    )
+    const projection = dispatchCapacity(
+      capacityBuilds,
+      config.capacity,
+      this.deps.clock(),
+      undefined,
+      { openPrs: { policy: config.policy, engaged } },
+    )
+    const transition = backpressureTransition(
+      backpressure,
+      engaged,
+      backpressure?.openPrs ?? openPrCount(capacityBuilds, engagement?.excludeHeld ?? false),
+    )
+    if (transition && this.deps.holdsRepoAuthority?.() !== false) {
+      await store.ensureRepo(this.deps.repo)
+      await store.appendRepo(this.deps.repo, { actor: DISPATCHER, ...transition })
+    }
+    const normalPaused = backpressure?.active === true
     const activeRefs: TicketRef[] = capacityBuilds
       .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
@@ -7718,6 +7752,7 @@ export class Dispatcher {
     const ready = this.deps.tickets.priority ? urgentFirst(claimable) : claimable
     report.invalidTickets += listing.diagnostics.length + conflicts.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics, ...conflicts.diagnostics)
+    if (normalPaused) report.ticketDiagnostics.push(backpressureExplanation(backpressure))
     report.queued = ready.length
     const withheld = new Set<string>()
     for (const ticket of ready) {
@@ -7753,13 +7788,14 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
+    const capacityFree = (ticket: Ticket) =>
+      ticket.kind === 'node' || (ticket.target !== undefined && (ticket.blockedBy?.length ?? 0) > 0)
     if (
       paused ||
-      (capacity <= 0 &&
+      (capacity <= 0 && !ready.some(capacityFree)) ||
+      (normalPaused &&
         !ready.some(
-          (ticket) =>
-            ticket.kind === 'node' ||
-            (ticket.target !== undefined && (ticket.blockedBy?.length ?? 0) > 0),
+          (ticket) => ticketPriority(ticket) === 'urgent' && (capacity > 0 || capacityFree(ticket)),
         ))
     ) {
       await this.sourceCondition(undefined, 'ready-scan')
@@ -7950,6 +7986,7 @@ export class Dispatcher {
     }
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) break
+      if (normalPaused && ticketPriority(ticket) !== 'urgent') continue
       if (ticket.kind !== 'node' && capacity <= 0) continue
       if (withheld.has(ticket.ref.id)) continue
       if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
