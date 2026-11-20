@@ -26,8 +26,7 @@ import {
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
-import type { GeneratedEntry, VerifyStepConfig } from '../config/schema'
-import { classifyGenerated } from '../kernel/generated-files'
+import type { VerifyStepConfig } from '../config/schema'
 import {
   allowedTerminals,
   phaseSpecFor,
@@ -132,8 +131,9 @@ export interface ContextManifest {
     conflicted?: boolean
     needsCompletion: boolean
   }
-  /** Reconcile: conflicted files the workspace's `[[generated]]` declares,
-   * with the command that rebuilds them. Never hand-merge these. */
+  /** Reconcile: this replay's conflicted `[[generated]]` files with the
+   * command that rebuilds them, as the runner recorded them. Never hand-merge
+   * these. */
   generated?: { command: string; files: string[] }[]
   /** Reconcile: the kernel's failed attempt to regenerate this replay. */
   regeneration?: {
@@ -808,29 +808,22 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   if (phase === 'reconcile') {
+    // The runner classified this replay's conflicts against its effective
+    // (deployment-owned) declarations and recorded the result. The checkout's
+    // autobuild.toml can differ, or be one of the conflicted files.
     const node = state.nodeRestack
     const active = events.log.restack.active
-    const files = node?.conflict
-      ? node.conflict.files
-      : (events.reconcileReplay?.files ??
-        (active !== undefined &&
-        events.reconcileTransaction?.restackId === active.id &&
-        events.log.restack.replay?.id === active.id
-          ? events.log.restack.replay.files
-          : undefined))
-    const declarations = files?.length ? await generatedDeclarations(workspacePath) : []
-    const { groups } = classifyGenerated(files ?? [], declarations)
-    if (groups.length > 0) manifest.generated = groups
-    const failed = node?.conflict
+    const fact = node?.conflict
       ? node.regeneration
       : active !== undefined && events.reconcileTransaction?.restackId === active.id
         ? events.log.restack.regeneration
         : undefined
-    if (failed?.outcome === 'failed' && failed.reason !== undefined)
+    if (fact !== undefined && fact.commands.length > 0) manifest.generated = fact.commands
+    if (fact?.outcome === 'failed' && fact.reason !== undefined)
       manifest.regeneration = {
         outcome: 'failed',
-        reason: failed.reason,
-        commands: failed.commands,
+        reason: fact.reason,
+        commands: fact.commands,
       }
   }
 
@@ -954,18 +947,6 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
   return manifest
-}
-
-/** The workspace's `[[generated]]` declarations. A reconcile may run over
- * a conflicted or absent autobuild.toml; then there is nothing to report. */
-async function generatedDeclarations(workspacePath: string): Promise<GeneratedEntry[]> {
-  const file = Bun.file(join(workspacePath, 'autobuild.toml'))
-  try {
-    if (!(await file.exists())) return []
-    return parseConfig(await file.text(), 'autobuild.toml', () => {}).generated ?? []
-  } catch {
-    return []
-  }
 }
 
 async function loadWorkspaceConfig(

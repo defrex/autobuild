@@ -5179,7 +5179,8 @@ resolution; a replacement workspace restores the retained head instead of
 regenerating. `failed` and `skipped` commit nothing, leave no command output,
 and restore the recorded conflict for reconcile, whose context names the
 conflicted generated files with their commands (`generated`) and a failure's
-`regeneration.reason`. Repositories that declare nothing are unaffected.
+`regeneration.reason`, both read from the recorded fact's `commands`, never
+from the checkout's `autobuild.toml`. Repositories that declare nothing are unaffected.
 Resolver completion links back to the automatic transaction. Retained commit bytes
 and replay object packs recover disposable-workspace objects before publication.
 Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.

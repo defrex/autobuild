@@ -43,7 +43,10 @@ command = "test"
  * A leaf build whose single change edits gen.txt (conflicting with main) and
  * src/a.ts (applying cleanly). `command` is the declared regeneration.
  */
-async function leafRestack(command: (counter: string) => string) {
+async function leafRestack(
+  command: (counter: string) => string,
+  edits: { leaf?: Record<string, string>; main?: Record<string, string> } = {},
+) {
   const cwd = await mkdtemp(join(tmpdir(), 'ab-generated-leaf-'))
   const outside = await mkdtemp(join(tmpdir(), 'ab-generated-count-'))
   const counter = join(outside, 'runs')
@@ -72,9 +75,9 @@ async function leafRestack(command: (counter: string) => string) {
     'base',
   )
   await git(['checkout', '-qb', BRANCH])
-  const oldHead = await commit({ 'gen.txt': 'leaf\n', 'src/a.ts': 'a1\n' }, 'leaf')
+  const oldHead = await commit({ 'gen.txt': 'leaf\n', 'src/a.ts': 'a1\n', ...edits.leaf }, 'leaf')
   await git(['checkout', '-q', 'main'])
-  const target = await commit({ 'gen.txt': 'upstream\n' }, 'upstream')
+  const target = await commit({ 'gen.txt': 'upstream\n', ...edits.main }, 'upstream')
   await git(['checkout', '-q', BRANCH])
 
   const store = await seedStore()
@@ -307,6 +310,47 @@ test('a conflict outside the declaration is skipped and reconciled by an agent',
       reason: 'conflicts outside [[generated]]: src/a.ts',
     }),
   ])
+  expect(leaf.sessions).toEqual(['reconcile'])
+  expect(await leaf.runs()).toBe(0)
+})
+
+test('a mixed reconcile context names the runner-recorded commands, not the checkout declarations', async () => {
+  const deployed = (counter: string) => `echo run >> ${counter}; echo deployed > gen.txt`
+  // Both sides edit autobuild.toml, so it conflicts; main's side also
+  // declares a different command than the deployment's live configuration.
+  const leaf = await leafRestack(deployed, {
+    leaf: { 'autobuild.toml': `${configToml('echo leaf > gen.txt')}# leaf\n` },
+    main: { 'autobuild.toml': `${configToml('echo checkout > gen.txt')}# main\n` },
+  })
+  leaf.onSession(async ({ env, git, cwd }) => {
+    expect((await git(['diff', '--name-only', '--diff-filter=U'])).split('\n')).toEqual([
+      'autobuild.toml',
+      'gen.txt',
+    ])
+    const context = async () => {
+      const manifest = await buildContext({
+        store: leaf.store,
+        env,
+        workspacePath: cwd,
+        exec: bunExec,
+      })
+      await rm(join(cwd, manifest.contextDir), { recursive: true, force: true })
+      return manifest
+    }
+    const expected = [{ command: expect.stringContaining('echo deployed'), files: ['gen.txt'] }]
+    // A conflicted, unparsable autobuild.toml does not hide the declarations.
+    expect(await readFile(join(cwd, 'autobuild.toml'), 'utf8')).toContain('<<<<<<<')
+    expect((await context()).generated).toEqual(expected)
+    // A parsable checkout declaring another command does not replace them.
+    await git(['checkout', '--ours', '--', 'autobuild.toml'])
+    expect(await readFile(join(cwd, 'autobuild.toml'), 'utf8')).toContain('echo checkout')
+    expect((await context()).generated).toEqual(expected)
+    await writeFile(join(cwd, 'gen.txt'), 'agent-regenerated\n')
+    await git(['add', '--', 'autobuild.toml', 'gen.txt'])
+    await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'])
+  })
+  await leaf.runToCompletion()
+  expect((await regenerated(leaf.store)).map((event) => event.payload.outcome)).toEqual(['skipped'])
   expect(leaf.sessions).toEqual(['reconcile'])
   expect(await leaf.runs()).toBe(0)
 })
