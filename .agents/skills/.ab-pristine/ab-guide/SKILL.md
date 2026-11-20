@@ -837,14 +837,14 @@ behavior.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `paths` | — (required) | nonempty array of path selectors (the `[verify.<step>].paths` grammar); a selector string may appear in only one entry | Files this entry owns. When several entries match a file, the first in declaration order owns it. |
-| `command` | — (required) | nonblank shell string | Run with `sh -c` from the workspace root, after `[commands].setup`, to rebuild every file the entry owns. It must write only declared paths. |
+| `command` | — (required) | nonblank shell string | Run with `sh -c` from the workspace root, after `[commands].setup`, to rebuild every file the entry owns. It must write only declared paths and leave the Git index unchanged; the kernel stages the output. |
 
 When a restack replay (a leaf's automatic restack, or one item of a node
 restack) conflicts only in declared files, the kernel regenerates them instead
 of starting a reconcile session: it takes the target's side of each conflicted
 file, runs each owning command once, and commits the result as the change's
-replay. A non-zero exit, a write outside the declarations, or leftover conflict
-markers fails the regeneration; nothing is committed and the replay goes to an
+replay. A non-zero exit, a write outside the declarations, a change to the Git
+index, or leftover conflict markers fails the regeneration; nothing is committed and the replay goes to an
 ordinary reconcile with the failure reason in its context. A replay that also
 conflicts in undeclared files goes straight to reconcile, whose context lists
 the generated files and commands to run after the other files are resolved.

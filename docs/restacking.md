@@ -233,8 +233,8 @@ committed unchanged.
   remaining items. A resolved fact whose receipt is missing is finished from the
   retained head on the next attempt.
 - **Fallback.** `skipped` (some conflicted path is undeclared) and `failed` (a
-  non-zero exit, a write outside the declarations, or conflict markers left)
-  commit nothing. The command's output is removed, the recorded conflict is
+  non-zero exit, a write outside the declarations, the command changed the Git
+  index, or conflict markers left) commit nothing. The command's output is removed, the recorded conflict is
   restored, and an ordinary reconcile session resolves it.
 - **Mixed conflicts.** The reconcile context lists the conflicted generated
   files and their commands as `generated`, and a failure's reason as

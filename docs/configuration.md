@@ -1608,8 +1608,10 @@ automatic restack and to every item of a node restack. The rules:
   order owns it. A selector string declared by two entries is rejected.
 - `command` is a shell string run with `sh -c`. Each owning command runs once
   per replay, in declaration order. It must write only paths the declarations
-  cover. Writing anything else, exiting non-zero, or leaving conflict markers
-  fails the regeneration.
+  cover and must leave the Git index unchanged: the kernel stages the declared
+  output itself. Writing anything else, staging changes, exiting non-zero, or
+  leaving conflict markers fails the regeneration, and the replay falls back to
+  an ordinary agent reconcile.
 - A failed regeneration commits nothing. The workspace returns to the recorded
   conflict and an ordinary reconcile session resolves it, with the failure
   reason in its context. A replay that also conflicts in undeclared files goes
