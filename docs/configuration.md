@@ -1813,6 +1813,13 @@ Cross-field validation rejects:
 - a check whose command is absent from `[commands]`;
 - fields from the other kind, unknown fields, and malformed selectors.
 
+A `check` command runs with `AB_VERIFY_BASE` set to the verify diff base: the
+commit [path applicability](#path-applicability) diffs from on a leaf, or the
+integration cycle parent on a node. It is absent outside a build, under an
+older runtime, and for a leaf with no provisioned base, so a check that needs
+it must handle its absence. See
+[what a check command receives](verification.md#what-a-check-command-receives).
+
 `always = true` does not make malformed `paths` acceptable: all supplied
 selectors are validated even though the mandatory step will not use them for
 applicability.
@@ -4098,6 +4105,8 @@ real process environment—even an empty string—wins over `.env`.
 Variables such as `AB_BUILD`, `AB_PHASE`, `AB_SESSION`, and the harvest-session
 identity tuple are runner-owned ambient authorization. You should not
 set or copy them into `.env`; the runner stamps them for each session.
+Likewise the runner sets `AB_VERIFY_BASE` for each `check` verify command, and
+clears any inherited value when the build has no base.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
 credentials or network access: it keeps durable PR records under private Git

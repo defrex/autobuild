@@ -115,6 +115,17 @@ Path rules:
 
 After a reconcile, the `afterReconcile` policy applies before plan and path selection. By default it re-verifies; excluded steps are recorded as policy skips.
 
+## What a check command receives
+
+A `check` command runs in the build's workspace with `AB_VERIFY_BASE` set to the commit verification compares against, the same base path applicability diffs from:
+
+- **Leaf builds:** the branch-cut SHA, or the refreshed base after a completed reconcile or restack.
+- **Integration nodes:** the integration cycle's parent.
+
+Use it for checks that only make sense relative to the base, such as "this file changed, so that one must change too": `git diff --name-only "$AB_VERIFY_BASE" HEAD`.
+
+The variable is absent outside a build, under a runtime that predates the variable, and for a leaf with no provisioned base. A check that needs it must handle its absence, by skipping that clause with a notice, for example, rather than assuming it is set. Checks that ignore it behave as before.
+
 ## Route the verifier role
 
 Agent steps route by step name, not skill name: [`[roles.acceptance]`](agent-runtimes.md#choosing-models) picks the agent for the `acceptance` step. Omitted `runtime` and `model` each inherit from the default role.

@@ -6442,3 +6442,171 @@ export async function panelProgressReadBudget(): Promise<void> {
   }
   expect(measured[1]).toEqual(measured[0])
 }
+
+/** What one pass of check verification cost a leaf build. */
+export interface VerifyCheckBaseCosts {
+  /** Store calls per method across the check runs. */
+  calls: Record<string, number>
+  /** Event rows the store returned, and how many of them predate the runs. */
+  rows: number
+  historicalRows: number
+  /** Keyed reads of the standalone verify diff base selector. */
+  verifyDiffBaseReads: number
+  /** The `AB_VERIFY_BASE` each check command received, in launch order;
+   * null when the runner did not pass the key, so an inherited value leaks. */
+  bases: (string | undefined | null)[]
+}
+
+/**
+ * Check verification hands every command the verify diff base from the build
+ * facts the runner already reads. A leaf build carries `length` events of
+ * history, rich in `restack.*` and `phase.failed` facts that move or neighbour
+ * the base; its saved values are warmed once, then one unconditional check,
+ * one conditional check and both members of a staged pair (the stage's
+ * per-member resolve-then-run) execute against a scripted shell. The costs
+ * must be identical at any history length. `provisioned: false` omits the
+ * workspace fact, so the build has no base, and runs only the unconditional
+ * check (a conditional one requires a base).
+ */
+export async function verifyCheckBaseReadBudget(opts: {
+  length: number
+  provisioned?: boolean
+}): Promise<VerifyCheckBaseCosts> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { BuildRunner } = await import('../processes/build-runner')
+  const { readBuildFacts, readPhaseFailures } = await import('../store/reduced-reads')
+  const { steppingClock } = await import('./fixed')
+  const slug = 'verify-base'
+  const base = 'b'.repeat(40)
+  const store = new MemoryBuildStore()
+  await store.createBuild({ slug, repo: 'repo', branch: `ab/${slug}` })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: { source: 'file', id: 'T-1' }, repo: 'repo', baseBranch: 'main' },
+  })
+  if (opts.provisioned !== false)
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'fake',
+        ref: 'ws',
+        branch: `ab/${slug}`,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+  // One validated append of each history fact, copied in rotation.
+  const templates = [
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'restack.advanced',
+      payload: {
+        trigger: 'wait-resume',
+        cycle: 1,
+        observation: 1,
+        branch: `ab/${slug}`,
+        from: 'a'.repeat(40),
+        to: base,
+      },
+    }),
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'phase.failed',
+      payload: { phase: 'implement', round: 1, attempt: 1, error: 'transient', willRetry: true },
+    }),
+    await store.append(slug, {
+      actor: humanActor('budget'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    }),
+  ]
+  const events = buildEventRows(store, slug)
+  while (events.length < opts.length)
+    events.push({
+      ...templates[events.length % templates.length]!,
+      seq: events.length + 1,
+    } as (typeof events)[number])
+  const bases: (string | undefined | null)[] = []
+  const exec: Exec = async (cmd, execOpts) => {
+    if (cmd[0] === 'sh') {
+      bases.push(
+        execOpts.env && 'AB_VERIFY_BASE' in execOpts.env ? execOpts.env.AB_VERIFY_BASE : null,
+      )
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'diff')
+      return { stdout: 'src/changed.ts\0', stderr: '', exitCode: 0 }
+    return { stdout: '', stderr: '', exitCode: 0 }
+  }
+  const runner = new BuildRunner({
+    store: store.scopeBuild(slug),
+    config: parseConfig(
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
+    ),
+    runtimes: {
+      scripted: {
+        runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+        servesModels: [''],
+      },
+    },
+    workspacePath: '/ws',
+    branch: `ab/${slug}`,
+    slug,
+    exec,
+    forge: new FakeForge(),
+    ids: sequentialIds(),
+    clock: steppingClock(),
+    instance: 'runner-1',
+    host: 'test',
+    runtimeIdentity: {
+      version: '0.0.0-test',
+      commit: 'unknown',
+      source: { kind: 'package', location: '/autobuild' },
+    },
+  })
+  type Check = { kind: 'run-check'; step: string; command: string; attempt: number }
+  const internals = runner as unknown as {
+    runCheck(decision: Check): Promise<void>
+    evaluateVerify(decision: unknown): Promise<void>
+    resolveVerify(decision: unknown): Promise<Check>
+  }
+  const check = (step: string): Check => ({ kind: 'run-check', step, command: step, attempt: 1 })
+  const conditional = (step: string) => ({
+    kind: 'evaluate-verify',
+    step,
+    attempt: 1,
+    paths: ['src/**'],
+    action: check(step),
+  })
+  const steps = ['unit', 'dashboard', 'lint', 'docs']
+  // Warm every saved value the runs read: computed once per key, then served.
+  await readBuildFacts(store, slug)
+  for (const step of steps) await readPhaseFailures(store, slug, `verify:${step}`, 1)
+  const boundary = events.at(-1)!.seq
+  let verifyDiffBaseReads = 0
+  const getReducerValue = store.getReducerValue.bind(store)
+  store.getReducerValue = (async (...args: Parameters<typeof getReducerValue>) => {
+    if (args[1].reducer === 'verifyDiffBaseValue') verifyDiffBaseReads += 1
+    return getReducerValue(...args)
+  }) as typeof store.getReducerValue
+  const metrics = await measureStoreReads(store, async () => {
+    await internals.runCheck(check('unit'))
+    if (opts.provisioned === false) return
+    await internals.evaluateVerify(conditional('dashboard'))
+    // A stage resolves each member, then runs the resolved check.
+    const members = await Promise.all([
+      internals.resolveVerify(conditional('lint')),
+      Promise.resolve(check('docs')),
+    ])
+    await Promise.all(members.map((member) => internals.runCheck(member)))
+  })
+  Reflect.deleteProperty(store, 'getReducerValue')
+  return {
+    calls: metrics.calls,
+    rows: metrics.rows,
+    historicalRows: metrics.read.filter((row) => row.seq <= boundary).length,
+    verifyDiffBaseReads,
+    bases,
+  }
+}
