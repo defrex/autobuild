@@ -7,6 +7,8 @@ import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
 import { holdReason, mergeVocabulary } from './dashboard/landing-display'
+import { ciFailureText, currentCiFailure } from '../kernel/forge-checks'
+import type { HeadCheck } from '../ports/types'
 import { buildVocabulary } from './dashboard/model'
 import {
   objectiveSegments,
@@ -182,6 +184,16 @@ export interface BuildSummary {
   waitOnly?: true
   /** Why the operator held the merge, while a hold that gave one stands. */
   holdReason?: string
+  /** Failing forge CI recorded at the open PR's live head, while it still
+   * describes the build's head (`currentCiFailure`). Absent CI is unknown or
+   * passing, never claimed green. */
+  ciFailure?: {
+    head: string
+    buildHead: string
+    checks: HeadCheck[]
+    total: number
+    text: string
+  }
 }
 
 export interface VerifyProgress {
@@ -415,6 +427,7 @@ export function summarizeFrom(
   const objective = objectiveSummary(state, now)
   const measurement = measurementSummary(state)
   const heldBecause = holdReason(state.landing)
+  const ciFailure = currentCiFailure(state)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -469,6 +482,17 @@ export function summarizeFrom(
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
     ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
+    ...(ciFailure !== undefined
+      ? {
+          ciFailure: {
+            head: ciFailure.head,
+            buildHead: ciFailure.buildHead,
+            checks: structuredClone(ciFailure.checks),
+            total: ciFailure.total,
+            text: ciFailureText(ciFailure),
+          },
+        }
+      : {}),
   }
 }
 
@@ -816,9 +840,9 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       prCell(summary),
     ])
   }
-  // An optimization node's objective progress and a held merge's reason ride
-  // on continuation lines under the row, so they cost the table's column
-  // alignment nothing.
+  // An optimization node's objective progress, a held merge's reason and
+  // failing forge CI ride on continuation lines under the row, so they cost
+  // the table's column alignment nothing.
   return padColumns(rows).flatMap((line, index) => {
     const summary = index === 0 ? undefined : summaries[index - 1]!
     const objective = summary?.objective
@@ -831,6 +855,9 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       ...(held === undefined
         ? []
         : [`    ${mergeVocabulary.label} ${safeStatusText(mergeVocabulary.held(held))}`]),
+      ...(summary?.ciFailure === undefined
+        ? []
+        : [`    ! ${safeStatusText(summary.ciFailure.text)}`]),
     ]
   })
 }
@@ -1014,6 +1041,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
             : 'consented (head not recorded)'
           : 'no consent recorded'
     lines.push(`  merge:    ${consent} · current head ${d.tree.currentHead ?? 'unknown'}`)
+  }
+  if (d.ciFailure !== undefined) {
+    lines.push(`  forge CI: ${safeStatusText(d.ciFailure.text)}`)
+    for (const check of d.ciFailure.checks)
+      if (check.url !== undefined)
+        lines.push(`    ${safeStatusText(check.name)}: ${safeStatusText(check.url)}`)
   }
   if (d.wait !== undefined)
     lines.push(
