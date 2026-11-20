@@ -45,6 +45,7 @@ import {
   openBuildWorkspaceReducer,
 } from '../processes/dispatcher-selectors'
 import { dashboardFactsReducer } from '../cli/dashboard/facts'
+import { verifyDiffBaseReducer } from './verify-diff-base'
 
 export interface BuildStreamSeed {
   build: BuildAcc
@@ -107,6 +108,7 @@ const parts = {
   pendingAttachments: pendingPrAttachmentReclaimsReducer,
   recoveryCheckpoint: recoveryCheckpointReducer,
   provisionMarker: provisionMarkerReducer,
+  verifyDiffBase: verifyDiffBaseReducer,
   baseBranch: baseBranchReducer,
   build: buildReducer,
   log: logIndexReducer,
@@ -149,6 +151,7 @@ export interface BuildReadAcc {
   pendingAttachments: ReturnType<typeof pendingPrAttachmentReclaimsReducer.initial>
   recoveryCheckpoint: ReturnType<typeof recoveryCheckpointReducer.initial>
   provisionMarker: ReturnType<typeof provisionMarkerReducer.initial>
+  verifyDiffBase: ReturnType<typeof verifyDiffBaseReducer.initial>
   baseBranch: ReturnType<typeof baseBranchReducer.initial>
   build: ReturnType<typeof buildReducer.initial>
   log: ReturnType<typeof logIndexReducer.initial>
@@ -252,6 +255,7 @@ export const buildReadFactsReducer = defineReducer({
     pendingAttachments: pendingPrAttachmentReclaimsReducer.initial(),
     recoveryCheckpoint: recoveryCheckpointReducer.initial(),
     provisionMarker: provisionMarkerReducer.initial(),
+    verifyDiffBase: verifyDiffBaseReducer.initial(),
     baseBranch: baseBranchReducer.initial(),
     build: buildReducer.initial(),
     log: logIndexReducer.initial(),
@@ -300,6 +304,7 @@ export const buildReadFactsReducer = defineReducer({
   fold(acc: BuildReadAcc, events: readonly AbEvent[]) {
     acc.baseBranch = baseBranchReducer.advance(acc.baseBranch, events)
     acc.provisionMarker = provisionMarkerReducer.advance(acc.provisionMarker, events)
+    acc.verifyDiffBase = verifyDiffBaseReducer.advance(acc.verifyDiffBase, events)
     acc.recoveryCheckpoint = recoveryCheckpointReducer.advance(acc.recoveryCheckpoint, events)
     acc.pendingAttachments = pendingPrAttachmentReclaimsReducer.advance(
       acc.pendingAttachments,
@@ -535,6 +540,7 @@ export const buildReadFactsReducer = defineReducer({
     pendingAttachments: pendingPrAttachmentReclaimsReducer.finish(acc.pendingAttachments),
     recoveryCheckpoint: recoveryCheckpointReducer.finish(acc.recoveryCheckpoint),
     provisionMarker: provisionMarkerReducer.finish(acc.provisionMarker),
+    verifyDiffBase: verifyDiffBaseReducer.finish(acc.verifyDiffBase),
     baseBranch: baseBranchReducer.finish(acc.baseBranch),
     state: buildReducer.finish(acc.build),
     log: encodeLog(logIndexReducer.finish(acc.log)),

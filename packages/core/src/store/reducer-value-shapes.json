@@ -28100,6 +28100,10 @@
           "type": "1902",
           "optional": false
         },
+        "verifyDiffBase": {
+          "type": "187",
+          "optional": false
+        },
         "baseBranch": {
           "type": "193",
           "optional": false
@@ -30442,6 +30446,10 @@
         },
         "provisionMarker": {
           "type": "2059",
+          "optional": false
+        },
+        "verifyDiffBase": {
+          "type": "4",
           "optional": false
         },
         "baseBranch": {
