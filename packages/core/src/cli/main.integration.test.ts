@@ -960,6 +960,28 @@ describe('runCli — sessionless build controls', () => {
     await local.close()
   })
 
+  test('hold records a trimmed reason and refuses a blank one before any write', async () => {
+    const storeRef = join(tmp, 'hold-reason-store')
+    await seedControlStore(storeRef, {})
+    let local = openLocalStore(storeRef)
+    const before = (await local.getEvents(slug)).length
+    await local.close()
+    const blank = controlDeps(storeRef)
+    expect(await runCli(['hold', slug, '--reason', '   '], blank)).toBe(1)
+    expect(blank.err.join('\n')).toContain('hold reason must be 1–2000 characters')
+    const d = controlDeps(storeRef)
+    expect(await runCli(['hold', slug, '--reason', '  waiting on T-2 '], d)).toBe(0)
+    expect(d.out).toEqual([`build ${slug}: merge hold requested (reason: waiting on T-2)`])
+    local = openLocalStore(storeRef)
+    const events = await local.getEvents(slug)
+    expect(events).toHaveLength(before + 1)
+    expect(events.at(-1)).toMatchObject({
+      type: 'build.hold-requested',
+      payload: { reason: 'waiting on T-2' },
+    })
+    await local.close()
+  })
+
   test('answer with no text selects retry', async () => {
     const storeRef = join(tmp, 'retry-store')
     await seedControlStore(storeRef, { escalations: ['esc-retry'] })

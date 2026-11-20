@@ -620,7 +620,12 @@ export function createOperatorServer(opts: OperatorServerOptions): {
                       ...(request.to !== undefined ? { to: request.to } : {}),
                       ...(request.reason !== undefined ? { reason: request.reason } : {}),
                     }
-                  : { kind: request.action }
+                  : request.action === 'hold'
+                    ? {
+                        kind: 'hold',
+                        ...(request.reason !== undefined ? { reason: request.reason } : {}),
+                      }
+                    : { kind: request.action }
         return json(
           200,
           await controlBuild({

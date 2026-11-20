@@ -1,6 +1,7 @@
 import { treeVocabulary } from './dashboard/tree'
+import { mergeVocabulary } from './dashboard/landing-display'
 import { listOperatorLandings } from '../operator/landings'
-import type { StatusOpts } from './status'
+import { safeStatusText, type StatusOpts } from './status'
 import { withAmbientReadStore } from './store-opening'
 
 export async function abLandings(opts: StatusOpts): Promise<void> {
@@ -12,7 +13,7 @@ export async function abLandings(opts: StatusOpts): Promise<void> {
     else
       for (const entry of entries)
         opts.stdout(
-          `${entry.slug} → ${entry.target.ticket?.id ?? entry.target.branch ?? treeVocabulary.root} · ${entry.branch ?? 'unknown branch'} · ${entry.reason} · ${treeVocabulary.verify} ${entry.verification.results.map((r) => `${r.step}:${r.outcome}`).join(', ') || 'no steps'}${entry.kind === 'node' ? ` · ${treeVocabulary.children} ${entry.children?.length ?? 'unknown'} (${entry.completeness})` : ''} · ${treeVocabulary.head} ${entry.currentHead ?? 'unknown'}${entry.consentedHead ? ` · ${treeVocabulary.consentedAt} ${entry.consentedHead}` : ''}`,
+          `${entry.slug} → ${entry.target.ticket?.id ?? entry.target.branch ?? treeVocabulary.root} · ${entry.branch ?? 'unknown branch'} · ${entry.reason === 'held' ? safeStatusText(mergeVocabulary.held(entry.holdReason ?? undefined)) : entry.reason} · ${treeVocabulary.verify} ${entry.verification.results.map((r) => `${r.step}:${r.outcome}`).join(', ') || 'no steps'}${entry.kind === 'node' ? ` · ${treeVocabulary.children} ${entry.children?.length ?? 'unknown'} (${entry.completeness})` : ''} · ${treeVocabulary.head} ${entry.currentHead ?? 'unknown'}${entry.consentedHead ? ` · ${treeVocabulary.consentedAt} ${entry.consentedHead}` : ''}`,
         )
   })
 }

@@ -69,6 +69,20 @@ describe('stored consent eligibility', () => {
     expect(projectTree(record, state, restack).consentedHead).toBeNull()
     expect(projectTree(record, { ...state, pr: undefined }, restack).currentHead).toBeNull()
   })
+  test('projects the standing hold reason and nothing once consent replaces it', () => {
+    const record = { slug: 'leaf', repo: 'repo', createdAt: '', updatedAt: '' }
+    const state = ready()
+    expect(projectTree(record, state, restack).holdReason).toBeNull()
+    state.landing!.command = { kind: 'hold', seq: 7, reason: 'waiting on Q-1' }
+    expect(projectTree(record, state, restack)).toMatchObject({
+      reason: 'held',
+      holdReason: 'waiting on Q-1',
+    })
+    state.landing!.command = { kind: 'hold', seq: 8 }
+    expect(projectTree(record, state, restack).holdReason).toBeNull()
+    state.landing!.command = { kind: 'land', seq: 9, decisionSeq: 6, head: 'head' }
+    expect(projectTree(record, state, restack).holdReason).toBeNull()
+  })
   test('unknown children are unknown and frozen target never comes from source metadata', () => {
     const state = {
       ...ready(),

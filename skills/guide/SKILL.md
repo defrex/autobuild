@@ -2574,7 +2574,9 @@ that merge and frozen destination; it survives replacement heads until hold
 or completion, except that consent given under a rule with `paths` or `within`
 predicates is revoked (`landing.consent-revoked`) when a reconcile's own edits,
 or a leaf restack's generated-file regeneration, touch a file those predicates match. `--head <sha>` refuses with `head-mismatch`, recording nothing,
-unless `<sha>` is the current candidate head. `ab hold <slug>` suppresses policy and withdraws consent.
+unless `<sha>` is the current candidate head. `ab hold <slug>` suppresses policy and withdraws consent;
+`--reason <text>` (1–2000 characters after trimming) records why, and status, merges, builds and
+both dashboards show it until a later hold or merge replaces it.
 The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
 are retired and return actionable errors; use merge rules and hold/merge.
 
@@ -2642,7 +2644,7 @@ to the build's event log and apply the same write-time checks.
 | Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected; revised stop rules apply on the next tick. | `optimization.objective-revised` |
 | Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
 | Settle an unmeasured merge | `ab objective <node> --settle-unmeasured <proposal\|build> --policy release-unmeasured [--note <text>] [--json] [--store <ref>]` | CLI/tool request (`optimization.settle-unmeasured`). Only for an attempt listed as an unmeasured merge; releases its slot once, never as accepted. | `attempt.settled {outcome: merged-unmeasured}` |
-| Hold merge | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
+| Hold merge | `ab hold <slug> [--reason <text>] [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested` (optional `reason`), then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |

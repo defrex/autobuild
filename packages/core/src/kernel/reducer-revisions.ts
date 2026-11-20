@@ -17,4 +17,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'nodeRestack/shape/8su0tli8be': 'AUT-1266 generated replay resolution state',
   'executionNoProgress/fold/v2he1qwp0t': 'AUT-1266 regeneration events count as progress',
   'buildReadFacts/shape/2kbhcftrqb': 'Carry the verify diff base as a bounded part',
+  'build/shape/691nlqt5o8': 'Hold reason on the landing command',
+  'buildReadFacts/shape/fjcms3g67h': 'Hold reason on the landing command',
+  'buildStreamSeed/shape/cnyes1nf0o': 'Hold reason on the landing command',
 }

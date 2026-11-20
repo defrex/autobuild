@@ -78,7 +78,7 @@ function randomWrite(rand: () => number): EventWrite {
             ? { default: true }
             : { index: 0, snapshot: { label: 'release', mode: 'auto' } },
       }),
-    () => w('build.hold-requested', {}),
+    () => w('build.hold-requested', round === 1 ? {} : { reason: 'waiting on a dependency' }),
     () => w('build.land-requested', { decisionSeq: 1 }),
     () => w('landing.command-acknowledged', { commandSeq: 1 }),
     () =>

@@ -10,7 +10,12 @@ import {
 } from '../../kernel/integration-state'
 import { landingReady } from '../../kernel/landing-readiness'
 import { projectIntegrationRow, integrationRepairSteps } from './integration-row'
-import { nodeLandingPolicyDisplay, nodeLandingRuleDisplay } from './landing-display'
+import {
+  holdReason,
+  mergeVocabulary,
+  nodeLandingPolicyDisplay,
+  nodeLandingRuleDisplay,
+} from './landing-display'
 
 export interface IntegrationChild {
   source: string
@@ -142,6 +147,6 @@ export function projectIntegrationDetail(
           ? 'verified on the current node head and destination'
           : 'pending on the current node head and destination',
     verifySteps,
-    landing: `${mode} — ${nodeLandingRuleDisplay(state, config.landing)}${landingReady(state, restack) && mode === 'consent' && state.landing?.command?.kind !== 'land' ? ` — press l, or ab merge ${record.slug}` : ''}`,
+    landing: `${mode === 'held' ? mergeVocabulary.held(holdReason(state.landing)) : mode} — ${nodeLandingRuleDisplay(state, config.landing)}${landingReady(state, restack) && mode === 'consent' && state.landing?.command?.kind !== 'land' ? ` — press l, or ab merge ${record.slug}` : ''}`,
   }
 }
