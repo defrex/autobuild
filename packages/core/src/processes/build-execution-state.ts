@@ -126,8 +126,6 @@ export interface OpenWorkspaceLocation {
   branch: string
 }
 
-export const OPEN_WORKSPACE_REDUCER_VERSION = 1
-
 /** Latest workspace location not followed by release. Historical events use
  * the provider ref as the path compatibility fallback. */
 export const openWorkspaceReducer = defineReducer<
@@ -135,7 +133,7 @@ export const openWorkspaceReducer = defineReducer<
   AbEvent,
   OpenWorkspaceLocation | null
 >({
-  version: OPEN_WORKSPACE_REDUCER_VERSION,
+  identity: 'openWorkspace',
   initial: () => ({ open: null }),
   fold(acc, events) {
     for (const event of events) {

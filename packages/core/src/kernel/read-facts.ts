@@ -56,15 +56,16 @@ export interface BuildStreamSeed {
   /** Terminal identity can precede later observations; retain it at the seed cursor. */
   terminalEvent?: AbEvent
 }
-// Bump with either constituent's semantics or historical eligibility semantics.
+// Revise with historical eligibility semantics; constituents add their own versions.
 export const buildStreamSeedReducer = defineReducer<BuildStreamSeed, AbEvent, BuildStreamSeed>({
   rawEvents: true,
-  version:
-    4 +
-    ticketMigrationsReducer.version +
-    leafRestackReducer.version +
-    buildReducer.version +
-    currentDeferralObservationReducer.version,
+  identity: 'buildStreamSeed',
+  parts: [
+    ticketMigrationsReducer,
+    leafRestackReducer,
+    buildReducer,
+    currentDeferralObservationReducer,
+  ],
   initial: () => ({
     build: buildReducer.initial(),
     deferral: currentDeferralObservationReducer.initial(),
@@ -239,7 +240,8 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 10 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  identity: 'buildReadFacts',
+  parts: Object.values(parts),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -671,25 +673,26 @@ export interface RepositoryReadAcc {
 }
 export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
-  version:
-    6 +
-    ticketMigrationsReducer.version +
-    dispatchUpgradeReducer.version +
-    ticketPreparationReducer.version +
-    ticketHandbacksReducer.version +
-    dispatcherRunFactsReducer('version').version +
-    openHarvestExecutionsReducer.version +
-    forgeHealthReducer.version +
-    forgeCredentialLimitsReducer.version +
-    kernelGitHealthReducer.version +
-    repositoryAttentionReducer.version +
-    dispatchSettingsReducer.version +
-    harvestReducer.version +
-    ticketSourceHealthReducer.version +
-    autoMergeDefaultReducer.version +
-    effectiveConfigReducer.version +
-    sandboxStatesReducer.version +
-    dispatchStatusReducer('version').version,
+  identity: 'repositoryReadFacts',
+  parts: [
+    ticketMigrationsReducer,
+    dispatchUpgradeReducer,
+    ticketPreparationReducer,
+    ticketHandbacksReducer,
+    dispatcherRunFactsReducer('version'),
+    openHarvestExecutionsReducer,
+    forgeHealthReducer,
+    forgeCredentialLimitsReducer,
+    kernelGitHealthReducer,
+    repositoryAttentionReducer,
+    dispatchSettingsReducer,
+    harvestReducer,
+    ticketSourceHealthReducer,
+    autoMergeDefaultReducer,
+    effectiveConfigReducer,
+    sandboxStatesReducer,
+    dispatchStatusReducer('version'),
+  ],
   initial: (): RepositoryReadAcc => ({
     missingAccounts: {},
     compatibility: initialCompatibility(),
@@ -913,7 +916,7 @@ export interface DispatcherRunFacts {
 }
 export function dispatcherRunFactsReducer(run: string) {
   return defineReducer<DispatcherRunFacts, RepositoryEvent, DispatcherRunFacts>({
-    version: 3,
+    identity: 'dispatcherRunFacts',
     initial: () => ({}),
     fold(acc, events) {
       for (const event of projectEvents(events)) {

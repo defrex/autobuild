@@ -27,7 +27,7 @@ export const ticketPreparationReducer = defineReducer<
   RepositoryEvent,
   Record<string, TicketPreparation>
 >({
-  version: 3,
+  identity: 'ticketPreparation',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

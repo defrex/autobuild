@@ -404,8 +404,6 @@ export async function preparePinnedAssets(
   )
 }
 
-export const PINNED_ASSETS_REDUCER_VERSION = 2
-
 /** The asset sets recorded by every `build.created`/`spec.revised` pin event
  * that carries one, in array order. Each pin event replaces the set, so the
  * newest decides the live pin; all of them answer "was this revision ever
@@ -415,7 +413,7 @@ export const pinnedAssetsReducer = defineReducer<
   AbEvent,
   { pins: PinnedAsset[][] }
 >({
-  version: PINNED_ASSETS_REDUCER_VERSION,
+  identity: 'pinnedAssets',
   initial: () => ({ pins: [] }),
   fold(acc, events) {
     for (const event of events) {

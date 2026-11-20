@@ -205,7 +205,7 @@ export const repositoryAttentionReducer = defineReducer<
   RepositoryEvent,
   RepositoryAttentionState
 >({
-  version: 2,
+  identity: 'repositoryAttention',
   initial: () => ({ sources: [], tickStarts: [] }),
   fold(acc, events) {
     const attention = new RepositoryAttention(acc)

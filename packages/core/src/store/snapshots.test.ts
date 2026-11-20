@@ -12,15 +12,17 @@ import {
   snapshotSupersedes,
 } from './snapshots'
 
-const stub = (version: number) =>
-  defineReducer<{ n: number }, { seq: number }, number>({
-    version,
+const stub = (version: number) => ({
+  ...defineReducer<{ n: number }, { seq: number }, number>({
+    identity: 'snapshotStub',
     initial: () => ({ n: 0 }),
     fold: (acc, events) => {
       acc.n += events.length
     },
     finish: (acc) => acc.n,
-  })
+  }),
+  version,
+})
 
 async function seeded(): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore()

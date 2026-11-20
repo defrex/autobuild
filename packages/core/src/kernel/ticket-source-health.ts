@@ -7,7 +7,7 @@ export const ticketSourceHealthReducer = defineReducer<
   RepositoryEvent,
   TicketSourceDegradation | undefined
 >({
-  version: 2,
+  identity: 'ticketSourceHealth',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

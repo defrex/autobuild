@@ -32,9 +32,9 @@ import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budget'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 /**
- * Every incremental reducer, with its published version and the whole-array
- * functions it backs. `reducer-registry.integration.test.ts` snapshots the versions and
- * the accumulator shapes, and scans `kernel/`, `store/` and `processes/` so a
+ * Every incremental reducer, with its derived identity and the whole-array
+ * functions it backs. `reducer-registry.integration.test.ts` checks the derived
+ * versions, the identity records and the accumulator shapes, and scans `kernel/`, `store/` and `processes/` so a
  * new event-array projection must be registered here or excluded with a reason.
  */
 import { recordedBaseShaReducer } from '../config/pipeline-source'

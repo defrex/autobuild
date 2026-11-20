@@ -12,7 +12,7 @@ export const summaryBoundaryReducer = defineReducer<
   AbEvent,
   { occurrence: number; boundary: number } | undefined
 >({
-  version: 1,
+  identity: 'summaryBoundary',
   initial: () => ({ sessions: {} }),
   fold(acc, events) {
     for (const event of events) {
@@ -97,7 +97,7 @@ export const summaryRequestsReducer = defineReducer<
   AbEvent,
   SummaryRequest[]
 >({
-  version: 1,
+  identity: 'summaryRequests',
   initial: () => ({ requests: [], settled: [] }),
   fold(acc, events) {
     for (const event of events) {

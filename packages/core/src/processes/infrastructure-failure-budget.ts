@@ -28,8 +28,6 @@ export interface InfrastructureFailureDependencies {
   ids: IdSource
 }
 
-export const INFRASTRUCTURE_FAILURE_RESET_REDUCER_VERSION = 1
-
 /** Infrastructure retries are re-armed only by a confirmed execution boundary
  * or a retry answer to this policy's own previously-raised exhaustion escalation. */
 export const infrastructureFailureResetReducer = defineReducer<
@@ -37,7 +35,7 @@ export const infrastructureFailureResetReducer = defineReducer<
   AbEvent,
   number
 >({
-  version: INFRASTRUCTURE_FAILURE_RESET_REDUCER_VERSION,
+  identity: 'infrastructureFailureReset',
   initial: () => ({ escalations: [], resetSeq: 0 }),
   fold(acc, events) {
     for (const event of events) {
