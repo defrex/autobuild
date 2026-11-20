@@ -175,8 +175,9 @@ combine through a clean restack and before anyone regenerates, the combined
 identity has no record of its own. A base-relative clause catches a fold change
 there: against the verify base (`AB_VERIFY_BASE`), a reducer whose change adds
 no revision must fold every corpus as the base's records, or failing those the
-base's own code, did. Only without a supplied base is the clause skipped, with a
-notice. Current-state consumers use the typed persisted
+base's own code, did. The clause is skipped, with a notice, in two cases: when
+no base is supplied, and when the supplied base predates the revision ledger.
+Either way the identity-record checks above stay in force. Current-state consumers use the typed persisted
 read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
 reference projections for tests and explicit historical output.
 
