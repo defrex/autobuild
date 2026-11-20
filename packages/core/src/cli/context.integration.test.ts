@@ -16,6 +16,7 @@ import type { IdSource } from '../ids'
 import type { Feedback, Finding } from '../ontology'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import { buildContext as hydrateContext } from './context'
 let activeContext = '.ab/plan'
 async function buildContext(deps: Parameters<typeof hydrateContext>[0]) {
@@ -2056,6 +2057,66 @@ describe('buildContext — optimization attempts (RFC 0005 §6.1)', () => {
       workspacePath: workspace,
     })
     expect(work.attempt).toBeUndefined()
+  })
+
+  // AUT-1279: sandbox sessions hold a store scoped to their own build.
+  const scoped = (session: string) =>
+    scopeLocalStoreToPhaseSession(store, { kind: 'build', id: BUILD, session })
+
+  test('every phase materializes the same attempt block and objective under a session-scoped store', async () => {
+    await attemptStore()
+    const advance: Record<string, () => Promise<void>> = {
+      plan: async () => {},
+      'plan-review': async () => {
+        await store.putArtifact(BUILD, { kind: 'plan', content: '# Plan v1\n' })
+        await store.append(BUILD, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+        await store.append(BUILD, {
+          actor: agent('plan'),
+          type: 'plan.completed',
+          payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+        })
+      },
+      implement: async () => {
+        await store.append(BUILD, {
+          actor: agent('plan-review'),
+          type: 'plan-review.verdict',
+          payload: {
+            round: 1,
+            verdict: 'approve',
+            findings: [],
+            artifact: { kind: 'plan-review', rev: 0 },
+          },
+        })
+      },
+      'code-review': () => seedImplementRound(1, 'sha-head-1'),
+    }
+    for (const [phase, seed] of Object.entries(advance)) {
+      await seed()
+      const env = makeEnv({ phase: phase as 'plan', round: 1 })
+      const unscoped = await buildContext({ store, env, workspacePath: workspace })
+      const unscopedObjective = await abFile('objective.md')
+      const manifest = await buildContext({
+        store: scoped(env.session!),
+        env,
+        workspacePath: workspace,
+      })
+      expect(manifest.attempt).toBeDefined()
+      expect(manifest.attempt).toEqual(unscoped.attempt)
+      expect(manifest.materialized['objective.md']).toBe('derived')
+      expect(await abFile('objective.md')).toBe(unscopedObjective)
+    }
+  })
+
+  test('a plain node child gets no objective under a session-scoped store', async () => {
+    await attemptStore({ objective: false })
+    const env = makeEnv({ phase: 'plan', round: 1 })
+    const child = await buildContext({
+      store: scoped(env.session!),
+      env,
+      workspacePath: workspace,
+    })
+    expect(child.attempt).toBeUndefined()
+    expect(child.materialized['objective.md']).toBeUndefined()
   })
 
   test('a proposal recorded before a ticket migration still names the attempt', async () => {
