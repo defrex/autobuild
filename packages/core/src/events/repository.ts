@@ -805,6 +805,25 @@ export const kernelGitHealthEventPayloadSchemas = {
   }),
 } as const
 
+/** Open-PR dispatch backpressure (§12 Intake order). One event engages it
+ * and one clears it, recorded only on transitions; the engaged fact is the
+ * hysteresis memory that keeps normal intake paused until the open root PR
+ * count drains to the resume watermark. */
+export const openPrBackpressureEventPayloadSchemas = {
+  'dispatcher.open-pr-backpressure-engaged': z.strictObject({
+    openPrs: z.number().int().nonnegative(),
+    maxOpenPrs: z.number().int().positive(),
+    resumeOpenPrs: z.number().int().nonnegative(),
+    excludeHeld: z.boolean(),
+  }),
+  'dispatcher.open-pr-backpressure-cleared': z.strictObject({
+    openPrs: z.number().int().nonnegative(),
+    /** `drained`: the count reached the resume watermark; `disabled`: the
+     * policy no longer configures `maxOpenPrs`. */
+    reason: z.enum(['drained', 'disabled']),
+  }),
+} as const
+
 /** Configured hook delivery health (§16.1 `[hooks]`). Advisory attention only:
  * no reducer consumes these and no decision path reads them. */
 const hookName = z.string().regex(/^(?!\.{1,2}$)[A-Za-z0-9._-]+$/)
@@ -964,6 +983,7 @@ export const repositoryEventPayloadSchemas = {
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...kernelGitHealthEventPayloadSchemas,
+  ...openPrBackpressureEventPayloadSchemas,
   ...hookEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
@@ -1100,6 +1120,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'forge.credential-limited': ['dispatcher', 'kernel'],
   'dispatcher.kernel-git-unavailable': ['dispatcher'],
   'dispatcher.kernel-git-recovered': ['dispatcher'],
+  'dispatcher.open-pr-backpressure-engaged': ['dispatcher'],
+  'dispatcher.open-pr-backpressure-cleared': ['dispatcher'],
   'hook.failing': ['dispatcher'],
   'hook.recovered': ['dispatcher'],
   'hook.skipped': ['dispatcher'],

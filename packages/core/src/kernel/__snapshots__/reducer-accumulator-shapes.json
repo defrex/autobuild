@@ -1482,6 +1482,7 @@
     "$.openHarvest.open[].sessionId: string",
     "$.openHarvest.open[]: object",
     "$.openHarvest: object",
+    "$.openPrBackpressure: object",
     "$.pendingHumanResume: number",
     "$.preparation.prep-1.attempt: string",
     "$.preparation.prep-1.claimed: boolean",

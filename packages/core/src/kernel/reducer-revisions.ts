@@ -17,4 +17,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'nodeRestack/shape/8su0tli8be': 'AUT-1266 generated replay resolution state',
   'executionNoProgress/fold/v2he1qwp0t': 'AUT-1266 regeneration events count as progress',
   'buildReadFacts/shape/2kbhcftrqb': 'Carry the verify diff base as a bounded part',
+  'repositoryReadFacts/shape/se5kk44boc': 'AUT-1288 open-PR backpressure engagement',
 }

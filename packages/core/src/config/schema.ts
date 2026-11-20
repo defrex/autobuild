@@ -805,6 +805,12 @@ export const policySchema = z.strictObject({
   nodeIdlePollSeconds: z.number().int().positive().default(120),
   janitorBackoffMaxSeconds: z.number().int().positive().default(300),
   harvestMaxDrift: z.number().int().nonnegative().default(3),
+  /** Open unmerged root PRs at which normal-priority intake pauses; unset disables backpressure. */
+  maxOpenPrs: z.number().int().positive().optional(),
+  /** Open unmerged root PRs at or below which paused intake resumes; defaults to `maxOpenPrs - 1`. */
+  resumeOpenPrs: z.number().int().nonnegative().optional(),
+  /** Leave PRs whose active landing command is `hold` out of the backpressure count. */
+  excludeHeldOpenPrs: z.boolean().default(false),
 })
 
 documentFields(policySchema, {
@@ -837,12 +843,21 @@ documentFields(policySchema, {
   janitorBackoffMaxSeconds: 'Cap on exponential janitor retry delay, starting at 30 seconds.',
   harvestMaxDrift:
     'Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.',
+  maxOpenPrs:
+    'Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.',
+  resumeOpenPrs:
+    'Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Inert without `maxOpenPrs`.',
+  excludeHeldOpenPrs:
+    'Leave PRs whose active landing command is `hold` out of the open-PR backpressure count. Inert without `maxOpenPrs`.',
 })
 documentSchema(policySchema.shape.dispatchLeaseTimeoutSeconds, {
   constraints: 'Must be greater than `dispatchLeaseRenewalSeconds`.',
 })
 documentSchema(policySchema.shape.dispatchLeaseRenewalSeconds, {
   constraints: 'Must be less than `dispatchLeaseTimeoutSeconds`.',
+})
+documentSchema(policySchema.shape.resumeOpenPrs, {
+  constraints: 'Must not exceed `maxOpenPrs`.',
 })
 export type PolicyConfig = z.infer<typeof policySchema>
 
@@ -1459,6 +1474,13 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
       code: 'custom',
       path: ['policy', 'dispatchLeaseRenewalSeconds'],
       message: `${DISPATCH_LEASE_PAIR_MESSAGE} (dispatchLeaseRenewalSeconds = ${leaseRenewal}, dispatchLeaseTimeoutSeconds = ${leaseTimeout})`,
+    })
+  const { maxOpenPrs, resumeOpenPrs } = config.policy
+  if (maxOpenPrs !== undefined && resumeOpenPrs !== undefined && resumeOpenPrs > maxOpenPrs)
+    ctx.addIssue({
+      code: 'custom',
+      path: ['policy', 'resumeOpenPrs'],
+      message: `policy.resumeOpenPrs must not exceed policy.maxOpenPrs (resumeOpenPrs = ${resumeOpenPrs}, maxOpenPrs = ${maxOpenPrs})`,
     })
   for (const [name, account] of Object.entries(config.accounts)) {
     if (account.kind !== 'chatgpt-subscription') continue

@@ -92,6 +92,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   `capacity` counts builds running work: a build that finished its pipeline
   holds no slot while it waits for a merge decision, though it keeps its
   workspace until it merges or closes. Priority never preempts a running build.
+  With `[policy].maxOpenPrs` set, open-PR backpressure pauses new
+  normal-priority claims once that many root PRs are open and unmerged, until
+  the count drains to `resumeOpenPrs`; urgent claims and in-flight work
+  continue, and capacity is unchanged.
 - **Ticket waits.** A work build that cannot proceed until other tickets
   complete parks without a slot. A phase agent ends its session with
   `ab wait-on <ticket-id>... --reason <text>`, a terminal that needs no
@@ -1435,7 +1439,9 @@ users to move its fields to `[roles.default]`.
 ### `[policy]`
 
 Every field is a **positive integer** except `harvestMaxDrift`, which is a
-nonnegative integer so zero can disable that trigger.
+nonnegative integer so zero can disable that trigger, and the open-PR
+backpressure keys `maxOpenPrs` (no default; unset disables backpressure),
+`resumeOpenPrs` and the boolean `excludeHeldOpenPrs`.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -1457,6 +1463,9 @@ nonnegative integer so zero can disable that trigger.
 | `nodeIdlePollSeconds` | `120` | positive integer | Interval between idle node checks; durable activity wakes the next tick. |
 | `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
+| `maxOpenPrs` | unset | positive integer | Open unmerged root PRs (leaves and integration nodes, not children of a node) at which the dispatcher stops claiming `normal`-priority tickets. Urgent claims, in-flight builds, reconciles and landings continue. Unset disables open-PR backpressure. |
+| `resumeOpenPrs` | `maxOpenPrs - 1` | nonnegative integer, at most `maxOpenPrs` | Once engaged, normal claims stay paused until the open root PR count is at or below this. Inert without `maxOpenPrs`. |
+| `excludeHeldOpenPrs` | `false` | boolean | Leave PRs whose active landing command is `hold` out of the count. Inert without `maxOpenPrs`. |
 
 Dispatch failures share one budget across stages until runner attachment. At
 exhaustion dispatch parks durably; bare `ab answer <slug>` and text guidance
@@ -2877,6 +2886,11 @@ repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
 and starts no dispatcher work. Dispatcher identity includes the held run’s recorded
 runtime; historical starts without metadata display `runtime unrecorded`.
+With `[policy].maxOpenPrs` configured and a dispatcher holding the
+repository, an `open-PR backpressure:` line (`capacity.backpressure` in JSON:
+`active`, `openPrs`, `maxOpenPrs`, `resumeOpenPrs`, `excludeHeld`) says whether
+normal intake is paused; the dispatcher records
+`dispatcher.open-pr-backpressure-engaged` and `-cleared` only on transitions.
 It also lists the latest ticket scan's ticket and dependency diagnostics
 (`queue:` lines, `ticketDiagnostics` and `dependencyDiagnostics` in JSON),
 including ready tickets whose labels select more than one role profile and
