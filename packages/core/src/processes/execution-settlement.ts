@@ -32,8 +32,6 @@ export interface OpenExecution {
   commandId?: string
 }
 
-export const OPEN_EXECUTION_REDUCER_VERSION = 1
-
 /** The latest `execution.started` not followed by an instance-matched
  * `execution.ended`, or null when no execution is open. */
 export const openExecutionReducer = defineReducer<
@@ -41,7 +39,7 @@ export const openExecutionReducer = defineReducer<
   AbEvent,
   OpenExecution | null
 >({
-  version: OPEN_EXECUTION_REDUCER_VERSION,
+  identity: 'openExecution',
   initial: () => ({ open: null }),
   fold(acc, events) {
     for (const event of events) {
@@ -69,8 +67,6 @@ export function openExecution(events: AbEvent[]): OpenExecution | null {
 
 export type ExecutionOutcome = 'open' | 'completed' | 'stopped' | 'lost' | 'relaunch' | 'none'
 
-export const LAST_EXECUTION_OUTCOME_REDUCER_VERSION = 2
-
 /** The lifecycle state of the latest recorded execution: `open` (no matching
  * end yet), `completed`/`stopped`/`lost`/`relaunch` (its recorded end), or `none`. */
 export const lastExecutionOutcomeReducer = defineReducer<
@@ -78,7 +74,7 @@ export const lastExecutionOutcomeReducer = defineReducer<
   AbEvent,
   ExecutionOutcome
 >({
-  version: LAST_EXECUTION_OUTCOME_REDUCER_VERSION,
+  identity: 'lastExecutionOutcome',
   initial: () => ({ state: 'none', instance: null }),
   fold(acc, events) {
     for (const event of events) {

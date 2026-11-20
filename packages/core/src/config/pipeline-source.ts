@@ -103,14 +103,12 @@ export function isActionablePipelineFailure(failure: PipelineSourceFailure): boo
   )
 }
 
-export const RECORDED_BASE_SHA_REDUCER_VERSION = 1
-
 /** The recorded base commit of the build's latest workspace. The newest
  * `workspace.provisioned` wins: a re-provisioned workspace is what the build's
  * current environment was cut from. */
 export const recordedBaseShaReducer = defineReducer<{ base?: string }, AbEvent, string | undefined>(
   {
-    version: RECORDED_BASE_SHA_REDUCER_VERSION,
+    identity: 'recordedBaseSha',
     initial: () => ({}),
     fold(acc, events) {
       for (const event of events) {

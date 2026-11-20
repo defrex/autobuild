@@ -11,15 +11,12 @@ export interface FrozenPrImageHostAcc {
   created?: { seq: number; imageHost?: PrImageHostTarget }
 }
 
-/** Bump when `FrozenPrImageHostAcc` or its fold changes. */
-export const FROZEN_PR_IMAGE_HOST_REDUCER_VERSION = 1
-
 export const frozenPrImageHostReducer: IncrementalReducer<
   FrozenPrImageHostAcc,
   AbEvent,
   PrImageHostTarget | undefined
 > = defineReducer<FrozenPrImageHostAcc, AbEvent, PrImageHostTarget | undefined>({
-  version: FROZEN_PR_IMAGE_HOST_REDUCER_VERSION,
+  identity: 'frozenPrImageHost',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -71,15 +68,12 @@ function finishDesignations(acc: DesignationAcc): PrAttachmentDesignationEvent[]
 
 export type CurrentPrAttachmentsAcc = DesignationAcc
 
-/** Bump when `CurrentPrAttachmentsAcc` or its fold changes. */
-export const CURRENT_PR_ATTACHMENTS_REDUCER_VERSION = 1
-
 export const currentPrAttachmentsReducer: IncrementalReducer<
   CurrentPrAttachmentsAcc,
   AbEvent,
   PrAttachmentDesignationEvent[]
 > = defineReducer<CurrentPrAttachmentsAcc, AbEvent, PrAttachmentDesignationEvent[]>({
-  version: CURRENT_PR_ATTACHMENTS_REDUCER_VERSION,
+  identity: 'currentPrAttachments',
   initial: initialDesignations,
   fold(acc, events) {
     for (const event of events) foldDesignations(acc, event)
@@ -103,9 +97,6 @@ export interface HostedPrAttachmentsAcc extends DesignationAcc {
   hostedByDesignation: Record<string, PrAttachmentHostedEvent>
 }
 
-/** Bump when `HostedPrAttachmentsAcc` or its fold changes. */
-export const HOSTED_PR_ATTACHMENTS_REDUCER_VERSION = 1
-
 function finishHosted(
   acc: HostedPrAttachmentsAcc,
   designations: readonly PrAttachmentDesignationEvent[],
@@ -125,7 +116,7 @@ export const hostedPrAttachmentsReducer: IncrementalReducer<
   AbEvent,
   Map<number, PrAttachmentHostedEvent>
 > = defineReducer<HostedPrAttachmentsAcc, AbEvent, Map<number, PrAttachmentHostedEvent>>({
-  version: HOSTED_PR_ATTACHMENTS_REDUCER_VERSION,
+  identity: 'hostedPrAttachments',
   initial: () => ({ ...initialDesignations(), hostedByDesignation: {} }),
   fold: foldHosted,
   finish: (acc) => finishHosted(acc, finishDesignations(acc)),
@@ -165,15 +156,12 @@ export interface PendingPrAttachmentReclaimsAcc {
   reclaimedAt: Record<string, number>
 }
 
-/** Bump when `PendingPrAttachmentReclaimsAcc` or its fold changes. */
-export const PENDING_PR_ATTACHMENT_RECLAIMS_REDUCER_VERSION = 1
-
 export const pendingPrAttachmentReclaimsReducer: IncrementalReducer<
   PendingPrAttachmentReclaimsAcc,
   AbEvent,
   PrAttachmentHostedEvent[]
 > = defineReducer<PendingPrAttachmentReclaimsAcc, AbEvent, PrAttachmentHostedEvent[]>({
-  version: PENDING_PR_ATTACHMENT_RECLAIMS_REDUCER_VERSION,
+  identity: 'pendingPrAttachmentReclaims',
   initial: () => ({ hosted: [], reclaimedAt: {} }),
   fold(acc, events) {
     for (const event of events) {

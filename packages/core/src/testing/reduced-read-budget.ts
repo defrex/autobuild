@@ -3368,6 +3368,8 @@ export async function hostedSeedReadBudget() {
   const { REDUCERS } = await import('../kernel/reducer-registry')
   const { repositoryAttentionReducer } = await import('../kernel/repository-attention')
   const { buildStreamSeedReducer } = await import('../kernel/read-facts')
+  const { deriveReducerVersion } = await import('../kernel/reducer-identity')
+  const { REDUCER_REVISIONS } = await import('../kernel/reducer-revisions')
   const gapCosts: number[] = []
   for (const length of [100, 10_000]) {
     const store = new MemoryBuildStore()
@@ -3460,6 +3462,33 @@ export async function hostedSeedReadBudget() {
       if ('excluded' in entry) throw new Error('missing seed entry')
       const create = entry.create
       const validate = entry.validate
+      const identity = create({}).identity!
+      /** The ledger with `generation` synthetic revisions of this identity. */
+      const ledger = (generation: number) => ({
+        ...REDUCER_REVISIONS,
+        ...Object.fromEntries(
+          Array.from({ length: generation }, (_, index) => [
+            `${identity}/shape/seedgen${String(index + 1).padStart(3, '0')}`,
+            'read budget',
+          ]),
+        ),
+      })
+      // Generation 0: the ledger-derived identity the migration leaves in
+      // place reuses every saved value and reads zero event rows.
+      try {
+        const reducer = create({})
+        entry.create = () => ({
+          ...reducer,
+          version: deriveReducerVersion({ identity, ledger: ledger(0) }),
+        })
+        expect(entry.create({}).version).toBe(reducer.version)
+        counter.reset()
+        await store.getStreamSeed(scope, requested)
+        await new RepoViewStore(store, { repo }).getStreamSeed!(scope, requested)
+        expect(counter.rows + counter.buildRows).toBe(0)
+      } finally {
+        entry.create = create
+      }
       entry.validate = (state) => {
         if (!state || typeof state !== 'object') return false
         const { addedByNewVersion, ...prior } = state as Record<string, unknown>
@@ -3472,7 +3501,7 @@ export async function hostedSeedReadBudget() {
           const reducer = create({})
           entry.create = () => ({
             ...reducer,
-            version: reducer.version + generation,
+            version: deriveReducerVersion({ identity, ledger: ledger(generation) }),
             initial: () => ({ ...reducer.initial(), addedByNewVersion: 0 }),
             finish: (acc) => ({ ...reducer.finish(acc), addedByNewVersion: acc.addedByNewVersion }),
             advance: (acc, events) => ({

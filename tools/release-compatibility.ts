@@ -57,6 +57,16 @@ async function catalogJson(value: ReleasedReducerValues): Promise<string> {
 
 /** Missing outgoing evidence is recovered from the immutable npm artifact,
  * never by attaching the outgoing version to this checkout's schemas. */
+/** A registry's published reducer versions. Reads only `.version`, which every
+ * release exposes: older published tarballs predate derived identities. */
+export function catalogVersions(reducers: unknown): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(reducers as Record<string, { reducer: { version: number } }>).map(
+      ([name, entry]) => [name, entry.reducer.version],
+    ),
+  )
+}
+
 export async function recoverPublished(root: string, version: string): Promise<PublishedEvidence> {
   const registry = 'https://registry.npmjs.org/@defrex%2fautobuild'
   const response = await fetch(registry)
@@ -115,14 +125,7 @@ export async function recoverPublished(root: string, version: string): Promise<P
       },
       catalog: {
         ...shapes,
-        versions: Object.fromEntries(
-          Object.entries(REDUCERS as Record<string, { reducer: { version: number } }>).map(
-            ([name, entry]: [string, { reducer: { version: number } }]) => [
-              name,
-              entry.reducer.version,
-            ],
-          ),
-        ),
+        versions: catalogVersions(REDUCERS),
       },
     }
   } finally {
@@ -222,14 +225,7 @@ export async function prepareReleaseCompatibility(input: {
             'utf8',
           ),
         ),
-        versions: Object.fromEntries(
-          Object.entries(REDUCERS as Record<string, { reducer: { version: number } }>).map(
-            ([name, entry]: [string, { reducer: { version: number } }]) => [
-              name,
-              entry.reducer.version,
-            ],
-          ),
-        ),
+        versions: catalogVersions(REDUCERS),
       },
     }
   }

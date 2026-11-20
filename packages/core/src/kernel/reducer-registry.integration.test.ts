@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import {
@@ -13,6 +13,24 @@ import { Glob } from 'bun'
 import type { RegisteredReducer } from './reducer-registry'
 import { randomSessionLog } from './generators/session-log'
 import { EXCLUDED, REDUCERS } from './reducer-registry'
+import {
+  IDENTIFIED,
+  LEGACY_REDUCER_VERSIONS,
+  PARTS,
+  canonicalJson,
+  checkIdentityRecords,
+  deriveReducerVersion,
+  evaluationCorpora,
+  formatUnregeneratedCombination,
+  parseRecordFile,
+  parseRevisions,
+  planRegeneration,
+  recordKey,
+  revisionSet,
+  type CurrentIdentity,
+  type IdentityRecord,
+} from './reducer-identity'
+import { REDUCER_REVISIONS } from './reducer-revisions'
 import { randomBuildLog } from './generators/build-log'
 import {
   randomHarvestJournal,
@@ -801,32 +819,130 @@ function corpora(): unknown[][] {
   ]
 }
 
-const logs = corpora()
+const sha256 = (text: string) => new Bun.CryptoHasher('sha256').update(text).digest('hex')
+/** Each corpus as canonical JSON, the bytes its id and archive file address.
+ * Every fold reads the parsed canonical form, so a corpus folds identically
+ * whether it is current or restored from the archive. */
+const corpusTexts = new Map(
+  corpora().map((log) => {
+    const text = canonicalJson(log)
+    return [sha256(text).slice(0, 16), text] as const
+  }),
+)
+const currentCids = [...corpusTexts.keys()].sort()
+const logs = new Map([...corpusTexts].map(([cid, text]) => [cid, JSON.parse(text) as unknown[]]))
 const CHUNK = 12
-const fingerprints = new Map<string, string[]>()
+const analyses = new Map<string, { paths: string[]; digests: Record<string, string> }>()
 
-/** Union of accumulator fingerprints after every chunk of every corpus, so
- * optional and variant fields are covered. A corpus a reducer cannot fold
- * (it throws on a malformed reference) contributes the chunks before. */
-function unionFingerprint(name: string, reducer: RegisteredReducer['reducer']): string[] {
-  const cached = fingerprints.get(name)
+/** Fold one corpus in CHUNK-sized chunks, stopping at the first chunk that
+ * throws (a corpus for another domain), and digest the accumulator reached. */
+function foldCorpus(
+  reducer: RegisteredReducer['reducer'],
+  log: readonly unknown[],
+  visit: (acc: unknown) => void = () => {},
+): string {
+  let acc = reducer.initial()
+  let threwAtChunk: number | null = null
+  for (let i = 0; i < log.length; i += CHUNK) {
+    try {
+      acc = reducer.advance(acc, log.slice(i, i + CHUNK))
+    } catch {
+      threwAtChunk = i / CHUNK
+      break
+    }
+    visit(acc)
+  }
+  return sha256(canonicalJson({ acc, threwAtChunk })).slice(0, 32)
+}
+
+/** One pass over the current corpora: the union of accumulator fingerprints
+ * after every chunk (so optional and variant fields are covered) and each
+ * corpus's accumulator digest for the identity records. */
+function analyze(
+  name: string,
+  reducer: RegisteredReducer['reducer'],
+): { paths: string[]; digests: Record<string, string> } {
+  const cached = analyses.get(name)
   if (cached !== undefined) return cached
   const paths = new Set<string>()
   collectPaths(reducer.initial(), '$', paths)
-  for (const log of logs) {
-    let acc = reducer.initial()
-    try {
-      for (let i = 0; i < log.length; i += CHUNK) {
-        acc = reducer.advance(acc, log.slice(i, i + CHUNK))
-        collectPaths(acc, '$', paths)
-      }
-    } catch {
-      // A corpus for another domain; keep what was reached.
+  const digests: Record<string, string> = {}
+  for (const [cid, log] of logs)
+    digests[cid] = foldCorpus(reducer, log, (acc) => collectPaths(acc, '$', paths))
+  const result = { paths: [...paths].sort(), digests }
+  analyses.set(name, result)
+  return result
+}
+
+function unionFingerprint(name: string, reducer: RegisteredReducer['reducer']): string[] {
+  return analyze(name, reducer).paths
+}
+
+const RECORDS = new URL('./__snapshots__/reducer-identity-records/', import.meta.url)
+const ARCHIVE = new URL('./__snapshots__/reducer-identity-corpora/', import.meta.url)
+/** The canonical JSON of `LEGACY_REDUCER_VERSIONS`. It never changes. */
+const LEGACY_DIGEST = 'a1e5f19749ef9d59c12e764b9dde42cefe8b67b7ef7d75a394f41b7c9d73b4bb'
+
+function readRecords(): IdentityRecord[] {
+  if (!existsSync(RECORDS)) return []
+  return readdirSync(RECORDS)
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .flatMap((file) => parseRecordFile(file, readFileSync(new URL(file, RECORDS), 'utf8'), sha256))
+}
+
+function archivedCids(): Set<string> {
+  if (!existsSync(ARCHIVE)) return new Set()
+  return new Set(
+    readdirSync(ARCHIVE)
+      .filter((file) => file.endsWith('.json.gz'))
+      .map((file) => file.slice(0, -'.json.gz'.length)),
+  )
+}
+
+const archivedLogs = new Map<string, unknown[] | null>()
+/** A retired corpus restored from the archive, or null when it is missing. */
+function archivedLog(cid: string): unknown[] | null {
+  if (archivedLogs.has(cid)) return archivedLogs.get(cid)!
+  const file = new URL(`${cid}.json.gz`, ARCHIVE)
+  let log: unknown[] | null = null
+  if (existsSync(file)) {
+    const text = new TextDecoder().decode(Bun.gunzipSync(readFileSync(file)))
+    if (sha256(text).slice(0, 16) !== cid)
+      throw new Error(`archived corpus ${cid} does not match its content`)
+    log = JSON.parse(text)
+  }
+  archivedLogs.set(cid, log)
+  return log
+}
+
+function transitiveParts(identity: string): string[] {
+  const out = new Set<string>()
+  const visit = (name: string) => {
+    for (const part of PARTS.get(name) ?? []) {
+      out.add(part)
+      visit(part)
     }
   }
-  const result = [...paths].sort()
-  fingerprints.set(name, result)
-  return result
+  visit(identity)
+  return [...out].sort()
+}
+
+/** Every registered reducer as it folds today, over the current corpora and
+ * every archived corpus its records at the current identity cover. */
+function currentIdentities(records: readonly IdentityRecord[]): CurrentIdentity[] {
+  return Object.entries(REDUCERS).map(([name, r]) => {
+    const identity = r.reducer.identity!
+    const revisions = revisionSet(identity)
+    const key = recordKey(identity, revisions, sha256)
+    const digests = { ...analyze(name, r.reducer).digests }
+    for (const cid of evaluationCorpora({ name, key, records, currentCids })) {
+      if (digests[cid] !== undefined) continue
+      const log = archivedLog(cid)
+      if (log !== null) digests[cid] = foldCorpus(r.reducer, log)
+    }
+    return { name, identity, parts: transitiveParts(identity), revisions, digests }
+  })
 }
 
 /** Reducers whose empty accumulator already has every field, so the corpora
@@ -847,92 +963,88 @@ function unclassified(found: Iterable<string>, covered: ReadonlySet<string>): st
 }
 
 describe('reducer registry', () => {
-  test('published versions', () => {
-    // Changing a reducer's accumulator shape or fold semantics requires
-    // bumping its version; a changed number here is that bump under review.
-    expect(
-      Object.fromEntries(Object.entries(REDUCERS).map(([name, r]) => [name, r.reducer.version])),
-    ).toMatchInlineSnapshot(`
-      {
-        "autoMergeDefault": 1,
-        "baseBranch": 2,
-        "baseBranchValue": 2,
-        "build": 51,
-        "buildDelegation": 2,
-        "buildDigest": 17,
-        "buildReadFacts": 114,
-        "buildStreamSeed": 67,
-        "currentDeferralObservation": 1,
-        "currentPrAttachments": 1,
-        "dashboardFacts": 4,
-        "dispatchFailureBudget": 1,
-        "dispatchFrontend": 5,
-        "dispatchPlacement": 1,
-        "dispatchSettings": 1,
-        "dispatchStatus": 5,
-        "dispatchUpgrade": 7,
-        "dispatcherRunFacts": 3,
-        "effectiveConfig": 1,
-        "executionNoProgress": 7,
-        "forgeHealthValue": 1,
-        "frozenPrImageHost": 1,
-        "harvest": 4,
-        "harvestDelegation": 2,
-        "hostedHarvestAuthority": 1,
-        "hostedPrAttachments": 1,
-        "infrastructureFailureReset": 1,
-        "journalView": 9,
-        "lastExecutionOutcome": 2,
-        "leafRestack": 10,
-        "logIndex": 13,
-        "nodeRestack": 10,
-        "openBuildWorkspace": 2,
-        "openExecution": 1,
-        "openHarvestExecutions": 1,
-        "openTick": 1,
-        "openWorkspace": 1,
-        "optimization": 6,
-        "optimizationLedger": 2,
-        "pendingPrAttachmentReclaims": 1,
-        "phaseFailures": 3,
-        "pinnedAssets": 2,
-        "provisionMarker": 2,
-        "publicationState": 8,
-        "publishedBranchHead": 5,
-        "publishedBranchHeadValue": 5,
-        "recordedBaseSha": 1,
-        "recordedBaseShaValue": 1,
-        "recoveryCheckpoint": 4,
-        "repositoryAttention": 2,
-        "repositoryReadFacts": 42,
-        "repositoryStateEvents": 8,
-        "sandboxStates": 1,
-        "session": 1,
-        "setupStreak": 1,
-        "summaryBoundary": 1,
-        "summaryRequests": 1,
-        "terminalGuard": 6,
-        "ticketHandbacks": 1,
-        "ticketMigrations": 1,
-        "ticketPreparation": 3,
-        "ticketSourceHealth": 2,
-        "verifyDiffBase": 3,
-        "verifyDiffBaseValue": 3,
-      }
-    `)
+  test('reducer identities derive from the frozen base and the revision ledger', () => {
+    // A version is never edited: it counts ledger revisions over a frozen base
+    // and adds its parts. Change a reducer's accumulator shape or fold with
+    // bun tools/reducer-revision.ts <shape|fold> <identity> --reason "…".
+    for (const [name, r] of Object.entries(REDUCERS)) {
+      const identity = r.reducer.identity
+      expect({ name, identity: typeof identity }).toEqual({ name, identity: 'string' })
+      expect(Number.isSafeInteger(r.reducer.version)).toBe(true)
+      expect(r.reducer.version).toBeGreaterThanOrEqual(1)
+      expect(r.reducer.version).toBeLessThanOrEqual(2 ** 31 - 1)
+      expect({ name, version: r.reducer.version }).toEqual({
+        name,
+        version: deriveReducerVersion({ identity: identity! }),
+      })
+    }
+    const revisions = parseRevisions(REDUCER_REVISIONS)
+    for (const revision of revisions) expect(IDENTIFIED).toContain(revision.identity)
+    expect(new Set(revisions.map((revision) => revision.id)).size).toBe(revisions.length)
+    for (const identity of Object.keys(LEGACY_REDUCER_VERSIONS))
+      expect(IDENTIFIED).toContain(identity)
+    expect(sha256(canonicalJson(LEGACY_REDUCER_VERSIONS))).toBe(LEGACY_DIGEST)
   })
 
+  test("identity records cover every reducer's accumulator behaviour", () => {
+    // Each record pins, per corpus, the accumulator digest of one reducer at
+    // one revision set. A digest that changes under an unchanged identity is a
+    // shape or fold change without a ledger revision. Record files and
+    // archived corpora are immutable, content-addressed and only ever added,
+    // so concurrent branches merge them cleanly; regenerate them, never edit
+    // or delete them, with AB_UPDATE_REDUCER_SHAPES=1 bun test <this file>.
+    let records = readRecords()
+    if (process.env.AB_UPDATE_REDUCER_SHAPES === '1') {
+      const plan = planRegeneration({
+        current: currentIdentities(records),
+        currentCids,
+        records,
+        archived: archivedCids(),
+        hash: sha256,
+      })
+      expect(plan.refused).toEqual([])
+      mkdirSync(RECORDS, { recursive: true })
+      mkdirSync(ARCHIVE, { recursive: true })
+      for (const cid of plan.archive)
+        writeFileSync(new URL(`${cid}.json.gz`, ARCHIVE), Bun.gzipSync(corpusTexts.get(cid)!))
+      if (plan.write) writeFileSync(new URL(plan.write.file, RECORDS), plan.write.content)
+      records = readRecords()
+    }
+    const current = currentIdentities(records)
+    const { violations, unregeneratedCombinations } = checkIdentityRecords({
+      current,
+      currentCids,
+      records,
+      hash: sha256,
+    })
+    // The accepted unregenerated-combination state is named on every run.
+    for (const entry of unregeneratedCombinations)
+      console.warn(formatUnregeneratedCombination(entry))
+    expect(violations.map((violation) => violation.message)).toEqual([])
+    // Accumulator digests are deterministic: a second, uncached fold agrees.
+    const again = Object.fromEntries(
+      Object.entries(REDUCERS).map(([name, r]) => [
+        name,
+        Object.fromEntries(currentCids.map((cid) => [cid, foldCorpus(r.reducer, logs.get(cid)!)])),
+      ]),
+    )
+    expect(again).toEqual(
+      Object.fromEntries(Object.keys(REDUCERS).map((name) => [name, analyses.get(name)!.digests])),
+    )
+  }, 120_000)
+
   test('accumulator shapes', () => {
-    // If this snapshot changed, the accumulator shape changed: BUMP THE
-    // REDUCER'S VERSION (and the 'published versions' snapshot above) rather
-    // than only re-snapshotting. Cached accumulators are valid per version.
+    // If this snapshot changed, the accumulator shape changed: add a revision
+    // with bun tools/reducer-revision.ts shape <identity> --reason "…", then
+    // regenerate, rather than only re-snapshotting. Cached accumulators are
+    // valid per version.
     const shapes = Object.fromEntries(
       Object.entries(REDUCERS).map(([name, r]) => [name, unionFingerprint(name, r.reducer)]),
     )
     // Direct JSON equality preserves the complete shape guard. Bun's external
     // snapshot assertion fails after module mocks load, even for identical shapes.
-    // Regenerate using these same deterministic corpora after reviewing the
-    // version bumps: AB_UPDATE_REDUCER_SHAPES=1 bun test <this file> --update-snapshots.
+    // Regenerate using these same deterministic corpora after adding the
+    // revisions: AB_UPDATE_REDUCER_SHAPES=1 bun test <this file>.
     if (process.env.AB_UPDATE_REDUCER_SHAPES === '1')
       writeFileSync(
         new URL('./__snapshots__/reducer-accumulator-shapes.json', import.meta.url),

@@ -1,0 +1,2 @@
+packages/core/src/kernel/reducer-revisions.ts merge=union
+packages/core/src/kernel/__snapshots__/reducer-identity-corpora/** binary

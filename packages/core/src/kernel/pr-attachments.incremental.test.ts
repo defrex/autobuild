@@ -3,10 +3,6 @@ import type { AbEvent } from '../events/catalog'
 import { checkIncremental, pick, seededRandom, shuffled } from './incremental-contract'
 import {
   type PrAttachmentDesignationEvent,
-  CURRENT_PR_ATTACHMENTS_REDUCER_VERSION,
-  FROZEN_PR_IMAGE_HOST_REDUCER_VERSION,
-  HOSTED_PR_ATTACHMENTS_REDUCER_VERSION,
-  PENDING_PR_ATTACHMENT_RECLAIMS_REDUCER_VERSION,
   currentPrAttachments,
   currentPrAttachmentsReducer,
   frozenPrImageHost,
@@ -155,13 +151,6 @@ const logs: [string, AbEvent[]][] = [
 ]
 
 describe('pr-attachments incremental reducers', () => {
-  test('versions start at 1', () => {
-    expect(FROZEN_PR_IMAGE_HOST_REDUCER_VERSION).toBe(1)
-    expect(CURRENT_PR_ATTACHMENTS_REDUCER_VERSION).toBe(1)
-    expect(HOSTED_PR_ATTACHMENTS_REDUCER_VERSION).toBe(1)
-    expect(PENDING_PR_ATTACHMENT_RECLAIMS_REDUCER_VERSION).toBe(1)
-  })
-
   for (const [name, log] of logs) {
     test(`matches the whole-array oracle and the incremental contract: ${name}`, () => {
       expect(frozenPrImageHost(log)).toEqual(oracleHost(log))

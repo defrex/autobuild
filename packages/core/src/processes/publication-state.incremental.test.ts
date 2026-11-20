@@ -3,7 +3,6 @@ import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { checkIncremental, pick, seededRandom, shuffled } from '../kernel/incremental-contract'
 import {
-  PUBLICATION_STATE_REDUCER_VERSION,
   abandonedPublicationPending,
   latestUncompletedPublicationRequest,
   publicationLostRecorded,
@@ -224,10 +223,6 @@ function generated(seed: number): AbEvent[] {
 }
 
 describe('publicationStateReducer', () => {
-  test('version includes durable publication retry episodes', () => {
-    expect(PUBLICATION_STATE_REDUCER_VERSION).toBe(8)
-  })
-
   test('counterexample: an irrelevant event between workspace facts is a scan barrier', () => {
     const request = implementRequest(5, A) as PublicationRequest
     const log = [

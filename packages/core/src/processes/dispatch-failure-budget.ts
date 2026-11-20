@@ -13,7 +13,7 @@ interface DispatchBudgetAccumulator {
 
 export function dispatchFailureBudgetReducer(infrastructureOwnsWorkspace: boolean) {
   return defineReducer({
-    version: 1,
+    identity: 'dispatchFailureBudget',
     initial: (): DispatchBudgetAccumulator => ({ failures: [], open: [], aborted: false }),
     fold(acc, events: readonly AbEvent[]) {
       for (const event of events) {

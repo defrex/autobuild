@@ -27,8 +27,6 @@ export interface OpenHarvestExecution {
   seq: number
 }
 
-export const OPEN_HARVEST_EXECUTIONS_REDUCER_VERSION = 1
-
 /** Open harvest executions: every `harvest.execution.started` not followed by
  * a matching `harvest.execution.released`, in journal order. The accumulator is
  * an ordered array: a re-started execution keeps its original position, as it
@@ -38,7 +36,7 @@ export const openHarvestExecutionsReducer = defineReducer<
   RepositoryEvent,
   OpenHarvestExecution[]
 >({
-  version: OPEN_HARVEST_EXECUTIONS_REDUCER_VERSION,
+  identity: 'openHarvestExecutions',
   initial: () => ({ open: [] }),
   fold(acc, events) {
     for (const event of events) {
@@ -78,8 +76,6 @@ export interface CurrentHarvestAuthority {
   released: boolean
 }
 
-export const HOSTED_HARVEST_AUTHORITY_REDUCER_VERSION = 1
-
 /** Constant-size current-authority projection a prepared hosted guest re-reads
  * at its durable boundaries. Unlike `repositoryReadFacts`, it keeps no history:
  * a later authorization for a different execution replaces `current`, a
@@ -93,7 +89,7 @@ export const hostedHarvestAuthorityReducer = defineReducer<
   RepositoryEvent,
   { current?: CurrentHarvestAuthority }
 >({
-  version: HOSTED_HARVEST_AUTHORITY_REDUCER_VERSION,
+  identity: 'hostedHarvestAuthority',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

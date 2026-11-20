@@ -18,7 +18,7 @@ export const ticketHandbacksReducer = defineReducer<
   RepositoryEvent,
   Record<string, OpenHandback>
 >({
-  version: 1,
+  identity: 'ticketHandbacks',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

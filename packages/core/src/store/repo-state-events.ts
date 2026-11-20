@@ -133,9 +133,6 @@ export interface RepositoryStateEventsAcc {
   retained: RepositoryEvent[]
 }
 
-/** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 8
-
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) ||
   (!LATEST_TYPES.has(event.type) && anchor !== undefined && event.seq >= anchor)
@@ -145,7 +142,7 @@ export const repositoryStateEventsReducer: IncrementalReducer<
   RepositoryEvent,
   RepositoryEvent[]
 > = defineReducer<RepositoryStateEventsAcc, RepositoryEvent, RepositoryEvent[]>({
-  version: REPOSITORY_STATE_EVENTS_REDUCER_VERSION,
+  identity: 'repositoryStateEvents',
   initial: () => ({ retained: [] }),
   fold(acc, events) {
     for (const event of events) {
@@ -181,9 +178,6 @@ export interface JournalViewAcc {
   retained: RepositoryEvent[]
 }
 
-/** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 9
-
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {
   for (const event of events) {
@@ -207,7 +201,7 @@ export const journalViewReducer: IncrementalReducer<
   RepositoryEvent,
   RepositoryEvent[]
 > = defineReducer<JournalViewAcc, RepositoryEvent, RepositoryEvent[]>({
-  version: JOURNAL_VIEW_REDUCER_VERSION,
+  identity: 'journalView',
   initial: () => ({ retained: [] }),
   fold: foldJournalView,
   finish: (acc) => [...acc.retained],
