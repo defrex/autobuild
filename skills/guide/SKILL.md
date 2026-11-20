@@ -859,7 +859,7 @@ subtables are part of this section — their fields are listed here.
 | `steps` | `[]` | strings or nonempty arrays of names; no duplicate names | Ordered stages. Members start together; every pass or skip is required before the next stage. Each name needs a matching table. |
 | `failFast` | `false` | optional boolean on either verify kind | A failure cancels unfinished members of its stage, then tears down and relaunches the whole execution before implement. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
-| `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
+| `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. Runs with `AB_VERIFY_BASE` set to the verify diff base when one exists. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-acceptance"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
@@ -1011,6 +1011,10 @@ excluded while build-owned resolutions remain visible. A miss starts no
 command, agent, or session and records `skipped` with
 `excluded by [verify.<step>].paths: no changed path matched <JSON paths>`.
 Git/base failures fail closed as infrastructure rather than becoming skips.
+A `check` command receives that same base as `AB_VERIFY_BASE` (a node's is its
+integration cycle parent), so it can judge the change relative to the base.
+The variable is absent outside a build, under an older runtime, and for a leaf
+with no provisioned base; a check that needs it must handle its absence.
 
 Agent verifiers may also use `ab verdict pass`,
 `ab verdict fail --report <file>`, or `ab verdict skip --reason <text>`. The

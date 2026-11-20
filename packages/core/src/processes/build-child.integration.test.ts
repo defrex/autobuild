@@ -564,7 +564,7 @@ test('a real local child suspends on shutdown and a new child resumes the native
 
 for (const kind of ['work', 'node'] as const) {
   test(`real ${kind} child executes serialized stage members concurrently`, async () => {
-    const { writeFile } = await import('node:fs/promises')
+    const { readFile, writeFile } = await import('node:fs/promises')
     const { integrationConfig } = await import('../kernel/integration-state')
     const tmp = await mkdtemp(join(tmpdir(), 'ab-child-stages-'))
     const store = new MemoryBuildStore()
@@ -585,7 +585,7 @@ runtime = "pi"
 source = "file"
 readyState = "ready"
 [commands]
-a = "touch a.started; i=0; until test -f b.started; do i=$((i+1)); test $i -lt 400 || exit 1; sleep 0.05; done"
+a = "printf %s $AB_VERIFY_BASE > a.base; touch a.started; i=0; until test -f b.started; do i=$((i+1)); test $i -lt 400 || exit 1; sleep 0.05; done"
 b = "touch b.started; i=0; until test -f a.started; do i=$((i+1)); test $i -lt 400 || exit 1; sleep 0.05; done"
 [verify]
 steps = [["a", "b"]]
@@ -740,6 +740,11 @@ always = true
           })
       }
       expect(events.at(-1)?.type).toBe('build.paused')
+      // The real shell received the verify base: the leaf's restacked target,
+      // the node's integration parent.
+      expect(await readFile(join(tmp, 'a.base'), 'utf8')).toBe(
+        kind === 'node' ? parent : leafTransaction.targetBase,
+      )
     } finally {
       await store.close()
       await rm(tmp, { recursive: true, force: true })

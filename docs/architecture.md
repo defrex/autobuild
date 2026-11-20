@@ -170,10 +170,13 @@ Every corpus a record has covered is kept in the content-addressed
 corpora may change freely while a fold change without a revision still fails.
 `AB_UPDATE_REDUCER_SHAPES=1` on that test regenerates the shapes and adds one
 new record file; record files are only ever added, never edited or deleted. One
-state passes with a notice rather than silently: after revisions combine
-through a clean restack and before anyone regenerates, the combined identity
-has no record of its own, so a fold change without a revision is not detected
-until regeneration (AUT-1274 closes this gap). Current-state consumers use the typed persisted
+state passes the records with a notice rather than silently: after revisions
+combine through a clean restack and before anyone regenerates, the combined
+identity has no record of its own. A base-relative clause catches a fold change
+there: against the verify base (`AB_VERIFY_BASE`), a reducer whose change adds
+no revision must fold every corpus as the base's records, or failing those the
+base's own code, did. Only without a supplied base is the clause skipped, with a
+notice. Current-state consumers use the typed persisted
 read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
 reference projections for tests and explicit historical output.
 
