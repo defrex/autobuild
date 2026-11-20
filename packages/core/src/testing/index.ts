@@ -83,7 +83,9 @@ export {
   reducedReadBudget,
   countHistoricalRows,
   countStoreRequests,
+  verifyCheckBaseReadBudget,
   type ReducedReadCosts,
+  type VerifyCheckBaseCosts,
 } from './reduced-read-budget'
 
 export { gitRewrite } from '../ports/forge/git-rewrite'

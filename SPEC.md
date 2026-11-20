@@ -5805,6 +5805,10 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
   reconcile, so upstream-merged work is not attributed to the build). No
   match skips without launching anything; a Git failure is infrastructure and
   fails closed, never a synthetic skip.
+- **Verify base for checks.** A `check` command runs with `AB_VERIFY_BASE`
+  set to that same durable base, or to a node's integration cycle parent, so
+  a check can judge the change relative to it; the variable is absent when no
+  base exists.
 
 
 #### Post-reconcile verification policy
