@@ -1,9 +1,18 @@
 import { DISPATCHER } from '../events/envelope'
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { makeHarness, happyHandlers, readyTicket, git, commitAll, CONFIG_TOML } from './harness'
+import {
+  makeHarness,
+  happyHandlers,
+  readyTicket,
+  git,
+  commitAll,
+  CONFIG_TOML,
+  ofType,
+} from './harness'
 import { controlBuild } from '../cli/build-control'
 import { reduceBuild } from '../kernel/reducer'
+import { summarize } from '../cli/status'
 import { observeIntegration } from '../kernel/integration-completeness'
 import { integrationHeadVerified } from '../kernel/integration-state'
 
@@ -642,3 +651,82 @@ test('agent verification failure reports the exact node cycle once without an es
     await h.cleanup()
   }
 })
+
+test('a node whose owned range is already upstream never prepares verification', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('NODE', { title: 'Upstreamed integration' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await addStack(h, node.branch!)
+    // A maintainer fast-forwards main to the node head before verification.
+    await git(['merge', '-q', '--ff-only', node.branch!], h.origin)
+    for (let i = 0; i < 4; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    const events = await h.events(node.slug)
+    expect(ofType(events, 'node.compared').at(-1)?.payload).toMatchObject({ ahead: 0 })
+    expect(ofType(events, 'integration.prepared')).toHaveLength(0)
+    expect(h.launched.filter((entry) => entry.slug === node.slug)).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('an external landing withdraws a live node runner and settles once its execution ends', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('NODE', { title: 'Externally landed integration' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await addStack(h, node.branch!)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const verifying = reduceBuild(await h.events(node.slug))
+    expect(verifying.integration?.cycle).toBeDefined()
+    expect(verifying.pr).toBeDefined()
+    // A verification runner is live: it holds the lease and an open execution.
+    expect(await h.store.claimLease(node.slug, 'runner-x', 3_600_000)).toBe(true)
+    const execution = { instance: 'runner-x', workspaceRef: 'live-ws' }
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { ...execution, provider: 'scenario' },
+    })
+    await h.forgeAdapter.squashMerge(h.origin, verifying.pr!.number, verifying.pr!.headSha)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const landed = reduceBuild(await h.events(node.slug))
+    expect(landed.integration?.landing).toMatchObject({ provenance: 'human' })
+    // The landing withdrew the runner's lease, but settlement waits for its end.
+    expect((await h.store.getBuild(node.slug))?.lease).toBeUndefined()
+    expect(landed.status).not.toBe('done')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.events(node.slug)).status).not.toBe('done')
+    expect(ofType(await h.events(node.slug), 'pr.merged')).toHaveLength(0)
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { ...execution, outcome: 'completed' },
+    })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const settled = reduceBuild(await h.events(node.slug))
+    expect(settled.status).toBe('done')
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+    expect((await h.tickets.get('NODE'))?.state).toBe('Done')
+    // `ab builds` and the dashboards read the settled node as done, not collecting.
+    expect(
+      summarize((await h.store.getBuild(node.slug))!, await h.events(node.slug), h.clock()),
+    ).toMatchObject({ status: 'done' })
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)

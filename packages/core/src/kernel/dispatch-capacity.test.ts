@@ -229,7 +229,7 @@ test('a node holding its workspace, provisioning or live lease is occupied, not 
   }
 })
 
-test('paused, blocked, escalated, deferred and verified nodes do not wait', () => {
+test('paused, blocked, escalated, deferred, verified and landed nodes do not wait', () => {
   const variants: ((node: CapacityBuild) => void)[] = [
     (node) => (node.state.status = 'paused'),
     (node) => (node.state.status = 'blocked'),
@@ -239,6 +239,14 @@ test('paused, blocked, escalated, deferred and verified nodes do not wait', () =
       ]),
     (node) => (node.state.compatibility = { decisiveFacts: 1 } as never),
     (node) => (node.state.prState = 'merged'),
+    (node) =>
+      (node.state.integration!.landing = {
+        head: 'head',
+        landed: 'head',
+        provenance: 'human',
+        fenced: false,
+        verified: false,
+      }),
     (node) =>
       (node.state.nodeComparison = {
         headSha: 'moved',
