@@ -36,7 +36,7 @@ import type { OpenSession } from '../kernel/reducer'
 import { nativeSessionHandleSchema } from '../ports/runner/native-session'
 import type { NativeSessionObserver } from '../ports/types'
 import { suspendNativeLanding } from '../kernel/landing-publication'
-import { integrationCurrent } from '../kernel/integration-state'
+import { integrationCurrent, nodeLanded } from '../kernel/integration-state'
 import { proposeRunDue } from '../kernel/optimization'
 import { replayNodeChange, validateNodeChange } from '../kernel/node-restack'
 import {
@@ -822,6 +822,8 @@ async function distributionJudgeSkill(): Promise<string> {
 
 export class BuildRunner {
   private verifyWrites = { tail: Promise.resolve() }
+  /** Aborts the running node check once a lease lapse reveals a landing. */
+  private checkAbort: AbortController | undefined
   private async withVerifyWrite<T>(write: () => Promise<T>): Promise<T> {
     const previous = this.verifyWrites.tail
     let release!: () => void
@@ -1293,7 +1295,20 @@ export class BuildRunner {
     this.cancelHeartbeat = scheduleHeartbeat(() => {
       store.heartbeat(slug, instance).then(
         (alive) => {
-          if (!alive) this.leaseLost = true
+          if (alive) return
+          this.leaseLost = true
+          // A lapse during a node check may be the dispatcher withdrawing the
+          // lease after a landing; one reduced read tells it from any other lapse.
+          const check = this.checkAbort
+          if (check)
+            void readBuildFacts(store, slug).then(
+              (facts) => {
+                if (nodeLanded(facts.value.state)) check.abort(new Error(`node ${slug} landed`))
+              },
+              () => {
+                // The next lapsed beat retries.
+              },
+            )
         },
         () => {
           // Store unreachable — the next beat retries; the lease TTL is the
@@ -1587,6 +1602,8 @@ export class BuildRunner {
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL))
       return (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     const initial = initialFacts.state
+    // A landed node has nothing left to execute; the janitor settles it.
+    if (nodeLanded(initial)) return initial
     if (
       initial.kind === 'node' &&
       !initial.nodeRestack?.conflict &&
@@ -2882,6 +2899,7 @@ export class BuildRunner {
     let decision: Decision = initial
     let drain = false
     let terminalDrain = false
+    let landed = false
     try {
       for (;;) {
         const observed = revision
@@ -2962,10 +2980,15 @@ export class BuildRunner {
         wake = undefined
         const facts = (await readBuildFacts(store, slug)).value
         decision = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
+        // A landing cancels open agent members as operator stops; let them end, not suspend.
+        landed = nodeLanded(facts.state)
         terminalDrain =
-          facts.state.status === 'running' &&
-          facts.state.pendingCommands.length === 0 &&
-          [...inFlight.keys()].every((key) => facts.state.verifyStage.outcomes[key] !== undefined)
+          landed ||
+          (facts.state.status === 'running' &&
+            facts.state.pendingCommands.length === 0 &&
+            [...inFlight.keys()].every(
+              (key) => facts.state.verifyStage.outcomes[key] !== undefined,
+            ))
 
         for (const entry of inFlight.values()) if (entry.error) throw entry.error
       }
@@ -2981,7 +3004,9 @@ export class BuildRunner {
         // Fail-fast must reach whole-execution teardown even when an adapter
         // ignores abort. Its cancelled brackets are already durably ended;
         // the supervisor, rather than a per-member reaper, owns descendants.
-        if (entry.agent && decision.kind !== 'cancel-verify-stage') await entry.pending
+        // A landing releases the workspace once execution ends, so every
+        // aborted member, checks included, finishes before the stage returns.
+        if (landed || (entry.agent && decision.kind !== 'cancel-verify-stage')) await entry.pending
         for (const stream of entry.runner.bracketStreams.values())
           entry.runner.closeBracketStream(stream, 'aborted')
         await entry.runner.closeProducerSessions()
@@ -3969,17 +3994,29 @@ export class BuildRunner {
         payload: { ...evidence, step, attempt },
       } satisfies EventWrite<'verify.started'>)
 
-    const result = await exec(['sh', '-c', command], {
-      cwd: workspacePath,
-      // An undefined value clears any inherited base rather than leaking it.
-      env: { [VERIFY_BASE_ENV]: verifyDiffBaseFrom(facts) },
-      ...(this.deps.shutdownSignal ? { signal: this.deps.shutdownSignal } : {}),
-    })
-    if (this.deps.shutdownSignal?.aborted) return
+    // A node's landing withdraws its lease; the heartbeat then aborts the check.
+    const landing = current.kind === 'node' ? new AbortController() : undefined
+    this.checkAbort = landing
+    const signals = [this.deps.shutdownSignal, landing?.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    )
+    let result: Awaited<ReturnType<typeof exec>>
+    try {
+      result = await exec(['sh', '-c', command], {
+        cwd: workspacePath,
+        // An undefined value clears any inherited base rather than leaking it.
+        env: { [VERIFY_BASE_ENV]: verifyDiffBaseFrom(facts) },
+        ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),
+      })
+    } finally {
+      if (this.checkAbort === landing) this.checkAbort = undefined
+    }
+    if (this.deps.shutdownSignal?.aborted || landing?.signal.aborted) return
     await this.withVerifyWrite(async () => {
       const state = (await readBuildFacts(store, slug)).value.state
       const key = verifyMemberKey(step, attempt)
       if (state.verifyStage.cancellations[key] || state.verifyStage.outcomes[key]) return
+      if (nodeLanded(state)) return
       if (result.exitCode === 0) {
         await store.append(slug, {
           actor: KERNEL,
@@ -4702,6 +4739,12 @@ export class BuildRunner {
       void readBuildFacts(store, slug)
         .then((facts) => {
           if (closed || controller.signal.aborted) return
+          // A landing recorded before this bracket armed ends the turn as an operator stop.
+          if (nodeLanded(facts.value.state)) {
+            abortCause = 'operator'
+            controller.abort(new Error(`node ${slug} landed`))
+            return
+          }
           const next = decideNextFromFacts(facts.value.state, facts.value.log, this.boundaryConfig)
           if (next.kind !== 'acknowledge' || next.command !== 'pause') return
           pauseInterrupted = true
@@ -4723,6 +4766,11 @@ export class BuildRunner {
       if (event.type === 'build.abort-requested') {
         abortCause = 'operator'
         controller.abort(new Error(`build ${slug} aborted by operator`))
+      }
+      // Only node builds record a landing; it ends open verification like an operator stop.
+      if (event.type === 'integration.landed') {
+        abortCause = 'operator'
+        controller.abort(new Error(`node ${slug} landed`))
       }
     })
     // A pause may have landed after phase selection but before this bracket.

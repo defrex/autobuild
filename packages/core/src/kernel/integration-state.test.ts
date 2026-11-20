@@ -8,6 +8,8 @@ import {
   integrationCurrent,
   integrationVerified,
   integrationNeedsRunner,
+  integrationAdmissible,
+  nodeLanded,
 } from './integration-state'
 
 const config = parseConfig(`
@@ -224,4 +226,22 @@ test('integration stages hold failure attention until every exact-cycle member s
   expect(
     decideNextFromFacts(state, { ...log, verifyCompleted: [result, foreign] }, grouped).kind,
   ).toBe('run-verify-stage')
+})
+test('a recorded landing ends node verification and admission', () => {
+  const state = prepared()
+  expect(integrationAdmissible(state)).toBe(true)
+  state.integration!.landing = {
+    head: 'head',
+    landed: 'head',
+    provenance: 'human',
+    fenced: false,
+    verified: false,
+  }
+  expect(nodeLanded(state)).toBe(true)
+  expect(integrationAdmissible(state)).toBe(false)
+  // The current cycle still has unfinished steps; the landing makes them moot.
+  expect(decideNextFromFacts(state, indexLog([]), config)).toEqual({
+    kind: 'wait',
+    reason: 'awaiting-pr',
+  })
 })

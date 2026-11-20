@@ -15726,6 +15726,52 @@ test('fresh node polling has bounded reads at 100 and 100000 events', async () =
   })
 }, 30_000)
 
+for (const variant of ['empty-range', 'landed'] as const)
+  test(`fresh polling of a complete ${variant} node prepares nothing and has bounded reads`, async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const node = (await h.store.listBuilds())[0]!
+    // The node's branch is its parent: every contribution is already upstream.
+    expect((await readBuildFacts(h.store, node.slug)).value.state.nodeComparison).toMatchObject({
+      ahead: 0,
+    })
+    await h.store.append(node.slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['merged-child'] },
+    })
+    if (variant === 'landed')
+      await h.store.append(node.slug, {
+        actor: DISPATCHER,
+        type: 'integration.landed',
+        payload: {
+          head: BASE_SHA,
+          landed: BASE_SHA,
+          provenance: 'human',
+          verified: false,
+          fenced: false,
+        },
+      })
+    const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+    await nodePollingReadBudget({
+      store: h.store as MemoryBuildStore,
+      slug: node.slug,
+      advance: (ms) => h.clock.advance(ms),
+      tick: () =>
+        harness({
+          store: h.store,
+          clock: h.clock,
+          wrapTickets: () => h.tickets,
+          dispatchForge: h.forge,
+        }).dispatcher.tick({ acceptNewWork: false }),
+    })
+    const events = await h.store.getEvents(node.slug)
+    expect(events.filter((event) => event.type === 'integration.prepared')).toEqual([])
+    expect(h.launches).not.toContain(node.slug)
+  }, 30_000)
+
 test('fresh node polling while the node waits for a slot at full capacity has bounded reads', async () => {
   const toml = [
     'capacity = 1',
