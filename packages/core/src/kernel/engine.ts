@@ -344,6 +344,9 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   const deferred = log.readDeferrals.find((item) => item.ended)
   if (deferred) return { kind: 'raise-read-deferral', ...deferred }
   if (state.kind === 'node') {
+    // A recorded landing ends the node's work: open verification is moot and
+    // the janitor settles the node once the execution ends.
+    if (state.integration?.landing) return { kind: 'wait', reason: 'awaiting-pr' }
     if (state.nodeRestack?.conflict) {
       const attempt =
         state.currentPhase?.phase === 'reconcile'

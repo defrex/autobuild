@@ -146,6 +146,7 @@ import {
   integrationVerified,
   integrationHeadVerified,
   integrationAdmissible,
+  nodeLanded,
 } from '../kernel/integration-state'
 import {
   normalizeIdentities,
@@ -1937,6 +1938,8 @@ export class Dispatcher {
     if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
     const launchState = (await this.store.buildFacts(slug)).state
+    // A landed node has nothing left to run; the janitor settles it.
+    if (nodeLanded(launchState)) return 'already-active'
     if (launchState.kind === 'node' && !launchState.nodeRestack?.conflict) {
       // The last check before a proposer starts: the open request must still
       // fit current state, unless its session was already admitted.
@@ -2845,6 +2848,7 @@ export class Dispatcher {
                 {
                   history,
                   workspace,
+                  executionOpen: initialFacts.open !== null,
                   observed: (pr) => {
                     incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
                   },
@@ -2940,6 +2944,7 @@ export class Dispatcher {
                   {
                     history,
                     workspace,
+                    executionOpen: initialFacts.open !== null,
                     observed: (pr) => {
                       incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
                     },
@@ -3127,6 +3132,7 @@ export class Dispatcher {
               {
                 history,
                 workspace,
+                executionOpen: initialFacts.open !== null,
                 observed: (pr) => {
                   incompleteObservation ||= pr.state === 'open' && pr.mergeable === null
                 },
@@ -4990,6 +4996,8 @@ export class Dispatcher {
     source: {
       history: () => Promise<CurrentBuildFacts>
       workspace: OpenBuildWorkspace | null
+      /** An execution is recorded open (started, not yet ended). */
+      executionOpen: boolean
       observed?: (pr: Awaited<ReturnType<Forge['getPrState']>>) => void
     },
     state: BuildState,
@@ -5778,8 +5786,10 @@ export class Dispatcher {
       if (state.prState === 'merged' && state.mergedSha)
         prState = { state: 'merged', sha: state.mergedSha }
     }
+    let landed = integration && state.integration?.landing !== undefined
     if (integration && prState.state === 'merged' && !state.integration?.landing) {
       const head = prState.headSha
+      landed = true
       await store.append(record.slug, {
         actor: DISPATCHER,
         type: 'integration.landed',
@@ -5793,11 +5803,19 @@ export class Dispatcher {
       })
     }
 
+    // A landing ends the node's verification: withdraw the runner's lease so
+    // its next heartbeat stops the work. One write, no reads; it repeats only
+    // while that runner still holds a live lease.
+    if (landed && executionLeaseLive && record.lease !== undefined)
+      await store.releaseLease(record.slug, record.lease.holder)
+    // A withdrawn lease is not an ended execution: settle only once the
+    // landed node's runner has recorded its end.
+    const executionLive = executionLeaseLive || (landed && source.executionOpen)
     if (
       integration &&
       (prState.state === 'merged' || prState.state === 'closed') &&
       record.branch &&
-      !executionLeaseLive
+      !executionLive
     ) {
       if (
         !(await this.withKernelRepository((kernelPath) =>
@@ -5816,7 +5834,7 @@ export class Dispatcher {
     }
     switch (prState.state) {
       case 'merged': {
-        if (executionLeaseLive) return
+        if (executionLive) return
         const events = await source.history()
         if (!landingAuthorized(state.landing) && !state.landing?.forgeMerge) {
           // Use our durable native-effect evidence, never provider origin.
@@ -5877,7 +5895,7 @@ export class Dispatcher {
         return
       }
       case 'closed': {
-        if (executionLeaseLive) return
+        if (executionLive) return
         const events = await source.history()
         // Closed without merge is a human decision — back to Triage (§15.7).
         if (state.prState !== 'closed') {
@@ -7239,7 +7257,7 @@ export class Dispatcher {
     const orphanEligible = (state: BuildState) =>
       !paused &&
       state.status === 'running' &&
-      (state.kind !== 'node' || integrationCurrent(state)) &&
+      (state.kind !== 'node' || (integrationCurrent(state) && !nodeLanded(state))) &&
       state.sessions.open.some((session) => session.suspensionCause === undefined)
     const provedEnded =
       facts.open === null &&
@@ -8834,6 +8852,7 @@ export class Dispatcher {
     }
     if (
       unchangedFailure ||
+      state.integration?.landing ||
       !integrationComplete(state) ||
       state.nodeRestack?.active ||
       state.integration?.intent ||
@@ -8860,6 +8879,9 @@ export class Dispatcher {
       !integrationCurrent(state) ||
       state.integration?.cycle?.config !== integrationConfig(config)
     ) {
+      // An empty owned range (everything already upstream) has nothing to
+      // verify: never prepare a new cycle for it.
+      if (comparison.ahead === 0 || comparison.headSha === comparison.parentSha) return
       await this.observeIntegration(record.slug)
       state = (await this.store.buildFacts(record.slug)).state
       if (!integrationComplete(state)) return
@@ -8876,6 +8898,8 @@ export class Dispatcher {
           return
         const exact = await forge.compareBranches(state.baseBranch!, record.branch!)
         if (exact.parentSha !== comparison.parentSha || exact.headSha !== comparison.headSha) return
+        if (exact.ahead === 0 || exact.headSha === exact.parentSha || current.integration?.landing)
+          return
         const cycle = {
           id: this.deps.ids('integration-cycle'),
           parent: exact.parentSha,
