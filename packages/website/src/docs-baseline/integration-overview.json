@@ -4,7 +4,7 @@
   "title": "Integrating related work",
   "group": "concepts",
   "description": "Collect work in an integration tree, preserve change identity through restacks, and merge under explicit policy.",
-  "textHash": "82e9b9ed986c28d9363cc1168b7f04030c571efe5722abb8fb9595d89b642848",
+  "textHash": "714ff1af8100ec3b50f283c5c0387c68543ccde2014d2a2f171c0efc9f575870",
   "headings": [
     "Targets form the tree",
     "One identity per leaf change",
