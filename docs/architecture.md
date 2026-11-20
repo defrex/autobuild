@@ -1830,6 +1830,12 @@ archive-before-replacement and expected-head publication mechanics. Automatic
 transactions emit `restack.*`; clean completion never starts a reconcile cycle.
 Pre-PR conflicts adopt the prepared replay through ordinary reconcile. Initial
 verification remains mandatory; waiting conflicts use post-reconcile policy.
+A conflict confined to `[[generated]]` files is first regenerated in the runner:
+`kernel/generated-files.ts` classifies conflicted paths by declaration,
+`kernel/generated-regeneration.ts` runs the commands on the reproduced conflict
+and commits or restores it, and `reconcile-restack.ts` (leaf) and the build
+runner's node-conflict path (node items) record `restack.regenerated` and
+`node.item-regenerated`. The engine reads only those facts.
 
 The dispatcher observes targets without changing workspaces; execution ownership
 and session settlement fence mutation. Transaction targets stay frozen while

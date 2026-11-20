@@ -57,8 +57,10 @@ configuration, separate from the pinned execution pipeline.
 into its destination. Consent survives head replacement, clean restacking,
 verification and re-finalization until hold or completion; it approves the merge
 rather than an immutable diff. Consent given under a rule with `paths` or
-`within` predicates is revoked when a reconcile's own edits (its recorded
-resolution) touch a file those predicates match: `landing.consent-revoked`
+`within` predicates is revoked when a reconcile's own edits, or a leaf
+restack's [generated-file regeneration](restacking.md#generated-file-conflicts),
+touch a file those predicates match (the recorded resolution, not upstream-only
+changes): `landing.consent-revoked`
 raises default attention naming the files and both heads, and the build returns
 to the consent queue for its new head. Accepted node reparenting also revokes
 consent.

@@ -321,7 +321,7 @@ the branch head never carried the file — the deposit records the source
 `worktree-dirty` with no commit. The build still runs the worktree bytes, but
 provenance declines to attribute them to any commit. **Deployment-owned** sections — `[accounts]`, `[roles]`
 (runtime, model, account, args, alternates, per-role `sessionBudgetSeconds`),
-`[profiles]` and `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
+`[profiles]`, `[policy]` and `[[generated]]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
 `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `hooks`) configure the
 dispatcher itself and are never interpreted by the build runner.
 
@@ -381,6 +381,7 @@ These fields hot-reload:
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
 | `[merge]` (ordered `[[merge]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
+| `[generated]` | Next restack replay that conflicts. The declarations come from the dispatcher's live snapshot, not the build's branch. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
@@ -1534,6 +1535,92 @@ attachment clears the current error projection. Other names run only when
 referenced by a configured check. A check's `command` value is the key in this
 map, not an inline shell command. The kernel passes the mapped string to a shell
 as written.
+
+## `[[generated]]`
+
+An optional ordered array of generated-file declarations. Each entry names the
+files a deterministic command rebuilds and that command. Omitting the table
+declares nothing, and restacks behave exactly as they do without it.
+
+<!-- configuration-reference:generated -->
+
+#### `generated`
+
+**TOML key:** `generated`
+
+- **Type:** `array of strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Generated files that a declared command rebuilds. Restack replays that conflict only in these files are regenerated instead of reconciled by an agent.
+
+**Constraints:** A path selector string may be declared by only one entry.
+
+#### `generated[].paths`
+
+**TOML key:** `generated[].paths`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Generated files this entry owns. When selectors of several entries match a file, the first entry in declaration order owns it.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
+#### `generated[].command`
+
+**TOML key:** `generated[].command`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Shell command, run with `sh -c` from the workspace root after `[commands].setup`, that rebuilds every file this entry owns.
+
+**Constraints:** command must be a nonblank shell command
+
+<!-- configuration-reference:/generated -->
+
+<!-- config-fragment:generated -->
+```toml
+[[generated]]
+paths = ["src/schema/shapes.json"]
+command = "bun tools/shapes.ts"
+
+[[generated]]
+paths = ["site/snapshots/**"]
+command = "bun run snapshots"
+```
+
+When a restack replays one change onto a moved target and every conflicted path
+is owned by a declaration, the kernel resolves the conflict without an agent. It
+starts each conflicted file from the target's side, runs the owning commands
+from the workspace root (after `[commands].setup` has run there), stages the
+result and commits it as that change's replay. This applies to a leaf build's
+automatic restack and to every item of a node restack. The rules:
+
+- `paths` uses the same selector grammar as `[verify.<step>].paths`. When the
+  selectors of several entries match a file, the first entry in declaration
+  order owns it. A selector string declared by two entries is rejected.
+- `command` is a shell string run with `sh -c`. Each owning command runs once
+  per replay, in declaration order. It must write only paths the declarations
+  cover and must leave the Git index unchanged: the kernel stages the declared
+  output itself. Writing anything else, staging changes, exiting non-zero, or
+  leaving conflict markers fails the regeneration, and the replay falls back to
+  an ordinary agent reconcile.
+- A failed regeneration commits nothing. The workspace returns to the recorded
+  conflict and an ordinary reconcile session resolves it, with the failure
+  reason in its context. A replay that also conflicts in undeclared files goes
+  to the agent as well; its context lists the generated files and their
+  commands, and the agent rebuilds them with the command instead of
+  hand-merging them.
+
+See [Generated-file conflicts](restacking.md#generated-file-conflicts) for the
+recorded facts and how status reports them.
 
 ## `[verify]` and `[verify.<step>]`
 
@@ -4275,8 +4362,9 @@ before readiness. `ab merge <slug>` requires readiness, clears hold, and consent
 to this build/node merge into its effective destination. Consent survives head
 replacement, clean restacking, verification and re-finalization until another
 hold or completion. Consent given under a rule with `paths` or `within`
-predicates is revoked when a reconcile's own edits (its recorded resolution)
-touch a file those predicates match; `landing.consent-revoked` raises default
+predicates is revoked when a reconcile's own edits, or a leaf restack's
+generated-file regeneration, touch a file those predicates match (the recorded
+resolution, not upstream-only changes); `landing.consent-revoked` raises default
 attention naming the files and both heads, and the build returns to the consent
 queue for its new head. Accepted node reparenting revokes consent; holds survive.
 It is consent to the merge, not approval of an immutable diff.

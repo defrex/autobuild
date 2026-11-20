@@ -227,22 +227,39 @@ export interface LeafRestackStatus {
   trigger: 'verify-entry' | 'awaiting-landing' | 'wait-resume'
   state: 'replaying' | 'conflicted' | 'completed' | 'advanced'
   onto: string
+  /** Commands that resolved this replay's conflicts by regeneration, not an agent. */
+  regenerated?: string[]
 }
 
 /** The open restack, else the newer of the last completed restack and the
  * last wait-resume fast-forward. Reduced state only. */
 export function leafRestackStatus(restack: LeafRestackState): LeafRestackStatus | undefined {
   const { active, advanced, completed } = restack
-  if (active !== undefined)
+  const regenerated = (fact: LeafRestackState['regeneration']) =>
+    fact?.outcome === 'resolved' ? { regenerated: fact.commands.map((c) => c.command) } : {}
+  if (active !== undefined) {
+    const resolved = regenerated(restack.regeneration)
     return {
       trigger: active.trigger,
-      state: restack.replay?.conflicted ? 'conflicted' : 'replaying',
+      state:
+        restack.replay?.conflicted && resolved.regenerated === undefined
+          ? 'conflicted'
+          : 'replaying',
       onto: active.targetBase,
+      ...resolved,
     }
+  }
   if (advanced !== undefined && (restack.advancedAt ?? 0) > (restack.completedAt ?? 0))
     return { trigger: advanced.trigger, state: 'advanced', onto: advanced.to }
   if (completed !== undefined)
-    return { trigger: completed.trigger, state: 'completed', onto: completed.targetBase }
+    return {
+      trigger: completed.trigger,
+      state: 'completed',
+      onto: completed.targetBase,
+      ...(restack.completedRegeneration?.id === completed.id
+        ? regenerated(restack.completedRegeneration)
+        : {}),
+    }
   return undefined
 }
 
@@ -885,12 +902,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       lines.push(`  node restack pending: parent ${node.observedParent.sha}`)
     if (node.active) {
       lines.push(
-        `  node ${node.active.operation}: ${node.active.id} · ${node.items.length}/${node.active.changes.length} changes · parent ${node.active.parent}`,
+        `  node ${node.active.operation}: ${node.active.id} · ${node.items.length}/${node.active.changes.length} changes · parent ${node.active.parent}${node.regenerated?.length ? ` · ${node.regenerated.length} regenerated` : ''}`,
       )
       if (node.conflict) {
         const change = node.active.changes[node.conflict.index]!
         lines.push(
-          `  conflict item ${node.conflict.index + 1}: ${change.sha} · ${change.build ?? 'foreign'}`,
+          `  conflict item ${node.conflict.index + 1}: ${change.sha} · ${change.build ?? 'foreign'}${node.regeneration?.outcome === 'failed' ? ' · regeneration failed' : ''}`,
         )
       }
       for (const proof of node.active.merges)
@@ -992,7 +1009,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     )
   if (d.restack !== undefined)
     lines.push(
-      `  restack:  ${d.restack.trigger} onto ${d.restack.onto.slice(0, 7)} — ${d.restack.state}`,
+      `  restack:  ${d.restack.trigger} onto ${d.restack.onto.slice(0, 7)} — ${d.restack.state}${d.restack.regenerated ? ` (regenerated: ${d.restack.regenerated.join(', ')})` : ''}`,
     )
   if (d.decision?.kind === 'awaiting-pr') {
     // The deferral reason (a durable observation about WHY consent could not
