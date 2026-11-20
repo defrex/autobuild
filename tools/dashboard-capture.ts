@@ -237,9 +237,9 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 50,
     parkedSlotWait: true,
     requires: [
-      '1 parked build waiting for a slot ahead of new ticket claims',
+      '1 parked build waiting for a slot ahead of normal ticket claims',
       'PR open',
-      '! reconcile waiting for a slot ahead of new ticket claims',
+      '! reconcile waiting for a slot ahead of normal ticket claims',
     ],
   },
   {

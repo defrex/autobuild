@@ -15,7 +15,7 @@ import {
   projectEvents,
   type CompatibilityState,
 } from '../events/compatibility'
-import type { IssueLink, NativeSessionHandle } from '../ports/types'
+import type { IssueLink, NativeSessionHandle, TicketPriority } from '../ports/types'
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
@@ -457,6 +457,10 @@ export interface BuildState {
    * still defined it; true until a session says otherwise. Absent for builds
    * without a profile and historical logs. */
   profile?: BuildProfile
+  /** Slot-admission priority: frozen from the claimed ticket by
+   * `build.created`, changed by `build.priority-set`. Absent reads as normal
+   * (`buildPriority`). */
+  priority?: TicketPriority
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
    * `spec.revised` bumps it (§6.3: rev N+1 restarts leaves from plan and nodes from collection). */
   specRev?: number
@@ -652,6 +656,7 @@ export interface BuildAcc {
   issueLinks: BuildIssueLink[]
   issueLinksSealedSeq?: number
   profile?: BuildProfile
+  priority?: TicketPriority
   finalizeCompletedSeq: number
   pipelineSettled?: number
   finalizeSteps: BuildState['finalizeSteps']
@@ -1006,6 +1011,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         }))
         if (event.payload.profile !== undefined)
           acc.profile = { name: event.payload.profile, configured: true }
+        if (event.payload.priority !== undefined) acc.priority = event.payload.priority
+        break
+      case 'build.priority-set':
+        acc.priority = event.payload.priority
         break
       case 'issue-link.downgraded': {
         // One-way and only before the seal: a later, a repeated or an
@@ -1919,6 +1928,7 @@ function finishBuild(acc: BuildAcc): BuildState {
       ? { issueLinksSealedSeq: acc.issueLinksSealedSeq }
       : {}),
     ...(acc.profile !== undefined ? { profile: { ...acc.profile } } : {}),
+    ...(acc.priority !== undefined ? { priority: acc.priority } : {}),
     specRev: acc.specRev,
     restartSince: acc.restartSince,
     plan: acc.plan,

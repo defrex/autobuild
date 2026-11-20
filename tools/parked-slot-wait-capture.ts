@@ -4,7 +4,7 @@ import {
 } from '../packages/core/src/cli/dashboard/model'
 
 /** The model with a finished work row parked for a merge decision on an open
- * PR and waiting to reconcile ahead of new ticket claims. The row alert and
+ * PR and waiting to reconcile ahead of normal ticket claims. The row alert and
  * the capacity notice come from the shared projection, as in both live
  * dashboards. */
 export function parkedSlotWaitCapture(model: DashboardModel): DashboardModel {
