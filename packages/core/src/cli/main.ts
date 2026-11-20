@@ -1,31 +1,3 @@
-import { abForgeClear } from './forge-clear'
-import { abAccountsLogin } from './accounts'
-import { abSecrets } from './secrets'
-import { currentTicketRef } from '../kernel/ticket-migrations'
-import { upgradeFollowup } from './upgrade-followup'
-import { parseDispatchArgs } from './dispatch-args'
-import { requestNodeRestack } from '../operator/restack'
-import {
-  reviseObjective,
-  settleUnmeasuredAttempt,
-  showObjective,
-  stopObjective,
-} from '../operator/optimization'
-import type { ObjectiveChanges } from '../objective'
-import {
-  OBJECTIVE_FLAGS,
-  OBJECTIVE_USAGE,
-  objectiveChangesFromFlags,
-  objectiveStopFromFlags,
-  objectiveSettleFromFlags,
-  renderObjective,
-} from './objective'
-import { withSessionlessStore } from './store-opening'
-import { abLandings } from './landings'
-import { readBuildFacts } from '../store/reduced-reads'
-import { preparePinnedAssets } from '../store/ticket-assets'
-import { abortDestinationSchema, type PinnedAsset } from '../events/payloads'
-import { abConnect, abDisconnect } from './connect'
 /**
  * `ab` — the only channel between agents and the store, and the enforcement
  * point of the entire ontology (SPEC §8). This module is pure routing: every
@@ -46,73 +18,29 @@ import { textContent } from '../store/types'
 import type { Forge } from '../ports/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
-import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
 import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
-import {
-  abBuildControl,
-  parseConsentHead,
-  type BuildControlAction,
-  type BuildControlResult,
-  type SpecBodySource,
-} from './build-control'
-import {
-  abBulkControl,
-  bulkControlLines,
-  bulkFailureLines,
-  BulkWalkError,
-  type BulkDirection,
-} from './bulk-control'
-import { buildContext, type ContextManifest } from './context'
-import { abDispatch } from './dispatch'
+import type { BuildControlAction, BuildControlResult, SpecBodySource } from './build-control'
+import type { BulkDirection } from './bulk-control'
+import type { ContextManifest } from './context'
+import { parseDispatchArgs } from './dispatch-args'
 import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv, JudgeCliEnv } from './env'
-import { runJudgeCommand } from './judge'
-import { abInit } from './init'
-import { validateInitReadiness } from './init-validation'
+import type { validateInitReadiness } from './init-validation'
 import { loadDotEnv } from './dotenv'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { SetupAgentLauncher } from './init-agent'
-import { abModels } from './models'
 import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
-import { observe } from './observe'
-import { downgradeIssueLink } from './issue-links'
-import { abPlugin, type PluginContractSubprocess } from './plugin'
-import { preparePrAttachments } from './pr-attachments'
-import { abBuildAssetGet, abBuilds, abBuildStatus } from './status'
-import { abRepositoryStatus } from './repository-status'
-import { abWatch, WATCH_USAGE } from './watch'
-import { abWait, WAIT_USAGE } from './wait'
-import { abMcp, AB_MCP_USAGE } from './mcp'
+import type { PluginContractSubprocess } from './plugin'
 import type { StoreOpener } from './store-opening'
-import { done, escalate, propose, verdict, waitOn } from './terminals'
-import { abTicket, lazyTicketSource, openTicketSource } from './ticket'
-import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
-import { abUpgrade, type ResolveConflict } from './upgrade'
-import { withUpgradeProgress } from './upgrade-progress'
-import {
-  cleanupUpgradeCommitContext,
-  createUpgradeCommitContext,
-  finishUpgradeCommit,
-  loadUpgradeCommitContext,
-  UPGRADE_COMMIT_CONTEXT_ENV,
-  type UpgradeCommitContext,
-} from './upgrade-commit'
+import type { CompatibilityFetch } from './upgrade-compatibility'
+import type { ResolveConflict } from './upgrade'
+import type { UpgradeCommitContext } from './upgrade-commit'
 import { formatInstalledVersion, readDistributionIdentity } from './installation'
-import {
-  selfUpdate,
-  SELF_UPDATE_HANDOFF_ENV,
-  type SelfUpdateCommand,
-  type SelfUpdateOptions,
-  type SelfUpdateResult,
-} from './self-update'
-import {
-  abHarvestStatus,
-  buildHarvestContext,
-  submitHarvestProposals,
-  submitHarvestVerdict,
-  type HarvestCliDeps,
-} from './harvest'
+import type { SelfUpdateCommand, SelfUpdateOptions, SelfUpdateResult } from './self-update'
+import type { HarvestCliDeps } from './harvest'
+import type { ObjectiveChanges } from '../objective'
+import type { PinnedAsset } from '../events/payloads'
 
 /**
  * Commands that run OUTSIDE phase sessions (§16.3, §8.8, §3.3). Repository
@@ -405,6 +333,8 @@ function ticketSpecReaders(
     store: BuildStore,
     repo: string,
   ): Promise<string> => {
+    const { openTicketSource } = await import('./ticket')
+    const { currentTicketRef } = await import('../kernel/ticket-migrations')
     const { source } = await openTicketSource(
       {
         targetRepo: deps.workspacePath,
@@ -434,6 +364,8 @@ function ticketSpecReaders(
   return {
     readTicketBody,
     prepareTicketAssets: async (ref, store, repo) => {
+      const { currentTicketRef } = await import('../kernel/ticket-migrations')
+      const { preparePinnedAssets } = await import('../store/ticket-assets')
       if (!revisionTicketSource) throw new Error('ticket body must be read before preparing assets')
       return preparePinnedAssets(
         revisionTicketSource,
@@ -458,6 +390,8 @@ async function runBuildControl(
       'build-control commands need an exec seam — this is a wiring bug in the ab binary',
     )
   }
+  const { abBuildControl } = await import('./build-control')
+  const { lazyTicketSource, openTicketSource } = await import('./ticket')
   const result = await abBuildControl({
     ...lazyTicketSource(() =>
       openTicketSource(
@@ -500,6 +434,9 @@ async function runBulkControl(
       'build-control commands need an exec seam — this is a wiring bug in the ab binary',
     )
   }
+  const { abBulkControl, bulkControlLines, bulkFailureLines, BulkWalkError } = await import(
+    './bulk-control'
+  )
   try {
     const summary = await abBulkControl({
       targetRepo: deps.workspacePath,
@@ -611,6 +548,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
     case 'accounts': {
+      const { abAccountsLogin } = await import('./accounts')
       const usage = 'usage: ab accounts login NAME [--local|--project]'
       const parsed = parseArgs(rest, { local: 'boolean', project: 'boolean' }, usage)
       if (
@@ -634,6 +572,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return 0
     }
     case 'secrets': {
+      const { abSecrets } = await import('./secrets')
       const parsed = parseArgs(
         rest,
         { json: 'boolean' },
@@ -652,6 +591,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
     case 'connect':
     case 'disconnect': {
+      const { abConnect, abDisconnect } = await import('./connect')
       const usage = command === 'connect' ? 'usage: ab connect [url]' : 'usage: ab disconnect'
       const parsed = parseArgs(rest, { tickets: 'boolean', builds: 'boolean' }, usage)
       if (parsed.positionals.length > (command === 'connect' ? 1 : 0)) throw new Error(usage)
@@ -669,6 +609,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return 0
     }
     case 'init': {
+      const { abInit } = await import('./init')
+      const { validateInitReadiness } = await import('./init-validation')
       const usage = 'usage: ab init [target] [--force | --validate] (§16.3)'
       const removed = [
         '--forge',
@@ -726,6 +668,18 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'upgrade':
     case 'update': {
+      const { selfUpdate, SELF_UPDATE_HANDOFF_ENV } = await import('./self-update')
+      const {
+        cleanupUpgradeCommitContext,
+        createUpgradeCommitContext,
+        finishUpgradeCommit,
+        loadUpgradeCommitContext,
+        UPGRADE_COMMIT_CONTEXT_ENV,
+      } = await import('./upgrade-commit')
+      const { checkUpgradeCompatibility } = await import('./upgrade-compatibility')
+      const { withUpgradeProgress } = await import('./upgrade-progress')
+      const { abUpgrade } = await import('./upgrade')
+      const { upgradeFollowup } = await import('./upgrade-followup')
       const usage =
         'usage: ab upgrade [target] [--no-self-update | --version <semver>] [--no-commit] (§16.3)'
       const parsed = parseArgs(
@@ -851,6 +805,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // Ticket grooming runs OUTSIDE build sessions (§8.8): command-scoped flag
     // declarations and one configured-source seam own every pre-build operation.
     case 'ticket': {
+      const { abTicket } = await import('./ticket')
       if (deps.exec === undefined) {
         throw new Error("'ab ticket' needs an exec seam — this is a wiring bug in the ab binary")
       }
@@ -869,6 +824,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // a build, so it routes before any store/env requirement and does its own
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
+      const { abDispatch } = await import('./dispatch')
       const {
         viewer,
         takeover,
@@ -911,6 +867,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'plugin': {
+      const { abPlugin } = await import('./plugin')
       if (deps.exec === undefined) {
         throw new Error("'ab plugin' needs an exec seam — this is a wiring bug in the ab binary")
       }
@@ -928,6 +885,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // human can find the provider-qualified id to paste into autobuild.toml. No
     // store needed — the local Pi CLI is behind an injectable catalog seam.
     case 'models': {
+      const { abModels } = await import('./models')
       const usage = 'usage: ab models [query] [--available] (§9)'
       const parsed = parseArgs(rest, { available: 'boolean' }, usage)
       await abModels({
@@ -941,6 +899,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // Read-only status commands run OUTSIDE build sessions (§16.3) like
     // dispatch: they resolve their own store (--store > AB_STORE > default).
     case 'repository': {
+      const { abForgeClear } = await import('./forge-clear')
+      const { abRepositoryStatus } = await import('./repository-status')
       const usage = 'usage: ab repository status [--json] [--store <ref>] (§8.2)'
       const [sub, ...more] = rest
       if (sub === 'forge-clear') {
@@ -993,6 +953,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'merges':
     case 'landings': {
+      const { abLandings } = await import('./landings')
       if (command === 'landings') stderr('ab landings is deprecated; use ab merges')
       const usage = 'usage: ab merges [--json] [--store <ref>]'
       const parsed = parseArgs(rest, { json: 'boolean', store: 'value' }, usage)
@@ -1011,6 +972,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'builds': {
+      const { abBuilds } = await import('./status')
       const usage = 'usage: ab builds [--queued] [--all] [--json] [--store <ref>] (§8.2)'
       const parsed = parseArgs(
         rest,
@@ -1038,6 +1000,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'mcp': {
+      const { abMcp, AB_MCP_USAGE } = await import('./mcp')
       const parsed = parseArgs(rest, { store: 'value', repo: 'value' }, AB_MCP_USAGE)
       if (parsed.positionals.length > 0) throw new Error(AB_MCP_USAGE)
       if (deps.exec === undefined) {
@@ -1059,6 +1022,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'build': {
+      const { abBuildAssetGet, abBuildStatus } = await import('./status')
       const usage =
         'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)\n' +
         '       ab build asset get <slug> <kind> <name> <dest> [--rev <n>] [--json] [--store <ref>] (§8.8)'
@@ -1137,6 +1101,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // status commands: it resolves its own store (--store > AB_STORE > default)
     // and honors a complete ambient identity as a scope restriction (watch.ts).
     case 'watch': {
+      const { abWatch, WATCH_USAGE } = await import('./watch')
       const parsed = parseArgs(
         rest,
         {
@@ -1196,6 +1161,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // identity as a scope restriction. Exit codes 0/2/3/4 are the command's
     // contract (wait.ts); thrown usage errors exit 1 via runCli.
     case 'wait': {
+      const { abWait, WAIT_USAGE } = await import('./wait')
       const parsed = parseArgs(
         rest,
         {
@@ -1237,6 +1203,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'restack': {
+      const { withSessionlessStore } = await import('./store-opening')
+      const { requestNodeRestack } = await import('../operator/restack')
       const usage = 'usage: ab restack <node> [--store <ref>]'
       const parsed = parseArgs(rest, { store: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
@@ -1271,6 +1239,17 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'objective': {
+      const {
+        OBJECTIVE_FLAGS,
+        OBJECTIVE_USAGE,
+        objectiveChangesFromFlags,
+        objectiveStopFromFlags,
+        objectiveSettleFromFlags,
+        renderObjective,
+      } = await import('./objective')
+      const { withSessionlessStore } = await import('./store-opening')
+      const { reviseObjective, settleUnmeasuredAttempt, showObjective, stopObjective } =
+        await import('../operator/optimization')
       const parsed = parseArgs(rest, OBJECTIVE_FLAGS, OBJECTIVE_USAGE)
       if (parsed.positionals.length !== 1) throw new Error(OBJECTIVE_USAGE)
       const slug = parsed.positionals[0]!
@@ -1334,6 +1313,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'abort': {
+      const { abortDestinationSchema } = await import('../events/payloads')
       const usage = 'usage: ab abort <slug> [--to triage|ready] [--reason <text>] [--store <ref>]'
       const parsed = parseArgs(rest, { store: 'value', to: 'value', reason: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
@@ -1382,6 +1362,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'hold':
     case 'merge':
     case 'land': {
+      const { parseConsentHead } = await import('./build-control')
       if (command === 'land') stderr('ab land is deprecated; use ab merge')
       if (command === 'hold') {
         const usage = 'usage: ab hold <slug> [--reason <text>] [--store <ref>]'
@@ -1539,6 +1520,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'harvest': {
+      const { abHarvestStatus, buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } =
+        await import('./harvest')
       const [sub, ...more] = rest
       if (sub === 'status') {
         const usage = 'usage: ab harvest status [--events <n>] [--json] [--store <ref>]'
@@ -1627,7 +1610,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       throw new Error('usage: ab harvest <status|context|submit|verdict> …')
     }
 
-    case 'judge':
+    case 'judge': {
+      const { runJudgeCommand } = await import('./judge')
       return runJudgeCommand(
         rest,
         {
@@ -1638,8 +1622,10 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         },
         stdout,
       )
+    }
 
     case 'context': {
+      const { buildContext } = await import('./context')
       const session = requireSession(command, deps)
       const usage = 'usage: ab context [--json]'
       const parsed = parseArgs(rest, { json: 'boolean' }, usage)
@@ -1654,6 +1640,11 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'artifact': {
+      const { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } = await import(
+        './artifact'
+      )
+      const { readBuildFacts } = await import('../store/reduced-reads')
+      const { preparePrAttachments } = await import('./pr-attachments')
       const [sub, ...more] = rest
       if (sub === 'download') {
         const usage =
@@ -1765,6 +1756,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'observe': {
+      const { observe } = await import('./observe')
       const usage =
         'usage: ab observe --kind <followup|refactor|latent-bug> [--files a,b] [--refs x,y] <summary> (§8.2)'
       const parsed = parseArgs(rest, { kind: 'value', files: 'value', refs: 'value' }, usage)
@@ -1787,6 +1779,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'issue': {
+      const { downgradeIssueLink } = await import('./issue-links')
       const usage = 'usage: ab issue downgrade <N> --reason <text>'
       const [sub, ...more] = rest
       if (sub !== 'downgrade') throw new Error(usage)
@@ -1802,6 +1795,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'done': {
+      const { done } = await import('./terminals')
       const session = requireSession(command, deps)
       const usage = 'usage: ab done [--notes <file>] [--no-improvement <reason>] (§8.2)'
       const parsed = parseArgs(rest, { notes: 'value', 'no-improvement': 'value' }, usage)
@@ -1825,6 +1819,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'propose': {
+      const { propose } = await import('./terminals')
       const session = requireSession(command, deps)
       const usage = 'usage: ab propose <file> | ab propose --none <reason> (§8.2)'
       const parsed = parseArgs(rest, { none: 'value' }, usage)
@@ -1843,6 +1838,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'verdict': {
+      const { verdict } = await import('./terminals')
       const usage =
         'usage: ab verdict <approve|revise|escalate|pass|fail|skip> ' +
         '[--findings <json>] [--notes <file>] [--reason <text>] [--report <file>] (§8.2)'
@@ -1877,6 +1873,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'escalate': {
+      const { escalate } = await import('./terminals')
       const usage = 'usage: ab escalate <question> [--refs a,b] (§8.2)'
       const parsed = parseArgs(rest, { refs: 'value' }, usage)
       const question = parsed.positionals.join(' ')
@@ -1894,6 +1891,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'wait-on': {
+      const { waitOn } = await import('./terminals')
       const usage = 'usage: ab wait-on <ticket-id>... --reason <text>'
       const parsed = parseArgs(rest, { reason: 'value' }, usage)
       if (parsed.positionals.length === 0) throw new Error(usage)
