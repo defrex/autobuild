@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { autoMergeDeferralObservation, pendingAutoMerge } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import { readBuildFacts } from '../store/reduced-reads'
 import { headPathsFor, readHeadPaths } from '../kernel/head-paths'
 import { FakeForge } from '../ports/forge/fake'
@@ -1288,6 +1289,46 @@ describe('ab done — optimization attempts', () => {
     await commitFile(workspace, 'bench/search/run.ts', 'measure()\n', 'restore the ruler')
     const event = await done(deps, { notes })
     expect(event.type).toBe('implement.completed')
+  })
+
+  // AUT-1279: sandbox sessions hold a store scoped to their own build.
+  function scopedAttemptDeps(): TestDeps {
+    const deps = attemptDeps()
+    return {
+      ...deps,
+      store: scopeLocalStoreToPhaseSession(store, {
+        kind: 'build',
+        id: BUILD,
+        session: deps.env.session!,
+      }),
+    }
+  }
+
+  test('under a session-scoped store a harness edit is refused and a clean one completes', async () => {
+    await seedAttempt()
+    await editHarness()
+    const deps = scopedAttemptDeps()
+    const notes = await stash('notes.md', 'notes\n')
+
+    await expect(done(deps, { notes })).rejects.toThrow(harnessRefusal)
+    expect(deps.forge.pushes).toEqual([])
+    expect(await eventTypes()).not.toContain('implement.completed')
+
+    await commitFile(workspace, 'bench/search/run.ts', 'measure()\n', 'restore the ruler')
+    const event = await done(deps, { notes })
+    expect(event.type).toBe('implement.completed')
+  })
+
+  test('under a session-scoped store --no-improvement records the decline', async () => {
+    await seedAttempt()
+    const event = await done(scopedAttemptDeps(), {
+      noImprovement: 'a trigram index did not beat the btree',
+      notes: await stash('notes.md', 'baseline 52.5, candidate 52.4\n'),
+    })
+    expect(event.type).toBe('implement.declined')
+    expect((await readBuildFacts(store, BUILD)).value.state.declined?.reason).toBe(
+      'a trigram index did not beat the btree',
+    )
   })
 
   test('a node child that is not an attempt may change the same path', async () => {
