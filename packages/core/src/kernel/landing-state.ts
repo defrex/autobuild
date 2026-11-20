@@ -20,6 +20,8 @@ export interface LandingState {
      * under such a rule is revocable by a reconcile's edits. */
     rule?: { index: number; snapshot: LandingRule }
     legacy?: true
+    /** Why the operator held; only on holds that gave one. */
+    reason?: string
   }
   acknowledgedSeq?: number
   native?: EventPayload<'landing.native-applied'> & { seq: number }
@@ -72,7 +74,11 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       break
     case 'build.hold-requested':
       delete state.applicationFailure
-      state.command = { kind: 'hold', seq: event.seq }
+      state.command = {
+        kind: 'hold',
+        seq: event.seq,
+        ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}),
+      }
       break
     case 'build.land-requested': {
       const decision =
