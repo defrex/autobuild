@@ -146,6 +146,33 @@ test('a command that rewrites a clean staged hand-written file fails', async () 
   await expectRestoredFailure(replay)
 })
 
+test('a failing command that staged its output returns failed and restores the conflict', async () => {
+  const replay = await conflictedReplay()
+  await replay.write('scratch.txt', 'kept\n')
+  const result = await replay.run(
+    `printf rebuilt > gen.txt; mkdir -p out && printf x > out/new.txt; git add gen.txt out; exit 1`,
+  )
+  expect(result).toEqual({
+    outcome: 'failed',
+    reason:
+      '`printf rebuilt > gen.txt; mkdir -p out && printf x > out/new.txt; git add gen.txt out; exit 1` exited 1',
+  })
+  expect(existsSync(join(replay.cwd, 'out'))).toBe(false)
+  await expectRestoredFailure(replay)
+})
+
+test('a succeeding command that stages its output fails and restores the conflict', async () => {
+  const replay = await conflictedReplay()
+  await replay.write('scratch.txt', 'kept\n')
+  const result = await replay.run(`printf rebuilt > gen.txt; git add gen.txt`)
+  expect(result).toEqual({
+    outcome: 'failed',
+    reason: 'a regeneration command staged changes itself',
+  })
+  expect(await replay.git(['rev-parse', 'HEAD'])).toBe(replay.target)
+  await expectRestoredFailure(replay)
+})
+
 test('conflict markers left by the command are never committed', async () => {
   const replay = await conflictedReplay()
   await replay.write('scratch.txt', 'kept\n')

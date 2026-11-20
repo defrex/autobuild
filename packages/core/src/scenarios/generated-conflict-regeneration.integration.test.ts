@@ -29,16 +29,27 @@ const generatedToml = (command: string) => `${CONFIG_TOML}
 paths = ["gen.txt"]
 command = ${JSON.stringify(command)}
 `
-type Mode = 'generated' | 'mixed' | 'failing' | 'undeclared' | 'interrupted'
+type Mode = 'generated' | 'mixed' | 'failing' | 'undeclared' | 'staging' | 'staged' | 'interrupted'
 /** The declared command per mode: the real one, or one that fails after
- * writing an undeclared file, or one that succeeds but writes one. */
+ * writing an undeclared file, or one that succeeds but writes one, or one
+ * that stages its output and then fails or succeeds. */
 const DECLARED: Record<Mode, string> = {
   generated: COMMAND,
   mixed: COMMAND,
   failing: 'printf junk > junk.txt; exit 3',
   undeclared: `printf junk > junk.txt; ${COMMAND}`,
+  staging: `printf junk > junk.txt; ${COMMAND}; git add gen.txt junk.txt; exit 3`,
+  staged: `${COMMAND}; git add gen.txt`,
   interrupted: COMMAND,
 }
+
+/** The failure reason each broken mode records. */
+const FAILURE = {
+  failing: 'exited 3',
+  undeclared: 'undeclared path(s): junk.txt',
+  staging: 'exited 3',
+  staged: 'staged changes itself',
+} as const
 
 async function generate(ws: string): Promise<string> {
   const names = (await readdir(join(ws, 'src'))).filter((name) => name.endsWith('.txt')).sort()
@@ -51,11 +62,11 @@ async function generate(ws: string): Promise<string> {
  * A node with two merged children. Each child adds its own src/<ticket>.txt
  * and regenerates gen.txt, so every replay of a child onto a moved root
  * conflicts in gen.txt. With `mixed`, the root also edits the first child's
- * hand-written file; `failing` and `undeclared` declare a broken command.
+ * hand-written file; every mode in `FAILURE` declares a broken command.
  */
 async function nodeRestack(makeHarness: Parameters<Parameters<typeof test>[1]>[0], mode: Mode) {
   const mixed = mode === 'mixed'
-  const broken = mode === 'failing' || mode === 'undeclared'
+  const broken = mode in FAILURE
   const names = new Map<string, string>()
   const counter = join(tmpdir(), `ab-generated-runs-${crypto.randomUUID()}`)
   const reconciled: number[] = []
@@ -85,9 +96,7 @@ async function nodeRestack(makeHarness: Parameters<Parameters<typeof test>[1]>[0
         const unmerged = (await git(['diff', '--name-only', '--diff-filter=U'], cli.ws)).split('\n')
         if (broken) {
           // The agent sees the original conflict, never the failed attempt.
-          expect(manifest.regeneration.reason).toContain(
-            mode === 'failing' ? 'exited 3' : 'undeclared path(s): junk.txt',
-          )
+          expect(manifest.regeneration.reason).toContain(FAILURE[mode as keyof typeof FAILURE])
           expect(unmerged).toEqual(['gen.txt'])
           expect(await git(['rev-parse', '--verify', 'CHERRY_PICK_HEAD'], cli.ws)).toMatch(
             /^[0-9a-f]{40}$/,
@@ -260,7 +269,7 @@ test(
   60_000,
 )
 
-for (const mode of ['failing', 'undeclared'] as const)
+for (const mode of ['failing', 'undeclared', 'staging', 'staged'] as const)
   test(
     `a ${mode} regeneration command falls back to one agent session per item on the original conflict`,
     (makeHarness) => nodeRestack(makeHarness, mode),

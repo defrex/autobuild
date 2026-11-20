@@ -213,43 +213,62 @@ test('a restack conflicting only in a declared generated file publishes with no 
   expect(paths?.type === 'head.paths-recorded' && paths.payload.resolution).toBeDefined()
 })
 
-test('a failed regeneration falls back to one reconcile session on the recorded conflict', async () => {
-  const leaf = await leafRestack(
-    (counter) => `echo run >> ${counter}; printf partial > gen.txt; printf junk > junk.txt; exit 1`,
-  )
-  leaf.onSession(async ({ env, git, cwd }) => {
-    expect(env.phase).toBe('reconcile')
-    expect(await git(['rev-parse', '--verify', 'CHERRY_PICK_HEAD'])).toMatch(/^[0-9a-f]{40}$/)
-    expect(await git(['diff', '--name-only', '--diff-filter=U'])).toBe('gen.txt')
-    expect(await git(['ls-files', '-s', '--', 'src/a.ts'])).toContain(
-      await git(['rev-parse', `${BRANCH}:src/a.ts`]),
-    )
-    expect(existsSync(join(cwd, 'junk.txt'))).toBe(false)
-    const manifest = await buildContext({
-      store: leaf.store,
-      env,
-      workspacePath: cwd,
-      exec: bunExec,
+const FAILING = [
+  {
+    name: 'a failed',
+    command: 'printf partial > gen.txt; printf junk > junk.txt; exit 1',
+    reason: 'exited 1',
+  },
+  {
+    name: 'a failed staging',
+    command: 'printf partial > gen.txt; printf junk > junk.txt; git add gen.txt junk.txt; exit 1',
+    reason: 'exited 1',
+  },
+  {
+    name: 'a self-staging',
+    command: 'printf partial > gen.txt; git add gen.txt',
+    reason: 'staged changes itself',
+  },
+]
+
+for (const failing of FAILING)
+  test(`${failing.name} regeneration falls back to one reconcile session on the recorded conflict`, async () => {
+    const leaf = await leafRestack((counter) => `echo run >> ${counter}; ${failing.command}`)
+    leaf.onSession(async ({ env, git, cwd }) => {
+      expect(env.phase).toBe('reconcile')
+      expect(await git(['rev-parse', '--verify', 'CHERRY_PICK_HEAD'])).toMatch(/^[0-9a-f]{40}$/)
+      expect(await git(['diff', '--name-only', '--diff-filter=U'])).toBe('gen.txt')
+      expect(await git(['ls-files', '-s', '--', 'src/a.ts'])).toContain(
+        await git(['rev-parse', `${BRANCH}:src/a.ts`]),
+      )
+      expect(existsSync(join(cwd, 'junk.txt'))).toBe(false)
+      const manifest = await buildContext({
+        store: leaf.store,
+        env,
+        workspacePath: cwd,
+        exec: bunExec,
+      })
+      expect(manifest.generated).toEqual([
+        { command: expect.stringContaining('printf partial'), files: ['gen.txt'] },
+      ])
+      expect(manifest.regeneration?.reason).toContain(failing.reason)
+      await rm(join(cwd, manifest.contextDir), { recursive: true, force: true })
+      // The agent resolves everything else, then rebuilds the generated file.
+      await writeFile(join(cwd, 'gen.txt'), 'agent-regenerated\n')
+      await git(['add', 'gen.txt'])
+      await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'])
     })
-    expect(manifest.generated).toEqual([
-      { command: expect.stringContaining('printf partial'), files: ['gen.txt'] },
+    await leaf.runToCompletion()
+    const events = await leaf.store.getEvents(BUILD)
+    expect((await regenerated(leaf.store)).map((event) => event.payload.outcome)).toEqual([
+      'failed',
     ])
-    expect(manifest.regeneration?.reason).toContain('exited 1')
-    await rm(join(cwd, manifest.contextDir), { recursive: true, force: true })
-    // The agent resolves everything else, then rebuilds the generated file.
-    await writeFile(join(cwd, 'gen.txt'), 'agent-regenerated\n')
-    await git(['add', 'gen.txt'])
-    await git(['-c', 'core.editor=true', 'cherry-pick', '--continue'])
+    expect(leaf.sessions).toEqual(['reconcile'])
+    expect(events.filter((event) => event.type === 'reconcile.started')).toHaveLength(1)
+    expect(await leaf.runs()).toBe(1)
+    expect(await leaf.git(['show', `${BRANCH}:src/a.ts`])).toBe('a1')
+    expect(await leaf.git(['show', `${BRANCH}:gen.txt`])).toBe('agent-regenerated')
   })
-  await leaf.runToCompletion()
-  const events = await leaf.store.getEvents(BUILD)
-  expect((await regenerated(leaf.store)).map((event) => event.payload.outcome)).toEqual(['failed'])
-  expect(leaf.sessions).toEqual(['reconcile'])
-  expect(events.filter((event) => event.type === 'reconcile.started')).toHaveLength(1)
-  expect(await leaf.runs()).toBe(1)
-  expect(await leaf.git(['show', `${BRANCH}:src/a.ts`])).toBe('a1')
-  expect(await leaf.git(['show', `${BRANCH}:gen.txt`])).toBe('agent-regenerated')
-})
 
 test('an interrupted resolved regeneration publishes its retained head without rerunning', async () => {
   const leaf = await leafRestack(

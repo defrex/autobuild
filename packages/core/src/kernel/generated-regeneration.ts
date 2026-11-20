@@ -64,9 +64,10 @@ interface Snapshot {
  * committed as the change's replay with its original message and author.
  * Clean edits the cherry-pick already staged are committed unchanged.
  *
- * A failed result leaves no command output behind: every untracked file the
+ * A failed result leaves no command output behind: the index is restored
+ * from a copy taken before any command ran, every untracked file the
  * commands introduced is deleted and every tracked path they touched is
- * restored from the index. The caller re-establishes the recorded conflict
+ * restored from that index. The caller re-establishes the recorded conflict
  * for the agent; no broken result is ever committed.
  */
 export async function regenerateConflict(
@@ -121,13 +122,22 @@ export async function regenerateConflict(
     }
   }
 
-  // 2a. What exists before any command runs.
+  // 2a. What exists before any command runs. The index is copied whole so a
+  // failure can restore its unmerged entries, whoever changed them.
   const before = await snapshot()
   const declared = compilePathSelectors(input.selectors)
-  let staged: string[] | undefined
+  const copy = async (from: string, to: string) => {
+    const copied = await deps.exec(['cp', '--', from, to], { cwd: deps.workspacePath })
+    if (copied.exitCode !== 0) throw new Error(`cannot copy ${from} to ${to}: ${copied.stderr}`)
+  }
+  const gitPath = async (name: string) =>
+    (await git(['rev-parse', '--path-format=absolute', '--git-path', name])).stdout.trim()
+  const indexFile = await gitPath('index')
+  const indexBackup = await gitPath('ab-regeneration-index')
+  await copy(indexFile, indexBackup)
 
   const cleanup = async () => {
-    if (staged !== undefined) await git(['reset', '-q', '--', ...staged])
+    await copy(indexBackup, indexFile)
     const current = await snapshot()
     const created = [...current.untracked].filter((path) => !before.untracked.has(path))
     const directories = new Set<string>()
@@ -150,8 +160,7 @@ export async function regenerateConflict(
     ]
     if (residue.length > 0)
       throw new Error(`regeneration cleanup left changes behind: ${residue.join(', ')}`)
-    // Once staged, the caller's re-pick restores the unmerged index.
-    if (staged === undefined && after.index.join('\0') !== before.index.join('\0'))
+    if (after.index.join('\0') !== before.index.join('\0'))
       throw new Error('regeneration cleanup could not restore the staged replay edits')
   }
 
@@ -186,7 +195,7 @@ export async function regenerateConflict(
       throw new RegenerationFailure('a regeneration command staged changes itself')
 
     // 5. Stage exactly the regenerated paths.
-    staged = [...files, ...introduced]
+    const staged = [...files, ...introduced]
     await git(['add', '-A', '--', ...staged])
     if ((await git(['ls-files', '-u'])).stdout.trim() !== '')
       throw new RegenerationFailure('unmerged paths remain after regeneration')
@@ -239,5 +248,7 @@ export async function regenerateConflict(
     if (!(error instanceof RegenerationFailure)) throw error
     await cleanup()
     return { outcome: 'failed', reason: regenerationReason(error.message) }
+  } finally {
+    await deps.exec(['rm', '-f', '--', indexBackup], { cwd: deps.workspacePath })
   }
 }
