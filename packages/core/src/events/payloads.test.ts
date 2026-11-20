@@ -1523,6 +1523,16 @@ test('an abort request carries an optional triage or ready destination', () => {
   expect(() => write({ to: 'backlog' })).toThrow()
 })
 
+test('a hold request carries an optional bounded reason; historical holds have none', () => {
+  const write = (payload: unknown) =>
+    validateEventWrite({ actor: humanActor('alice'), type: 'build.hold-requested', payload })
+  expect(write({}).payload).toEqual({})
+  expect(write({ reason: 'waiting on T-2' }).payload).toEqual({ reason: 'waiting on T-2' })
+  expect(() => write({ reason: '' })).toThrow()
+  expect(() => write({ reason: 'x'.repeat(2001) })).toThrow()
+  expect(() => write({ note: 'x' })).toThrow()
+})
+
 test('hand-back checkpoints round-trip, and a legacy abort checkpoint still validates', () => {
   const ticket = { source: 'fake', id: 'T-1' }
   expect(

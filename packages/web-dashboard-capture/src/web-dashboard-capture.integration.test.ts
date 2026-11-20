@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
-import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
+import {
+  landingPolicyDisplay,
+  type DashboardBuild,
+  type DashboardModel,
+} from '@defrex/autobuild/operator-presentation'
 import {
   buildRowActions,
   canPreviewPointer,
@@ -616,6 +620,16 @@ test('landing detail distinguishes a pending policy decision from a hold', async
     expect(text).toContain(held ? 'merge held' : 'merge policy pending')
     expect(text).not.toContain('merge not ready')
   }
+})
+
+test('landing detail shows a standing hold reason through the shared projection', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  const fixtures = models()
+  const landing = { command: { kind: 'hold' as const, seq: 1, reason: 'waiting on AUT-1' } }
+  fixtures.mixed.builds = fixtures.mixed.builds.map((build) => ({ ...build, landing }))
+  const text = evidenceText(await renderWebFrame(spec, fixtures, { css: '', fontCss: '' }))
+  expect(text).toContain(`merge ${landingPolicyDisplay(landing)}`)
+  expect(text).toContain('merge held — waiting on AUT-1')
 })
 
 test('the named consent frame renders the real page with its registered client', async () => {

@@ -36,7 +36,7 @@ import { reduceBuild } from '../../kernel/reducer'
 import type { Config } from '../../config/schema'
 import type { Finding, Phase } from '../../ontology'
 import { verifyPhase } from '../../ontology'
-import { mergeSummary } from './landing-display'
+import { landingPolicyDisplay, mergeSummary } from './landing-display'
 import { steppingClock } from '../../testing/fixed'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
@@ -1833,6 +1833,14 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     const held = project(toLog([...ready, ev('build.hold-requested', {})]))
     expect(stepFor(held, 'merge')?.reason).toContain('Merge held')
     expect(stepFor(held, 'merge')?.reason).not.toContain('awaits consent')
+    const reasoned = project(
+      toLog([...ready, ev('build.hold-requested', { reason: 'waiting on Q-1' })]),
+    )
+    expect(stepFor(reasoned, 'merge')?.reason).toBe(
+      'Merge held — waiting on Q-1; use ab merge auth-rate-limit when ready to release the hold',
+    )
+    expect(landingPolicyDisplay(reasoned.landing)).toBe('held — waiting on Q-1')
+    expect(reasoned.tree?.holdReason).toBe('waiting on Q-1')
     const bare = project(toLog(ready))
     expect(stepFor(bare, 'merge')?.reason).toBe(
       'Merge awaits consent — use ab merge auth-rate-limit; use ab hold auth-rate-limit to withdraw consent',
