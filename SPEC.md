@@ -3217,6 +3217,13 @@ survive completion. Merge gates are never bypassed; unsupported transports defer
 Human forge merges are an explicit escape hatch, even while incomplete, paused
 or unverified. The janitor records human provenance and whether the actual merged
 head had a successful cycle, then completes the node ticket.
+A recorded landing, kernel or human, ends the node's verification: no new cycle
+is prepared, and an open one is cancelled. The dispatcher withdraws the running
+verifier's execution lease; the runner aborts its active check at its next
+heartbeat and ends open sessions as an operator stop does, without recording
+results. The janitor completes the node once that execution has ended. A node
+whose owned range is empty (its head is its parent's, as when the parent was
+fast-forwarded onto it) never prepares a verification cycle either.
 Closing without merge or aborting closes admission and returns the ticket to
 triage (or ready, when the abort asks for it); an optimization attempt's ticket
 goes to the rejected role instead (§13.1.1). Children already claimed retain

@@ -200,9 +200,16 @@ export function integrationCycleVerified(state: BuildState): boolean {
   )
 }
 
-/** Durable facts that rule out preparing or admitting integration verification. */
+/** A node whose landing is recorded has no verification or execution left to run. */
+export function nodeLanded(state: BuildState): boolean {
+  return state.kind === 'node' && state.integration?.landing !== undefined
+}
+
+/** Durable facts that rule out preparing or admitting integration verification.
+ * A recorded landing ends a node's verification: nothing it could verify remains. */
 export function integrationAdmissible(state: BuildState): boolean {
   return !(
+    state.integration?.landing ||
     state.targetRewrite ||
     state.status === 'paused' ||
     state.status === 'done' ||
