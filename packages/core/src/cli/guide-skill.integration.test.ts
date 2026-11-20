@@ -439,7 +439,7 @@ describe('ab-guide — durable build-control coverage', () => {
       ['pause', /`ab pause <slug> \[--store <ref>\]`/],
       ['resume', /`ab resume <slug> \[--store <ref>\]`/],
       ['merge', /`ab merge <slug> \[--head <sha>\] \[--store <ref>\]`/],
-      ['hold', /`ab hold <slug> \[--store <ref>\]`/],
+      ['hold', /`ab hold <slug> \[--reason <text>\] \[--store <ref>\]`/],
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
       ['abort', /`ab abort <slug> \[--to triage\\\|ready\] \[--reason <text>\] \[--store <ref>\]`/],
