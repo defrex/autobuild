@@ -25,7 +25,6 @@ import { join, resolve } from 'node:path'
 import { effectiveRuntimeReferences } from '../config/roles'
 import type { Config, TicketsConfig } from '../config/schema'
 import { loadConfig } from '../config/load'
-import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -286,7 +285,8 @@ export async function runGuestReadinessProbe(opts: {
         "add the package to the repository's dependencies so it resolves from the repository install during commands.setup"
     }
     runtimes = await materializePluginRuntimes(
-      opts.runtimes ?? createProductionRuntimes().runtimes,
+      opts.runtimes ??
+        (await import('../ports/runner/production')).createProductionRuntimes().runtimes,
       diagnosis.registry,
       { repoRoot: opts.repo, env: opts.env },
     )

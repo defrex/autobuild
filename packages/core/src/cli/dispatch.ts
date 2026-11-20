@@ -169,7 +169,6 @@ import {
   type GitHubRequest,
 } from '../ports/forge/github-transport'
 import { GitHubForge, refusedArchiveFallback } from '../ports/forge/github'
-import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import { dispatcherTicketSource } from './dispatch-tickets'
@@ -646,6 +645,7 @@ async function defaultWire(
   await prepareReadyAssigneeForDispatch(tickets, config.tickets, (line) => {
     if (opts.silent !== true) opts.stderr(`warning: ${line}`)
   })
+  const { createProductionRuntimes } = await import('../ports/runner/production')
   const { runtimes } = createProductionRuntimes()
   if (opts.env.AB_PROJECT_SECRETS_FAILED === '1')
     for (const name of JSON.parse(opts.env.AB_PROJECT_SECRETS_UNAVAILABLE ?? '[]') as string[])
