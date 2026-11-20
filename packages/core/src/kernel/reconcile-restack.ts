@@ -12,6 +12,9 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { buildTrailers, withBuildTrailer } from './build-identity'
 import { reconcileScratchViolations, phaseScratchRejection } from '../ports/workspace/phase-scratch'
+import type { GeneratedEntry } from '../config/schema'
+import { classifyGenerated, generatedSelectors } from './generated-files'
+import { regenerateConflict, regenerationReason } from './generated-regeneration'
 
 export type ReconcileTransaction = EventPayload<'reconcile.prepared'>
 export interface RestackDeps {
@@ -112,7 +115,7 @@ export function requireRewrite(forge: Forge) {
 }
 
 export { retainReplay, restoreReplay } from './replay-retention'
-import { restoreReplay } from './replay-retention'
+import { restoreReplay, retainReplay } from './replay-retention'
 
 /** Restore a sandbox-only change from durable bytes without remote write access. */
 export async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
@@ -536,6 +539,117 @@ async function continuePreparation(
         : {}),
     },
   })
+}
+
+/** `git clean` pathspecs for every declared generated selector. */
+export function generatedCleanPathspecs(declarations: readonly GeneratedEntry[]): string[] {
+  return generatedSelectors(declarations).map((selector) => `:(glob)${selector}`)
+}
+
+/**
+ * Decide and record a conflicted automatic replay's `[[generated]]`
+ * regeneration: `skipped` when some conflicted path is undeclared, else run
+ * the declared commands on the reproduced conflict. A resolved head is
+ * retained before its fact is written, so a durable `resolved` always names
+ * recoverable bytes. On failure the recorded conflict is re-established for
+ * the agent reconcile that follows.
+ */
+export async function regenerateRestackConflict(
+  deps: RestackDeps & { signal?: AbortSignal },
+  transaction: EventPayload<'restack.prepared'>,
+  files: readonly string[],
+  declarations: readonly GeneratedEntry[],
+): Promise<EventPayload<'restack.regenerated'>> {
+  const { groups, other } = classifyGenerated(files, declarations)
+  const record = async (payload: EventPayload<'restack.regenerated'>) => {
+    await deps.store.append(deps.slug, { actor: KERNEL, type: 'restack.regenerated', payload })
+    return payload
+  }
+  const commands = groups.map((group) => ({ command: group.command, files: group.files }))
+  if (files.length === 0)
+    throw new Error('a conflicted replay recorded no conflicted paths to regenerate')
+  if (other.length > 0)
+    return record({
+      id: transaction.id,
+      files: [...files],
+      commands,
+      outcome: 'skipped',
+      reason: regenerationReason(`conflicts outside [[generated]]: ${other.join(', ')}`),
+    })
+  const sorted = [...files].sort()
+  const restore = async () => {
+    await git(deps, ['cherry-pick', '--abort'], true)
+    await deps.beforeRewrite?.()
+    await git(deps, ['reset', '-q', '--hard'])
+    await git(deps, ['clean', '-q', '-fd', '--', ...generatedCleanPathspecs(declarations)])
+    await git(deps, ['checkout', '-q', '--detach', transaction.targetBase])
+    await commitGit(
+      deps,
+      transaction.oldHead,
+      ['cherry-pick', '--allow-empty', transaction.changeSha],
+      true,
+    )
+    const unmerged = (await git(deps, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
+      .split('\0')
+      .filter(Boolean)
+      .sort()
+    if (unmerged.join('\0') !== sorted.join('\0'))
+      throw new Error(
+        `restack conflict did not reproduce: expected ${sorted.join(', ')}, found ${unmerged.join(', ') || 'none'}`,
+      )
+    if (
+      (await output(deps, ['rev-parse', '--verify', 'CHERRY_PICK_HEAD'])) !== transaction.changeSha
+    )
+      throw new Error('another cherry-pick occupies the restack workspace')
+  }
+  await restore()
+  const result = await regenerateConflict(
+    {
+      exec: deps.exec,
+      workspacePath: deps.workspacePath,
+      ...(deps.signal ? { signal: deps.signal } : {}),
+    },
+    {
+      files: sorted,
+      groups,
+      selectors: generatedSelectors(declarations),
+      identitySource: transaction.oldHead,
+    },
+  )
+  if (result.outcome === 'failed') {
+    await restore()
+    return record({ id: transaction.id, files: [...files], commands, ...result })
+  }
+  await retainReplay(deps, result.head, transaction.targetBase)
+  return record({ id: transaction.id, files: [...files], commands, ...result })
+}
+
+/**
+ * Adopt a durably resolved regeneration after a crash or a replacement
+ * workspace: restore its retained head instead of running the commands or
+ * an agent again.
+ */
+export async function adoptRegeneratedRestack(
+  deps: RestackDeps,
+  transaction: EventPayload<'restack.prepared'>,
+  head: string,
+): Promise<void> {
+  if ((await output(deps, ['rev-parse', 'HEAD'])) !== head) {
+    await git(deps, ['cherry-pick', '--abort'], true)
+    await deps.beforeRewrite?.()
+    await git(deps, ['reset', '-q', '--hard'])
+    if (
+      (await git(deps, ['cat-file', '-e', `${head}^{commit}`], true)).exitCode !== 0 &&
+      !(await restoreReplay(deps, head))
+    )
+      throw new Error(`the regenerated replay ${head} was not retained`)
+    await git(deps, ['checkout', '-q', '--detach', head])
+  }
+  if ((await output(deps, ['show', '-s', '--format=%P', head])) !== transaction.targetBase)
+    throw new Error(`the regenerated replay ${head} is not based on ${transaction.targetBase}`)
+  const trailers = buildTrailers(await output(deps, ['show', '-s', '--format=%B', head]))
+  if (trailers.length !== 1 || trailers[0] !== deps.slug)
+    throw new Error(`the regenerated replay ${head} lost its Autobuild-Build: ${deps.slug} trailer`)
 }
 
 export async function validateRestack(

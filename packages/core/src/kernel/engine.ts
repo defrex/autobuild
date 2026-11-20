@@ -588,7 +588,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   if (waitCycle !== undefined) return { kind: 'restack', trigger: 'wait-resume', cycle: waitCycle }
   const waitRestack = log.restack.active?.trigger === 'wait-resume' ? log.restack.active : undefined
   if (waitRestack) {
-    if (log.restack.replay?.conflicted) {
+    if (restackConflictNeedsReconcile(log, config)) {
       const round = log.restack.reconcileAttempt ?? state.reconcileAttempts + 1
       return { kind: 'run-phase', phase: 'reconcile', round, reconcile: { attempt: round } }
     }
@@ -698,7 +698,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // A frozen transaction always wins over a new observation. The runner owns
   // workspace mutation; the dispatcher only records target movement.
   if (log.restack.active !== undefined) {
-    if (log.restack.replay?.conflicted) {
+    if (restackConflictNeedsReconcile(log, config)) {
       const round = log.restack.reconcileAttempt ?? state.reconcileAttempts + 1
       return { kind: 'run-phase', phase: 'reconcile', round, reconcile: { attempt: round } }
     }
@@ -945,6 +945,23 @@ export function landingRestackDue(state: BuildState, log: Pick<LogIndex, 'restac
       (state.target !== undefined &&
         (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
   )
+}
+
+/** Whether a conflicted leaf replay needs an agent reconcile. The runner
+ * regenerates a replay whose conflicts are all `[[generated]]` files and
+ * records the outcome; the engine reads only that fact, never globs. With
+ * declarations and no fact yet (and no reconcile started), the runner still
+ * has to decide, so the transaction stays a restack. */
+export function restackConflictNeedsReconcile(
+  log: Pick<LogIndex, 'restack'>,
+  config: Pick<Config, 'generated'>,
+): boolean {
+  if (!log.restack.replay?.conflicted) return false
+  if (log.restack.reconcileAttempt !== undefined) return true
+  const regeneration = log.restack.regeneration
+  if (regeneration?.outcome === 'resolved') return false
+  if (regeneration === undefined && (config.generated?.length ?? 0) > 0) return false
+  return true
 }
 
 // ── Review-loop transition (rules 5 and 6 share one structure — §10) ─────────
