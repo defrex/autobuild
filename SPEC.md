@@ -4460,7 +4460,9 @@ writer and reader share a release string. Upgrading clears deferral through
 local replay without answering an escalation. Repository unknown counts do
 not invent per-build blockers.
 
-Event-derived caches require both the exact reducer version and a deterministic
+Reducer versions are derived from a frozen base, append-only revisions, and the
+versions of a reducer's constituents, so independent revisions sum and versions
+only increase. Event-derived caches require both the exact reducer version and a deterministic
 read-catalog identity, including build/repository type classifications and a
 read-decoder revision. Named and generic checkpoints use catalog-specific keys;
 legacy/foreign-catalog snapshots are misses and are preserved. Unrecognized
