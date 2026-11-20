@@ -3194,7 +3194,13 @@ Merge follows ordered `[[merge]]` rules (§15.7), defaulting to node consent.
 Auto mode authorizes complete, verified nodes; consent mode waits for `ab merge`.
 Merge refuses incomplete nodes and names open children; `ab hold` remains available.
 Node parents and local-git roots receive guarded fast-forwards, preserving one
-commit and identity trailer per contributing build. GitHub shared roots use the
+commit and identity trailer per contributing build; each verified node-owned
+hand-pushed commit of the exact verified range lands as pushed, without a trailer.
+Landing refuses a range that is non-linear, contains a merge commit, gives a
+commit several or repeated identities, or holds a trailer-less commit the node
+does not own. A refusal raises operator attention naming the rule and commit
+instead of retrying; a bare retry answer attempts the same head once more.
+GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
 A root node's PR body carries the node's own issue links and its landed
 children's, and is refreshed before landing, so merging it closes them (see

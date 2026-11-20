@@ -18,6 +18,23 @@ async function addStack(h: Awaited<ReturnType<typeof makeHarness>>, branch: stri
   await git(['worktree', 'remove', cwd], h.origin)
 }
 
+/** A maintainer-authorized tweak pushed straight onto an open node branch. */
+async function addHandPushed(
+  h: Awaited<ReturnType<typeof makeHarness>>,
+  branch: string,
+  name: string,
+  message = `Maintainer tweak ${name}`,
+) {
+  const cwd = join(h.tmp, `tweak-${name}`)
+  // Detached: the dispatcher may hold the branch checked out in its worktree.
+  await git(['worktree', 'add', '--detach', cwd, branch], h.origin)
+  await Bun.write(join(cwd, `${name}.txt`), name)
+  const sha = await commitAll(cwd, message)
+  await git(['update-ref', `refs/heads/${branch}`, sha], h.origin)
+  await git(['worktree', 'remove', cwd], h.origin)
+  return sha
+}
+
 async function seedContributors(h: Awaited<ReturnType<typeof makeHarness>>, repo: string) {
   for (const slug of ['first-child', 'second-child']) {
     const ticket = { source: 'fake', id: slug }
@@ -98,6 +115,128 @@ test('nested node merge preserves both child commits and parent merges the stack
     await h.cleanup()
   }
 })
+
+test('verified hand-pushed commits land into a parent node and then at root', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
+      { ...readyTicket('B', { title: 'Nested integration' }), kind: 'node', target: 'A' },
+    ],
+  })
+  try {
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const records = await h.store.listBuilds()
+    const a = records.find((record) => record.ticket?.id === 'A')!
+    const b = records.find((record) => record.ticket?.id === 'B')!
+    await addStack(h, b.branch!)
+    const nested = await addHandPushed(h, b.branch!, 'nested')
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    const state = reduceBuild(await h.events(b.slug))
+    expect(state.integration!.cycle!.head).toBe(nested)
+    expect(integrationHeadVerified(state, nested)).toBe(true)
+    await h.dispatcher.tick()
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: b.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+    for (let i = 0; i < 4; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
+    const root = await addHandPushed(h, a.branch!, 'root')
+    for (let i = 0; i < 2; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    expect(integrationHeadVerified(reduceBuild(await h.events(a.slug)), root)).toBe(true)
+    await h.dispatcher.tick()
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: a.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+    for (let i = 0; i < 4; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    const landed = reduceBuild(await h.events(a.slug))
+    expect(landed.status).toBe('done')
+    expect(landed.openEscalations).toEqual([])
+    expect(await git(['rev-parse', 'main'], h.origin)).toBe(root)
+    const messages = await git(['log', '-4', '--format=%B', 'main'], h.origin)
+    expect(messages).toContain('Autobuild-Build: first-child')
+    expect(messages).toContain('Autobuild-Build: second-child')
+    expect(messages).toContain('Maintainer tweak nested')
+    expect(messages).toContain('Maintainer tweak root')
+    for (const slug of [a.slug, b.slug])
+      expect(
+        (await h.events(slug)).filter((e) => e.type === 'build.janitor-attempt-failed'),
+      ).toEqual([])
+    expect(landed.integration?.audit?.identities).toEqual(['first-child', 'second-child'])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a structurally invalid stack raises one attention instead of janitor retries', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('NODE', { title: 'Invalid integration' }), kind: 'node' }],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds())[0]!
+    await addStack(h, node.branch!)
+    const duplicate = await addHandPushed(
+      h,
+      node.branch!,
+      'duplicate',
+      'Repeat\n\nAutobuild-Build: first-child',
+    )
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    expect(integrationHeadVerified(reduceBuild(await h.events(node.slug)), duplicate)).toBe(true)
+    await h.dispatcher.tick()
+    const main = await git(['rev-parse', 'main'], h.origin)
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: node.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+    for (let i = 0; i < 4; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    const settled = (await h.events(node.slug)).length
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    const events = await h.events(node.slug)
+    expect(events.length).toBe(settled)
+    const state = reduceBuild(events)
+    expect(state.openEscalations.map((e) => e.id)).toEqual([`integration-stack:${duplicate}:1`])
+    expect(state.openEscalations[0]!.question).toContain(duplicate)
+    expect(state.openEscalations[0]!.question).toContain('repeats build identity first-child')
+    expect(events.filter((e) => e.type === 'build.janitor-attempt-failed')).toEqual([])
+    expect(events.filter((e) => e.type === 'integration.landed')).toEqual([])
+    expect(await git(['rev-parse', 'main'], h.origin)).toBe(main)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
 
 test('native terminal states, partial listings and reopening govern completeness', async () => {
   const h = await makeHarness({
