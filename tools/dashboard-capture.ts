@@ -1149,7 +1149,7 @@ mode = "auto"
       await harness.store.append(slug, {
         actor: { kind: 'human', user: 'capture' },
         type: 'build.hold-requested',
-        payload: {},
+        payload: { reason: 'waiting on AUT-1 to merge' },
       })
     if (label === 'stale')
       await harness.store.append(slug, {

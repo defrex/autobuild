@@ -4339,7 +4339,7 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
@@ -5299,8 +5299,13 @@ is published.
 Policy is live dispatcher configuration, outside the pinned execution pipeline.
 
 `ab hold <slug>` durably suppresses merge and revokes previous consent, even
-before readiness. `ab merge <slug>` requires readiness, clears hold, and consents
-to this build/node merge into its frozen destination. Consent survives head
+before readiness. `ab hold <slug> --reason <text>` also records why on
+`build.hold-requested` (1–2000 characters after trimming; a blank reason is
+refused and nothing is written). The reduced hold carries the reason, and
+status, merges, builds and both dashboards show it while that hold stands; a
+later hold replaces it and merge consent clears it. `ab merge <slug>` requires
+readiness, clears hold, and consents to this build/node merge into its frozen
+destination. Consent survives head
 replacement, clean restacking, verification and re-finalization until another
 hold or completion. It is consent to the merge, not approval of an immutable diff.
 Consent given under a rule with `paths` or `within` predicates is the exception:

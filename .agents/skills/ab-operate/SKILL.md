@@ -325,7 +325,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   optimization attempt is different: it settles `aborted` and its node moves the
   ticket to the rejected role, so no hand-back is reported and `--to` has no
   effect.
-- `ab hold <slug>` — persistently hold a merge and revoke earlier consent.
+- `ab hold <slug> [--reason <text>]` — persistently hold a merge and revoke
+  earlier consent. Record why with `--reason` when holding during queue work;
+  status, merges, builds and both dashboards show it until a later hold or
+  merge replaces it.
 - `ab merge <slug>` — consent to a ready merge and clear its hold. Consent
   survives clean restacks and verification; use hold to withdraw it when work
   changes. Consent given under a `[[merge]]` rule with `paths` or `within`
@@ -681,7 +684,7 @@ either, and takes one ahead of new claims once its wait ends.
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
 or `hold`; its optional `head` binds merge consent to the reviewed head, like
-`ab merge --head`. Hold is available before readiness and suppresses automatic merge.
+`ab merge --head`, and `hold` takes an optional `reason`, like `ab hold --reason`. Hold is available before readiness and suppresses automatic merge.
 Merge rechecks readiness and live node completeness, so act on failures by
 refreshing the facts. Open children keep a node collecting; a child moved to
 the rejected role no longer does. When integration

@@ -4367,7 +4367,9 @@ readiness provenance. See [merge policy](merge-policy.md) for examples,
 merge methods and forge capability requirements.
 
 `ab hold <slug>` durably suppresses merge and revokes previous consent, even
-before readiness. `ab merge <slug>` requires readiness, clears hold, and consents
+before readiness; `--reason <text>` records why (1–2000 characters after
+trimming), shown wherever the hold is until a later hold or merge replaces it.
+`ab merge <slug>` requires readiness, clears hold, and consents
 to this build/node merge into its effective destination. Consent survives head
 replacement, clean restacking, verification and re-finalization until another
 hold or completion. Consent given under a rule with `paths` or `within`

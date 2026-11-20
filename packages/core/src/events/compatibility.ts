@@ -30,7 +30,8 @@ export interface StoredEvent {
 // Revision 7 retains the optional abort destination and hand-back report fields.
 // Revision 8 retains the optional landed head on accepted attempt settlements.
 // Revision 9 retains the optional stream and provider substitution on judge session starts.
-export const READ_DECODER_REVISION = 9
+// Revision 10 retains the optional hold reason.
+export const READ_DECODER_REVISION = 10
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

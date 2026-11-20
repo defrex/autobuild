@@ -44,7 +44,7 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
       .regex(/^\S+$/, 'head must be a nonblank commit SHA without whitespace')
       .optional(),
   }),
-  z.strictObject({ action: z.literal('hold') }),
+  z.strictObject({ action: z.literal('hold'), reason: z.string().optional() }),
 ])
 export type OperatorBuildControlRequest = z.infer<typeof buildControlRequestSchema>
 

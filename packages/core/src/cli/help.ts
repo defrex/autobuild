@@ -775,7 +775,7 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
     summary: name === 'hold' ? 'Hold a merge and withdraw consent.' : 'Consent to a ready merge.',
     detail: page([
       name === 'hold'
-        ? 'Usage: ab hold <slug> [--store <ref>]'
+        ? 'Usage: ab hold <slug> [--reason <text>] [--store <ref>]'
         : 'Usage: ab merge <slug> [--head <sha>] [--store <ref>]',
       '',
       'Merge consent survives clean restacks and verification; hold persists until merge.',
@@ -787,7 +787,10 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
             '--head refuses, recording nothing, unless <sha> (full or ≥7-character prefix)',
             "is the build's current candidate head; consent still survives later clean restacks.",
           ]
-        : []),
+        : [
+            '--reason records why (1–2000 characters after trimming); status, merges, builds',
+            'and both dashboards show it while the hold stands. A later hold or merge replaces it.',
+          ]),
     ]),
   })),
   {

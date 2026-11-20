@@ -242,6 +242,8 @@ const headPathsRecorded = z
 
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
+/** Bound on an operator's free-text control reason (abort, hold), after trimming. */
+export const CONTROL_REASON_LIMIT = 2000
 /** Where an abort hands the build's ticket back. Triage is the default. */
 export const abortDestinationSchema = z.enum(['triage', 'ready'])
 export type AbortDestination = z.infer<typeof abortDestinationSchema>
@@ -1534,7 +1536,10 @@ export const eventPayloadSchemas = {
   'landing.decided': landingDecision,
   'landing.deferred': landingDeferred,
   'landing.consent-revoked': landingConsentRevoked,
-  'build.hold-requested': empty,
+  'build.hold-requested': z.strictObject({
+    /** Why the operator held the merge; absent on historical and reasonless holds. */
+    reason: z.string().min(1).max(CONTROL_REASON_LIMIT).optional(),
+  }),
   'build.land-requested': z.strictObject({
     decisionSeq: z.number().int().positive(),
   }),
