@@ -15,8 +15,12 @@ import { REDUCER_REVISIONS } from './reducer-revisions'
  *
  * This module also holds the pure rules of the identity records that prove a
  * revision accompanies every accumulator change; the registry integration test
- * supplies the corpora, the digests and the files. It must stay free of IO and
- * `node:` imports because the dashboard client bundle reads it.
+ * supplies the corpora, the digests and the files. Records alone cannot see a
+ * fold-only change made after two branches' revisions combine and before the
+ * combined record is regenerated; the base-relative clause closes that state
+ * by comparing against the verify base (`AB_VERIFY_BASE`) when one is given.
+ * It must stay free of IO and `node:` imports because the dashboard client
+ * bundle reads it.
  */
 
 /** Each identity's version before revisions were derived: the reducer's own
@@ -96,6 +100,7 @@ export const LEDGER_SENTINEL = '__ledger__'
 export const REGENERATE_COMMAND =
   'AB_UPDATE_REDUCER_SHAPES=1 bun test packages/core/src/kernel/reducer-registry.integration.test.ts'
 export const UNREGENERATED_COMBINATION_PREFIX = 'reducer identity: unregenerated combination'
+export const BASE_RELATIVE_SKIPPED_PREFIX = 'reducer identity: base-relative clause skipped'
 
 export type Ledger = Readonly<Record<string, string>>
 export interface Revision {
@@ -104,6 +109,22 @@ export interface Revision {
   kind: 'shape' | 'fold'
   id: string
   reason: string
+}
+
+const LEDGER_LINE = /^\s*'([^']*)':\s*'[^']*',?\s*$/
+
+/** The revision keys of a ledger file's source text, as another commit holds
+ * it. Throws on a malformed key: a hand edit. */
+export function parseLedgerSource(source: string): Set<string> {
+  const keys = new Set<string>()
+  for (const line of source.split('\n')) {
+    const match = LEDGER_LINE.exec(line)
+    if (!match || match[1] === LEDGER_SENTINEL) continue
+    if (!REVISION_KEY.test(match[1]!))
+      throw new Error(`malformed reducer revision key ${JSON.stringify(match[1])}`)
+    keys.add(match[1]!)
+  }
+  return keys
 }
 
 /** Every ledger revision. Throws on a malformed key: a hand edit. */
@@ -241,6 +262,7 @@ export interface CurrentIdentity {
 
 export type IdentityViolationKind =
   | 'changed'
+  | 'changed-since-base'
   | 'disagreeing-records'
   | 'missing-archive'
   | 'unrecorded-corpus'
@@ -473,7 +495,80 @@ export function planRegeneration(input: {
 
 /** The notice the registry test prints for the accepted AC3 state. */
 export function formatUnregeneratedCombination(entry: UnregeneratedCombination): string {
-  return `${UNREGENERATED_COMBINATION_PREFIX}: ${entry.name} (${entry.identity}) at revisions [${entry.revisions.join(', ')}] is covered only by the records ${entry.coveredBy.join(', ')} of its combined revisions. A fold-only change without a revision cannot be detected until the combined record is regenerated with ${REGENERATE_COMMAND} (AUT-1274 closes this gap).`
+  return `${UNREGENERATED_COMBINATION_PREFIX}: ${entry.name} (${entry.identity}) at revisions [${entry.revisions.join(', ')}] is covered only by the records ${entry.coveredBy.join(', ')} of its combined revisions. A fold-only change without a revision is caught only against the verify base (AB_VERIFY_BASE), and otherwise not until the combined record is regenerated with ${REGENERATE_COMMAND}.`
+}
+
+/** The notice the registry test prints when it cannot compare against a base. */
+export function formatBaseRelativeSkipped(reason: string): string {
+  return `${BASE_RELATIVE_SKIPPED_PREFIX}: ${reason}. Changes since the verify base are checked only against the identity records.`
+}
+
+/** The entries whose every revision already exists in the base's ledger: the
+ * change adds no revision for them, so their digests must equal the base's. */
+export function unrevisedSinceBase(
+  current: readonly CurrentIdentity[],
+  baseLedger: ReadonlySet<string>,
+): CurrentIdentity[] {
+  return current.filter((entry) => entry.revisions.every((key) => baseLedger.has(key)))
+}
+
+/** Every corpus the head folds differently from the base for a reducer that
+ * adds no revision relative to it. `baseDigests` holds, per reducer name, the
+ * base's digests; only corpus ids both sides hold are compared, and a reducer
+ * absent from it is new at the head. */
+export function checkAgainstBase(input: {
+  current: readonly CurrentIdentity[]
+  base: string
+  baseDigests: ReadonlyMap<string, Readonly<Record<string, string>>>
+}): IdentityViolation[] {
+  const violations: IdentityViolation[] = []
+  for (const current of input.current) {
+    const base = input.baseDigests.get(current.name)
+    if (base === undefined) continue
+    for (const cid of Object.keys(current.digests).sort()) {
+      const digest = base[cid]
+      if (digest === undefined || digest === current.digests[cid]) continue
+      violations.push({
+        name: current.name,
+        kind: 'changed-since-base',
+        message: `${current.name}: identity ${current.identity} folds corpus ${cid} differently from the verify base ${input.base.slice(0, 12)} but adds no revision relative to it; ${reviseHint(current)}`,
+      })
+    }
+  }
+  return violations
+}
+
+/** A reducer as the identity digest folds it; structural, so a reducer
+ * imported from another commit's code folds through the same function.
+ * Method syntax keeps the parameters bivariant for any accumulator type. */
+export interface DigestReducer {
+  initial(): unknown
+  advance(acc: unknown, events: readonly unknown[]): unknown
+}
+/** The chunk size every identity digest folds a corpus in. */
+export const DIGEST_CHUNK = 12
+
+/** Fold one corpus in DIGEST_CHUNK-sized chunks, stopping at the first chunk
+ * that throws (a corpus for another domain), and digest the accumulator
+ * reached. `visit` sees the accumulator after every chunk. */
+export function foldDigest(
+  reducer: DigestReducer,
+  log: readonly unknown[],
+  hash: Hash,
+  visit: (acc: unknown) => void = () => {},
+): string {
+  let acc = reducer.initial()
+  let threwAtChunk: number | null = null
+  for (let i = 0; i < log.length; i += DIGEST_CHUNK) {
+    try {
+      acc = reducer.advance(acc, log.slice(i, i + DIGEST_CHUNK))
+    } catch {
+      threwAtChunk = i / DIGEST_CHUNK
+      break
+    }
+    visit(acc)
+  }
+  return hash(canonicalJson({ acc, threwAtChunk })).slice(0, 32)
 }
 
 /** Biome's line width; a ledger line must never wrap. */
