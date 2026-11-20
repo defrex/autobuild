@@ -31,6 +31,28 @@ describe('check commands receive the verify diff base', () => {
     expect(long.bases).toEqual(short.bases)
   })
 
+  test('a node check under live heartbeats adds no subscription and no reads with history', async () => {
+    const short = await verifyCheckBaseReadBudget({ length: 100, node: { beats: 5 } })
+    const long = await verifyCheckBaseReadBudget({ length: 2_000, node: { beats: 5 } })
+    const quiet = await verifyCheckBaseReadBudget({ length: 100, node: { beats: 0 } })
+    expect(long.calls).toEqual(short.calls)
+    expect(long.rows).toBe(short.rows)
+    expect(short.historicalRows).toBe(0)
+    expect(long.historicalRows).toBe(0)
+    // The landing interruption rides the heartbeat: no subscription, and a
+    // live beat costs one heartbeat call and nothing else.
+    expect(short.calls.subscribe).toBeUndefined()
+    expect(short.calls.getEvents).toBeUndefined()
+    expect(short.calls.heartbeat).toBe(5)
+    // `state` is the memory store's internal lookup, once inside each heartbeat.
+    const { heartbeat: _beats, state, ...withoutBeats } = short.calls
+    const { state: quietState, ...quietCalls } = quiet.calls
+    expect(withoutBeats).toEqual(quietCalls)
+    expect(state! - quietState!).toBe(5)
+    expect(short.rows).toBe(quiet.rows)
+    expect(short.aborted).toBe(false)
+  })
+
   test('a leaf with no provisioned base clears the variable instead of leaking an inherited one', async () => {
     const costs = await verifyCheckBaseReadBudget({ length: 100, provisioned: false })
     expect(costs.bases).toEqual([undefined])

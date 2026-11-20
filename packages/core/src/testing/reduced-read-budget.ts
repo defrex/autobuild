@@ -6455,6 +6455,8 @@ export interface VerifyCheckBaseCosts {
   /** The `AB_VERIFY_BASE` each check command received, in launch order;
    * null when the runner did not pass the key, so an inherited value leaks. */
   bases: (string | undefined | null)[]
+  /** Node mode: whether the running check's signal was aborted. */
+  aborted?: boolean
 }
 
 /**
@@ -6467,10 +6469,16 @@ export interface VerifyCheckBaseCosts {
  * must be identical at any history length. `provisioned: false` omits the
  * workspace fact, so the build has no base, and runs only the unconditional
  * check (a conditional one requires a base).
+ *
+ * `node` runs one check of a node's prepared verification cycle under an
+ * attached runner, firing `beats` live heartbeats while the command runs, so
+ * the landing interruption (a lapsed beat during a node check) is proved to
+ * add no subscription and no reads while the lease stays live.
  */
 export async function verifyCheckBaseReadBudget(opts: {
   length: number
   provisioned?: boolean
+  node?: { beats: number }
 }): Promise<VerifyCheckBaseCosts> {
   const { MemoryBuildStore } = await import('../store/memory')
   const { BuildRunner } = await import('../processes/build-runner')
@@ -6480,11 +6488,39 @@ export async function verifyCheckBaseReadBudget(opts: {
   const base = 'b'.repeat(40)
   const store = new MemoryBuildStore()
   await store.createBuild({ slug, repo: 'repo', branch: `ab/${slug}` })
+  const config = parseConfig(
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
+  )
+  const nodeHead = 'c'.repeat(40)
   await store.append(slug, {
     actor: DISPATCHER,
     type: 'build.created',
-    payload: { ticket: { source: 'file', id: 'T-1' }, repo: 'repo', baseBranch: 'main' },
+    payload: {
+      ticket: { source: 'file', id: 'T-1' },
+      repo: 'repo',
+      baseBranch: 'main',
+      ...(opts.node ? { kind: 'node' as const } : {}),
+    },
   })
+  if (opts.node) {
+    const { integrationConfig } = await import('../kernel/integration-state')
+    await store.append(slug, { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.compared',
+      payload: { parentSha: base, headSha: nodeHead, ahead: 1 },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.observed',
+      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'integration.prepared',
+      payload: { id: 'cycle', parent: base, head: nodeHead, config: integrationConfig(config) },
+    })
+  }
   if (opts.provisioned !== false)
     await store.append(slug, {
       actor: DISPATCHER,
@@ -6498,18 +6534,23 @@ export async function verifyCheckBaseReadBudget(opts: {
     })
   // One validated append of each history fact, copied in rotation.
   const templates = [
-    await store.append(slug, {
-      actor: KERNEL,
-      type: 'restack.advanced',
-      payload: {
-        trigger: 'wait-resume',
-        cycle: 1,
-        observation: 1,
-        branch: `ab/${slug}`,
-        from: 'a'.repeat(40),
-        to: base,
-      },
-    }),
+    // A node's history has no leaf restack facts.
+    ...(opts.node
+      ? []
+      : [
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'restack.advanced',
+            payload: {
+              trigger: 'wait-resume',
+              cycle: 1,
+              observation: 1,
+              branch: `ab/${slug}`,
+              from: 'a'.repeat(40),
+              to: base,
+            },
+          }),
+        ]),
     await store.append(slug, {
       actor: KERNEL,
       type: 'phase.failed',
@@ -6528,22 +6569,30 @@ export async function verifyCheckBaseReadBudget(opts: {
       seq: events.length + 1,
     } as (typeof events)[number])
   const bases: (string | undefined | null)[] = []
+  let beat: (() => void) | undefined
+  let aborted = false
   const exec: Exec = async (cmd, execOpts) => {
     if (cmd[0] === 'sh') {
       bases.push(
         execOpts.env && 'AB_VERIFY_BASE' in execOpts.env ? execOpts.env.AB_VERIFY_BASE : null,
       )
+      // Live beats while the command runs; each settles before the next.
+      for (let i = 0; i < (opts.node?.beats ?? 0); i++) {
+        beat!()
+        for (let turn = 0; turn < 10; turn++) await Promise.resolve()
+      }
+      aborted = execOpts.signal?.aborted ?? false
       return { stdout: '', stderr: '', exitCode: 0 }
     }
+    if (opts.node && cmd[0] === 'git' && cmd[1] === 'rev-parse' && cmd.includes('HEAD'))
+      return { stdout: `${nodeHead}\n`, stderr: '', exitCode: 0 }
     if (cmd[0] === 'git' && cmd[1] === 'diff')
       return { stdout: 'src/changed.ts\0', stderr: '', exitCode: 0 }
     return { stdout: '', stderr: '', exitCode: 0 }
   }
   const runner = new BuildRunner({
     store: store.scopeBuild(slug),
-    config: parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[roles.default]\nruntime = "scripted"\n',
-    ),
+    config,
     runtimes: {
       scripted: {
         runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
@@ -6564,9 +6613,18 @@ export async function verifyCheckBaseReadBudget(opts: {
       commit: 'unknown',
       source: { kind: 'package', location: '/autobuild' },
     },
+    opts: {
+      scheduleHeartbeat: (fn) => {
+        beat = fn
+        return () => {
+          beat = undefined
+        }
+      },
+    },
   })
   type Check = { kind: 'run-check'; step: string; command: string; attempt: number }
   const internals = runner as unknown as {
+    stopHeartbeat(): void
     runCheck(decision: Check): Promise<void>
     evaluateVerify(decision: unknown): Promise<void>
     resolveVerify(decision: unknown): Promise<Check>
@@ -6580,6 +6638,8 @@ export async function verifyCheckBaseReadBudget(opts: {
     action: check(step),
   })
   const steps = ['unit', 'dashboard', 'lint', 'docs']
+  // A node check runs under an attached runner, whose heartbeat is armed.
+  if (opts.node) await runner.attach()
   // Warm every saved value the runs read: computed once per key, then served.
   await readBuildFacts(store, slug)
   for (const step of steps) await readPhaseFailures(store, slug, `verify:${step}`, 1)
@@ -6592,7 +6652,7 @@ export async function verifyCheckBaseReadBudget(opts: {
   }) as typeof store.getReducerValue
   const metrics = await measureStoreReads(store, async () => {
     await internals.runCheck(check('unit'))
-    if (opts.provisioned === false) return
+    if (opts.provisioned === false || opts.node) return
     await internals.evaluateVerify(conditional('dashboard'))
     // A stage resolves each member, then runs the resolved check.
     const members = await Promise.all([
@@ -6602,11 +6662,13 @@ export async function verifyCheckBaseReadBudget(opts: {
     await Promise.all(members.map((member) => internals.runCheck(member)))
   })
   Reflect.deleteProperty(store, 'getReducerValue')
+  internals.stopHeartbeat()
   return {
     calls: metrics.calls,
     rows: metrics.rows,
     historicalRows: metrics.read.filter((row) => row.seq <= boundary).length,
     verifyDiffBaseReads,
     bases,
+    ...(opts.node ? { aborted } : {}),
   }
 }
