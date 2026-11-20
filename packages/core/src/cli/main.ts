@@ -53,6 +53,7 @@ import {
   parseConsentHead,
   type BuildControlAction,
   type BuildControlResult,
+  type SpecBodySource,
 } from './build-control'
 import {
   abBulkControl,
@@ -154,6 +155,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'land',
   'auto-merge',
   'answer',
+  'reopen',
   'abort',
   'models',
   'plugin',
@@ -352,8 +354,94 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         result.resumed ? '; resume requested' : ''
       }`
     }
+    case 'reopened': {
+      const revision = result.specRev === undefined ? '' : ` (spec rev ${result.specRev})`
+      if (result.completedEarlier)
+        return `build ${result.slug}: completed the reopen recorded earlier${revision}; the arguments supplied now were not used`
+      return result.route === 'plan'
+        ? `build ${result.slug}: reopened; consent revoked; ${result.specRev === undefined ? 'spec' : `spec rev ${result.specRev}`} recorded; restarting from plan — waiting for a slot`
+        : `build ${result.slug}: reopened; consent revoked; returning to implement with feedback — waiting for a slot`
+    }
     case 'answer-required':
       throw new Error('build-control requested interactive feedback for an explicit CLI command')
+  }
+}
+
+/** A `--revise-spec <file>` body, read only when a revision is prepared. */
+function suppliedSpecBody(specPath: string): SpecBodySource {
+  return {
+    kind: 'supplied',
+    origin: `--revise-spec ${specPath}`,
+    read: async (): Promise<string> => {
+      try {
+        return await readFile(specPath, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(
+            `--revise-spec ${specPath}: file not found — expected a file holding the replacement spec body`,
+          )
+        }
+        throw error
+      }
+    },
+  }
+}
+
+/** The ticket body reader and asset preparation for a
+ * `--revise-spec-from-ticket` revision. Assets are prepared from the source
+ * the body was read through. */
+function ticketSpecReaders(
+  deps: SessionlessCliDeps,
+  slug: string,
+  storeRef: string | undefined,
+  label: string,
+): {
+  readTicketBody: (ref: TicketRef, store: BuildStore, repo: string) => Promise<string>
+  prepareTicketAssets: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
+} {
+  let revisionTicketSource: import('../ports/types').TicketSource | undefined
+  const readTicketBody = async (
+    original: TicketRef,
+    store: BuildStore,
+    repo: string,
+  ): Promise<string> => {
+    const { source } = await openTicketSource(
+      {
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
+        stdout: deps.stdout,
+        ...(storeRef !== undefined ? { storeRef } : {}),
+      },
+      label,
+    )
+    revisionTicketSource = source
+    const ref = await currentTicketRef(store, repo, source.name, original, slug)
+    const ticket = await source.get(ref.id)
+    if (ticket === null) {
+      throw new Error(`ticket "${ref.id}" was not found in the configured ${source.name} source`)
+    }
+    if (
+      ticket.ref.source !== ref.source ||
+      (source.name !== 'hosted' && ticket.ref.id !== ref.id)
+    ) {
+      throw new Error(
+        `ticket adapter returned ${ticket.ref.source}:${ticket.ref.id}, expected ${ref.source}:${ref.id}`,
+      )
+    }
+    return ticket.body
+  }
+  return {
+    readTicketBody,
+    prepareTicketAssets: async (ref, store, repo) => {
+      if (!revisionTicketSource) throw new Error('ticket body must be read before preparing assets')
+      return preparePinnedAssets(
+        revisionTicketSource,
+        store,
+        repo,
+        (await currentTicketRef(store, repo, revisionTicketSource.name, ref, slug)).id,
+      )
+    },
   }
 }
 
@@ -1375,60 +1463,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const resolve = parsed.flags.has('dismiss')
         ? ({ kind: 'dismiss-finding' } as const)
         : specPath !== undefined
-          ? ({
-              kind: 'revise-spec',
-              body: {
-                kind: 'supplied',
-                origin: `--revise-spec ${specPath}`,
-                read: async (): Promise<string> => {
-                  try {
-                    return await readFile(specPath, 'utf8')
-                  } catch (error) {
-                    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-                      throw new Error(
-                        `--revise-spec ${specPath}: file not found — expected a file holding the replacement spec body`,
-                      )
-                    }
-                    throw error
-                  }
-                },
-              },
-            } as const)
+          ? ({ kind: 'revise-spec', body: suppliedSpecBody(specPath) } as const)
           : parsed.flags.has('revise-spec-from-ticket')
             ? ({ kind: 'revise-spec', body: { kind: 'ticket' } } as const)
             : undefined
-      let revisionTicketSource: import('../ports/types').TicketSource | undefined
-      const readTicketBody =
+      const readers =
         resolve?.kind === 'revise-spec' && resolve.body.kind === 'ticket'
-          ? async (original: TicketRef, store: BuildStore, repo: string): Promise<string> => {
-              const { source } = await openTicketSource(
-                {
-                  targetRepo: deps.workspacePath,
-                  env: deps.processEnv ?? {},
-                  ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
-                  stdout,
-                  ...(storeRef !== undefined ? { storeRef } : {}),
-                },
-                'ab answer --revise-spec-from-ticket',
-              )
-              revisionTicketSource = source
-              const ref = await currentTicketRef(store, repo, source.name, original, slug)
-              const ticket = await source.get(ref.id)
-              if (ticket === null) {
-                throw new Error(
-                  `ticket "${ref.id}" was not found in the configured ${source.name} source`,
-                )
-              }
-              if (
-                ticket.ref.source !== ref.source ||
-                (source.name !== 'hosted' && ticket.ref.id !== ref.id)
-              ) {
-                throw new Error(
-                  `ticket adapter returned ${ticket.ref.source}:${ticket.ref.id}, expected ${ref.source}:${ref.id}`,
-                )
-              }
-              return ticket.body
-            }
+          ? ticketSpecReaders(deps, slug, storeRef, 'ab answer --revise-spec-from-ticket')
           : undefined
       await runBuildControl(
         deps,
@@ -1440,19 +1481,59 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           ...(reviewRoundCeiling !== undefined ? { reviewRoundCeiling } : {}),
         },
         storeRef,
-        readTicketBody,
-        readTicketBody
-          ? async (ref, store, repo) => {
-              if (!revisionTicketSource)
-                throw new Error('ticket body must be read before preparing assets')
-              return preparePinnedAssets(
-                revisionTicketSource,
-                store,
-                repo,
-                (await currentTicketRef(store, repo, revisionTicketSource.name, ref, slug)).id,
-              )
-            }
-          : undefined,
+        readers?.readTicketBody,
+        readers?.prepareTicketAssets,
+      )
+      return 0
+    }
+
+    case 'reopen': {
+      const usage =
+        'usage: ab reopen <slug> [--feedback <text>] [--revise-spec <file> | --revise-spec-from-ticket] [--store <ref>]'
+      const parsed = parseArgs(
+        rest,
+        {
+          store: 'value',
+          feedback: 'value',
+          'revise-spec': 'value',
+          'revise-spec-from-ticket': 'boolean',
+        },
+        usage,
+      )
+      if (parsed.positionals.length !== 1) throw new Error(usage)
+      const slug = parsed.positionals[0]!
+      const storeRef = stringFlag(parsed, 'store')
+      const specPath = stringFlag(parsed, 'revise-spec')
+      const fromTicket = parsed.flags.has('revise-spec-from-ticket')
+      if (specPath !== undefined && fromTicket)
+        throw new Error(
+          `--revise-spec and --revise-spec-from-ticket are mutually exclusive — ${usage}`,
+        )
+      const feedback = stringFlag(parsed, 'feedback')
+      if (feedback !== undefined && feedback.trim() === '')
+        throw new Error(`--feedback must not be blank — ${usage}`)
+      if (feedback === undefined && specPath === undefined && !fromTicket)
+        throw new Error(`a reopen needs --feedback, a spec revision, or both — ${usage}`)
+      const reviseSpec =
+        specPath !== undefined
+          ? suppliedSpecBody(specPath)
+          : fromTicket
+            ? ({ kind: 'ticket' } as const)
+            : undefined
+      const readers = fromTicket
+        ? ticketSpecReaders(deps, slug, storeRef, 'ab reopen --revise-spec-from-ticket')
+        : undefined
+      await runBuildControl(
+        deps,
+        slug,
+        {
+          kind: 'reopen',
+          ...(feedback !== undefined ? { feedback } : {}),
+          ...(reviseSpec !== undefined ? { reviseSpec } : {}),
+        },
+        storeRef,
+        readers?.readTicketBody,
+        readers?.prepareTicketAssets,
       )
       return 0
     }

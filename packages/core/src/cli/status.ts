@@ -7,6 +7,7 @@ import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { indexLog } from '../kernel/log-index'
 import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
 import { holdReason, mergeVocabulary } from './dashboard/landing-display'
+import { reopenedSummary, reopenedText, type ReopenedSummary } from './dashboard/reopen-display'
 import { buildVocabulary } from './dashboard/model'
 import {
   objectiveSegments,
@@ -182,6 +183,8 @@ export interface BuildSummary {
   waitOnly?: true
   /** Why the operator held the merge, while a hold that gave one stands. */
   holdReason?: string
+  /** An operator reopened this leaf and it has not settled again (§15.7). */
+  reopened?: ReopenedSummary
 }
 
 export interface VerifyProgress {
@@ -415,6 +418,7 @@ export function summarizeFrom(
   const objective = objectiveSummary(state, now)
   const measurement = measurementSummary(state)
   const heldBecause = holdReason(state.landing)
+  const reopened = reopenedSummary(state)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -469,6 +473,7 @@ export function summarizeFrom(
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
     ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
+    ...(reopened !== undefined ? { reopened } : {}),
   }
 }
 
@@ -816,13 +821,14 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       prCell(summary),
     ])
   }
-  // An optimization node's objective progress and a held merge's reason ride
-  // on continuation lines under the row, so they cost the table's column
-  // alignment nothing.
+  // An optimization node's objective progress, a held merge's reason and a
+  // reopen ride on continuation lines under the row, so they cost the table's
+  // column alignment nothing.
   return padColumns(rows).flatMap((line, index) => {
     const summary = index === 0 ? undefined : summaries[index - 1]!
     const objective = summary?.objective
     const held = summary?.holdReason
+    const reopened = summary?.reopened
     return [
       line,
       ...(objective === undefined
@@ -831,6 +837,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       ...(held === undefined
         ? []
         : [`    ${mergeVocabulary.label} ${safeStatusText(mergeVocabulary.held(held))}`]),
+      ...(reopened === undefined ? [] : [`    ${safeStatusText(reopenedText(reopened))}`]),
     ]
   })
 }
@@ -931,6 +938,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   lines.push(`  status:   ${summaryStatus(d)}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
+  if (d.reopened !== undefined)
+    lines.push(
+      `  reopened: ${safeStatusText(reopenedText(d.reopened).replace(/^reopened /, ''))} (${d.reopened.at})`,
+    )
   if (d.reviewRoundCeilings !== undefined) {
     const ceilings = [
       ...(d.reviewRoundCeilings.plan !== undefined ? [`plan ${d.reviewRoundCeilings.plan}`] : []),

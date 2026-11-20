@@ -20,7 +20,13 @@ export function terminalGuardReducer(env: CliEnv) {
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
-        if (event.type === 'spec.revised' && (isVerifyPhase(env.phase) || env.phase === 'finalize'))
+        // A spec revision or a reopen re-runs verify and finalize, whose
+        // occurrence identity (attempt, finalize's single round) would
+        // otherwise match the earlier completion.
+        if (
+          (event.type === 'spec.revised' || event.type === 'build.reopened') &&
+          (isVerifyPhase(env.phase) || env.phase === 'finalize')
+        )
           delete acc.completion
         if (event.type === 'reconcile.started') acc.reconcileAttempt = event.payload.attempt
         if (event.type === 'session.started' && event.payload.session === env.session)

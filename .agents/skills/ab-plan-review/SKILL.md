@@ -15,7 +15,10 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
 1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md` (latest revision),
    and `$AB_CONTEXT_DIR/history/` with every prior round's findings — for persistence
    marking, not for deference. When present, `$AB_CONTEXT_DIR/dismissed-findings.json`
-   lists finding ids a human explicitly dismissed.
+   lists finding ids a human explicitly dismissed. When the manifest has a
+   `reopen` block, an operator reopened this finished build with a revised spec;
+   `$AB_CONTEXT_DIR/reopen.json` carries any `feedback` they gave with it. Judge
+   the plan against that feedback as well as the spec.
 2. Judge the plan on exactly these axes:
    - **Spec conformance** — does executing this plan satisfy every
      acceptance criterion? Does anything in it exceed the spec's scope? A

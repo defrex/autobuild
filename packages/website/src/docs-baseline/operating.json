@@ -4,7 +4,7 @@
   "title": "Working with your operator agent",
   "group": "guides",
   "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
-  "textHash": "e5d0c6e641c64239465d1454406115eb2c0fca70c444b98636378905aef3015d",
+  "textHash": "f9bf3e47d30249309ce432def84ec3c9d248ab35d9c487ddec795882714b27b4",
   "headings": [
     "Choose a harness",
     "Give the agent memory",
@@ -12,6 +12,7 @@
     "Watch for attention",
     "Answer and pause",
     "Authorize merge",
+    "Send a finished build back",
     "Choose an operator surface",
     "An example session"
   ],
@@ -21,6 +22,7 @@
     "[hooks.notify]\ncommand = \"jq -r '.id + \\\"  \\\" + (.event.type // .observation.type)' >> attention.log\"",
     "bun ab answer my-build \"Keep the public API compatible\"",
     "bun ab pause my-build\nbun ab resume my-build",
-    "bun ab merge my-build\nbun ab hold my-build --reason \"waiting on AUT-12 to merge\""
+    "bun ab merge my-build\nbun ab hold my-build --reason \"waiting on AUT-12 to merge\"",
+    "bun ab reopen my-build --feedback \"rename the flag and update the docs\"\nbun ab reopen my-build --revise-spec-from-ticket"
   ]
 }

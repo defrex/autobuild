@@ -4788,3 +4788,107 @@ describe('decideNext: panel node starting measurement and progress', () => {
     })
   })
 })
+
+// ── Reopening a settled leaf (§15.7) ─────────────────────────────────────────
+
+describe('decideNext: a reopened settled leaf', () => {
+  const settledThrough = (body: EventWrite[]): EventWrite[] => {
+    const log = toLog(body)
+    const finalize = log.findLast((e) => e.type === 'finalize.completed')!
+    return [...body, ev('pipeline.settled', { cycle: finalize.seq })]
+  }
+  const settled = settledThrough([
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'revise', [finding('f1')]),
+    ...implementRound(2, 'sha-r2'),
+    ...codeReview(2, 'approve'),
+    ...verifyAllPass(1),
+    ...finalized(),
+  ])
+  const reopened = (payload: PayloadInput<'build.reopened'>) => ev('build.reopened', payload)
+
+  test('the settled leaf waits for its PR', () => {
+    expect(decide(settled)).toEqual(wait('awaiting-pr'))
+  })
+
+  test('feedback re-enters implement at the next round with no stale feedback; the plan stays approved', () => {
+    const log = [...settled, reopened({ feedback: 'rename the flag' })]
+    expect(decide(log)).toEqual(runPhase('implement', 3))
+    // A crashed reopened implement re-runs the same round, still without
+    // the earlier revise findings as feedback.
+    expect(decide([...log, ev('implement.started', { round: 3 })])).toEqual(
+      runPhase('implement', 3),
+    )
+  })
+
+  test('the reopened code half runs review, verify, finalize and post-steps again', () => {
+    const base = [...settled, reopened({ feedback: 'rename the flag' })]
+    const implemented = [...base, ...implementRound(3, 'sha-r3')]
+    expect(decide(implemented)).toEqual(runPhase('code-review', 3))
+    const approved = [...implemented, ...codeReview(3, 'approve')]
+    expect(decide(approved)).toEqual({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun tsc --noEmit',
+      attempt: 2,
+    })
+    const verified = [...approved, ...verifyAllPass(2)]
+    expect(decide(verified)).toEqual(runPhase('finalize', 1))
+    expect(
+      decide([...verified, ev('finalize.started', {}), ev('finalize.completed', { pr: PR })]),
+    ).toEqual({
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'ab-release-notes' },
+    })
+    expect(decide([...verified, ...finalized()])).toEqual(wait('awaiting-pr'))
+  })
+
+  test('the verify failure budget restarts with the reopen', () => {
+    const exhausted = settledThrough([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, false),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'approve'),
+      ...verifyRun('types', 2, false),
+      ...implementRound(3, 'sha-r3'),
+      ...codeReview(3, 'approve'),
+      ...verifyAllPass(3),
+      ...finalized(),
+    ])
+    const failed = [
+      ...exhausted,
+      reopened({ feedback: 'one more change' }),
+      ...implementRound(4, 'sha-r4'),
+      ...codeReview(4, 'approve'),
+      ...verifyRun('types', 4, false),
+    ]
+    expect(decide(failed)).toEqual(runPhase('implement', 5))
+  })
+
+  test('a spec reopen waits for publication, then restarts from plan', () => {
+    const recorded = [...settled, reopened({ spec: { artifact: { kind: 'spec', rev: 1 } } })]
+    expect(decide(recorded)).toEqual(wait('awaiting-spec'))
+    const published = [
+      ...recorded,
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, operator: { user: 'aron' } }),
+    ]
+    expect(decide(published)).toEqual(runPhase('plan', 2))
+  })
+
+  test('a pending abort after a reopen is acknowledged first', () => {
+    for (const payload of [
+      { feedback: 'x' },
+      { spec: { artifact: { kind: 'spec', rev: 1 } } },
+    ] as const)
+      expect(decide([...settled, reopened(payload), ev('build.abort-requested', {})])).toEqual({
+        kind: 'acknowledge',
+        command: 'abort',
+      })
+  })
+})
