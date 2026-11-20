@@ -20,4 +20,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/shape/691nlqt5o8': 'Hold reason on the landing command',
   'buildReadFacts/shape/fjcms3g67h': 'Hold reason on the landing command',
   'buildStreamSeed/shape/cnyes1nf0o': 'Hold reason on the landing command',
+  'build/shape/0sj01uqgcz': 'Forge CI failure record on finished leaves',
+  'buildReadFacts/shape/42qtslvxvq': 'Forge CI failure record on finished leaves',
+  'buildStreamSeed/shape/9970dr98ff': 'Forge CI failure record on finished leaves',
 }
