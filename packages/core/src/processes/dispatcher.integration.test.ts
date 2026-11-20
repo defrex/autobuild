@@ -17,7 +17,7 @@ import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext, decideNextFromFacts } from '../kernel/engine'
-import { epilogueLeaf } from '../kernel/dispatch-capacity'
+import { epilogueLeaf, settlementKey } from '../kernel/dispatch-capacity'
 import { listOperatorBuilds } from '../operator/query'
 import { projectBuildFromFacts } from '../cli/dashboard/model'
 import { abWait } from '../cli/wait'
@@ -17984,7 +17984,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(await failures(h, slug)).toEqual([])
     })
 
-  test('a conflicted parked build waits for a slot ahead of new claims, then goes first', async () => {
+  test('a conflicted parked build waits for a slot ahead of normal claims, then goes first', async () => {
     const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
     const parked = await parkedBuild(h, 'a-parked', 2)
     const busy = await busyBuild(h, 'b-busy')
@@ -18031,7 +18031,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(await failures(h, waiting)).toEqual([])
   })
 
-  test('a parked build whose target moved waits to re-verify ahead of new claims', async () => {
+  test('a parked build whose target moved waits to re-verify ahead of normal claims', async () => {
     const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
     const parked = await parkedBuild(h, 'a-parked', 2)
     const busy = await busyBuild(h, 'b-busy')
@@ -18420,6 +18420,249 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     const waiting = h.launches[0] === first ? second : first
     expect(await types(h, waiting)).not.toContain('workspace.provision-started')
   })
+
+  // SPEC §12 "Slot admission order": urgent parked work, urgent claims,
+  // normal parked work, normal claims. None of these seed `urgentWaiting`:
+  // the tick discovers urgent demand itself.
+  describe('slot admission order', () => {
+    /** Settled and conflicted before any tick, so no scan fact exists yet. */
+    async function conflictedParked(h: Harness, slug: string, number: number): Promise<string> {
+      await parkedBuild(h, slug, number)
+      const state = (await readBuildFacts(h.store, slug)).value.state
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'pipeline.settled',
+        payload: { cycle: settlementKey(state) },
+      })
+      h.forge.setPrState(number, { state: 'open', mergeable: false })
+      return slug
+    }
+    const latestScan = async (h: Harness) => {
+      const events = h.store.getRepoEvents ? await h.store.getRepoEvents(REPO).catch(() => []) : []
+      const scan = events.findLast((event) => event.type === 'dispatcher.ticket-scan-completed')
+      return scan?.type === 'dispatcher.ticket-scan-completed' ? scan.payload : undefined
+    }
+    const buildFor = async (h: Harness, ticket: string) =>
+      (await h.store.listBuilds()).find((record) => record.ticket?.id === ticket)?.slug
+    const setPriority = (h: Harness, slug: string, priority: 'urgent' | 'normal') =>
+      h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.priority-set',
+        payload: { priority },
+      })
+    const scans = (h: Harness) => {
+      let calls = 0
+      return {
+        wrapTickets: (source: FakeTicketSource) => {
+          const listReady = source.listReady.bind(source)
+          source.listReady = async (...args: Parameters<typeof listReady>) => {
+            calls++
+            return listReady(...args)
+          }
+          return source
+        },
+        calls: () => calls,
+        h,
+      }
+    }
+
+    test('cold start: an urgent ticket takes the free slot ahead of a normal reconcile', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+      expect(await latestScan(h)).toBeUndefined()
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched).toBe(1)
+      const urgent = await buildFor(h, 'U1')
+      expect(urgent).toBeDefined()
+      expect(h.launches).toEqual([urgent!])
+      expect(await slotWait(h, parked)).toBe('reconcile')
+      expect(await failures(h, parked)).toEqual([])
+      // The urgent build records its ticket's priority.
+      expect((await readBuildFacts(h.store, urgent!)).value.state.priority).toBe('urgent')
+
+      // No starvation: the slot the urgent build frees goes to the parked
+      // build in the same tick's post-dispatch pass.
+      await finish(h, urgent!)
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([urgent!, parked])
+    })
+
+    for (const variant of ['zero prior demand', 'intervening observation scan'] as const)
+      test(`${variant}: the tick that frees a slot lists the urgent ticket first`, async () => {
+        const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+        const parked = await parkedBuild(h, 'a-parked', 2)
+        const busy = await busyBuild(h, 'b-busy')
+        await h.dispatcher.tick()
+        expect(await settlements(h, parked)).toBe(1)
+        expect((await latestScan(h))?.urgentWaiting).toBeUndefined()
+        h.forge.setPrState(2, { state: 'open', mergeable: false })
+        h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+        if (variant === 'intervening observation scan') {
+          h.clock.advance(60_000)
+          await h.dispatcher.observeReady()
+          expect((await latestScan(h))?.mode).toBe('observation')
+        }
+        await finish(h, busy)
+        h.clock.advance(1_000)
+        await h.dispatcher.tick()
+        const urgent = await buildFor(h, 'U1')
+        expect(urgent).toBeDefined()
+        expect(h.launches).toEqual([urgent!])
+        expect(await slotWait(h, parked)).toBe('reconcile')
+      })
+
+    test('with no urgent work a deferred parked build takes the slot in the same tick, ahead of normal claims', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      h.tickets.add(readyTicket('N1'))
+      const report = await h.dispatcher.tick()
+      expect(h.launches).toEqual([parked])
+      expect(report.dispatched).toBe(0)
+      expect(await buildFor(h, 'N1')).toBeUndefined()
+      expect(report.janitorDiagnostics).toEqual([])
+    })
+
+    test('urgent parked work goes ahead of normal parked work, whichever is visited first', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const normal = await conflictedParked(h, 'a-normal', 2)
+      const urgent = await conflictedParked(h, 'z-urgent', 3)
+      await setPriority(h, urgent, 'urgent')
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([urgent])
+      expect(await slotWait(h, normal)).toBe('reconcile')
+      const summaries = await listOperatorBuilds({
+        store: h.store,
+        repo: REPO,
+        scope: 'active',
+        now: h.clock(),
+      })
+      expect(summaries.find((summary) => summary.slug === urgent)?.priority).toBe('urgent')
+      expect(summaries.find((summary) => summary.slug === normal)).not.toHaveProperty('priority')
+    })
+
+    test('ab priority on a waiting build flips the order on the next tick', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const first = await conflictedParked(h, 'a-first', 2)
+      const second = await conflictedParked(h, 'b-second', 3)
+      const busy = await busyBuild(h, 'c-busy')
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([])
+      await controlBuild({
+        store: h.store,
+        repo: REPO,
+        slug: second,
+        user: 'operator',
+        action: { kind: 'priority', priority: 'urgent' },
+      })
+      await finish(h, busy)
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([second])
+      expect(await slotWait(h, first)).toBe('reconcile')
+    })
+
+    test('an urgent ticket blocked on a dependency never holds back normal parked work', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      h.tickets.add(readyTicket('U1', { priority: 'urgent', blockedBy: ['B1'] }))
+      h.tickets.add(readyTicket('B1', { state: 'Triage' }))
+      const report = await h.dispatcher.tick()
+      expect(report.dependencyBlocked).toBe(1)
+      expect(h.launches).toEqual([parked])
+      expect((await latestScan(h))?.urgentWaiting).toBeUndefined()
+    })
+
+    test('an urgent ticket that cannot fit is recorded as urgent demand for status surfaces', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const urgent = await conflictedParked(h, 'a-urgent', 2)
+      await setPriority(h, urgent, 'urgent')
+      h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+      await h.dispatcher.tick()
+      // Tier 1 took the only slot; the urgent claim waits as demand.
+      expect(h.launches).toEqual([urgent])
+      expect(await buildFor(h, 'U1')).toBeUndefined()
+      expect((await latestScan(h))?.urgentWaiting).toBe(1)
+    })
+
+    test('with intake off nothing defers and normal parked work is admitted in the sweep', async () => {
+      const counted = scans(harness())
+      const h = harness({
+        toml: VERIFY_TOML,
+        onLaunch: claimOnLaunch,
+        wrapTickets: counted.wrapTickets,
+      })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(h.launches).toEqual([parked])
+      expect(counted.calls()).toBe(0)
+    })
+
+    test('an incomplete urgent evaluation launches no deferred normal waiter', async () => {
+      const h = harness({
+        toml: VERIFY_TOML,
+        onLaunch: claimOnLaunch,
+        wrapTickets: (source) => {
+          source.listReady = async () => {
+            throw new Error('listing unavailable')
+          }
+          return source
+        },
+      })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      await expect(h.dispatcher.tick()).rejects.toThrow('listing unavailable')
+      expect(h.launches).toEqual([])
+      expect(await failures(h, parked)).toEqual([])
+    })
+
+    test('an observation scan never authorizes a deferred normal launch', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const parked = await conflictedParked(h, 'a-parked', 2)
+      await h.dispatcher.observeReady()
+      // The admission scan is not due on its own, and the forced one fails.
+      const listReady = h.tickets.listReady.bind(h.tickets)
+      h.tickets.listReady = async () => {
+        throw new Error('listing unavailable')
+      }
+      await expect(h.dispatcher.tick()).rejects.toThrow('listing unavailable')
+      expect(h.launches).toEqual([])
+      h.tickets.listReady = listReady
+      h.clock.advance(1_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([parked])
+    })
+
+    test('an unchanged deferral state lists again only when a scan is due on its own', async () => {
+      let calls = 0
+      // Launches never claim a lease, so the parked build stays parked and
+      // defers again on every tick after its first-claim grace.
+      const h = harness({
+        toml: VERIFY_TOML,
+        wrapTickets: (source) => {
+          const listReady = source.listReady.bind(source)
+          source.listReady = async (...args: Parameters<typeof listReady>) => {
+            calls++
+            return listReady(...args)
+          }
+          return source
+        },
+      })
+      await conflictedParked(h, 'a-parked', 2)
+      await h.dispatcher.tick()
+      expect(calls).toBe(1)
+      const launches = h.launches.length
+      for (let tick = 0; tick < 5; tick++) {
+        h.clock.advance(5_000)
+        await h.dispatcher.tick()
+      }
+      // A second deferral key may force one more listing; idle ticks inside
+      // the scan interval never list once per tick.
+      expect(calls).toBeLessThanOrEqual(2)
+      expect(h.launches.length).toBeLessThanOrEqual(launches + 1)
+    })
+  })
 })
 
 // ── Ticket waits (SPEC §11 "Ticket waits") ───────────────────────────────────
@@ -18664,7 +18907,7 @@ describe('dispatcher — ticket waits', () => {
         (event.payload as { policyCause?: string }).policyCause === 'wait-unresolvable',
     )
 
-  test('every waited ticket completing ends the wait within one tick, ahead of new claims', async () => {
+  test('every waited ticket completing ends the wait within one tick, ahead of normal claims', async () => {
     const h = waitHarness()
     await enterWait(h)
     await h.tickets.transition('B', 'Done')

@@ -426,7 +426,9 @@ describe('summarize', () => {
       NOW,
       'none',
     ).join('\n')
-    expect(row).toContain('reconcile a2, reconcile waiting for a slot ahead of new ticket claims')
+    expect(row).toContain(
+      'reconcile a2, reconcile waiting for a slot ahead of normal ticket claims',
+    )
   })
 
   test('a completed loop phase keeps reporting its own round', async () => {

@@ -689,7 +689,7 @@ describe('capacity: ticket waits', () => {
     expect(occupiesCapacity(capacityBuild('a', refused), now)).toBe(true)
   })
 
-  test('an ended wait requests a resume slot ahead of new claims', () => {
+  test('an ended wait requests a resume slot ahead of normal claims', () => {
     const resuming = capacityBuild('a', answered())
     expect(occupiesCapacity(resuming, now)).toBe(false)
     expect(slotRequest(resuming, now)).toBe('resume')
