@@ -18,6 +18,9 @@ import {
   setupStreakReducer,
   verifyDiffBaseReducer,
 } from './build-runner'
+import { buildReadFactsReducer } from '../kernel/read-facts'
+import { checkIncremental } from '../kernel/incremental-contract'
+import { randomBuildLog } from '../kernel/generators/build-log'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
 
 const logs = generatedLogs(buildLog, randomBuildItem)
@@ -138,6 +141,73 @@ describe('build-runner selector reducers', () => {
     ])
     expect(selectVerifyDiffBase(reordered)).toBe('new')
     checkAgainstReference(verifyDiffBaseReducer, [reordered], referenceDiffBase)
+  })
+
+  test('buildReadFacts publishes the verify diff base at every split point', () => {
+    const sha = (c: string) => c.repeat(40)
+    const provisioned = [
+      'workspace.provisioned',
+      { provider: 'p', ref: 'r', branch: 'b', base: { source: 'remote', sha: sha('0') } },
+    ] as const
+    const restack = {
+      id: 'r1',
+      branch: 'b',
+      oldHead: sha('1'),
+      oldBase: sha('0'),
+      targetBase: sha('2'),
+      changeSha: sha('3'),
+      workspaceHead: sha('4'),
+      localBranchHead: sha('4'),
+      trigger: 'verify-entry',
+      cycle: 1,
+      observation: 1,
+      message: 'restack',
+      headSha: sha('4'),
+    }
+    const advanced = {
+      trigger: 'wait-resume',
+      cycle: 1,
+      observation: 1,
+      branch: 'b',
+      from: sha('0'),
+      to: sha('5'),
+    }
+    const completed = ['reconcile.completed', { mergeCommit: 'm', artifact: { kind: 'n', rev: 0 } }]
+    const promotions = [
+      [provisioned, ['restack.completed', restack]],
+      [provisioned, ['restack.advanced', advanced]],
+      [provisioned, ['reconcile.started', { attempt: 1, baseSha: sha('6') }], completed],
+      [
+        provisioned,
+        ['reconcile.started', { attempt: 1, baseSha: sha('7') }],
+        ['reconcile.superseded', { attempt: 1, cycle: 1, cause: 'wait-resume' }],
+        completed,
+      ],
+      [provisioned, ['reconcile.started', { attempt: 1, baseSha: sha('8') }]],
+    ].map((items) => buildLog(items as [string, Record<string, unknown>][]))
+    expect(promotions.map((log) => buildReadFactsReducer.reduce(log).verifyDiffBase)).toEqual([
+      sha('2'),
+      sha('5'),
+      sha('6'),
+      sha('0'),
+      sha('0'),
+    ])
+    // A promotion before the provisioned fact still wins.
+    const reordered = buildLog([
+      ['reconcile.started', { attempt: 1, baseSha: sha('9') }],
+      completed as [string, Record<string, unknown>],
+      provisioned,
+    ])
+    expect(buildReadFactsReducer.reduce(reordered).verifyDiffBase).toBe(sha('9'))
+    // The schema-valid generated build logs; this file's selector logs are not.
+    const built = [1, 2].map((seed) => randomBuildLog(seed, 60))
+    for (const log of [...built, ...promotions, reordered]) {
+      const expected = verifyDiffBaseReducer.reduce(log)
+      expect(buildReadFactsReducer.reduce(log).verifyDiffBase).toBe(expected)
+      checkIncremental(buildReadFactsReducer, log, {
+        compare: (actual) => expect(actual.verifyDiffBase).toBe(expected),
+      })
+    }
   })
 
   test('wrappers throw on a log with no head or base', () => {

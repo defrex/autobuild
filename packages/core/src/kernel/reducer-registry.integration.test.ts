@@ -1,4 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { VERIFY_BASE_ENV } from './verify-diff-base'
+import { temporaryDirectories } from '../testing/temp-directories'
 import { nodeRestackLog } from './generators/node-restack-log'
 import { leafRestackLog } from './generators/leaf-restack-log'
 import {
@@ -8,7 +20,7 @@ import {
   unmeasuredMergeLog,
   panelOptimizationLog,
 } from './generators/optimization-log'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
 import type { RegisteredReducer } from './reducer-registry'
 import { randomSessionLog } from './generators/session-log'
@@ -18,15 +30,20 @@ import {
   LEGACY_REDUCER_VERSIONS,
   PARTS,
   canonicalJson,
+  checkAgainstBase,
   checkIdentityRecords,
   deriveReducerVersion,
   evaluationCorpora,
+  foldDigest,
+  formatBaseRelativeSkipped,
   formatUnregeneratedCombination,
+  parseLedgerSource,
   parseRecordFile,
   parseRevisions,
   planRegeneration,
   recordKey,
   revisionSet,
+  unrevisedSinceBase,
   type CurrentIdentity,
   type IdentityRecord,
 } from './reducer-identity'
@@ -831,28 +848,15 @@ const corpusTexts = new Map(
 )
 const currentCids = [...corpusTexts.keys()].sort()
 const logs = new Map([...corpusTexts].map(([cid, text]) => [cid, JSON.parse(text) as unknown[]]))
-const CHUNK = 12
 const analyses = new Map<string, { paths: string[]; digests: Record<string, string> }>()
 
-/** Fold one corpus in CHUNK-sized chunks, stopping at the first chunk that
- * throws (a corpus for another domain), and digest the accumulator reached. */
+/** One corpus's accumulator digest; head and base code fold through it alike. */
 function foldCorpus(
   reducer: RegisteredReducer['reducer'],
   log: readonly unknown[],
-  visit: (acc: unknown) => void = () => {},
+  visit?: (acc: unknown) => void,
 ): string {
-  let acc = reducer.initial()
-  let threwAtChunk: number | null = null
-  for (let i = 0; i < log.length; i += CHUNK) {
-    try {
-      acc = reducer.advance(acc, log.slice(i, i + CHUNK))
-    } catch {
-      threwAtChunk = i / CHUNK
-      break
-    }
-    visit(acc)
-  }
-  return sha256(canonicalJson({ acc, threwAtChunk })).slice(0, 32)
+  return foldDigest(reducer, log, sha256, visit)
 }
 
 /** One pass over the current corpora: the union of accumulator fingerprints
@@ -945,6 +949,154 @@ function currentIdentities(records: readonly IdentityRecord[]): CurrentIdentity[
   })
 }
 
+const directory = temporaryDirectories(afterEach)
+const LEDGER_PATH = 'packages/core/src/kernel/reducer-revisions.ts'
+const RECORDS_PATH = 'packages/core/src/kernel/__snapshots__/reducer-identity-records'
+const REGISTRY_PATH = 'packages/core/src/kernel/reducer-registry.ts'
+/** The trees base code needs to load; corpora and records stay behind. */
+const BASE_CODE_PATHS = [
+  'packages/core/src',
+  'packages/core/package.json',
+  'package.json',
+  'tsconfig.json',
+]
+
+/** Run git in `root`; throws naming the command when it fails. */
+function git(root: string, args: string[]): string {
+  const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  if (result.exitCode !== 0)
+    throw new Error(
+      `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.toString().trim() || '(no output)'}`,
+    )
+  return result.stdout.toString()
+}
+
+function gitHas(root: string, object: string): boolean {
+  return (
+    Bun.spawnSync(['git', 'cat-file', '-e', object], {
+      cwd: root,
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exitCode === 0
+  )
+}
+
+function repoRoot(): string {
+  return git(import.meta.dir, ['rev-parse', '--show-toplevel']).trim()
+}
+
+/** The base's ledger keys, or null when the base predates the ledger. Fails
+ * closed when the base itself does not resolve. */
+function readBaseLedger(root: string, base: string): Set<string> | null {
+  git(root, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`])
+  if (!gitHas(root, `${base}:${LEDGER_PATH}`)) return null
+  return parseLedgerSource(git(root, ['show', `${base}:${LEDGER_PATH}`]))
+}
+
+/** Every identity record the base holds. */
+function readBaseRecords(root: string, base: string): IdentityRecord[] {
+  if (!gitHas(root, `${base}:${RECORDS_PATH}`)) return []
+  return git(root, ['ls-tree', '--name-only', `${base}:${RECORDS_PATH}`])
+    .split('\n')
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .flatMap((file) =>
+      parseRecordFile(file, git(root, ['show', `${base}:${RECORDS_PATH}/${file}`]), sha256),
+    )
+}
+
+/** Fold `logs` through the base's own reducer code for each named reducer.
+ * The base's code tree is extracted into a temporary directory that resolves
+ * packages through this checkout's `node_modules`, imported in-process, and
+ * removed. A name the base does not register, or registers under another
+ * identity, is new at the head and gets no entry. */
+async function foldAtBase(input: {
+  root: string
+  base: string
+  names: ReadonlyMap<string, string>
+  logs: ReadonlyMap<string, readonly unknown[]>
+  /** Receives the extraction directory, so a test can prove its removal. */
+  onExtract?: (dir: string) => void
+}): Promise<Map<string, Record<string, string>>> {
+  const dir = await mkdtemp(join(tmpdir(), 'ab-identity-base-'))
+  input.onExtract?.(dir)
+  try {
+    const paths = BASE_CODE_PATHS.filter((path) => gitHas(input.root, `${input.base}:${path}`))
+    const archive = Bun.spawnSync(['git', 'archive', '--format=tar', input.base, '--', ...paths], {
+      cwd: input.root,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    if (archive.exitCode !== 0)
+      throw new Error(
+        `git archive ${input.base} exited ${archive.exitCode}: ${archive.stderr.toString().trim()}`,
+      )
+    const extract = Bun.spawnSync(['tar', '-x', '-C', dir], {
+      stdin: archive.stdout,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    if (extract.exitCode !== 0)
+      throw new Error(`extracting ${input.base} failed: ${extract.stderr.toString().trim()}`)
+    const checkout = repoRoot()
+    for (const modules of ['node_modules', 'packages/core/node_modules']) {
+      const target = join(dir, modules)
+      if (existsSync(join(checkout, modules)) && !existsSync(target)) {
+        mkdirSync(dirname(target), { recursive: true })
+        symlinkSync(join(checkout, modules), target)
+      }
+    }
+    let registry: { REDUCERS?: Record<string, { reducer: RegisteredReducer['reducer'] }> }
+    try {
+      registry = await import(join(dir, REGISTRY_PATH))
+    } catch (error) {
+      throw new Error(
+        `importing the reducer registry at verify base ${input.base} failed: ${(error as Error).message}`,
+      )
+    }
+    const out = new Map<string, Record<string, string>>()
+    for (const [name, identity] of input.names) {
+      const reducer = registry.REDUCERS?.[name]?.reducer
+      if (reducer?.identity !== identity) continue
+      out.set(
+        name,
+        Object.fromEntries([...input.logs].map(([cid, log]) => [cid, foldCorpus(reducer, log)])),
+      )
+    }
+    return out
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/** Each unrevised reducer's digests at the base: from the base's records at the
+ * head's record key when they share a corpus with the head, otherwise from
+ * folding the current corpora through the base's code. */
+async function baseDigestsFor(input: {
+  root: string
+  base: string
+  targets: readonly CurrentIdentity[]
+}): Promise<Map<string, Readonly<Record<string, string>>>> {
+  const records = readBaseRecords(input.root, input.base)
+  const out = new Map<string, Readonly<Record<string, string>>>()
+  const unrecorded = new Map<string, string>()
+  for (const target of input.targets) {
+    const key = recordKey(target.identity, target.revisions, sha256)
+    const entries: Record<string, string> = {}
+    for (const record of records)
+      if (record.name === target.name && record.key === key)
+        for (const [cid, digest] of Object.entries(record.entries))
+          if (target.digests[cid] !== undefined) entries[cid] ??= digest
+    if (Object.keys(entries).length) out.set(target.name, entries)
+    else unrecorded.set(target.name, target.identity)
+  }
+  if (unrecorded.size) {
+    const folded = await foldAtBase({ root: input.root, base: input.base, names: unrecorded, logs })
+    for (const [name, digests] of folded) out.set(name, digests)
+  }
+  return out
+}
+
 /** Reducers whose empty accumulator already has every field, so the corpora
  * cannot add paths to it. */
 const COMPLETE_WHEN_EMPTY = new Set([
@@ -1032,6 +1184,87 @@ describe('reducer registry', () => {
       Object.fromEntries(Object.keys(REDUCERS).map((name) => [name, analyses.get(name)!.digests])),
     )
   }, 120_000)
+
+  test('identity changes relative to the verify base carry a revision', async () => {
+    // Records cannot see a fold-only change made after two branches' revisions
+    // combine and before the combined record is regenerated. Against the verify
+    // base the kernel supplies, a reducer whose change adds no revision must
+    // fold every shared corpus exactly as the base did.
+    const base = process.env[VERIFY_BASE_ENV]?.trim()
+    if (!base) {
+      console.warn(
+        formatBaseRelativeSkipped(
+          `${VERIFY_BASE_ENV} is not set (outside a build or under an older runtime)`,
+        ),
+      )
+      return
+    }
+    const root = repoRoot()
+    const baseLedger = readBaseLedger(root, base)
+    if (baseLedger === null) {
+      console.warn(
+        formatBaseRelativeSkipped(`the verify base ${base} predates the revision ledger`),
+      )
+      return
+    }
+    const targets = unrevisedSinceBase(currentIdentities(readRecords()), baseLedger)
+    const baseDigests = await baseDigestsFor({ root, base, targets })
+    const violations = checkAgainstBase({ current: targets, base, baseDigests })
+    console.warn(
+      `reducer identity: compared ${baseDigests.size} unrevised identities against the verify base ${base}`,
+    )
+    expect(violations.map((violation) => violation.message)).toEqual([])
+  }, 120_000)
+
+  test('base code folds through the same digest as head code', async () => {
+    const root = await directory(join(tmpdir(), 'ab-identity-fixture-'))
+    const toy = (step: number) => `export const REDUCERS = {
+  toy: {
+    reducer: {
+      identity: 'toy',
+      initial: () => ({ n: 0 }),
+      advance: (acc, events) => ({ n: acc.n + events.length * ${step} }),
+    },
+  },
+}
+`
+    const commit = (step: number) => {
+      mkdirSync(join(root, dirname(REGISTRY_PATH)), { recursive: true })
+      writeFileSync(join(root, REGISTRY_PATH), toy(step))
+      git(root, ['add', '-A'])
+      git(root, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', `step ${step}`])
+      return git(root, ['rev-parse', 'HEAD']).trim()
+    }
+    git(root, ['init', '-q'])
+    const first = commit(1)
+    const second = commit(2)
+    const fixtureLogs = new Map([['corpus', Array.from({ length: 30 }, (_, seq) => ({ seq }))]])
+    const extracted: string[] = []
+    const fold = (base: string) =>
+      foldAtBase({
+        root,
+        base,
+        names: new Map([
+          ['toy', 'toy'],
+          ['other', 'other'],
+        ]),
+        logs: fixtureLogs,
+        onExtract: (dir) => extracted.push(dir),
+      })
+    const atFirst = await fold(first)
+    const reference = {
+      initial: () => ({ n: 0 }),
+      advance: (acc: { n: number }, events: readonly unknown[]) => ({ n: acc.n + events.length }),
+    }
+    expect([...atFirst.keys()]).toEqual(['toy'])
+    expect(atFirst.get('toy')).toEqual({
+      corpus: foldDigest(reference, fixtureLogs.get('corpus')!, sha256),
+    })
+    const atSecond = await fold(second)
+    expect(atSecond.get('toy')!.corpus).not.toBe(atFirst.get('toy')!.corpus)
+    expect(extracted).toHaveLength(2)
+    for (const dir of extracted) expect(existsSync(dir)).toBe(false)
+  })
 
   test('accumulator shapes', () => {
     // If this snapshot changed, the accumulator shape changed: add a revision
