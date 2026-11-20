@@ -767,6 +767,16 @@ answer with a bare retry so the janitor attempts on its next tick. The janitor
 keeps retrying underneath, so the escalation may also close on its own when an
 attempt succeeds; reconcile current status before acting on it.
 
+### Node landing stack attention
+
+An open `integration-stack:<head>:<n>` escalation means landing refused the
+node's verified stack: it is non-linear, contains a merge commit, gives a commit
+several or repeated `Autobuild-Build:` identities, or holds a trailer-less commit
+the node does not own. Verified hand-pushed tweaks are not refusals. The question
+names the rule and commit. Landing does not retry that head on its own. Ask a
+maintainer to make the node branch linear, which yields a new head that verifies
+again, or answer with a bare retry to attempt the same head once more.
+
 ## Optimization nodes
 
 An optimization node files and dispatches its own attempts toward an objective,

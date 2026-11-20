@@ -329,8 +329,12 @@ An open node supports three ways to iterate:
 - **Push small maintainer-authorized tweaks.** Push to the node's recorded branch
   with meaningful commit messages describing intent. Verification reads the frozen
   range's owned `handPushedCommits` messages, judges quality and consistency, and
-  cannot fail a tweak solely because it lacks a covering spec. This is maintainer
-  iteration, not permission for phase agents to bypass their publication boundary.
+  cannot fail a tweak solely because it lacks a covering spec. Tweaks need no
+  `Autobuild-Build:` trailer and land with the node exactly as pushed. Keep the
+  node branch linear: rebase rather than merge, because landing refuses a merge
+  commit or broken ancestry and raises operator attention naming the commit. This
+  is maintainer iteration, not permission for phase agents to bypass their
+  publication boundary.
 - **Revise the charter when the charter itself changes.** Use
   `ab answer <node> --revise-spec replacement.md`, or update the ticket and import
   it with `ab answer <node> --revise-spec-from-ticket`. A ticket edit alone does
