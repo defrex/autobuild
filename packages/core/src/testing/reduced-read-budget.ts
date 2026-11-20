@@ -2144,6 +2144,72 @@ export async function countStoreRequests(
   return counts
 }
 
+/** Resolving an attempt's context (`ab context` and `ab done`, AUT-1279)
+ * through a session-scoped store reads a fixed vector of served values at
+ * every node and repository log length: once warm, an unchanged invocation
+ * reads no build or repository row and downloads no events, and one new node
+ * fact costs exactly that row. Returns the per-invocation call vector. */
+export async function attemptContextReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  node: string
+  repo: string
+  sizes: readonly number[]
+  /** One invocation's attempt read, through the scoped store. */
+  run: () => Promise<void>
+}): Promise<Record<string, number>> {
+  const { store, node, repo } = opts
+  const replays = ['getEvents', 'getRepoEvents', 'getBuildEventPage', 'getRepositoryTail']
+  let baseline: Record<string, number> | undefined
+  for (const size of opts.sizes) {
+    await seedBuildFiller(store, node, size)
+    await seedRepoFiller(store, repo, size)
+    // The served values are reduced once per key; later invocations advance.
+    await opts.run()
+    const idle = await measureStoreReads(store, opts.run)
+    expect(idle.rows).toBe(0)
+    expect(idle.repoRows).toBe(0)
+    for (const name of replays) expect(idle.calls[name]).toBeUndefined()
+    await store.append(node, {
+      actor: humanActor('budget'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    const advanced = await measureStoreReads(store, opts.run)
+    expect(advanced.rows).toBe(1)
+    expect(advanced.repoRows).toBe(0)
+    for (const name of replays) expect(advanced.calls[name]).toBeUndefined()
+    // The caller-facing requests, without the store's own internal calls.
+    const requests = memoryStoreRequestCounter(store)
+    try {
+      await opts.run()
+    } finally {
+      requests.restore()
+    }
+    if (baseline) expect(requests.vector()).toEqual(baseline)
+    baseline = requests.vector()
+  }
+  return baseline!
+}
+
+/** Append filler facts to one repository until its journal holds `length`
+ * events. */
+async function seedRepoFiller(
+  store: import('../store/memory').MemoryBuildStore,
+  repo: string,
+  length: number,
+): Promise<void> {
+  const events: { seq: number }[] = Reflect.get(store, 'repos').get(repo).events
+  if (events.length >= length) return
+  const filler = {
+    actor: humanActor('budget'),
+    type: 'dispatcher.intake-set' as const,
+    payload: { enabled: true },
+  }
+  const template = await store.appendRepo(repo, filler)
+  while (events.length < length - 1) events.push({ ...template, seq: events.length + 1 })
+  if (events.length < length) await store.appendRepo(repo, filler)
+}
+
 /** Append filler facts to one build until its log holds `length` events. */
 async function seedBuildFiller(
   store: import('../store/memory').MemoryBuildStore,

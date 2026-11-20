@@ -355,11 +355,18 @@ identity for the finite `builds`, `build status`, and `artifact download` read
 shells: no identity retains operator authority, while any partial, malformed,
 shared-only, or mixed identity fails closed before Store opening. Remote
 references keep the existing token-backed client unchanged. Local references
-are wrapped by `packages/core/src/store/phase-session.ts`, which permits only the exact
+are wrapped by `packages/core/src/store/phase-session.ts`, which permits the exact
 ambient build or repository resource (this is the phase-session wrapper, not the
 operator-session scope handle in `session-handle.ts`) and rejects
 agent-attributed event writes
-for any session other than `AB_SESSION`. The wrapper deliberately allows
+for any session other than `AB_SESSION`. One read-only exception serves a
+targeted build that is not itself a node, such as an optimization attempt or
+another node child: it may read its target node's `buildReadFacts` value, its
+own repository's `repositoryReadFacts` value and that repository's record, so
+attempt context, harness protection and `--no-improvement` work in the session.
+The grant is derived once per handle from the scoped build's own facts. Every
+other foreign read, any unrelated build or repository, and every foreign write
+remain refused. The wrapper deliberately allows
 non-agent actors because phase terminals also run trusted kernel plumbing in
 that CLI process; resource authority still applies to every operation. Generic
 sessionless opening remains unwrapped; only those three reads use the dedicated
