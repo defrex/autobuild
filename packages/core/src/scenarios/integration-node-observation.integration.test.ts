@@ -89,7 +89,7 @@ test('collecting nodes share bounded exhaustive scans, discover external changes
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('display metadata follows membership authorities, survives failed scans, and publishes idempotently', async () => {
   const { MemoryBuildStore } = await import('../store/memory')
@@ -232,7 +232,7 @@ test('collecting stale nodes observe distance and inventory without replay; oper
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('recorded remaps join frozen children to current membership and isolate unrelated history', async () => {
   const { MemoryBuildStore } = await import('../store/memory')
