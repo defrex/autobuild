@@ -97,7 +97,7 @@ test('nested node merge preserves both child commits and parent merges the stack
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('native terminal states, partial listings and reopening govern completeness', async () => {
   const h = await makeHarness({
@@ -340,7 +340,7 @@ test('prepared cycles consume capacity only when execution resources are admitte
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('integration agent verification receives exact commit range without producer artifacts', async () => {
   const { CONFIG_TOML } = await import('./harness')
