@@ -16,7 +16,7 @@ export const dispatchPlacementReducer = defineReducer<
   RepositoryEvent,
   DispatchPlacement
 >({
-  version: 1,
+  identity: 'dispatchPlacement',
   initial: () => ({ placement: null }),
   fold: (acc, events) => {
     for (const event of events) {

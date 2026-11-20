@@ -75,9 +75,6 @@ export interface SessionAcc {
   journalWakeCursor: number
 }
 
-/** Bump when `SessionAcc`'s shape or fold semantics change. */
-export const SESSION_REDUCER_VERSION = 1
-
 function foldSession(acc: SessionAcc, events: readonly SessionEvent[]): void {
   const turns = acc.turns
   let archived = acc.archived
@@ -225,7 +222,7 @@ function finishSession(acc: SessionAcc): SessionState {
 
 export const sessionReducer: IncrementalReducer<SessionAcc, SessionEvent, SessionState> =
   defineReducer({
-    version: SESSION_REDUCER_VERSION,
+    identity: 'session',
     initial: (): SessionAcc => ({
       turns: [],
       archived: false,

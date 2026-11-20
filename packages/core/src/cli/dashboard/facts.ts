@@ -14,8 +14,6 @@ import type { AbEvent } from '../../events/catalog'
 import { defineReducer } from '../../kernel/incremental'
 import { verifyPhase } from '../../ontology'
 
-export const DASHBOARD_FACTS_REDUCER_VERSION = 4
-
 /** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
  * seq of the `*.started` event, so callers can scope by the same seq
  * boundaries (`restartSince`/`cycleSince`) the step STATES already use. */
@@ -168,7 +166,7 @@ function foldInterval(intervals: Record<string, PhaseTiming>, ev: AbEvent): void
 }
 
 export const dashboardFactsReducer = defineReducer<DashboardFacts, AbEvent, DashboardFacts>({
-  version: DASHBOARD_FACTS_REDUCER_VERSION,
+  identity: 'dashboardFacts',
   initial: () => ({
     sessionEvents: [],
     judgeSessions: [],

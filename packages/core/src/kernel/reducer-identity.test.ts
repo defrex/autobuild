@@ -1,0 +1,463 @@
+import { describe, expect, test } from 'bun:test'
+import type { AbEvent } from '../events/catalog'
+// The registry loads first: it fills the identity graph and settles import order.
+import { REDUCERS } from './reducer-registry'
+import { setupStreakReducer } from '../processes/build-runner'
+import {
+  readReducerValue,
+  type ReducerValueStorage,
+  type ValueCacheRow,
+} from '../store/reducer-values'
+import {
+  LEGACY_REDUCER_VERSIONS,
+  LEDGER_SENTINEL,
+  REGENERATE_COMMAND,
+  UNREGENERATED_COMBINATION_PREFIX,
+  appendRevision,
+  canonicalJson,
+  checkIdentityRecords,
+  deriveReducerVersion,
+  evaluationCorpora,
+  formatUnregeneratedCombination,
+  parseRecordFile,
+  parseRevisions,
+  planRegeneration,
+  recordKey,
+  renderRecordFile,
+  revisionSet,
+  type CurrentIdentity,
+  type IdentityRecord,
+  type Ledger,
+} from './reducer-identity'
+
+const sha256 = (text: string) => new Bun.CryptoHasher('sha256').update(text).digest('hex')
+const BASE_SOURCE = `export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
+  ${LEDGER_SENTINEL}: 'not a revision; append revisions below',
+}
+`
+/** The ledger object a source declares: one `'key': 'value',` line per entry. */
+function ledgerOf(source: string): Ledger {
+  return Object.fromEntries(
+    [...source.matchAll(/^ {2}'?([^':]+)'?: '([^']*)',$/gm)].map((m) => [m[1]!, m[2]!]),
+  )
+}
+/** What `merge=union` keeps when two branches append different lines. */
+function unionMerge(base: string, a: string, b: string): string {
+  const added = (side: string) =>
+    side.split('\n').filter((line) => !base.split('\n').includes(line))
+  const lines = base.split('\n')
+  const close = lines.lastIndexOf('}')
+  return [...lines.slice(0, close), ...added(a), ...added(b), ...lines.slice(close)].join('\n')
+}
+
+const graph = new Map<string, readonly string[]>([['composite', ['build', 'harvest']]])
+
+describe('reducer identity derivation', () => {
+  test('the frozen base and the empty ledger reproduce the published versions', () => {
+    expect(deriveReducerVersion({ identity: 'build', ledger: ledgerOf(BASE_SOURCE) })).toBe(
+      LEGACY_REDUCER_VERSIONS.build!,
+    )
+    expect(deriveReducerVersion({ identity: 'brandNew', ledger: {} })).toBe(1)
+    expect(
+      deriveReducerVersion({ identity: 'composite', ledger: {}, graph }) -
+        (LEGACY_REDUCER_VERSIONS.build! + LEGACY_REDUCER_VERSIONS.harvest!),
+    ).toBe(1)
+  })
+
+  test('independent revisions combine into a version distinct from either branch', () => {
+    const a = appendRevision(BASE_SOURCE, {
+      identity: 'build',
+      kind: 'fold',
+      reason: 'AUT-1 A',
+      id: 'aaaaaaaaaa',
+    })
+    const b = appendRevision(BASE_SOURCE, {
+      identity: 'build',
+      kind: 'shape',
+      reason: 'AUT-2 B',
+      id: 'bbbbbbbbbb',
+    })
+    const merged = unionMerge(BASE_SOURCE, a, b)
+    const version = (source: string) =>
+      deriveReducerVersion({ identity: 'build', ledger: ledgerOf(source) })
+    const base = version(BASE_SOURCE)
+    expect([version(a), version(b), version(merged)]).toEqual([base + 1, base + 1, base + 2])
+    expect(parseRevisions(ledgerOf(merged)).map((revision) => revision.id)).toEqual([
+      'aaaaaaaaaa',
+      'bbbbbbbbbb',
+    ])
+  })
+
+  test('a part revision and a composite revision combine through the parts', () => {
+    const partRevised = { 'build/fold/aaaaaaaaaa': 'part' }
+    const compositeRevised = { 'composite/fold/bbbbbbbbbb': 'composite' }
+    const v = (ledger: Ledger) => deriveReducerVersion({ identity: 'composite', ledger, graph })
+    const base = v({})
+    expect(v(partRevised)).toBe(base + 1)
+    expect(v(compositeRevised)).toBe(base + 1)
+    expect(v({ ...partRevised, ...compositeRevised })).toBe(base + 2)
+    expect(revisionSet('composite', { ...partRevised, ...compositeRevised }, graph)).toEqual([
+      'build/fold/aaaaaaaaaa',
+      'composite/fold/bbbbbbbbbb',
+    ])
+  })
+
+  test('parseRevisions skips the sentinel and rejects malformed keys', () => {
+    expect(parseRevisions({ [LEDGER_SENTINEL]: 'x' })).toEqual([])
+    expect(parseRevisions({ 'build/shape/0123456789': 'AUT-1 r' })).toEqual([
+      {
+        key: 'build/shape/0123456789',
+        identity: 'build',
+        kind: 'shape',
+        id: '0123456789',
+        reason: 'AUT-1 r',
+      },
+    ])
+    for (const key of ['build/rename/0123456789', 'build/shape/short', 'build-shape-0123456789'])
+      expect(() => parseRevisions({ [key]: 'r' })).toThrow('malformed reducer revision key')
+  })
+
+  test('appendRevision writes one line and refuses a reason that would break it', () => {
+    const next = appendRevision(BASE_SOURCE, {
+      identity: 'build',
+      kind: 'fold',
+      reason: 'AUT-1267 records X',
+      id: 'k7x2q9ab3d',
+    })
+    expect(next).toBe(
+      BASE_SOURCE.replace('\n}', "\n  'build/fold/k7x2q9ab3d': 'AUT-1267 records X',\n}"),
+    )
+    const revision = { identity: 'build', kind: 'fold', id: 'k7x2q9ab3d' } as const
+    expect(() => appendRevision(BASE_SOURCE, { ...revision, reason: 'x'.repeat(80) })).toThrow(
+      'too long',
+    )
+    expect(() => appendRevision(BASE_SOURCE, { ...revision, reason: "it's" })).toThrow('quotes')
+    expect(() => appendRevision(BASE_SOURCE, { ...revision, reason: 'a\nb' })).toThrow('one')
+    expect(() => appendRevision(BASE_SOURCE, { ...revision, reason: 'r', id: 'BAD' })).toThrow(
+      'invalid',
+    )
+  })
+})
+
+describe('combined identities in the canonical store', () => {
+  test('values saved under either branch are never served to the combined code', async () => {
+    const entry = REDUCERS.setupStreak!.valueRead
+    if ('excluded' in entry) throw new Error('setupStreak is a value reducer')
+    const events = Array.from({ length: 20 }, (_, index) => ({
+      type: 'build.paused',
+      build: 'b',
+      seq: index + 1,
+      ts: '2026-11-20T00:00:00Z',
+      actor: { kind: 'kernel' },
+      payload: {},
+    })) as unknown as AbEvent[]
+    const rows = new Map<string, ValueCacheRow>()
+    let eventRows = 0
+    const storage: ReducerValueStorage = {
+      highWater: async () => events.length,
+      events: async (since, through) => {
+        const delta = events.filter((event) => event.seq > since && event.seq <= through)
+        eventRows += delta.length
+        return structuredClone(delta)
+      },
+      read: async (key) => structuredClone(rows.get(key) ?? null),
+      put: async (key, snapshot) => {
+        rows.set(key, { snapshot: structuredClone(snapshot), token: JSON.stringify(snapshot) })
+        return true
+      },
+      repair: async () => false,
+    }
+    const ledgers: Record<string, Ledger> = {
+      a: { 'setupStreak/fold/aaaaaaaaaa': 'A' },
+      b: { 'setupStreak/fold/bbbbbbbbbb': 'B' },
+    }
+    ledgers.combined = { ...ledgers.a, ...ledgers.b }
+    const create = entry.create
+    const read = async (ledger: Ledger) => {
+      const version = deriveReducerVersion({ identity: 'setupStreak', ledger })
+      entry.create = () => ({ ...setupStreakReducer, version })
+      eventRows = 0
+      const value = await readReducerValue(
+        { kind: 'build', slug: 'b' },
+        { reducer: 'setupStreak' },
+        storage,
+      )
+      return { version: value.version, eventRows }
+    }
+    try {
+      const a = await read(ledgers.a!)
+      const b = await read(ledgers.b!)
+      expect(a.version).toBe(b.version)
+      const saved = structuredClone([...rows])
+      const combined = await read(ledgers.combined)
+      expect(combined.version).toBeGreaterThan(a.version)
+      // A full reduction under a new key: neither branch's row was served or rewritten.
+      expect(combined.eventRows).toBe(events.length)
+      expect(rows.size).toBe(saved.length + 1)
+      for (const [key, row] of saved) expect(rows.get(key)).toEqual(row)
+      expect((await read(ledgers.combined)).eventRows).toBe(0)
+    } finally {
+      entry.create = create
+    }
+  })
+})
+
+const corpus = [
+  { type: 'runner.attached', seq: 1, payload: { instance: 'r', host: 'h', resumedFromSeq: 0 } },
+  { type: 'runner.setup-failed', seq: 2, payload: { error: 'x' } },
+  { type: 'runner.setup-failed', seq: 3, payload: { error: 'y' } },
+] as unknown as AbEvent[]
+type Streak = typeof setupStreakReducer
+const digest = (reducer: Pick<Streak, 'initial' | 'advance'>, log: readonly AbEvent[] = corpus) =>
+  sha256(canonicalJson(reducer.advance(reducer.initial(), log))).slice(0, 32)
+/** The same shape, a different fold: an attachment moves the boundary one further. */
+const flipped: Pick<Streak, 'initial' | 'advance'> = {
+  initial: setupStreakReducer.initial,
+  advance(acc, events) {
+    const next = setupStreakReducer.advance(acc, events)
+    for (const event of events) if (event.type === 'runner.attached') next.boundary = event.seq + 1
+    return next
+  },
+}
+/** A behaviour-identical refactor: one event at a time. */
+const refactored: Pick<Streak, 'initial' | 'advance'> = {
+  initial: setupStreakReducer.initial,
+  advance: (acc, events) =>
+    events.reduce((next, event) => setupStreakReducer.advance(next, [event]), acc),
+}
+
+const IDENTITY = 'setupStreak'
+function record(revisions: string[], entries: Record<string, string>): IdentityRecord {
+  const rendered = renderRecordFile(
+    [{ name: IDENTITY, identity: IDENTITY, revisions, entries }],
+    sha256,
+  )
+  return parseRecordFile(rendered.file, rendered.content, sha256)[0]!
+}
+function current(revisions: string[], digests: Record<string, string>): CurrentIdentity {
+  return { name: IDENTITY, identity: IDENTITY, revisions, digests }
+}
+const check = (
+  now: CurrentIdentity,
+  records: IdentityRecord[],
+  currentCids = Object.keys(now.digests),
+) => checkIdentityRecords({ current: [now], currentCids, records, hash: sha256 })
+const A = 'setupStreak/fold/aaaaaaaaaa'
+const B = 'setupStreak/shape/bbbbbbbbbb'
+
+describe('identity records', () => {
+  test('a fold-only change without a revision is a case-1 violation', () => {
+    expect(digest(flipped)).not.toBe(digest(setupStreakReducer))
+    const result = check(current([], { c1: digest(flipped) }), [
+      record([], { c1: digest(setupStreakReducer) }),
+    ])
+    expect(result.violations.map((violation) => violation.kind)).toEqual(['changed'])
+    expect(result.violations[0]!.message).toContain('bun tools/reducer-revision.ts')
+    expect(result.unregeneratedCombinations).toEqual([])
+  })
+
+  test('a revision added without regeneration is a missing record', () => {
+    const result = check(current([A], { c1: digest(setupStreakReducer) }), [
+      record([], { c1: digest(setupStreakReducer) }),
+    ])
+    expect(result.violations.map((violation) => violation.kind)).toEqual(['missing-record'])
+  })
+
+  test('a deleted base record is a missing record', () => {
+    const result = check(current([], { c1: digest(setupStreakReducer) }), [])
+    expect(result.violations.map((violation) => violation.kind)).toEqual(['missing-record'])
+  })
+
+  test('a behaviour-identical refactor keeps every digest', () => {
+    expect(digest(refactored)).toBe(digest(setupStreakReducer))
+    expect(
+      check(current([], { c1: digest(refactored) }), [
+        record([], { c1: digest(setupStreakReducer) }),
+      ]),
+    ).toEqual({ violations: [], unregeneratedCombinations: [] })
+  })
+
+  test('a clean combination is reported, never silent', () => {
+    const original = digest(setupStreakReducer)
+    const records = [record([A], { c1: 'a-digest' }), record([B], { c1: 'b-digest' })]
+    const result = check(current([A, B], { c1: original }), records)
+    expect(result.violations).toEqual([])
+    expect(result.unregeneratedCombinations).toEqual([
+      {
+        name: IDENTITY,
+        identity: IDENTITY,
+        revisions: [A, B],
+        coveredBy: [recordKey(IDENTITY, [A], sha256), recordKey(IDENTITY, [B], sha256)].sort(),
+      },
+    ])
+    const notice = formatUnregeneratedCombination(result.unregeneratedCombinations[0]!)
+    expect(notice.startsWith(`${UNREGENERATED_COMBINATION_PREFIX}: setupStreak`)).toBe(true)
+    expect(notice).toContain(REGENERATE_COMMAND)
+    expect(notice).toContain('AUT-1274')
+  })
+
+  test('a fold change on an unregenerated combination is named until regeneration, then fails', () => {
+    const records = [record([A], { c1: 'a-digest' }), record([B], { c1: 'b-digest' })]
+    const changed = current([A, B], { c1: digest(flipped) })
+    const before = check(changed, records)
+    expect(before.violations).toEqual([])
+    expect(before.unregeneratedCombinations.map((entry) => entry.name)).toEqual([IDENTITY])
+    const regenerated = [...records, record([A, B], { c1: digest(setupStreakReducer) })]
+    const after = check(changed, regenerated)
+    expect(after.violations.map((violation) => violation.kind)).toEqual(['changed'])
+    expect(after.unregeneratedCombinations).toEqual([])
+  })
+
+  test('an exact record reports no combination', () => {
+    const result = check(current([A], { c1: digest(setupStreakReducer) }), [
+      record([A], { c1: digest(setupStreakReducer) }),
+    ])
+    expect(result).toEqual({ violations: [], unregeneratedCombinations: [] })
+  })
+
+  const c1 = corpus.slice(0, 2)
+  const c2 = corpus
+  const c2Edited = [...corpus, { ...corpus[2]!, seq: 4 }] as AbEvent[]
+  const c3 = corpus.slice(1)
+  test('a fold change hidden behind a corpus change still fails on the archived corpus', () => {
+    const base = record([], {
+      c1: digest(setupStreakReducer, c1),
+      c2: digest(setupStreakReducer, c2),
+    })
+    const key = recordKey(IDENTITY, [], sha256)
+    const currentCids = ['c2e', 'c3']
+    const toFold = evaluationCorpora({ name: IDENTITY, key, records: [base], currentCids })
+    expect(toFold).toEqual(['c1', 'c2', 'c2e', 'c3'])
+    const archive: Record<string, readonly AbEvent[]> = { c1, c2, c2e: c2Edited, c3 }
+    const now = current(
+      [],
+      Object.fromEntries(toFold.map((cid) => [cid, digest(flipped, archive[cid])])),
+    )
+    const result = check(now, [base], currentCids)
+    expect(
+      result.violations.filter((violation) => violation.kind === 'changed').length,
+    ).toBeGreaterThan(0)
+    expect(
+      planRegeneration({
+        current: [now],
+        currentCids,
+        records: [base],
+        archived: new Set(['c1', 'c2']),
+        hash: sha256,
+      }),
+    ).toEqual({
+      refused: expect.arrayContaining([expect.stringContaining('without a revision')]),
+      archive: [],
+    })
+  })
+
+  test('a corpus-only update adds entries under the unchanged identity', () => {
+    const base = record([], {
+      c1: digest(setupStreakReducer, c1),
+      c2: digest(setupStreakReducer, c2),
+    })
+    const currentCids = ['c2e', 'c3']
+    const archive: Record<string, readonly AbEvent[]> = { c1, c2, c2e: c2Edited, c3 }
+    const now = current(
+      [],
+      Object.fromEntries(
+        Object.entries(archive).map(([cid, log]) => [cid, digest(setupStreakReducer, log)]),
+      ),
+    )
+    expect(check(now, [base], currentCids).violations.map((violation) => violation.kind)).toEqual([
+      'unrecorded-corpus',
+      'unrecorded-corpus',
+    ])
+    const plan = planRegeneration({
+      current: [now],
+      currentCids,
+      records: [base],
+      archived: new Set(['c1', 'c2']),
+      hash: sha256,
+    })
+    expect(plan.refused).toEqual([])
+    expect(plan.archive).toEqual(['c2e', 'c3'])
+    // Only the new entries, in a new file beside the untouched base record.
+    const added = parseRecordFile(plan.write!.file, plan.write!.content, sha256)
+    expect(added.map((entry) => [entry.key, Object.keys(entry.entries)])).toEqual([
+      [base.key, ['c2e', 'c3']],
+    ])
+    expect(added[0]!.file).not.toBe(base.file)
+    expect(check(now, [base, ...added], currentCids)).toEqual({
+      violations: [],
+      unregeneratedCombinations: [],
+    })
+  })
+
+  test('records for one key are unioned, and disagreeing records fail', () => {
+    const d = digest(setupStreakReducer)
+    const agree = check(current([], { c1: d, c2: d }), [
+      record([], { c1: d }),
+      record([], { c2: d }),
+    ])
+    expect(agree.violations).toEqual([])
+    const disagree = check(current([], { c1: d }), [
+      record([], { c1: d }),
+      record([], { c1: 'other' }),
+    ])
+    expect(disagree.violations.map((violation) => violation.kind)).toEqual(['disagreeing-records'])
+  })
+
+  test('a missing archived corpus names its id', () => {
+    const d = digest(setupStreakReducer)
+    const result = check(current([], { c2: d }), [record([], { c1: d, c2: d })], ['c2'])
+    expect(result.violations.map((violation) => violation.kind)).toEqual(['missing-archive'])
+    expect(result.violations[0]!.message).toContain('c1')
+  })
+
+  test('a record whose name does not address its content is refused', () => {
+    const rendered = renderRecordFile(
+      [{ name: IDENTITY, identity: IDENTITY, revisions: [], entries: { c1: 'x' } }],
+      sha256,
+    )
+    expect(() =>
+      parseRecordFile(rendered.file, rendered.content.replace('"x"', '"y"'), sha256),
+    ).toThrow('does not match its content')
+  })
+
+  test('records of removed reducers and superseded identities stay inert', () => {
+    const d = digest(setupStreakReducer)
+    const gone = renderRecordFile(
+      [
+        { name: 'gone', identity: 'gone', revisions: [], entries: { c1: 'x' } },
+        { name: IDENTITY, identity: IDENTITY, revisions: [], entries: { c1: 'superseded' } },
+      ],
+      sha256,
+    )
+    const records = [record([A], { c1: d }), ...parseRecordFile(gone.file, gone.content, sha256)]
+    expect(check(current([A], { c1: d }), records)).toEqual({
+      violations: [],
+      unregeneratedCombinations: [],
+    })
+    expect(
+      planRegeneration({
+        current: [current([A], { c1: d })],
+        currentCids: ['c1'],
+        records,
+        archived: new Set(['c1']),
+        hash: sha256,
+      }),
+    ).toEqual({ refused: [], archive: [] })
+  })
+
+  test('regeneration at a new identity records every current corpus and nothing else', () => {
+    const d = digest(setupStreakReducer)
+    const plan = planRegeneration({
+      current: [current([A], { c1: d, c2: d })],
+      currentCids: ['c1', 'c2'],
+      records: [record([], { c0: 'old', c1: d })],
+      archived: new Set(['c0', 'c1']),
+      hash: sha256,
+    })
+    const added = parseRecordFile(plan.write!.file, plan.write!.content, sha256)
+    expect(added.map((entry) => [entry.revisions, entry.entries])).toEqual([
+      [[A], { c1: d, c2: d }],
+    ])
+    expect(plan.archive).toEqual(['c2'])
+  })
+})

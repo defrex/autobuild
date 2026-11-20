@@ -1,0 +1,16 @@
+/**
+ * The append-only reducer revision ledger. A reducer's version is derived from
+ * its frozen legacy base, the number of lines here naming its identity, and the
+ * versions of its declared parts (`reducer-identity.ts`), so two branches that
+ * each revise the same reducer merge by union (`.gitattributes`) and the
+ * combined code counts both revisions.
+ *
+ * Append a line only with `bun tools/reducer-revision.ts <shape|fold> <identity>
+ * --reason "…"`. Never edit, reorder or delete a line, and never resolve this
+ * file by choosing a side: a deleted line lowers a version, and saved values
+ * under the higher version would then be reduced again on every read. A revert
+ * adds a revision rather than removing one.
+ */
+export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
+  __ledger__: 'not a revision; append revisions below',
+}

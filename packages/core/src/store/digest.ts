@@ -139,9 +139,6 @@ export interface DigestAcc {
   proposerDeferredSeq?: number
 }
 
-/** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 17
-
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */
 export class BuildDigestCapabilityError extends Error {
@@ -182,7 +179,7 @@ export const buildDigestReducer: IncrementalReducer<
   DigestEvent,
   Omit<BuildDigest, 'slug'>
 > = defineReducer({
-  version: BUILD_DIGEST_REDUCER_VERSION,
+  identity: 'buildDigest',
   initial: (): DigestAcc => ({
     compatibility: initialCompatibility(),
     observations: [],

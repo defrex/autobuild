@@ -682,9 +682,6 @@ export interface BuildAcc {
   lastEvent?: AbEvent
 }
 
-/** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 51
-
 function initialBuildAcc(): BuildAcc {
   return {
     endedExecutionInstances: {},
@@ -1963,7 +1960,7 @@ function finishBuild(acc: BuildAcc): BuildState {
 /** The incremental form of `reduceBuild`: advance a carried accumulator with
  * only the events newer than it, then derive the state. */
 export const buildReducer: IncrementalReducer<BuildAcc, AbEvent, BuildState> = defineReducer({
-  version: BUILD_REDUCER_VERSION,
+  identity: 'build',
   rawEvents: true,
   initial: initialBuildAcc,
   fold: foldBuild,

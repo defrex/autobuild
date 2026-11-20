@@ -214,7 +214,7 @@ interface Accumulator {
 }
 
 export const executionNoProgressReducer = defineReducer({
-  version: 7,
+  identity: 'executionNoProgress',
   initial: (): Accumulator => ({
     active: null,
     count: 0,

@@ -1489,7 +1489,11 @@ for (const fragmentOnly of [false, true]) {
   }
 }
 
-import { prepareReleaseCompatibility, COMPATIBILITY_ROOT } from './release-compatibility'
+import {
+  prepareReleaseCompatibility,
+  COMPATIBILITY_ROOT,
+  catalogVersions,
+} from './release-compatibility'
 import type { ReleasedClient } from '../packages/core/src/store/remote/released-clients'
 import type { ReleasedReducerValues } from '../packages/core/src/store/remote/released-reducer-values'
 const tinyCatalog: ReleasedReducerValues = {
@@ -1581,6 +1585,62 @@ test('missing outgoing contract is recovered from published evidence, never curr
     '1.2.0.json',
   )
   expect(files.some((file) => file.path.endsWith('1.4.0.json'))).toBe(false)
+})
+
+test('catalog versions are ledger-derived, and one added revision freezes a new contract', async () => {
+  const { REDUCERS } = await import('../packages/core/src/kernel/reducer-registry')
+  const { deriveReducerVersion } = await import('../packages/core/src/kernel/reducer-identity')
+  const { REDUCER_REVISIONS } = await import('../packages/core/src/kernel/reducer-revisions')
+  const versions = catalogVersions(REDUCERS)
+  for (const [name, entry] of Object.entries(REDUCERS))
+    expect({ name, version: versions[name] }).toEqual({
+      name,
+      version: deriveReducerVersion({ identity: entry.reducer.identity! }),
+    })
+  const base = deriveReducerVersion({ identity: 'build' })
+  const revised = deriveReducerVersion({
+    identity: 'build',
+    ledger: { ...REDUCER_REVISIONS, 'build/fold/releasecat': 'release' },
+  })
+  expect(revised).toBe(base + 1)
+  const prepare = async (build: number) => {
+    const fixture = await compatibilityFixture()
+    for (const contract of ['1.2.0.json', '1.3.0.json'])
+      await writeFile(
+        join(fixture.root, COMPATIBILITY_ROOT, 'released-reducer-values', contract),
+        JSON.stringify({ ...tinyCatalog, versions: { build: base } }),
+      )
+    return prepareReleaseCompatibility({
+      root: fixture.root,
+      outgoing: '1.3.0',
+      target: '1.4.0',
+      now: '2026-10-30T12:00:00.000Z',
+      current: {
+        catalog: { ...tinyCatalog, versions: { build } },
+        protocol: '6',
+        catalogIdentity: 'fingerprint',
+      },
+    })
+  }
+  const newContract = `${COMPATIBILITY_ROOT}/released-reducer-values/1.4.0.json`
+  expect((await prepare(base)).map((file) => file.path)).not.toContain(newContract)
+  expect((await prepare(revised)).map((file) => file.path)).toContain(newContract)
+})
+
+test('every frozen release catalog holds positive integer versions', async () => {
+  const directory = join(repoRoot, COMPATIBILITY_ROOT, 'released-reducer-values')
+  const { readdir } = await import('node:fs/promises')
+  const files = (await readdir(directory)).filter((file) => file.endsWith('.json'))
+  expect(files.length).toBeGreaterThan(0)
+  for (const file of files) {
+    const catalog = JSON.parse(
+      await readFile(join(directory, file), 'utf8'),
+    ) as ReleasedReducerValues
+    for (const version of Object.values(catalog.versions)) {
+      expect(Number.isInteger(version)).toBe(true)
+      expect(version).toBeGreaterThanOrEqual(1)
+    }
+  }
 })
 
 test('compatibility candidates are visible to gates and restored after dry-run or failure', async () => {

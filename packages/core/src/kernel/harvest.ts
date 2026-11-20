@@ -221,9 +221,6 @@ export interface HarvestAcc {
   lastSeq: number
 }
 
-/** Bump when `HarvestAcc`'s shape or fold semantics change. */
-export const HARVEST_REDUCER_VERSION = 4
-
 function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void {
   const order = acc.runs
   const runs = new Map(order.map((run) => [run.run, run]))
@@ -778,7 +775,7 @@ function finishHarvest(acc: HarvestAcc): HarvestState {
 
 export const harvestReducer: IncrementalReducer<HarvestAcc, RepositoryEvent, HarvestState> =
   defineReducer({
-    version: HARVEST_REDUCER_VERSION,
+    identity: 'harvest',
     initial: (): HarvestAcc => ({
       runs: [],
       claimed: [],

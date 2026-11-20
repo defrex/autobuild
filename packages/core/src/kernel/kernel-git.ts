@@ -70,7 +70,7 @@ export const kernelGitHealthReducer = defineReducer<
   RepositoryEvent,
   KernelGitCondition | undefined
 >({
-  version: 1,
+  identity: 'kernelGitHealth',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {

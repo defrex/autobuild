@@ -9,7 +9,7 @@ export const effectiveConfigReducer = defineReducer<
   RepositoryEvent,
   { run?: string; reference?: ArtifactRef }
 >({
-  version: 1,
+  identity: 'effectiveConfig',
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -64,7 +64,7 @@ export const buildDelegationReducer = defineReducer<
   AbEvent,
   BuildDelegationFacts
 >({
-  version: 2,
+  identity: 'buildDelegation',
   initial: () => ({ lastSeq: 0, sessions: {}, terminals: [], preferred: {} }),
   fold(acc, events) {
     for (const event of events) {
@@ -94,7 +94,7 @@ export const harvestDelegationReducer = defineReducer<
   RepositoryEvent,
   HarvestDelegationFacts
 >({
-  version: 2,
+  identity: 'harvestDelegation',
   initial: () => ({
     lastSeq: 0,
     runs: {},

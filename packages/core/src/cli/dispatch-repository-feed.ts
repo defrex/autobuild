@@ -25,7 +25,7 @@ function isLegacyDashboardEvent(event: RepositoryEvent): boolean {
 const LEGACY_VERSION = 4
 
 export const dispatchFrontendReducer = defineReducer({
-  version: 5,
+  identity: 'dispatchFrontend',
   initial: (): { identities: RepositoryEvent[]; holder?: string } => ({ identities: [] }),
   fold(acc, events: readonly RepositoryEvent[]) {
     const starts = new Map(acc.identities.map((event) => [event.seq, event]))

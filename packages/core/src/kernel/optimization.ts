@@ -386,7 +386,7 @@ export const optimizationReducer = defineReducer<
   AbEvent,
   OptimizationState | null
 >({
-  version: 6,
+  identity: 'optimization',
   initial: () => ({}),
   fold(acc, events) {
     const state = advanceOptimization(acc.state, events)
@@ -589,7 +589,7 @@ export const optimizationLedgerReducer = defineReducer<
   AbEvent,
   OptimizationLedger
 >({
-  version: 2,
+  identity: 'optimizationLedger',
   initial: () => ({ pending: {}, entries: [] }),
   fold(acc, events) {
     for (const event of events) {

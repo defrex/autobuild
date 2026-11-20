@@ -3,7 +3,6 @@ import { KERNEL } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { checkIncremental, pick, seededRandom, shuffled } from '../kernel/incremental-contract'
 import {
-  REPOSITORY_STATE_EVENTS_REDUCER_VERSION,
   REPOSITORY_STATE_EVENT_TYPES,
   projectRepositoryStateEvents,
   repositoryStateEventsReducer,
@@ -86,10 +85,6 @@ const fixtures: Record<string, RepositoryEvent[]> = {
 }
 
 describe('repositoryStateEventsReducer', () => {
-  test('version includes latest-only placement alongside durable workflow facts', () => {
-    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(8)
-  })
-
   for (const [name, log] of Object.entries(fixtures)) {
     test(`contract on fixture: ${name}`, () => {
       expect(projectRepositoryStateEvents(log)).toEqual(oracle(log))

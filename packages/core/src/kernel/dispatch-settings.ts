@@ -30,9 +30,6 @@ export interface DispatchSettingsAcc extends DispatchSettings {
   autoMergeSeq: number
 }
 
-/** Bump when `DispatchSettingsAcc`'s shape or fold semantics change. */
-export const DISPATCH_SETTINGS_REDUCER_VERSION = 1
-
 function foldDispatchSettings(acc: DispatchSettingsAcc, events: readonly RepositoryEvent[]): void {
   for (const event of events) {
     switch (event.type) {
@@ -67,7 +64,7 @@ export const dispatchSettingsReducer: IncrementalReducer<
   RepositoryEvent,
   DispatchSettings
 > = defineReducer({
-  version: DISPATCH_SETTINGS_REDUCER_VERSION,
+  identity: 'dispatchSettings',
   initial: () => ({
     intake: DEFAULT_DISPATCH_INTAKE,
     paused: DEFAULT_DISPATCH_PAUSED,

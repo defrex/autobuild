@@ -13,8 +13,9 @@ import { reduceBuild } from '../kernel/reducer'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { checkIncremental } from '../kernel/incremental-contract'
 import { openExecution } from '../processes/execution-settlement'
+import { deriveReducerVersion } from '../kernel/reducer-identity'
+import { REDUCER_REVISIONS } from '../kernel/reducer-revisions'
 import {
-  BUILD_DIGEST_REDUCER_VERSION,
   BuildDigestCapabilityError,
   buildDigestReducer,
   digestNodeTargets,
@@ -349,8 +350,11 @@ describe('reduceBuildDigest node targets', () => {
     ...(nodeTargets ? { nodeTargets } : {}),
   })
 
-  test('the version bump re-reduces saved digests that predate node targets', () => {
-    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(17)
+  test('a shape revision re-reduces saved digests under a different version', () => {
+    const revised = { ...REDUCER_REVISIONS, 'buildDigest/shape/nodetarget': 'node targets' }
+    expect(deriveReducerVersion({ identity: 'buildDigest', ledger: revised })).toBe(
+      buildDigestReducer.version + 1,
+    )
   })
 
   test('collects every named node as a sorted unique set that only grows', () => {

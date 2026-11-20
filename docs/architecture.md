@@ -150,11 +150,30 @@ wrappers over the same fold, so results cannot diverge, and a property test
 checks every split point of fixture and generated logs. The accumulator is plain
 JSON, so it survives a serialize-and-parse round trip. `advance` never mutates
 its input: it clones, then folds, so a state derived earlier is never disturbed
-by a later advance. Each reducer publishes a `version`; bump it whenever the
-accumulator shape or the fold semantics change, because a cached accumulator is
-only valid for the version that wrote it. `kernel/reducer-registry.ts` lists
-every reducer with its version, and its snapshot test fails when an accumulator
-shape changes without a bump. Current-state consumers use the typed persisted
+by a later advance. Each reducer publishes a `version`, because a cached
+accumulator is only valid for the version that wrote it. The version is derived,
+never edited (`kernel/reducer-identity.ts`): a frozen legacy base, plus one for
+each line naming the reducer's identity in the append-only revision ledger
+`kernel/reducer-revisions.ts`, plus the versions of its declared parts. When an
+accumulator shape or fold changes, `bun tools/reducer-revision.ts <shape|fold>
+<identity> --reason "…"` appends a line with a random id. The ledger merges by
+union (`.gitattributes`), so two branches that revise the same reducer combine
+without a conflict into a version higher than either, and versions only grow.
+Never delete a ledger line, even to revert: a lower version would be reduced
+again on every read. `kernel/reducer-registry.ts` lists every reducer, and its
+integration test checks the derivation and fails when an accumulator shape
+changes without a revision. It also holds the identity records under
+`kernel/__snapshots__/reducer-identity-records/`: per reducer identity and
+revision set, the accumulator digest after each deterministic test corpus.
+Every corpus a record has covered is kept in the content-addressed
+`reducer-identity-corpora/` archive and stays checked under that identity, so
+corpora may change freely while a fold change without a revision still fails.
+`AB_UPDATE_REDUCER_SHAPES=1` on that test regenerates the shapes and adds one
+new record file; record files are only ever added, never edited or deleted. One
+state passes with a notice rather than silently: after revisions combine
+through a clean restack and before anyone regenerates, the combined identity
+has no record of its own, so a fold change without a revision is not detected
+until regeneration (AUT-1274 closes this gap). Current-state consumers use the typed persisted
 read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
 reference projections for tests and explicit historical output.
 
