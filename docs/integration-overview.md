@@ -40,7 +40,7 @@ A node whose spec declares an objective is an [optimization node](optimization-n
 
 A leaf contributes one canonical net change, however many commits it took.
 
-- **Identity.** The `Autobuild-Build: <slug>` trailer carries it across SHA rewrites. Root squash merges keep it; node integration keeps each contributing identity, in order, rather than one node commit.
+- **Identity.** The `Autobuild-Build: <slug>` trailer carries it across SHA rewrites. Root squash merges keep it; node integration keeps each contributing identity, in order, alongside the node's verified hand-pushed tweaks, rather than one node commit.
 - **Restacks.** When a destination moves, a leaf restacks onto it at its usual restack points; a node restacks only on demand, and each descendant node needs its own demand. Clean replay is automatic, and so is a conflict confined to files the repository declares as generated, which their declared command rebuilds. Any other conflict attaches a reconcile runner with the source change's context, then verification as required.
 - **Reverification.** Node verification covers the exact node head and parent; a change to either voids merge eligibility until reverified, even after a clean restack. A cleanly restacked waiting leaf can keep its prior verification; reports cite their actual head and base.
 
