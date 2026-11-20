@@ -5,6 +5,7 @@ import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 import { proposeRunDue, proposeStarted } from './optimization'
+import { reopenSpecPending } from './reopen'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
  * phase per the transition table, invoke the AgentRunner with `/{skill}
@@ -228,6 +229,7 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
         f.cycle >=
           Math.max(
             log.restartSeq,
+            log.codeRestartSeq,
             log.code.latestApproveSeq,
             log.lastReconcileCompletedSeq,
             log.verifyConfigBoundary,
@@ -283,6 +285,11 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // refused, the declaring phase re-runs with the refusal as guidance.
   if (pendingWaitRequest(state)) return { kind: 'wait', reason: 'ticket-wait' }
 
+  // A reopen with a replacement spec parks until the kernel publishes it as
+  // the next `spec.revised` (§15.7), exactly like an answered revise-spec.
+  if (state.kind !== 'node' && reopenSpecPending(state))
+    return { kind: 'wait', reason: 'awaiting-spec' }
+
   // Frozen transactions retain their original destination and may recover.
   if (state.targetRewrite && !log.restack.active && !state.nodeRestack?.active)
     return { kind: 'wait', reason: 'target-rewritten' }
@@ -294,7 +301,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   const stageCycle =
     state.kind === 'node'
       ? Math.max(state.integration?.cycle?.seq ?? 0, log.verifyConfigBoundary)
-      : Math.max(leafVerifyCycleInputs(log), log.restartSeq)
+      : Math.max(leafVerifyCycleInputs(log), log.restartSeq, log.codeRestartSeq)
   const stage =
     config.verify.stages === undefined
       ? undefined
@@ -613,6 +620,8 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   if (planDecision !== 'approved') return planDecision
 
   // ── 6. Code loop: identical structure, plus verify routing ─────────────────
+  // `log.code` counts only rounds after `codeRestartSeq`: a feedback-only
+  // reopen (§15.7) empties it, so implement runs again at maxRoundEver + 1.
   const codeDecision = decideLoop({
     loop: log.code,
     producer: 'implement',

@@ -19,6 +19,8 @@ import {
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 import { holdReason } from './landing-display'
+import { reopenedSummary, reopenedText } from './reopen-display'
+import { reopenSpecPending } from '../../kernel/reopen'
 export { treeVocabulary, consentQueue } from './tree'
 import {
   currentLandingFallback,
@@ -821,15 +823,22 @@ export function projectBuildFromFacts(
   // boundary the same way the landed one will. (`decideNext` returns `wait`
   // here, naming no phase, so the engine oracle in the tests is blind to this
   // state — it is asserted by hand.)
-  const pendingRestart = state.answeredEscalations.some(
-    (e) => e.resolution === 'revise-spec' && e.answeredSeq > state.restartSince,
-  )
+  // A reopen whose spec is not published yet is the same window (§15.7).
+  const pendingRestart =
+    state.answeredEscalations.some(
+      (e) => e.resolution === 'revise-spec' && e.answeredSeq > state.restartSince,
+    ) ||
+    (state.kind !== 'node' && reopenSpecPending(state))
   const restartSince = pendingRestart ? state.lastSeq : state.restartSince
-  const cycleSince = Math.max(state.verify.cycleSince, restartSince)
+  // A feedback-only reopen restarts the code half alone (log-index
+  // `codeRestartSeq`): implement, code review, verify and finalize re-run
+  // while the plan stays approved.
+  const codeSince = Math.max(restartSince, state.reopen?.seq ?? 0)
+  const cycleSince = Math.max(state.verify.cycleSince, codeSince)
   // Post-steps re-run after a restart too (engine.ts:710-712). Their reducer
   // projection is full-log history, so the same effective boundary handles
   // both a landed revision and the pending human-paced restart window.
-  const finalizeSteps = state.finalizeSteps.filter((completion) => completion.seq > restartSince)
+  const finalizeSteps = state.finalizeSteps.filter((completion) => completion.seq > codeSince)
 
   /**
    * The current phase, scoped to the current spec.
@@ -898,14 +907,15 @@ export function projectBuildFromFacts(
   const loopDone = (
     approval: { seq: number; round: number } | undefined,
     producerRound: number,
-  ): boolean =>
-    approval !== undefined && approval.seq > restartSince && approval.round === producerRound
+    since: number,
+  ): boolean => approval !== undefined && approval.seq > since && approval.round === producerRound
 
-  const planDone = loopDone(state.plan.approval, state.plan.round)
+  const planDone = loopDone(state.plan.approval, state.plan.round, restartSince)
   // `&& !cycleFailed`: a verify failure reopens the CODE loop (§15.6-A) the
   // MOMENT it lands — long before `implement.started` moves `implement.round`,
   // and under default policy that start may never come (see below).
-  const codeDone = loopDone(state.codeReviewApproval, state.implement.round) && !cycleFailed
+  const codeDone =
+    loopDone(state.codeReviewApproval, state.implement.round, codeSince) && !cycleFailed
 
   // A loop row is provisional only when ITS terminal output belongs to the
   // reducer's currently tracked round and landed after the effective restart
@@ -925,17 +935,17 @@ export function projectBuildFromFacts(
   const implementProduced = producedAfter(
     dashboard.produced.implementCompleted,
     state.implement.round,
-    restartSince,
+    codeSince,
   )
   const codeReviewProduced = producedAfter(
     dashboard.produced.codeReviewVerdict,
     state.implement.round,
-    restartSince,
+    codeSince,
   )
 
   // Finalize ran for the CURRENT spec — NOT `prState !== undefined`, which a
   // spec restart never resets while the engine re-runs finalize from scratch.
-  const finalizeDone = state.finalizeCompletedSeq > restartSince
+  const finalizeDone = state.finalizeCompletedSeq > codeSince
   const postStepsDrained = pipeline.finalize.steps.every((s) =>
     finalizeSteps.some((f) => f.step === s),
   )
@@ -960,14 +970,21 @@ export function projectBuildFromFacts(
     step('implement', codeDone, at('implement'), {
       producedOutput: implementProduced,
       count: codeCount,
-      timing: timingFor(intervals, 'implement', restartSince, frozenNow),
+      timing: timingFor(intervals, 'implement', codeSince, frozenNow),
     }),
     step('code-review', codeDone, at('code-review'), {
       producedOutput: codeReviewProduced,
       count: codeCount,
-      timing: timingFor(intervals, 'code-review', restartSince, frozenNow),
+      timing: timingFor(intervals, 'code-review', codeSince, frozenNow),
     }),
   ]
+
+  // A reopened leaf names who sent it back on the step it re-entered.
+  const reopened = reopenedSummary(state)
+  if (reopened !== undefined) {
+    const index = steps.findIndex((entry) => entry.label === reopened.route)
+    if (index >= 0) steps[index] = { ...steps[index]!, reason: reopenedText(reopened) }
+  }
 
   for (const s of pipeline.verify.steps) {
     const phase = verifyPhase(s)
@@ -1019,7 +1036,7 @@ export function projectBuildFromFacts(
 
   steps.push(
     step('finalize', finalizeDone, at('finalize'), {
-      timing: timingFor(intervals, 'finalize', restartSince, frozenNow),
+      timing: timingFor(intervals, 'finalize', codeSince, frozenNow),
     }),
   )
   for (const s of pipeline.finalize.steps) {

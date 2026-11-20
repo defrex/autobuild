@@ -143,6 +143,10 @@ export interface LogIndex {
   }
   /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3). */
   restartSeq: number
+  /** The code half's boundary: the later of `restartSeq` and the latest
+   * `build.reopened` (§15.7). A reopen restarts the code loop, verify,
+   * reconcile and finalize records while the plan stays approved. */
+  codeRestartSeq: number
   plan: LoopIndex
   code: LoopIndex
   /** Post-restart `verify.completed` facts with seq, for the same sequence-based
@@ -247,6 +251,8 @@ export interface LogIndexAcc {
   restack: LeafRestackState
   /** Full-log running state. */
   restartSeq: number
+  /** seq of the latest `build.reopened`, else 0. */
+  reopenSeq: number
   maxRoundEver: { plan: number; code: number }
   maxVerifyAttemptEver: number
   pendingGuidanceStarts: Record<string, { escalation: string; seq: number }>
@@ -273,6 +279,7 @@ function initialLogIndexAcc(): LogIndexAcc {
     readDeferrals: initialReadDeferrals(),
     restack: { gates: {} },
     restartSeq: 0,
+    reopenSeq: 0,
     maxRoundEver: { plan: 0, code: 0 },
     maxVerifyAttemptEver: 0,
     pendingGuidanceStarts: {},
@@ -319,6 +326,9 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
     switch (event.type) {
       case 'spec.revised':
         acc.restartSeq = event.seq
+        break
+      case 'build.reopened':
+        acc.reopenSeq = Math.max(acc.reopenSeq, event.seq)
         break
       case 'plan.started':
         noteGuidanceStart(`plan@${event.payload.round}`, event.payload.feedback, event.seq)
@@ -543,8 +553,25 @@ function verdictCandidate(
   }
 }
 
+/** Whether a candidate belongs to the code half of the pipeline, which a
+ * reopen restarts. Plan-loop records keep the spec restart boundary alone. */
+function codeCandidate(candidate: LogIndexCandidate): boolean {
+  switch (candidate.kind) {
+    case 'round-start':
+    case 'round-touch':
+    case 'round-completed':
+    case 'verdict':
+      return candidate.loop === 'code'
+    case 'plan-completed':
+      return false
+    default:
+      return true
+  }
+}
+
 function finishLogIndex(acc: LogIndexAcc): LogIndex {
   const { restartSeq } = acc
+  const codeRestartSeq = Math.max(restartSeq, acc.reopenSeq)
   const plan = emptyLoop()
   const code = emptyLoop()
   plan.maxRoundEver = acc.maxRoundEver.plan
@@ -572,9 +599,11 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   }
 
   // Replay only what is post-restart under the FINAL boundary, in array order.
+  // The code half also drops what a later reopen restarted.
   for (const candidate of acc.candidates) {
     const seq = candidate.kind === 'verify-completed' ? candidate.record.seq : candidate.seq
     if (seq <= restartSeq) continue
+    if (seq <= codeRestartSeq && codeCandidate(candidate)) continue
     switch (candidate.kind) {
       case 'round-start':
         roundRecord(loops[candidate.loop], candidate.round).startedSeq = candidate.seq
@@ -721,6 +750,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     readDeferrals: structuredClone(acc.readDeferrals.pending),
     restack: structuredClone(acc.restack),
     restartSeq,
+    codeRestartSeq,
     plan,
     code,
     verifyCompleted,
