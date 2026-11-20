@@ -141,6 +141,23 @@ function models(): WebFixtureModels {
       active: { current: 5, limit: 5 },
       capacity: { configured: 4, occupied: 5, effective: 5, borrowingNodes: ['queue-conflict'] },
     },
+    backpressure: {
+      ...happy,
+      active: { current: 2, limit: 4 },
+      capacity: {
+        configured: 4,
+        occupied: 2,
+        effective: 4,
+        borrowingNodes: [],
+        backpressure: {
+          active: true,
+          openPrs: 2,
+          maxOpenPrs: 2,
+          resumeOpenPrs: 1,
+          excludeHeld: false,
+        },
+      },
+    },
     integration: {
       ...happy,
       builds: [
@@ -245,6 +262,20 @@ test('every web frame renders its required evidence and none of the forbidden', 
       }
     }
   }
+})
+
+test('the capacity notice shows active open-PR backpressure alone and hides it when inactive', async () => {
+  const fixture = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'backpressure-wide')!
+  const active = await renderWebFrame(spec, fixture, { css: '', fontCss: '' })
+  expect(active).toContain('capacity-notice')
+  expect(evidenceText(active)).toContain(
+    'open-PR backpressure: 2 open root PRs ≥ maxOpenPrs 2; normal claims paused until ≤ 1 (urgent still claimed)',
+  )
+  fixture.backpressure!.capacity!.backpressure!.active = false
+  const inactive = await renderWebFrame(spec, fixture, { css: '', fontCss: '' })
+  expect(inactive).not.toContain('capacity-notice')
+  expect(evidenceText(inactive)).not.toContain('open-PR backpressure')
 })
 
 test('selected Harvest frames keep the run action in the row register without a footer', async () => {

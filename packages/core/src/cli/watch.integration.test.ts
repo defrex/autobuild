@@ -3713,6 +3713,33 @@ test('kernel Git condition events render as repository attention lines', async (
   ).toBe('Kernel Git recovered (git)')
 })
 
+test('open-PR backpressure transitions render as repository lines', async () => {
+  const { summarizeEvent } = await import('./watch')
+  const base = { repo: 'repo', seq: 1, ts: '2026-11-20T00:00:00.000Z', actor: DISPATCHER }
+  expect(
+    summarizeEvent(
+      {
+        ...base,
+        type: 'dispatcher.open-pr-backpressure-engaged',
+        payload: { openPrs: 12, maxOpenPrs: 12, resumeOpenPrs: 9, excludeHeld: true },
+      },
+      null,
+    ),
+  ).toBe(
+    'Open-PR backpressure engaged: 12 open root PRs ≥ 12; normal claims paused until ≤ 9 (held PRs excluded)',
+  )
+  expect(
+    summarizeEvent(
+      {
+        ...base,
+        type: 'dispatcher.open-pr-backpressure-cleared',
+        payload: { openPrs: 9, reason: 'drained' },
+      },
+      null,
+    ),
+  ).toBe('Open-PR backpressure cleared (drained): 9 open root PRs')
+})
+
 describe('watch announced builds and resumed merge decisions (AUT-1221)', () => {
   const EXPECTED = { store: `${REPO}/.autobuild`, repo: REPO }
   const ticketOf = (attempt: string) => ({ source: 'file', id: `T-${attempt}` })
