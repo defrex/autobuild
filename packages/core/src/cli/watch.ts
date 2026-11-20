@@ -625,6 +625,10 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `Kernel Git unavailable (${event.payload.executable}): ${singleLine(event.payload.detail)}`
     case 'dispatcher.kernel-git-recovered':
       return `Kernel Git recovered (${event.payload.executable})`
+    case 'dispatcher.open-pr-backpressure-engaged':
+      return `Open-PR backpressure engaged: ${event.payload.openPrs} open root PRs ≥ ${event.payload.maxOpenPrs}; normal claims paused until ≤ ${event.payload.resumeOpenPrs}${event.payload.excludeHeld ? ' (held PRs excluded)' : ''}`
+    case 'dispatcher.open-pr-backpressure-cleared':
+      return `Open-PR backpressure cleared (${event.payload.reason}): ${event.payload.openPrs} open root PRs`
     case 'hook.failing':
       return singleLine(
         `hook ${event.payload.hook} failing since ${event.payload.since} (${event.payload.attempts} attempts): ${event.payload.error}`,
