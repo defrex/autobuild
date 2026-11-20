@@ -116,6 +116,7 @@ import { continuesVerifyCycle } from '../kernel/pr-summary'
 import { isPhaseTerminalEvent, PHASE_SPECS } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
+import { VERIFY_BASE_ENV } from '../kernel/verify-diff-base'
 import {
   verifyPhase,
   verifyReportKind,
@@ -661,56 +662,20 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
-/**
- * The durable tree against which a conditional verifier evaluates the
- * branch's current HEAD, or undefined until a `workspace.provisioned` exists.
- * The accumulator keeps the first provisioned base and the latest promoted
- * reconcile base separately, so the result is exact for any array order (a
- * promotion that precedes the provisioned fact in the array still wins).
- */
-export const verifyDiffBaseReducer = defineReducer<
-  { provisioned?: string; promoted?: string; pendingReconcileBase?: string },
-  AbEvent,
-  string | undefined
->({
-  identity: 'verifyDiffBase',
-  initial: () => ({}),
-  fold(acc, events) {
-    for (const event of events) {
-      if (event.type === 'workspace.provisioned') {
-        if (acc.provisioned === undefined) acc.provisioned = event.payload.base.sha
-      } else if (event.type === 'restack.completed') {
-        acc.promoted = event.payload.targetBase
-      } else if (event.type === 'restack.advanced') {
-        acc.promoted = event.payload.to
-      } else if (event.type === 'reconcile.superseded') {
-        // An abandoned occurrence's base never promotes.
-        delete acc.pendingReconcileBase
-      } else if (event.type === 'reconcile.started') {
-        acc.pendingReconcileBase = event.payload.baseSha
-      } else if (event.type === 'reconcile.completed') {
-        if (acc.pendingReconcileBase !== undefined) acc.promoted = acc.pendingReconcileBase
-        delete acc.pendingReconcileBase
-      }
-    }
-  },
-  finish: (acc) => (acc.provisioned === undefined ? undefined : (acc.promoted ?? acc.provisioned)),
-})
+export {
+  selectVerifyDiffBase,
+  VERIFY_BASE_ENV,
+  verifyDiffBaseReducer,
+} from '../kernel/verify-diff-base'
 
 /**
- * Select the durable tree against which a conditional verifier evaluates the
- * branch's current HEAD. The initial branch-cut SHA is authoritative until a
- * successful reconcile; each completed reconcile promotes the latest start's
- * refreshed base SHA. A dangling start is intentionally ignored.
+ * The commit verification compares against: a node's integration cycle
+ * parent, otherwise the leaf's verify diff base. Reads nothing beyond facts.
  */
-export function selectVerifyDiffBase(events: readonly AbEvent[]): string {
-  const base = verifyDiffBaseReducer.reduce(events)
-  if (base === undefined) {
-    throw new Error(
-      'conditional verify requires a workspace.provisioned base SHA, but this build has none',
-    )
-  }
-  return base
+function verifyDiffBaseFrom(
+  facts: Awaited<ReturnType<typeof readBuildFacts>>['value'],
+): string | undefined {
+  return facts.state.kind === 'node' ? facts.state.integration?.cycle?.parent : facts.verifyDiffBase
 }
 
 export { parseNulChangedPaths }
@@ -2581,11 +2546,9 @@ export class BuildRunner {
     Exclude<import('../kernel/engine').VerifyMemberDecision, { kind: 'evaluate-verify' }>
   > {
     const { exec, workspacePath } = this.deps
-    const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
-    const baseSha =
-      state.kind === 'node'
-        ? state.integration?.cycle?.parent
-        : await readBuildSelector(this.deps.store, this.deps.slug, 'verifyDiffBase')
+    const baseSha = verifyDiffBaseFrom(
+      (await readBuildFacts(this.deps.store, this.deps.slug)).value,
+    )
     if (baseSha === undefined)
       throw new Error(
         'conditional verify requires a workspace.provisioned base SHA, but this build has none',
@@ -3764,7 +3727,8 @@ export class BuildRunner {
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
-   * command directly; a failure deposits the output tail as the report. */
+   * command directly with `AB_VERIFY_BASE` set to the verify diff base, or
+   * unset when none exists; a failure deposits the output tail as the report. */
   private async runCheck(decision: RunCheckDecision): Promise<void> {
     await this.withKernelPhaseFailure(verifyPhase(decision.step), decision.attempt, () =>
       this.runCheckOperation(decision),
@@ -3774,7 +3738,8 @@ export class BuildRunner {
   private async runCheckOperation(decision: RunCheckDecision): Promise<void> {
     const { store, slug, exec, workspacePath } = this.deps
     const { step, command, attempt } = decision
-    const current = (await readBuildFacts(store, slug)).value.state
+    const facts = (await readBuildFacts(store, slug)).value
+    const current = facts.state
     const memberKey = verifyMemberKey(step, attempt)
     if (current.verifyStage.outcomes[memberKey] || current.verifyStage.cancellations[memberKey])
       return
@@ -3797,6 +3762,8 @@ export class BuildRunner {
 
     const result = await exec(['sh', '-c', command], {
       cwd: workspacePath,
+      // An undefined value clears any inherited base rather than leaking it.
+      env: { [VERIFY_BASE_ENV]: verifyDiffBaseFrom(facts) },
       ...(this.deps.shutdownSignal ? { signal: this.deps.shutdownSignal } : {}),
     })
     if (this.deps.shutdownSignal?.aborted) return
