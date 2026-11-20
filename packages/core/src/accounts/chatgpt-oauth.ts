@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
+import type { JWTVerifyGetKey } from 'jose'
 import { chatgptStateSchema, earliestRefreshAt, type ChatGPTState } from './chatgpt-state'
 
 const issuer = 'https://auth.openai.com'
@@ -69,15 +69,17 @@ export function callback(t: OAuthTransaction, url: URL): { code: string; clientI
     throw failure()
   return { code, clientId }
 }
-const jwks = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`), {
-  timeoutDuration: 15000,
-})
+let jwks: JWTVerifyGetKey | undefined
 export async function verifyIdentity(
   idToken: string,
   clientId: string,
   nonce?: string,
-  keys: JWTVerifyGetKey = jwks,
+  keys?: JWTVerifyGetKey,
 ): Promise<string> {
+  const { createRemoteJWKSet, jwtVerify } = await import('jose')
+  keys ??= jwks ??= createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`), {
+    timeoutDuration: 15000,
+  })
   const { payload } = await jwtVerify(idToken, keys, {
     issuer,
     audience: clientId,
