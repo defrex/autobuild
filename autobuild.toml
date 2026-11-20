@@ -74,6 +74,17 @@ app-load = "./scripts/verify-bun.sh bun run check:app-load"
 # provisioning step installs it, and a local run uses the host's own.
 test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' ./scripts/verify-bun.sh bun run test:integration"
 
+# Generated outputs a restack rebuilds with their command instead of starting
+# an agent reconcile. reducer-value-shapes.json interns shapes by index, so any
+# reducer change renumbers it and nearly every concurrent replay conflicts in it.
+[[generated]]
+paths = ["packages/core/src/store/reducer-value-shapes.json"]
+command = "bun tools/reducer-value-shapes.ts"
+
+[[generated]]
+paths = ["packages/website/src/docs-baseline/**"]
+command = "bun run docs:baseline"
+
 # The configured universe and stage order of verification. Members of a stage
 # run concurrently; every member must pass or skip before the next stage starts.
 # A plan may deselect optional steps in its opening `verifySteps` front matter;

@@ -728,7 +728,9 @@ wait early. Either way the build then takes a
 slot ahead of new ticket claims. If its target moved, it first restacks onto the
 target's current head, so the resumed phase sees the merged blockers;
 `ab build status` shows a `restack:` line with trigger `wait-resume`, and a
-conflicting restack shows as `reconcile` before the phase resumes. The phase
+conflicting restack shows as `reconcile` before the phase resumes (a conflict
+only in declared generated files is regenerated instead, and the `restack:`
+line names the commands as `regenerated:`). The phase
 that declared the wait then resumes, told what it waited on. A verify or
 finalize wait whose target moved first re-runs every verification step on the
 restacked base before finalize or merge. Until the

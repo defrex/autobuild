@@ -1399,6 +1399,9 @@ documentFields(configRootSchema, {
 documentSchema(configRootSchema.shape.upgrade.unwrap().shape.automatic, {
   description: 'Check and adopt changed runtime targets automatically.',
 })
+documentSchema(configRootSchema.shape.generated, {
+  constraints: 'A path selector string may be declared by only one entry.',
+})
 documentSchema(configRootSchema.shape.plugins, {
   constraints: 'Exact module specifiers must be unique.',
 })
