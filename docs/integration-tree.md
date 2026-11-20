@@ -180,7 +180,13 @@ own issue; landed child commits keep their own messages.
 
 Human forge merges are an explicit escape hatch, including while incomplete,
 paused or unverified. The janitor records human provenance and whether the actual
-merged head was verified, then completes the ticket. A human merge of an
+merged head was verified, then completes the ticket. A recorded landing, by the
+kernel or a human, ends the node's verification: no new cycle is prepared, and
+an open one is cancelled. Its runner stops the running check and ends open
+sessions as an operator stop does, without recording results, and the janitor
+completes the node once that execution has ended. A node whose head is its
+parent's, such as one the parent was fast-forwarded onto, has nothing to verify
+and never prepares a cycle. A human merge of an
 optimization attempt also skips its landing measurement; when the merged head
 was never measured, the attempt stays in flight and keeps its concurrency slot
 until an operator settles it with `ab objective <node> --settle-unmeasured`

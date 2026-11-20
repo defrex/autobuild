@@ -1987,7 +1987,13 @@ fast-forward shape against the frozen parent. Exact authoritative head readback
 or a durable confirmed receipt establishes publication; ancestry alone cannot
 acknowledge an unconfirmed candidate. Shared status vocabulary exposes provenance
 and mismatch attention in both frontends. Human forge merges remain observable
-escape hatches independent of completeness and verification.
+escape hatches independent of completeness and verification. A recorded
+`integration.landed` ends node verification: `integrationAdmissible` and
+`decideNext` stop preparation and runner work, the session bracket and stage
+loop cancel agent members through their existing subscriptions, and `checkPr`
+withdraws a live verifier lease so the runner's next heartbeat aborts a running
+check. Settlement waits for the open execution to end. Preparation also skips a
+node whose comparison is empty.
 
 ### Merge authorization
 
