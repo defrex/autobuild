@@ -34,7 +34,6 @@ import {
 import { dirname, join, relative, resolve } from 'node:path'
 import { distributionRoot } from '../distribution'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
-import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import {
   launchSetupAgent,
@@ -624,7 +623,9 @@ export async function abInit(opts: {
   const stdout = opts.stdout ?? (() => {})
   const force = opts.force ?? false
   const env = opts.env ?? process.env
-  const runtimes = opts.runtimes ?? createProductionRuntimes().runtimes
+  const runtimes =
+    opts.runtimes ??
+    (await import('../ports/runner/production')).createProductionRuntimes().runtimes
   const configPath = join(opts.targetRepo, 'autobuild.toml')
   const configExists = (await readIfExists(configPath)) !== undefined
   const probes = await probeInitRuntimes(runtimes, opts.targetRepo, env)
