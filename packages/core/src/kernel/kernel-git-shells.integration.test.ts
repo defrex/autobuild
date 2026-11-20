@@ -218,6 +218,8 @@ const GIT_SHELL_LITERALS = 5
 /** Shell sites whose script is a variable. They run agent, operator and
  * verify commands in build workspaces, never kernel dispatcher Git. */
 const DYNAMIC_SHELL_ALLOWLIST: Record<string, string> = {
+  'kernel/generated-regeneration.ts group.command':
+    'declared generated-file command in the build workspace',
   'ports/workspace/git-worktree.ts command': 'operator command in a local workspace',
   'ports/workspace/git-worktree.ts request.command': 'agent command in a local workspace',
   'ports/workspace/fake.ts this.sandboxSetupCommand': 'fake sandbox setup for tests',

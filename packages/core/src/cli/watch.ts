@@ -71,7 +71,7 @@ import { landingFallbackReason } from '../kernel/landing-state'
  * Output carries no ANSI, ever, in either form (§16).
  */
 import type { AbEvent } from '../events/catalog'
-import type { EventType } from '../events/payloads'
+import type { EventPayload, EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import {
   mergeDecisionFromFacts,
@@ -598,6 +598,9 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `verification failed: ${event.payload.steps.join(', ')}; head ${event.payload.head}; parent ${event.payload.parent}; ${event.payload.guidance}`
     case 'build.janitor-failing':
       return `Janitor failing: ${singleLine(event.payload.message)}`
+    case 'restack.regenerated':
+    case 'node.item-regenerated':
+      return singleLine(regenerationSummary(event.payload))
     case 'dispatcher.forge-degraded':
       return `Forge degraded: ${singleLine(event.payload.message)}; reset ${event.payload.resetAt}`
     case 'account.credentials-unavailable':
@@ -740,6 +743,18 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return summarizePayload(event.payload)
     default:
       return summarizePayload(event.payload)
+  }
+}
+
+function regenerationSummary(payload: EventPayload<'restack.regenerated'>): string {
+  const commands = payload.commands.map((c) => `\`${c.command}\``).join(', ')
+  switch (payload.outcome) {
+    case 'resolved':
+      return `replay resolved by regeneration (${commands}): ${payload.files.join(', ')}`
+    case 'failed':
+      return `regeneration failed: ${payload.reason ?? 'unknown'}; an agent reconciles`
+    case 'skipped':
+      return `regeneration skipped (undeclared conflicts): ${payload.reason ?? payload.files.join(', ')}`
   }
 }
 

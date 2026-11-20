@@ -131,6 +131,16 @@ export interface ContextManifest {
     conflicted?: boolean
     needsCompletion: boolean
   }
+  /** Reconcile: this replay's conflicted `[[generated]]` files with the
+   * command that rebuilds them, as the runner recorded them. Never hand-merge
+   * these. */
+  generated?: { command: string; files: string[] }[]
+  /** Reconcile: the kernel's failed attempt to regenerate this replay. */
+  regeneration?: {
+    outcome: 'failed'
+    reason: string
+    commands: { command: string; files: string[] }[]
+  }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
   /** Propose: the open request this session answers. The workspace is its
@@ -795,6 +805,26 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
           'with the freshly resolved base SHA — the runner must record the phase start before launching the session',
       )
     }
+  }
+
+  if (phase === 'reconcile') {
+    // The runner classified this replay's conflicts against its effective
+    // (deployment-owned) declarations and recorded the result. The checkout's
+    // autobuild.toml can differ, or be one of the conflicted files.
+    const node = state.nodeRestack
+    const active = events.log.restack.active
+    const fact = node?.conflict
+      ? node.regeneration
+      : active !== undefined && events.reconcileTransaction?.restackId === active.id
+        ? events.log.restack.regeneration
+        : undefined
+    if (fact !== undefined && fact.commands.length > 0) manifest.generated = fact.commands
+    if (fact?.outcome === 'failed' && fact.reason !== undefined)
+      manifest.regeneration = {
+        outcome: 'failed',
+        reason: fact.reason,
+        commands: fact.commands,
+      }
   }
 
   // The proposer's inputs (SPEC §13.1.1): the effective objective, progress

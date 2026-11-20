@@ -30,6 +30,7 @@ import {
   prSchema,
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
+  generatedEntrySchema,
   policySchema,
   roleSchema,
   ticketsInputSchema,
@@ -74,6 +75,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   workspace: Object.keys(workspaceSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
+  generated: Object.keys(generatedEntrySchema.shape),
   verify: [
     'steps',
     ...Object.keys(verifyCheckStepSchema.shape),

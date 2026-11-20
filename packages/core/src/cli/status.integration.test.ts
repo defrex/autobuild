@@ -2834,3 +2834,42 @@ test('node status shares hand-pushed identities in JSON and text and leaves stay
   state.kind = 'work'
   expect(summarizeFrom(record(), state, NOW)).not.toHaveProperty('handPushedCommits')
 })
+
+test('node status counts regenerated items and flags a failed regeneration', async () => {
+  const { reduceBuild } = await import('../kernel/reducer')
+  const { summarizeFrom } = await import('./status')
+  const state = reduceBuild([])
+  state.kind = 'node'
+  state.nodeRestack = {
+    items: [
+      { id: 'tx', index: 0, base: 'p', head: 'h0', dropped: false },
+      { id: 'tx', index: 1, base: 'h0', head: 'h1', dropped: false },
+    ],
+    regenerated: [1],
+    active: {
+      id: 'tx',
+      operation: 'restack',
+      expected: 'old',
+      parent: 'p',
+      oldBase: 'o',
+      archive: 'a',
+      changes: [{ sha: 's0' }, { sha: 's1' }, { sha: 's2', build: 'child' }],
+      upstreamBuilds: [],
+      merges: [],
+    },
+    conflict: { id: 'tx', index: 2, base: 'h1', files: ['src/a.ts'] },
+    regeneration: {
+      id: 'tx',
+      index: 2,
+      base: 'h1',
+      files: ['src/a.ts'],
+      commands: [],
+      outcome: 'failed',
+      reason: 'exit 1',
+    },
+  }
+  const d = { ...detail(record(), [], NOW), ...summarizeFrom(record(), state, NOW) }
+  const text = renderDetail(d, NOW).join('\n')
+  expect(text).toContain('  node restack: tx · 2/3 changes · parent p · 1 regenerated')
+  expect(text).toContain('  conflict item 3: s2 · child · regeneration failed')
+})

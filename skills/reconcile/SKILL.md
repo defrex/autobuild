@@ -49,10 +49,21 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    result is reconstructed on the prepared replay under its retained frozen
    target; do not search for the known nonexistent candidate. Preserved work
    remains the starting point for continuation.
+   `generated` lists the conflicted files the repository declares in
+   `[[generated]]`, each with the command that rebuilds it. `regeneration`
+   appears when the kernel already tried that command on this replay and
+   failed; its `reason` says why.
 2. Inspect `git status` and the prepared replay. If conflicts remain, resolve
    them with the explicit charge to regress against neither side:
    - Preserve the behavior the spec and approved plan require.
    - Preserve the behavior already merged on the target base.
+   Conflicted files listed in `generated` are rebuilt by their declared
+   command, never hand-merged. Resolve every other conflicted file first. Then
+   run each listed command from the workspace root and stage its output (only
+   paths the declaration covers). A replay whose conflicts are all generated
+   never reaches you unless regeneration failed: fix the cause the `reason`
+   names, usually a real error the command reports, rather than editing the
+   generated output.
    Stage only the resolved files and run `git cherry-pick --continue`. If the
    change is now redundant, preserve an empty commit with `git commit
    --allow-empty --no-edit`; never skip away the build's identity. A clean
