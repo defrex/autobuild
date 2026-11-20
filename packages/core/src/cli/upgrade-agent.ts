@@ -4,15 +4,11 @@
  * returned text is only a proposal; upgrade.ts owns all validation and writes.
  */
 import { join } from 'node:path'
-import { loadConfig } from '../config/load'
 import { UPGRADE_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
-import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
-import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { OneShotCompletion } from '../ports/runner/one-shot'
-import { createProductionRuntimes, type ProductionRuntimes } from '../ports/runner/production'
-import { createRuntimeResolver } from '../ports/runner/routing'
+import type { ProductionRuntimes } from '../ports/runner/production'
 import { UpgradeResolutionCancelledError, type ResolveConflict } from './upgrade'
 
 /** The one output that means the model considers the conflict ambiguous. */
@@ -104,9 +100,17 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
 
   const completion = (): Promise<ResolvedCompletion> => {
     resolved ??= (async () => {
-      const config = await (opts.load ?? loadConfig)(join(opts.targetRepo, 'autobuild.toml'))
-      const plugins = await (opts.pluginLoader ?? loadPlugins)(config.plugins, opts.targetRepo)
-      const production = (opts.runtimeFactory ?? createProductionRuntimes)()
+      // Provider runtimes and plugin composition load here, on the first
+      // conflict, so ordinary CLI startup never pulls them in.
+      const load = opts.load ?? (await import('../config/load')).loadConfig
+      const config = await load(join(opts.targetRepo, 'autobuild.toml'))
+      const pluginLoader = opts.pluginLoader ?? (await import('../plugins/load')).loadPlugins
+      const plugins = await pluginLoader(config.plugins, opts.targetRepo)
+      const runtimeFactory =
+        opts.runtimeFactory ?? (await import('../ports/runner/production')).createProductionRuntimes
+      const production = runtimeFactory()
+      const { materializePluginRuntimes } = await import('../plugins/runtimes')
+      const { createRuntimeResolver } = await import('../ports/runner/routing')
       const runtimes = await materializePluginRuntimes(production.runtimes, plugins, {
         repoRoot: opts.targetRepo,
         env: opts.env,

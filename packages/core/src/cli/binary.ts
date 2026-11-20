@@ -1,10 +1,8 @@
-import { selectDispatchMode } from './dispatch-mode'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { join } from 'node:path'
 import type { DashboardRendererResolver } from './dashboard/render'
 import { loadDotEnv } from './dotenv'
 import { parseDispatchArgs } from './dispatch-args'
-import { launchDispatcher } from './dispatch-launcher'
 import { DISPATCH_GENERATION_ENV, DISPATCH_CONDITIONAL_ENV } from './dispatch-launch-contract'
 export {
   usesGenericSessionlessSigintHandler,
@@ -30,6 +28,7 @@ export async function runBinary(
     try {
       const args = parseDispatchArgs(argv.slice(1), process.env)
       if (!args.viewer && !args.once && !args.repository) {
+        const { selectDispatchMode } = await import('./dispatch-mode')
         const mode = await selectDispatchMode({
           ...args,
           targetRepo: process.cwd(),
@@ -37,7 +36,10 @@ export async function runBinary(
           exec: spawnExec,
           stderr: console.error,
         })
-        if (!mode.viewer) return await launchDispatcher(argv)
+        if (!mode.viewer) {
+          const { launchDispatcher } = await import('./dispatch-launcher')
+          return await launchDispatcher(argv)
+        }
         const { runDirectBinary } = await import('./binary-direct')
         return runDirectBinary(
           [...argv, '--viewer', '--dispatched-by', mode.dispatchedBy!],
