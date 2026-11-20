@@ -13,4 +13,5 @@
  */
 export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   __ledger__: 'not a revision; append revisions below',
+  'buildReadFacts/shape/2kbhcftrqb': 'Carry the verify diff base as a bounded part',
 }
