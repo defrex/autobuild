@@ -8,8 +8,14 @@ import type { ReducerValueRequest, ReducerValue } from './reducer-values'
  * writes for any other `AB_SESSION`. It is unrelated to the operator-session
  * scope handles in `session-handle.ts` (hosted-only, AUT-339), which scope a
  * store to a single operator session's record.
+ *
+ * A build session whose build targets a node may also read that node's
+ * `buildReadFacts` value, its own repository's `repositoryReadFacts` value and
+ * that repository's record: what attempt resolution needs (RFC 0005 §6.1).
+ * Nothing else outside its own build is readable, and nothing is writable.
  */
 import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+import { readBuildFacts } from './reduced-reads'
 import { appendJudgePreference, judgeScopeRefusal, type JudgeScope } from './judge-authority'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
@@ -107,7 +113,10 @@ function actorSession(actor: unknown): string | null {
  * Restrict a local Store handle to the exact resource and session supplied by
  * a validated ambient agent identity. Resource checks apply to every method;
  * the session dimension applies only to agent-attributed event writes so the
- * CLI's trusted KERNEL plumbing remains usable.
+ * CLI's trusted KERNEL plumbing remains usable. A build scope whose build
+ * targets a node additionally reads the node's `buildReadFacts`, its own
+ * repository's `repositoryReadFacts` and that repository's record, resolved
+ * once from the build's own `build.created` facts on the first foreign read.
  */
 export function scopeLocalStoreToPhaseSession(
   store: BuildStore,
@@ -130,6 +139,36 @@ export function scopeLocalStoreToPhaseSession(
     if (scope.kind !== kind || scope.id !== id) {
       throw new PhaseSessionError(scope, operation, target(kind, id))
     }
+  }
+  const isOwn = (kind: 'build' | 'repo', id: string): boolean =>
+    scope.kind === kind && scope.id === id
+  /** The target node and repository a targeted (non-node) build may read,
+   * derived from its immutable `build.created` facts; memoized per handle,
+   * and resolved only on a read that would otherwise be refused. */
+  let grant: Promise<{ node: string; repo: string } | null> | undefined
+  const targetGrant = (): Promise<{ node: string; repo: string } | null> => {
+    if (scope.kind !== 'build') return Promise.resolve(null)
+    grant ??= readBuildFacts(store, scope.id).then(
+      ({ value }) => {
+        const created = value.created
+        const node = value.state.target?.build
+        if (created?.type !== 'build.created' || value.state.kind === 'node' || !node) return null
+        return { node, repo: created.payload.repo }
+      },
+      (error: unknown) => {
+        grant = undefined
+        throw error
+      },
+    )
+    return grant
+  }
+  const readsTarget = async (target: SnapshotScope, reducer: string): Promise<boolean> => {
+    if (scope.kind !== 'build') return false
+    if (target.kind === 'build' ? reducer !== 'buildReadFacts' : reducer !== 'repositoryReadFacts')
+      return false
+    const granted = await targetGrant()
+    if (granted === null) return false
+    return target.kind === 'build' ? target.slug === granted.node : target.repo === granted.repo
   }
   const admin = (operation: string): never => {
     throw new PhaseSessionError(scope, operation, { kind: 'admin' })
@@ -380,7 +419,9 @@ export function scopeLocalStoreToPhaseSession(
       return admin('ensureRepo')
     },
     async getRepo(repo: string): Promise<RepositoryRecord | null> {
-      own('getRepo', 'repo', repo)
+      if (!isOwn('repo', repo) && (await targetGrant())?.repo !== repo) {
+        own('getRepo', 'repo', repo)
+      }
       return store.getRepo(repo)
     },
     async appendRepo<T extends RepositoryEventType>(
@@ -426,8 +467,11 @@ export function scopeLocalStoreToPhaseSession(
       target: SnapshotScope,
       request: ReducerValueRequest,
     ): Promise<ReducerValue> {
-      if (target.kind === 'build') own('getReducerValue', 'build', target.slug)
-      else own('getReducerValue', 'repo', target.repo)
+      const kind = target.kind === 'build' ? 'build' : 'repo'
+      const id = target.kind === 'build' ? target.slug : target.repo
+      if (!isOwn(kind, id) && !(await readsTarget(target, request.reducer))) {
+        own('getReducerValue', kind, id)
+      }
       return store.getReducerValue(target, request)
     },
     async getReducerSnapshot(
