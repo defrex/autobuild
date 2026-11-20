@@ -3,8 +3,9 @@ import { DISPATCHER, KERNEL } from '../events/envelope'
 import { commandObjective } from '../kernel/generators/optimization-log'
 import type { TicketRef } from '../ontology'
 import { MemoryBuildStore } from '../store/memory'
+import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import { readBuildFacts } from '../store/reduced-reads'
-import { memoryStoreRequestCounter } from '../testing/reduced-read-budget'
+import { attemptContextReadBudget, memoryStoreRequestCounter } from '../testing/reduced-read-budget'
 import { readAttemptContext } from './attempt'
 
 const repo = '/attempt/repo'
@@ -146,5 +147,101 @@ describe('readAttemptContext', () => {
     await expect(
       readAttemptContext(store, { ...input, ticketSource: source('hosted') }),
     ).rejects.toThrow('cannot resolve optimization attempt identity for build c1')
+  })
+})
+
+describe('readAttemptContext through a session-scoped store (AUT-1279)', () => {
+  const scoped = (store: MemoryBuildStore, slug: string) =>
+    scopeLocalStoreToPhaseSession(store, {
+      kind: 'build',
+      id: slug,
+      session: 's_1',
+    })
+
+  test('an in-flight attempt resolves exactly as it does unscoped', async () => {
+    const store = await nodeStore({
+      proposed: [{ source: 'file', id: 'A-1' }],
+    })
+    const input = {
+      ...(await child(store, 'c1', { source: 'file', id: 'A-1' })),
+    }
+    const ticketSource = source('file')
+    const unscoped = await readAttemptContext(store, {
+      ...input,
+      ticketSource,
+    })
+    expect(unscoped).toBeDefined()
+    expect(await readAttemptContext(scoped(store, 'c1'), { ...input, ticketSource })).toEqual(
+      unscoped,
+    )
+  })
+
+  test('a migrated proposal still matches under scope', async () => {
+    const store = await nodeStore({
+      proposed: [{ source: 'file', id: 'A-1' }],
+    })
+    await migrate(store, { NODE: 'H-1', 'A-1': 'H-9' })
+    const input = await child(store, 'c1', { source: 'hosted', id: 'H-9' })
+    const attempt = await readAttemptContext(scoped(store, 'c1'), {
+      ...input,
+      ticketSource: source('hosted'),
+    })
+    expect(attempt?.attempt.proposal).toBe('p0')
+  })
+
+  test('a plain node child is not an attempt and does not fail', async () => {
+    const store = await nodeStore({ objective: false })
+    const input = await child(store, 'c1', { source: 'file', id: 'A-1' })
+    expect(
+      await readAttemptContext(scoped(store, 'c1'), {
+        ...input,
+        ticketSource: source('file'),
+      }),
+    ).toBeUndefined()
+  })
+
+  test('an untargeted build reads nothing and gains no node access', async () => {
+    const store = await nodeStore({
+      proposed: [{ source: 'file', id: 'A-1' }],
+    })
+    const input = await child(store, 'plain', { source: 'file', id: 'A-1' }, false)
+    const handle = scoped(store, 'plain')
+    const requests = memoryStoreRequestCounter(store)
+    try {
+      expect(
+        await readAttemptContext(handle, {
+          ...input,
+          ticketSource: source('file'),
+        }),
+      ).toBeUndefined()
+      expect(requests.vector()).toEqual({})
+    } finally {
+      requests.restore()
+    }
+    await expect(readBuildFacts(handle, node)).rejects.toBeInstanceOf(PhaseSessionError)
+  })
+
+  test('each invocation reads a fixed vector of served values at every log length', async () => {
+    const store = await nodeStore({
+      proposed: [{ source: 'file', id: 'A-1' }],
+    })
+    await migrate(store, { NODE: 'NODE', 'A-1': 'A-1' })
+    const input = await child(store, 'c1', { source: 'file', id: 'A-1' })
+    const calls = await attemptContextReadBudget({
+      store,
+      node,
+      repo,
+      sizes: [100, 10_000],
+      // A fresh scoped handle per invocation, as each `ab` process opens one.
+      run: async () => {
+        const attempt = await readAttemptContext(scoped(store, 'c1'), {
+          ...input,
+          ticketSource: source('file'),
+        })
+        expect(attempt?.attempt.proposal).toBe('p0')
+      },
+    })
+    // The grant (own facts), the node's facts, the repository record and its facts.
+    expect(calls).toEqual({ getReducerValue: 3, getRepo: 1 })
   })
 })
