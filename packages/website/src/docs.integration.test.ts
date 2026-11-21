@@ -140,6 +140,7 @@ test('published pages keep navigation on-site and link only declared repository 
         'packages/hosted-dispatcher/README.md#shipped-git',
       ],
     ],
+    ['docs/dispatcher.md', ['docs/configuration.md#policy']],
     ['docs/operating.md', ['docs/operator-api.md', 'docs/configuration.md#hooks']],
     [
       'docs/optimization-nodes.md',

@@ -2705,6 +2705,25 @@ creation holds, capacity, intake off and repository pause — so a blocked urgen
 ticket never holds back normal work. Priority never preempts: an urgent ticket
 does not stop, pause or displace a running build.
 
+**Open-PR backpressure.** When `[policy].maxOpenPrs` is set, the dispatcher
+counts open unmerged root PRs: nonterminal builds with an open or conflicted
+PR and no integration-node target, root leaves and root integration nodes
+alike. Children targeting a node do not count. A PR whose active landing
+command is `hold` counts unless `excludeHeldOpenPrs = true`. Backpressure
+engages when the count reaches `maxOpenPrs` and stays engaged until the count
+drops to or below `resumeOpenPrs` (default `maxOpenPrs - 1`). While engaged,
+the dispatcher claims no new `normal`-priority ticket; `urgent` claims,
+in-flight builds, parked-build admission, reconciles, verification and
+landings continue, and capacity accounting is unchanged. The count is derived
+from the reduced build facts each tick already holds. The dispatcher records
+`dispatcher.open-pr-backpressure-engaged` and
+`dispatcher.open-pr-backpressure-cleared` repository facts only on
+transitions (a cleared fact names `drained`, or `disabled` when the key is
+removed while engaged); the engaged fact is the hysteresis memory a fresh
+process reads. Repository status and both dashboards report the count,
+watermarks and whether normal intake is paused. Unset `maxOpenPrs` disables
+backpressure entirely.
+
 **What holds a slot.** `capacity` counts builds running work. A work build that
 has finished its pipeline (every verify step and every finalize post-step for
 the current spec) holds no slot while it waits for a merge decision, for merge
@@ -5701,6 +5720,9 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5            # observation-count pressure in dispatch
 harvestMaxDrift = 3             # merged builds since oldest observation; 0 disables
+# maxOpenPrs = 12               # open root PRs that pause normal claims; unset disables
+# resumeOpenPrs = 9             # resume at or below; default maxOpenPrs - 1
+# excludeHeldOpenPrs = false    # leave held PRs out of the count
 
 [tickets]
 source = "file"

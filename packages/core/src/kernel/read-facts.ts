@@ -609,6 +609,7 @@ import { dispatchSettingsReducer } from './dispatch-settings'
 import { harvestReducer } from './harvest'
 import { forgeCredentialLimitsReducer, forgeHealthReducer } from './forge-health'
 import { kernelGitHealthReducer } from './kernel-git'
+import { openPrBackpressureReducer } from './open-pr-backpressure-state'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 import { autoMergeDefaultReducer } from './auto-merge-default'
 import { effectiveConfigReducer } from './service-facts'
@@ -663,6 +664,7 @@ export interface RepositoryReadAcc {
   forgeHealth: ReturnType<typeof forgeHealthReducer.initial>
   forgeCredentialLimits: ReturnType<typeof forgeCredentialLimitsReducer.initial>
   kernelGit: ReturnType<typeof kernelGitHealthReducer.initial>
+  openPrBackpressure: ReturnType<typeof openPrBackpressureReducer.initial>
   ticketMigrations: ReturnType<typeof ticketMigrationsReducer.initial>
   health: ReturnType<typeof ticketSourceHealthReducer.initial>
   autoMerge: ReturnType<typeof autoMergeDefaultReducer.initial>
@@ -690,6 +692,7 @@ export const repositoryReadFactsReducer = defineReducer({
     forgeHealthReducer,
     forgeCredentialLimitsReducer,
     kernelGitHealthReducer,
+    openPrBackpressureReducer,
     repositoryAttentionReducer,
     dispatchSettingsReducer,
     harvestReducer,
@@ -724,6 +727,7 @@ export const repositoryReadFactsReducer = defineReducer({
     forgeHealth: forgeHealthReducer.initial(),
     forgeCredentialLimits: forgeCredentialLimitsReducer.initial(),
     kernelGit: kernelGitHealthReducer.initial(),
+    openPrBackpressure: openPrBackpressureReducer.initial(),
     ticketMigrations: ticketMigrationsReducer.initial(),
     health: ticketSourceHealthReducer.initial(),
     autoMerge: autoMergeDefaultReducer.initial(),
@@ -747,6 +751,7 @@ export const repositoryReadFactsReducer = defineReducer({
       events,
     )
     acc.kernelGit = kernelGitHealthReducer.advance(acc.kernelGit, events)
+    acc.openPrBackpressure = openPrBackpressureReducer.advance(acc.openPrBackpressure, events)
     acc.ticketMigrations = ticketMigrationsReducer.advance(acc.ticketMigrations, events)
     acc.health = ticketSourceHealthReducer.advance(acc.health, events)
     acc.autoMerge = autoMergeDefaultReducer.advance(acc.autoMerge, events)
@@ -883,6 +888,7 @@ export const repositoryReadFactsReducer = defineReducer({
     forgeHealth: forgeHealthReducer.finish(acc.forgeHealth),
     forgeCredentialLimits: forgeCredentialLimitsReducer.finish(acc.forgeCredentialLimits),
     kernelGit: kernelGitHealthReducer.finish(acc.kernelGit),
+    openPrBackpressure: openPrBackpressureReducer.finish(acc.openPrBackpressure),
     ticketMigrations: ticketMigrationsReducer.finish(acc.ticketMigrations),
     health: ticketSourceHealthReducer.finish(acc.health),
     autoMerge: autoMergeDefaultReducer.finish(acc.autoMerge),
