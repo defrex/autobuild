@@ -895,6 +895,140 @@ describe('Dispatcher urgent intake order', () => {
   }, 60_000)
 })
 
+describe('Dispatcher open-PR backpressure', () => {
+  const POLICY = (policy: string, capacity = 5) =>
+    `capacity = ${capacity}\n[tickets]\nsource = "file"\nreadyState = "Ready"\n[policy]\n${policy}\n`
+  const backpressureEvents = async (h: Harness) =>
+    (await h.store.getRepoEvents(REPO))
+      .filter((event) => event.type.startsWith('dispatcher.open-pr-backpressure-'))
+      .map((event) => ({ type: event.type, payload: event.payload }))
+  const ready = () => [
+    readyTicket('N1', { title: 'First normal work' }),
+    readyTicket('N2', { title: 'Second normal work' }),
+    readyTicket('U1', { title: 'Urgent work', priority: 'urgent' }),
+  ]
+  const close = (h: Harness, slug: string) =>
+    h.store.append(slug, { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+
+  test('at the high watermark only urgent work is claimed, recorded once', async () => {
+    const h = harness({ tickets: ready(), toml: POLICY('maxOpenPrs = 2') })
+    await seedAwaitingPr(h, 'open-a')
+    await seedAwaitingPr(h, 'open-b')
+    const report = await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual(['U1'])
+    expect(report.ticketDiagnostics).toContain(
+      'open-PR backpressure: 2 open root PRs ≥ maxOpenPrs 2; normal claims paused until ≤ 1 (urgent still claimed)',
+    )
+    expect(await backpressureEvents(h)).toEqual([
+      {
+        type: 'dispatcher.open-pr-backpressure-engaged',
+        payload: { openPrs: 2, maxOpenPrs: 2, resumeOpenPrs: 1, excludeHeld: false },
+      },
+    ])
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual(['U1'])
+    expect(await backpressureEvents(h)).toHaveLength(1)
+  })
+
+  test('paused intake holds until the count drains to the resume watermark', async () => {
+    const h = harness({
+      tickets: ready().slice(0, 2),
+      toml: POLICY('maxOpenPrs = 3\nresumeOpenPrs = 1'),
+    })
+    for (const slug of ['open-a', 'open-b', 'open-c']) await seedAwaitingPr(h, slug)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual([])
+    await close(h, 'open-a')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual([])
+    expect(await backpressureEvents(h)).toHaveLength(1)
+    await close(h, 'open-b')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual(['N1', 'N2'])
+    expect((await backpressureEvents(h)).at(-1)).toEqual({
+      type: 'dispatcher.open-pr-backpressure-cleared',
+      payload: { openPrs: 1, reason: 'drained' },
+    })
+  })
+
+  test('the resume watermark defaults to one below the high watermark', async () => {
+    const h = harness({ tickets: ready().slice(0, 1), toml: POLICY('maxOpenPrs = 2') })
+    await seedAwaitingPr(h, 'open-a')
+    await seedAwaitingPr(h, 'open-b')
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual([])
+    await close(h, 'open-a')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual(['N1'])
+  })
+
+  test('held PRs count by default and leave the count when excluded', async () => {
+    const counted = harness({ tickets: ready().slice(0, 1), toml: POLICY('maxOpenPrs = 2') })
+    await seedAwaitingPr(counted, 'open-a')
+    await seedAwaitingPr(counted, 'held-b')
+    await counted.store.append('held-b', {
+      actor: humanActor('op'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    await counted.dispatcher.tick()
+    expect(counted.tickets.claims).toEqual([])
+
+    const excluded = harness({
+      tickets: ready().slice(0, 1),
+      toml: POLICY('maxOpenPrs = 2\nexcludeHeldOpenPrs = true'),
+    })
+    await seedAwaitingPr(excluded, 'open-a')
+    await seedAwaitingPr(excluded, 'open-b')
+    await excluded.dispatcher.tick()
+    expect(excluded.tickets.claims).toEqual([])
+    // A hold placed after engagement leaves the count on the next tick.
+    await excluded.store.append('open-b', {
+      actor: humanActor('op'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    excluded.clock.advance(60_000)
+    await excluded.dispatcher.tick()
+    expect(excluded.tickets.claims).toEqual(['N1'])
+    expect((await backpressureEvents(excluded)).map((event) => event.type)).toEqual([
+      'dispatcher.open-pr-backpressure-engaged',
+      'dispatcher.open-pr-backpressure-cleared',
+    ])
+  })
+
+  test('without maxOpenPrs nothing is recorded; removing it while engaged clears', async () => {
+    let config = parseConfig(withReadyState(POLICY('maxOpenPrs = 1')))
+    const h = harness({ tickets: ready().slice(0, 1), getConfig: () => config })
+    await seedAwaitingPr(h, 'open-a')
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual([])
+    config = parseConfig(withReadyState(POLICY('resumeOpenPrs = 0')))
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.tickets.claims).toEqual(['N1'])
+    expect((await backpressureEvents(h)).at(-1)).toEqual({
+      type: 'dispatcher.open-pr-backpressure-cleared',
+      payload: { openPrs: 1, reason: 'disabled' },
+    })
+
+    const disabled = harness({ tickets: ready().slice(0, 1), toml: POLICY('', 5) })
+    await seedAwaitingPr(disabled, 'open-a')
+    await disabled.dispatcher.tick()
+    expect(disabled.tickets.claims).toEqual(['N1'])
+    expect(await backpressureEvents(disabled)).toEqual([])
+  })
+
+  test('a quiet intake tick reads no more under backpressure than without it', async () => {
+    const { openPrBackpressureReadBudget } = await import('../testing/reduced-read-budget')
+    await openPrBackpressureReadBudget()
+  }, 60_000)
+})
+
 // ── Dispatch (§12, §6.3) ─────────────────────────────────────────────────────
 
 describe('Dispatcher dispatch', () => {

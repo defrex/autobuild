@@ -4242,6 +4242,12 @@ class DispatchLoop {
             repositoryEvents.ticketMigrations,
             configSnapshot.config.tickets.source,
           ),
+          {
+            openPrs: {
+              policy: configSnapshot.config.policy,
+              engaged: repositoryEvents.openPrBackpressure !== undefined,
+            },
+          },
         ),
         ...(this.triageSampler?.value !== undefined ? { triage: this.triageSampler.value } : {}),
       },
