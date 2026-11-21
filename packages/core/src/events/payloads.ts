@@ -1915,6 +1915,37 @@ export const eventPayloadSchemas = {
   }),
   'pr.closed': empty,
   'pr.conflicted': z.strictObject({ baseSha: z.string().min(1) }),
+  /** Failing forge CI observed at a finished leaf's live PR head. */
+  'pr.checks-failed': z.strictObject({
+    pr: z.number().int().positive(),
+    /** The forge's live PR head the checks were read at. */
+    head: z.string().min(1),
+    /** The build's recorded `pr.headSha` when the checks were read. */
+    buildHead: z.string().min(1),
+    /** Display preview of the sorted failing set. */
+    checks: z
+      .array(
+        z.strictObject({
+          name: z.string().min(1).max(200),
+          source: z.enum(['check-run', 'status']),
+          conclusion: z.string().min(1),
+          url: z.string().min(1).optional(),
+        }),
+      )
+      .min(1)
+      .max(20),
+    /** Size of the complete failing set. */
+    total: z.number().int().positive(),
+    /** SHA-256 hex of the complete failing set; the dedupe identity. */
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+  /** The recorded forge CI failure no longer describes the PR. */
+  'pr.checks-cleared': z.strictObject({
+    pr: z.number().int().positive(),
+    /** The head the cleared failure was recorded at. */
+    head: z.string().min(1),
+    cause: z.enum(['passing', 'pending', 'head-changed']),
+  }),
   'reconcile.progress-checked': z.strictObject({
     /** seq of the repeat pr.conflicted fact this authoritative read answers. */
     conflictSeq: z.number().int().positive(),

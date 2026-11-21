@@ -94,10 +94,12 @@ import type {
   ClosePrResult,
   PrAttachmentHosting,
   Forge,
+  HeadChecks,
   IssueLink,
   PrRef,
   PrState,
 } from '../types'
+import { classifyHeadChecks } from '../../kernel/forge-checks'
 import { GitHubPrAttachmentHosting } from './github-pr-attachments'
 
 /** One subprocess seam for every forge command: argv array, optional cwd,
@@ -197,6 +199,42 @@ const restPrState = z
   .refine((view) => !view.merged || view.merge_commit_sha !== null, {
     message: 'GitHub reports PR merged with no merge_commit_sha',
   })
+
+/** `GET commits/{sha}/check-runs?filter=latest`. Enumerations stay strings:
+ * classification is a pure function and an unknown value is not a failure. */
+const restCheckRuns = z
+  .object({
+    total_count: z.number().int().nonnegative(),
+    check_runs: z.array(
+      z
+        .object({
+          name: z.string(),
+          status: z.string(),
+          conclusion: z.string().nullable(),
+          html_url: z.string().nullable().optional(),
+          details_url: z.string().nullable().optional(),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough()
+
+/** `GET commits/{sha}/status`. The combined `state` is `pending` with no
+ * statuses at all, so only the individual entries are classified. */
+const restCombinedStatus = z
+  .object({
+    total_count: z.number().int().nonnegative(),
+    statuses: z.array(
+      z
+        .object({
+          context: z.string(),
+          state: z.string(),
+          target_url: z.string().nullable().optional(),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough()
 
 const restNativeAutoMerge = z
   .object({
@@ -639,7 +677,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * single tick cannot absorb. */
 export const MERGEABILITY_RETRY_DELAYS_MS = [1000, 2000, 4000, 5000, 6000, 6000, 6000]
 
-/** Bounded validated HTTP representations; eviction falls back to fresh GETs. */
+/** Bounded validated HTTP representations; eviction falls back to fresh GETs.
+ * Each open finished leaf holds up to three entries (its PR, check runs and
+ * statuses at its head), so beyond about 170 such leaves per dispatcher
+ * evictions cost full 200 responses instead of 304s, still bounded per poll. */
 const REPRESENTATION_CACHE_CAP = 512
 
 /** A conditional GET's raw answer: the JSON body and its pagination link. */
@@ -1269,10 +1310,41 @@ export class GitHubForge implements Forge {
             state: 'open',
             mergeable: view.mergeable,
             ...(view.auto_merge !== undefined ? { nativeAutoMerge: view.auto_merge !== null } : {}),
+            ...(view.head ? { headSha: view.head.sha } : {}),
           }
       }
     }
     return state
+  }
+
+  /** Forge CI at one exact commit: two conditional GETs through the ETag
+   * representation cache, so an unchanged head costs two 304s. Errors
+   * propagate; the caller treats them as unknown CI. */
+  async inspectHeadChecks(_workspacePath: string, sha: string): Promise<HeadChecks> {
+    const { owner, name } = await this.requireCoordinates()
+    const commit = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${encodeURIComponent(sha)}`
+    const [runs, statuses] = await Promise.all([
+      this.revalidate(
+        restCheckRuns,
+        `${commit}/check-runs?filter=latest&per_page=100`,
+        `check runs at ${sha}`,
+      ),
+      this.revalidate(restCombinedStatus, `${commit}/status?per_page=100`, `statuses at ${sha}`),
+    ])
+    return classifyHeadChecks(
+      runs.check_runs.map((run) => ({
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion,
+        ...((run.html_url ?? run.details_url) ? { url: (run.html_url ?? run.details_url)! } : {}),
+      })),
+      statuses.statuses.map((status) => ({
+        context: status.context,
+        state: status.state,
+        ...(status.target_url ? { url: status.target_url } : {}),
+      })),
+      runs.total_count > runs.check_runs.length || statuses.total_count > statuses.statuses.length,
+    )
   }
 
   private prView(number: number, path: string) {
