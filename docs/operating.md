@@ -159,7 +159,7 @@ bun ab reopen my-build --revise-spec-from-ticket
 
 - **Feedback alone** returns the build to `implement` with the feedback in `reopen.json`; code review, verification and finalize run again and the plan stays approved.
 - **A spec revision** (`--revise-spec <file>`, or `--revise-spec-from-ticket` after amending the ticket, which re-pins its assets) restarts from `plan`, with any feedback alongside.
-- The open PR and branch are kept and updated in place. Consent is revoked (a hold stays), the dispatcher cancels an armed native auto-merge, and the build waits for a slot like other parked work.
+- The open PR and branch are kept and updated in place. Consent is revoked at once (a hold stays), and the build waits for a slot like other parked work. An armed native auto-merge is cancelled on a later dispatcher poll, not by `ab reopen` itself; a forge merge that lands first completes the build as merged.
 - Only a leaf waiting for its merge decision can be reopened. Use `answer` for a blocked build; a merged or closed PR needs a new ticket.
 
 ## Choose an operator surface

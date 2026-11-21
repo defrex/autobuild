@@ -331,8 +331,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   Feedback alone returns it to implement with the feedback in its context;
   `--revise-spec <file>` or `--revise-spec-from-ticket` (with or without
   feedback) restarts it from plan. The branch and open PR are kept, consent is
-  revoked (a hold stays), the dispatcher cancels an armed native auto-merge, and
-  the build waits for a slot like other parked work. It refuses nodes,
+  revoked at once (a hold stays), and the build waits for a slot like other
+  parked work. An armed native auto-merge is cancelled on a later dispatcher
+  poll, not by the command; a forge merge that lands first completes the build
+  as merged. It refuses nodes,
   optimization attempts, blocked or still-running builds (use `ab answer` for a
   blocked one), merged or closed PRs (file a new ticket), and pending abort or
   discard. Re-run `ab reopen` with the same arguments after an interrupted spec

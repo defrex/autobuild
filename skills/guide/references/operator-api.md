@@ -508,9 +508,10 @@ It uses the same service as `ab reopen` and needs feedback (1–20000 characters
 after trimming), a revision, or both. It applies only to a leaf that finished
 its pipeline and waits for its merge decision: feedback returns it to implement,
 and a revision is recorded as the next spec revision and restarts it from plan.
-The open PR and branch are kept, merge consent is revoked (a hold stays), and
-the dispatcher cancels an armed native auto-merge before the leaf waits for a
-slot. The receipt is `{kind: "reopened", slug, route, event?, specRev?,
+The open PR and branch are kept and merge consent is revoked at once (a hold
+stays). An armed native auto-merge is cancelled asynchronously on a later
+dispatcher poll, and the receipt does not confirm it; a forge merge that lands
+first completes the build as merged. The receipt is `{kind: "reopened", slug, route, event?, specRev?,
 completedEarlier?}`; `completedEarlier` means the call completed a spec reopen
 recorded earlier without using its own arguments. It refuses integration nodes
 and optimization attempts and terminal or queued builds with `not-reopenable`
