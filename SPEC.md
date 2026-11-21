@@ -646,8 +646,8 @@ two consecutive empty proposals, and when its room is positive. Room is the
 smaller of the free concurrency slots (`proposer.concurrency` minus attempts
 queued or running) and the remaining attempts budget, and is zero once the
 attempts or hours budget is spent. A paused, blocked or otherwise held node
-is deferred instead. The request takes a slot ahead of new ticket claims,
-like node reconcile and verification, and is re-checked against current state
+is deferred instead. The request takes a slot ahead of normal ticket claims,
+like node reconcile and verification (§12 "Slot admission order"), and is re-checked against current state
 before it is admitted. The session runs the `ab-propose` skill on the node
 head's tree and ends with `ab propose <file>`, `ab propose --none <reason>` or
 `ab escalate`; `ab done` and `ab verdict` are refused. The proposer only
@@ -2613,8 +2613,8 @@ nothing, reports a diagnostic and is retried on the next tick. Hosted clients
 read `ticketWait` from the digest wire answer; an older service that omits it
 yields no automatic release, and operators still end waits by answering.
 
-An ended wait requests a `resume` slot and is admitted before new ticket
-claims, as a parked finished build is; a `revise-spec` answer instead waits for
+An ended wait requests a `resume` slot and is admitted before normal ticket
+claims, as a parked finished build is (§12 "Slot admission order"); a `revise-spec` answer instead waits for
 the revision. The dispatcher observes the leaf's target when it launches the
 resume. Before the declaring phase resumes, and ahead of the plan and code
 loops, the engine decides a `restack` with trigger `wait-resume` and cycle
@@ -2705,6 +2705,40 @@ creation holds, capacity, intake off and repository pause — so a blocked urgen
 ticket never holds back normal work. Priority never preempts: an urgent ticket
 does not stop, pause or displace a running build.
 
+**Slot admission order.** Free slots are admitted in four tiers: urgent parked
+work (nodes and parked leaves waiting for verification, reconcile, resume or
+propose), then urgent ticket claims, then normal parked work, then normal
+ticket claims. Each tier keeps its own order: parked leaves in the tick's visit
+order, nodes in slug order, tickets in the source's listing order. A build's
+priority is frozen from its claimed ticket on `build.created` (`priority:
+urgent`; omitted for normal and in historical logs) and changed by the
+human-authored advisory `build.priority-set {priority: urgent | normal}`
+(`ab priority <slug> urgent|normal`, the operator `builds.control` action
+`priority`); a later ticket priority edit does not reach an existing build.
+Absent priority reads as normal. Admission is arithmetic over reduced facts: a
+waiter is admitted when the slots occupied by every other build plus the
+slots reserved ahead of it are below `capacity`. Nothing is reserved ahead of
+urgent parked work. Ahead of normal parked work are the urgent waiters' slot
+reservations and the urgent claim demand of the latest admission scan:
+`dispatcher.ticket-scan-completed` records `urgentWaiting`, the urgent non-node
+ready tickets that passed every intake gate except capacity (omitted when
+none; counted only while intake is on and the repository unpaused). An urgent
+claim waits only for urgent reservations; a normal claim waits for every
+waiter, as before. Because demand discovered by an earlier scan can be stale,
+the dispatcher also defers, within a tick, any normal parked admission into a
+free slot while ticket claims can run (the source supports priority, intake is
+on, the repository is unpaused, accounts are present and the forge is not
+cooling down). A deferral writes nothing and keeps the build's reservation
+against normal claims; it makes that tick's admission scan due, and the
+deferred admissions are retried after the tick's dispatch only when that scan
+completed its urgent decision (its claim loop ran to the end, or it proved no
+urgent ticket ready). Otherwise they are decided again on a later tick. A
+forced scan is bounded per deferral state: an unchanged set of deferred builds
+and occupancy lists again only when a scan is due on its own. Only gate-passing
+urgent tickets count, so an urgent ticket blocked on a dependency never holds
+back normal parked work. Free slots only: priority never interrupts a running
+build or session.
+
 **What holds a slot.** `capacity` counts builds running work. A work build that
 has finished its pipeline (every verify step and every finalize post-step for
 the current spec) holds no slot while it waits for a merge decision, for merge
@@ -2717,8 +2751,8 @@ not finished keeps its slot, even while paused, blocked on a question, waiting
 for the dispatcher to check a ticket wait, or interrupted between
 `finalize.completed` and its post-steps. When a finished build must restack,
 re-verify, reconcile or run a requested optimization measurement (§13.1.1), or
-a ticket wait ends, the build is admitted before new
-ticket claims, as a node is: intake reserves a slot for it (`resume` for an
+a ticket wait ends, the build is admitted before normal
+ticket claims, as a node is (urgent work first: "Slot admission order"): intake reserves a slot for it (`resume` for an
 ended wait), and its wait records nothing, consumes no attempt and raises no
 attention. Abort and pause acknowledgements are not gated. A finished or
 waiting build keeps its workspace, so retained workspaces can exceed
@@ -2976,8 +3010,9 @@ unaffected. `ab ticket create` and `update` take `--issues N[:refs],...`;
 operator and MCP ticket requests take `issueLinks`.
 
 **Ticket priority.** A ticket's priority is `urgent` or `normal`; absent means
-normal. Urgent ready work is claimed before normal ready work (§12) and nothing
-else changes. Sources declare support. The file source stores
+normal. Urgent ready work is claimed before normal ready work, and ahead of
+normal parked work (§12 "Slot admission order"); a claimed ticket's priority
+becomes its build's priority, and nothing else changes. Sources declare support. The file source stores
 `priority = "urgent"` in its frontmatter, writes no key for normal, and covers
 urgent priority in its revisions; the in-memory fake behaves the same way.
 The hosted source stores priority in the hosted ticket store, covers it in its
@@ -3150,12 +3185,13 @@ the branch is open to targeting tickets immediately, without a PR. Idle integrat
 builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 
 A node requesting reconcile, verification or, for an optimization node,
-propose is admitted before new ticket claims. The request is durable: a
+propose is admitted before normal ticket claims (urgent work first, §12 "Slot
+admission order"). The request is durable: a
 prepared verification cycle, a restack conflict or an open proposal request,
 with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
-claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
+normal claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
 paused descendants, following accepted source-qualified build target ancestry.
 Running descendants and unrelated builds still count; ordinary blocked and
 paused work retains its slot for every other admission, except a work build
@@ -3164,8 +3200,9 @@ node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
 Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of new ticket claims, and report a finished work build waiting to run
-again the same way. Idle collecting nodes remain free.
+ahead of normal ticket claims, marking urgent waiters and the urgent ticket
+claims waiting ahead of normal parked work, and report a finished work build
+waiting to run again the same way. Idle collecting nodes remain free.
 
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
@@ -3825,8 +3862,8 @@ runtime compatibility is not requested; the dispatcher instead records
 `optimization.proposal-deferred {reason}` (`paused`, `blocked`, `command`,
 `restack`, `integration`, `landing` or `compatibility`), and reconsiders the
 node only after a fact that can clear the blocker lands on its log. The
-request is the node's `propose` slot request, admitted ahead of new ticket
-claims (§13.1). Before admission the dispatcher re-checks it against current
+request is the node's `propose` slot request, admitted ahead of normal ticket
+claims (§13.1, §12 "Slot admission order"). Before admission the dispatcher re-checks it against current
 state: a request whose node has stopped, whose hours budget expired, whose
 room fell to zero or below the recorded room, or whose node has no free
 concurrency slot, and for which no session has started, records
@@ -4352,7 +4389,7 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.priority-set {priority}` (advisory slot-admission priority, §12); `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |

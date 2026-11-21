@@ -1,4 +1,5 @@
 import { terminalGuardReducer } from './terminal-guard'
+import { buildPriority } from './dispatch-capacity'
 import { leafTransaction, leafRestackLog } from './generators/leaf-restack-log'
 /**
  * Reducer seam tests (SPEC §15.5), fixture-driven off the walkthroughs in
@@ -2379,6 +2380,32 @@ test('cancellation fences the verifier terminal before and after session end', (
       ]),
     ).diagnostic,
   ).toContain('cancelled')
+})
+
+describe('build priority (SPEC §12 "Slot admission order")', () => {
+  const created = (priority?: 'urgent') =>
+    ev('build.created', {
+      ticket: { source: 'file', id: 'file-1' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      ...(priority !== undefined ? { priority } : {}),
+    })
+  const set = (priority: 'urgent' | 'normal') => ev('build.priority-set', { priority })
+
+  test('a historical build has no priority and reads as normal', () => {
+    const state = reduceBuild(toLog([created()]))
+    expect(state).not.toHaveProperty('priority')
+    expect(buildPriority(state)).toBe('normal')
+  })
+
+  test('the claimed ticket freezes urgent priority on build.created', () => {
+    expect(reduceBuild(toLog([created('urgent')])).priority).toBe('urgent')
+  })
+
+  test('the latest priority-set wins', () => {
+    expect(reduceBuild(toLog([created('urgent'), set('normal')])).priority).toBe('normal')
+    expect(reduceBuild(toLog([created(), set('normal'), set('urgent')])).priority).toBe('urgent')
+  })
 })
 
 describe('role profile (SPEC §9)', () => {

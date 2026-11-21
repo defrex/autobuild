@@ -3890,6 +3890,83 @@ export async function urgentIntakeReadBudget() {
   return baseline!.calls[0]!
 }
 
+/** Slot admission order (SPEC §12): urgent and normal parked builds waiting
+ * on a full repository cost each idle tick zero historical rows, no append and
+ * no ready listing inside the scan interval, at 100 and 100,000 events. Once
+ * `free` opens one slot for the normal build, its first deferral forces one
+ * listing; while its launch keeps being refused under the same deferral key,
+ * idle ticks force no further listing and still read no history. */
+export async function slotAdmissionReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  /** The normal parked build; filler events extend its log. */
+  slug: string
+  tick: () => Promise<unknown>
+  listed: () => number
+  launched: () => number
+  /** Advance the clock by a small fraction of the scan interval. */
+  advance: () => void
+  /** Advance the clock past the scan interval, so the next scan is due. */
+  advanceDue: () => void
+  free: () => Promise<void>
+}): Promise<void> {
+  const { store, slug } = opts
+  const events = buildEventRows(store, slug)
+  const appended = () => {
+    let total = 0
+    for (const build of (
+      Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
+    ).values())
+      total += build.events.length
+    for (const repo of (Reflect.get(store, 'repos') as Map<string, { events: unknown[] }>).values())
+      total += repo.events.length
+    return total
+  }
+  const idle = async (ticks: number) => {
+    const boundary = events.at(-1)!.seq
+    const metrics = { historicalRows: 0, tailRows: 0 }
+    const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
+    const before = { listed: opts.listed(), launched: opts.launched(), appended: appended() }
+    try {
+      for (let tick = 0; tick < ticks; tick++) {
+        opts.advance()
+        await opts.tick()
+      }
+    } finally {
+      restore()
+    }
+    expect(metrics.historicalRows).toBe(0)
+    expect(opts.listed() - before.listed).toBe(0)
+    expect(opts.launched() - before.launched).toBe(0)
+    expect(appended() - before.appended).toBe(0)
+  }
+  let filler = 0
+  for (const length of [100, 100_000]) {
+    while (events.length < length)
+      await store.append(slug, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    filler++
+    // Warm the saved reduced values past the filler, and past the warm
+    // tick's own acknowledgement, before measuring; the idle window that
+    // follows sits inside one scan interval.
+    opts.advanceDue()
+    await opts.tick()
+    opts.advance()
+    await opts.tick()
+    await idle(3)
+  }
+  expect(filler).toBe(2)
+  await opts.free()
+  opts.advance()
+  const listed = opts.listed()
+  await opts.tick()
+  // The first deferral forces one listing and admits the build after it.
+  expect(opts.listed() - listed).toBe(1)
+  await idle(3)
+}
+
 /** Native identity maintenance (SPEC §15.7) adds one forge identity read per
  * armed, eligible poll and nothing else: a fresh dispatcher's quiet
  * maintenance tick reads no history, spends exactly the store reads of the same

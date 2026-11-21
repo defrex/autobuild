@@ -429,7 +429,7 @@ test('a node waiting for a slot alone opens the capacity notice', () => {
   })
   expect(html).toContain('class="messages"')
   expect(html).toContain('capacity-notice')
-  expect(html).toContain('1 node waiting for a slot ahead of new ticket claims: release-node')
+  expect(html).toContain('1 node waiting for a slot ahead of normal ticket claims: release-node')
 })
 
 test('no borrowed or waiting nodes renders no capacity notice; a legacy projection still borrows', () => {
@@ -455,7 +455,7 @@ test('a parked build waiting for a slot opens the capacity notice and alerts on 
           ...pinnedBuild({}),
           alert: {
             tone: 'yellow',
-            text: 'verification waiting for a slot ahead of new ticket claims',
+            text: 'verification waiting for a slot ahead of normal ticket claims',
           },
         }),
         capacity: {
@@ -475,7 +475,7 @@ test('a parked build waiting for a slot opens the capacity notice and alerts on 
     />,
   )
   expect(html).toContain('capacity-notice')
-  expect(html).toContain('1 parked build waiting for a slot ahead of new ticket claims: demo')
+  expect(html).toContain('1 parked build waiting for a slot ahead of normal ticket claims: demo')
   expect(html).toContain('class="sub integration-alert warn" role="status"')
-  expect(html).toContain('verification waiting for a slot ahead of new ticket claims</p>')
+  expect(html).toContain('verification waiting for a slot ahead of normal ticket claims</p>')
 })

@@ -134,6 +134,12 @@ bun ab resume my-build
 
 Intake off only stops new ticket claims; a repository pause also holds queued builds. Neither withdraws merge consent; use `hold`.
 
+```
+bun ab priority my-build urgent
+```
+
+- **`priority`** sets an active build's slot-admission priority to `urgent` or `normal` without touching its ticket. An urgent build waiting to re-verify, reconcile or resume takes the next free slot ahead of normal work; see [slot admission order](dispatcher.md#slot-admission-order). It never interrupts running work.
+
 ## Authorize merge
 
 Ordered merge rules choose automatic authorization or explicit consent. With no matching rule, leaves default to auto and integration nodes to consent. Verification, checks, protection and merge gates still apply.
