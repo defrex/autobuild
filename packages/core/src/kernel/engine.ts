@@ -5,7 +5,7 @@ import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 import { proposeRunDue, proposeStarted } from './optimization'
-import { reopenSpecPending } from './reopen'
+import { reopenSpecPending } from './reopen-state'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
  * phase per the transition table, invoke the AgentRunner with `/{skill}

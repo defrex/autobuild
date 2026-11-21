@@ -1,8 +1,8 @@
 /**
- * Reopening a settled, unmerged leaf (SPEC §15.7): the pure predicates the
- * control, engine, capacity, landing readiness, `ab context` and status
- * surfaces share. Every input is already-reduced `BuildState`; nothing here
- * reads the store.
+ * Reopening a settled, unmerged leaf (SPEC §15.7): the refusal guards the
+ * control applies, plus a re-export of the shared predicates in
+ * `reopen-state.ts`. Every input is already-reduced `BuildState`; nothing
+ * here reads the store.
  *
  * A feedback-only reopen opens a new code loop: its seq is the log index's
  * `codeRestartSeq`, so implement, code review, verify and finalize run again
@@ -13,53 +13,20 @@
 import { discardInFlight, type BuildState } from './reducer'
 import { epilogueLeaf, epilogueUnsettled } from './dispatch-capacity'
 import { pendingMeasurementRequest } from './measurement'
+import { reopenUnsettled } from './reopen-state'
+
+export {
+  reopenCurrent,
+  reopenRestart,
+  reopenRoute,
+  reopenSpecPending,
+  reopenUnsettled,
+} from './reopen-state'
 
 export interface ReopenRefusal {
   /** A `BuildControlErrorCode`. */
   code: 'inactive' | 'abort-pending' | 'discard-pending' | 'not-reopenable'
   message: string
-}
-
-/** A recorded reopen whose spec the kernel has not published yet. */
-export function reopenSpecPending(state: Pick<BuildState, 'reopen'>): boolean {
-  return state.reopen?.spec !== undefined && state.reopen.specPublishedSeq === undefined
-}
-
-/** The restart the latest reopen opened by publishing its spec is the
- * current restart: no later spec revision superseded it. */
-export function reopenRestart(state: Pick<BuildState, 'reopen' | 'restartSince'>): boolean {
-  return (
-    state.reopen?.specPublishedSeq !== undefined &&
-    state.reopen.specPublishedSeq === state.restartSince
-  )
-}
-
-/** Whether the latest reopen still governs the current spec: a feedback-only
- * reopen after the latest spec revision, or the reopen whose spec is the
- * current revision. A later escalation spec revision supersedes it. */
-export function reopenCurrent(state: Pick<BuildState, 'reopen' | 'restartSince'>): boolean {
-  const reopen = state.reopen
-  if (reopen === undefined) return false
-  return reopen.spec !== undefined ? reopenRestart(state) : reopen.seq > state.restartSince
-}
-
-/** A nonterminal leaf reopened since it last settled: it is re-running its
- * pipeline and is not awaiting merge. */
-export function reopenUnsettled(
-  state: Pick<BuildState, 'kind' | 'status' | 'reopen' | 'pipelineSettled'>,
-): boolean {
-  return (
-    state.kind !== 'node' &&
-    state.status !== 'done' &&
-    state.status !== 'aborted' &&
-    state.reopen !== undefined &&
-    state.reopen.seq > (state.pipelineSettled ?? 0)
-  )
-}
-
-/** Where a reopen sends the leaf. */
-export function reopenRoute(reopen: NonNullable<BuildState['reopen']>): 'implement' | 'plan' {
-  return reopen.spec !== undefined ? 'plan' : 'implement'
 }
 
 const NEW_TICKET = 'a fixup for a merged or closed pull request is a new ticket (SPEC §15.7)'

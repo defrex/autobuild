@@ -1,5 +1,5 @@
 import type { BuildState } from '../../kernel/reducer'
-import { reopenRoute, reopenUnsettled } from '../../kernel/reopen'
+import { reopenRoute, reopenUnsettled } from '../../kernel/reopen-state'
 
 /** A reopened leaf re-running its pipeline (SPEC §15.7): the shared status
  * vocabulary for `ab build status`, `ab builds` and both dashboards. */

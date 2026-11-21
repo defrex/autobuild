@@ -4,7 +4,7 @@ import type { LeafRestackState } from './leaf-restack-state'
 import type { LandingCandidate } from './landing-policy'
 import { sameLandingCandidate } from './landing-state'
 import { escalationsBeyondJanitor } from './janitor-failure'
-import { reopenUnsettled } from './reopen'
+import { reopenUnsettled } from './reopen-state'
 import { compatibilityDiagnostic, mixedVersionDeferred } from './mixed-version'
 import {
   integrationCurrent,

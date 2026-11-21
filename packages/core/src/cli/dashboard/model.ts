@@ -20,7 +20,7 @@ import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/disp
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 import { holdReason } from './landing-display'
 import { reopenedSummary, reopenedText } from './reopen-display'
-import { reopenSpecPending } from '../../kernel/reopen'
+import { reopenSpecPending } from '../../kernel/reopen-state'
 export { treeVocabulary, consentQueue } from './tree'
 import {
   currentLandingFallback,

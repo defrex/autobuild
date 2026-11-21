@@ -5,7 +5,7 @@ import { integrationAdmissible, integrationNeedsRunner } from './integration-sta
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
-import { reopenRestart, reopenSpecPending, reopenUnsettled } from './reopen'
+import { reopenRestart, reopenSpecPending, reopenUnsettled } from './reopen-state'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
