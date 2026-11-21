@@ -299,7 +299,8 @@ The default watch reports actionable conditions only:
   edits, naming the matched files and both heads),
   `pr.checks-failed` (failing forge CI at a finished leaf's live PR head, once
   per head and failing set; build summaries, details and merge-queue entries
-  carry it as `ciFailure` until it clears),
+  carry it as `ciFailure` until a CI read finds no failing checks on that
+  head, pending ones included, or the PR moves to another head),
   `optimization.noise-exceeded` (an optimization node's ε is below its
   measured noise, naming both), or conflicted
   `restack.replayed` events. `build.consent-ready` is the single

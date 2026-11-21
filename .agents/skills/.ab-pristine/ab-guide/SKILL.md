@@ -3033,7 +3033,9 @@ The default watch reports actionable conditions only:
   live PR head. It names the failing checks (a preview of up to 20, and the
   total), the live head and the build's head, and fires once per head and
   failing set. `ab build status`, `ab builds`, `ab merges` and both dashboards
-  show it as `ciFailure` until checks pass or the PR moves to another head.
+  show it as `ciFailure` until a successful CI read finds no failing checks on
+  that head, even while some are still pending, or the PR moves to another
+  head; clearing does not prove green.
   Unreadable CI is unknown, never red or green. Autobuild reports it and never
   re-runs CI or re-enters implement.
 - Build `optimization.noise-exceeded`: an optimization node's starting

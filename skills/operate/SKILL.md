@@ -521,8 +521,10 @@ Treat every default-watch record as a call to act:
   naming the failing checks and the head. Inspect the PR, then re-run CI on
   the forge if the failure looks flaky or external, or send the build back with
   feedback if its own change broke. Autobuild never re-runs CI or returns the
-  build to implement on its own. The failure clears when checks pass or the PR
-  moves to another head. CI the forge cannot report (missing permission, rate
+  build to implement on its own. The failure clears when a successful CI read
+  finds no failing checks on that head, even while some are still pending, or
+  the PR moves to another head; clearing does not prove green. CI the forge
+  cannot report (missing permission, rate
   limit, outage) is unknown and is never reported as red or green.
 - `optimization.noise-exceeded`: an optimization node's ε is below the noise
   its starting measurement found, so its gate could accept noise. Tell the
