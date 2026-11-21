@@ -1238,6 +1238,9 @@ export class Dispatcher {
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+  /** While the start pass's targeted dispatch runs: its deferral checks
+   * serve this tick's retained facts (`servedBuildFacts`). */
+  private startPass = false
   /** Per tick: the janitor's work listing, and the nonterminal children of
    * each node indexed from it on the first landing turn that needs them. The
    * landing gate reads its turn candidates here, never from a new listing. */
@@ -1492,14 +1495,21 @@ export class Dispatcher {
     const { repo } = this.deps
     const records = (await store.listBuilds()).filter((record) => record.repo === repo)
     const digests = await readBuildDigests(store, repo)
+    // Including deferred builds needs no deferral check: the tick's stages
+    // that exclude them already checked and recorded it. The check reads
+    // through the view, so a retaining tick keeps the read for capacity, and
+    // the start pass serves it instead of reading the deferred builds again.
     const blocked = new Set<string>()
-    for (const record of records) {
-      if (
-        (digests.get(record.slug)?.compatibility?.decisiveFacts ?? 0) > 0 &&
-        (await deferMixedVersion(store, record.slug))
-      )
-        blocked.add(record.slug)
-    }
+    const readFacts = (slug: string) =>
+      this.startPass ? store.servedBuildFacts(slug) : store.buildFacts(slug)
+    if (!includeDeferred)
+      for (const record of records) {
+        if (
+          (digests.get(record.slug)?.compatibility?.decisiveFacts ?? 0) > 0 &&
+          (await deferMixedVersion(store, record.slug, undefined, readFacts))
+        )
+          blocked.add(record.slug)
+      }
     return records
       .filter((record) => includeDeferred || !blocked.has(record.slug))
       .map((record) => {
@@ -1812,9 +1822,11 @@ export class Dispatcher {
       measured,
     }
     const scratch = emptyTickReport()
+    this.startPass = true
     try {
       await this.dispatch(scratch, launched, autoMergeUser, paused, opts, undefined, targeted)
     } finally {
+      this.startPass = false
       for (const counter of [
         'dispatched',
         'authored',

@@ -6801,6 +6801,7 @@ export async function ticketStartReadBudget(): Promise<{
     )
     const gets: string[] = []
     const claims: string[] = []
+    const launches: string[] = []
     // A hosted-named source whose `get` also resolves legacy `ticket-<n>` aliases.
     const tickets = new Proxy(fake, {
       get(target, key) {
@@ -6839,9 +6840,31 @@ export async function ticketStartReadBudget(): Promise<{
         },
       })
     }
+    // Unrelated builds this runtime defers for a newer writer's decisive
+    // fact, one per five active builds: they hold slots and their deferral
+    // check reads them on every tick, so capacity must serve that read.
+    const { newerFact, seedNewerMemoryFact } = await import('./newer-writer')
+    const deferred = Math.ceil(builds / 5)
+    for (let i = 1; i <= deferred; i++) {
+      const slug = `deferred-${i}`
+      const ref = { source: 'fake', id: `DEFERRED-${i}` }
+      await store.createBuild({
+        slug,
+        repo,
+        ticket: ref,
+        branch: `ab/${slug}`,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { ticket: ref, repo, baseBranch: 'main' },
+        },
+      })
+      const seq = (await store.getEvents(slug)).length + 1
+      seedNewerMemoryFact(store, newerFact(seq, 'decisive', slug))
+    }
     // The default scan cadence: each tick advances the clock past it.
     const config = parseConfig(
-      `capacity = ${capacity}\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
+      `capacity = ${capacity + deferred}\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
     )
     const dispatcher = () => {
       const forge = new FakeForge()
@@ -6858,7 +6881,10 @@ export async function ticketStartReadBudget(): Promise<{
         config,
         repo,
         exec: async () => ({ stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }),
-        launchRunner: async () => 'scheduled',
+        launchRunner: async (slug: string) => {
+          launches.push(slug)
+          return 'scheduled' as const
+        },
         ids: sequentialIds(),
         clock,
       })
@@ -6870,6 +6896,14 @@ export async function ticketStartReadBudget(): Promise<{
     return {
       store,
       repo,
+      /** Each deferred build recorded its deferral once and never ran. */
+      deferredHeld: async () => {
+        for (let i = 1; i <= deferred; i++) {
+          const events = await store.getEvents(`deferred-${i}`)
+          expect(events.filter((e) => e.type === 'build.compatibility-deferred')).toHaveLength(1)
+        }
+        expect(launches.filter((slug) => slug.startsWith('deferred-'))).toEqual([])
+      },
       gets,
       claims,
       tickets,
@@ -7004,6 +7038,7 @@ export async function ticketStartReadBudget(): Promise<{
       const run = { gets: extra.length, calls, rows, repoRows }
       results.set(key, [...(results.get(key) ?? []), run])
     }
+    await pending.deferredHeld()
     // Cancelling ends the request; the tick after it settles nothing.
     await pending.store.appendRepo(pending.repo, {
       actor: humanActor('budget'),
@@ -7115,6 +7150,7 @@ export async function ticketStartReadBudget(): Promise<{
       expect.objectContaining({ outcome: 'started', ticket: { source: 'hosted', id: 'AB-S' } }),
     ])
     expect(world.claims).toEqual(['AB-S'])
+    await world.deferredHeld()
     admissions.set(builds, [waits[0]!, admitted.calls])
     await control.store.close()
     await world.store.close()

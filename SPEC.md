@@ -579,8 +579,9 @@ attention. There is no force: capacity is respected and nothing is preempted.
 The claim itself proceeds only after a journal refresh confirms the request is
 still pending, so a cancellation that lands while a pass is reading the ticket
 prevents it. The stage measures capacity, for a wait and for an admission
-alike, from the build facts the same tick's janitor, dispatch recovery and lease
-sweep have already read. A build is read again only when the tick skipped it,
+alike, from the build facts the same tick's janitor, dispatch recovery, lease
+sweep and mixed-version deferral check have already read, and the stage's own
+deferral checks serve those reads too. A build is read again only when the tick skipped it,
 or wrote to it after reading it, unless it is a leaf provisioning a runner,
 which holds its slot whatever its state. So a pending request adds no per-build
 read on a fresh dispatcher process or a long-lived one, and a write by another
