@@ -305,6 +305,11 @@ export const repositoryEventPolicy = {
   'forge.credential-limited': 'advisory',
   'dispatcher.kernel-git-unavailable': 'advisory',
   'dispatcher.kernel-git-recovered': 'advisory',
+  // Advisory: an older runtime cannot parse a config carrying `maxOpenPrs`
+  // (the policy schema is strict), so it never applies backpressure; ignoring
+  // the fact only loses an intake pause it could not configure.
+  'dispatcher.open-pr-backpressure-engaged': 'advisory',
+  'dispatcher.open-pr-backpressure-cleared': 'advisory',
   'hook.failing': 'advisory',
   'hook.recovered': 'advisory',
   'hook.skipped': 'advisory',

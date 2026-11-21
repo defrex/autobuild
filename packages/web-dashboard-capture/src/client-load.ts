@@ -505,6 +505,7 @@ const FRAME_PAGES: readonly (readonly [string, string])[] = [
   ['builds-', '/'],
   ['integration-', '/'],
   ['capacity-', '/'],
+  ['backpressure-', '/'],
   ['account-credentials-', '/'],
 ]
 

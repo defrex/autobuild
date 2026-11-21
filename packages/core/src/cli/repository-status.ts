@@ -17,6 +17,7 @@ import {
   type DispatchCapacity,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
+import { backpressureStatusLine } from '../kernel/open-pr-backpressure'
 import {
   activeForgeCredentialLimits,
   forgeCredentialLimitsReducer,
@@ -513,6 +514,9 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
+    ...(status.capacity?.backpressure
+      ? [backpressureStatusLine(status.capacity.backpressure)]
+      : []),
     ...(status.warningLines ?? []),
     ...(status.hooks ?? []).map(renderHookStatus),
     `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatRepositoryDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
@@ -646,7 +650,10 @@ export async function readRepositoryCapacity(
         config.capacity,
         now,
         migrationIdentity(facts.ticketMigrations, config.tickets.source),
-        { urgentClaims: urgentClaimDemand(facts) },
+        {
+          urgentClaims: urgentClaimDemand(facts),
+          openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
+        },
       )
     }
   }

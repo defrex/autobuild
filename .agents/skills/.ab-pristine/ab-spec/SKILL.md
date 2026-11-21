@@ -144,9 +144,10 @@ keep the Evidence citation.
 
 When grooming established that the ticket must go next — for example a fix
 that unblocks a stuck build — create it with `--priority urgent` so the
-dispatcher claims it before normal ready work and normal waiting builds. Otherwise omit the flag; normal
-is the default. A source that cannot store priority refuses the create and
-names itself; file it normal and tell the human so the operator can expedite it.
+dispatcher claims it before normal ready work and normal waiting builds, and
+claims it even while open-PR backpressure pauses normal intake. Otherwise omit
+the flag; normal is the default. A source that cannot store priority refuses
+the create and names itself; file it normal and tell the human so the operator can expedite it.
 
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next

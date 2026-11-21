@@ -225,6 +225,8 @@ while normal work proceeds, and urgency never stops a running build. To
 expedite a ticket, mark it urgent rather than moving other tickets out of
 `ready/`. Editing a ticket's priority after it is claimed does not change its
 build; the operator runs `ab priority <slug> urgent` for that.
+When `[policy].maxOpenPrs` is set and that many root PRs are open and unmerged,
+open-PR backpressure pauses normal claims while urgent ones are still claimed.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
 then to `done/` on merge or back to `triage/` if the build aborts (`ready/`
