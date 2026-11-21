@@ -20,4 +20,12 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/shape/691nlqt5o8': 'Hold reason on the landing command',
   'buildReadFacts/shape/fjcms3g67h': 'Hold reason on the landing command',
   'buildStreamSeed/shape/cnyes1nf0o': 'Hold reason on the landing command',
+  'build/shape/3vstye5scq': 'Reopen of a settled leaf (build.reopened)',
+  'logIndex/shape/5so3ulzgzo': 'Reopen of a settled leaf (build.reopened)',
+  'buildReadFacts/shape/q1u260vc6f': 'Reopen of a settled leaf (build.reopened)',
+  'buildStreamSeed/shape/vc3s07eqg4': 'Reopen of a settled leaf (build.reopened)',
+  'build/fold/un4t96vlnx': 'Reopen of a settled leaf (build.reopened)',
+  'logIndex/fold/oj2ejk6qgb': 'Reopen of a settled leaf (build.reopened)',
+  'executionNoProgress/fold/e37vc1wkgl': 'Reopen of a settled leaf (build.reopened)',
+  'terminalGuard/fold/stc1et9vcy': 'A reopen re-runs verify and finalize terminals',
 }

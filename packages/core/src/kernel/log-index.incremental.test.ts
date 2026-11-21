@@ -45,9 +45,13 @@ function emptyLoop(): LoopIndex {
 function referenceIndexLog(events: AbEvent[]): LogIndex {
   // Pass 1: the restart boundary — seq of the latest spec.revised (§6.3).
   let restartSeq = 0
+  let reopenSeq = 0
   for (const event of events) {
     if (event.type === 'spec.revised') restartSeq = event.seq
+    if (event.type === 'build.reopened') reopenSeq = Math.max(reopenSeq, event.seq)
   }
+  // A reopen restarts the code half of the pipeline only.
+  const codeRestartSeq = Math.max(restartSeq, reopenSeq)
 
   const plan = emptyLoop()
   const code = emptyLoop()
@@ -131,16 +135,17 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
   }
 
   for (const event of events) {
-    const post = event.seq > restartSeq
+    const planPost = event.seq > restartSeq
+    const post = event.seq > codeRestartSeq
     switch (event.type) {
       case 'plan.started': {
         noteGuidanceStart(`plan@${event.payload.round}`, event.payload.feedback, event.seq)
-        const record = roundRecord(plan, event.payload.round, post)
+        const record = roundRecord(plan, event.payload.round, planPost)
         if (record !== undefined) record.startedSeq = event.seq
         break
       }
       case 'plan.completed': {
-        const record = roundRecord(plan, event.payload.round, post)
+        const record = roundRecord(plan, event.payload.round, planPost)
         if (record !== undefined) {
           record.completedSeq = event.seq
           record.planCompletion = {
@@ -154,10 +159,10 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
         break
       }
       case 'plan-review.started':
-        roundRecord(plan, event.payload.round, post)
+        roundRecord(plan, event.payload.round, planPost)
         break
       case 'plan-review.verdict':
-        noteVerdict(plan, event.payload, event.seq, post)
+        noteVerdict(plan, event.payload, event.seq, planPost)
         break
 
       case 'implement.started': {
@@ -352,6 +357,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
     readDeferrals: [],
     restack: leafRestackReducer.reduce(events),
     restartSeq,
+    codeRestartSeq,
     plan,
     code,
     verifyCompleted,
@@ -410,6 +416,13 @@ function randomWrite(rand: () => number): EventWrite {
   const templates: Array<() => EventWrite> = [
     () =>
       w('spec.revised', { artifact: { kind: 'spec', rev: round }, escalation: 1 }, humanActor('a')),
+    () =>
+      w(
+        'build.reopened',
+        rand() < 0.5
+          ? { feedback: 'change it' }
+          : { spec: { artifact: { kind: 'spec', rev: round } } },
+      ),
     () => w('plan.started', { round, feedback: feedback() }),
     () =>
       w('plan.completed', {

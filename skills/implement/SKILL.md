@@ -40,6 +40,10 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    guidance rounds. Read its `verifyReports` paths and `cancelledVerify` entries.
    Cancellation feedback belongs only to that receipt; a later round without a
    receipt carries no cancellation list.
+   When the manifest has a `reopen` block, an operator reopened this finished
+   build; `$AB_CONTEXT_DIR/reopen.json` carries who reopened it and their
+   `feedback` (and `specRev` when they also revised the spec). The existing
+   branch and open PR already hold the earlier work; build on them.
    When the manifest lists `assets`, they are the build's pinned ticket assets
    under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.
@@ -161,6 +165,14 @@ first: it says why the number matters and what must not change while it moves.
   the answer. A referenced failed-stage receipt still provides reports and
   cancelled/not-run members alongside that guidance. If `feedback` is absent,
   build the plan and read any receipt listed by the manifest.
+- **Act on a reopen's feedback.** A manifest `reopen` block means the build
+  finished and an operator sent it back; `$AB_CONTEXT_DIR/reopen.json` holds
+  their `feedback`. Treat it as authoritative alongside the spec and make the
+  requested change as commits on top of the existing branch; the plan is still
+  approved and the open PR is updated in place. It stays in context for every
+  round until the build finishes again, and the round's `feedback` field still
+  names review findings or verify reports to handle. If honoring it means
+  breaking the spec, escalate rather than quietly picking one.
 - **Keep `.ab/` out of every commit.** Never stage or commit it, even with
   `git add -f`. It is disposable phase scratch, not part of the build
   deliverable.

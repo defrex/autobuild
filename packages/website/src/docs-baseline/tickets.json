@@ -4,7 +4,7 @@
   "title": "Tickets and specs",
   "group": "concepts",
   "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-  "textHash": "08794eda9d26ffd85ac25269c508056dc48832d4f442d4da8872d0094aae5d24",
+  "textHash": "85e91219b3a97f99ad2ecd0399267327f160219c8a09d5abbcda1a1807239612",
   "headings": [
     "Choose a source",
     "Groom a buildable spec",
@@ -18,6 +18,7 @@
     "bun ab ticket update AUT-12 --priority urgent",
     "bun ab ticket update 412 --assignees octocat",
     "bun ab ticket move AUT-12 --role backlog",
-    "bun ab answer <slug> --revise-spec-from-ticket"
+    "bun ab answer <slug> --revise-spec-from-ticket",
+    "bun ab reopen <slug> --revise-spec-from-ticket"
   ]
 }

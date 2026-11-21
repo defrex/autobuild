@@ -790,6 +790,16 @@ boundary in the reducer and log index, independently of reconcile identity.
 The advisory `pipeline.settled` fact records that the engine reached a leaf's
 `wait awaiting-pr`; `kernel/dispatch-capacity.ts` reads it so a finished build
 parked for its merge decision holds no slot.
+Reopening a settled leaf (SPEC §15.7) spans the same seams. The shared
+`cli/build-control.ts` control appends the human `build.reopened` and, for a
+spec, publishes the kernel's operator `spec.revised`; `ab reopen` and the
+`builds.reopen` tool call it. `kernel/reopen.ts` holds the reduced-state
+predicates the control's refusals, the engine's `awaiting-spec` park, capacity's
+`reopen` slot request, landing readiness, `ab context` (`reopen.json`) and the
+status surfaces share. The log index's `codeRestartSeq` is the code half's
+restart boundary, so the engine re-runs implement, review, verify and finalize
+without special cases, and the terminal guard lets the re-run finalize and
+verify attempts complete again.
 Ticket waits (SPEC §11) span four seams. `cli/terminals.ts` (`waitOn`, routed
 as `ab wait-on`) appends the agent's terminal `wait.requested`; the build
 digest marks it pending. The dispatcher's lease-sweep pass validates a pending
@@ -2347,7 +2357,8 @@ pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
-spec and its publication is confirmed.
+spec and its publication is confirmed. A settled, unmerged leaf awaiting merge
+revises without an escalation through `ab reopen`.
 
 Verification stages are planned purely in `kernel/verify-stages.ts`, shared by
 leaf and integration decisions in `kernel/engine.ts`. The build runner keeps

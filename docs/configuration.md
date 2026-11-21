@@ -4372,12 +4372,15 @@ trimming), shown wherever the hold is until a later hold or merge replaces it.
 `ab merge <slug>` requires readiness, clears hold, and consents
 to this build/node merge into its effective destination. Consent survives head
 replacement, clean restacking, verification and re-finalization until another
-hold or completion. Consent given under a rule with `paths` or `within`
+hold, reopen or completion. Consent given under a rule with `paths` or `within`
 predicates is revoked when a reconcile's own edits, or a leaf restack's
 generated-file regeneration, touch a file those predicates match (the recorded
 resolution, not upstream-only changes); `landing.consent-revoked` raises default
 attention naming the files and both heads, and the build returns to the consent
 queue for its new head. Accepted node reparenting revokes consent; holds survive.
+Accepted reopening of a settled, unmerged leaf revokes consent immediately; a
+hold survives. See [Send a finished build back](operating.md#send-a-finished-build-back)
+for the command and for asynchronous cancellation of an armed native auto-merge.
 It is consent to the merge, not approval of an immutable diff.
 The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
 `head-mismatch`, recording nothing, unless `<sha>` (full or at least seven

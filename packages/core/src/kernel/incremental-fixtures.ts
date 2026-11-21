@@ -87,6 +87,12 @@ export function randomBuildItem(rand: Rand): readonly [string, Record<string, un
     () => ['build.created', { baseBranch: pick(rand, ['main', 'dev']), assets: assets() }],
     () => ['spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 1, assets: assets() }],
     () => [
+      'build.reopened',
+      rand() < 0.5
+        ? { feedback: 'rename the flag' }
+        : { spec: { artifact: { kind: 'spec', rev: 1 }, assets: assets() } },
+    ],
+    () => [
       'execution.started',
       {
         provider: 'p',
