@@ -49,6 +49,8 @@ export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   'forge.credential-limited',
   'dispatcher.kernel-git-unavailable',
   'dispatcher.kernel-git-recovered',
+  'dispatcher.open-pr-backpressure-engaged',
+  'dispatcher.open-pr-backpressure-cleared',
   ...Object.keys(changePresenceEventPayloadSchemas),
   ...Object.keys(ticketSourceHealthEventPayloadSchemas),
   ...Object.keys(harvestEventPayloadSchemas),
