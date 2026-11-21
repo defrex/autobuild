@@ -79,6 +79,7 @@ function randomWrite(rand: () => number): EventWrite {
             : { index: 0, snapshot: { label: 'release', mode: 'auto' } },
       }),
     () => w('build.hold-requested', round === 1 ? {} : { reason: 'waiting on a dependency' }),
+    () => w('build.priority-set', { priority: round % 2 === 1 ? 'urgent' : 'normal' }),
     () => w('build.land-requested', { decisionSeq: 1 }),
     () => w('landing.command-acknowledged', { commandSeq: 1 }),
     () =>
@@ -303,6 +304,7 @@ export function randomBuildLog(seed: number, length: number): AbEvent[] {
     ticket: { source: 'linear', id: 'E-1', title: 't' },
     repo: 'o/r',
     baseBranch: 'main',
+    ...(seed % 2 === 0 ? { priority: 'urgent' } : {}),
   })
   const writes = [created, ...Array.from({ length }, () => randomWrite(rand))]
   return writes.map(
