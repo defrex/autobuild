@@ -1,5 +1,6 @@
 import { ticketPreparationReducer } from './ticket-preparation'
 import { ticketHandbacksReducer } from './ticket-handbacks'
+import { ticketStartsReducer } from './ticket-starts'
 import { ticketMigrationsReducer } from './ticket-migrations'
 import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import {
@@ -623,6 +624,7 @@ export interface RepositoryReadAcc {
   missingAccounts: Record<string, import('../accounts/availability').MissingAccountCredential>
   preparation: ReturnType<typeof ticketPreparationReducer.initial>
   handbacks: ReturnType<typeof ticketHandbacksReducer.initial>
+  ticketStarts: ReturnType<typeof ticketStartsReducer.initial>
   compatibility: CompatibilityState
   presence: Record<
     string,
@@ -685,6 +687,7 @@ export const repositoryReadFactsReducer = defineReducer({
     dispatchUpgradeReducer,
     ticketPreparationReducer,
     ticketHandbacksReducer,
+    ticketStartsReducer,
     dispatcherRunFactsReducer('version'),
     openHarvestExecutionsReducer,
     forgeHealthReducer,
@@ -705,6 +708,7 @@ export const repositoryReadFactsReducer = defineReducer({
     presence: {},
     preparation: ticketPreparationReducer.initial(),
     handbacks: ticketHandbacksReducer.initial(),
+    ticketStarts: ticketStartsReducer.initial(),
     upgrades: dispatchUpgradeReducer.initial(),
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
@@ -735,6 +739,7 @@ export const repositoryReadFactsReducer = defineReducer({
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
     acc.preparation = ticketPreparationReducer.advance(acc.preparation, events)
     acc.handbacks = ticketHandbacksReducer.advance(acc.handbacks, events)
+    acc.ticketStarts = ticketStartsReducer.advance(acc.ticketStarts, events)
     advanceCompatibility(acc.compatibility, events)
     acc.upgrades = dispatchUpgradeReducer.advance(acc.upgrades, events)
     acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
@@ -865,6 +870,7 @@ export const repositoryReadFactsReducer = defineReducer({
     presence: structuredClone(acc.presence),
     preparation: ticketPreparationReducer.finish(acc.preparation),
     handbacks: ticketHandbacksReducer.finish(acc.handbacks),
+    ticketStarts: ticketStartsReducer.finish(acc.ticketStarts),
     upgrades: dispatchUpgradeReducer.finish(acc.upgrades),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestTerminals: structuredClone(acc.harvestTerminals),

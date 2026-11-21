@@ -68,6 +68,11 @@ describe('repository attention projection', () => {
     ['ticket.handed-back', { cause: 'abort', state: 'Ready', role: 'ready' }, true],
     ['ticket.handed-back', { cause: 'spec-bounce', state: 'Triage', role: 'triage' }, true],
     ['ticket.handback-settled', { build: 'b' }, false],
+    ['ticket.start-settled', { request: 1, outcome: 'started', slug: 'b' }, true],
+    ['ticket.start-settled', { request: 1, outcome: 'blocked', detail: 'T-2' }, true],
+    ['ticket.start-requested', {}, false],
+    ['ticket.start-cancelled', { request: 1 }, false],
+    ['ticket.identity-recorded', { identities: [] }, false],
   ])('%s %j direct=%s', (type, payload, expected) => {
     expect(repositoryNeedsAttention(repo(type as string, payload, 1))).toBe(expected as boolean)
   })
