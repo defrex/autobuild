@@ -1071,8 +1071,10 @@ merge from both completing between polls.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
-`production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct
-Codex `exec --json` subprocess protocol with native thread resume), `pi.ts` and
+`production.ts` (shipped Claude/Codex/Pi/Antigravity registrations), `codex.ts` (direct
+Codex `exec --json` subprocess protocol with native thread resume), `antigravity.ts`
+(direct `agy` stream-json subprocess, `--conversation` native resume, no
+one-shot), `pi.ts` and
 `pi-rpc.ts` (the local pi CLI prerequisite/auth probe and long-lived headless
 RPC protocol, minimum version 0.84.3), `one-shot.ts` (optional tool-free
 non-phase completions — slug naming via `packages/core/src/cli/dispatch.ts`, skill-conflict
@@ -1582,10 +1584,12 @@ protection permissions. The fixture creates and deletes temporary branches,
 PRs, comments, and a required-check protection rule; it never pushes to or
 merges into the default branch. Use a dedicated scratch repository only.
 
-The deterministic Claude, Codex, and Pi adapter contracts run offline in every
-normal test run. Their live registrations add real transport/authentication smoke
-coverage for successful start, continue, end, environment refresh, managed CLI
-execution, and one-shot completion:
+The deterministic Claude, Codex, Pi, and Antigravity adapter contracts run
+offline in every normal test run. Their live registrations add real
+transport/authentication smoke coverage for successful start, continue, end,
+environment refresh, managed CLI execution, and one-shot completion where the
+runtime declares it. Antigravity declares no one-shot, so its live run skips
+that block:
 
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
@@ -1599,6 +1603,10 @@ bun test packages/core/src/ports/runner/codex.live.integration.test.ts
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_PI_CONTRACT_MODEL=openai/gpt-… \
 bun test packages/core/src/ports/runner/pi.live.integration.test.ts
+
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_ANTIGRAVITY_CONTRACT_MODEL=gemini-… \
+bun test packages/core/src/ports/runner/antigravity.live.integration.test.ts
 ```
 
 Claude uses the locally installed Claude Code CLI and its configured login; the

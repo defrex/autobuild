@@ -9,14 +9,16 @@ import { agentInvocation, type StartPromptOpts } from '../types'
 
 export type { StartPromptOpts } from '../types'
 
-export type StartPromptRuntime = 'claude' | 'pi' | 'codex'
+export type StartPromptRuntime = 'claude' | 'pi' | 'codex' | 'antigravity'
 
-/** Runtime-native explicit skill command: Claude `/name`, Pi `/skill:name`,
- * Codex `$name`. Claude Code and Pi expand the command only at the very start
- * of a message, so it always leads the prompt. */
+/** Runtime-native explicit skill command: Claude and Antigravity `/name`, Pi
+ * `/skill:name`, Codex `$name`. Claude Code and Pi expand the command only at
+ * the very start of a message, so it always leads the prompt; Antigravity
+ * expands each `.agents/skills/<name>` skill as a `/name` command. */
 export function skillCommand(runtime: StartPromptRuntime, skill: string): string {
   switch (runtime) {
     case 'claude':
+    case 'antigravity':
       return `/${skill}`
     case 'pi':
       return `/skill:${skill}`

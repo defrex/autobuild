@@ -88,7 +88,7 @@ function expectTranscript(transcript: Transcript, runner: AgentRunner, model: st
 /** Successful real-provider smoke coverage. Deterministic failure taxonomy is
  * deliberately covered by the full injected adapter contract instead. */
 export async function runLiveAgentRunnerContract(
-  runner: AgentRunner & OneShotCompletion,
+  runner: AgentRunner & Partial<OneShotCompletion>,
   model: string,
 ): Promise<void> {
   const fixture = await createLiveFixture()
@@ -167,6 +167,8 @@ export async function runLiveAgentRunnerContract(
     if (failure !== undefined) throw failure
     expectTranscript(transcript, runner, model)
 
+    // A runtime that declares no one-shot capability skips this block.
+    if (runner.complete === undefined) return
     const nonce = crypto.randomUUID()
     const oneShot = await runner.complete({
       prompt: `Reply with exactly this token and no other text: ${nonce}`,
