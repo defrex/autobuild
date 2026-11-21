@@ -14620,3 +14620,158 @@ secretEnv = "HOOK_SECRET"
     }
   }, 30_000)
 })
+
+describe('forge rate-limit readings survive ticks, failures and restarts', () => {
+  type Observation = { resource: string; remaining: number }
+  /** Every request observer registered during this process sees the batch,
+   * as if the process's requests had carried those headers. */
+  function observeScripted(forge: FakeForge, clock: () => Date, batch: Observation[]) {
+    const observable = forge as FakeForge & {
+      observeRequests?: (observer: (context: object) => void) => () => void
+    }
+    observable.observeRequests = (observer) => {
+      for (const { resource, remaining } of batch)
+        observer({
+          outcome: 'restPrimary',
+          rateLimit: {
+            resource,
+            limit: 5000,
+            remaining,
+            resetAt: new Date(clock().getTime() + 3_600_000).toISOString(),
+          },
+        })
+      return () => {}
+    }
+  }
+  const sample = async (fx: Fixture) => {
+    const finished = (await fx.store.getRepo(fx.origin))!.tick!.finished!
+    const requests =
+      finished.outcome === 'completed' ? finished.counters.forgeRequests : finished.forgeRequests
+    return { finished, requests }
+  }
+  const readings = async (fx: Fixture) =>
+    ((await sample(fx)).requests?.rateLimits ?? []).map(({ resource, remaining, observedAt }) => ({
+      resource,
+      remaining,
+      observedAt,
+    }))
+  const dispatchOnce = (fx: Fixture) =>
+    abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      plain: true,
+      wire: fx.wire,
+    })
+
+  for (const variant of ['tick throws', 'fails before the dispatcher tick'] as const) {
+    test(`a fresh process whose first tick ${variant} keeps the newest unpublished readings`, async () => {
+      const clock = manualClock()
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      try {
+        // Process 1: an older reading, then a newer one plus a new resource.
+        observeScripted(fx.forge, clock, [{ resource: 'core', remaining: 100 }])
+        await dispatchOnce(fx)
+        clock.advance(60_000)
+        observeScripted(fx.forge, clock, [
+          { resource: 'core', remaining: 0 },
+          { resource: 'search', remaining: 9 },
+        ])
+        await dispatchOnce(fx)
+        const newest = await readings(fx)
+        expect(newest.map(({ resource, remaining }) => [resource, remaining])).toEqual([
+          ['core', 0],
+          ['search', 9],
+        ])
+        const expectNewest = async () => expect(await readings(fx)).toEqual(newest)
+
+        // Process 2: no forge request, and the tick fails.
+        clock.advance(60_000)
+        observeScripted(fx.forge, clock, [])
+        let restore = () => {}
+        if (variant === 'tick throws') {
+          const listReady = fx.tickets.listReady.bind(fx.tickets)
+          fx.tickets.listReady = async () => {
+            throw new Error('injected ticket scan failure')
+          }
+          restore = () => {
+            fx.tickets.listReady = listReady
+          }
+        } else {
+          const begin = fx.store.beginRepoTick.bind(fx.store)
+          const listBuilds = fx.store.listBuilds.bind(fx.store)
+          let armed = false
+          fx.store.beginRepoTick = async (...args) => {
+            armed = true
+            return begin(...args)
+          }
+          fx.store.listBuilds = async (...args) => {
+            if (armed) {
+              armed = false
+              throw new Error('injected refresh failure')
+            }
+            return listBuilds(...args)
+          }
+          restore = () => {
+            fx.store.beginRepoTick = begin
+            fx.store.listBuilds = listBuilds
+          }
+        }
+        await dispatchOnce(fx).catch(() => {})
+        restore()
+        expect((await sample(fx)).finished.outcome).toBe('failed')
+        if (variant === 'fails before the dispatcher tick')
+          expect((await sample(fx)).requests?.complete).toBe(false)
+        await expectNewest()
+
+        // Process 3: an idle cooldown tick with no requests.
+        clock.advance(60_000)
+        await dispatchOnce(fx)
+        expect((await sample(fx)).finished.outcome).toBe('completed')
+        await expectNewest()
+        const { getRepositoryStatus } = await import('../operator/query')
+        const status = await getRepositoryStatus(fx.store, fx.origin, clock())
+        expect(
+          status.forgeRateLimit?.limits.map(({ resource, remaining, observedAt }) => ({
+            resource,
+            remaining,
+            observedAt,
+          })),
+        ).toEqual(newest)
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
+
+  test('carried readings add no store reads', async () => {
+    const counted = async (script: Observation[][]) => {
+      const clock = manualClock()
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      const counts = { getRepo: 0, getReducerValue: 0, getRepoEvents: 0 }
+      try {
+        for (const method of Object.keys(counts) as (keyof typeof counts)[]) {
+          const original = (fx.store[method] as (...args: unknown[]) => unknown).bind(fx.store)
+          ;(fx.store as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+            counts[method]++
+            return original(...args)
+          }
+        }
+        for (let tick = 0; tick < 3; tick++) {
+          observeScripted(fx.forge, clock, script[tick] ?? [])
+          await dispatchOnce(fx)
+          clock.advance(60_000)
+        }
+        return counts
+      } finally {
+        await fx.cleanup()
+      }
+    }
+    const baseline = await counted([])
+    const seeded = await counted([[{ resource: 'core', remaining: 10 }], [], []])
+    expect(seeded).toEqual(baseline)
+  }, 30_000)
+})

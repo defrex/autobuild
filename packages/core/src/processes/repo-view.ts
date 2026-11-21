@@ -597,6 +597,8 @@ export class RepoViewStore implements BuildStore {
   }
   async finishRepoTick(...args: Parameters<BuildStore['finishRepoTick']>) {
     const result = await this.backing.finishRepoTick(...args)
+    // The committed observation is the newest durable sample; keep it without a read.
+    if (result && args[0] === this.repo) this.tickSample = result.observation.finished
     if (result && result.events.length > 0 && args[0] === this.repo) {
       for (const event of result.events) this.foldJournalAppend(event)
       return this.refreshCommitted(result)
