@@ -50,6 +50,8 @@ A ticket is claimed when it passes every gate:
 
 Others stay queued. Urgent tickets are claimed before normal ones, each in the source's order; priority never preempts a running build. See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
 
+To start one ticket without turning intake on for the whole ready queue, run `ab start <ticket-id>` (or the `tickets.start` operator tool). The running dispatcher, local or hosted, claims just that ticket on its next tick with a free slot, through the same gates, and records the outcome as a `ticket.start-settled` event shown by `ab watch` and `ab repository status`. See `ab help start`.
+
 Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps the builds running work: a work build holds a slot until it finishes its pipeline (verification and finalize), even while paused or blocked on a question. Once it waits for a merge decision it holds none; if its target moves or its PR conflicts, it waits for a slot ahead of new claims to restack, re-verify or reconcile. A work build waiting on other tickets (`ab wait-on`) also holds none, and when the wait ends it waits for a slot ahead of new claims to resume. Finished and waiting builds keep their workspaces, so retained workspaces can exceed `capacity` while running work cannot. An integration node holds a slot only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
 
 

@@ -4,7 +4,7 @@
   "title": "Working with your operator agent",
   "group": "guides",
   "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
-  "textHash": "e5d0c6e641c64239465d1454406115eb2c0fca70c444b98636378905aef3015d",
+  "textHash": "f1b4d1e910725d3a69cb5d5a31c5c80f7f1702247b1cb22dbd7d2e4b3977d130",
   "headings": [
     "Choose a harness",
     "Give the agent memory",
@@ -21,6 +21,7 @@
     "[hooks.notify]\ncommand = \"jq -r '.id + \\\"  \\\" + (.event.type // .observation.type)' >> attention.log\"",
     "bun ab answer my-build \"Keep the public API compatible\"",
     "bun ab pause my-build\nbun ab resume my-build",
+    "bun ab start AUT-12",
     "bun ab merge my-build\nbun ab hold my-build --reason \"waiting on AUT-12 to merge\""
   ]
 }
