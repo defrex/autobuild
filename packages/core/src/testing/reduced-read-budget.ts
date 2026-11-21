@@ -6752,9 +6752,10 @@ export async function ticketStartReadBudget(): Promise<{
   rows: number
   repoRows: number
 }> {
-  // While a request waits at full capacity, targeted admission reads each
-  // active build's served facts for capacity, as an intake scan does: one
-  // reduced value per active build, never an event row.
+  // While a request waits at full capacity, the first pass of a process
+  // measures capacity from each active build's served facts, as an intake
+  // scan does. Later passes read only the repository change position until
+  // something changes, so the steady cost is independent of the fleet.
   const { MemoryBuildStore } = await import('../store/memory')
   const { CONFORMING_BODY } = await import('../scenarios/harness')
   const { requestTicketStart } = await import('../operator/ticket-start')
@@ -6824,7 +6825,9 @@ export async function ticketStartReadBudget(): Promise<{
       })
     }
     const config = parseConfig(
-      `capacity = ${capacity}\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
+      // Measured ticks fall inside one scan interval, the most a capacity
+      // measurement is reused for.
+      `capacity = ${capacity}\nticketScanIntervalSeconds = 3600\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
     )
     const dispatcher = () => {
       const forge = new FakeForge()
@@ -6899,7 +6902,7 @@ export async function ticketStartReadBudget(): Promise<{
   for (const [builds, history] of [
     [5, 100],
     [5, 5_000],
-    [20, 100],
+    [50, 100],
   ] as const) {
     // Full capacity: the request waits for a slot.
     const control = await open(builds, history, builds, 'control')
@@ -6943,23 +6946,29 @@ export async function ticketStartReadBudget(): Promise<{
         control.fresh()
         pending.fresh()
       }
+      // The unleased builds are relaunched until their launch budget blocks
+      // them, and a launch holds a slot without a measurement. The first
+      // tick after that measures capacity once; later ticks serve the bound
+      // from the cached records.
+      for (let i = 0; i < 4; i++) {
+        await control.tick()
+        await pending.tick()
+      }
       const base = await control.tick()
       const measured = await pending.tick()
       const extra = subtract(measured.gets, base.gets)
       expect(extra).toEqual(['AB-0'])
       expect(measured.appended).toEqual([])
       expect(pending.claims).toEqual([])
-      // Row differences are snapshot-cadence advances: build facts both
-      // worlds read, and the pending world's own extra journal rows (the
-      // request and its identity records), each read once.
+      // The pending world reads no build facts the control does not.
       const rows = measured.rows - base.rows
       const repoRows = measured.repoRows - base.repoRows
-      expect(rows).toBeLessThanOrEqual(builds)
+      expect(rows).toBe(0)
       expect(repoRows).toBeLessThanOrEqual(projectionTicks + 1)
       const calls = difference(measured.calls, base.calls)
       for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
         expect(calls[replay]).toBeUndefined()
-      expect(calls.getReducerValue ?? 0).toBeLessThanOrEqual(builds + 2)
+      expect(calls).toEqual({})
       const key = `${builds}:${fresh}`
       const run = { gets: extra.length, calls, rows, repoRows }
       results.set(key, [...(results.get(key) ?? []), run])
@@ -6985,10 +6994,14 @@ export async function ticketStartReadBudget(): Promise<{
     await control.store.close()
     await pending.store.close()
   }
-  // Identical at every history length; source reads identical at every build count.
+  // Identical at every history length; source reads and store requests
+  // identical at every build count.
   for (const runs of results.values()) for (const run of runs) expect(run).toEqual(runs[0]!)
   const baseline = results.get('5:false')![0]!
-  for (const runs of results.values()) expect(runs[0]!.gets).toBe(baseline.gets)
+  for (const runs of results.values()) {
+    expect(runs[0]!.gets).toBe(baseline.gets)
+    expect(runs[0]!.calls).toEqual(baseline.calls)
+  }
 
   // Admission with a free slot: the request is claimed with one get, and a
   // legacy-alias build of the requested ticket moved back to Ready is matched

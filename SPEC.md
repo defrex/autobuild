@@ -576,6 +576,13 @@ ticket-source error or the tick budget leaves the request pending for the next
 tick. Each settlement is one dispatcher `ticket.start-settled` after a journal
 refresh confirms the request is still pending, and it is default watch
 attention. There is no force: capacity is respected and nothing is preempted.
+The claim itself proceeds only after a journal refresh confirms the request is
+still pending, so a cancellation that lands while a pass is reading the ticket
+prevents it. While a request waits for a slot, the dispatcher reads no build
+facts when the cached build records already account for every slot: leaves
+with a live runner lease or a launch this tick, plus leaves the last capacity
+measurement found holding a slot without a runner whose records have not
+changed since. That measurement is reused for at most one ticket scan interval.
 
 Hosted active builds may record a legacy ticket alias. While a request is
 pending, the dispatcher resolves the canonical identity of each active hosted
