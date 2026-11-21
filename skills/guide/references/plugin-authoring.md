@@ -526,8 +526,8 @@ An adapter opts in with `priority: true` and must persist
 return `priority: 'urgent'` on every read of an urgent ticket and omit the field
 otherwise, treat `normal` as clearing urgency, and include urgent priority in
 revisions. The dispatcher claims urgent ready tickets before normal ones, each in
-your listing order. Without the flag, every ticket reads as normal: the
-compatibility facade refuses a write naming `urgent` with
+your listing order, and ahead of normal builds waiting for a slot. Without the
+flag, every ticket reads as normal: the compatibility facade refuses a write naming `urgent` with
 `TicketPriorityUnsupported` before your methods run, drops a `normal` no-op
 (skipping the call when nothing else remains), and strips priority from reads.
 

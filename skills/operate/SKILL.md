@@ -396,11 +396,18 @@ ticket into the ready state sends it to dispatch — do that only when the
 ticket genuinely conforms and the human's intent is clear.
 
 The dispatcher claims urgent ready tickets before normal ones, each in source
-order. To expedite a ticket, such as a fix for a stuck build, mark it urgent
+order, and ahead of normal builds waiting for a slot to re-verify, reconcile or
+resume. To expedite a ticket, such as a fix for a stuck build, mark it urgent
 with `--priority urgent` on create or update; never move other ready tickets
-out of ready to make room. Urgency never preempts a running build, and a blocked
-urgent ticket still waits on its blockers. A source that cannot store priority
-refuses `urgent` and names itself; tell the human.
+out of ready to make room. A claimed ticket's priority becomes its build's.
+To expedite a build that already exists — a waiting reconcile or re-verify
+that now blocks other work — run `ab priority <slug> urgent` (MCP:
+`builds.control` with action `priority` and `priority: "urgent"`); `normal`
+returns it to normal order. Free slots go to urgent waiting work, urgent
+tickets, normal waiting work, then normal tickets. Urgency never preempts a
+running build, and a blocked urgent ticket still waits on its blockers. A
+source that cannot store priority refuses `urgent` and names itself; tell the
+human.
 
 On GitHub tickets, `--assignees` on create or update sets who a ticket is
 assigned to (`me` is the credential owner; on update it replaces the set). Under
@@ -491,7 +498,8 @@ that does the job, and say what you are doing before you do it:
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
   from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
   the default) or `{issue, intent: "refs"}` when the work only partly
-  addresses it. `priority: "urgent"` dispatches it before normal ready work.
+  addresses it. `priority: "urgent"` dispatches it before normal ready work
+  and normal waiting builds.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
   blocker relations. `issueLinks` on update replaces the whole set;
   `priority` (`urgent` or `normal`) expedites a ticket instead of moving other
@@ -702,9 +710,10 @@ verification receipts and node children/completeness. Unknown completeness is
 not zero children. A changed head or parent must regain current verification;
 unfinished or automatically authorized candidates do not ask for attention.
 Queued and held candidates hold no capacity slot; one that must re-verify or
-reconcile waits for a slot ahead of new ticket claims, so a full repository
-delays it without failing it. A build waiting on other tickets holds no slot
-either, and takes one ahead of new claims once its wait ends.
+reconcile waits for a slot ahead of normal ticket claims (urgent work first), so
+a full repository delays it without failing it. A build waiting on other
+tickets holds no slot either, and takes one ahead of normal claims once its
+wait ends.
 
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
@@ -759,7 +768,7 @@ first tick after every named ticket completes, with no answer needed, and a
 wait with some tickets still open stays in place. Answer sooner only when the
 needed work landed another way or the wait is mistaken; any answer ends the
 wait early. Either way the build then takes a
-slot ahead of new ticket claims. If its target moved, it first restacks onto the
+slot ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
 target's current head, so the resumed phase sees the merged blockers;
 `ab build status` shows a `restack:` line with trigger `wait-resume`, and a
 conflicting restack shows as `reconcile` before the phase resumes (a conflict

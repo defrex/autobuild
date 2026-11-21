@@ -7,6 +7,7 @@ import {
 } from './generators/optimization-log'
 import { reduceBuild } from './reducer'
 import {
+  buildPriority,
   capacityExplanation,
   dispatchCapacity,
   epilogueLeaf,
@@ -14,11 +15,13 @@ import {
   intakeCapacity,
   nodeCapacity,
   occupiesCapacity,
+  reservedAhead,
   settlementDue,
   settlementKey,
   slotRequest,
   slotWaitText,
   strandedNodeWorkspace,
+  urgentClaimDemand,
   waitingExplanation,
   type CapacityBuild,
   type DispatchCapacity,
@@ -287,7 +290,7 @@ test('capacity wording covers waiting, borrowing, both and a legacy projection',
       ...base,
       waitingNodes: [{ slug: 'n', request: 'verification' }],
     }),
-  ).toBe(' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n)')
+  ).toBe(' (2 configured; 1 node waiting for a slot ahead of normal ticket claims: n)')
   expect(capacityExplanation({ ...base, borrowingNodes: ['b'] })).toBe(
     ' (2 configured; 1 node using descendant-held slots: b)',
   )
@@ -301,10 +304,10 @@ test('capacity wording covers waiting, borrowing, both and a legacy projection',
       ],
     }),
   ).toBe(
-    ' (2 configured; 1 node using descendant-held slots: b; 2 nodes waiting for a slot ahead of new ticket claims: m, n)',
+    ' (2 configured; 1 node using descendant-held slots: b; 2 nodes waiting for a slot ahead of normal ticket claims: m, n)',
   )
   expect(slotWaitText('verification')).toBe(
-    'verification waiting for a slot ahead of new ticket claims',
+    'verification waiting for a slot ahead of normal ticket claims',
   )
   expect(intakeCapacity(base)).toBe(0)
 })
@@ -459,12 +462,22 @@ test('parked leaves free capacity and reserve intake while they wait', () => {
   })
   expect(intakeCapacity(capacity)).toBe(0)
   expect(intakeCapacity(capacity, { settled: new Set(['wait-v']) })).toBe(1)
-  expect(intakeCapacity(capacity, { denied: new Set(['wait-r', 'other']) })).toBe(-1)
   expect(
-    intakeCapacity(capacity, { settled: new Set(['wait-r']), denied: new Set(['wait-r']) }),
+    intakeCapacity(capacity, {
+      denied: new Map([
+        ['wait-r', 'normal'],
+        ['other', 'normal'],
+      ]),
+    }),
+  ).toBe(-1)
+  expect(
+    intakeCapacity(capacity, {
+      settled: new Set(['wait-r']),
+      denied: new Map([['wait-r', 'normal']]),
+    }),
   ).toBe(0)
   expect(waitingExplanation(capacity, { requests: true })).toBe(
-    '2 parked builds waiting for a slot ahead of new ticket claims: wait-r (reconcile), wait-v (verification)',
+    '2 parked builds waiting for a slot ahead of normal ticket claims: wait-r (reconcile), wait-v (verification)',
   )
 })
 
@@ -479,8 +492,136 @@ test('capacity wording joins node and parked-build waits', () => {
       waitingBuilds: [{ slug: 'p', request: 'reconcile' }],
     }),
   ).toBe(
-    ' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n; 1 parked build waiting for a slot ahead of new ticket claims: p)',
+    ' (2 configured; 1 node waiting for a slot ahead of normal ticket claims: n; 1 parked build waiting for a slot ahead of normal ticket claims: p)',
   )
+})
+
+describe('slot admission order', () => {
+  function urgent<T extends CapacityBuild>(entry: T): T {
+    entry.state.priority = 'urgent'
+    return entry
+  }
+  function reverify(slug: string): CapacityBuild {
+    const leaf = finished(slug, { settled: 10 })
+    leaf.restackDue = true
+    return leaf
+  }
+
+  test('a build reads absent priority as normal', () => {
+    const leaf = build('a')
+    expect(buildPriority(leaf.state)).toBe('normal')
+    expect(buildPriority(urgent(leaf).state)).toBe('urgent')
+  })
+
+  test('waiting entries carry urgent priority and omit normal', () => {
+    const capacity = dispatchCapacity([reverify('n'), urgent(reverify('u'))], 2, now)
+    expect(capacity.waitingBuilds).toEqual([
+      { slug: 'n', request: 'verification' },
+      { slug: 'u', request: 'verification', priority: 'urgent' },
+    ])
+    expect(capacity.urgentClaims).toBeUndefined()
+    expect(dispatchCapacity([], 2, now, undefined, { urgentClaims: 2 }).urgentClaims).toBe(2)
+    expect(dispatchCapacity([], 2, now, undefined, { urgentClaims: 0 })).not.toHaveProperty(
+      'urgentClaims',
+    )
+  })
+
+  test('urgent work reserves ahead of normal parked work, never the reverse', () => {
+    const capacity: DispatchCapacity = {
+      configured: 2,
+      occupied: 0,
+      effective: 2,
+      borrowingNodes: [],
+      waitingNodes: [
+        { slug: 'verify', request: 'verification', priority: 'urgent' },
+        { slug: 'reconcile', request: 'reconcile', priority: 'urgent' },
+        { slug: 'normal-node', request: 'verification' },
+      ],
+      waitingBuilds: [
+        { slug: 'leaf', request: 'reconcile', priority: 'urgent' },
+        { slug: 'n', request: 'resume' },
+      ],
+      urgentClaims: 1,
+    }
+    expect(reservedAhead(capacity, { slug: 'verify', priority: 'urgent' })).toBe(0)
+    // An urgent reconcile node already occupies its slot; the rest reserve.
+    expect(reservedAhead(capacity, { slug: 'n', priority: 'normal' })).toBe(3)
+    // A waiter never reserves ahead of itself.
+    expect(
+      reservedAhead({ ...capacity, urgentClaims: 0 }, { slug: 'leaf', priority: 'normal' }),
+    ).toBe(1)
+  })
+
+  test('urgent claims wait only for urgent parked work', () => {
+    const capacity = dispatchCapacity(
+      [build('running'), reverify('n'), urgent(reverify('u'))],
+      3,
+      now,
+    )
+    expect(intakeCapacity(capacity)).toBe(0)
+    expect(intakeCapacity(capacity, {}, 'urgent')).toBe(1)
+    expect(intakeCapacity(capacity, { settled: new Set(['u']) }, 'urgent')).toBe(2)
+    // A denied normal leaf never lowers the urgent budget.
+    expect(intakeCapacity(capacity, { denied: new Map([['x', 'normal']]) }, 'urgent')).toBe(1)
+    expect(intakeCapacity(capacity, { denied: new Map([['x', 'urgent']]) }, 'urgent')).toBe(0)
+    expect(intakeCapacity(capacity, { denied: new Map([['x', 'urgent']]) })).toBe(-1)
+  })
+
+  test('one free slot: urgent claims outrank normal parked work', () => {
+    const capacity = dispatchCapacity([reverify('n')], 1, now, undefined, { urgentClaims: 1 })
+    const admitted = (slug: string, priority: 'urgent' | 'normal') =>
+      capacity.occupied + reservedAhead(capacity, { slug, priority }) < capacity.configured
+    expect(admitted('n', 'normal')).toBe(false)
+    expect(intakeCapacity(capacity, {}, 'urgent')).toBe(1)
+  })
+
+  test('one free slot: urgent parked work outranks normal, in either visit order', () => {
+    const capacity = dispatchCapacity([reverify('a-normal'), urgent(reverify('z-urgent'))], 1, now)
+    const admitted = (slug: string, priority: 'urgent' | 'normal') =>
+      capacity.occupied + reservedAhead(capacity, { slug, priority }) < capacity.configured
+    expect(admitted('a-normal', 'normal')).toBe(false)
+    expect(admitted('z-urgent', 'urgent')).toBe(true)
+  })
+
+  test('urgent claim demand comes only from an admission scan with intake on', () => {
+    const scan = { mode: 'admission' as const, urgentWaiting: 2 }
+    const settings = { intake: true, paused: false }
+    expect(urgentClaimDemand({ scan, settings })).toBe(2)
+    expect(urgentClaimDemand({ scan, settings: { ...settings, intake: false } })).toBe(0)
+    expect(urgentClaimDemand({ scan, settings: { ...settings, paused: true } })).toBe(0)
+    expect(urgentClaimDemand({ scan: { ...scan, mode: 'observation' }, settings })).toBe(0)
+    expect(urgentClaimDemand({ scan: { mode: 'admission' }, settings })).toBe(0)
+    expect(urgentClaimDemand({ settings })).toBe(0)
+  })
+
+  test('wording names priority and urgent claims', () => {
+    expect(slotWaitText('reconcile')).toBe(
+      'reconcile waiting for a slot ahead of normal ticket claims',
+    )
+    expect(slotWaitText('reconcile', 'urgent')).toBe(
+      'urgent reconcile waiting for a slot ahead of normal work',
+    )
+    const capacity: DispatchCapacity = {
+      configured: 1,
+      occupied: 1,
+      effective: 1,
+      borrowingNodes: [],
+      waitingBuilds: [
+        { slug: 'a', request: 'verification' },
+        { slug: 'b', request: 'reconcile', priority: 'urgent' },
+      ],
+      urgentClaims: 1,
+    }
+    expect(waitingExplanation(capacity)).toBe(
+      '2 parked builds waiting for a slot ahead of normal ticket claims: b (urgent), a; 1 urgent ticket claim waiting ahead of normal parked work',
+    )
+    expect(waitingExplanation(capacity, { requests: true })).toBe(
+      '2 parked builds waiting for a slot ahead of normal ticket claims: b (reconcile, urgent), a (verification); 1 urgent ticket claim waiting ahead of normal parked work',
+    )
+    expect(waitingExplanation({ ...capacity, waitingBuilds: [], urgentClaims: 2 })).toBe(
+      '2 urgent ticket claims waiting ahead of normal parked work',
+    )
+  })
 })
 
 const measurementRequest = {

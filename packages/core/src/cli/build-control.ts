@@ -6,7 +6,8 @@ import {
   landRefusalReason,
 } from '../kernel/landing-readiness'
 import { observeIntegration } from '../kernel/integration-completeness'
-import type { TicketSource } from '../ports/types'
+import type { TicketPriority, TicketSource } from '../ports/types'
+import { ticketPrioritySchema } from '../ports/tickets/priority'
 import { readBuildFacts } from '../store/reduced-reads'
 /**
  * Durable operator controls for one build.
@@ -65,6 +66,8 @@ export type BuildControlAction =
       reason?: string
     }
   | { kind: 'land'; head?: string }
+  /** Slot-admission priority for an active build; never changes the ticket. */
+  | { kind: 'priority'; priority: TicketPriority }
   | { kind: 'pause' }
   | { kind: 'resume' }
   | {
@@ -102,6 +105,7 @@ export type BuildControlAction =
 export type BuildControlCommand =
   | 'hold'
   | 'land'
+  | 'priority'
   | 'pause'
   | 'resume'
   | 'abort'
@@ -241,7 +245,8 @@ async function appendCommand(
       })
       break
     case 'abort':
-      throw new Error('Abort commands require compare-and-append authorization')
+    case 'priority':
+      throw new Error(`${command} commands require compare-and-append authorization`)
     case 'discard':
       event = await store.append(slug, {
         actor,
@@ -610,6 +615,22 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
   }
 
   if (opts.action.kind === 'reopen') return reopenBuild(opts, record, user, opts.action)
+  if (opts.action.kind === 'priority') {
+    const parsed = ticketPrioritySchema.safeParse(opts.action.priority)
+    if (!parsed.success)
+      throw new BuildControlError(
+        'invalid-argument',
+        `priority must be urgent or normal, got "${String(opts.action.priority)}"; nothing was recorded`,
+      )
+    activeState(opts.slug, state)
+    const event = await opts.store.appendIfCurrent(opts.slug, state.lastSeq, {
+      actor: humanActor(user, opts.via),
+      type: 'build.priority-set',
+      payload: { priority: parsed.data },
+    })
+    if (event === null) return controlBuild(opts)
+    return { kind: 'command', slug: opts.slug, command: 'priority', event }
+  }
 
   const holdReason = opts.action.kind === 'hold' ? opts.action.reason?.trim() : undefined
   if (
@@ -1300,6 +1321,8 @@ function actionLabel(action: BuildControlAction): string {
       return 'discard'
     case 'answer':
       return 'answer'
+    case 'priority':
+      return 'set the priority of'
     default:
       return action.kind
   }

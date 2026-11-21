@@ -315,6 +315,9 @@ export interface E2eHarness {
   advanceRemote(changes: Record<string, string>, message: string): Promise<string>
   /** Run the most recently launched BuildRunner to its park point (§11). */
   runLatest(): Promise<BuildState>
+  /** Run the most recent BuildRunner launched for `slug`, when one tick
+   * launched several builds and the order is not the subject. */
+  runLaunched(slug: string): Promise<BuildState>
   events(slug: string): Promise<AbEvent[]>
   /** Idempotent: every call after the first returns the first call's promise,
    * so a scenario's own `finally` and scenarioScope can both invoke it. */
@@ -793,6 +796,16 @@ export async function makeHarness(opts: {
     }
 
     let cleaned: Promise<void> | undefined
+    const runEntry = async (entry: (typeof launched)[number]): Promise<BuildState> => {
+      signal?.throwIfAborted()
+      try {
+        return await entry.runner.run()
+      } finally {
+        // Direct Dispatcher integration bypasses DispatchLoop's execution
+        // supervisor; mirror its exact post-completion lease release here.
+        await activeStore.releaseLease(entry.slug, entry.instance)
+      }
+    }
     return {
       tmp,
       origin,
@@ -823,16 +836,14 @@ export async function makeHarness(opts: {
         return sha
       },
       async runLatest(): Promise<BuildState> {
-        signal?.throwIfAborted()
         const entry = launched.at(-1)
         if (entry === undefined) throw new Error('runLatest: nothing launched')
-        try {
-          return await entry.runner.run()
-        } finally {
-          // Direct Dispatcher integration bypasses DispatchLoop's execution
-          // supervisor; mirror its exact post-completion lease release here.
-          await activeStore.releaseLease(entry.slug, entry.instance)
-        }
+        return runEntry(entry)
+      },
+      async runLaunched(slug: string): Promise<BuildState> {
+        const entry = launched.findLast((candidate) => candidate.slug === slug)
+        if (entry === undefined) throw new Error(`runLaunched: ${slug} was not launched`)
+        return runEntry(entry)
       },
       events: (slug) => store.getEvents(slug),
       cleanup: () =>
