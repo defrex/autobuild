@@ -85,6 +85,7 @@ import {
   epilogueLeaf,
   intakeCapacity,
   nodeCapacity,
+  occupiesCapacity,
   settlementDue,
   settlementKey,
   slotRequest,
@@ -694,8 +695,17 @@ interface TargetedDispatch {
   tickets: Ticket[]
   /** Active ticket identities, matched without source reads. */
   activeIds: Set<string>
+  /** The request each ticket answers, keyed by ticket id. */
+  requests: Map<string, PendingTicketStart>
   /** Keyed by ticket id. A ticket without an entry stays pending. */
   outcomes: Map<string, TargetedOutcome>
+  /** The builds the pass measured capacity from, when it got that far. */
+  measured?: CapacityBuild[]
+}
+
+/** A runner lease that has not expired. */
+function leaseLive(record: BuildRecord, now: Date): boolean {
+  return record.lease !== undefined && Date.parse(record.lease.expiresAt) > now.getTime()
 }
 
 /** An active build's ticket ref, normalized through recorded migrations. */
@@ -1222,6 +1232,13 @@ export class Dispatcher {
   /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
    * projected wait for one of these is one tick stale and reserves nothing. */
   private readonly parkedSettled = new Set<string>()
+  /** Leaves the last start-request capacity measurement found holding a slot
+   * with no runner allocated, by slug, with their record's `updatedAt` then.
+   * Only a change to that state can free the slot, and every append moves
+   * `updatedAt`, so an unchanged record still holds it. Kept for one ticket
+   * scan interval, so even a write that left `updatedAt` equal at clock
+   * resolution delays a start by at most the cadence intake already scans at. */
+  private startOccupants = { at: 0, slugs: new Map<string, string>() }
 
   // Batched confirmed landing evidence is shared across nodes for this tick.
   // Only durable availability facts authorize the shortcut after restart. The
@@ -1761,15 +1778,52 @@ export class Dispatcher {
       candidates.push({ request, ticket })
     }
     if (candidates.length === 0 || this.outOfBudget(opts)) return
+    // Measuring capacity reads every active build's facts. A lower bound from
+    // the cached records needs none: a leaf with a live lease or a launch holds
+    // a slot, and so does a leaf the last measurement found holding one by its
+    // state alone while its record is unchanged. Neither can over-admit; a
+    // stale bound only delays the pass to a later tick.
+    const now = this.deps.clock()
+    if (now.getTime() - this.startOccupants.at >= config.ticketScanIntervalSeconds * 1000)
+      this.startOccupants.slugs.clear()
+    const plain = candidates.every(
+      ({ ticket }) =>
+        ticket.kind !== 'node' && !(ticket.target !== undefined && ticket.blockedBy?.length),
+    )
+    const held = active.filter(
+      ({ record, digest }) =>
+        digest.kind !== 'node' &&
+        (leaseLive(record, now) ||
+          launched.has(record.slug) ||
+          this.continuations.has(record.slug) ||
+          this.startOccupants.slugs.get(record.slug) === record.updatedAt),
+    ).length
+    if (plain && held >= config.capacity) return
     const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
     const targeted: TargetedDispatch = {
       tickets: candidates.map(({ ticket }) => ticket),
       activeIds: new Set(refs.map(({ ref }) => key(ref))),
+      requests: new Map(candidates.map(({ request, ticket }) => [ticket.ref.id, request])),
       outcomes: new Map(),
     }
     const scratch = emptyTickReport()
     try {
       await this.dispatch(scratch, launched, autoMergeUser, paused, opts, undefined, targeted)
+      if (targeted.measured)
+        this.startOccupants = {
+          at: now.getTime(),
+          slugs: new Map(
+            targeted.measured
+              .filter(
+                (build) =>
+                  build.state.kind !== 'node' &&
+                  !build.provisioning &&
+                  !leaseLive(build.record, now) &&
+                  occupiesCapacity(build, now),
+              )
+              .map((build) => [build.record.slug, build.record.updatedAt]),
+          ),
+        }
     } finally {
       for (const counter of [
         'dispatched',
@@ -1861,6 +1915,17 @@ export class Dispatcher {
       return false
     }
     return complete
+  }
+
+  /** Whether the request a targeted ticket answers is still pending, read
+   * after one journal refresh. */
+  private async startStillPending(targeted: TargetedDispatch, ticket: Ticket): Promise<boolean> {
+    const request = targeted.requests.get(ticket.ref.id)
+    if (request === undefined) return false
+    await this.store.refreshJournal()
+    const current =
+      this.store.repositoryFacts().ticketStarts.pending[ticketStartKey(request.ticket)]
+    return current?.seq === request.seq
   }
 
   /** Settle one start request once. The journal is refreshed first, so a
@@ -7948,6 +8013,7 @@ export class Dispatcher {
     // decision holds none. Capacity is per repo (§16.1) — another repo's
     // builds never consume this repo's slots.
     const capacityBuilds = await this.capacityBuilds(launched)
+    if (targeted) targeted.measured = capacityBuilds
     // A node awaiting verification, or a parked build that must run again,
     // reserves its slot ahead of new claims until it is admitted; this only
     // ever lowers the claim budget.
@@ -8287,6 +8353,9 @@ export class Dispatcher {
       await store.ensureRepo(this.deps.repo)
       // A lapsed run leaves the ticket Ready for whoever holds the repository.
       if (this.deps.holdsRepoAuthority?.() === false) break
+      // An operator may cancel a start request while its pass reads; the
+      // claim proceeds only for a request still pending after a fresh read.
+      if (targeted && !(await this.startStillPending(targeted, ticket))) continue
       await store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
         type: 'ticket-preparation.intended',

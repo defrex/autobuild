@@ -231,6 +231,17 @@ test('a request waits for a free slot and starts once one opens', async () => {
   expect((await w.settled()).map((event) => event.payload)).toMatchObject([{ outcome: 'started' }])
 })
 
+test('a waiting request starts on the tick after an occupant frees its slot', async () => {
+  const w = await world([ticket('T-1')], { config: `capacity = 1\n${FILE_CONFIG}` })
+  await seedBuild(w.store, 'occupant', { source: 'fake', id: 'T-9' })
+  await w.start('T-1')
+  // The second waiting tick skips re-measuring capacity; nothing has changed.
+  for (let i = 0; i < 2; i++) expect((await w.tick()).dispatched).toBe(0)
+  await w.store.append('occupant', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+  expect((await w.tick()).dispatched).toBe(1)
+  expect((await w.settled()).map((event) => event.payload)).toMatchObject([{ outcome: 'started' }])
+})
+
 test('refusals settle once with an explicit outcome and are never re-read', async () => {
   const w = await world(
     [
@@ -281,6 +292,30 @@ test('cancel through MCP records a cancelled entry and the next tick does nothin
   expect(await w.start('T-1', true)).toMatchObject({ cancelled: false })
   await w.tick()
   expect(w.calls.claim).toEqual([])
+  expect((await w.status()).ticketStarts?.recent).toMatchObject([
+    { ticket: { id: 'T-1' }, outcome: 'cancelled' },
+  ])
+})
+
+test('a cancellation landing while the pass reads the ticket prevents the claim', async () => {
+  let armed = false
+  // The operator cancels during the dispatcher's targeted `get`.
+  const w: Awaited<ReturnType<typeof world>> = await world([ticket('T-1')], {
+    get: (id) => {
+      if (!armed) return undefined
+      armed = false
+      return (async () => {
+        await w.start(id, true)
+        return w.source.get(id)
+      })()
+    },
+  })
+  await w.start('T-1')
+  armed = true
+  await w.tick()
+  expect(w.calls.claim).toEqual([])
+  expect(await w.store.listBuilds()).toEqual([])
+  expect(await w.settled()).toEqual([])
   expect((await w.status()).ticketStarts?.recent).toMatchObject([
     { ticket: { id: 'T-1' }, outcome: 'cancelled' },
   ])
