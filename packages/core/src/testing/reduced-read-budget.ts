@@ -6753,9 +6753,9 @@ export async function ticketStartReadBudget(): Promise<{
   repoRows: number
 }> {
   // While a request waits at full capacity, the first pass of a process
-  // measures capacity from each active build's served facts, as an intake
-  // scan does. Later passes read only the repository change position until
-  // something changes, so the steady cost is independent of the fleet.
+  // reads each active build's served facts once, as an intake scan does.
+  // Later passes read only builds whose record changed, so the steady cost
+  // is independent of the fleet and of time.
   const { MemoryBuildStore } = await import('../store/memory')
   const { CONFORMING_BODY } = await import('../scenarios/harness')
   const { requestTicketStart } = await import('../operator/ticket-start')
@@ -6824,10 +6824,9 @@ export async function ticketStartReadBudget(): Promise<{
         },
       })
     }
+    // The default scan cadence: each tick advances the clock past it.
     const config = parseConfig(
-      // Measured ticks fall inside one scan interval, the most a capacity
-      // measurement is reused for.
-      `capacity = ${capacity}\nticketScanIntervalSeconds = 3600\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
+      `capacity = ${capacity}\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
     )
     const dispatcher = () => {
       const forge = new FakeForge()
@@ -6947,28 +6946,46 @@ export async function ticketStartReadBudget(): Promise<{
         pending.fresh()
       }
       // The unleased builds are relaunched until their launch budget blocks
-      // them, and a launch holds a slot without a measurement. The first
-      // tick after that measures capacity once; later ticks serve the bound
-      // from the cached records.
+      // them, and each launch moves a record, which the start stage then
+      // reads once. A fresh process has no memoized capacity inputs: its
+      // first waiting tick reads each active build's served facts once, with
+      // no event rows, and never again while the builds are unchanged.
       for (let i = 0; i < 4; i++) {
-        await control.tick()
-        await pending.tick()
+        const base = await control.tick()
+        const measured = await pending.tick()
+        if (!fresh || i > 0) continue
+        const calls = difference(measured.calls, base.calls)
+        expect(measured.rows - base.rows).toBe(0)
+        expect(calls).toEqual({
+          getReducerValue: builds,
+          readValue: builds,
+          snapshotTail: builds,
+          state: builds,
+        })
       }
-      const base = await control.tick()
-      const measured = await pending.tick()
-      const extra = subtract(measured.gets, base.gets)
-      expect(extra).toEqual(['AB-0'])
-      expect(measured.appended).toEqual([])
-      expect(pending.claims).toEqual([])
-      // The pending world reads no build facts the control does not.
-      const rows = measured.rows - base.rows
-      const repoRows = measured.repoRows - base.repoRows
-      expect(rows).toBe(0)
-      expect(repoRows).toBeLessThanOrEqual(projectionTicks + 1)
-      const calls = difference(measured.calls, base.calls)
-      for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
-        expect(calls[replay]).toBeUndefined()
-      expect(calls).toEqual({})
+      // Each tick advances the clock past the default scan interval, so
+      // nothing the stage serves expires with time.
+      let calls: Record<string, number> = {}
+      let rows = 0
+      let repoRows = 0
+      let extra: string[] = []
+      for (let i = 0; i < 3; i++) {
+        const base = await control.tick()
+        const measured = await pending.tick()
+        extra = subtract(measured.gets, base.gets)
+        expect(extra).toEqual(['AB-0'])
+        expect(measured.appended).toEqual([])
+        expect(pending.claims).toEqual([])
+        // The pending world reads no build facts the control does not.
+        rows = measured.rows - base.rows
+        repoRows = measured.repoRows - base.repoRows
+        expect(rows).toBe(0)
+        expect(repoRows).toBeLessThanOrEqual(projectionTicks + 1)
+        calls = difference(measured.calls, base.calls)
+        for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
+          expect(calls[replay]).toBeUndefined()
+        expect(calls).toEqual({})
+      }
       const key = `${builds}:${fresh}`
       const run = { gets: extra.length, calls, rows, repoRows }
       results.set(key, [...(results.get(key) ?? []), run])

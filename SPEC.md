@@ -578,11 +578,15 @@ refresh confirms the request is still pending, and it is default watch
 attention. There is no force: capacity is respected and nothing is preempted.
 The claim itself proceeds only after a journal refresh confirms the request is
 still pending, so a cancellation that lands while a pass is reading the ticket
-prevents it. While a request waits for a slot, the dispatcher reads no build
-facts when the cached build records already account for every slot: leaves
-with a live runner lease or a launch this tick, plus leaves the last capacity
-measurement found holding a slot without a runner whose records have not
-changed since. That measurement is reused for at most one ticket scan interval.
+prevents it. While a request waits for a slot, the dispatcher keeps each
+active build's capacity inputs as it last read them and reads a build again
+only when its record has changed since; a leaf holding a runner lease or
+launched this tick holds its slot whatever its state. A dispatcher process
+reads each active build once, then nothing while the fleet is unchanged,
+however long the request waits. It runs the admission pass only when those
+inputs show a free slot, or for a node or a not-yet-checked blocked target, and
+admission measures capacity afresh, so a stale input can delay a start but
+never exceed capacity.
 
 Hosted active builds may record a legacy ticket alias. While a request is
 pending, the dispatcher resolves the canonical identity of each active hosted

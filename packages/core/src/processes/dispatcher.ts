@@ -85,7 +85,6 @@ import {
   epilogueLeaf,
   intakeCapacity,
   nodeCapacity,
-  occupiesCapacity,
   settlementDue,
   settlementKey,
   slotRequest,
@@ -708,6 +707,13 @@ function leaseLive(record: BuildRecord, now: Date): boolean {
   return record.lease !== undefined && Date.parse(record.lease.expiresAt) > now.getTime()
 }
 
+/** The `updatedAt` under which a read of `record` at `now` may be served
+ * again. A write in the same clock millisecond as the read could leave
+ * `updatedAt` unchanged, so such a read keys nothing and is read again. */
+function memoKey(record: BuildRecord, now: Date): string {
+  return Date.parse(record.updatedAt) < now.getTime() ? record.updatedAt : ''
+}
+
 /** An active build's ticket ref, normalized through recorded migrations. */
 interface ActiveTicketRef {
   slug: string
@@ -1232,13 +1238,18 @@ export class Dispatcher {
   /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
    * projected wait for one of these is one tick stale and reserves nothing. */
   private readonly parkedSettled = new Set<string>()
-  /** Leaves the last start-request capacity measurement found holding a slot
-   * with no runner allocated, by slug, with their record's `updatedAt` then.
-   * Only a change to that state can free the slot, and every append moves
-   * `updatedAt`, so an unchanged record still holds it. Kept for one ticket
-   * scan interval, so even a write that left `updatedAt` equal at clock
-   * resolution delays a start by at most the cadence intake already scans at. */
-  private startOccupants = { at: 0, slugs: new Map<string, string>() }
+  /** Each active build's capacity inputs as the start-request stage last
+   * read them, keyed by slug with the record's `updatedAt` then. Every append
+   * moves `updatedAt`, so an unchanged record serves its entry with no read;
+   * a changed or new one is read once and replaces it (see `memoKey`). Leased
+   * leaves hold a slot whatever their state, so their entry is served while
+   * leased. Only the decision to skip a pass rests on it: admission measures
+   * afresh, so a stale entry can delay a start but never over-admit. */
+  private startCapacity = new Map<string, { updatedAt: string; build: CapacityBuild }>()
+  /** Start requests whose ticket has a target and blockers and that have
+   * had one full pass with no free slot: the pass that may settle them
+   * `blocked`. Later full-capacity ticks wait for a slot without one. */
+  private startBlockersChecked = new Set<number>()
 
   // Batched confirmed landing evidence is shared across nodes for this tick.
   // Only durable availability facts authorize the shortcut after restart. The
@@ -1778,52 +1789,45 @@ export class Dispatcher {
       candidates.push({ request, ticket })
     }
     if (candidates.length === 0 || this.outOfBudget(opts)) return
-    // Measuring capacity reads every active build's facts. A lower bound from
-    // the cached records needs none: a leaf with a live lease or a launch holds
-    // a slot, and so does a leaf the last measurement found holding one by its
-    // state alone while its record is unchanged. Neither can over-admit; a
-    // stale bound only delays the pass to a later tick.
+    // Measuring capacity reads every active build's facts. The memoized
+    // inputs read only builds that changed since; when they leave no slot,
+    // only a node, or a blocked target not yet checked, needs the pass. A
+    // memo the pass finds stale only delays: admission always measures afresh.
     const now = this.deps.clock()
-    if (now.getTime() - this.startOccupants.at >= config.ticketScanIntervalSeconds * 1000)
-      this.startOccupants.slugs.clear()
-    const plain = candidates.every(
-      ({ ticket }) =>
-        ticket.kind !== 'node' && !(ticket.target !== undefined && ticket.blockedBy?.length),
-    )
-    const held = active.filter(
-      ({ record, digest }) =>
-        digest.kind !== 'node' &&
-        (leaseLive(record, now) ||
-          launched.has(record.slug) ||
-          this.continuations.has(record.slug) ||
-          this.startOccupants.slugs.get(record.slug) === record.updatedAt),
-    ).length
-    if (plain && held >= config.capacity) return
+    const projected = await this.startCapacityBuilds(active, launched, now)
+    const free =
+      intakeCapacity(dispatchCapacity(projected, config.capacity, now), {
+        settled: this.parkedSettled,
+        denied: this.slotWaiters,
+      }) > 0
+    const open = new Set(Object.values(starts.pending).map(({ seq }) => seq))
+    for (const seq of this.startBlockersChecked)
+      if (!open.has(seq)) this.startBlockersChecked.delete(seq)
+    const passing = free
+      ? candidates
+      : candidates.filter(
+          ({ request, ticket }) =>
+            ticket.kind === 'node' ||
+            (ticket.target !== undefined &&
+              !!ticket.blockedBy?.length &&
+              !this.startBlockersChecked.has(request.seq)),
+        )
+    if (passing.length === 0) return
+    if (!free)
+      for (const { request, ticket } of passing)
+        if (ticket.kind !== 'node') this.startBlockersChecked.add(request.seq)
     const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
     const targeted: TargetedDispatch = {
-      tickets: candidates.map(({ ticket }) => ticket),
+      tickets: passing.map(({ ticket }) => ticket),
       activeIds: new Set(refs.map(({ ref }) => key(ref))),
-      requests: new Map(candidates.map(({ request, ticket }) => [ticket.ref.id, request])),
+      requests: new Map(passing.map(({ request, ticket }) => [ticket.ref.id, request])),
       outcomes: new Map(),
     }
     const scratch = emptyTickReport()
     try {
       await this.dispatch(scratch, launched, autoMergeUser, paused, opts, undefined, targeted)
-      if (targeted.measured)
-        this.startOccupants = {
-          at: now.getTime(),
-          slugs: new Map(
-            targeted.measured
-              .filter(
-                (build) =>
-                  build.state.kind !== 'node' &&
-                  !build.provisioning &&
-                  !leaseLive(build.record, now) &&
-                  occupiesCapacity(build, now),
-              )
-              .map((build) => [build.record.slug, build.record.updatedAt]),
-          ),
-        }
+      for (const build of targeted.measured ?? [])
+        this.startCapacity.set(build.record.slug, { updatedAt: memoKey(build.record, now), build })
     } finally {
       for (const counter of [
         'dispatched',
@@ -1836,7 +1840,7 @@ export class Dispatcher {
         'dependencyCheckFailed',
       ] as const)
         report[counter] += scratch[counter]
-      for (const { request, ticket } of candidates) {
+      for (const { request, ticket } of passing) {
         const settled = targeted.outcomes.get(ticket.ref.id)
         if (settled === undefined) continue
         const { outcome, ...extra } = settled
@@ -3850,6 +3854,50 @@ export class Dispatcher {
             ? (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined
             : this.continuations.has(record.slug) || !!launched?.has(record.slug),
         restackDue: landingRestackDue(facts.state, facts.log),
+      })
+    }
+    return builds
+  }
+
+  /** `capacityBuilds` for the start-request stage, served from
+   * `startCapacity`: a build is read only when its record changed since its
+   * entry, or when it has none. Runner allocation comes from the current
+   * record and this process's continuations and launches. */
+  private async startCapacityBuilds(
+    active: readonly { record: BuildRecord; digest: BuildDigest }[],
+    launched: ReadonlySet<string>,
+    now: Date,
+  ): Promise<CapacityBuild[]> {
+    const live = new Set(active.map(({ record }) => record.slug))
+    for (const slug of this.startCapacity.keys())
+      if (!live.has(slug)) this.startCapacity.delete(slug)
+    const builds: CapacityBuild[] = []
+    for (const { record, digest } of active) {
+      const node = digest.kind === 'node'
+      const running =
+        !node &&
+        (leaseLive(record, now) || launched.has(record.slug) || this.continuations.has(record.slug))
+      let entry = this.startCapacity.get(record.slug)
+      if (entry === undefined || (!running && entry.updatedAt !== record.updatedAt)) {
+        const facts = await this.store.buildFacts(record.slug)
+        entry = {
+          updatedAt: memoKey(record, now),
+          build: {
+            record,
+            state: facts.state,
+            workspace: facts.workspace !== null,
+            ...(node ? { provisioning: facts.provisionMarker !== undefined } : {}),
+            restackDue: landingRestackDue(facts.state, facts.log),
+          },
+        }
+        this.startCapacity.set(record.slug, entry)
+      }
+      builds.push({
+        ...entry.build,
+        record,
+        provisioning: node
+          ? entry.build.provisioning
+          : this.continuations.has(record.slug) || launched.has(record.slug),
       })
     }
     return builds
