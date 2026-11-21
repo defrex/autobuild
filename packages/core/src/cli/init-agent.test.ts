@@ -23,12 +23,14 @@ describe('init runtime probing and selection', () => {
       alpha: registration(false),
       claude: registration({ usable: false, reason: 'logged out' }),
       codex: registration(true),
+      antigravity: registration(true),
     }
     const reports = await probeInitRuntimes(runtimes, '/repo', {})
     expect(reports.map((report) => report.runtime)).toEqual([
       'claude',
       'codex',
       'pi',
+      'antigravity',
       'alpha',
       'zebra',
     ])
@@ -40,10 +42,16 @@ describe('init runtime probing and selection', () => {
   })
 
   test('the launcher preference and direct interactive argv are explicit', () => {
-    expect(SETUP_RUNTIME_PREFERENCE).toEqual(['claude', 'codex', 'pi'])
-    for (const runtime of SETUP_RUNTIME_PREFERENCE) {
+    expect(SETUP_RUNTIME_PREFERENCE).toEqual(['claude', 'codex', 'pi', 'antigravity'])
+    for (const runtime of ['claude', 'codex', 'pi'] as const) {
       expect(setupAgentCommand(runtime, 'exact prompt')).toEqual([runtime, 'exact prompt'])
     }
+    // The antigravity runtime launches the `agy` executable's interactive TUI.
+    expect(setupAgentCommand('antigravity', 'exact prompt')).toEqual([
+      'agy',
+      '--prompt-interactive',
+      'exact prompt',
+    ])
     expect(() => setupAgentCommand('plugin-only', 'prompt')).toThrow(
       'no interactive setup launcher',
     )
@@ -53,6 +61,12 @@ describe('init runtime probing and selection', () => {
         { runtime: 'claude', usable: true, reason: 'ready' },
       ]),
     ).toBe('claude')
+    expect(
+      selectSetupRuntime([
+        { runtime: 'antigravity', usable: true, reason: 'ready' },
+        { runtime: 'pi', usable: true, reason: 'ready' },
+      ]),
+    ).toBe('pi')
   })
 
   test('reports absent and throwing probes without hiding other runtimes', async () => {

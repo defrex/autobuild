@@ -1,4 +1,5 @@
 /** Child adapter process shared by deterministic and opt-in live resume proofs. */
+import { AntigravityAgentRunner } from './antigravity'
 import { ClaudeAgentRunner } from './claude'
 import { CodexAgentRunner } from './codex'
 import { PiAgentRunner } from './pi'
@@ -17,7 +18,9 @@ if (import.meta.main) {
       ? new ClaudeAgentRunner()
       : input.provider === 'codex'
         ? new CodexAgentRunner()
-        : new PiAgentRunner()
+        : input.provider === 'antigravity'
+          ? new AntigravityAgentRunner()
+          : new PiAgentRunner()
   let observed: NativeSessionHandle | undefined
   input.opts.onNativeSession = async (handle) => {
     observed = handle

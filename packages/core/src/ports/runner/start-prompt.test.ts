@@ -5,6 +5,7 @@ const COMMANDS: Record<StartPromptRuntime, string> = {
   claude: '/ab-plan-review',
   pi: '/skill:ab-plan-review',
   codex: '$ab-plan-review',
+  antigravity: '/ab-plan-review',
 }
 
 describe('skillCommand', () => {

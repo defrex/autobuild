@@ -4,7 +4,7 @@
   "title": "How Autobuild works",
   "group": "start",
   "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-  "textHash": "9fd3996d3223ed393e2980a26c569f6c1e7a77c479ca784d176da597e6e851f8",
+  "textHash": "f8fb45bc0e29543239ed728dc31119177216a185643a0b419604b973bc08484f",
   "headings": [
     "From a ticket to a change",
     "Where it fits",

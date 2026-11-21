@@ -4,7 +4,7 @@
   "title": "Getting started",
   "group": "start",
   "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
-  "textHash": "a6a9a125c4fb51bdf9dd3eea10020ddaac4d799914a88ca296bd487fb79bc381",
+  "textHash": "f5adb658e9df90126fe89cc7863bde73fcc31f43d4df61d7edbf99faba92b584",
   "headings": [
     "1. Install in the repository",
     "2. Initialize and configure",

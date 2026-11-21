@@ -93,7 +93,7 @@ Interfaces to the world, each with swappable adapters:
 | Port | Duty | Initial adapters |
 |---|---|---|
 | `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; hosted; GitHub Issues; third-party in-process registrations |
-| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); local pi CLI (`--mode rpc`, minimum 0.84.3); third-party in-process registrations |
+| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); local pi CLI (`--mode rpc`, minimum 0.84.3); Antigravity CLI (`agy -p --output-format stream-json`); third-party in-process registrations |
 | `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub; local Git; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
@@ -2204,14 +2204,17 @@ non-resumable), used for slug naming (§6.3) and vendored-skill conflict
 resolution (§16.3). A runtime without it is valid; each caller owns its
 deterministic fail-safe.
 
-- **Adapters:** three builtins sit behind the interface: the locally installed
+- **Adapters:** four builtins sit behind the interface: the locally installed
   Claude Code CLI in headless mode for Claude models; the locally installed
-  Codex CLI for unqualified `gpt-*` models; and the locally installed pi CLI
+  Codex CLI for unqualified `gpt-*` models; the locally installed pi CLI
   (minimum version 0.84.3), driven headlessly through `--mode rpc`, for every
-  provider-qualified model that installation resolves. Each adapter uses its
-  CLI's local authenticated login; pi also owns its local model catalog and
-  keeps one persistent RPC process alive across review-loop continuations. All
-  three provide tool-free one-shot completion. Plugins may register additional
+  provider-qualified model that installation resolves; and the locally
+  installed Antigravity CLI (`agy`) for `gemini-`, `claude-` and `gpt-` slugs,
+  using ambient agy auth and `--conversation` native resume. Each adapter uses
+  its CLI's local authenticated login; pi also owns its local model catalog and
+  keeps one persistent RPC process alive across review-loop continuations.
+  Claude, Codex and Pi provide tool-free one-shot completion; Antigravity omits
+  it because agy cannot guarantee tool-free execution. Plugins may register additional
   adapters, each under a *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
   AgentRunner contract suite.
@@ -5996,7 +5999,7 @@ skill ships. `ab init` installs into a repo:
   Existing config is never overwritten, even with `--force`.
 - **An agent-driven setup handoff.** Init probes every registered runtime and
   reports each usable/unusable result, then chooses an interactive setup agent
-  using the product-fixed `claude`, `codex`, `pi` preference order. The launcher
+  using the product-fixed `claude`, `codex`, `pi`, `antigravity` preference order. The launcher
   choice does not constrain the pipeline's final roles or models. On an
   interactive terminal, init starts that coding-agent CLI directly in the
   target repository with inherited terminal I/O, no `AB_*` session identity,

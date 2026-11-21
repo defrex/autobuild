@@ -62,6 +62,10 @@ export interface AgentRunnerContractHarness {
    * the per-turn emitter, across turns, in order. Present only when the
    * offline fake supports streaming. */
   stream?: () => readonly StreamPart[]
+  /** Set when the adapter's `end` is idempotent: a repeated `end` returns
+   * the first transcript instead of rejecting, and `continue` on an ended
+   * session still rejects. Unset keeps the strict single-`end` assertion. */
+  idempotentEnd?: boolean
   cleanup?: () => Promise<void>
 }
 
@@ -280,7 +284,27 @@ export function describeAgentRunnerContract(
         })
         expectTranscript(transcript, harness.runner, harness.model)
         if (harness.disposed !== undefined) expect(harness.disposed()).toBe(1)
-        await expect(harness.runner.end(started.session)).rejects.toThrow()
+        if (harness.idempotentEnd === true)
+          expect(await harness.runner.end(started.session)).toEqual(transcript)
+        else await expect(harness.runner.end(started.session)).rejects.toThrow()
+      })
+    })
+
+    test('an idempotent end returns the same transcript and the ended session cannot continue', async () => {
+      await withHarness(factory, 'success', async (harness) => {
+        if (harness.idempotentEnd !== true) return
+        const started = await harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+        })
+        expectTypedCompleted(started.result)
+        const first = await harness.runner.end(started.session)
+        expectTranscript(first, harness.runner, harness.model)
+        expect(await harness.runner.end(started.session)).toEqual(first)
+        await expect(harness.runner.continue(started.session, CONTRACT_FOLLOW_UP)).rejects.toThrow()
       })
     })
 
