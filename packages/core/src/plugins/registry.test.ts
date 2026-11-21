@@ -90,6 +90,7 @@ describe('PluginRegistry', () => {
       'claude',
       'codex',
       'pi',
+      'antigravity',
       'split',
     ])
     expect(() => registry.register(plugin('bad', { agentRuntimes: { codex: factory } }))).toThrow(

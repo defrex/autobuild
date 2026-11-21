@@ -942,7 +942,9 @@ describe('docs/configuration.md — init behavior', () => {
     const section = headingSection(doc, 2, 'What `ab init` generates')
     expect(section).toBeDefined()
     expect(section).toContain('stack-neutral skeleton')
-    expect(section).toContain('product preference `claude`, then `codex`, then `pi`')
+    expect(section).toContain(
+      'product preference `claude`, then `codex`, then `pi`, then `antigravity`',
+    )
     expect(section).toContain('empty `[commands]`')
     expect(section).toContain('same setup pointer prompt verbatim')
     expect(section).toContain('.agents/skills/ab-guide/references/setup.md')

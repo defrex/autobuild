@@ -25,6 +25,43 @@ describe('production runtime registry', () => {
     expect(pi?.defaultModel).toBe('kimi-coding/k3')
   })
 
+  test('registers Antigravity without a one-shot and with agy-owned options', () => {
+    const { antigravity } = createProductionRuntimes().runtimes
+    expect(antigravity?.runner.name).toBe('antigravity')
+    expect(antigravity?.ownedArgs).toEqual([
+      '-p',
+      '--print',
+      '--prompt',
+      '--output-format',
+      '--input-format',
+      '--model',
+    ])
+    expect(antigravity?.servesModels).toEqual(['gemini-', 'claude-', 'gpt-'])
+    expect(antigravity?.defaultModel).toBeUndefined()
+    expect(antigravity?.oneShot).toBeUndefined()
+    expect(antigravity?.promptBoundary).toBeUndefined()
+    expect(antigravity?.openSessionStream).toBeDefined()
+    expect(typeof antigravity?.initUsable).toBe('function')
+  })
+
+  test('validates Antigravity model families and delegates an omitted model', () => {
+    const runtimes = createProductionRuntimes().runtimes
+    const omitted = createRuntimeResolver(runtimes, { default: { runtime: 'antigravity' } })
+    expect(omitted.resolve('plan')).toMatchObject({ runtime: 'antigravity' })
+    expect(omitted.resolve('plan').model).toBeUndefined()
+    for (const model of ['gemini-3.8-flash-medium', 'claude-opus-5-5', 'gpt-6.1-sol']) {
+      const resolved = createRuntimeResolver(runtimes, {
+        default: { runtime: 'antigravity', model },
+      })
+      expect(resolved.resolve('implement').model).toBe(model)
+    }
+    expect(() =>
+      createRuntimeResolver(runtimes, {
+        default: { runtime: 'antigravity', model: 'openai/gpt-x' },
+      }),
+    ).toThrow(/runtime "antigravity".*serves only/)
+  })
+
   test('rejects only model and parsed-protocol spellings, including real aliases', () => {
     const runtimes = createProductionRuntimes().runtimes
     for (const [runtime, arg] of [
@@ -38,6 +75,14 @@ describe('production runtime registry', () => {
       ['codex', '-mgpt-5.4'],
       ['pi', '--mode'],
       ['pi', '--model'],
+      ['antigravity', '-p'],
+      ['antigravity', '-pfoo'],
+      ['antigravity', '--print'],
+      ['antigravity', '--prompt'],
+      ['antigravity', '--output-format'],
+      ['antigravity', '--input-format'],
+      ['antigravity', '--model'],
+      ['antigravity', '--model=gemini-x'],
     ] as const) {
       expect(() =>
         createRuntimeResolver(runtimes, {
@@ -114,6 +159,10 @@ describe('production runtime registry', () => {
           '--help',
           '--',
         ],
+      ],
+      [
+        'antigravity',
+        ['--effort', 'high', '--mode', 'accept-edits', '--sandbox', '--add-dir', '../x'],
       ],
     ] as const
 

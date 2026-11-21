@@ -3,11 +3,12 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { AgentTurnResult, NativeSessionHandle, Transcript } from '../types'
+import { AntigravityAgentRunner } from './antigravity'
 import { ClaudeAgentRunner } from './claude'
 import { CodexAgentRunner } from './codex'
 import { runNativeAdapterChild } from './live-contract-fixture'
 
-for (const provider of ['claude', 'codex', 'pi'])
+for (const provider of ['claude', 'codex', 'pi', 'antigravity'])
   test(`${provider}: separate adapter processes retain native memory with fresh environment`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'ab-native-process-'))
     try {
@@ -15,7 +16,8 @@ for (const provider of ['claude', 'codex', 'pi'])
       const cwd = join(root, 'workspace')
       const state = join(root, 'native')
       await Promise.all([mkdir(bin), mkdir(cwd), mkdir(state)])
-      const executable = join(bin, provider)
+      // The antigravity runtime invokes the `agy` executable.
+      const executable = join(bin, provider === 'antigravity' ? 'agy' : provider)
       await writeFile(
         executable,
         `#!/bin/sh\nexec '${process.execPath}' '${new URL('./native-cli-fixture.ts', import.meta.url).pathname}' "$@"\n`,
@@ -45,18 +47,23 @@ for (const provider of ['claude', 'codex', 'pi'])
     }
   })
 
-for (const provider of ['claude', 'codex'] as const)
+for (const provider of ['claude', 'codex', 'antigravity'] as const)
   test(`${provider}: production subprocess reports identity before a blocked turn ends without a UI stream`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'ab-native-latency-'))
     const release = join(root, 'release')
     try {
-      const executable = join(root, provider)
+      const executable = join(root, provider === 'antigravity' ? 'agy' : provider)
       await writeFile(
         executable,
         `#!/bin/sh\nexec '${process.execPath}' '${new URL('./native-cli-fixture.ts', import.meta.url).pathname}' "$@"\n`,
       )
       await chmod(executable, 0o755)
-      const runner = provider === 'claude' ? new ClaudeAgentRunner() : new CodexAgentRunner()
+      const runner =
+        provider === 'claude'
+          ? new ClaudeAgentRunner()
+          : provider === 'codex'
+            ? new CodexAgentRunner()
+            : new AntigravityAgentRunner()
       let observed!: (handle: NativeSessionHandle) => void
       const observation = new Promise<NativeSessionHandle>((resolve) => {
         observed = resolve

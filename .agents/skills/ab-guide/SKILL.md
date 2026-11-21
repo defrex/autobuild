@@ -1268,7 +1268,7 @@ These are the repository's roles for every build; a ticket label can select a
 The four primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
-with a copyable fix and all registered runtime names. Three runtimes ship:
+with a copyable fix and all registered runtime names. Four runtimes ship:
 Named `[accounts]` are deployment-owned nonsecret descriptors, adopted atomically
 with `[roles]`. The `account` axis inherits independently on primary and alternate
 routes. A Claude route defaults to the sole Claude subscription account, and
@@ -1276,12 +1276,19 @@ ambiguity or incompatible runtimes fail validation. See [billing accounts](refer
 for provisioning, ChatGPT sign-in destinations, Kimi regions, placeholders, single-owner renewal and metadata-only hosted readiness.
 
 **`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
-`gpt-*` ids), and **`pi`** (local Pi CLI 0.84.3 or newer; provider-qualified ids
-such as the independent `openai-codex/gpt-5.6-sol` route). Pi runs headlessly
+`gpt-*` ids), **`pi`** (local Pi CLI 0.84.3 or newer; provider-qualified ids
+such as the independent `openai-codex/gpt-5.6-sol` route), and **`antigravity`**
+(local Antigravity CLI `agy`; unqualified `gemini-*`, `claude-*` and `gpt-*`
+slugs). Pi runs headlessly
 through RPC and uses that local installation's login and model catalog;
 Autobuild does not install it. `ab models [query]` lists the local catalog, and
-`ab models --available` filters it to configured credentials. Claude and Codex
-delegate an omitted model to their CLI default; a Claude route selecting a Kimi Code account defaults to `kimi-for-coding`; Pi declares `kimi-coding/k3`.
+`ab models --available` filters it to configured credentials. Antigravity runs
+headless `agy` turns with the operator's ambient agy authentication (keyring
+sign-in, `GEMINI_API_KEY` with `modelProvider = "gemini"`, or ADC); Autobuild
+does not install it and has no named accounts for it. Claude, Codex and
+Antigravity delegate an omitted model to their CLI default; a Claude route selecting a Kimi Code account defaults to `kimi-for-coding`; Pi declares `kimi-coding/k3`.
+Antigravity declares no tool-free one-shot, so slug naming uses the title
+fallback and upgrade conflicts stay manual on Antigravity routes.
 Trusted plugins may register additional runtime names;
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
@@ -1332,7 +1339,9 @@ model families; all problems in `default` and every declared role are
 aggregated by one eager resolver construction before judgment runs. Runtime
 adapters reject the model and parsed protocol/output-mode options they
 emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
-rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude
+rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`;
+Antigravity rejects `-p`/`--print`/`--prompt`, `--output-format`,
+`--input-format`, and `--model`. Claude
 routes with a selected account additionally reject `--settings`,
 `--setting-sources`, and `--bare` because Autobuild owns their authentication
 settings. Codex routes selecting a ChatGPT subscription account additionally
@@ -1341,7 +1350,10 @@ because Autobuild owns their provider and configuration routing. This includes
 using `-c` to set reasoning effort. Routes without an account retain the existing
 argument behavior. Exact
 spellings, `--option=value` forms, and documented compact short aliases join
-that same role-naming aggregate. Every other option passes through without
+that same role-naming aggregate. Antigravity also owns conversation
+selection: `--conversation`, `--continue`/`-c`, and `--prompt-interactive`/`-i`
+(including `=` forms) in `args` fail each turn as a configuration failure
+before `agy` launches rather than at startup. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,
 thinking, extension, lifecycle, and unknown options, even when it supplements
 another adapter-emitted occurrence. Pi always
@@ -1825,7 +1837,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
 - Probes every registered runtime and reports whether it is usable, including a
   diagnostic reason. Setup launch selection uses the fixed product order
-  `claude`, `codex`, then `pi`; it never depends on repository content or a user
+  `claude`, `codex`, `pi`, then `antigravity`; it never depends on repository content or a user
   questionnaire.
 - If config is absent, writes a valid stack-neutral skeleton with empty
   `[commands]`, no verify or finalize steps, a valid local ticket gate, and one

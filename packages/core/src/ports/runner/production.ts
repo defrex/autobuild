@@ -15,6 +15,11 @@ import {
   CodexAgentRunner,
   isCodexRuntimeUsable,
 } from './codex'
+import {
+  ANTIGRAVITY_OWNED_ARGS,
+  AntigravityAgentRunner,
+  isAntigravityRuntimeUsable,
+} from './antigravity'
 import { isPiRuntimeUsable, PI_OWNED_ARGS, PiAgentRunner } from './pi'
 import type { SessionStreamInfo, RuntimeRegistry } from './runtime'
 import type { SessionStreamSink } from '../types'
@@ -24,11 +29,12 @@ export interface ProductionRuntimes {
 }
 
 export function createProductionRuntimes(): ProductionRuntimes {
-  // Each adapter carries both the resumable AgentRunner contract and its
-  // optional tool-free OneShotCompletion capability.
+  // Each adapter carries the resumable AgentRunner contract; all but
+  // Antigravity also carry the optional tool-free OneShotCompletion capability.
   const claude = new ClaudeAgentRunner()
   const codex = new CodexAgentRunner()
   const pi = new PiAgentRunner()
+  const antigravity = new AntigravityAgentRunner()
 
   return {
     runtimes: {
@@ -61,6 +67,17 @@ export function createProductionRuntimes(): ProductionRuntimes {
         servesModels: ['*/*'],
         defaultModel: 'kimi-coding/k3',
         ownedArgs: PI_OWNED_ARGS,
+        openSessionStream: openSessionStreamLabel,
+      },
+      antigravity: {
+        runner: antigravity,
+        // No oneShot: agy has no per-invocation way to guarantee tool-free
+        // execution, so callers take their deterministic fallback.
+        initUsable: isAntigravityRuntimeUsable,
+        // Antigravity serves Gemini plus its Claude and GPT models under
+        // unqualified slugs; an omitted model delegates to the agy default.
+        servesModels: ['gemini-', 'claude-', 'gpt-'],
+        ownedArgs: ANTIGRAVITY_OWNED_ARGS,
         openSessionStream: openSessionStreamLabel,
       },
     },

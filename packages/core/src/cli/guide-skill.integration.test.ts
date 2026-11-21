@@ -204,7 +204,7 @@ describe('ab-guide — init behavior', () => {
     const setup = headingSection('## Setup and upgrades')
     expect(commands).toContain('Fresh init config deliberately leaves this map empty')
     expect(commands).toContain('deterministic init code never guesses')
-    expect(setup).toContain('`claude`, `codex`, then `pi`')
+    expect(setup).toContain('`claude`, `codex`, `pi`, then `antigravity`')
     expect(setup).toContain('with empty\n  `[commands]`')
     expect(setup).toContain('[repository setup reference](references/setup.md)')
     expect(setup).toContain('Vendors 14 skills before handoff')
