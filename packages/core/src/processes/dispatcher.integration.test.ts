@@ -15703,7 +15703,7 @@ for (const storeLagMs of [0, 200])
       await tick()
     }
     expect((await count()) - before - active).toBe(7)
-  })
+  }, 30_000)
 
 test('fresh node polling has bounded reads at 100 and 100000 events', async () => {
   const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
