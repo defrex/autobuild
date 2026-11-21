@@ -9,7 +9,7 @@ import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets, operatorControlTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
-import { TicketPriorityUnsupported } from '../ports/tickets/priority'
+import { TicketPriorityUnsupported, ticketPrioritySchema } from '../ports/tickets/priority'
 import { TicketAssigneesUnsupported } from '../ports/tickets/assignees'
 /**
  * The agent tool registry — one typed table that is the single source of
@@ -348,9 +348,24 @@ const buildControlInput = z.strictObject({
   repo: repoField,
   slug: slugField,
   action: z
-    .enum(['pause', 'cancel-pause', 'resume', 'merge', 'land', 'hold', 'abort', 'discard'])
+    .enum([
+      'pause',
+      'cancel-pause',
+      'resume',
+      'merge',
+      'land',
+      'hold',
+      'priority',
+      'abort',
+      'discard',
+    ])
     .describe(
-      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, hands the ticket back to triage, or to ready with `to`) and "discard" (dequeue a queued build).',
+      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent, "priority" to set the build\'s slot-admission priority — or the destructive "abort" (cancels the build, cleans up its PR and workspace, hands the ticket back to triage, or to ready with `to`) and "discard" (dequeue a queued build).',
+    ),
+  priority: ticketPrioritySchema
+    .optional()
+    .describe(
+      'Required with, and only valid with, "priority": "urgent" admits the build to free slots ahead of normal parked work and normal ticket claims; "normal" returns it to normal order. Running work is never preempted and the ticket is unchanged.',
     ),
   to: abortDestinationSchema
     .optional()
@@ -780,7 +795,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate, and an optional head binds consent to the reviewed head; hold withdraws merge consent, with an optional reason.',
+    "Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate, and an optional head binds consent to the reviewed head; hold withdraws merge consent, with an optional reason. Priority sets the build's slot-admission priority (urgent or normal) to expedite waiting work without aborting it.",
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {
@@ -811,6 +826,13 @@ export const TOOLS: readonly ToolEntry[] = [
         const error = `"reason" applies only to the abort and hold actions, not "${received.action}"`
         throw new RegistryError('validation', error, { kind: 'validation', error })
       }
+      if ((input.action === 'priority') !== (input.priority !== undefined)) {
+        const error =
+          input.action === 'priority'
+            ? '"priority" is required with the priority action'
+            : `"priority" applies only to the priority action, not "${received.action}"`
+        throw new RegistryError('validation', error, { kind: 'validation', error })
+      }
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
       // The route maps BOTH pause and cancel-pause to `dashboard-pause`:
       // on a running build it requests a pause, and on a build with a pending
@@ -834,7 +856,9 @@ export const TOOLS: readonly ToolEntry[] = [
                       kind: 'hold',
                       ...(input.reason !== undefined ? { reason: input.reason } : {}),
                     }
-                  : { kind: input.action }
+                  : input.action === 'priority'
+                    ? { kind: 'priority', priority: input.priority! }
+                    : { kind: input.action }
       return controlBuild({
         store: ctx.store,
         ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),

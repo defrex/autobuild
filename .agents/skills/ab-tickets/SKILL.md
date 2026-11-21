@@ -219,9 +219,12 @@ capacity. Blocker edits must use the source-agnostic `ab ticket block` and
 `ab ticket unblock` commands shown above.
 
 With a free slot the dispatcher claims eligible urgent tickets first, then
-normal ones, each in source order; a blocked urgent ticket waits while normal
-work proceeds, and urgency never stops a running build. To expedite a ticket,
-mark it urgent rather than moving other tickets out of `ready/`.
+normal ones, each in source order; urgent tickets also go ahead of normal
+builds waiting to re-verify, reconcile or resume. A blocked urgent ticket waits
+while normal work proceeds, and urgency never stops a running build. To
+expedite a ticket, mark it urgent rather than moving other tickets out of
+`ready/`. Editing a ticket's priority after it is claimed does not change its
+build; the operator runs `ab priority <slug> urgent` for that.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
 then to `done/` on merge or back to `triage/` if the build aborts (`ready/`

@@ -89,6 +89,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   starts builds up to the top-level `capacity` bound, after slots reserved for
   integration nodes awaiting verification, reconcile or propose, for finished builds
   waiting to re-verify or reconcile, and for builds whose ticket wait ended.
+  Free slots go to urgent waiting work, then urgent tickets, then normal
+  waiting work, then normal tickets; a build takes its ticket's priority at
+  claim, and `ab priority <slug> urgent|normal` changes an active build's
+  priority. Priority orders free slots only.
   `capacity` counts builds running work: a build that finished its pipeline
   holds no slot while it waits for a merge decision, though it keeps its
   workspace until it merges or closes. Priority never preempts a running build.
@@ -114,7 +118,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   filter, and its answer resumes the declaring phase like a wait answer. An
   operator may still end a wait early by answering its escalation (cause
   `operator`). The build then takes a slot
-  ahead of new ticket claims. If its target moved, it first restacks onto the
+  ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
   target's current head (published work is replayed as one change, and a
   conflict reconciles first unless it is confined to declared `[generated]`
   files, which the kernel regenerates; with nothing published, the branch fast-forwards
@@ -2188,8 +2192,10 @@ when it claims the ticket and turns them into PR and commit keywords; see
 complete replacement and `--issues ''` clears it. A source that cannot store
 issue links refuses any write naming them, names itself, and writes nothing.
 `--priority urgent` makes the dispatcher claim the ticket before normal ready
-work, each class in source order; blockers and every other gate still apply,
-and it never preempts a running build. `--priority normal` (the default)
+work, each class in source order, and ahead of normal builds waiting for a
+slot; blockers and every other gate still apply, and it never preempts a
+running build. The claimed build keeps that priority; `ab priority <slug>
+urgent|normal` changes an existing build's priority without touching its ticket. `--priority normal` (the default)
 removes urgency. The file, hosted and Linear sources store priority (Linear as
 its native Urgent; `normal` clears only Urgent and leaves other Linear priorities
 alone); plugin sources without the capability read every ticket as normal,
@@ -2396,7 +2402,7 @@ verification progress or failure and the merge mode in parentheses. Before
 a policy decision, label-dependent modes may read `policy pending`. A current
 verified node adds `verified`. Only restack conflicts, current verification
 failures (file a repair child targeting the node), a node waiting for a runner
-slot ahead of new ticket claims, and readiness awaiting consent add a list
+slot ahead of normal ticket claims, and readiness awaiting consent add a list
 alert. Consent names `l` and `ab merge <slug>`. Branch,
 restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
@@ -2647,6 +2653,7 @@ to the build's event log and apply the same write-time checks.
 | Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
 | Settle an unmeasured merge | `ab objective <node> --settle-unmeasured <proposal\|build> --policy release-unmeasured [--note <text>] [--json] [--store <ref>]` | CLI/tool request (`optimization.settle-unmeasured`). Only for an attempt listed as an unmeasured merge; releases its slot once, never as accepted. | `attempt.settled {outcome: merged-unmeasured}` |
 | Hold merge | `ab hold <slug> [--reason <text>] [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested` (optional `reason`), then `landing.command-acknowledged` after native cancellation |
+| Set build priority | `ab priority <slug> urgent\|normal [--store <ref>]` | CLI/tool request (`builds.control` action `priority`); changes only the build's slot-admission order, never its ticket, and never preempts running work. | `build.priority-set` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |

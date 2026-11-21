@@ -28,4 +28,8 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'logIndex/fold/oj2ejk6qgb': 'Reopen of a settled leaf (build.reopened)',
   'executionNoProgress/fold/e37vc1wkgl': 'Reopen of a settled leaf (build.reopened)',
   'terminalGuard/fold/stc1et9vcy': 'A reopen re-runs verify and finalize terminals',
+  'build/shape/p4ohsa1w9f': 'AUT-1290 build priority and urgent scan demand',
+  'buildReadFacts/shape/jjcct3w7sh': 'AUT-1290 build priority and urgent scan demand',
+  'buildStreamSeed/shape/x80591dawj': 'AUT-1290 build priority and urgent scan demand',
+  'repositoryReadFacts/shape/hgw4spz5c0': 'AUT-1290 build priority and urgent scan demand',
 }

@@ -2,6 +2,7 @@ import { abForgeClear } from './forge-clear'
 import { abAccountsLogin } from './accounts'
 import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
+import { parsePriorityFlag } from '../ports/tickets/priority'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
@@ -153,6 +154,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'resume',
   'hold',
   'land',
+  'priority',
   'auto-merge',
   'answer',
   'reopen',
@@ -302,6 +304,7 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         discard: 'discard requested',
         hold: 'merge hold requested',
         land: 'merge consent requested',
+        priority: 'priority set',
         'auto-merge-on': 'auto-merge requested',
         'auto-merge-off': 'auto-merge cancelled',
       }
@@ -309,6 +312,8 @@ export function buildControlConfirmation(result: BuildControlResult): string {
         return `build ${result.slug}: abort requested; ticket returns to ${result.event.payload.to ?? 'triage'}`
       if (result.event.type === 'build.hold-requested' && result.event.payload.reason !== undefined)
         return `build ${result.slug}: merge hold requested (reason: ${result.event.payload.reason})`
+      if (result.event.type === 'build.priority-set')
+        return `build ${result.slug}: priority set to ${result.event.payload.priority}`
       return `build ${result.slug}: ${outcome[result.command]}`
     }
     case 'answered': {
@@ -1352,6 +1357,20 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           ...(destination.success ? { to: destination.data } : {}),
           ...(reason !== undefined ? { reason } : {}),
         },
+        stringFlag(parsed, 'store'),
+      )
+      return 0
+    }
+
+    case 'priority': {
+      const usage = 'usage: ab priority <slug> urgent|normal [--store <ref>]'
+      const parsed = parseArgs(rest, { store: 'value' }, usage)
+      if (parsed.positionals.length !== 2) throw new Error(usage)
+      const priority = parsePriorityFlag(parsed.positionals[1]!, 'priority')
+      await runBuildControl(
+        deps,
+        parsed.positionals[0]!,
+        { kind: 'priority', priority },
         stringFlag(parsed, 'store'),
       )
       return 0
