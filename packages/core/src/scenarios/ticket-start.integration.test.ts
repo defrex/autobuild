@@ -416,3 +416,9 @@ test('a hosted legacy-alias build moved back to ready settles already-building w
     slug: 'other',
   })
 })
+
+test('start requests cost one targeted read per pending request and none while idle', async () => {
+  const { ticketStartReadBudget } = await import('../testing/reduced-read-budget')
+  const steady = await ticketStartReadBudget()
+  expect(steady.gets).toBe(1)
+}, 120_000)

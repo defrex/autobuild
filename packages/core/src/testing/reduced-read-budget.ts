@@ -6738,3 +6738,296 @@ export async function verifyCheckBaseReadBudget(opts: {
     ...(opts.node ? { aborted } : {}),
   }
 }
+
+/** Operator single-ticket start requests (AUT-1293) cost nothing while none
+ * is pending and one targeted `get` per pending request per tick otherwise,
+ * independent of journal length and of how many unrelated builds are active.
+ * Two identical worlds tick in lockstep with intake off, one with a request,
+ * so the difference is exactly the start stage's cost. Hosted builds' canonical
+ * identities are projected once per build, durably: a fresh dispatcher and a
+ * later request resolve none again. Returns the steady per-tick difference. */
+export async function ticketStartReadBudget(): Promise<{
+  gets: number
+  calls: Record<string, number>
+  rows: number
+  repoRows: number
+}> {
+  // While a request waits at full capacity, targeted admission reads each
+  // active build's served facts for capacity, as an intake scan does: one
+  // reduced value per active build, never an event row.
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { CONFORMING_BODY } = await import('../scenarios/harness')
+  const { requestTicketStart } = await import('../operator/ticket-start')
+  const sha = 'a'.repeat(40)
+  type Source = import('../ports/types').TicketSource
+  type Run = { gets: number; calls: Record<string, number>; rows: number; repoRows: number }
+  const results = new Map<string, Run[]>()
+  const open = async (builds: number, history: number, capacity: number, label: string) => {
+    let now = 1_800_000_000_000
+    const clock = () => new Date(now)
+    const store = new MemoryBuildStore({ clock })
+    const repo = `https://github.com/budget/ticket-start-${label}-${builds}-${history}`
+    await store.ensureRepo(repo)
+    for (let i = 0; i < history; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+    const ticket = (id: string): import('../ports/types').Ticket => ({
+      revision: 'budget',
+      ref: { source: 'hosted', id },
+      title: id,
+      body: CONFORMING_BODY,
+      state: 'ready',
+      resolved: false,
+      labels: [],
+    })
+    const fake = new FakeTicketSource(
+      [ticket('AB-0'), ...Array.from({ length: builds }, (_, i) => ticket(`AB-${i + 1}`))],
+      { doneState: 'done' },
+    )
+    const gets: string[] = []
+    const claims: string[] = []
+    // A hosted-named source whose `get` also resolves legacy `ticket-<n>` aliases.
+    const tickets = new Proxy(fake, {
+      get(target, key) {
+        if (key === 'name') return 'hosted'
+        // Hosted sources own their assets; the memory store stands in.
+        if (key === 'assets') return store
+        if (key === 'get')
+          return (id: string) => {
+            gets.push(id)
+            return target.get(id.replace(/^ticket-/, 'AB-'))
+          }
+        if (key === 'claim')
+          return (id: string) => {
+            claims.push(id)
+            return target.claim(id)
+          }
+        return Reflect.get(target, key, target)
+      },
+    }) as unknown as Source
+    // Unrelated active builds: legacy aliases and readable ids in mixed case.
+    for (let i = 1; i <= builds; i++) {
+      const ref = { source: 'hosted', id: i % 2 ? `ticket-${i}` : `ab-${i}` }
+      await store.createBuild({
+        slug: `active-${i}`,
+        repo,
+        ticket: ref,
+        branch: `ab/active-${i}`,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { ticket: ref, repo, baseBranch: 'main' },
+        },
+      })
+    }
+    const config = parseConfig(
+      `capacity = ${capacity}\n[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
+    )
+    const dispatcher = () => {
+      const forge = new FakeForge()
+      forge.seedBranch('main', sha)
+      return new Dispatcher({
+        store,
+        tickets,
+        workspaces: new FakeWorkspaceProvider({
+          root: '/ticket-start-budget',
+          mode: 'logical',
+          base: { source: 'remote', sha },
+        }),
+        forge,
+        config,
+        repo,
+        exec: async () => ({ stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }),
+        launchRunner: async () => 'scheduled',
+        ids: sequentialIds(),
+        clock,
+      })
+    }
+    // The one serialized reduction per key happens before the measured ticks.
+    await readRepositoryFacts(store, repo)
+    await readBuildDigests(store, repo)
+    let current = dispatcher()
+    return {
+      store,
+      repo,
+      gets,
+      claims,
+      tickets,
+      fresh: () => {
+        current = dispatcher()
+      },
+      tick: async () => {
+        now += 60_000
+        gets.length = 0
+        const before = (await store.getRepoEvents(repo)).length
+        const metrics = await measureStoreReads(store, async () => {
+          await current.tick({ acceptNewWork: false })
+        })
+        const appended = (await store.getRepoEvents(repo)).slice(before)
+        return {
+          gets: [...gets],
+          calls: metrics.calls,
+          rows: metrics.rows,
+          repoRows: metrics.repoRows,
+          appended,
+        }
+      },
+    }
+  }
+  const difference = (a: Record<string, number>, b: Record<string, number>) => {
+    const out: Record<string, number> = {}
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const delta = (a[key] ?? 0) - (b[key] ?? 0)
+      if (delta !== 0) out[key] = delta
+    }
+    return out
+  }
+  /** Source reads the pending world made beyond the lockstep control's. */
+  const subtract = (measured: readonly string[], base: readonly string[]) => {
+    const extra = [...measured]
+    for (const id of base) {
+      const index = extra.indexOf(id)
+      expect(index).toBeGreaterThanOrEqual(0)
+      extra.splice(index, 1)
+    }
+    return extra
+  }
+  // History length at a small fleet, fleet size at a short history.
+  for (const [builds, history] of [
+    [5, 100],
+    [5, 5_000],
+    [20, 100],
+  ] as const) {
+    // Full capacity: the request waits for a slot.
+    const control = await open(builds, history, builds, 'control')
+    const pending = await open(builds, history, builds, 'pending')
+    // The operator invocation: one get, one reduced value, at most one append.
+    pending.gets.length = 0
+    const invocation = await measureStoreReads(pending.store, async () => {
+      await requestTicketStart({
+        store: pending.store,
+        repo: pending.repo,
+        source: pending.tickets,
+        id: 'AB-0',
+        user: 'budget',
+      })
+    })
+    expect(pending.gets).toEqual(['AB-0'])
+    expect(invocation.calls.getReducerValue).toBe(1)
+    expect(invocation.calls.appendRepo).toBe(1)
+    expect(invocation.calls.getRepoEvents).toBeUndefined()
+    expect(invocation.calls.listBuilds).toBeUndefined()
+    // Projection: at most 16 identity reads per tick, each build once in total.
+    const projectionTicks = Math.ceil(builds / 16)
+    const resolved: string[] = []
+    for (let tick = 0; tick < projectionTicks; tick++) {
+      const base = await control.tick()
+      const measured = await pending.tick()
+      const extra = subtract(measured.gets, base.gets)
+      expect(extra.filter((id) => id === 'AB-0')).toHaveLength(1)
+      const identity = extra.filter((id) => id !== 'AB-0')
+      expect(identity.length).toBeLessThanOrEqual(16)
+      resolved.push(...identity)
+      expect(measured.appended.map((event) => event.type)).toEqual(['ticket.identity-recorded'])
+    }
+    const recorded = Array.from({ length: builds }, (_, i) =>
+      (i + 1) % 2 ? `ticket-${i + 1}` : `ab-${i + 1}`,
+    )
+    expect(resolved.sort()).toEqual(recorded.sort())
+    // Steady state: one get per tick, no identity read, no write, no claim.
+    for (const fresh of [false, true]) {
+      if (fresh) {
+        control.fresh()
+        pending.fresh()
+      }
+      const base = await control.tick()
+      const measured = await pending.tick()
+      const extra = subtract(measured.gets, base.gets)
+      expect(extra).toEqual(['AB-0'])
+      expect(measured.appended).toEqual([])
+      expect(pending.claims).toEqual([])
+      // Row differences are snapshot-cadence advances: build facts both
+      // worlds read, and the pending world's own extra journal rows (the
+      // request and its identity records), each read once.
+      const rows = measured.rows - base.rows
+      const repoRows = measured.repoRows - base.repoRows
+      expect(rows).toBeLessThanOrEqual(builds)
+      expect(repoRows).toBeLessThanOrEqual(projectionTicks + 1)
+      const calls = difference(measured.calls, base.calls)
+      for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
+        expect(calls[replay]).toBeUndefined()
+      expect(calls.getReducerValue ?? 0).toBeLessThanOrEqual(builds + 2)
+      const key = `${builds}:${fresh}`
+      const run = { gets: extra.length, calls, rows, repoRows }
+      results.set(key, [...(results.get(key) ?? []), run])
+    }
+    // Cancelling ends the request; the tick after it settles nothing.
+    await pending.store.appendRepo(pending.repo, {
+      actor: humanActor('budget'),
+      type: 'ticket.start-cancelled',
+      payload: {
+        request: (await readRepositoryFacts(pending.store, pending.repo)).value.ticketStarts
+          .pending['hosted:AB-0']!.seq,
+        ticket: { source: 'hosted', id: 'AB-0' },
+      },
+    })
+    await control.tick()
+    await pending.tick()
+    // No request pending: the stage reads nothing, not even identities.
+    const base = await control.tick()
+    const idle = await pending.tick()
+    expect(idle.gets).toEqual(base.gets)
+    expect(difference(idle.calls, base.calls)).toEqual({})
+    expect(idle.appended).toEqual([])
+    await control.store.close()
+    await pending.store.close()
+  }
+  // Identical at every history length; source reads identical at every build count.
+  for (const runs of results.values()) for (const run of runs) expect(run).toEqual(runs[0]!)
+  const baseline = results.get('5:false')![0]!
+  for (const runs of results.values()) expect(runs[0]!.gets).toBe(baseline.gets)
+
+  // Admission with a free slot: the request is claimed with one get, and a
+  // legacy-alias build of the requested ticket moved back to Ready is matched
+  // through the projection and never claimed.
+  {
+    const builds = 20
+    const world = await open(builds, 100, builds + 1, 'admission')
+    await requestTicketStart({
+      store: world.store,
+      repo: world.repo,
+      source: world.tickets,
+      id: 'AB-0',
+      user: 'budget',
+    })
+    let started = false
+    for (let tick = 0; tick < Math.ceil(builds / 16) + 1 && !started; tick++) {
+      const measured = await world.tick()
+      started = measured.appended.some(
+        (event) =>
+          event.type === 'ticket.start-settled' &&
+          (event.payload as { outcome: string }).outcome === 'started',
+      )
+    }
+    expect(started).toBe(true)
+    expect(world.claims).toEqual(['AB-0'])
+    // `active-1` records the legacy alias `ticket-1` of AB-1, which is Ready.
+    await requestTicketStart({
+      store: world.store,
+      repo: world.repo,
+      source: world.tickets,
+      id: 'AB-1',
+      user: 'budget',
+    })
+    const measured = await world.tick()
+    expect(measured.appended.map((event) => event.payload)).toContainEqual(
+      expect.objectContaining({ outcome: 'already-building', slug: 'active-1' }),
+    )
+    expect(world.claims).toEqual(['AB-0'])
+    await world.store.close()
+  }
+  return baseline
+}
