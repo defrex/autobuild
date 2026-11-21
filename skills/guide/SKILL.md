@@ -2556,7 +2556,9 @@ Intake off skips only new ticket claims while janitor, stale-runner, harvest,
 and in-flight work continue — it deliberately does **not** set the repository
 hold, so a build the repository has already accepted still starts and finishes.
 Every dispatcher samples the current value on each tick, so a change in one
-process gates all dispatchers for that repository.
+process gates all dispatchers for that repository. Intake is not the only way
+to claim a ticket: `ab start <ticket-id>` asks the running dispatcher to claim
+one named ticket whether or not intake is on (see the controls table below).
 
 The repository hold has no launch flag and no setter of its own: `p` and `r` on
 the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
@@ -2653,7 +2655,26 @@ to the build's event log and apply the same write-time checks.
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
 | Reopen a finished leaf | `ab reopen <slug> [--feedback <text>] [--revise-spec <file> \| --revise-spec-from-ticket] [--store <ref>]` | CLI/tool request (`builds.reopen`); only for a leaf waiting for its merge decision. Feedback alone returns to implement; a spec revision restarts from plan; the PR and branch are kept. | `build.reopened`; with a spec, kernel `spec.revised` with operator provenance |
+| Start one ticket | `ab start <ticket-id> [--cancel] [--json] [--store <ref>]` | CLI/tool request (`tickets.start`); works while intake is off and claims no other ticket. | `ticket.start-requested` (or `ticket.start-cancelled`), then one dispatcher `ticket.start-settled` with its outcome |
 | Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket (an optimization attempt instead settles `aborted` and its ticket moves to the rejected role) |
+
+`ab start <ticket-id>` is for working one ticket while intake stays off — a
+single fix, or draining a backlog one ticket at a time. The id resolves through
+the configured source (an unknown ticket is refused, and GitHub `#123` and `123`
+are the same ticket); a repeat while the request is pending is a no-op. On its
+next tick, before ordinary intake, the running dispatcher — local or hosted —
+claims that ticket and nothing else, through every ordinary gate: it must be in
+the configured ready state, meet the spec standard (a nonconforming body is
+bounced to triage as usual), have no unresolved `blockedBy` dependency and no
+active build. Dispatch labels and the ready assignee are not applied, because
+the ticket is named. Capacity and the repository pause are respected; the
+request waits for a free slot and never preempts a build, and there is no
+force. Each request settles exactly once with a dispatcher `ticket.start-settled`
+(default `ab watch` attention): `started` names the build; `already-building`,
+`blocked`, `invalid`, `missing`, `not-ready`, `terminal` and `claim-refused`
+say why it could not start. While pending, the request is listed by
+`ab repository status`; `ab start --cancel <ticket-id>` withdraws it. With
+intake on, a request takes a free slot before ready-order intake.
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
 The repository pause is written first and intake second, both absolutely —
@@ -2845,7 +2866,8 @@ across startup, a successful attempt closes it unanswered, and a bare retry only
 brings the next attempt forward. Startup still recovers actionable builds and
 delivers pending operator commands, but it never records an answer or re-arms a budget.
 
-Durable repository intake has launch-flag setters and a global-row toggle.
+Durable repository intake has launch-flag setters and a global-row toggle;
+`ab start` claims one ticket without changing it.
 Merge policy is configured through ordered rules, with per-merge hold/merge
 commands; no writable repository auto-merge default remains.
 Abort is available through both its CLI command and the confirmed build-row/detail
@@ -2872,7 +2894,9 @@ and are safe to run at any time.
 
 **`ab repository status [--json] [--store <ref>]`** reports ticket intake
 (`intake`, default `true`) and repository-wide pause (`paused`, default
-`false`), alongside dispatcher and infrastructure status. Its historical
+`false`), alongside dispatcher and infrastructure status, plus `ticketStarts`
+(pending start requests and the most recent settlements) when either is
+nonempty. Its historical
 `defaultAutoMerge` field remains an inert compatibility value; it is not
 claim-time policy or a writable setting. Merge decisions and command state
 are queried on the build. A repository with no journal row uses the defaults
@@ -3071,6 +3095,10 @@ The default watch reports actionable conditions only:
   destination `state` and `role`, `requested` when an abort to ready fell back,
   the spec-standard parts `missing`, and the operator's `reason`. Each hand-back
   emits it once; moving the ticket on receipt is never overridden.
+- Repository `ticket.start-settled`: a single-ticket start request reached its
+  outcome — `started` with the build `slug`, or `already-building` (with the
+  slug), `blocked`, `invalid`, `missing`, `not-ready`, `terminal` or
+  `claim-refused`, with a `detail`. Each request settles once.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,

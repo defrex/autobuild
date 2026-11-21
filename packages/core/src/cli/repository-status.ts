@@ -1,4 +1,9 @@
 import { repositoryReadFactsReducer } from '../kernel/read-facts'
+import {
+  ticketStartsReducer,
+  type SettledTicketStart,
+  type TicketStarts,
+} from '../kernel/ticket-starts'
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
 import { migrationIdentity } from '../kernel/ticket-migrations'
@@ -190,6 +195,10 @@ export interface RepositoryStatus extends DispatchSettings {
    * by another store. */
   dependencyDiagnostics?: string[]
   missingAccounts?: RepositoryReadFacts['missingAccounts']
+  /** Operator single-ticket start requests (`ab start`): pending ones oldest
+   * first, then the most recent settlements newest last. Present only when
+   * either list is nonempty. */
+  ticketStarts?: RepositoryTicketStarts
   dispatcher: DispatcherLiveness
   forgeRequests?: ForgeRequestCounts
   forgeRequestHotspot?: string
@@ -227,6 +236,30 @@ export interface RepositoryStatus extends DispatchSettings {
     session?: string
     at: string
   }>
+}
+
+export interface RepositoryTicketStarts {
+  pending: Array<{
+    ticket: { source: string; id: string }
+    request: number
+    requestedAt: string
+    by?: string
+  }>
+  recent: SettledTicketStart[]
+}
+
+function projectTicketStarts(starts: TicketStarts): { ticketStarts?: RepositoryTicketStarts } {
+  const pending = Object.values(starts.pending)
+    .sort((a, b) => a.seq - b.seq)
+    .map((entry) => ({
+      ticket: entry.ticket,
+      request: entry.seq,
+      requestedAt: entry.ts,
+      ...(entry.by !== undefined ? { by: entry.by } : {}),
+    }))
+  return pending.length || starts.recent.length
+    ? { ticketStarts: { pending, recent: [...starts.recent] } }
+    : {}
 }
 
 export interface RepositoryStatusOpts {
@@ -331,6 +364,7 @@ export function projectRepositoryStatus(
     ...(Object.keys(repositoryReadFactsReducer.reduce(events).missingAccounts).length
       ? { missingAccounts: repositoryReadFactsReducer.reduce(events).missingAccounts }
       : {}),
+    ...projectTicketStarts(ticketStartsReducer.reduce(events)),
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: dispatchUpgradeReducer.reduce(events),
@@ -371,6 +405,7 @@ export function repositoryStatusFromFacts(
     ...(Object.keys(facts.missingAccounts).length
       ? { missingAccounts: facts.missingAccounts }
       : {}),
+    ...projectTicketStarts(facts.ticketStarts),
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: facts.upgrades,
@@ -535,6 +570,14 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
+    ...(status.ticketStarts?.pending ?? []).map(
+      (entry) =>
+        `start request ${entry.ticket.id}: pending since ${entry.requestedAt}${entry.by !== undefined ? ` (by ${entry.by})` : ''}`,
+    ),
+    ...(status.ticketStarts?.recent ?? []).map(
+      (entry) =>
+        `start request ${entry.ticket.id}: ${entry.outcome}${entry.slug !== undefined ? ` → build ${entry.slug}` : ''}${entry.detail !== undefined ? ` — ${entry.detail.replace(/\s+/g, ' ')}` : ''} (${entry.at})`,
+    ),
     ...(status.ticketDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...(status.dependencyDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...status.sandboxes.map(

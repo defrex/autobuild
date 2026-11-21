@@ -118,7 +118,7 @@ Credential/process changes remain subject to the Boundaries below.
 `ab watch --operator --json` is the standing monitor. Keep its default filter: every
 record calls for action. It reports failed node verification, build escalations, persistent janitor failures and their escalations, merge decisions,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
-restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket hand-backs (`ticket.handed-back`), ticket-source and forge degradation past reset (15 minutes
+restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket hand-backs (`ticket.handed-back`), single-ticket start settlements (`ticket.start-settled`), ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), forge rate limits outside the dispatcher's credential
 (`forge.credential-limited`), configured hook failures and skips (`hook.*`), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
@@ -339,6 +339,15 @@ Read events with a cursor or a small `--events` count; logs are long.
   blocked one), merged or closed PRs (file a new ticket), and pending abort or
   discard. Re-run `ab reopen` with the same arguments after an interrupted spec
   reopen; it completes the recorded one.
+- `ab start <ticket-id> [--cancel]` — ask the running dispatcher to claim one
+  ticket on its next tick with a free slot, even while intake is off, and no
+  other. Use it to work a backlog one ticket at a time, or to run a single fix,
+  instead of turning intake on or moving other tickets out of ready. Every gate
+  still applies (ready state, spec standard, resolved blockers, no active
+  build, capacity, repository pause). Act on the `ticket.start-settled`
+  repository event: `started` names the build; any other outcome says why it
+  did not start and needs a fix before you ask again. `ab repository status`
+  lists pending requests; `--cancel` withdraws one.
 - `ab hold <slug> [--reason <text>]` — persistently hold a merge and revoke
   earlier consent. Record why with `--reason` when holding during queue work;
   status, merges, builds and both dashboards show it until a later hold or
@@ -496,6 +505,9 @@ that does the job, and say what you are doing before you do it:
   phrases and unconfigured-role handling as the CLI. Moving a ticket
   into the ready state sends it to dispatch — do that only when the ticket
   genuinely conforms and the human's intent is clear.
+- `tickets.start` — ask the running dispatcher to start one ticket even while
+  intake is off, as `ab start` does; `cancel: true` withdraws a pending
+  request. The outcome arrives as `ticket.start-settled` in `repository.events`.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
   human-readable notes about this repository's operation. Write what the
   next operator or human will need; explicitly read it before acting on
@@ -599,6 +611,13 @@ Treat every default-watch record as a call to act:
   parts first. Moving the ticket as soon as the record arrives is safe: no later
   dispatcher write for the same hand-back overrides it. Each hand-back reports
   once.
+- Single-ticket start settlement (`ticket.start-settled`): an `ab start` or
+  `tickets.start` request reached its outcome. `started` names the build to
+  follow. `already-building` names the build already embodying the ticket.
+  `blocked` (unresolved blockers or target), `invalid` (bounced to triage, or a
+  profile conflict), `not-ready` (not in the ready state), `terminal`, `missing`
+  and `claim-refused` carry a `detail`: fix the cause, then request again if the
+  ticket should still go next. Each request settles once.
 
 Do not re-derive history the build's events already tell you; read events
 with a cursor and keep it short.

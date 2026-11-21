@@ -22,6 +22,7 @@ const COMMANDS = [
   'pause',
   'resume',
   'answer',
+  'start',
   'abort',
   'restack',
   'objective',
@@ -337,6 +338,7 @@ describe('layered CLI help catalog', () => {
         'use --all',
       ],
       answer: ['answer <slug>', 'bare retry', 'resume is requested last'],
+      start: ['start <ticket-id>', '--cancel', 'even while intake is off', 'ticket.start-settled'],
       abort: ['abort <slug>', '--store', 'sessionless'],
       restack: ['restack <node>', '--store', 'sessionless'],
       objective: [

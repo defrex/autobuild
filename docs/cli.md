@@ -33,6 +33,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `mcp` — Serve the operator tools over stdio.
 - `pause` — Request a build or repository pause.
 - `resume` — Resume a paused build or repository.
+- `start` — Ask the running dispatcher to start one ticket, even while intake is off. See [Operating](operating.md).
 - `answer` — Answer escalations or request a retry.
 - `abort` — Request irreversible build termination and cleanup.
 - `restack` — Request a node restack onto its current parent.
