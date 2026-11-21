@@ -4378,6 +4378,9 @@ generated-file regeneration, touch a file those predicates match (the recorded
 resolution, not upstream-only changes); `landing.consent-revoked` raises default
 attention naming the files and both heads, and the build returns to the consent
 queue for its new head. Accepted node reparenting revokes consent; holds survive.
+Failing forge CI at a finished leaf's live PR head raises default
+`pr.checks-failed` attention once per head and failing set; it is reported, not
+acted on, and unreadable CI is unknown rather than green or red.
 It is consent to the merge, not approval of an immutable diff.
 The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
 `head-mismatch`, recording nothing, unless `<sha>` (full or at least seven

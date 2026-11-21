@@ -205,6 +205,10 @@ Forge optimizations that don't change the required plugin API version:
 
 Invalidate observations before writes, including uncertain writes and Git pushes. Acknowledgement and readiness reads stay fresh. Branch and ref endpoints share normalized facts, never HTTP validators.
 
+### Forge CI
+
+The optional **`inspectHeadChecks(workspacePath, sha)`** reports CI at exactly `sha` as `{kind: 'known', failing, pending}` or `{kind: 'unknown', reason}`. Report a failing set only when the provider proves it, and `unknown` when a listing is incomplete with no visible failure. Throw on transport, authorization, rate-limit or parse failure. The dispatcher treats a throw, or a forge without the capability, as unknown CI: never green, never red. Report the live PR head as `headSha` on an open `getPrState` result when the provider has it, so a moved head clears an older failure. Keep the read cheap; it runs on every janitor poll of a finished leaf.
+
 ### API versions
 
 A plugin relying on a capability declares an `apiVersion` range containing its version (for example `^1.5.0`). Legacy plugins without newer fields keep working.

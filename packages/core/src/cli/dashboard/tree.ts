@@ -7,6 +7,7 @@ import {
   integrationCycleVerified,
 } from '../../kernel/integration-state'
 import { holdReason, mergeVocabulary } from './landing-display'
+import { ciFailureText, currentCiFailure } from '../../kernel/forge-checks'
 import { awaitsConsent, currentCandidateHead, landingReady } from '../../kernel/landing-readiness'
 
 export const treeVocabulary = {
@@ -101,12 +102,19 @@ export function projectTree(
       state.landing?.command?.kind === 'land' ? (state.landing.command.head ?? null) : null,
     /** Why the operator held, while a hold with a reason stands; otherwise null. */
     holdReason: holdReason(state.landing) ?? null,
+    /** Failing forge CI at the open PR's live head, in the shared vocabulary,
+     * while it still describes the build's head; otherwise null. */
+    ciFailure: ciFailureOf(state),
     reason: awaitsConsent(state, restack)
       ? state.landing?.command?.kind === 'hold'
         ? ('held' as const)
         : ('consent required' as const)
       : undefined,
   }
+}
+function ciFailureOf(state: BuildState): string | null {
+  const failure = currentCiFailure(state)
+  return failure ? ciFailureText(failure) : null
 }
 export type TreeProjection = ReturnType<typeof projectTree>
 export type ConsentQueueEntry = TreeProjection & { slug: string }

@@ -635,9 +635,31 @@ export interface PrRef {
 /** Native state is sampled with the ordinary PR read. Omission means the
  * adapter cannot observe it; callers retain conservative cancellation. */
 export type PrState =
-  | { state: 'open'; mergeable: boolean | null; nativeAutoMerge?: boolean }
+  | {
+      state: 'open'
+      mergeable: boolean | null
+      nativeAutoMerge?: boolean
+      /** The forge's live PR head, when the provider reports it. */
+      headSha?: string
+    }
   | { state: 'merged'; sha: string; headSha?: string }
   | { state: 'closed' }
+
+/** One failing check run or commit status observed at an exact commit. */
+export interface HeadCheck {
+  name: string
+  source: 'check-run' | 'status'
+  /** The provider's conclusion or state, such as `failure` or `error`. */
+  conclusion: string
+  url?: string
+}
+
+/** Forge CI observed at one commit. `unknown` proves nothing: it is never
+ * green and never red. `truncated` means the listing was incomplete and
+ * showed no failure; `unavailable` means the provider cannot report it. */
+export type HeadChecks =
+  | { kind: 'known'; failing: HeadCheck[]; pending: boolean }
+  | { kind: 'unknown'; reason: 'truncated' | 'unavailable' }
 
 /** Abort cleanup may race landing. A merged result is terminal and must never
  * be overwritten by a close attempt. */
@@ -854,6 +876,10 @@ export interface Forge {
     workspacePath: string,
     number: number,
   ): Promise<{ base: string; head: string; headSha: string; open: boolean }>
+  /** Read the check runs and commit statuses reported at exactly `sha`. A
+   * read: throws on transport, authorization, rate-limit or parse failure.
+   * Callers treat a throw, or the capability's absence, as unknown CI. */
+  inspectHeadChecks?(workspacePath: string, sha: string): Promise<HeadChecks>
 
   /** Change only an existing open review's base, preserving its identity.
    * Implementations acknowledge only a matching inspected base/head. */
