@@ -81,6 +81,11 @@ import {
   forgeRequestContext,
 } from '../ports/forge-request-context'
 import {
+  forgeRateLimitObservationSchema,
+  forgeRateLimitSnapshotSchema,
+  type ForgeRateLimitSnapshot,
+} from '../ports/forge-telemetry'
+import {
   dispatchCapacity,
   epilogueLeaf,
   intakeCapacity,
@@ -694,6 +699,9 @@ const DISPATCH_COMMENT = /^build ([a-z0-9][a-z0-9-]*) dispatched$/
  * lease. A dead provisioner is therefore adopted within one lease TTL. */
 const PROVISION_HEARTBEAT_MS = 15_000
 const DEFAULT_PROVISION_STALE_MS = 20 * 60 * 1000
+/** Rate-limit readings carried in tick telemetry: resources and age bounds. */
+const FORGE_RATE_LIMIT_RESOURCES = 8
+const FORGE_RATE_LIMIT_RETENTION_MS = 24 * 60 * 60 * 1000
 
 /** Outcome of one attempt to complete an interrupted dispatch. `deferred`
  * means durable progress was made (background provisioning kicked or already
@@ -1264,6 +1272,65 @@ export class Dispatcher {
   }
 
   lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
+  /** Latest primary rate-limit reading per resource, carried across ticks so
+   * a cooldown tick with no wire request still reports the last known quota. */
+  private readonly forgeRateLimits = new Map<string, ForgeRateLimitSnapshot>()
+
+  /** Merges the view's retained durable tick sample (newest `observedAt` per
+   * resource wins), then returns the bounded carried list. No store read: the
+   * sample is the record the journal refresh already fetched. */
+  private carriedRateLimits(): ForgeRateLimitSnapshot[] {
+    const sample = this.store.lastTickSample()
+    const durable =
+      sample === undefined
+        ? undefined
+        : sample.outcome === 'completed'
+          ? sample.counters.forgeRequests?.rateLimits
+          : sample.forgeRequests?.rateLimits
+    for (const entry of durable ?? []) {
+      const parsed = forgeRateLimitSnapshotSchema.safeParse(entry)
+      if (!parsed.success) continue
+      const carried = this.forgeRateLimits.get(parsed.data.resource)
+      if (
+        carried === undefined ||
+        Date.parse(parsed.data.observedAt) > Date.parse(carried.observedAt)
+      )
+        this.forgeRateLimits.set(parsed.data.resource, parsed.data)
+    }
+    const cutoff = this.deps.clock().getTime() - FORGE_RATE_LIMIT_RETENTION_MS
+    for (const [resource, entry] of this.forgeRateLimits)
+      if (Date.parse(entry.observedAt) < cutoff) this.forgeRateLimits.delete(resource)
+    this.boundForgeRateLimits()
+    return [...this.forgeRateLimits.values()].sort((a, b) => a.resource.localeCompare(b.resource))
+  }
+
+  private boundForgeRateLimits(): void {
+    while (this.forgeRateLimits.size > FORGE_RATE_LIMIT_RESOURCES) {
+      let oldest: ForgeRateLimitSnapshot | undefined
+      for (const entry of this.forgeRateLimits.values())
+        if (oldest === undefined || Date.parse(entry.observedAt) < Date.parse(oldest.observedAt))
+          oldest = entry
+      if (oldest === undefined) return
+      this.forgeRateLimits.delete(oldest.resource)
+    }
+  }
+
+  /** The forge request telemetry a tick that failed before or inside
+   * {@link tick} persists: the last counts (or an honestly incomplete empty
+   * count) carrying every known rate-limit reading. */
+  failureForgeRequests(): import('../ports/forge-telemetry').ForgeRequestCounts | undefined {
+    const rateLimits = this.carriedRateLimits()
+    const base = this.lastForgeRequests
+    if (base === undefined && rateLimits.length === 0) return undefined
+    const { rateLimits: _previous, ...rest } = base ?? {
+      total: 0,
+      unattributed: 0,
+      builds: [],
+      complete: false,
+    }
+    return { ...rest, ...(rateLimits.length > 0 ? { rateLimits } : {}) }
+  }
+
   async tick(opts: TickOpts = {}): Promise<TickReport> {
     this.kernelGitUnavailable = undefined
     this.tickAbandonments = []
@@ -1287,17 +1354,31 @@ export class Dispatcher {
       }
       if (build) builds.set(build, (builds.get(build) ?? 0) + 1)
       else unattributed++
+      if (request.rateLimit) {
+        const observation = forgeRateLimitObservationSchema.safeParse(request.rateLimit)
+        if (observation.success) {
+          this.forgeRateLimits.set(observation.data.resource, {
+            ...observation.data,
+            observedAt: this.deps.clock().toISOString(),
+          })
+          this.boundForgeRateLimits()
+        }
+      }
     })
-    const counts = () => ({
-      total,
-      ...(classified ? categories : {}),
-      unattributed,
-      builds: [...builds]
-        .map(([build, requests]) => ({ build, requests }))
-        .sort((a, b) => b.requests - a.requests || a.build.localeCompare(b.build))
-        .slice(0, 10),
-      complete: true,
-    })
+    const counts = () => {
+      const rateLimits = this.carriedRateLimits()
+      return {
+        total,
+        ...(classified ? categories : {}),
+        unattributed,
+        builds: [...builds]
+          .map(([build, requests]) => ({ build, requests }))
+          .sort((a, b) => b.requests - a.requests || a.build.localeCompare(b.build))
+          .slice(0, 10),
+        complete: true,
+        ...(rateLimits.length > 0 ? { rateLimits } : {}),
+      }
+    }
     this.lastForgeRequests = undefined
     try {
       const report = await (this.deps.forge.withReadScope

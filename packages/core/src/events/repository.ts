@@ -774,6 +774,9 @@ export const forgeHealthEventPayloadSchemas = {
     message: z.string().min(1),
     resetAt: z.iso.datetime(),
     firstFailureAt: z.iso.datetime(),
+    /** Written while this forge's degradation episode was active, extending
+     * its reset; not a new episode. */
+    continued: z.literal(true).optional(),
   }),
   'dispatcher.forge-recovered': z.strictObject({
     forge: z.string().min(1),

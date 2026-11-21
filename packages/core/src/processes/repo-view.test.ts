@@ -243,3 +243,37 @@ for (const operation of ['append', 'artifact', 'tick'] as const) {
     await expect(view.appendRepo('repo', event)).rejects.toThrow('write unavailable')
   })
 }
+
+test('the retained tick sample tracks the journal refresh read and committed finishes', async () => {
+  const { store, view } = await setup()
+  await view.startJournal()
+  expect(view.lastTickSample()).toBeUndefined()
+  await store.claimRepoLease('repo', 'run', 60_000)
+  await store.beginRepoTick('repo', 'run')
+  const forgeRequests = { total: 0, unattributed: 0, builds: [], complete: false }
+  const boundaries = (error: string) => [
+    { actor: DISPATCHER, type: 'dispatcher.tick-started' as const, payload: { run: 'run' } },
+    { actor: DISPATCHER, type: 'dispatcher.tick-failed' as const, payload: { run: 'run', error } },
+  ]
+  await store.finishRepoTick(
+    'repo',
+    'run',
+    { outcome: 'failed', error: 'a', forgeRequests },
+    boundaries('a'),
+  )
+  let getRepo = 0
+  const read = store.getRepo.bind(store)
+  store.getRepo = async (...args) => {
+    getRepo++
+    return read(...args)
+  }
+  await view.refreshJournal()
+  expect(getRepo).toBe(1)
+  expect(view.lastTickSample()).toMatchObject({ outcome: 'failed', error: 'a', forgeRequests })
+  const sample = view.lastTickSample()!
+  if (sample.outcome === 'failed') sample.error = 'mutated'
+  expect(view.lastTickSample()).toMatchObject({ error: 'a' })
+  await view.beginRepoTick('repo', 'run')
+  await view.finishRepoTick('repo', 'run', { outcome: 'failed', error: 'b' }, boundaries('b'))
+  expect(view.lastTickSample()).toMatchObject({ outcome: 'failed', error: 'b' })
+})

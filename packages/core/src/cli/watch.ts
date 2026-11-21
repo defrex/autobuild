@@ -602,7 +602,7 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
     case 'node.item-regenerated':
       return singleLine(regenerationSummary(event.payload))
     case 'dispatcher.forge-degraded':
-      return `Forge degraded: ${singleLine(event.payload.message)}; reset ${event.payload.resetAt}`
+      return `Forge degraded (rate-limit cooldown until ${event.payload.resetAt}): ${singleLine(event.payload.message)}`
     case 'account.credentials-unavailable':
       return `Missing credentials: ${singleLine(event.payload.remedy)} [${event.payload.source}]`
     case 'account.credentials-recovered':

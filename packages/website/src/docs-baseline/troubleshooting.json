@@ -4,7 +4,7 @@
   "title": "Troubleshooting",
   "group": "reference",
   "description": "Diagnose configuration, idle dispatch, authentication, stalled builds, and project selection.",
-  "textHash": "01731ce30bc8d507c287dee1326771edd20d0708d381a0c16e5c388a59c0e407",
+  "textHash": "2ca3d4c5121d4e4982efe44a0dd27342791a23a9e19a09a3188d222758a447a7",
   "headings": [
     "Invalid configuration",
     "tick: idle with expected work",

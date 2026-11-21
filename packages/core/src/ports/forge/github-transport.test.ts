@@ -4,6 +4,7 @@ import {
   GitHubApiError,
   classifyGitHubFailure,
   classifyGitHubGraphQLRefusal,
+  githubRateLimitSnapshot,
   isGitHubGraphQLUnavailable,
 } from './github-transport'
 
@@ -62,4 +63,25 @@ test('rate limits and transient failures stay ForgeFailures', () => {
 test('non-GitHub errors pass through unchanged', () => {
   const error = new Error(PROXY)
   expect(classifyGitHubGraphQLRefusal(error)).toBe(error)
+})
+
+test('rate-limit snapshots parse primary headers in epoch seconds and default to core', () => {
+  const headers = {
+    'x-ratelimit-limit': '5000',
+    'x-ratelimit-remaining': '4210',
+    'x-ratelimit-reset': '1795176000',
+    'x-ratelimit-used': '790',
+  }
+  expect(githubRateLimitSnapshot({ ...headers, 'x-ratelimit-resource': 'graphql' })).toEqual({
+    resource: 'graphql',
+    limit: 5000,
+    remaining: 4210,
+    resetAt: new Date(1795176000 * 1000).toISOString(),
+  })
+  expect(githubRateLimitSnapshot(headers)?.resource).toBe('core')
+  expect(githubRateLimitSnapshot({})).toBeUndefined()
+  for (const garbage of ['', 'soon', '-1', '1.5', '1e3'])
+    expect(githubRateLimitSnapshot({ ...headers, 'x-ratelimit-reset': garbage })).toBeUndefined()
+  const { 'x-ratelimit-remaining': _remaining, ...partial } = headers
+  expect(githubRateLimitSnapshot(partial)).toBeUndefined()
 })

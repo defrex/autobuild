@@ -3395,7 +3395,7 @@ class DispatchLoop {
     const completion: RepoTickCompletion = {
       outcome: 'failed',
       error: failed.payload.error,
-      forgeRequests: this.dispatcher.lastForgeRequests,
+      forgeRequests: this.dispatcher.failureForgeRequests(),
     }
     const events: RepositoryEventWrite[] = [
       {

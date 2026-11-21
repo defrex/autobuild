@@ -599,6 +599,105 @@ test('repository status renders available outcome categories on failed tick tele
   )
 })
 
+test('repository status projects carried forge rate limits and the cooldown pause', async () => {
+  const now = new Date('2026-11-20T12:00:00.000Z')
+  const at = (ms: number) => new Date(now.getTime() + ms).toISOString()
+  const store = new MemoryBuildStore({ clock: () => now })
+  await store.ensureRepo(REPO)
+  const { getRepositoryStatus } = await import('../operator/query')
+  expect((await getRepositoryStatus(store, REPO, now)).forgeRateLimit).toBeUndefined()
+  await store.claimRepoLease(REPO, 'run', 60_000)
+  await store.beginRepoTick(REPO, 'run')
+  const core = {
+    resource: 'core',
+    limit: 5000,
+    remaining: 0,
+    resetAt: at(600_000),
+    observedAt: at(-1000),
+  }
+  const search = {
+    resource: 'search',
+    limit: 30,
+    remaining: 12,
+    resetAt: at(-5000),
+    observedAt: at(-90_000),
+  }
+  const rateLimits = [core, search]
+  await store.finishRepoTick(
+    REPO,
+    'run',
+    {
+      outcome: 'failed',
+      error: 'offline',
+      forgeRequests: { total: 0, unattributed: 0, builds: [], complete: false, rateLimits },
+    },
+    [
+      {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.tick-started',
+        payload: { run: 'run', startedAt: now.toISOString() },
+      },
+      {
+        actor: { kind: 'dispatcher' },
+        type: 'dispatcher.tick-failed',
+        payload: { run: 'run', error: 'offline' },
+      },
+    ],
+  )
+  const view = { limits: [core, { ...search, stale: true as const }], paused: false }
+  expect((await getRepositoryStatus(store, REPO, now)).forgeRateLimit).toEqual(view)
+  const lines = renderRepositoryStatus(await getRepositoryStatus(store, REPO, now))
+  expect(lines).toContain(
+    `forge rate limit core: 0/5000 remaining; resets ${at(600_000)} (observed ${at(-1000)})`,
+  )
+  expect(lines).toContain(
+    `forge rate limit search: 12/30 remaining; resets ${at(-5000)} (observed ${at(-90_000)}); window since reset, current quota unknown`,
+  )
+
+  await store.appendRepo(REPO, {
+    actor: { kind: 'kernel' },
+    type: 'dispatcher.forge-degraded',
+    payload: { forge: 'github', message: 'limit', resetAt: at(600_000), firstFailureAt: at(0) },
+  })
+  const opts = options(store, { json: true, now: () => now })
+  await abRepositoryStatus(opts)
+  expect(JSON.parse(opts.output.join('\n')).forgeRateLimit).toEqual({
+    ...view,
+    paused: true,
+    pausedUntil: at(600_000),
+  })
+  expect(renderRepositoryStatus(await getRepositoryStatus(store, REPO, now))).toContain(
+    `forge landing/polling paused until ${at(600_000)} (rate-limit cooldown)`,
+  )
+  // Past the reset, the cooldown no longer pauses and the reading is stale.
+  const later = new Date(now.getTime() + 600_000)
+  expect((await getRepositoryStatus(store, REPO, later)).forgeRateLimit).toEqual({
+    limits: [
+      { ...core, stale: true as const },
+      { ...search, stale: true as const },
+    ],
+    paused: false,
+  })
+})
+
+test('the event projection and the facts projection agree on forge rate limits', () => {
+  const now = new Date('2026-11-20T12:00:00.000Z')
+  const resetAt = new Date(now.getTime() + 60_000).toISOString()
+  const degraded = {
+    repo: REPO,
+    seq: 1,
+    ts: now.toISOString(),
+    actor: { kind: 'kernel' as const },
+    type: 'dispatcher.forge-degraded' as const,
+    payload: { forge: 'github', message: 'limit', resetAt, firstFailureAt: now.toISOString() },
+  }
+  const fromEvents = projectRepositoryStatus(REPO, [degraded], undefined, now)
+  expect(fromEvents.forgeRateLimit).toEqual({ limits: [], paused: true, pausedUntil: resetAt })
+  expect(renderRepositoryStatus(fromEvents)).toContain(
+    `forge landing/polling paused until ${resetAt} (rate-limit cooldown)`,
+  )
+})
+
 test('human and JSON repository status expose the held runtime and legacy unrecorded state', async () => {
   const clock = () => new Date('2026-10-21T12:00:00Z')
   const store = new MemoryBuildStore({ clock })

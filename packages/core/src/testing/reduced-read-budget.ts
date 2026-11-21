@@ -3676,6 +3676,22 @@ export async function ticketRoleTickBudget(
         now += 60_000
         const forge = new FakeForge()
         forge.seedBranch('main', sha)
+        // Every tick observes a forge rate-limit reading: carrying it in tick
+        // telemetry is in-memory and must not move the row bound below.
+        Object.assign(forge, {
+          observeRequests: (observer: import('../ports/forge-failure').ForgeRequestObserver) => {
+            observer({
+              outcome: 'restPrimary',
+              rateLimit: {
+                resource: 'core',
+                limit: 5000,
+                remaining: 4000,
+                resetAt: new Date(now + 3_600_000).toISOString(),
+              },
+            })
+            return () => {}
+          },
+        })
         const dispatcher = new Dispatcher({
           store,
           tickets,
@@ -3698,6 +3714,7 @@ export async function ticketRoleTickBudget(
         counter.reset()
         const report = await dispatcher.tick()
         costs.push(requests() - before)
+        expect(report.forgeRequests?.rateLimits?.map((limit) => limit.remaining)).toEqual([4000])
         expect(report.dispatched).toBe(0)
         expect(report.dependencyBlocked).toBe(2)
         expect(

@@ -31,7 +31,9 @@ export interface StoredEvent {
 // Revision 8 retains the optional landed head on accepted attempt settlements.
 // Revision 9 retains the optional stream and provider substitution on judge session starts.
 // Revision 10 retains the optional hold reason.
-export const READ_DECODER_REVISION = 10
+// Revision 11 retains optional forge rate-limit snapshots on tick telemetry
+// and the optional continued marker on forge degradation.
+export const READ_DECODER_REVISION = 11
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

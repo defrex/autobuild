@@ -302,3 +302,128 @@ test('an explicit override permits a probe but a real limit restores the observe
   await expect(forge.getPrState('r', 1)).rejects.toThrow('limit')
   expect((await readForgeHealth(store, 'r'))?.resetAt).toBe(resetAt)
 })
+
+function limitedForge(now: () => Date) {
+  const raw = new FakeForge()
+  let release!: () => void
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let drift = 0
+  raw.getPrState = async () => {
+    await released
+    // Each secondary limit computes `now + 60s` a little later.
+    const resetAt = new Date(now().getTime() + 60_000 + 250 * drift++).toISOString()
+    throw new ForgeFailure('secondary limit', { kind: 'rate-limited', resetAt })
+  }
+  return { raw, release }
+}
+
+const degradations = async (store: MemoryBuildStore) =>
+  (await store.getRepoEvents('r')).flatMap((event) =>
+    event.type === 'dispatcher.forge-degraded' ? [event.payload] : [],
+  )
+
+test('overlapping limited requests open one episode and only extend it', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const { raw, release } = limitedForge(now)
+  const forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now })
+  const pending = [1, 2, 3, 4].map((n) => forge.getPrState('/r', n))
+  release()
+  const outcomes = await Promise.allSettled(pending)
+  expect(outcomes.every((outcome) => outcome.status === 'rejected')).toBe(true)
+  const written = await degradations(store)
+  expect(written.filter((payload) => payload.continued !== true)).toHaveLength(1)
+  expect(new Set(written.map((payload) => payload.firstFailureAt)).size).toBe(1)
+  const latest = Math.max(...written.map((payload) => Date.parse(payload.resetAt)))
+  expect(Date.parse((await readForgeHealth(store, 'r'))!.resetAt)).toBe(latest)
+  // While paused, calls are refused before any wire request.
+  await expect(forge.getPrState('/r', 5)).rejects.toBeInstanceOf(ForgeCooldown)
+})
+
+test('concurrent first failures with the same reset write one opening degradation', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const raw = new FakeForge()
+  let release!: () => void
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  raw.getPrState = async () => {
+    await released
+    throw new ForgeFailure('secondary limit', { kind: 'rate-limited', resetAt })
+  }
+  const forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now })
+  const pending = [forge.getPrState('/r', 1), forge.getPrState('/r', 2)]
+  release()
+  await Promise.allSettled(pending)
+  expect(await degradations(store)).toEqual([
+    { forge: 'plugin', message: 'secondary limit', resetAt, firstFailureAt: now().toISOString() },
+  ])
+})
+
+test('in-flight limits: equal or earlier resets write nothing, a later one extends, expiry and recovery reopen', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const raw = new FakeForge()
+  // Each request waits for its own reset, so requests that passed the
+  // cooldown check before the episode opened fail one at a time inside it.
+  const resets = new Map<number, (resetAt: string) => void>()
+  raw.getPrState = async (_path, n) => {
+    const resetAt = await new Promise<string>((resolve) => resets.set(n, resolve))
+    throw new ForgeFailure('limit', { kind: 'rate-limited', resetAt })
+  }
+  const at = (ms: number) => new Date(now().getTime() + ms).toISOString()
+  const forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now })
+  const pending = [1, 2, 3, 4].map((n) => forge.getPrState('/r', n).catch(() => {}))
+  await Promise.resolve()
+  while (resets.size < 4) await new Promise<void>((resolve) => queueMicrotask(resolve))
+  const opened = now().toISOString()
+  const fail = async (n: number, resetAt: string) => {
+    resets.get(n)!(resetAt)
+    await pending[n - 1]
+  }
+  await fail(1, at(60_000))
+  await fail(2, at(60_000))
+  await fail(3, at(30_000))
+  expect(await degradations(store)).toHaveLength(1)
+  await fail(4, at(90_000))
+  expect(await degradations(store)).toEqual([
+    { forge: 'plugin', message: 'limit', resetAt: at(60_000), firstFailureAt: opened },
+    {
+      forge: 'plugin',
+      message: 'limit',
+      resetAt: at(90_000),
+      firstFailureAt: opened,
+      continued: true,
+    },
+  ])
+
+  // Expired without recovery: the next limit opens a new episode.
+  now.advance(90_000)
+  resets.clear()
+  const expired = forge.getPrState('/r', 5).catch(() => {})
+  while (!resets.has(5)) await new Promise<void>((resolve) => queueMicrotask(resolve))
+  resets.get(5)!(at(60_000))
+  await expired
+  const reopened = (await degradations(store)).at(-1)!
+  expect(reopened.continued).toBeUndefined()
+  expect(reopened.firstFailureAt).toBe(now().toISOString())
+
+  // After recovery: a new limit also opens a new episode.
+  now.advance(60_000)
+  await store.appendRepo('r', {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.forge-recovered',
+    payload: { forge: 'plugin' },
+  })
+  const recovered = forge.getPrState('/r', 6).catch(() => {})
+  while (!resets.has(6)) await new Promise<void>((resolve) => queueMicrotask(resolve))
+  resets.get(6)!(at(60_000))
+  await recovered
+  const fresh = (await degradations(store)).at(-1)!
+  expect(fresh.continued).toBeUndefined()
+  expect(fresh.firstFailureAt).toBe(now().toISOString())
+})

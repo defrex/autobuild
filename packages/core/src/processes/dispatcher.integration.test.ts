@@ -20097,3 +20097,78 @@ describe('optimization proposer read budget', () => {
     })
   }, 120_000)
 })
+
+describe('forge rate-limit readings carried in tick telemetry', () => {
+  function observed() {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    let batch: { resource: string; remaining: number }[] = []
+    const clock = manualClock()
+    const observable = forge as FakeForge & {
+      observeRequests?: (observer: (context: object) => void) => () => void
+    }
+    observable.observeRequests = (observer) => {
+      for (const { resource, remaining } of batch)
+        observer({
+          outcome: 'restPrimary',
+          rateLimit: {
+            resource,
+            limit: 5000,
+            remaining,
+            resetAt: new Date(clock().getTime() + 3_600_000).toISOString(),
+          },
+        })
+      return () => {}
+    }
+    const h = harness({ clock, forge })
+    const tick = async (next: typeof batch) => {
+      batch = next
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      batch = []
+      return report.forgeRequests?.rateLimits
+    }
+    return { h, clock, tick }
+  }
+
+  test('cooldown ticks and ticks touching other resources keep every last reading', async () => {
+    const { clock, tick } = observed()
+    expect(await tick([])).toBeUndefined()
+    const first = clock().toISOString()
+    expect(await tick([{ resource: 'core', remaining: 0 }])).toMatchObject([
+      { resource: 'core', remaining: 0, observedAt: first },
+    ])
+    clock.advance(60_000)
+    expect(await tick([])).toMatchObject([{ resource: 'core', remaining: 0, observedAt: first }])
+    clock.advance(60_000)
+    expect(await tick([{ resource: 'search', remaining: 7 }])).toMatchObject([
+      { resource: 'core', observedAt: first },
+      { resource: 'search', remaining: 7, observedAt: clock().toISOString() },
+    ])
+    // A fresher in-process observation replaces the carried one.
+    expect(await tick([{ resource: 'core', remaining: 4999 }])).toMatchObject([
+      { resource: 'core', remaining: 4999, observedAt: clock().toISOString() },
+      { resource: 'search' },
+    ])
+  })
+
+  test('readings stay bounded to eight resources and expire after a day', async () => {
+    const { clock, tick } = observed()
+    for (let n = 0; n < 9; n++) {
+      await tick([{ resource: `r${n}`, remaining: n }])
+      clock.advance(1000)
+    }
+    const bounded = await tick([])
+    expect(bounded?.map((entry) => entry.resource)).toEqual([
+      'r1',
+      'r2',
+      'r3',
+      'r4',
+      'r5',
+      'r6',
+      'r7',
+      'r8',
+    ])
+    clock.advance(24 * 60 * 60 * 1000)
+    expect(await tick([])).toBeUndefined()
+  })
+})

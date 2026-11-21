@@ -65,6 +65,7 @@ import {
 import { z } from 'zod'
 import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
 import type { Exec } from '../workspace/git-worktree'
+import type { ForgeRateLimitObservation } from '../forge-telemetry'
 import {
   GitHubApiError,
   classifyGitHubFailure,
@@ -72,6 +73,7 @@ import {
   createGitHubFetchTransport,
   isGitHubGraphQLUnavailable,
   githubCredentialRequirement,
+  githubRateLimitSnapshot,
   githubTokenSource,
   restPlanLimitation,
   type GitHubRequest,
@@ -640,6 +642,17 @@ export const MERGEABILITY_RETRY_DELAYS_MS = [1000, 2000, 4000, 5000, 6000, 6000,
 /** Bounded validated HTTP representations; eviction falls back to fresh GETs. */
 const REPRESENTATION_CACHE_CAP = 512
 
+/** A conditional GET's raw answer: the JSON body and its pagination link. */
+type Representation = { json: unknown; link?: string }
+
+/** The exact cache key of a JSON GET: its path plus its sorted query. */
+function resourceKey(path: string, query?: Record<string, string>): string {
+  if (query === undefined) return path
+  const params = new URLSearchParams(Object.entries(query).sort(([a], [b]) => a.localeCompare(b)))
+  const encoded = params.toString()
+  return encoded === '' ? path : `${path}?${encoded}`
+}
+
 export class GitHubForge implements Forge {
   get rewrite() {
     return gitRewrite(
@@ -729,7 +742,7 @@ export class GitHubForge implements Forge {
   private readonly repoRoot?: string
   private readonly env: Readonly<Record<string, string | undefined>>
   private coordinates?: RepoCoordinates | null
-  private readonly representations = new Map<string, { etag: string; value: unknown }>()
+  private readonly representations = new Map<string, { etag: string } & Representation>()
   private readonly reads = new AsyncLocalStorage<Map<string, Promise<unknown>>>()
 
   private readonly activeScopes = new Set<Map<string, Promise<unknown>>>()
@@ -763,41 +776,97 @@ export class GitHubForge implements Forge {
   }
 
   /** These reads all use GET with the transport's fixed JSON representation
-   * headers. The full repository-qualified path (including query, if any)
-   * is therefore the exact resource key; raw/file/readiness reads stay separate.
-   * Only validated representations receive validators. */
-  private async revalidate<T>(schema: z.ZodType<T>, path: string, operation: string): Promise<T> {
-    return this.memo(`http:${path}`, () => this.revalidateResource(schema, path, operation))
+   * headers. The full repository-qualified path plus its sorted query is
+   * therefore the exact resource key; raw/file/readiness reads stay separate.
+   * Both caching layers — the cross-tick ETag cache and the tick-scope memo —
+   * hold the raw representation, and every caller validates it with its own
+   * schema, so consumers of one path share one wire request and one
+   * validator without seeing each other's parsed view. A representation
+   * that fails a caller's validation loses its validator. */
+  private async revalidate<T>(
+    schema: z.ZodType<T>,
+    path: string,
+    operation: string,
+    query?: Record<string, string>,
+  ): Promise<T> {
+    const key = resourceKey(path, query)
+    const raw = await this.memo(`http:${key}`, () =>
+      this.fetchRepresentation(path, operation, query),
+    )
+    return this.validated(schema, key, raw, operation).value
   }
 
+  /** Unmemoized conditional read for reads documented as fresh: it reaches
+   * GitHub every time (a 304 still proves currency), reusing only the ETag. */
   private async revalidateResource<T>(
     schema: z.ZodType<T>,
     path: string,
     operation: string,
-  ): Promise<T> {
-    const epoch = this.readEpoch
-    const cached = this.representations.get(path)
+    query?: Record<string, string>,
+  ): Promise<{ value: T; link?: string }> {
+    const key = resourceKey(path, query)
+    return this.validated(
+      schema,
+      key,
+      await this.fetchRepresentation(path, operation, query),
+      operation,
+    )
+  }
+
+  private validated<T>(
+    schema: z.ZodType<T>,
+    key: string,
+    raw: Representation,
+    operation: string,
+  ): { value: T; link?: string } {
     try {
+      const value = this.parse(schema, { status: 200, headers: {}, json: raw.json }, operation)
+      return { value, ...(raw.link !== undefined ? { link: raw.link } : {}) }
+    } catch (error) {
+      // Only validated representations keep validators: evict the one this
+      // caller rejected, unless a newer representation already replaced it.
+      if (this.representations.get(key)?.json === raw.json) this.representations.delete(key)
+      throw error
+    }
+  }
+
+  private async fetchRepresentation(
+    path: string,
+    operation: string,
+    query?: Record<string, string>,
+  ): Promise<Representation> {
+    const key = resourceKey(path, query)
+    const epoch = this.readEpoch
+    const cached = this.representations.get(key)
+    try {
+      const opts: GitHubRequestOpts = {
+        ...(query !== undefined ? { query } : {}),
+        ...(cached ? { headers: { 'If-None-Match': cached.etag } } : {}),
+      }
       const response = await this.request(
         'GET',
         path,
-        cached ? { headers: { 'If-None-Match': cached.etag } } : undefined,
+        Object.keys(opts).length > 0 ? opts : undefined,
       )
       if (response.status === 304) {
         if (!cached) throw new Error(`unsolicited GitHub 304 for ${operation}`)
-        return cached.value as T
+        return { json: cached.json, ...(cached.link !== undefined ? { link: cached.link } : {}) }
       }
-      const value = this.parse(schema, response, operation)
-      if (epoch !== this.readEpoch) return value
-      this.representations.delete(path)
-      if (response.headers.etag)
-        this.representations.set(path, { etag: response.headers.etag, value })
+      const link = response.headers.link
+      const representation: Representation = {
+        json: response.json,
+        ...(link !== undefined ? { link } : {}),
+      }
+      if (epoch !== this.readEpoch) return representation
+      this.representations.delete(key)
+      if (response.headers.etag && response.json !== undefined)
+        this.representations.set(key, { etag: response.headers.etag, ...representation })
       while (this.representations.size > REPRESENTATION_CACHE_CAP) {
         this.representations.delete(this.representations.keys().next().value!)
       }
-      return value
+      return representation
     } catch (error) {
-      if (epoch === this.readEpoch) this.representations.delete(path)
+      if (epoch === this.readEpoch) this.representations.delete(key)
       throw error
     }
   }
@@ -890,13 +959,21 @@ export class GitHubForge implements Forge {
       guardedForgeRequest(async () => {
         const context = forgeRequestContext()
         let outcome: 'restPrimary' | 'restNotModified' | 'graphql' | undefined
+        // Captured opportunistically from every answer, 304s and limited
+        // failures included; no `/rate_limit` request is ever made for it.
+        let rateLimit: ForgeRateLimitObservation | undefined
         if (args[1] === 'graphql') outcome = 'graphql'
         try {
           const response = await transport(...args)
           outcome ??= response.status === 304 ? 'restNotModified' : 'restPrimary'
+          rateLimit = githubRateLimitSnapshot(response.headers ?? {})
           return response
         } catch (error) {
-          if (error instanceof GitHubApiError) outcome ??= 'restPrimary'
+          if (error instanceof GitHubApiError) {
+            outcome ??= 'restPrimary'
+            // Read before classification: a `ForgeFailure` drops the headers.
+            rateLimit = githubRateLimitSnapshot(error.headers ?? {})
+          }
           let classified = classifyGitHubFailure(error, this.now())
           if (args[1] === 'graphql') {
             classified = classifyGitHubGraphQLRefusal(classified)
@@ -909,7 +986,11 @@ export class GitHubForge implements Forge {
           throw classified
         } finally {
           for (const observer of this.requestObservers)
-            observer({ ...context, ...(outcome ? { outcome } : {}) })
+            observer({
+              ...context,
+              ...(outcome ? { outcome } : {}),
+              ...(rateLimit ? { rateLimit } : {}),
+            })
         }
       })
     if (opts.repository !== undefined && opts.repository !== '') {
@@ -1275,22 +1356,21 @@ export class GitHubForge implements Forge {
     const evidence: string[] = []
     try {
       const { owner, name } = await this.requireCoordinates()
-      const response = await this.request(
-        'GET',
+      const protectionSchema = z.object({
+        enforce_admins: z.object({ enabled: z.boolean() }),
+        required_status_checks: z
+          .object({
+            strict: z.boolean(),
+            contexts: z.array(z.string()).optional(),
+            checks: z.array(z.object({ context: z.string() })).optional(),
+          })
+          .nullable(),
+      })
+      const { value: protection } = await this.revalidateResource(
+        protectionSchema,
         `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}/protection`,
+        'merge freshness protection read',
       )
-      const protection = z
-        .object({
-          enforce_admins: z.object({ enabled: z.boolean() }),
-          required_status_checks: z
-            .object({
-              strict: z.boolean(),
-              contexts: z.array(z.string()).optional(),
-              checks: z.array(z.object({ context: z.string() })).optional(),
-            })
-            .nullable(),
-        })
-        .parse(response.json)
       const checks = protection.required_status_checks
       if (
         protection.enforce_admins.enabled &&
@@ -1304,7 +1384,9 @@ export class GitHubForge implements Forge {
           ],
         }
       evidence.push('Classic protection does not prove enforced freshness for all merge actors.')
-    } catch {
+    } catch (error) {
+      // A rate limit or cooldown is an unreadable forge, never best-effort evidence.
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       evidence.push('Classic freshness protection could not be inspected authoritatively.')
     }
     try {
@@ -1317,12 +1399,12 @@ export class GitHubForge implements Forge {
       })
       const rules: z.infer<typeof ruleSchema>[] = []
       for (let page = 1; ; page++) {
-        const response = await this.request(
-          'GET',
+        const { value: batch } = await this.revalidateResource(
+          z.array(ruleSchema),
           `${root}/rules/branches/${encodeURIComponent(branch)}`,
-          { query: { per_page: '100', page: String(page) } },
+          'merge freshness rules read',
+          { per_page: '100', page: String(page) },
         )
-        const batch = z.array(ruleSchema).parse(response.json)
         rules.push(...batch)
         if (batch.length < 100) break
       }
@@ -1342,12 +1424,12 @@ export class GitHubForge implements Forge {
           continue
         // Repository ruleset reads include inherited organization rulesets.
         // Omitted bypass data is uncertainty, never proof of an empty list.
-        const response = await this.request('GET', `${root}/rulesets/${rule.ruleset_id}`, {
-          query: { includes_parents: 'true' },
-        })
-        const ruleset = z
-          .object({ enforcement: z.literal('active'), bypass_actors: z.array(z.unknown()) })
-          .parse(response.json)
+        const { value: ruleset } = await this.revalidateResource(
+          z.object({ enforcement: z.literal('active'), bypass_actors: z.array(z.unknown()) }),
+          `${root}/rulesets/${rule.ruleset_id}`,
+          'merge freshness ruleset read',
+          { includes_parents: 'true' },
+        )
         if (!ruleset.bypass_actors.length)
           return {
             fenced: true,
@@ -1357,7 +1439,8 @@ export class GitHubForge implements Forge {
           }
       }
       evidence.push('Effective rules do not prove strict freshness without bypass actors.')
-    } catch {
+    } catch (error) {
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       evidence.push(
         'Effective freshness rules or bypass permissions could not be inspected completely.',
       )
@@ -1428,6 +1511,8 @@ export class GitHubForge implements Forge {
       title: z.string(),
       body: z.string().nullable(),
     })
+    // Unconditional on purpose: the readback follows a PATCH that cleared
+    // every validator, and the first read decides that PATCH.
     const read = async (operation: string) =>
       this.parse(view, await this.request('GET', path), operation)
     const normalize = (body: string | null): string => (body ?? '').replace(/\r\n/g, '\n')
@@ -1454,10 +1539,6 @@ export class GitHubForge implements Forge {
 
   async inspectLandingPr(_workspacePath: string, number: number) {
     const { owner, name } = await this.requireCoordinates()
-    const response = await this.request(
-      'GET',
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
-    )
     const schema = z.object({
       state: z.enum(['open', 'closed']),
       merged: z.boolean(),
@@ -1465,7 +1546,12 @@ export class GitHubForge implements Forge {
       base: z.object({ ref: z.string() }),
       head: z.object({ ref: z.string(), sha: z.string() }),
     })
-    const pr = this.parse(schema, response, `node merge PR #${number}`)
+    // Fresh: unmemoized, conditional on the PR path's shared validator.
+    const { value: pr } = await this.revalidateResource(
+      schema,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+      `node merge PR #${number}`,
+    )
     return {
       base: pr.base.ref,
       head: pr.head.ref,
@@ -1503,6 +1589,7 @@ export class GitHubForge implements Forge {
     const { owner, name } = await this.requireCoordinates()
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
     try {
+      // Unconditional on purpose: a one-shot probe before the DELETE.
       await this.request('GET', `${repoPath}/git/ref/heads/${encodeURIComponent(branch)}`)
     } catch (error) {
       if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
@@ -1525,7 +1612,7 @@ export class GitHubForge implements Forge {
    * observation can make an `applied` result durable. */
   private async nativeAutoMergeView(number: number): Promise<{ enabled: boolean; nodeId: string }> {
     const { owner, name } = await this.requireCoordinates()
-    const view = await this.getJson(
+    const { value: view } = await this.revalidateResource(
       restNativeAutoMerge,
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
       `PR #${number} native auto-merge read`,
@@ -1577,16 +1664,18 @@ export class GitHubForge implements Forge {
     try {
       // Scope-local only: a direct squash re-checks the gate the same tick's
       // enable inspection just read, without repeating the requests.
-      const branch = await this.memo(`gate-branch:${baseRefName}`, () =>
-        this.request('GET', branchPath),
+      // The raw branch representation is shared with `remoteBranchSha`.
+      const view: Record<string, unknown> = await this.revalidate(
+        z.record(z.string(), z.unknown()),
+        branchPath,
+        'gate branch read',
       )
-      const view = branch.json as Record<string, unknown> | undefined
-      if (view?.protected === false) {
+      if (view.protected === false) {
         // The branch view's own flag proves classic protection absent even
         // when the nested protection object is the unprotected stub.
         classicGate = false
       } else {
-        const protection = view?.protection
+        const protection = view.protection
         if (protection === undefined) {
           throw new Error('branch response carries no protection object')
         }
@@ -1619,16 +1708,17 @@ export class GitHubForge implements Forge {
         try {
           for (let page = 1; ; page++) {
             if (page > 1000) throw new Error('ruleset pagination did not terminate')
-            const response = await this.request(
-              'GET',
+            // A 304 replays the cached page and its `link`, so pagination
+            // is identical on a cache hit.
+            const { value: batch, link } = await this.revalidateResource(
+              restRulesetRules,
               `${repoPath}/rules/branches/${encodeURIComponent(baseRefName)}`,
-              { query: { per_page: '100', page: String(page) } },
+              'ruleset probe',
+              { per_page: '100', page: String(page) },
             )
-            if (response.status !== 200) throw new Error('incomplete ruleset response')
-            const batch = this.parse(restRulesetRules, response, 'ruleset probe')
             pagesRead++
             rules.push(...batch)
-            const more = response.headers.link?.includes('rel="next"') === true
+            const more = link?.includes('rel="next"') === true
             if (batch.length < 100 && !more) break
             if (batch.length === 0) throw new Error('incomplete ruleset pagination')
           }
@@ -1729,11 +1819,13 @@ export class GitHubForge implements Forge {
     }
     const view =
       parsedInitial?.data ??
-      (await this.getJson(
-        restAutoMergeView,
-        `${repoPath}/pulls/${number}`,
-        `PR #${number} auto-merge inspection`,
-      ))
+      (
+        await this.revalidateResource(
+          restAutoMergeView,
+          `${repoPath}/pulls/${number}`,
+          `PR #${number} auto-merge inspection`,
+        )
+      ).value
     let current = view
     let requeries = 0
     let waitedMs = 0
@@ -1746,11 +1838,13 @@ export class GitHubForge implements Forge {
       await sleep(delay)
       waitedMs += delay
       requeries += 1
-      current = await this.getJson(
-        restAutoMergeView,
-        `${repoPath}/pulls/${number}`,
-        `PR #${number} auto-merge inspection`,
-      )
+      current = (
+        await this.revalidateResource(
+          restAutoMergeView,
+          `${repoPath}/pulls/${number}`,
+          `PR #${number} auto-merge inspection`,
+        )
+      ).value
     }
     return {
       view: current,
@@ -1990,16 +2084,13 @@ export class GitHubForge implements Forge {
     const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
     return this.memo(`activity:${base}`, async () => {
       try {
-        const response = await this.request('GET', `${repoPath}/activity`, {
-          query: {
-            ref: `refs/heads/${base}`,
-            activity_type: 'merge_queue_merge',
-            per_page: '1',
-          },
-        })
-        return this.parse(restActivity, response, 'merge-queue activity read').some(
-          (entry) => entry.activity_type === 'merge_queue_merge',
+        const { value: activity } = await this.revalidateResource(
+          restActivity,
+          `${repoPath}/activity`,
+          'merge-queue activity read',
+          { ref: `refs/heads/${base}`, activity_type: 'merge_queue_merge', per_page: '1' },
         )
+        return activity.some((entry) => entry.activity_type === 'merge_queue_merge')
       } catch (error) {
         if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
         if (error instanceof GitHubApiError && [403, 404, 422].includes(error.status)) return false
@@ -2017,7 +2108,7 @@ export class GitHubForge implements Forge {
     const { owner, name } = await this.requireCoordinates()
     const path = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
     const raw = fresh
-      ? await this.revalidateResource(restPrState, path, `PR #${number} landing read`)
+      ? (await this.revalidateResource(restPrState, path, `PR #${number} landing read`)).value
       : await this.prView(number, path)
     const parsed = restLandingPr.safeParse(raw)
     if (!parsed.success) {
@@ -2057,6 +2148,8 @@ export class GitHubForge implements Forge {
       new Error(`GitHub PR #${number} head or base changed during commit read (${detail}); retry`)
     const listed: { sha: string; message: string }[] = []
     const pages = Math.ceil(count / 100)
+    // Unconditional on purpose: the commit-set identity cache above already
+    // skips these reads until the PR's commits change.
     if (count <= 250) {
       // GitHub caps this listing at 250 commits.
       for (let page = 1; page <= pages; page++) {
@@ -2233,7 +2326,7 @@ export class GitHubForge implements Forge {
 
   async readCommitMessage(_workspacePath: string, sha: string): Promise<string> {
     const { owner, name } = await this.requireCoordinates()
-    const view = await this.getJson(
+    const { value: view } = await this.revalidateResource(
       z.object({ commit: z.object({ message: z.string() }) }),
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${encodeURIComponent(sha)}`,
       'merged commit message',
@@ -2247,16 +2340,12 @@ export class GitHubForge implements Forge {
     const forge = this
     async function* messages() {
       for (let page = 1; ; page++) {
-        const response = await forge.request(
-          'GET',
+        const { value: commits } = await forge.revalidateResource(
+          z.array(z.object({ commit: z.object({ message: z.string() }) })),
           `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits`,
-          {
-            query: { sha: branch, per_page: '100', page: String(page) },
-          },
+          'branch history read',
+          { sha: branch, per_page: '100', page: String(page) },
         )
-        const commits = z
-          .array(z.object({ commit: z.object({ message: z.string() }) }))
-          .parse(response.json)
         for (const commit of commits) yield commit.commit.message
         if (commits.length < 100) return
       }
@@ -2359,10 +2448,12 @@ export class GitHubForge implements Forge {
       for (let scan = 0; scan < 2; scan++) {
         let match: { id: number; body: string } | undefined
         for (let page = 1; ; page++) {
-          const response = await this.request('GET', collection, {
-            query: { per_page: '100', page: String(page) },
-          })
-          const comments = schema.parse(response.json)
+          const { value: comments } = await this.revalidateResource(
+            schema,
+            collection,
+            `PR #${number} comment listing`,
+            { per_page: '100', page: String(page) },
+          )
           match ??= comments.find((comment) => findSummaryMarker(comment.body) === marker)
           if (comments.length < 100) break
         }
@@ -2449,6 +2540,7 @@ export class GitHubForge implements Forge {
       if (!(error instanceof GitHubApiError && error.status === 422)) throw error
       const { owner, name } = await this.requireCoordinates()
       try {
+        // Unconditional on purpose: a one-shot, mutation-adjacent probe.
         await this.request(
           'GET',
           `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${sha}`,
@@ -2528,9 +2620,11 @@ export class GitHubForge implements Forge {
     if (!isValidGitBranchName(branch)) throw new Error(`invalid branch ${branch}`)
     const { owner, name } = await this.requireCoordinates()
     try {
-      await this.request(
-        'GET',
+      // Conditional, never memoized: a 304 still proves current existence.
+      await this.revalidateResource(
+        z.unknown(),
         `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodeURIComponent(branch)}`,
+        'branch existence',
       )
       return true
     } catch (error) {
@@ -2545,6 +2639,7 @@ export class GitHubForge implements Forge {
   async readFile(path: string, ref?: string): Promise<string> {
     const { owner, name } = await this.requireCoordinates()
     const query = ref !== undefined ? { ref } : undefined
+    // Unconditional on purpose: a raw-media read outside the JSON cache.
     const response = await this.request(
       'GET',
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${path}`,

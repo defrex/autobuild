@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { inspectGitHubReadiness, patternMatches, patternOverlaps } from './github-readiness'
 import type { GitHubRequest } from './github-transport'
+import { ForgeFailure } from '../forge-failure'
 
 function fixture(
   options: {
@@ -365,4 +366,32 @@ test('matching refs returns 100+ node targets in one unpaginated response', asyn
     expect(byKey(checks, 'linear-history').status).toBe('fail')
     expect(byKey(checks, 'linear-history').detail).toContain(lastTarget)
   }
+})
+
+test('rate-limited policy reads never pass gate or freshness checks', async () => {
+  const limited = new ForgeFailure('API rate limit exceeded', {
+    kind: 'rate-limited',
+    resetAt: '2026-11-20T13:00:00.000Z',
+  })
+  const checks = await inspectGitHubReadiness({
+    owner: 'o',
+    name: 'r',
+    input: { rootBranch: 'release/root' },
+    request: async (_method, path) => {
+      if (path === 'repos/o/r')
+        return {
+          status: 200,
+          headers: {},
+          json: {
+            allow_squash_merge: true,
+            allow_rebase_merge: true,
+            default_branch: 'main',
+            permissions: { push: true },
+          },
+        }
+      throw limited
+    },
+  })
+  for (const key of ['linear-history', 'root-freshness'])
+    expect(byKey(checks, key).status).not.toBe('pass')
 })
