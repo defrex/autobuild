@@ -39,6 +39,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `objective` — Show, revise or stop an optimization node's objective and progress.
 - `hold` — Hold a merge, withdrawing consent.
 - `merge` — Consent to a ready merge.
+- `reopen` — Send a finished, unmerged build back to implement with feedback, or to plan with a revised spec.
 - `models` — Search Pi's model catalog.
 - `plugin` — Inspect, diagnose, and contract-test adapters.
 - `context` — Materialize the current phase's inputs.

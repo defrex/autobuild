@@ -2,7 +2,7 @@ import { readBuildFacts } from '../store/reduced-reads'
 import { effectiveStatus } from '../cli/dashboard/model'
 import { BuildControlError, type BuildControlAction } from '../cli/build-control'
 import type { BuildStore } from '../store/types'
-import type { OperatorAnswerRequest } from './protocol'
+import type { OperatorAnswerRequest, OperatorReopenRequest } from './protocol'
 
 /**
  * The failure body an operator API route emits when its pre-service glue
@@ -84,6 +84,29 @@ export async function controlPrechecks(
  * The ticket-origin body
  * reader travels separately, exactly as the route passes `readTicketBody`.
  */
+/** The `builds.reopen` request as the shared control's action. */
+export function reopenAction(request: OperatorReopenRequest): {
+  action: Extract<BuildControlAction, { kind: 'reopen' }>
+  readTicketBody?: () => Promise<string>
+} {
+  const revision = request.revision
+  return {
+    action: {
+      kind: 'reopen',
+      ...(request.feedback !== undefined ? { feedback: request.feedback } : {}),
+      ...(revision === undefined
+        ? {}
+        : {
+            reviseSpec:
+              revision.origin === 'body'
+                ? { kind: 'supplied', origin: 'operator API body', read: async () => revision.body }
+                : { kind: 'ticket' },
+          }),
+    },
+    ...(revision?.origin === 'ticket' ? { readTicketBody: async () => revision.body } : {}),
+  }
+}
+
 export function answerAction(request: OperatorAnswerRequest): {
   action: BuildControlAction
   readTicketBody?: () => Promise<string>

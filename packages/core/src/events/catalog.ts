@@ -54,6 +54,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'landing.consent-revoked': ['kernel'],
   'build.hold-requested': ['human'],
   'build.land-requested': ['human'],
+  'build.reopened': ['human'],
   'landing.command-acknowledged': ['dispatcher', 'kernel'],
   'landing.native-enable-started': ['dispatcher'],
   'landing.polling-selected': ['dispatcher'],

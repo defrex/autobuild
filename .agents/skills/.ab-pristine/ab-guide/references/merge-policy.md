@@ -64,8 +64,9 @@ restack's [generated-file regeneration](restacking.md#generated-file-conflicts),
 touch a file those predicates match (the recorded resolution, not upstream-only
 changes): `landing.consent-revoked`
 raises default attention naming the files and both heads, and the build returns
-to the consent queue for its new head. Accepted node reparenting also revokes
-consent.
+to the consent queue for its new head. Accepted node reparenting and
+reopening a finished leaf (`ab reopen`) also revoke consent; a reopen keeps a
+hold.
 `ab merge <slug> --head <sha>` binds consent to the head the reviewer saw: it
 refuses with `head-mismatch`, recording nothing, unless `<sha>` (full or at
 least seven characters) is the current candidate head. Build status and the

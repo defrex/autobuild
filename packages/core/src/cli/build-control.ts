@@ -1,4 +1,4 @@
-import { optimizationCompletionBlocker } from '../kernel/optimization'
+import { optimizationAttempt, optimizationCompletionBlocker } from '../kernel/optimization'
 import { integrationFailed } from '../kernel/integration-state'
 import {
   candidateHeadMatches,
@@ -17,7 +17,12 @@ import { readBuildFacts } from '../store/reduced-reads'
  * normal runner and dispatcher consume them.
  */
 import type { AbEvent } from '../events/catalog'
-import { CONTROL_REASON_LIMIT, type AbortDestination, type PinnedAsset } from '../events/payloads'
+import {
+  CONTROL_REASON_LIMIT,
+  REOPEN_FEEDBACK_LIMIT,
+  type AbortDestination,
+  type PinnedAsset,
+} from '../events/payloads'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
 import { discardInFlight, type BuildState, type OpenEscalation } from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
@@ -25,7 +30,8 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
 import { objectiveBlocks, OBJECTIVE_INFO_STRING, parseObjective } from '../objective'
 import { samplePinnedAssets } from '../store/ticket-assets'
-import type { BuildStore } from '../store/types'
+import type { BuildRecord, BuildStore } from '../store/types'
+import { reopenPublicationRefusal, reopenRefusal, reopenSpecPending } from '../kernel/reopen'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 /** Matches the hand-back report's reason bound. */
@@ -69,6 +75,13 @@ export type BuildControlAction =
       reason?: string
     }
   | { kind: 'discard' }
+  | {
+      kind: 'reopen'
+      /** Operator feedback for the re-run; required without a spec. */
+      feedback?: string
+      /** A replacement spec, which restarts the leaf from plan. */
+      reviseSpec?: SpecBodySource
+    }
   | { kind: 'auto-merge-on' }
   | { kind: 'auto-merge-off' }
   | { kind: 'dashboard-pause' }
@@ -122,6 +135,19 @@ export type BuildControlResult =
       /** A durable post-append fact says this build cannot restart. */
       terminalSignal?: TerminalSignal
     }
+  | {
+      kind: 'reopened'
+      slug: string
+      /** Where the leaf re-enters: implement for feedback, plan for a spec. */
+      route: 'implement' | 'plan'
+      /** The event this call appended last; absent when another caller
+       * published the recorded reopen's spec first. */
+      event?: AbEvent
+      specRev?: number
+      /** This call completed a reopen recorded earlier and did not use its
+       * own arguments. */
+      completedEarlier?: true
+    }
 
 export type TerminalSignal =
   | { kind: 'terminal-status'; status: 'done' | 'aborted'; outcome?: BuildOutcome }
@@ -147,6 +173,7 @@ export type BuildControlErrorCode =
   | 'node-incomplete'
   | 'head-mismatch'
   | 'invalid-argument'
+  | 'not-reopenable'
 
 /** Normalize an operator-given consent head (`ab merge --head`, the operator
  * `head` field): trimmed and lowercased. Undefined when blank or containing
@@ -582,6 +609,8 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     return { kind: 'command', slug: opts.slug, command: 'abort', event }
   }
 
+  if (opts.action.kind === 'reopen') return reopenBuild(opts, record, user, opts.action)
+
   const holdReason = opts.action.kind === 'hold' ? opts.action.reason?.trim() : undefined
   if (
     opts.action.kind === 'hold' &&
@@ -790,54 +819,15 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           artifact = initial.artifact
           assets = initial.assets
         } else {
-          let body: string
-          const source = opts.action.resolve.body
-          if (source.kind === 'supplied') {
-            body = await source.read()
-          } else {
-            if (record.ticket === undefined) {
-              throw new BuildControlError(
-                'ticket-unavailable',
-                `build "${opts.slug}" has no recorded ticket to re-import`,
-              )
-            }
-            if (opts.readTicketBody === undefined) {
-              throw new BuildControlError(
-                'ticket-unavailable',
-                'ticket body reader is unavailable for --revise-spec-from-ticket',
-              )
-            }
-            body = await opts.readTicketBody(record.ticket, opts.store, record.repo)
-            if (record.ticket.source === 'hosted' && !opts.prepareTicketAssets) {
-              throw new BuildControlError(
-                'ticket-unavailable',
-                'hosted ticket asset preparation is unavailable',
-              )
-            }
-            assets = opts.prepareTicketAssets
-              ? await opts.prepareTicketAssets(record.ticket, opts.store, record.repo)
-              : await samplePinnedAssets(opts.store, record.repo, record.ticket.id)
-          }
-          const conformance = specConformance(body)
-          if (!conformance.conforms) {
-            throw new BuildControlError(
-              'spec-nonconforming',
-              `replacement spec from ${source.kind === 'supplied' ? source.origin : 'the build ticket'} ` +
-                `does not conform: missing ${conformance.missing.join('; ')}; ` +
-                'nothing was recorded and the build remains blocked',
-            )
-          }
-          await assertObjectiveRevision(opts.store, opts.slug, state, body)
-          // A deposit without a later human authorization is deliberately inert:
-          // every consumer reads the revision anchored by a spec.* event.
-          const deposited = await opts.store.putArtifact(opts.slug, {
-            kind: 'spec',
-            content: body,
-            ...(record.ticket !== undefined
-              ? { metadata: { ticket: record.ticket.id, source: record.ticket.source } }
-              : {}),
-          })
-          artifact = { kind: 'spec', rev: deposited.revision }
+          const prepared = await prepareSpecBody(
+            opts,
+            record,
+            state,
+            opts.action.resolve.body,
+            'nothing was recorded and the build remains blocked',
+          )
+          artifact = prepared.artifact
+          assets = prepared.assets
         }
 
         if (nodeRevision) {
@@ -1110,6 +1100,190 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
   }
 }
 
+/** Read, validate and deposit a replacement spec body: the supplied file or
+ * the build's ticket, which also re-pins the ticket's assets. A supplied body
+ * leaves the pinned set alone (`assets` absent). The deposit is inert until a
+ * `spec.*` event cites it. `outcome` ends every refusal message. */
+async function prepareSpecBody(
+  opts: ControlBuildOpts,
+  record: BuildRecord,
+  state: BuildState,
+  source: SpecBodySource,
+  outcome: string,
+): Promise<{ artifact: ArtifactRef; assets?: PinnedAsset[] }> {
+  let body: string
+  let assets: PinnedAsset[] | undefined
+  if (source.kind === 'supplied') {
+    body = await source.read()
+  } else {
+    if (record.ticket === undefined) {
+      throw new BuildControlError(
+        'ticket-unavailable',
+        `build "${opts.slug}" has no recorded ticket to re-import`,
+      )
+    }
+    if (opts.readTicketBody === undefined) {
+      throw new BuildControlError(
+        'ticket-unavailable',
+        'ticket body reader is unavailable for --revise-spec-from-ticket',
+      )
+    }
+    body = await opts.readTicketBody(record.ticket, opts.store, record.repo)
+    if (record.ticket.source === 'hosted' && !opts.prepareTicketAssets) {
+      throw new BuildControlError(
+        'ticket-unavailable',
+        'hosted ticket asset preparation is unavailable',
+      )
+    }
+    assets = opts.prepareTicketAssets
+      ? await opts.prepareTicketAssets(record.ticket, opts.store, record.repo)
+      : await samplePinnedAssets(opts.store, record.repo, record.ticket.id)
+  }
+  const conformance = specConformance(body)
+  if (!conformance.conforms) {
+    throw new BuildControlError(
+      'spec-nonconforming',
+      `replacement spec from ${source.kind === 'supplied' ? source.origin : 'the build ticket'} ` +
+        `does not conform: missing ${conformance.missing.join('; ')}; ${outcome}`,
+    )
+  }
+  await assertObjectiveRevision(opts.store, opts.slug, state, body, outcome)
+  // A deposit without a later human authorization is deliberately inert:
+  // every consumer reads the revision anchored by a spec.* event.
+  const deposited = await opts.store.putArtifact(opts.slug, {
+    kind: 'spec',
+    content: body,
+    ...(record.ticket !== undefined
+      ? { metadata: { ticket: record.ticket.id, source: record.ticket.source } }
+      : {}),
+  })
+  return {
+    artifact: { kind: 'spec', rev: deposited.revision },
+    ...(assets !== undefined ? { assets } : {}),
+  }
+}
+
+/** Whether this leaf is an optimization attempt, whose node's landing gate
+ * owns its lifecycle. One served read of the target node, only for a leaf
+ * with a target. */
+async function optimizationAttemptBuild(
+  store: BuildStore,
+  record: BuildRecord,
+  state: BuildState,
+): Promise<boolean> {
+  if (state.attemptMeasurement !== undefined) return true
+  if (state.kind === 'node' || state.target === undefined || record.ticket === undefined)
+    return false
+  const node = (await readBuildFacts(store, state.target.build)).value.state
+  return optimizationAttempt(node.optimization, record.ticket) !== undefined
+}
+
+/** `ab reopen` (SPEC §15.7): send a settled, unmerged leaf back into
+ * execution with operator feedback, a replacement spec, or both. One
+ * compare-and-append records `build.reopened`; a spec is then published as
+ * the kernel's `spec.revised` by `publishReopenSpec`. */
+async function reopenBuild(
+  opts: ControlBuildOpts,
+  record: BuildRecord,
+  user: string,
+  action: Extract<BuildControlAction, { kind: 'reopen' }>,
+): Promise<BuildControlResult> {
+  const feedback = action.feedback?.trim()
+  if (action.feedback !== undefined && (!feedback || feedback.length > REOPEN_FEEDBACK_LIMIT))
+    throw new BuildControlError(
+      'invalid-argument',
+      `reopen feedback must be 1–${REOPEN_FEEDBACK_LIMIT} characters after trimming; nothing was recorded`,
+    )
+  if (feedback === undefined && action.reviseSpec === undefined)
+    throw new BuildControlError(
+      'invalid-argument',
+      'a reopen needs feedback, a replacement spec, or both; nothing was recorded',
+    )
+
+  const initial = (await readBuildFacts(opts.store, opts.slug)).value
+  // Crash recovery: an earlier reopen was recorded but its spec was not
+  // published. Complete that one; the arguments supplied now are not used.
+  if (reopenSpecPending(initial.state)) return publishReopenSpec(opts, true)
+  const attempt = await optimizationAttemptBuild(opts.store, record, initial.state)
+  const guard = (facts: typeof initial): void => {
+    const refusal = reopenRefusal(opts.slug, facts.state, {
+      attempt,
+      restackActive: facts.log.restack.active !== undefined,
+    })
+    if (refusal) throw new BuildControlError(refusal.code, refusal.message)
+  }
+  guard(initial)
+  const spec =
+    action.reviseSpec === undefined
+      ? undefined
+      : await prepareSpecBody(
+          opts,
+          record,
+          initial.state,
+          action.reviseSpec,
+          'nothing was recorded',
+        )
+
+  for (;;) {
+    const current = (await readBuildFacts(opts.store, opts.slug)).value
+    if (reopenSpecPending(current.state)) return publishReopenSpec(opts, true)
+    guard(current)
+    const event = await opts.store.appendIfCurrent(opts.slug, current.state.lastSeq, {
+      actor: humanActor(user, opts.via),
+      type: 'build.reopened',
+      payload: {
+        ...(feedback !== undefined ? { feedback } : {}),
+        ...(spec !== undefined ? { spec } : {}),
+      },
+    })
+    if (event === null) continue
+    if (spec === undefined) return { kind: 'reopened', slug: opts.slug, route: 'implement', event }
+    return publishReopenSpec(opts, false)
+  }
+}
+
+/** Publish the recorded reopen's spec as the kernel's `spec.revised`. Every
+ * attempt re-reads and re-guards, and appends only on that same tail, so an
+ * abort, discard or ended PR landing after the guard wins. The artifact and
+ * assets always come from the reduced reopen, never from the caller. */
+async function publishReopenSpec(
+  opts: ControlBuildOpts,
+  completedEarlier: boolean,
+): Promise<BuildControlResult> {
+  for (;;) {
+    const fresh = (await readBuildFacts(opts.store, opts.slug)).value.state
+    const refusal = reopenPublicationRefusal(opts.slug, fresh)
+    if (refusal) throw new BuildControlError(refusal.code, refusal.message)
+    const reopen = fresh.reopen
+    if (!reopenSpecPending(fresh) || reopen?.spec === undefined)
+      return {
+        kind: 'reopened',
+        slug: opts.slug,
+        route: 'plan',
+        ...(fresh.specRev !== undefined ? { specRev: fresh.specRev } : {}),
+        ...(completedEarlier ? { completedEarlier: true as const } : {}),
+      }
+    const event = await opts.store.appendIfCurrent(opts.slug, fresh.lastSeq, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: {
+        artifact: reopen.spec.artifact,
+        operator: { user: reopen.user, ...(reopen.via !== undefined ? { via: reopen.via } : {}) },
+        ...(reopen.spec.assets !== undefined ? { assets: reopen.spec.assets } : {}),
+      },
+    })
+    if (event === null) continue
+    return {
+      kind: 'reopened',
+      slug: opts.slug,
+      route: 'plan',
+      event,
+      specRev: reopen.spec.artifact.rev,
+      ...(completedEarlier ? { completedEarlier: true as const } : {}),
+    }
+  }
+}
+
 function actionLabel(action: BuildControlAction): string {
   switch (action.kind) {
     case 'auto-merge-on':
@@ -1196,12 +1370,10 @@ async function assertObjectiveRevision(
   slug: string,
   state: BuildState,
   body: string,
+  outcome = 'nothing was recorded and the build remains blocked',
 ): Promise<void> {
   const refuse = (reason: string) => {
-    throw new BuildControlError(
-      'spec-nonconforming',
-      `replacement spec ${reason}; nothing was recorded and the build remains blocked`,
-    )
+    throw new BuildControlError('spec-nonconforming', `replacement spec ${reason}; ${outcome}`)
   }
   const carries = objectiveBlocks(body).length > 0
   let optimization = state.optimization !== undefined
