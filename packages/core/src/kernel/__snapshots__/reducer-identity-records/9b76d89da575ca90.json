@@ -1,0 +1,20 @@
+{
+  "records": [
+    {
+      "name": "repositoryReadFacts",
+      "identity": "repositoryReadFacts",
+      "revisions": [
+        "repositoryReadFacts/shape/hgw4spz5c0",
+        "repositoryReadFacts/shape/se5kk44boc"
+      ],
+      "entries": {
+        "293dcb3a94fb3470": "70ee1fec41fcdf45d94691c2fcc3a77b",
+        "38c75099d9191471": "70ee1fec41fcdf45d94691c2fcc3a77b",
+        "6ae5bf60504d6467": "64d56859b9b6e66711761497221c45ca",
+        "8879f57a24733897": "64d56859b9b6e66711761497221c45ca",
+        "af953392d81911da": "64d56859b9b6e66711761497221c45ca",
+        "d1432a819d8e48c5": "70ee1fec41fcdf45d94691c2fcc3a77b"
+      }
+    }
+  ]
+}

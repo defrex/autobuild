@@ -285,6 +285,15 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       })
     })
 
+    test('inspectHeadChecks never reports red for a fresh head without CI', async () => {
+      await withForge(factory, undefined, async (harness) => {
+        if (!harness.forge.inspectHeadChecks) return
+        const { pr } = await pushAndOpen(harness)
+        const checks = await harness.forge.inspectHeadChecks(harness.workspacePath, pr.headSha)
+        expect(checks.kind === 'unknown' || checks.failing.length === 0).toBe(true)
+      })
+    })
+
     test('getPrState discriminates an open conflict', async () => {
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)

@@ -213,6 +213,8 @@ export interface VerifyResult {
  * `reconcile.completed` appears after the `pr.conflicted`, which returns the
  * PR to 'open' while verify re-runs in full. */
 export type PrLifecycle = 'open' | 'merged' | 'closed' | 'conflicted'
+/** A recorded forge CI failure and the seq that recorded it. */
+export type CiFailureRecord = EventPayload<'pr.checks-failed'> & { seq: number }
 
 /** Durable desired state for GitHub native auto-merge plus the latest forge
  * application fact. The command seq correlates the two sides of the
@@ -422,6 +424,10 @@ export interface BuildState {
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
+  /** The latest recorded forge CI failure (`pr.checks-failed`) until a
+   * `pr.checks-cleared`. A fact projection: whether it still describes the
+   * PR is `currentCiFailure` in `kernel/forge-checks`. */
+  ciFailure?: CiFailureRecord
   /** Readiness provenance, landing-bound consent and native application receipts. */
   targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
   janitor?: {
@@ -653,6 +659,7 @@ export interface BuildAcc {
   reopen?: ReopenState
   pr: BuildState['pr']
   prState?: PrLifecycle
+  ciFailure?: CiFailureRecord
   targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
   janitor?: {
     firstFailureAt: string
@@ -1563,6 +1570,12 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'pr.conflicted':
         prState = 'conflicted'
         break
+      case 'pr.checks-failed':
+        acc.ciFailure = { ...structuredClone(event.payload), seq: event.seq }
+        break
+      case 'pr.checks-cleared':
+        delete acc.ciFailure
+        break
       case 'propose.started':
         start({ phase: 'propose', round: event.payload.round, seq: event.seq })
         break
@@ -1965,6 +1978,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.reopen !== undefined ? { reopen: structuredClone(acc.reopen) } : {}),
     pr: acc.pr,
     prState: acc.prState,
+    ...(acc.ciFailure !== undefined ? { ciFailure: structuredClone(acc.ciFailure) } : {}),
     targetRewrite: acc.targetRewrite,
     janitor: acc.janitor,
     landing: acc.landing,
