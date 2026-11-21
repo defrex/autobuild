@@ -52,6 +52,7 @@ import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { LinearTicketSource } from '../ports/tickets/linear'
 import {
+  ForgeFailure,
   NoCommitsBetweenBranchesError,
   TicketSourceRateLimitError,
   WorkspaceCleanupRequired,
@@ -17460,7 +17461,14 @@ mode = "consent"
 `
   for (const toml of [undefined, pathRules]) {
     const vectors: Record<string, number>[] = []
-    for (const recorded of [true, false]) {
+    // A third variant keeps a recorded head red on the forge: the CI
+    // observation adds no store request while the failure is unchanged.
+    const variants = [
+      { recorded: true, failing: false },
+      { recorded: false, failing: false },
+      ...(toml === undefined ? [{ recorded: true, failing: true }] : []),
+    ]
+    for (const { recorded, failing } of variants) {
       const git: string[][] = []
       const exec: Exec = async (cmd) => {
         if (cmd[0] === 'git') git.push(cmd)
@@ -17510,6 +17518,9 @@ mode = "consent"
               : { warm: 'landing.deferred' as const }),
           advance: (ms) => h.clock.advance(ms),
           git: () => git,
+          ...(failing
+            ? { failingChecks: { set: (checks) => h.forge.setHeadChecks(head, checks) } }
+            : {}),
           tick: () =>
             harness({
               store: h.store,
@@ -17522,8 +17533,10 @@ mode = "consent"
         }),
       )
     }
-    // A recorded fact and a pre-change log cost the poll exactly the same.
+    // A recorded fact, a pre-change log and an unchanged red head cost the
+    // poll exactly the same.
     expect(vectors[0]).toEqual(vectors[1])
+    if (vectors[2]) expect(vectors[2]).toEqual(vectors[0]!)
   }
 }, 240_000)
 
@@ -17575,12 +17588,15 @@ test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 1
     preLimit: failingTick,
     threshold: { ...failingTick, append: 2 },
     escalated: failingTick,
+    // The recovering poll reaches the open-PR epilogue, whose forge CI read
+    // pays the forge guard's constant cooldown check before and after the
+    // call (two served repository reads, no event rows), like getPrState.
     recovery: {
       append: 1,
       getArtifact: 2,
       getLatestArtifactMeta: 1,
-      getReducerValue: 22,
-      getRepo: 5,
+      getReducerValue: 24,
+      getRepo: 7,
       getRepoBuildDigests: 1,
       listBuilds: 2,
     },
@@ -20760,5 +20776,219 @@ describe('forge rate-limit readings carried in tick telemetry', () => {
     ])
     clock.advance(24 * 60 * 60 * 1000)
     expect(await tick([])).toBeUndefined()
+  })
+})
+
+// ── Forge CI on finished leaves (§15.7) ─────────────────────────────────────
+
+describe('forge CI observation on finished leaves', () => {
+  const red = (...names: string[]): import('../ports/types').HeadChecks => ({
+    kind: 'known',
+    pending: false,
+    failing: names.map((name) => ({ name, source: 'check-run', conclusion: 'failure' })),
+  })
+  const green: import('../ports/types').HeadChecks = { kind: 'known', pending: false, failing: [] }
+  async function finished(h: Harness) {
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: PR.headSha })
+    // Settle the pipeline before observing.
+    await h.dispatcher.tick()
+    expect((await readBuildFacts(h.store, slug)).value.state.pipelineSettled).toBeDefined()
+    return slug
+  }
+  const ci = async (h: Harness, slug: string) =>
+    (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'pr.checks-failed' || event.type === 'pr.checks-cleared',
+    )
+  const janitor = async (h: Harness, slug: string) =>
+    (await h.store.getEvents(slug)).filter((event) => event.type.startsWith('build.janitor-'))
+
+  test('a red head records one failure; unchanged polls append nothing; a new failure adds one', async () => {
+    const h = harness()
+    const slug = await finished(h)
+    h.forge.setHeadChecks(PR.headSha, red('unit'))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    const recorded = await ci(h, slug)
+    expect(recorded.map((event) => event.type)).toEqual(['pr.checks-failed'])
+    expect(recorded[0]!.actor).toEqual(DISPATCHER)
+    expect(recorded[0]!.payload).toMatchObject({
+      pr: 1,
+      head: PR.headSha,
+      buildHead: PR.headSha,
+      checks: [{ name: 'unit' }],
+      total: 1,
+    })
+    const state = (await readBuildFacts(h.store, slug)).value.state
+    expect(buildNeedsAttention(await h.store.getEvents(slug), state)).toBe(true)
+    h.forge.setHeadChecks(PR.headSha, red('unit', 'lint'))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect((await ci(h, slug)).map((event) => event.type)).toEqual([
+      'pr.checks-failed',
+      'pr.checks-failed',
+    ])
+    expect(await janitor(h, slug)).toEqual([])
+  })
+
+  const pending: import('../ports/types').HeadChecks = {
+    kind: 'known',
+    pending: true,
+    failing: [],
+  }
+  for (const [label, checks, cause] of [
+    ['passing', green, 'passing'],
+    ['pending', pending, 'pending'],
+  ] as const)
+    test(`a ${label} head clears the failure once`, async () => {
+      const h = harness()
+      const slug = await finished(h)
+      h.forge.setHeadChecks(PR.headSha, red('unit'))
+      await h.dispatcher.tick()
+      h.forge.setHeadChecks(PR.headSha, checks)
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      const recorded = await ci(h, slug)
+      expect(recorded.map((event) => event.type)).toEqual(['pr.checks-failed', 'pr.checks-cleared'])
+      expect(recorded[1]!.payload).toEqual({ pr: 1, head: PR.headSha, cause })
+      expect((await readBuildFacts(h.store, slug)).value.state.ciFailure).toBeUndefined()
+    })
+
+  test('a new live head clears the old failure; a red new head records one new failure', async () => {
+    const h = harness()
+    const slug = await finished(h)
+    h.forge.setHeadChecks(PR.headSha, red('unit'))
+    await h.dispatcher.tick()
+    h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: 'live-b' })
+    h.forge.setHeadChecks('live-b', red('e2e'))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    const recorded = await ci(h, slug)
+    expect(recorded.map((event) => event.type)).toEqual([
+      'pr.checks-failed',
+      'pr.checks-cleared',
+      'pr.checks-failed',
+    ])
+    expect(recorded[1]!.payload).toEqual({ pr: 1, head: PR.headSha, cause: 'head-changed' })
+    expect(recorded[2]!.payload).toMatchObject({
+      head: 'live-b',
+      buildHead: PR.headSha,
+      checks: [{ name: 'e2e' }],
+    })
+    const summary = (
+      await listOperatorBuilds({ store: h.store, repo: REPO, scope: 'active', now: h.clock() })
+    ).find((entry) => entry.slug === slug)
+    expect(summary?.ciFailure?.text).toContain('live PR head differs from build head head-1')
+  })
+
+  test('a new live head with green checks clears with head-changed only', async () => {
+    const h = harness()
+    const slug = await finished(h)
+    h.forge.setHeadChecks(PR.headSha, red('unit'))
+    await h.dispatcher.tick()
+    h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: 'live-b' })
+    h.forge.setHeadChecks('live-b', green)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect((await ci(h, slug)).map((event) => [event.type, event.payload])).toEqual([
+      ['pr.checks-failed', expect.anything()],
+      ['pr.checks-cleared', { pr: 1, head: PR.headSha, cause: 'head-changed' }],
+    ])
+  })
+
+  // f_487f301a: an old head's failure never survives an unreadable new head.
+  for (const variant of ['forbidden', 'rate-limited', 'truncated', 'missing'] as const)
+    test(`red A then live B with unreadable checks (${variant}) clears A and claims nothing`, async () => {
+      const h = harness()
+      const slug = await finished(h)
+      h.forge.setHeadChecks(PR.headSha, red('unit'))
+      await h.dispatcher.tick()
+      h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: 'live-b' })
+      if (variant === 'forbidden')
+        h.forge.setHeadChecks('live-b', new Error('GitHub 403: Resource not accessible'))
+      else if (variant === 'rate-limited')
+        h.forge.setHeadChecks(
+          'live-b',
+          new ForgeFailure('limit', {
+            kind: 'rate-limited',
+            resetAt: '2099-01-01T00:00:00.000Z',
+          }),
+        )
+      else if (variant === 'truncated')
+        h.forge.setHeadChecks('live-b', { kind: 'unknown', reason: 'truncated' })
+      else Object.defineProperty(h.forge, 'inspectHeadChecks', { value: undefined })
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      const recorded = await ci(h, slug)
+      expect(recorded.map((event) => [event.type, event.payload])).toEqual([
+        ['pr.checks-failed', expect.objectContaining({ head: PR.headSha })],
+        ['pr.checks-cleared', { pr: 1, head: PR.headSha, cause: 'head-changed' }],
+      ])
+      const state = (await readBuildFacts(h.store, slug)).value.state
+      expect(state.ciFailure).toBeUndefined()
+      const summary = (
+        await listOperatorBuilds({ store: h.store, repo: REPO, scope: 'active', now: h.clock() })
+      ).find((entry) => entry.slug === slug)
+      expect(summary?.ciFailure).toBeUndefined()
+      expect(await janitor(h, slug)).toEqual([])
+    })
+
+  // f_a51eae5c: the dedupe identity covers the complete failing set.
+  test('swapping a failing check outside the preview records exactly one new failure', async () => {
+    const h = harness()
+    const slug = await finished(h)
+    const names = Array.from({ length: 21 }, (_, i) => `check-${String(i).padStart(2, '0')}`)
+    h.forge.setHeadChecks(PR.headSha, red(...names))
+    await h.dispatcher.tick()
+    h.forge.setHeadChecks(PR.headSha, red(...names.slice(0, 20), 'check-zz'))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    const recorded = (await ci(h, slug)) as EventEnvelope<'pr.checks-failed'>[]
+    expect(recorded.map((event) => event.type)).toEqual(['pr.checks-failed', 'pr.checks-failed'])
+    expect(recorded[0]!.payload.checks).toEqual(recorded[1]!.payload.checks)
+    expect(recorded[0]!.payload.total).toBe(21)
+    expect(recorded[1]!.payload.digest).not.toBe(recorded[0]!.payload.digest)
+  })
+
+  for (const variant of ['rate-limited', 'forbidden', 'deferred', 'missing'] as const)
+    test(`unknown CI (${variant}) records nothing, raises no janitor episode and blocks no landing`, async () => {
+      const h = harness()
+      const slug = await finished(h)
+      const other = await seedAwaitingPr(h, 'other-leaf')
+      if (variant === 'rate-limited')
+        h.forge.setHeadChecks(
+          PR.headSha,
+          new ForgeFailure('limit', { kind: 'rate-limited', resetAt: '2099-01-01T00:00:00.000Z' }),
+        )
+      else if (variant === 'forbidden') h.forge.setHeadChecks(PR.headSha, new Error('GitHub 403'))
+      else if (variant === 'deferred')
+        h.forge.setHeadChecks(PR.headSha, new ForgeRequestDeferred('cooldown'))
+      else Object.defineProperty(h.forge, 'inspectHeadChecks', { value: undefined })
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      expect(await ci(h, slug)).toEqual([])
+      expect(await janitor(h, slug)).toEqual([])
+      expect(await janitor(h, other)).toEqual([])
+      expect((await readBuildFacts(h.store, other)).value.state.pipelineSettled).toBeDefined()
+    })
+
+  test('a reconcile moving the build head hides the record before the durable clear', async () => {
+    const h = harness()
+    const slug = await finished(h)
+    h.forge.setHeadChecks(PR.headSha, red('unit'))
+    await h.dispatcher.tick()
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { ...PR, headSha: 'head-2' } },
+    })
+    const state = (await readBuildFacts(h.store, slug)).value.state
+    expect(state.ciFailure).toBeDefined()
+    const summary = (
+      await listOperatorBuilds({ store: h.store, repo: REPO, scope: 'active', now: h.clock() })
+    ).find((entry) => entry.slug === slug)
+    expect(summary?.ciFailure).toBeUndefined()
   })
 })

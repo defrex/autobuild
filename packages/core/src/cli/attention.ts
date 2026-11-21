@@ -10,6 +10,7 @@ import {
 } from '../kernel/auto-merge'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { actionableEscalations } from '../kernel/ticket-wait'
+import { currentCiFailure } from '../kernel/forge-checks'
 
 export interface MergeDecision {
   type: 'build.merge-decision'
@@ -45,6 +46,7 @@ export function buildNeedsAttention(events: AbEvent[], state: BuildState): boole
     !!state.targetRewrite ||
     (state.compatibility?.decisiveFacts ?? 0) > 0 ||
     actionableEscalations(state).length > 0 ||
+    currentCiFailure(state) !== undefined ||
     mergeDecision(events, new Date(0), state) !== null
   )
 }

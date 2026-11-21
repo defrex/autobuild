@@ -182,6 +182,8 @@ export const executionProgress = {
   'pr.merged': 'progress',
   'pr.closed': 'progress',
   'pr.conflicted': 'progress',
+  'pr.checks-failed': 'bookkeeping',
+  'pr.checks-cleared': 'bookkeeping',
   'reconcile.progress-checked': 'progress',
   'reconcile.prepared': 'bookkeeping',
   'reconcile.contended': 'bookkeeping',
