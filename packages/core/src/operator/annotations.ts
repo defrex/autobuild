@@ -4,10 +4,11 @@
  * MCP annotations are per-tool hints, never per-argument, so a tool whose
  * action set *may* destroy work carries `destructiveHint: true` for the whole
  * tool, and each destructive action value is additionally named in the input
- * field's description so a model still sees the per-value risk. Today exactly
- * three tools may destroy work: `builds.control` (abort, discard),
- * `builds.answer` (revise-spec), and `tickets.move` (a move into the
- * configured ready state).
+ * field's description so a model still sees the per-value risk. Exactly four
+ * tools may destroy work: `builds.control` (abort, discard),
+ * `builds.answer` (revise-spec), `builds.reopen` (a spec revision, and it
+ * revokes merge consent), and `tickets.move` (a move into the configured
+ * ready state).
  *
  * The registry entries and the contract suite both read this table, so a
  * change to any tool's risk class is a one-line visible diff this suite
@@ -99,6 +100,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     approval: 'default',
   },
   'builds.answer': {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'builds.reopen': {
     readOnlyHint: false,
     destructiveHint: true,
     idempotentHint: false,

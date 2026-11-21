@@ -716,6 +716,14 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `build completed (${event.payload.outcome})`
     case 'build.aborted':
       return 'build aborted'
+    case 'build.reopened': {
+      const who = event.actor.kind === 'human' ? event.actor.user : 'operator'
+      const spec =
+        event.payload.spec !== undefined ? ` with spec rev ${event.payload.spec.artifact.rev}` : ''
+      const feedback = event.payload.feedback !== undefined ? `: ${event.payload.feedback}` : ''
+      const line = singleLine(`reopened by ${who}${spec}${feedback}`)
+      return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX - 1)}…` : line
+    }
     case 'harvest.escalated':
       return `harvest run ${event.payload.run} escalated: ${singleLine(event.payload.reason)}`
     case 'harvest.failed':

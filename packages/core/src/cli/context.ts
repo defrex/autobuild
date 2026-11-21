@@ -35,6 +35,7 @@ import {
 } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
 import { waitBlock, waitGuidance, waitSummary } from '../kernel/ticket-wait'
+import { reopenCurrent } from '../kernel/reopen'
 import {
   isVerifyPhase,
   verifyReportKind,
@@ -45,7 +46,7 @@ import {
   type Finding,
   type Phase,
 } from '../ontology'
-import { KERNEL } from '../events/envelope'
+import { KERNEL, type Via } from '../events/envelope'
 import type { IdSource } from '../ids'
 import {
   allocateScratchPath,
@@ -114,6 +115,9 @@ export interface ContextManifest {
   /** The forge issue links this build froze at claim, with effective intent
    * (SPEC "Forge issue links"). Omitted when the build has none. */
   issueLinks?: { issue: number; intent: 'closes' | 'refs'; downgradeReason?: string }[]
+  /** The operator's reopen of this settled leaf (§15.7), also written to
+   * `reopen.json`, while it governs the current spec. Every phase gets it. */
+  reopen?: ReopenContext
   /** From the latest `implement.completed` (§8.3 code-review/verify inputs). */
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
@@ -172,6 +176,17 @@ export interface ContextManifest {
     current?: number
     path: string
   }
+}
+
+export interface ReopenContext {
+  seq: number
+  user: string
+  via?: Via
+  /** When the operator reopened the build. */
+  at: string
+  feedback?: string
+  /** The spec revision the reopen recorded; absent for feedback only. */
+  specRev?: number
 }
 
 function requiredKinds(spec: PhaseSpec, phase: Phase): string[] {
@@ -463,6 +478,22 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       intent: link.intent,
       ...(link.downgrade !== undefined ? { downgradeReason: link.downgrade.reason } : {}),
     }))
+
+  // A reopen's feedback and spec revision are operator instructions for
+  // every phase until a later reopen or spec revision supersedes them.
+  if (state.kind !== 'node' && state.reopen !== undefined && reopenCurrent(state)) {
+    const reopen = state.reopen
+    const document: ReopenContext = {
+      seq: reopen.seq,
+      user: reopen.user,
+      ...(reopen.via !== undefined ? { via: reopen.via } : {}),
+      at: reopen.ts,
+      ...(reopen.feedback !== undefined ? { feedback: reopen.feedback } : {}),
+      ...(reopen.spec !== undefined ? { specRev: reopen.spec.artifact.rev } : {}),
+    }
+    manifest.reopen = document
+    await writeDerived('reopen.json', `${JSON.stringify(document, null, 2)}\n`)
+  }
 
   if (inputs.assets === true && state.pinnedAssets.length > 0) {
     // The pin, not the ticket's current state: the revisions `build.created`

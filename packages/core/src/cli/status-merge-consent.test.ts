@@ -169,3 +169,42 @@ test('a node whose integration candidate is deferred on unrecorded paths says so
     `  landing:  undecided — deferred — [[merge]] rule merge[1] matches on changed paths, but the changed paths of head ${head.slice(0, 12)} are not recorded; the decision waits for a head this build records (heads pushed outside a build are never recorded)`,
   )
 })
+
+test('a reopened leaf shows who reopened it in summaries, detail and JSON until it resettles', async () => {
+  const store = new MemoryBuildStore()
+  const record = await store.createBuild({ slug: 'consent', repo: '/repo' })
+  const finalize = await store.append(record.slug, finalized('aaa'))
+  await store.append(record.slug, {
+    actor: DISPATCHER,
+    type: 'pipeline.settled',
+    payload: { cycle: finalize.seq },
+  })
+  await store.append(record.slug, {
+    actor: humanActor('ada'),
+    type: 'build.reopened',
+    payload: { feedback: 'rename the flag\u001b[2J' },
+  })
+  const now = new Date('2026-11-20T00:00:00Z')
+  const events = await store.getEvents(record.slug)
+  const summary = summarize(record, events, now)
+  expect(summary.reopened).toMatchObject({
+    user: 'ada',
+    route: 'implement',
+    feedback: 'rename the flag\u001b[2J',
+  })
+  expect(JSON.parse(JSON.stringify(summary)).reopened.route).toBe('implement')
+  expect(renderSummaries([summary], now, '')).toContain(
+    '    reopened by ada → implement: rename the flag\\u{1b}[2J',
+  )
+  expect(renderDetail(detail(record, events, now), now).join('\n')).toContain(
+    '  reopened: by ada → implement: rename the flag\\u{1b}[2J',
+  )
+  await store.append(record.slug, finalized('bbb'))
+  const last = (await store.getEvents(record.slug)).at(-1)!
+  await store.append(record.slug, {
+    actor: DISPATCHER,
+    type: 'pipeline.settled',
+    payload: { cycle: last.seq },
+  })
+  expect(summarize(record, await store.getEvents(record.slug), now).reopened).toBeUndefined()
+})

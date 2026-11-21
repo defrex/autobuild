@@ -146,7 +146,21 @@ bun ab hold my-build --reason "waiting on AUT-12 to merge"
 - **`merge`** requires a ready build, clears its hold and grants consent to merge into its destination.
 - **`hold`** suppresses merge and revokes consent, even before the build is ready. The optional `--reason` (1–2000 characters after trimming) is shown by `build status`, `builds`, `merges` and both dashboards while that hold stands; a later hold replaces it and `merge` clears it.
 - **Reviewed head:** `merge --head <sha>` records consent only while `<sha>` is the current candidate head; otherwise it refuses with `head-mismatch` and records nothing.
-- **Persistence:** consent survives head changes, clean restacks, verification and re-finalization until a hold or completion. Consent given under a `paths` or `within` rule is revoked, with `landing.consent-revoked` attention, when a reconcile's own edits, or a leaf restack's generated-file regeneration, touch a file the rule protects. Accepted node reparenting also revokes it.
+- **Persistence:** consent survives head changes, clean restacks, verification and re-finalization until a hold or completion. Consent given under a `paths` or `within` rule is revoked, with `landing.consent-revoked` attention, when a reconcile's own edits, or a leaf restack's generated-file regeneration, touch a file the rule protects. Accepted node reparenting and a reopen also revoke it.
+
+## Send a finished build back
+
+When review of a finished, unmerged build asks for changes, reopen it instead of aborting it or opening a second PR:
+
+```
+bun ab reopen my-build --feedback "rename the flag and update the docs"
+bun ab reopen my-build --revise-spec-from-ticket
+```
+
+- **Feedback alone** returns the build to `implement` with the feedback in `reopen.json`; code review, verification and finalize run again and the plan stays approved.
+- **A spec revision** (`--revise-spec <file>`, or `--revise-spec-from-ticket` after amending the ticket, which re-pins its assets) restarts from `plan`, with any feedback alongside.
+- The open PR and branch are kept and updated in place. Consent is revoked at once (a hold stays), and the build waits for a slot like other parked work. An armed native auto-merge is cancelled on a later dispatcher poll, not by `ab reopen` itself; a forge merge that lands first completes the build as merged.
+- Only a leaf waiting for its merge decision can be reopened. Use `answer` for a blocked build; a merged or closed PR needs a new ticket.
 
 ## Choose an operator surface
 

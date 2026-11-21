@@ -36,6 +36,11 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    reviewer's findings) or `$AB_CONTEXT_DIR/guidance.json` (an operator's answer to
    the escalation that blocked this build). A round never carries both, and a
    round may carry neither.
+   When the manifest has a `reopen` block, an operator reopened this finished
+   build with a revised spec; `$AB_CONTEXT_DIR/reopen.json` names the new
+   `specRev` and carries any `feedback` they gave with it. Plan the change on
+   top of the existing branch and open PR, which already hold the earlier work,
+   and act on that feedback alongside the spec.
    When the manifest lists `assets`, they are the build's pinned ticket assets
    under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — the plan must satisfy it, while how stays yours. The spec cites

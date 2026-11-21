@@ -244,6 +244,8 @@ const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
 /** Bound on an operator's free-text control reason (abort, hold), after trimming. */
 export const CONTROL_REASON_LIMIT = 2000
+/** Bound on an operator's reopen feedback, in trimmed characters. */
+export const REOPEN_FEEDBACK_LIMIT = 20_000
 /** Where an abort hands the build's ticket back. Triage is the default. */
 export const abortDestinationSchema = z.enum(['triage', 'ready'])
 export type AbortDestination = z.infer<typeof abortDestinationSchema>
@@ -1543,6 +1545,29 @@ export const eventPayloadSchemas = {
   'build.land-requested': z.strictObject({
     decisionSeq: z.number().int().positive(),
   }),
+  /** An operator sent a settled, unmerged leaf back into execution (SPEC
+   * §15.7). Feedback alone re-enters implement; a spec re-enters plan once
+   * the kernel publishes it as the next `spec.revised`. */
+  'build.reopened': z
+    .strictObject({
+      feedback: z
+        .string()
+        .min(1)
+        .max(REOPEN_FEEDBACK_LIMIT)
+        .refine((text) => text.trim() !== '', 'must not be blank')
+        .optional(),
+      spec: z
+        .strictObject({
+          artifact: artifactRefSchema,
+          /** Present only for a from-ticket revision, which re-pins assets. */
+          assets: z.array(pinnedAssetSchema).optional(),
+        })
+        .optional(),
+    })
+    .refine(
+      (reopen) => reopen.feedback !== undefined || reopen.spec !== undefined,
+      'a reopen requires feedback or a spec',
+    ),
   'landing.command-acknowledged': z.strictObject({
     commandSeq: z.number().int().positive(),
   }),

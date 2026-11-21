@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from './envelope'
-import { eventPayloadSchemas, normalizeVerifyCompletion } from './payloads'
+import { eventPayloadSchemas, normalizeVerifyCompletion, REOPEN_FEEDBACK_LIMIT } from './payloads'
 import { buildEventPolicy } from './policy'
 
 function plan(payload: unknown): EventWrite<'plan.completed'> {
@@ -1531,6 +1531,26 @@ test('a hold request carries an optional bounded reason; historical holds have n
   expect(() => write({ reason: '' })).toThrow()
   expect(() => write({ reason: 'x'.repeat(2001) })).toThrow()
   expect(() => write({ note: 'x' })).toThrow()
+})
+
+test('a reopen carries bounded feedback, a spec, or both, and never neither', () => {
+  const write = (payload: unknown) =>
+    validateEventWrite({ actor: humanActor('alice'), type: 'build.reopened', payload })
+  const spec = { artifact: { kind: 'spec', rev: 2 } }
+  expect(write({ feedback: 'rename it' }).payload).toEqual({ feedback: 'rename it' })
+  expect(write({ spec }).payload).toEqual({ spec })
+  expect(write({ feedback: 'x', spec: { ...spec, assets: [] } }).payload).toEqual({
+    feedback: 'x',
+    spec: { ...spec, assets: [] },
+  })
+  expect(() => write({})).toThrow()
+  expect(() => write({ feedback: '' })).toThrow()
+  expect(() => write({ feedback: '   ' })).toThrow()
+  expect(() => write({ feedback: 'x'.repeat(REOPEN_FEEDBACK_LIMIT + 1) })).toThrow()
+  expect(() => write({ feedback: 'x', note: 'y' })).toThrow()
+  expect(() =>
+    validateEventWrite({ actor: KERNEL, type: 'build.reopened', payload: { feedback: 'x' } }),
+  ).toThrow()
 })
 
 test('hand-back checkpoints round-trip, and a legacy abort checkpoint still validates', () => {
