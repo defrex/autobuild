@@ -94,6 +94,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'harvest-suspended-wide',
     'harvest-suspended-narrow',
     'capacity-wide',
+    'backpressure-wide',
     'integration-detail-wide',
     'integration-detail-narrow',
     'integration-detail-conflict',
@@ -186,6 +187,19 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         borrowingNodes: ['queue-conflict'],
       })
       expect(frame.text).toContain('descendant-held slots')
+    } else if (frame.id === 'backpressure-wide') {
+      expect(frame.model.capacity?.backpressure).toEqual({
+        active: true,
+        openPrs: 2,
+        maxOpenPrs: 2,
+        resumeOpenPrs: 1,
+        excludeHeld: false,
+      })
+      expect(frame.model.capacity?.borrowingNodes).toEqual([])
+      expect(frame.model.capacity?.waitingNodes).toBeUndefined()
+      expect(frame.model.capacity?.waitingBuilds).toBeUndefined()
+      expect(frame.text).toContain('open-PR backpressure: 2 open root PRs')
+      expect(frame.text).toContain('normal claims paused')
     } else if (frame.id === 'headline-happy-wide' || frame.id === 'website-hero') {
       expect(frame.text).toContain('AUT-131')
       expect(frame.text).toContain('AUT-129')
@@ -377,6 +391,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     if (
       frame.id !== 'integration-wide' &&
       frame.id !== 'capacity-wide' &&
+      frame.id !== 'backpressure-wide' &&
       frame.id !== 'post-reconcile-policy' &&
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&

@@ -264,6 +264,18 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     height: 3200,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
   },
+  {
+    id: 'backpressure-wide',
+    width: 1440,
+    height: 1600,
+    requires: ['open-PR backpressure', 'normal claims paused'],
+  },
+  {
+    id: 'backpressure-narrow',
+    width: 390,
+    height: 3200,
+    requires: ['open-PR backpressure', 'normal claims paused'],
+  },
   ...(['missing', 'recovered'] as const).flatMap((state) =>
     ['wide', 'narrow'].map((size) => ({
       id: `account-credentials-${state}-${size}`,
@@ -706,6 +718,8 @@ export interface WebFixtureModels {
   integrationNarrow?: DashboardModel
   integration: DashboardModel
   capacity?: DashboardModel
+  /** Open-PR backpressure as the only capacity condition: no waiters, no borrowed slots. */
+  backpressure?: DashboardModel
   mixed: DashboardModel
 }
 
@@ -1106,6 +1120,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'capacity-narrow': {
       const capacity = models.capacity ?? models.integration
       return shell(builds(capacity), { model: capacity })
+    }
+    case 'backpressure-wide':
+    case 'backpressure-narrow': {
+      const backpressure = models.backpressure ?? models.integration
+      return shell(builds(backpressure), { model: backpressure })
     }
     case 'integration-narrow': {
       const model = models.integrationNarrow ?? models.integration
@@ -1521,6 +1540,7 @@ export async function harnessModels(): Promise<WebFixtureModels> {
       integration: frameModel(capture, 'integration-wide'),
       integrationNarrow: frameModel(capture, 'integration-narrow'),
       capacity: frameModel(capture, 'capacity-wide'),
+      backpressure: frameModel(capture, 'backpressure-wide'),
     }
   } finally {
     await rm(workspace, { recursive: true, force: true })

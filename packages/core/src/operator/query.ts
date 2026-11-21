@@ -472,7 +472,13 @@ async function dashboardFromView(
     config.capacity,
     opts.clock(),
     migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
-    { urgentClaims: urgentClaimDemand(repositoryEvents) },
+    {
+      urgentClaims: urgentClaimDemand(repositoryEvents),
+      openPrs: {
+        policy: config.policy,
+        engaged: repositoryEvents.openPrBackpressure !== undefined,
+      },
+    },
   )
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, records),

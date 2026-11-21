@@ -4242,7 +4242,13 @@ class DispatchLoop {
             repositoryEvents.ticketMigrations,
             configSnapshot.config.tickets.source,
           ),
-          { urgentClaims: urgentClaimDemand(repositoryEvents) },
+          {
+            urgentClaims: urgentClaimDemand(repositoryEvents),
+            openPrs: {
+              policy: configSnapshot.config.policy,
+              engaged: repositoryEvents.openPrBackpressure !== undefined,
+            },
+          },
         ),
         ...(this.triageSampler?.value !== undefined ? { triage: this.triageSampler.value } : {}),
       },

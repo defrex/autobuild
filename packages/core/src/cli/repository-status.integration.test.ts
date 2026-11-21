@@ -558,6 +558,68 @@ test.each([false, true])(
   },
 )
 
+test('CLI JSON and text report configured open-PR backpressure from the held configuration', async () => {
+  const { DISPATCHER, KERNEL } = await import('../events/envelope')
+  const { manualClock } = await import('../testing/fixed')
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  const config = {
+    ...historicalEffectiveConfig(false),
+    capacity: 3,
+    tickets: { source: 'file', readyState: 'Ready' },
+    policy: { maxOpenPrs: 2, resumeOpenPrs: 1, excludeHeldOpenPrs: true },
+  }
+  const artifact = await store.putRepoArtifact(REPO, {
+    kind: 'config',
+    content: JSON.stringify(config),
+  })
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'live',
+      pid: 42,
+      roleWarnings: [],
+      effectiveConfig: { kind: 'config', rev: artifact.revision },
+    },
+  })
+  await store.claimRepoLease(REPO, 'live', 60000)
+  for (const slug of ['open-a', 'open-b']) {
+    const ticket = { source: 'file', id: slug }
+    await store.createBuild({
+      slug,
+      repo: REPO,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo: REPO, ticket, baseBranch: 'main' },
+      },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: `https://example.test/${slug}`, headSha: 'head' } },
+    })
+  }
+  const expected = {
+    active: true,
+    openPrs: 2,
+    maxOpenPrs: 2,
+    resumeOpenPrs: 1,
+    excludeHeld: true,
+  }
+  const json = options(store, { json: true, now: clock })
+  await abRepositoryStatus(json)
+  expect(JSON.parse(json.output.join('\n')).capacity.backpressure).toEqual(expected)
+  const text = options(store, { now: clock })
+  await abRepositoryStatus(text)
+  expect(text.output.join('\n')).toContain(
+    'open-PR backpressure: active — 2 open root PRs (max 2, resume 1, held excluded); normal-priority claims paused, urgent still claimed',
+  )
+})
+
 test('repository status renders available outcome categories on failed tick telemetry', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(REPO)
