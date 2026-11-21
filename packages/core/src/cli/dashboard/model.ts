@@ -22,6 +22,7 @@ import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 import { holdReason } from './landing-display'
 import { reopenedSummary, reopenedText } from './reopen-display'
 import { reopenSpecPending } from '../../kernel/reopen-state'
+import { ciFailureText, currentCiFailure } from '../../kernel/forge-checks'
 export { treeVocabulary, consentQueue } from './tree'
 import {
   currentLandingFallback,
@@ -1132,6 +1133,7 @@ export function projectBuildFromFacts(
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
       ? currentLandingWaitReasonFrom(facts.deferral, state)
       : undefined
+  const ciFailure = currentCiFailure(state)
 
   return {
     slug: record.slug,
@@ -1200,7 +1202,14 @@ export function projectBuildFromFacts(
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
     sessions: projectSessions(dashboard.sessionEvents, streams, dashboard.judgeSessions),
+    ...(ciFailure !== undefined
+      ? { alert: { tone: 'red' as const, text: capitalize(ciFailureText(ciFailure)) } }
+      : {}),
   }
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 function harvestStepTiming(

@@ -1013,6 +1013,14 @@ refreshed durable consent/engine eligibility precede any repair. Comparison
 normalizes line endings and tolerates provider trimming of surrounding
 headline whitespace and trailing body whitespace while preserving the
 headline, body content, and squash method.
+On the same poll of a finished, open leaf, `checkPr` reads forge CI at the PR's
+live head through the optional `inspectHeadChecks` capability (GitHub: two
+ETag-conditional REST reads) and compares it with the reduced `ciFailure`
+already in hand, appending advisory `pr.checks-failed` or `pr.checks-cleared`
+only on a transition; an unchanged head reads no store rows. A read failure is
+unknown CI, never a janitor failure. `packages/core/src/kernel/forge-checks.ts`
+holds the pure classification, the failing-set digest and `currentCiFailure`,
+the selector every status surface and the attention predicates read.
 `packages/core/src/kernel/issue-keywords.ts` composes a build's sealed issue
 links into `Closes #N` / `Refs #N` lines, neutralizes closing keywords aimed at
 `refs` issues, and places the keyword paragraph before the trailer block; a

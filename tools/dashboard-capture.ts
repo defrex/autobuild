@@ -1145,6 +1145,23 @@ mode = "auto"
         rule: { default: true },
       },
     })
+    // Red forge CI at the leaf's live PR head: the row's red alert.
+    if (label === 'ready-leaf')
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'pr.checks-failed',
+        payload: {
+          pr: 100 + index,
+          head,
+          buildHead: head,
+          checks: [
+            { name: 'unit', source: 'check-run', conclusion: 'failure' },
+            { name: 'ci/integration', source: 'status', conclusion: 'error' },
+          ],
+          total: 2,
+          digest: 'c'.repeat(64),
+        },
+      })
     if (label === 'held')
       await harness.store.append(slug, {
         actor: { kind: 'human', user: 'capture' },
