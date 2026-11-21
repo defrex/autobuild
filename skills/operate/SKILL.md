@@ -542,6 +542,15 @@ Treat every default-watch record as a call to act:
   your consent was given under. Review the reconcile's edits to the named files
   at the new head, then consent again with `ab merge <slug> --head <new head>`
   or hold it. The build is back in the consent queue until you do.
+- `pr.checks-failed`: forge CI is failing at a finished leaf's live PR head,
+  naming the failing checks and the head. Inspect the PR, then re-run CI on
+  the forge if the failure looks flaky or external, or send the build back with
+  feedback if its own change broke. Autobuild never re-runs CI or returns the
+  build to implement on its own. The failure clears when a successful CI read
+  finds no failing checks on that head, even while some are still pending, or
+  the PR moves to another head; clearing does not prove green. CI the forge
+  cannot report (missing permission, rate
+  limit, outage) is unknown and is never reported as red or green.
 - `optimization.noise-exceeded`: an optimization node's ε is below the noise
   its starting measurement found, so its gate could accept noise. Tell the
   human both numbers; raising ε (`ab objective <node> --epsilon …`) or
@@ -726,7 +735,7 @@ Watch for decisions and conflicts with `ab watch --operator --json`; save its op
 and resume with `ab watch --operator --since <watch-cursor> --json`. On
 `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge the
 unavailable historical gap. Default attention includes
-failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays, revoked protected consent (`landing.consent-revoked`), optimization noise above ε (`optimization.noise-exceeded`) and derived
+failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays, revoked protected consent (`landing.consent-revoked`), failing forge CI on a finished leaf (`pr.checks-failed`), optimization noise above ε (`optimization.noise-exceeded`) and derived
 `build.consent-ready` observations, including already-ready merges on first
 repository-wide discovery. Readiness is identified by its durable
 entry position: resuming suppresses the same episode, while a new candidate or

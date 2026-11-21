@@ -2193,3 +2193,44 @@ describe('judge panel facts', () => {
     }
   })
 })
+
+test('forge CI facts bind heads, bound the preview and carry a set digest', () => {
+  const check = { name: 'unit', source: 'check-run', conclusion: 'failure' }
+  const failed = (payload: Record<string, unknown>) =>
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'pr.checks-failed',
+      payload: {
+        pr: 3,
+        head: 'live',
+        buildHead: 'build',
+        checks: [check],
+        total: 1,
+        digest: 'f'.repeat(64),
+        ...payload,
+      },
+    })
+  expect(failed({}).payload).toMatchObject({ head: 'live', buildHead: 'build', total: 1 })
+  expect(() => failed({ checks: [] })).toThrow()
+  expect(() => failed({ checks: Array.from({ length: 21 }, () => check) })).toThrow()
+  expect(() => failed({ digest: 'not-a-digest' })).toThrow()
+  expect(() => failed({ checks: [{ ...check, source: 'other' }] })).toThrow()
+  expect(() =>
+    validateEventWrite({
+      actor: KERNEL,
+      type: 'pr.checks-failed',
+      payload: failed({}).payload,
+    }),
+  ).toThrow()
+  const cleared = (cause: string) =>
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'pr.checks-cleared',
+      payload: { pr: 3, head: 'live', cause },
+    })
+  for (const cause of ['passing', 'pending', 'head-changed'])
+    expect(cleared(cause).payload).toMatchObject({ cause })
+  expect(() => cleared('green')).toThrow()
+  expect(buildEventPolicy['pr.checks-failed']).toBe('advisory')
+  expect(buildEventPolicy['pr.checks-cleared']).toBe('advisory')
+})

@@ -143,6 +143,7 @@ export const FORGE_READ_ALLOWLIST: readonly string[] = [
   'inspectMergeFreshness',
   'inspectLandingGate',
   'inspectLandingPr',
+  'inspectHeadChecks',
   'compareBranches',
   'confirmPublication',
   'snapshotBase',

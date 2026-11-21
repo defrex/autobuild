@@ -306,6 +306,22 @@ function randomWrite(rand: () => number): EventWrite {
   return pick(rand, templates)()
 }
 
+/** Forge CI facts close every log without drawing from the seeded stream,
+ * so earlier prefixes stay identical: odd seeds end red, even seeds cleared. */
+function ciWrites(seed: number): EventWrite[] {
+  const failed = w('pr.checks-failed', {
+    pr: 7,
+    head: 'h',
+    buildHead: 'h',
+    checks: [{ name: 'unit', source: 'check-run', conclusion: 'failure', url: 'https://ci/1' }],
+    total: 2,
+    digest: 'd'.repeat(64),
+  })
+  return seed % 2 === 1
+    ? [failed]
+    : [failed, w('pr.checks-cleared', { pr: 7, head: 'h', cause: 'passing' })]
+}
+
 export function randomBuildLog(seed: number, length: number): AbEvent[] {
   const rand = seededRandom(seed)
   const clock = steppingClock()
@@ -314,7 +330,7 @@ export function randomBuildLog(seed: number, length: number): AbEvent[] {
     repo: 'o/r',
     baseBranch: 'main',
   })
-  const writes = [created, ...Array.from({ length }, () => randomWrite(rand))]
+  const writes = [created, ...Array.from({ length }, () => randomWrite(rand)), ...ciWrites(seed)]
   return writes.map(
     (write, index) =>
       ({
