@@ -525,7 +525,13 @@ export class DispatchFrontend {
           config.capacity,
           this.clock(),
           migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
-          { urgentClaims: urgentClaimDemand(repositoryFacts) },
+          {
+            urgentClaims: urgentClaimDemand(repositoryFacts),
+            openPrs: {
+              policy: config.policy,
+              engaged: repositoryFacts.openPrBackpressure !== undefined,
+            },
+          },
         ),
         // A viewer shows only its own read; headless ticks publish no count.
         ...(this.opts.viewer

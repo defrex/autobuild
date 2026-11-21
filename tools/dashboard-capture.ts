@@ -59,7 +59,7 @@ export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 /** Tickets waiting in triage in every capture's header. */
 export const CAPTURE_TRIAGE_COUNT = 2
 
-type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
+type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity' | 'backpressure'
 
 export interface FrameSpec {
   viewer?: { dispatchedBy?: string }
@@ -264,6 +264,13 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     columns: 180,
     rows: 44,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+  },
+  {
+    id: 'backpressure-wide',
+    scenario: 'backpressure',
+    columns: 180,
+    rows: 44,
+    requires: ['open-PR backpressure', 'normal claims paused'],
   },
   ...(['wide', 'narrow'] as const).map((size) => ({
     id: `integration-detail-${size}`,
@@ -1225,6 +1232,47 @@ async function prepareBorrowedCapacity(harness: E2eHarness): Promise<void> {
   }
 }
 
+/** Two root leaves with open PRs at `maxOpenPrs = 2`: open-PR backpressure
+ * is the only capacity condition (no slot waiters, no borrowed slots). Each
+ * leaf is paused under a sentinel lease so the capture tick leaves it alone. */
+async function prepareBackpressureScenario(): Promise<E2eHarness> {
+  const harness = await makeHarness({
+    handlers: happyHandlers(),
+    configToml: CAPTURE_CONFIG_TOML.replace(
+      HAPPY_LEASE_LINE,
+      `${HAPPY_LEASE_LINE}maxOpenPrs = 2\nresumeOpenPrs = 1\n`,
+    ),
+    tickets: [readyTicket('BP-NEXT', { title: 'Normal work paused by backpressure' })],
+  })
+  await harness.store.ensureRepo(harness.origin)
+  for (const [index, slug] of ['open-pr-review', 'open-pr-ci'].entries()) {
+    const ticket = { source: 'fake', id: `BP-${index + 1}` }
+    await harness.store.createBuild({
+      slug,
+      repo: harness.origin,
+      ticket,
+      branch: `ab/${slug}`,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo: harness.origin, ticket, baseBranch: 'main' },
+      },
+    })
+    const number = 200 + index
+    harness.forge.setPrState(number, { state: 'open', mergeable: null })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number, url: `https://example.test/pr/${number}`, headSha: 'b'.repeat(40) },
+      },
+    })
+    await harness.store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
+  }
+  return harness
+}
+
 export async function prepareScenario(): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: captureHandlers(),
@@ -1854,20 +1902,22 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   const commonEvidence =
     (spec.scenario === 'integration' || spec.scenario === 'capacity') && !spec.detail
       ? ['integration', 'collect', 'children unknown']
-      : spec.scenario === 'happy'
-        ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
-        : spec.transcript !== undefined
-          ? ['Transcript', 'complete-dashboard-evidence']
-          : spec.session !== undefined
-            ? ['Session', spec.session.slug]
-            : spec.ticketWait === 'detail'
-              ? ['Build  ']
-              : spec.detail === undefined
-                ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-                : [
-                    `Build  ${spec.detail.slug}`,
-                    ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
-                  ]
+      : spec.scenario === 'backpressure'
+        ? ['open-pr-review', 'open-pr-ci']
+        : spec.scenario === 'happy'
+          ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
+          : spec.transcript !== undefined
+            ? ['Transcript', 'complete-dashboard-evidence']
+            : spec.session !== undefined
+              ? ['Session', spec.session.slug]
+              : spec.ticketWait === 'detail'
+                ? ['Build  ']
+                : spec.detail === undefined
+                  ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+                  : [
+                      `Build  ${spec.detail.slug}`,
+                      ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
+                    ]
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
@@ -2153,6 +2203,7 @@ export async function captureDashboardFrames(
   const mixedHarness = await prepareScenario()
   const capacityHarness = await prepareIntegrationScenario(true, true)
   await prepareBorrowedCapacity(capacityHarness)
+  const backpressureHarness = await prepareBackpressureScenario()
   const integrationHarness = await prepareIntegrationScenario(
     options.consentQueueFixtures !== false,
   )
@@ -2161,6 +2212,7 @@ export async function captureDashboardFrames(
     happy = await prepareHappyScenario()
   } catch (error) {
     await capacityHarness.cleanup()
+    await backpressureHarness.cleanup()
     await integrationHarness.cleanup()
     await mixedHarness.cleanup()
     throw error
@@ -2183,9 +2235,11 @@ export async function captureDashboardFrames(
           ? happy.harness
           : spec.scenario === 'capacity'
             ? capacityHarness
-            : spec.scenario === 'integration'
-              ? integrationHarness
-              : mixedHarness
+            : spec.scenario === 'backpressure'
+              ? backpressureHarness
+              : spec.scenario === 'integration'
+                ? integrationHarness
+                : mixedHarness
       if (spec.id === 'integration-wide') {
         await harness.store.append('integration-unknown', {
           actor: DISPATCHER,
@@ -2370,6 +2424,7 @@ export async function captureDashboardFrames(
   } finally {
     await Promise.all([
       capacityHarness.cleanup(),
+      backpressureHarness.cleanup(),
       integrationHarness.cleanup(),
       mixedHarness.cleanup(),
       happy.harness.cleanup(),

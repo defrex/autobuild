@@ -2,6 +2,7 @@ import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { workTargetDistance } from './target-distance'
 import { openTicketWait, waitingOnLine } from '../../kernel/ticket-wait'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
+import { openPrBackpressureReducer } from '../../kernel/open-pr-backpressure-state'
 import { projectRollback, type DashboardRollback } from './rollback'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
 import { enrichDrainingRow, projectHandoffs, type DashboardHandoff } from './handoff'
@@ -1566,7 +1567,18 @@ export function buildDashboard(
         : repositoryEvents.ticketMigrations,
       config.tickets.source,
     ),
-    Array.isArray(repositoryEvents) ? {} : { urgentClaims: urgentClaimDemand(repositoryEvents) },
+    {
+      ...(Array.isArray(repositoryEvents)
+        ? {}
+        : { urgentClaims: urgentClaimDemand(repositoryEvents) }),
+      openPrs: {
+        policy: config.policy,
+        engaged:
+          (Array.isArray(repositoryEvents)
+            ? openPrBackpressureReducer.reduce(repositoryEvents)
+            : repositoryEvents.openPrBackpressure) !== undefined,
+      },
+    },
   )
   const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(

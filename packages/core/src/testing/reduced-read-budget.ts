@@ -3967,6 +3967,145 @@ export async function slotAdmissionReadBudget(opts: {
   await idle(3)
 }
 
+/** Open-PR backpressure (SPEC §12 Intake order) counts open root PRs over the
+ * capacity builds the tick already loaded and reads its engagement from the
+ * advanced repository view: a quiet intake tick with backpressure engaged
+ * costs no more store rows or ticket-source requests than the same tick with
+ * it disabled, at 100 and 100,000 repository events, and a steady engaged
+ * state appends nothing. */
+export async function openPrBackpressureReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const sha = 'a'.repeat(40)
+  const plain =
+    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n'
+  const methods = ['listReady', 'get', 'dependencyStates', 'listAll'] as const
+  const results = new Map<string, { calls: Record<string, number>[]; rows: number[] }>()
+  for (const engaged of [false, true]) {
+    const config = parseConfig(engaged ? `${plain}[policy]\nmaxOpenPrs = 1\n` : plain)
+    for (const length of [100, 100_000]) {
+      const source = new FakeTicketSource([], { createState: 'triage', doneState: 'done' })
+      const calls: Record<string, number> = Object.fromEntries(methods.map((name) => [name, 0]))
+      const tickets = new Proxy(source, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target)
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            if (typeof key === 'string' && key in calls) calls[key]! += 1
+            return value.apply(target, args)
+          }
+        },
+      })
+      // Every ready ticket is blocked, so the disabled baseline claims nothing either.
+      const blocker = await source.create({ title: 'Unresolved blocker', body: 'Budget' })
+      for (const title of ['N1', 'N2']) {
+        const ticket = await source.create({ title, body: 'Budget' })
+        await source.addBlocker(ticket.ref.id, blocker.ref.id)
+        await source.transition(ticket.ref.id, 'ready')
+      }
+
+      let now = 1_800_000_000_000
+      const clock = () => new Date(now)
+      const store = new MemoryBuildStore({ clock })
+      const repo = `https://github.com/budget/open-pr-backpressure-${engaged}-${length}`
+      await store.ensureRepo(repo)
+      // One open root PR, in both variants.
+      const slug = 'open-pr'
+      await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: { source: 'hosted', id: 'OPEN' }, repo, baseBranch: 'main' },
+      })
+      await store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr: { number: 1, url: 'https://github.com/budget/pr/1', headSha: sha } },
+      })
+      for (let i = 0; i < length - (engaged ? 1 : 0); i++)
+        await store.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+      if (engaged)
+        await store.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.open-pr-backpressure-engaged',
+          payload: { openPrs: 1, maxOpenPrs: 1, resumeOpenPrs: 0, excludeHeld: false },
+        })
+      // The one serialized reduction per key happens before the measured ticks.
+      await readRepositoryFacts(store, repo)
+      await readBuildDigests(store, repo)
+      const counter = memoryRepositoryReadCounter(store, repo)
+      const perTick: Record<string, number>[] = []
+      const rows: number[] = []
+      for (let tick = 0; tick < 3; tick++) {
+        now += 60_000
+        const forge = new FakeForge()
+        forge.seedBranch('main', sha)
+        const dispatcher = new Dispatcher({
+          store,
+          tickets,
+          workspaces: new FakeWorkspaceProvider({
+            root: '/open-pr-backpressure-budget',
+            mode: 'logical',
+            base: { source: 'remote', sha },
+          }),
+          forge,
+          config,
+          repo,
+          exec: async () => ({ stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }),
+          launchRunner: async () => {
+            throw new Error('no launches in the open-PR backpressure budget')
+          },
+          ids: sequentialIds(),
+          clock,
+        })
+        const before = { ...calls }
+        const appended = (await store.getRepoEvents(repo)).length
+        counter.reset()
+        const report = await dispatcher.tick()
+        expect(report.dispatched).toBe(0)
+        // The warm-up tick makes the once-per-key reductions the open PR's
+        // forge work needs (forge health); later ticks are measured.
+        if (tick > 0) {
+          perTick.push(
+            Object.fromEntries(methods.map((name) => [name, calls[name]! - before[name]!])),
+          )
+          rows.push(counter.rows)
+          expect(counter.rows).toBeLessThanOrEqual(32)
+        }
+        // A steady state records no backpressure transition.
+        expect(
+          (await store.getRepoEvents(repo, appended)).filter((event) =>
+            event.type.startsWith('dispatcher.open-pr-backpressure-'),
+          ),
+        ).toEqual([])
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        counter.reset()
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        expect(counter.rows).toBe(0)
+      }
+      results.set(`${engaged}:${length}`, { calls: perTick, rows })
+      await store.close()
+    }
+  }
+  const disabled = results.get('false:100')!
+  expect(results.get('false:100000')).toEqual(disabled)
+  const engaged = results.get('true:100')!
+  expect(results.get('true:100000')).toEqual(engaged)
+  // Paused intake skips the dependency preflight, so it can only save.
+  engaged.calls.forEach((tick, index) => {
+    for (const name of methods)
+      expect(tick[name]).toBeLessThanOrEqual(disabled.calls[index]![name]!)
+    expect(engaged.rows[index]).toBeLessThanOrEqual(disabled.rows[index]!)
+  })
+  return { disabled, engaged }
+}
+
 /** Native identity maintenance (SPEC §15.7) adds one forge identity read per
  * armed, eligible poll and nothing else: a fresh dispatcher's quiet
  * maintenance tick reads no history, spends exactly the store reads of the same

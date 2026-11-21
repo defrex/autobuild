@@ -7,6 +7,13 @@ import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization
 import { waitParked, waitResumeDue } from './ticket-wait'
 import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
 import { reopenRestart, reopenSpecPending, reopenUnsettled } from './reopen-state'
+import type { PolicyConfig } from '../config/schema'
+import {
+  backpressureExplanation,
+  openPrBackpressure,
+  openPrBackpressurePolicy,
+  type OpenPrBackpressure,
+} from './open-pr-backpressure'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
@@ -58,6 +65,8 @@ export interface DispatchCapacity {
    * (`urgentClaimDemand`); they go ahead of normal parked work. Omitted when
    * none, and when the caller has no repository facts. */
   urgentClaims?: number
+  /** Open-PR backpressure on normal-priority claims; absent when disabled. */
+  backpressure?: OpenPrBackpressure
 }
 
 /** A build's slot-admission priority; absent (historical builds, sources
@@ -75,6 +84,15 @@ export function urgentClaimDemand(facts: {
 }): number {
   if (!facts.settings.intake || facts.settings.paused || facts.scan?.mode !== 'admission') return 0
   return facts.scan.urgentWaiting ?? 0
+}
+
+/** What a capacity projection needs to report open-PR backpressure: the
+ * effective `[policy]` and whether the durable engagement fact is set. */
+export interface OpenPrBackpressureInput {
+  policy:
+    | Partial<Pick<PolicyConfig, 'maxOpenPrs' | 'resumeOpenPrs' | 'excludeHeldOpenPrs'>>
+    | undefined
+  engaged: boolean
 }
 
 /** A provisioning marker or continuation, or a live lease: a runner is working. */
@@ -306,7 +324,7 @@ export function dispatchCapacity(
   configured: number,
   now: Date,
   identity: Identity = exactIdentity,
-  opts: { urgentClaims?: number } = {},
+  options: { urgentClaims?: number; openPrs?: OpenPrBackpressureInput } = {},
 ): DispatchCapacity {
   const unique = [...new Map(builds.map((build) => [build.record.slug, build])).values()]
   const occupied = unique.filter((build) => occupiesCapacity(build, now)).length
@@ -337,6 +355,13 @@ export function dispatchCapacity(
       .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
   const waitingNodes = waiting('node')
   const waitingBuilds = waiting('leaf')
+  const backpressure = options.openPrs
+    ? openPrBackpressure(
+        unique,
+        openPrBackpressurePolicy(options.openPrs.policy),
+        options.openPrs.engaged,
+      )
+    : undefined
   return {
     configured,
     occupied,
@@ -344,7 +369,8 @@ export function dispatchCapacity(
     borrowingNodes,
     ...(waitingNodes.length ? { waitingNodes } : {}),
     ...(waitingBuilds.length ? { waitingBuilds } : {}),
-    ...(opts.urgentClaims ? { urgentClaims: opts.urgentClaims } : {}),
+    ...(options.urgentClaims ? { urgentClaims: options.urgentClaims } : {}),
+    ...(backpressure ? { backpressure } : {}),
   }
 }
 
@@ -456,6 +482,8 @@ export function capacityExplanation(capacity?: DispatchCapacity): string {
     )
   const waiting = waitingExplanation(capacity)
   if (waiting) clauses.push(waiting)
+  const backpressure = backpressureExplanation(capacity.backpressure)
+  if (backpressure) clauses.push(backpressure)
   if (!clauses.length) return ''
   return ` (${capacity.configured} configured; ${clauses.join('; ')})`
 }
