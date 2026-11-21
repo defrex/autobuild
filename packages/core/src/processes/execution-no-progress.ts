@@ -22,6 +22,7 @@ export const executionProgress = {
   'landing.deferred': 'bookkeeping',
   'landing.consent-revoked': 'bookkeeping',
   'build.hold-requested': 'progress',
+  'build.reopened': 'progress',
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',
   'landing.native-enable-started': 'bookkeeping',

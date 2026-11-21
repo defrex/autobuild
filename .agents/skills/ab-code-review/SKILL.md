@@ -25,6 +25,10 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    (`base`/`head` in `$AB_CONTEXT_DIR/context.json`), `$AB_CONTEXT_DIR/implement-notes.md`, and
    `$AB_CONTEXT_DIR/history/` with prior rounds' findings. When present,
    `$AB_CONTEXT_DIR/dismissed-findings.json` lists finding ids a human explicitly dismissed.
+   When the manifest has a `reopen` block, an operator reopened this finished
+   build and `$AB_CONTEXT_DIR/reopen.json` carries their `feedback`: judge the
+   new commits against it as well as the spec, so the requested change is in
+   scope and leaving it undone is a finding.
 2. Read the actual diff (`git diff <base>..<head>`), then the surrounding
    code. Review what changed *and* what the change touches.
 3. Judge on exactly these axes, in this order:

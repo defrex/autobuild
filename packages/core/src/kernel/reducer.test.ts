@@ -2659,3 +2659,16 @@ describe('reduceBuild: implement.declined', () => {
     expect(state.implement.commits).toBeUndefined()
   })
 })
+
+test('a reopen lets the re-run finalize record its terminal again', () => {
+  const finalized = [
+    ev('finalize.started', {}),
+    ev('finalize.completed', { pr: { number: 7, url: 'https://forge/7', headSha: 'h1' } }),
+  ]
+  const finalize = terminalGuardReducer({ phase: 'finalize', round: 1, session: 's_final' })
+  expect(finalize.reduce(toLog(finalized)).diagnostic).toContain('second terminal call rejected')
+  expect(
+    finalize.reduce(toLog([...finalized, ev('build.reopened', { feedback: 'rename it' })]))
+      .diagnostic,
+  ).toBeUndefined()
+})

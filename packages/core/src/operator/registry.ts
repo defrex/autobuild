@@ -66,6 +66,7 @@ import {
 import {
   answerRequestSchema,
   harvestControlRequestSchema,
+  reopenRequestSchema,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
   exactlyOneMoveTarget,
@@ -73,9 +74,16 @@ import {
   ticketMoveRequestShape,
   ticketUpdateRequestSchema,
   type OperatorAnswerRequest,
+  type OperatorReopenRequest,
 } from './protocol'
 import { OPERATOR_TOOL_ANNOTATIONS, type OperatorToolName } from './annotations'
-import { answerAction, controlPrechecks, requireRouteBuild, RouteRefusalError } from './requests'
+import {
+  answerAction,
+  controlPrechecks,
+  reopenAction,
+  requireRouteBuild,
+  RouteRefusalError,
+} from './requests'
 import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
 import type { OperatorSandboxService } from './sandbox'
 import {
@@ -386,6 +394,8 @@ const repositoryEventsInput = z.strictObject({
 })
 
 const buildsAnswerInput = extendUnion(answerRequestSchema, { repo: repoField, slug: slugField })
+
+const buildsReopenInput = reopenRequestSchema.extend({ repo: repoField, slug: slugField })
 
 const repositoryStatusInput = z.strictObject({ repo: repoField })
 
@@ -853,6 +863,32 @@ export const TOOLS: readonly ToolEntry[] = [
             await openOperatorTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets })
           ).source
         },
+        repo: input.repo,
+        slug: input.slug,
+        user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
+        action,
+        ...(readTicketBody !== undefined
+          ? {
+              readTicketBody,
+              prepareTicketAssets: (ref, store, repo) =>
+                prepareOperatorTicketAssets({ ref, store, repo, backend: ctx.tickets }),
+            }
+          : {}),
+      })
+    },
+  ),
+  defineTool(
+    'builds.reopen',
+    'Send a settled, unmerged leaf that waits for its merge decision back into execution, keeping its open PR and branch. Feedback alone returns it to implement with the feedback in its phase context; a spec revision (destructive — replaces the spec) restarts it from plan. Merge consent is revoked (a hold stays) and the dispatcher cancels any armed native auto-merge; the leaf then waits for a slot. Refused for integration nodes, optimization attempts, terminal builds, merged or closed PRs (a fixup is a new ticket), leaves still running or blocked (use builds.answer), and pending abort or discard.',
+    buildsReopenInput,
+    'The controlBuild reopen result: {kind: "reopened", slug, route: "implement" | "plan", event?, specRev?, completedEarlier?}. completedEarlier means this call finished an earlier recorded spec reopen and did not use its own arguments.',
+    async (raw, ctx) => {
+      const input = raw as OperatorReopenRequest & { repo: string; slug: string }
+      await requireRouteBuild(ctx.store, input.repo, input.slug)
+      const { action, readTicketBody } = reopenAction(input)
+      return controlBuild({
+        store: ctx.store,
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),

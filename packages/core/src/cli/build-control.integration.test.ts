@@ -2463,3 +2463,310 @@ test('an uncaptured answer racing fail-fast cancellation is refused at compare-a
   )
   await store.close()
 })
+
+describe('reopen a settled, unmerged leaf (SPEC §15.7)', () => {
+  const ticket = { source: 'fake', id: 'T-7' }
+  const pin = (name: string, revision: number) => ({
+    kind: 'mock',
+    name,
+    revision,
+    layout: 'file' as const,
+    size: 1,
+    fileCount: 1,
+    dirCount: 0,
+  })
+  const OLD_PINS = [pin('old.png', 0)]
+  const via = { kind: 'mcp' as const, client: 'test' }
+
+  /** A leaf that finished, opened its PR and settled awaiting merge. */
+  async function settledStore(): Promise<MemoryBuildStore> {
+    const store = await makeStore({ ticket })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'main', assets: OLD_PINS },
+    })
+    await seedSpec(store, CONFORMING_SPEC)
+    await readyLanding(store)
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'ada' },
+      type: 'build.land-requested',
+      payload: { decisionSeq: (await store.getEvents(SLUG)).at(-1)!.seq },
+    })
+    const facts = reduceBuild(await store.getEvents(SLUG))
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pipeline.settled',
+      payload: { cycle: Math.max(facts.verify.cycleSince, facts.finalizeCompletedSeq) },
+    })
+    return store
+  }
+
+  function counters() {
+    const calls = { body: 0, assets: 0, supplied: 0 }
+    return {
+      calls,
+      readTicketBody: async () => {
+        calls.body += 1
+        return CONFORMING_SPEC
+      },
+      prepareTicketAssets: async () => {
+        calls.assets += 1
+        return [pin('a.png', 1), pin('b.png', 0)]
+      },
+      supplied: {
+        kind: 'supplied' as const,
+        origin: 'spec.md',
+        read: async () => {
+          calls.supplied += 1
+          return CONFORMING_SPEC
+        },
+      },
+    }
+  }
+
+  const reopen = (
+    store: BuildStore,
+    action: Extract<BuildControlAction, { kind: 'reopen' }>,
+    seams: Partial<ReturnType<typeof counters>> = {},
+  ) =>
+    controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      user: 'ada',
+      via,
+      action,
+      ...(seams.readTicketBody ? { readTicketBody: seams.readTicketBody } : {}),
+      ...(seams.prepareTicketAssets ? { prepareTicketAssets: seams.prepareTicketAssets } : {}),
+    })
+
+  /** Inject `write` immediately before the `n`th compare-and-append. */
+  function injecting(store: MemoryBuildStore, n: number, write: EventWrite): MemoryBuildStore {
+    let calls = 0
+    const proxy = Object.create(store) as MemoryBuildStore
+    proxy.appendIfCurrent = async <T extends EventType>(
+      target: string,
+      expectedSeq: number,
+      event: EventWrite<T>,
+    ): Promise<EventEnvelope<T> | null> => {
+      calls += 1
+      if (calls === n) await store.append(SLUG, write)
+      return store.appendIfCurrent(target, expectedSeq, event)
+    }
+    return proxy
+  }
+
+  test('feedback records an attributed reopen, revokes consent and re-enters implement', async () => {
+    const store = await settledStore()
+    const result = await reopen(store, { kind: 'reopen', feedback: '  rename the flag  ' })
+    expect(result).toMatchObject({ kind: 'reopened', route: 'implement' })
+    const events = await store.getEvents(SLUG)
+    expect(events.at(-1)).toMatchObject({
+      type: 'build.reopened',
+      actor: { kind: 'human', user: 'ada', via },
+      payload: { feedback: 'rename the flag' },
+    })
+    const state = reduceBuild(events)
+    expect(state.landing?.command).toBeUndefined()
+    expect(state.prState).toBe('open')
+    // Routing through implement is covered by the engine's reopen tests.
+    expect(state.reopen).toMatchObject({ user: 'ada', via, feedback: 'rename the flag' })
+    await store.close()
+  })
+
+  test('every refusal writes nothing', async () => {
+    const cases: [string, (store: MemoryBuildStore) => Promise<unknown>, string][] = [
+      ['blank feedback', (s) => reopen(s, { kind: 'reopen', feedback: '   ' }), 'invalid-argument'],
+      [
+        'over-long feedback',
+        (s) => reopen(s, { kind: 'reopen', feedback: 'x'.repeat(20_001) }),
+        'invalid-argument',
+      ],
+      ['nothing to reopen with', (s) => reopen(s, { kind: 'reopen' }), 'invalid-argument'],
+      [
+        'nonconforming spec',
+        (s) =>
+          reopen(s, {
+            kind: 'reopen',
+            reviseSpec: { kind: 'supplied', origin: 'bad.md', read: async () => 'no sections' },
+          }),
+        'spec-nonconforming',
+      ],
+    ]
+    for (const [name, run, code] of cases) {
+      const store = await settledStore()
+      const before = await eventTypes(store)
+      await expect(run(store), name).rejects.toMatchObject({ code })
+      expect(await eventTypes(store), name).toEqual(before)
+      await store.close()
+    }
+    const states: [string, EventWrite, string][] = [
+      ['merged', { actor: DISPATCHER, type: 'pr.merged', payload: { sha: 's' } }, 'not-reopenable'],
+      ['closed', { actor: DISPATCHER, type: 'pr.closed', payload: {} }, 'not-reopenable'],
+      [
+        'aborting',
+        { actor: { kind: 'human', user: 'b' }, type: 'build.abort-requested', payload: {} },
+        'abort-pending',
+      ],
+      [
+        'blocked',
+        {
+          actor: agentActor('implement', 's'),
+          type: 'escalation.raised',
+          payload: { id: 'e', phase: 'implement', source: 'agent', question: 'q' },
+        },
+        'not-reopenable',
+      ],
+    ]
+    for (const [name, write, code] of states) {
+      const store = await settledStore()
+      await store.append(SLUG, write)
+      const before = await eventTypes(store)
+      await expect(reopen(store, { kind: 'reopen', feedback: 'x' }), name).rejects.toMatchObject({
+        code,
+      })
+      expect(await eventTypes(store), name).toEqual(before)
+      await store.close()
+    }
+  })
+
+  test('a supplied spec records the reopen then the operator revision, and restarts from plan', async () => {
+    const store = await settledStore()
+    const seams = counters()
+    const result = await reopen(
+      store,
+      { kind: 'reopen', feedback: 'see the new spec', reviseSpec: seams.supplied },
+      seams,
+    )
+    expect(result).toMatchObject({ kind: 'reopened', route: 'plan', specRev: 1 })
+    const events = await store.getEvents(SLUG)
+    expect(events.slice(-2)).toMatchObject([
+      {
+        type: 'build.reopened',
+        payload: { feedback: 'see the new spec', spec: { artifact: { rev: 1 } } },
+      },
+      {
+        type: 'spec.revised',
+        actor: KERNEL,
+        payload: { artifact: { kind: 'spec', rev: 1 }, operator: { user: 'ada', via } },
+      },
+    ])
+    expect(events.at(-1)!.payload).not.toHaveProperty('assets')
+    expect(reduceBuild(events).pinnedAssets).toEqual(OLD_PINS)
+    expect(decideNext(events, ENGINE_CONFIG)).toMatchObject({ kind: 'run-phase', phase: 'plan' })
+    expect(seams.calls).toEqual({ body: 0, assets: 0, supplied: 1 })
+    await store.close()
+  })
+
+  test('a ticket spec re-pins assets once, even across a lost publication race', async () => {
+    const store = await settledStore()
+    const seams = counters()
+    const proxy = injecting(store, 2, {
+      actor: DISPATCHER,
+      type: 'build.janitor-recovered',
+      payload: {},
+    })
+    await reopen(proxy, { kind: 'reopen', reviseSpec: { kind: 'ticket' } }, seams)
+    const events = await store.getEvents(SLUG)
+    const revisions = events.filter((e) => e.type === 'spec.revised')
+    expect(revisions).toHaveLength(1)
+    expect(revisions[0]!.payload).toMatchObject({ assets: [pin('a.png', 1), pin('b.png', 0)] })
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 1), pin('b.png', 0)])
+    expect(seams.calls).toEqual({ body: 1, assets: 1, supplied: 0 })
+    await store.close()
+  })
+
+  test('a repeated reopen completes a recorded spec reopen from its recorded pins only', async () => {
+    for (const assets of [[pin('a.png', 1), pin('b.png', 0)], [], undefined]) {
+      const store = await settledStore()
+      const deposit = await store.putArtifact(SLUG, { kind: 'spec', content: CONFORMING_SPEC })
+      // Crash: the reopen landed, its publication did not.
+      await store.append(SLUG, {
+        actor: { kind: 'human', user: 'ada' },
+        type: 'build.reopened',
+        payload: {
+          spec: {
+            artifact: { kind: 'spec', rev: deposit.revision },
+            ...(assets !== undefined ? { assets } : {}),
+          },
+        },
+      })
+      const seams = counters()
+      const result = await reopen(
+        store,
+        { kind: 'reopen', feedback: 'ignored', reviseSpec: seams.supplied },
+        seams,
+      )
+      expect(result).toMatchObject({ completedEarlier: true, specRev: deposit.revision })
+      const events = await store.getEvents(SLUG)
+      const revision = events.at(-1)!
+      expect(revision.type).toBe('spec.revised')
+      if (assets === undefined) expect(revision.payload).not.toHaveProperty('assets')
+      else expect(revision.payload).toMatchObject({ assets })
+      expect(reduceBuild(events).pinnedAssets).toEqual(assets ?? OLD_PINS)
+      expect(seams.calls).toEqual({ body: 0, assets: 0, supplied: 0 })
+      expect(events.filter((e) => e.type === 'build.reopened')).toHaveLength(1)
+      await store.close()
+    }
+  })
+
+  const interleavings: [string, EventWrite, string][] = [
+    [
+      'abort',
+      { actor: { kind: 'human', user: 'b' }, type: 'build.abort-requested', payload: {} },
+      'abort-pending',
+    ],
+    [
+      'discard',
+      { actor: { kind: 'human', user: 'b' }, type: 'build.discard-requested', payload: {} },
+      'discard-pending',
+    ],
+    ['merge', { actor: DISPATCHER, type: 'pr.merged', payload: { sha: 's' } }, 'not-reopenable'],
+    ['close', { actor: DISPATCHER, type: 'pr.closed', payload: {} }, 'not-reopenable'],
+    [
+      'completion',
+      { actor: DISPATCHER, type: 'build.completed', payload: { outcome: 'merged' } },
+      'inactive',
+    ],
+    ['abort completion', { actor: KERNEL, type: 'build.aborted', payload: {} }, 'inactive'],
+  ]
+
+  test('an interleaving after authorization wins over spec publication', async () => {
+    for (const [name, write, code] of interleavings) {
+      const store = await settledStore()
+      const seams = counters()
+      await expect(
+        reopen(injecting(store, 2, write), { kind: 'reopen', reviseSpec: seams.supplied }, seams),
+        name,
+      ).rejects.toMatchObject({ code, message: expect.stringContaining('was recorded') })
+      const tail = (await store.getEvents(SLUG)).slice(-2).map((e) => e.type)
+      expect(tail, name).toEqual(['build.reopened', write.type])
+      await store.close()
+    }
+  })
+
+  test('the same interleavings refuse a crash-recovery reopen without opening the body source', async () => {
+    for (const [name, write, code] of interleavings) {
+      const store = await settledStore()
+      await store.append(SLUG, {
+        actor: { kind: 'human', user: 'ada' },
+        type: 'build.reopened',
+        payload: { spec: { artifact: { kind: 'spec', rev: 0 } } },
+      })
+      await store.append(SLUG, write)
+      const seams = counters()
+      await expect(
+        reopen(store, { kind: 'reopen', reviseSpec: seams.supplied }, seams),
+        name,
+      ).rejects.toMatchObject({ code })
+      const events = await store.getEvents(SLUG)
+      expect(
+        events.some((e) => e.type === 'spec.revised'),
+        name,
+      ).toBe(false)
+      expect(seams.calls, name).toEqual({ body: 0, assets: 0, supplied: 0 })
+      await store.close()
+    }
+  })
+})

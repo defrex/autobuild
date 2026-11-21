@@ -17,7 +17,11 @@ Guidance is an external operator answer, from the operator agent or a human.
 1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, every verify report (including earlier failed cycles),
    the repo's PR template config if one exists, and — when an operator answered an
    escalation this phase raised on an earlier attempt — `$AB_CONTEXT_DIR/guidance.json`,
-   their answer to it.
+   their answer to it. When the manifest has a `reopen` block, an operator
+   reopened this build after its PR was opened, and `$AB_CONTEXT_DIR/reopen.json`
+   carries their `feedback`. The PR already exists: the kernel adopts it and
+   pushes the new commits to it, keeping its title and prose, so describe the
+   whole change as usual; the deposit records it with the build.
 2. Write `$AB_CONTEXT_DIR/pr-description.md`:
    - **Title line first** — imperative, ≤ 70 chars, from the spec's what.
    - **What & why** — from the spec, compressed for a human reviewer who
@@ -63,7 +67,8 @@ escalation that blocked this build: the escalation id and the answer text. It
 is authoritative feedback for this attempt and the PR description must act on
 it, while the spec remains the contract this phase is measured against — if the
 two cannot both be satisfied, escalate instead of guessing. Finalize has no
-review round of its own, so guidance is the only feedback it ever receives.
+review round of its own, so guidance is the only answer it ever receives; a
+reopen's `reopen.json` is context about why the build ran again, not an answer.
 If finalize cannot proceed until another ticket merges, end the session with
 `ab wait-on <ticket-id>... --reason "…"` instead of escalating: the build parks
 without a slot and finalize resumes when every named ticket completes. If the

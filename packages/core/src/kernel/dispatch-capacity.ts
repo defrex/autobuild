@@ -5,6 +5,7 @@ import { integrationAdmissible, integrationNeedsRunner } from './integration-sta
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
+import { reopenRestart, reopenSpecPending, reopenUnsettled } from './reopen-state'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
@@ -13,7 +14,10 @@ import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
  * waits for a merge decision, merge gates or the forge, or when it waits on
  * other tickets (`waitParked`). A parked leaf holds no slot, though it keeps
  * its workspace. Every other unfinished leaf holds a slot, paused or blocked
- * on a question included. Nodes hold a slot only while they need a runner. */
+ * on a question included. A reopened leaf (SPEC §15.7) stays a finished leaf,
+ * so it re-enters through the same slot queue and, like a blocked reconcile,
+ * holds no slot while it waits on a question. Nodes hold a slot only while
+ * they need a runner. */
 export interface CapacityBuild {
   record: BuildRecord
   state: BuildState
@@ -24,9 +28,10 @@ export interface CapacityBuild {
 }
 
 /** The runner a node or parked leaf has durably requested and does not yet
- * hold. `resume` is a leaf whose ticket wait ended; `propose` is an
- * optimization node's open, still eligible proposal request. */
-export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'propose'
+ * hold. `resume` is a leaf whose ticket wait ended; `reopen` is a leaf an
+ * operator reopened; `propose` is an optimization node's open, still
+ * eligible proposal request. */
+export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'reopen' | 'propose'
 
 export interface DispatchCapacity {
   configured: number
@@ -65,10 +70,14 @@ function terminal(state: BuildState): boolean {
 
 /** A nonterminal leaf that finished its pipeline (every verify step and
  * finalize post-step) for the current spec at least once, as recorded by
- * `pipeline.settled`. A spec revision after settlement makes it unfinished. */
+ * `pipeline.settled`. A spec revision after settlement makes it unfinished,
+ * unless that revision published a reopen's spec: a reopened leaf re-runs
+ * through the parked-work slot queue. */
 export function epilogueLeaf(state: BuildState): boolean {
   return (
-    state.kind !== 'node' && !terminal(state) && (state.pipelineSettled ?? 0) > state.restartSince
+    state.kind !== 'node' &&
+    !terminal(state) &&
+    ((state.pipelineSettled ?? 0) > state.restartSince || reopenRestart(state))
   )
 }
 
@@ -163,6 +172,9 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
   // wait has ended, to resume the phase that declared it.
   if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined
   if (state.prState === 'conflicted') return 'reconcile'
+  // A reopen asks for a slot once any replacement spec is published.
+  if (reopenSpecPending(state)) return undefined
+  if (reopenUnsettled(state)) return 'reopen'
   // A requested optimization measurement is admitted as a re-verify is. A
   // superseded request asks for no slot: the gate requests a current one.
   if (
