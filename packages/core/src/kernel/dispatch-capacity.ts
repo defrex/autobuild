@@ -1,4 +1,5 @@
 import type { TicketRef } from '../ontology'
+import type { TicketPriority } from '../ports/types'
 import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
@@ -33,15 +34,47 @@ export interface CapacityBuild {
  * eligible proposal request. */
 export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'reopen' | 'propose'
 
+/** One node or parked leaf waiting for a slot. `priority` is omitted for
+ * normal builds, and by an older server. */
+export interface SlotWaiter {
+  slug: string
+  request: SlotRequest
+  priority?: 'urgent'
+}
+
+/** Slot admission order for free slots (SPEC §12, "Slot admission order"):
+ * urgent parked work, urgent ticket claims, normal parked work, normal ticket
+ * claims; each tier keeps its own order. */
 export interface DispatchCapacity {
   configured: number
   occupied: number
   effective: number
   borrowingNodes: string[]
-  /** Nodes admitted ahead of new ticket claims; omitted when none wait, and by an older server. */
-  waitingNodes?: { slug: string; request: SlotRequest }[]
-  /** Parked leaves admitted ahead of new ticket claims; omitted when none wait, and by an older server. */
-  waitingBuilds?: { slug: string; request: SlotRequest }[]
+  /** Nodes waiting for a slot; omitted when none wait, and by an older server. */
+  waitingNodes?: SlotWaiter[]
+  /** Parked leaves waiting for a slot; omitted when none wait, and by an older server. */
+  waitingBuilds?: SlotWaiter[]
+  /** Urgent ticket claims the latest admission scan found waiting for a slot
+   * (`urgentClaimDemand`); they go ahead of normal parked work. Omitted when
+   * none, and when the caller has no repository facts. */
+  urgentClaims?: number
+}
+
+/** A build's slot-admission priority; absent (historical builds, sources
+ * without priority) reads as normal. */
+export function buildPriority(state: Pick<BuildState, 'priority'>): TicketPriority {
+  return state.priority === 'urgent' ? 'urgent' : 'normal'
+}
+
+/** Urgent ticket claims still waiting for a slot, from the latest scan fact.
+ * Only an admission scan with intake on and the repository unpaused speaks
+ * for claims that can run. */
+export function urgentClaimDemand(facts: {
+  scan?: { mode: 'admission' | 'observation'; urgentWaiting?: number }
+  settings: { intake: boolean; paused: boolean }
+}): number {
+  if (!facts.settings.intake || facts.settings.paused || facts.scan?.mode !== 'admission') return 0
+  return facts.scan.urgentWaiting ?? 0
 }
 
 /** A provisioning marker or continuation, or a live lease: a runner is working. */
@@ -187,8 +220,8 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
 }
 
 /** A node's or parked leaf's durable request for a runner it does not hold
- * yet. Admission outranks new ticket claims, so this never depends on when a
- * tick saw it. */
+ * yet. Admission outranks ticket claims of the same priority, so this never
+ * depends on when a tick saw it. */
 export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
   const { state } = build
   if (state.kind !== 'node') return leafSlotRequest(build, now)
@@ -273,6 +306,7 @@ export function dispatchCapacity(
   configured: number,
   now: Date,
   identity: Identity = exactIdentity,
+  opts: { urgentClaims?: number } = {},
 ): DispatchCapacity {
   const unique = [...new Map(builds.map((build) => [build.record.slug, build])).values()]
   const occupied = unique.filter((build) => occupiesCapacity(build, now)).length
@@ -295,7 +329,10 @@ export function dispatchCapacity(
       .flatMap((build) => {
         if ((build.state.kind === 'node') !== (kind === 'node')) return []
         const request = slotRequest(build, now)
-        return request ? [{ slug: build.record.slug, request }] : []
+        if (!request) return []
+        const waiter: SlotWaiter = { slug: build.record.slug, request }
+        if (buildPriority(build.state) === 'urgent') waiter.priority = 'urgent'
+        return [waiter]
       })
       .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
   const waitingNodes = waiting('node')
@@ -307,53 +344,105 @@ export function dispatchCapacity(
     borrowingNodes,
     ...(waitingNodes.length ? { waitingNodes } : {}),
     ...(waitingBuilds.length ? { waitingBuilds } : {}),
+    ...(opts.urgentClaims ? { urgentClaims: opts.urgentClaims } : {}),
   }
 }
 
-/** Slots left for new ticket claims. A node verification or propose request
- * reserves one slot until the node holds it; a node reconcile request already
- * occupies one.
- * A parked build's request occupies nothing, so every one reserves a slot.
- * Never more than the configured budget minus occupied builds.
+/** A node verification or propose request reserves a slot until the node
+ * holds it; a node reconcile request already occupies one. */
+function nodeReserves(node: SlotWaiter): boolean {
+  return node.request === 'verification' || node.request === 'propose'
+}
+
+/** Slots reserved ahead of one parked waiter: nothing for urgent work; for
+ * normal work, every other urgent reservation and the urgent ticket claims
+ * still waiting. A waiter is admitted when `occupied + reservedAhead` is below
+ * the configured budget, so the order waiters are visited in never matters
+ * across tiers. */
+export function reservedAhead(
+  capacity: DispatchCapacity,
+  waiter: { slug: string; priority: TicketPriority },
+): number {
+  if (waiter.priority === 'urgent') return 0
+  const urgent = (entry: SlotWaiter) => entry.priority === 'urgent' && entry.slug !== waiter.slug
+  return (
+    (capacity.waitingNodes ?? []).filter((node) => nodeReserves(node) && urgent(node)).length +
+    (capacity.waitingBuilds ?? []).filter(urgent).length +
+    (capacity.urgentClaims ?? 0)
+  )
+}
+
+/** Slots left for ticket claims of one priority. Parked work of the same or
+ * a higher priority reserves ahead of them: an urgent claim waits only for
+ * urgent parked work, a normal claim for every waiter. A node verification or
+ * propose request reserves one slot until the node holds it; a node reconcile
+ * request already occupies one. A parked build's request occupies nothing, so
+ * each one reserves a slot. Never more than the configured budget minus
+ * occupied builds.
  *
  * The dispatcher refines the projection with its own decisions this tick:
  * `settled` drops waiters it found waiting for their PR, `denied` adds
- * builds its admission gate turned away. Status surfaces omit `adjust`. */
+ * builds its admission gate turned away, with their priority. Status surfaces
+ * omit `adjust`. */
 export function intakeCapacity(
   capacity: DispatchCapacity,
-  adjust: { settled?: ReadonlySet<string>; denied?: ReadonlySet<string> } = {},
+  adjust: { settled?: ReadonlySet<string>; denied?: ReadonlyMap<string, TicketPriority> } = {},
+  priority: TicketPriority = 'normal',
 ): number {
+  const counts = (entry: { priority?: TicketPriority }) =>
+    priority === 'normal' || entry.priority === 'urgent'
   const nodes = (capacity.waitingNodes ?? []).filter(
-    (node) => node.request === 'verification' || node.request === 'propose',
+    (node) => nodeReserves(node) && counts(node),
   ).length
   const builds = new Set(
     (capacity.waitingBuilds ?? [])
-      .map((build) => build.slug)
-      .filter((slug) => !adjust.settled?.has(slug)),
+      .filter((build) => counts(build) && !adjust.settled?.has(build.slug))
+      .map((build) => build.slug),
   )
-  for (const slug of adjust.denied ?? []) builds.add(slug)
+  for (const [slug, denied] of adjust.denied ?? [])
+    if (counts({ priority: denied })) builds.add(slug)
   return capacity.configured - capacity.occupied - nodes - builds.size
 }
 
 /** Shared wording for one node or parked build waiting on a runner slot. */
-export function slotWaitText(request: SlotRequest): string {
-  return `${request} waiting for a slot ahead of new ticket claims`
+export function slotWaitText(request: SlotRequest, priority: TicketPriority = 'normal'): string {
+  return priority === 'urgent'
+    ? `urgent ${request} waiting for a slot ahead of normal work`
+    : `${request} waiting for a slot ahead of normal ticket claims`
 }
 
-/** Shared wording for every node and parked build waiting on a runner slot, or `''`. */
+/** Shared wording for every node and parked build waiting on a runner slot,
+ * and for urgent ticket claims waiting ahead of normal parked work, or `''`. */
 export function waitingExplanation(
   capacity?: DispatchCapacity,
   opts: { requests?: boolean } = {},
 ): string {
-  const clause = (noun: string, waiting: { slug: string; request: SlotRequest }[]) =>
-    waiting.length
-      ? [
-          `${waiting.length} ${noun}${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of new ticket claims: ${waiting.map((entry) => (opts.requests ? `${entry.slug} (${entry.request})` : entry.slug)).join(', ')}`,
-        ]
-      : []
+  const label = (entry: SlotWaiter) => {
+    const notes = [
+      ...(opts.requests ? [entry.request] : []),
+      ...(entry.priority === 'urgent' ? ['urgent'] : []),
+    ]
+    return notes.length ? `${entry.slug} (${notes.join(', ')})` : entry.slug
+  }
+  const clause = (noun: string, waiting: SlotWaiter[]) => {
+    if (!waiting.length) return []
+    const ordered = [
+      ...waiting.filter((entry) => entry.priority === 'urgent'),
+      ...waiting.filter((entry) => entry.priority !== 'urgent'),
+    ]
+    return [
+      `${waiting.length} ${noun}${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of normal ticket claims: ${ordered.map(label).join(', ')}`,
+    ]
+  }
+  const urgentClaims = capacity?.urgentClaims ?? 0
   return [
     ...clause('node', capacity?.waitingNodes ?? []),
     ...clause('parked build', capacity?.waitingBuilds ?? []),
+    ...(urgentClaims
+      ? [
+          `${urgentClaims} urgent ticket claim${urgentClaims === 1 ? '' : 's'} waiting ahead of normal parked work`,
+        ]
+      : []),
   ].join('; ')
 }
 

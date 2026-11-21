@@ -45,6 +45,8 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
       .optional(),
   }),
   z.strictObject({ action: z.literal('hold'), reason: z.string().optional() }),
+  /** Slot-admission priority for an active build; never changes the ticket. */
+  z.strictObject({ action: z.literal('priority'), priority: ticketPrioritySchema }),
 ])
 export type OperatorBuildControlRequest = z.infer<typeof buildControlRequestSchema>
 

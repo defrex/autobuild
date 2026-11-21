@@ -144,7 +144,7 @@ keep the Evidence citation.
 
 When grooming established that the ticket must go next — for example a fix
 that unblocks a stuck build — create it with `--priority urgent` so the
-dispatcher claims it before normal ready work. Otherwise omit the flag; normal
+dispatcher claims it before normal ready work and normal waiting builds. Otherwise omit the flag; normal
 is the default. A source that cannot store priority refuses the create and
 names itself; file it normal and tell the human so the operator can expedite it.
 

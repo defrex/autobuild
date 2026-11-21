@@ -63,7 +63,7 @@ RESUME on a waiting build answers it. The dispatcher ends the wait on its
 first tick after every named ticket completes; a wait with some tickets still
 open stays in place. To end it early, for example when the work landed another
 way, `ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait.
-Either way the build takes the next free slot ahead of new ticket claims. If its target
+Either way the build takes the next free slot ahead of normal ticket claims (urgent work first; `ab priority <slug> urgent` expedites it). If its target
 branch has moved past the base the build's work sits on, the build first
 restacks onto the target's current head so the resumed phase sees the merged blockers; a conflicting
 restack shows as `reconcile` and resolves first. The phase that declared the

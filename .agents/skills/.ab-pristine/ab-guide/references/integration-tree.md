@@ -99,12 +99,12 @@ has commits its current parent lacks; parent-only advancement remains empty.
 
 
 A node requesting reconcile, verification or, for an optimization node,
-propose is admitted before new ticket claims. The request is durable: a
+propose is admitted before normal ticket claims; urgent work goes first. The request is durable: a
 prepared verification cycle, a restack conflict or an open proposal request,
 with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
-claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
+normal claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
 paused descendants, following accepted source-qualified build target ancestry.
 Running descendants and unrelated builds still count; ordinary blocked and
 paused work retains its slot for every other admission, except a work build
@@ -113,7 +113,7 @@ node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
 Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of new ticket claims. Idle collecting nodes remain free.
+ahead of normal ticket claims, marking urgent ones. Idle collecting nodes remain free.
 
 Claims freeze the destination build generation and branch. Missing, unopened,
 merged, closed or aborted targets leave work queued with diagnostics. The newest
@@ -251,7 +251,7 @@ An optimization node follows `branch opening → starting measurement →
 (propose → collecting)*`, then completes, verifies and merges like any node.
 Once the starting value is measured, the dispatcher requests a `propose`
 session whenever the node has room within its concurrency and attempts budget.
-The request takes a slot ahead of new ticket claims, like node reconcile and
+The request takes a slot ahead of normal ticket claims, like node reconcile and
 verification. The session runs the `ab-propose` skill on the node head, reads
 the attempt ledger and deposits proposals with `ab propose`; it never creates
 tickets. The dispatcher files each proposal as a work ticket targeting the

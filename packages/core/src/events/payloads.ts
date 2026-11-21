@@ -24,6 +24,7 @@ import {
   revisableChangesSchema,
 } from '../objective'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
+import { ticketPrioritySchema } from '../ports/tickets/priority'
 import {
   HEAD_PATHS_ARTIFACT,
   HEAD_PATHS_PREVIEW,
@@ -906,6 +907,9 @@ export const eventPayloadSchemas = {
      * later relabelling never changes it. Omitted for builds without a
      * profile and in historical logs. */
     profile: z.string().min(1).optional(),
+    /** The claimed ticket's priority, frozen at claim. Omitted for normal and
+     * in historical logs; `build.priority-set` changes it later. */
+    priority: z.literal('urgent').optional(),
   }),
   'node.opening': z.strictObject({
     branch: z.string().min(1),
@@ -1542,6 +1546,8 @@ export const eventPayloadSchemas = {
     /** Why the operator held the merge; absent on historical and reasonless holds. */
     reason: z.string().min(1).max(CONTROL_REASON_LIMIT).optional(),
   }),
+  /** An operator changed the build's slot-admission priority. */
+  'build.priority-set': z.strictObject({ priority: ticketPrioritySchema }),
   'build.land-requested': z.strictObject({
     decisionSeq: z.number().int().positive(),
   }),
