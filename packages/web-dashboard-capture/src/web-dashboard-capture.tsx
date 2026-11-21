@@ -231,8 +231,8 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     width: size === 'narrow' ? 390 : 1440,
     height: 2200,
     requires: [
-      'parked build waiting for a slot ahead of new ticket claims',
-      'reconcile waiting for a slot ahead of new ticket claims',
+      'parked build waiting for a slot ahead of normal ticket claims',
+      'reconcile waiting for a slot ahead of normal ticket claims',
     ],
   })),
   ...['wide', 'narrow'].map((size) => ({

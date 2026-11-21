@@ -33,7 +33,8 @@ export interface StoredEvent {
 // Revision 10 retains the optional hold reason.
 // Revision 11 retains optional forge rate-limit snapshots on tick telemetry
 // and the optional continued marker on forge degradation.
-export const READ_DECODER_REVISION = 11
+// Revision 12 retains the optional build priority and urgent scan demand.
+export const READ_DECODER_REVISION = 12
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

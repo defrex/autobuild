@@ -23,6 +23,7 @@ export const executionProgress = {
   'landing.consent-revoked': 'bookkeeping',
   'build.hold-requested': 'progress',
   'build.reopened': 'progress',
+  'build.priority-set': 'bookkeeping',
   'build.land-requested': 'progress',
   'landing.command-acknowledged': 'progress',
   'landing.native-enable-started': 'bookkeeping',

@@ -100,8 +100,7 @@ test('a declined attempt settles on the node and completes unmerged', async (mak
     // the attempt's launches matter here.
     const attemptLaunches = () => h.launched.filter((entry) => entry.slug === child.slug)
     expect(attemptLaunches()).toHaveLength(1)
-    expect(h.launched.at(-1)!.slug).toBe(child.slug)
-    await h.runLatest()
+    await h.runLaunched(child.slug)
     // The runner stopped at wait/declined; the janitor settles the attempt.
     expect(reduceBuild(await h.events(child.slug)).declined?.reason).toBe(REASON)
     h.clock.advance(60_000)

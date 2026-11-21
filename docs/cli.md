@@ -36,6 +36,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `answer` — Answer escalations or request a retry.
 - `abort` — Request irreversible build termination and cleanup.
 - `restack` — Request a node restack onto its current parent.
+- `priority` — Set an active build's slot-admission priority: urgent or normal.
 - `objective` — Show, revise or stop an optimization node's objective and progress.
 - `hold` — Hold a merge, withdrawing consent.
 - `merge` — Consent to a ready merge.

@@ -50,7 +50,18 @@ A ticket is claimed when it passes every gate:
 
 Others stay queued. Urgent tickets are claimed before normal ones, each in the source's order; priority never preempts a running build. See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
 
-Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps the builds running work: a work build holds a slot until it finishes its pipeline (verification and finalize), even while paused or blocked on a question. Once it waits for a merge decision it holds none; if its target moves or its PR conflicts, it waits for a slot ahead of new claims to restack, re-verify or reconcile. A work build waiting on other tickets (`ab wait-on`) also holds none, and when the wait ends it waits for a slot ahead of new claims to resume. Finished and waiting builds keep their workspaces, so retained workspaces can exceed `capacity` while running work cannot. An integration node holds a slot only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
+Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps the builds running work: a work build holds a slot until it finishes its pipeline (verification and finalize), even while paused or blocked on a question. Once it waits for a merge decision it holds none; if its target moves or its PR conflicts, it waits for a slot ahead of normal ticket claims to restack, re-verify or reconcile. A work build waiting on other tickets (`ab wait-on`) also holds none, and when the wait ends it waits for a slot ahead of normal ticket claims to resume. Finished and waiting builds keep their workspaces, so retained workspaces can exceed `capacity` while running work cannot. An integration node holds a slot only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
+
+## Slot admission order
+
+A free slot goes, in order, to:
+
+1. urgent parked work: nodes and finished or waiting builds that must verify, reconcile, resume or propose;
+2. urgent ready tickets;
+3. normal parked work;
+4. normal ready tickets.
+
+Each tier keeps its usual order. A build takes its ticket's priority when it is claimed. `ab priority <slug> urgent|normal` (or the `builds.control` action `priority`) changes an active build's priority, for example to expedite a waiting reconcile that now blocks other work; it never changes the ticket. While urgent tickets are ready, normal parked work waits for a slot until the dispatcher has offered urgent tickets the free slots that tick. An urgent ticket blocked on a dependency reserves nothing. Priority orders free slots only: it never interrupts a running build. `ab repository status`, `ab builds` and both dashboards mark urgent waiters and urgent ticket claims waiting ahead of normal parked work.
 
 
 ## The log is the source of truth

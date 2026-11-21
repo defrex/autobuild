@@ -1553,6 +1553,26 @@ test('a reopen carries bounded feedback, a spec, or both, and never neither', ()
   ).toThrow()
 })
 
+test('a build priority is urgent or normal and only a human sets it', () => {
+  const write = (payload: unknown, actor = humanActor('alice')) =>
+    validateEventWrite({ actor, type: 'build.priority-set', payload })
+  expect(write({ priority: 'urgent' }).payload).toEqual({ priority: 'urgent' })
+  expect(write({ priority: 'normal' }).payload).toEqual({ priority: 'normal' })
+  expect(() => write({})).toThrow()
+  expect(() => write({ priority: 'high' })).toThrow()
+  expect(() => write({ priority: 'urgent', reason: 'x' })).toThrow()
+  expect(() => write({ priority: 'urgent' }, DISPATCHER)).toThrow()
+  const created = (extra: object) =>
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket: { source: 'fake', id: 'T-1' }, repo: 'o/r', baseBranch: 'main', ...extra },
+    })
+  expect(created({ priority: 'urgent' }).payload).toMatchObject({ priority: 'urgent' })
+  // Normal is omitted, never written.
+  expect(() => created({ priority: 'normal' })).toThrow()
+})
+
 test('hand-back checkpoints round-trip, and a legacy abort checkpoint still validates', () => {
   const ticket = { source: 'fake', id: 'T-1' }
   expect(
