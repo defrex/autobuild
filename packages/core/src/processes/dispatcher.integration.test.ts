@@ -20006,6 +20006,62 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     expect(await types()).toContain('workspace.released')
   })
 
+  test('a normal node holding its measurement workspace relaunches ahead of urgent waiting work', async () => {
+    const h = harness({ toml: 'capacity = 1\n' })
+    const openNode = async (slug: string) => {
+      h.forge.seedBranch(`ab-node/${slug}`, PIN)
+      await h.store.createBuild({ slug, repo: REPO, branch: `ab-node/${slug}` })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: slug.toUpperCase() },
+          repo: REPO,
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'optimization.objective-accepted',
+        payload: { objective: objective(), revision: 1, harnessPin: PIN, specRev: 0 },
+      })
+      await h.store.append(slug, { actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+    }
+    await openNode(NODE)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.launches).toEqual([NODE])
+    expect((await h.store.getEvents(NODE)).map((event) => event.type)).toContain(
+      'workspace.provisioned',
+    )
+
+    // The launched session never claimed its lease; the node keeps its
+    // workspace and the only slot. Urgent work now waits for a slot.
+    const urgent = 'opt-urgent'
+    await openNode(urgent)
+    await h.store.append(urgent, {
+      actor: humanActor('operator'),
+      type: 'build.priority-set',
+      payload: { priority: 'urgent' },
+    })
+    // Priority orders free slots only: node admission, which retries a
+    // workspace-holding measurement node, admits the owner without reserving
+    // its slot for the urgent node, which waits for it.
+    const admission = (
+      h.dispatcher as unknown as {
+        nodeHasCapacity: (slug: string) => Promise<'admit' | 'wait' | 'defer'>
+      }
+    ).nodeHasCapacity.bind(h.dispatcher)
+    expect(await admission(NODE)).toBe('admit')
+    expect(await admission(urgent)).toBe('wait')
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.launches).toEqual([NODE, NODE])
+    expect((await h.store.getEvents(urgent)).map((event) => event.type)).not.toContain(
+      'workspace.provisioned',
+    )
+  })
+
   test('idle ticks stay bounded at 100 and 100,000 events', async () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })

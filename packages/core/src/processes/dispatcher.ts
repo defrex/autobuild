@@ -91,6 +91,7 @@ import {
   epilogueLeaf,
   intakeCapacity,
   nodeCapacity,
+  occupiesCapacity,
   reservedAhead,
   settlementDue,
   settlementKey,
@@ -4311,8 +4312,10 @@ export class Dispatcher {
 
   /** A node's admission into a free slot. A verification or measurement
    * request (`reserving`) yields to urgent work ahead of it and defers while
-   * urgent claims are unevaluated; a restack-conflict reconcile already holds
-   * its slot, so it only needs the node's own room. */
+   * urgent claims are unevaluated. A node that already holds its slot — a
+   * restack-conflict reconcile, or runner work that kept its workspace across
+   * a failed launch or expired lease — only needs the node's own room:
+   * priority orders free slots, never one the node owns. */
   private async nodeHasCapacity(
     slug: string,
     reserving = true,
@@ -4324,8 +4327,9 @@ export class Dispatcher {
       this.deps.tickets.name,
     )
     const { occupied } = nodeCapacity(builds, slug, now, identity)
-    if (!reserving) return occupied < this.deps.config.capacity ? 'admit' : 'wait'
     const node = builds.find((build) => build.record.slug === slug)
+    if (!reserving || (node && occupiesCapacity(node, now)))
+      return occupied < this.deps.config.capacity ? 'admit' : 'wait'
     const outcome = this.slotAdmission(
       slug,
       node ? buildPriority(node.state) : 'normal',
