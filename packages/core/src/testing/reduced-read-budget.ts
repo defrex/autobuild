@@ -4397,8 +4397,14 @@ export async function headPathsLandingReadBudget(opts: {
   advance: (ms: number) => void
   /** Git commands attempted so far. */
   git: () => readonly string[][]
+  /** Seeds the forge's checks at the PR head. With it, the head turns red
+   * after the first warm-up: exactly one `pr.checks-failed` is recorded and
+   * an unchanged red head then costs the poll no extra store request. */
+  failingChecks?: { set: (checks: import('../ports/types').HeadChecks) => void }
 }) {
   const { store, repo, slug } = opts
+  const ciFailures = async () =>
+    (await store.getEvents(slug)).filter((event) => event.type === 'pr.checks-failed').length
   /** The commands that derive a head's path facts. */
   const pathFact = /^(merge-base|diff|merge-tree|worktree|cherry-pick|write-tree)$/
   const { candidateHeadPaths, HEAD_PATHS_ARTIFACT, HEAD_PATHS_PREVIEW } = await import(
@@ -4435,6 +4441,18 @@ export async function headPathsLandingReadBudget(opts: {
       for (let n = 0; n < 2; n++) {
         opts.advance(120_000)
         await opts.tick()
+      }
+      if (opts.failingChecks && length === 100) {
+        opts.failingChecks.set({
+          kind: 'known',
+          pending: false,
+          failing: [{ name: 'unit', source: 'check-run', conclusion: 'failure' }],
+        })
+        for (let n = 0; n < 2; n++) {
+          opts.advance(120_000)
+          await opts.tick()
+        }
+        expect(await ciFailures()).toBe(1)
       }
       if (opts.warm) {
         const landing = (await store.getEvents(slug)).filter(
@@ -4507,6 +4525,8 @@ export async function headPathsLandingReadBudget(opts: {
     store.getArtifact = getArtifact
   }
   expect(vectors[1]).toEqual(vectors[0])
+  // A red head is recorded once and never re-emitted while it stays red.
+  if (opts.failingChecks) expect(await ciFailures()).toBe(1)
   const answer = candidateHeadPaths((await readBuildFacts(store, slug)).value.state)
   expect(answer.recorded).toBe(opts.recorded)
   if (answer.recorded) {
