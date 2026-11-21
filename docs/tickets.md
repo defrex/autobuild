@@ -83,8 +83,9 @@ The dispatcher claims only tickets in the ready state with the required labels a
 
 - **Blockers.** Unresolved prerequisite tickets keep it queued; they don't create a blocked build. With nodes, prerequisites with builds must be present at the sampled destination; see [integration and blocker presence](integration-overview.md).
 - **Destination and capacity.** Its target must accept new work, and a capacity slot must be free and not reserved for an integration node awaiting verification, a finished build waiting to re-verify or reconcile, or a build resuming after its ticket wait ends; each of those is admitted before new claims.
+- **Open-PR backpressure.** When the repository configures `maxOpenPrs` and that many root build PRs are open and unmerged, the dispatcher pauses normal-priority claims, even with a free slot, until the count drains to `resumeOpenPrs`. Urgent tickets bypass this gate. See [`[policy]`](configuration.md#policy) for the thresholds.
 
-When a slot is free, the dispatcher takes urgent ready tickets first, then normal ones, each in the source's order. Priority changes only that order: a blocked urgent ticket waits like any other while normal work proceeds, and an urgent ticket never stops or pauses a running build. The web dashboard's Queue tab lists tickets in the same order and marks urgent ones `URGENT`; the mark shows priority, not that the ticket will dispatch next.
+When a slot is free, the dispatcher takes urgent ready tickets first, then normal ones, each in the source's order. Beyond that order, priority matters only to open-PR backpressure: a blocked urgent ticket waits like any other while normal work proceeds, and an urgent ticket never stops or pauses a running build. The web dashboard's Queue tab lists tickets in the same order and marks urgent ones `URGENT`; the mark shows priority, not that the ticket will dispatch next.
 
 Before ready filing, the agent checks `ab repository status --json`. With live
 `operator.registrations`, it records intent, rejected alternatives and out-of-scope

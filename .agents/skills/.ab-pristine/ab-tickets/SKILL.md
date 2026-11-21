@@ -221,7 +221,9 @@ capacity. Blocker edits must use the source-agnostic `ab ticket block` and
 With a free slot the dispatcher claims eligible urgent tickets first, then
 normal ones, each in source order; a blocked urgent ticket waits while normal
 work proceeds, and urgency never stops a running build. To expedite a ticket,
-mark it urgent rather than moving other tickets out of `ready/`.
+mark it urgent rather than moving other tickets out of `ready/`. When
+`[policy].maxOpenPrs` is set and that many root PRs are open and unmerged,
+open-PR backpressure pauses normal claims while urgent ones are still claimed.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
 then to `done/` on merge or back to `triage/` if the build aborts (`ready/`
