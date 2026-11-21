@@ -2686,3 +2686,48 @@ describe('ticket waits project as waiting, not blocked', () => {
     expect(row.blockers).toEqual([])
   })
 })
+
+describe('a reopened settled leaf (SPEC §15.7)', () => {
+  const settled = [
+    ...throughCodeReview(),
+    ...verifyRun('lint', 1, true),
+    ...verifyRun('test', 1, true),
+    ...finalized(),
+  ]
+  const settledLog = () => {
+    const log = toLog(settled)
+    const finalize = log.findLast((e) => e.type === 'finalize.completed')!
+    return [...settled, ev('pipeline.settled', { cycle: finalize.seq })]
+  }
+
+  test('feedback returns the code half to pending and names who reopened it', () => {
+    const before = project(toLog(settledLog()))
+    expect(stateOf(before, 'merge')).toBe('current')
+    const build = project(
+      toLog([...settledLog(), ev('build.reopened', { feedback: 'rename the flag\nand more' })]),
+    )
+    expect(stateOf(build, 'plan')).toBe('done')
+    expect(stateOf(build, 'plan-review')).toBe('done')
+    expect(stateOf(build, 'implement')).not.toBe('done')
+    expect(stateOf(build, 'code-review')).not.toBe('done')
+    expect(stateOf(build, verifyPhase('lint'))).toBe('pending')
+    expect(stateOf(build, 'finalize')).toBe('pending')
+    expect(stateOf(build, 'merge')).toBe('pending')
+    expect(stepFor(build, 'implement')?.reason).toBe(
+      'reopened by aron → implement: rename the flag',
+    )
+  })
+
+  test('a spec reopen restarts every step while publication is pending', () => {
+    const build = project(
+      toLog([
+        ...settledLog(),
+        ev('build.reopened', { spec: { artifact: { kind: 'spec', rev: 1 } } }),
+      ]),
+    )
+    expect(stateOf(build, 'plan')).not.toBe('done')
+    expect(stateOf(build, 'finalize')).toBe('pending')
+    expect(stateOf(build, 'merge')).toBe('pending')
+    expect(stepFor(build, 'plan')?.reason).toBe('reopened by aron → plan with spec rev 1')
+  })
+})

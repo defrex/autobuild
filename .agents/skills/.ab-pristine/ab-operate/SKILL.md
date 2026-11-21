@@ -303,7 +303,8 @@ Read events with a cursor or a small `--events` count; logs are long.
   for verification on the same head; children and contributions remain intact.
   Active work, pause, pending controls and merge intent refuse revision. Leaves
   require an escalation and restart from plan after any unfinished reconcile
-  resumes under the revised spec and its publication is confirmed. Answering a
+  resumes under the revised spec and its publication is confirmed; a finished
+  leaf waiting for its merge decision revises with `ab reopen`. Answering a
   ticket wait's escalation ends the wait early; the dispatcher ends it when its
   tickets complete (see ticket wait attention). Run
   `ab help answer` for the full menu.
@@ -325,6 +326,19 @@ Read events with a cursor or a small `--events` count; logs are long.
   optimization attempt is different: it settles `aborted` and its node moves the
   ticket to the rejected role, so no hand-back is reported and `--to` has no
   effect.
+- `ab reopen <slug> --feedback <text>` — send a finished, unmerged leaf back
+  when review wants changes, instead of aborting it or hand-making a second PR.
+  Feedback alone returns it to implement with the feedback in its context;
+  `--revise-spec <file>` or `--revise-spec-from-ticket` (with or without
+  feedback) restarts it from plan. The branch and open PR are kept, consent is
+  revoked at once (a hold stays), and the build waits for a slot like other
+  parked work. An armed native auto-merge is cancelled on a later dispatcher
+  poll, not by the command; a forge merge that lands first completes the build
+  as merged. It refuses nodes,
+  optimization attempts, blocked or still-running builds (use `ab answer` for a
+  blocked one), merged or closed PRs (file a new ticket), and pending abort or
+  discard. Re-run `ab reopen` with the same arguments after an interrupted spec
+  reopen; it completes the recorded one.
 - `ab hold <slug> [--reason <text>]` — persistently hold a merge and revoke
   earlier consent. Record why with `--reason` when holding during queue work;
   status, merges, builds and both dashboards show it until a later hold or
@@ -461,6 +475,10 @@ that does the job, and say what you are doing before you do it:
   resumes under the revised spec and its publication is confirmed. Answering a
   ticket wait's escalation ends the wait early; the dispatcher ends it when its
   tickets complete.
+- `builds.reopen` — send a finished, unmerged leaf back with `feedback`, a spec
+  `revision` (`{origin: "body" | "ticket", body}`, destructive — it replaces the
+  spec), or both, exactly as `ab reopen` does. Feedback returns to implement; a
+  revision restarts from plan; consent is revoked and the PR is kept.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
@@ -685,6 +703,12 @@ Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
 or `hold`; its optional `head` binds merge consent to the reviewed head, like
 `ab merge --head`, and `hold` takes an optional `reason`, like `ab hold --reason`. Hold is available before readiness and suppresses automatic merge.
+When review of a queued merge asks for changes, reopen it (`ab reopen`, MCP
+`builds.reopen`) rather than holding it and filing a parallel PR: hold only
+stops the merge, abort closes the PR, and reopen carries the requested change
+back into the same build and PR. The reopened build leaves the queue until it
+finishes again and needs fresh consent then. A merged or closed PR is final;
+its fixup is a new ticket.
 Merge rechecks readiness and live node completeness, so act on failures by
 refreshing the facts. Open children keep a node collecting; a child moved to
 the rejected role no longer does. When integration

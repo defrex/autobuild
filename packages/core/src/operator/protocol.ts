@@ -76,6 +76,27 @@ export const answerRequestSchema = z.union([
 ])
 export type OperatorAnswerRequest = z.infer<typeof answerRequestSchema>
 
+/** `builds.reopen`: feedback, a spec revision, or both. The ticket origin
+ * carries the amended ticket body, as the answer route's does. */
+export const reopenRequestSchema = z.strictObject({
+  feedback: z
+    .string()
+    .optional()
+    .describe(
+      'What to change: returns the leaf to implement with this text in its phase context (1–20000 characters after trimming). Required without a revision.',
+    ),
+  revision: z
+    .discriminatedUnion('origin', [
+      z.strictObject({ origin: z.literal('body'), body: z.string() }),
+      z.strictObject({ origin: z.literal('ticket'), body: z.string() }),
+    ])
+    .optional()
+    .describe(
+      'A replacement spec (destructive — replaces the spec and restarts from plan). origin "ticket" re-imports the amended build ticket and re-pins its assets.',
+    ),
+})
+export type OperatorReopenRequest = z.infer<typeof reopenRequestSchema>
+
 export const settingRequestSchema = z.strictObject({ enabled: z.boolean() })
 export const bulkControlRequestSchema = z.strictObject({ action: z.enum(['pause', 'resume']) })
 export const harvestControlRequestSchema = z.discriminatedUnion('action', [

@@ -175,7 +175,8 @@ pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
-spec and its publication is confirmed.
+spec and its publication is confirmed. A settled, unmerged leaf awaiting merge
+revises without an escalation through `ab reopen`.
 A revision of an optimization node may change its `autobuild-objective` block
 but cannot remove it, and a revision of a plain node or a leaf cannot add one;
 both refusals record nothing.
@@ -208,6 +209,8 @@ Build control returns one of:
   Depending on the operation, the result also includes `remainingOpen`,
   `reviewRoundCeiling:{loop,value}`, `specRev`, `authorizedEarlier`, or a
   `terminalSignal` describing a terminal status, pending abort, or ended PR.
+- `{kind:"reopened",slug,route,event?,specRev?,completedEarlier?}` from the
+  reopen tool; `route` is `implement` or `plan`.
 
 Repository setting writes and toggles return `{enabled,event}`. Harvest gate
 toggle returns `{command:"pause"|"resume",event}`; a concrete-run action
@@ -496,6 +499,26 @@ validation refusal. The tool refuses non-node builds, nodes with no accepted
 objective, terminal nodes, and an attempt that is not in flight, has not merged
 unmeasured, or whose merged head has a valid measurement. It works on a stopped
 node and enforces repository ownership. The tool has no HTTP route.
+
+### Reopen a settled leaf
+
+`builds.reopen` accepts `{repo, slug, feedback?, revision?}`, where `revision`
+is `{origin: "body", body}` or `{origin: "ticket", body}` as on `builds.answer`.
+It uses the same service as `ab reopen` and needs feedback (1–20000 characters
+after trimming), a revision, or both. It applies only to a leaf that finished
+its pipeline and waits for its merge decision: feedback returns it to implement,
+and a revision is recorded as the next spec revision and restarts it from plan.
+The open PR and branch are kept and merge consent is revoked at once (a hold
+stays). An armed native auto-merge is cancelled asynchronously on a later
+dispatcher poll, and the receipt does not confirm it; a forge merge that lands
+first completes the build as merged. The receipt is `{kind: "reopened", slug, route, event?, specRev?,
+completedEarlier?}`; `completedEarlier` means the call completed a spec reopen
+recorded earlier without using its own arguments. It refuses integration nodes
+and optimization attempts and terminal or queued builds with `not-reopenable`
+or `inactive`. Merged or closed PRs, leaves still running, conflicted or
+blocked (use `builds.answer`) are refused with `not-reopenable`; a pending abort
+or discard is refused with `abort-pending` or `discard-pending`. Ownership is
+enforced. The tool has no HTTP route.
 
 ### Node restack request
 

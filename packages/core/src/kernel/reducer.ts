@@ -34,7 +34,7 @@ import { cleanWaitResumeCompletion, waitResumeReverifies } from './ticket-wait'
  * from it, the operator UI's build list is exactly this reduction over every
  * build (§15.5), and the dispatcher's janitor reads `pr`/`prState` (§15.7).
  */
-import type { Actor } from '../events/envelope'
+import type { Actor, Via } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
 import {
   normalizeVerifyCompletion,
@@ -317,6 +317,20 @@ export interface AttemptMeasurementState {
   observedHead?: string
 }
 
+/** The latest operator reopen of a settled leaf (SPEC §15.7). `spec`
+ * mirrors the event: `assets` is present only when the reopen re-pinned
+ * them. `specPublishedSeq` is the seq of the kernel `spec.revised` that
+ * published that spec; it stays absent while publication is pending. */
+export interface ReopenState {
+  seq: number
+  ts: string
+  user: string
+  via?: Via
+  feedback?: string
+  spec?: { artifact: ArtifactRef; assets?: PinnedAsset[] }
+  specPublishedSeq?: number
+}
+
 export interface BuildState {
   drainingExecutions?: Record<string, DrainExecution>
   compatibility: CompatibilityState
@@ -403,6 +417,8 @@ export interface BuildState {
   wait?: TicketWaitState
   /** Human-selected absolute caps for the current spec's independent loops. */
   reviewRoundCeilings: { plan?: number; code?: number }
+  /** The latest `build.reopened`; see `ReopenState` and kernel/reopen.ts. */
+  reopen?: ReopenState
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
@@ -630,6 +646,7 @@ export interface BuildAcc {
    * `restack.completed` citing another cycle replayed cleanly. */
   lastReconcileCompletedSeq?: number
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
+  reopen?: ReopenState
   pr: BuildState['pr']
   prState?: PrLifecycle
   targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
@@ -1216,7 +1233,46 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
         delete reviewRoundCeilings.plan
         delete reviewRoundCeilings.code
+        // The kernel's publication of a reopen's spec: the restart it opens
+        // is that reopen's restart (kernel/reopen.ts).
+        if (
+          'operator' in event.payload &&
+          acc.reopen?.spec !== undefined &&
+          acc.reopen.specPublishedSeq === undefined &&
+          event.payload.artifact.rev === acc.reopen.spec.artifact.rev
+        )
+          acc.reopen.specPublishedSeq = event.seq
         break
+
+      case 'build.reopened': {
+        // A later reopen replaces the earlier one. The reopen opens a new
+        // code loop (log-index `codeRestartSeq`), so it is a verify cycle
+        // boundary, and the loop's human round cap no longer applies.
+        const spec = event.payload.spec
+        acc.reopen = {
+          seq: event.seq,
+          ts: event.ts,
+          user: event.actor.kind === 'human' ? event.actor.user : 'unknown',
+          ...(event.actor.kind === 'human' && event.actor.via !== undefined
+            ? { via: event.actor.via }
+            : {}),
+          ...(event.payload.feedback !== undefined ? { feedback: event.payload.feedback } : {}),
+          ...(spec !== undefined
+            ? {
+                spec: {
+                  artifact: { ...spec.artifact },
+                  ...(spec.assets !== undefined
+                    ? { assets: spec.assets.map((asset) => ({ ...asset })) }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        delete reviewRoundCeilings.code
+        if (spec !== undefined) delete reviewRoundCeilings.plan
+        break
+      }
 
       case 'session.started': {
         if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
@@ -1897,6 +1953,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.declined !== undefined ? { declined: { ...acc.declined } } : {}),
     ...(acc.wait !== undefined ? { wait: acc.wait } : {}),
     reviewRoundCeilings: acc.reviewRoundCeilings,
+    ...(acc.reopen !== undefined ? { reopen: structuredClone(acc.reopen) } : {}),
     pr: acc.pr,
     prState: acc.prState,
     targetRewrite: acc.targetRewrite,

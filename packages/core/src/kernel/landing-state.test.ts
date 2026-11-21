@@ -468,3 +468,44 @@ describe('landing fallback route', () => {
     )
   })
 })
+
+describe('reopening a settled leaf', () => {
+  const reopened = (seq: number) =>
+    event(seq, {
+      actor: humanActor('operator'),
+      type: 'build.reopened',
+      payload: { feedback: 'rename the flag' },
+    })
+  const native = (seq: number) =>
+    event(seq, {
+      actor: DISPATCHER,
+      type: 'landing.native-applied',
+      payload: { enabled: true, candidate, decisionSeq: 1, commandSeq: 2 },
+    })
+
+  test('revokes consent and its acknowledgement, clears the decision, keeps native evidence', () => {
+    const landing = buildReducer.finish(
+      buildReducer.advance(buildReducer.initial(), [
+        decided(),
+        land(2),
+        ack(3, 2),
+        native(4),
+        reopened(5),
+      ]),
+    ).landing
+    expect(landing?.command).toBeUndefined()
+    expect(landing?.acknowledgedSeq).toBeUndefined()
+    expect(landing?.decision).toBeUndefined()
+    expect(landing?.native).toMatchObject({ enabled: true, seq: 4 })
+    expect(landingAuthorized(landing)).toBe(false)
+    expect(nativeLandingApplied(landing)).toBe(false)
+  })
+
+  test('keeps a standing hold and its reason', () => {
+    const landing = buildReducer.finish(
+      buildReducer.advance(buildReducer.initial(), [decided(), hold(2, 'wait'), reopened(3)]),
+    ).landing
+    expect(landing?.command).toMatchObject({ kind: 'hold', seq: 2, reason: 'wait' })
+    expect(landing?.decision).toBeUndefined()
+  })
+})

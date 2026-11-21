@@ -5,6 +5,7 @@ import {
   answerAction,
   controlPrechecks,
   parseArtifactRevision,
+  reopenAction,
   RouteRefusalError,
 } from './requests'
 
@@ -29,6 +30,31 @@ async function runningStore(): Promise<MemoryBuildStore> {
 }
 
 describe('operator route glue re-derived for the registry', () => {
+  test('reopenAction maps feedback and either revision origin to the control action', async () => {
+    expect(reopenAction({ feedback: 'rename it' })).toEqual({
+      action: { kind: 'reopen', feedback: 'rename it' },
+    })
+    const body = reopenAction({ revision: { origin: 'body', body: 'replacement' } })
+    expect(body.action).toMatchObject({
+      kind: 'reopen',
+      reviseSpec: { kind: 'supplied', origin: 'operator API body' },
+    })
+    expect(
+      body.action.reviseSpec?.kind === 'supplied' ? await body.action.reviseSpec.read() : '',
+    ).toBe('replacement')
+    expect(body.readTicketBody).toBeUndefined()
+    const ticket = reopenAction({
+      feedback: 'and this',
+      revision: { origin: 'ticket', body: 'ticket body' },
+    })
+    expect(ticket.action).toEqual({
+      kind: 'reopen',
+      feedback: 'and this',
+      reviseSpec: { kind: 'ticket' },
+    })
+    expect(await ticket.readTicketBody?.()).toBe('ticket body')
+  })
+
   test('answerAction maps every resolution to the route’s exact action shape', () => {
     expect(answerAction({ resolution: 'retry' })).toEqual({ action: { kind: 'answer' } })
     expect(answerAction({ resolution: 'guidance', text: ' go left ' })).toEqual({

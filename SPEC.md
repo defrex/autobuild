@@ -804,7 +804,8 @@ to configured Ready under the dispatcher's preparation recovery contract
 are recorded once and never renamed.
 
 **Immutability:** the spec cannot change during a build except through the
-explicit operator revision protocol (leaf escalation or the node exception below). Every downstream reviewer approves
+explicit operator revision protocol (leaf escalation, a settled leaf's reopen
+(§15.7), or the node exception below). Every downstream reviewer approves
 conformance *to it*; a drifting spec silently converts approvals into
 approvals-of-something-else. A phase discovering the spec itself is wrong
 raises an `escalation`; the operator agent or a human answers with
@@ -831,7 +832,8 @@ pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
-spec and its publication is confirmed.
+spec and its publication is confirmed. A settled, unmerged leaf awaiting merge
+revises without an escalation through `ab reopen`.
 
 Caught preparation failures before an established build follow the durable
 claim recovery contract in §5; incomplete hosted snapshots never launch a build.
@@ -1690,6 +1692,7 @@ A phase-scoped hydration into the gitignored scratch dir:
   contributions/    # node verify: <build>/spec.md
   plan.md           # per phase needs (see table)
   findings.json     # current feedback, when round > 1
+  reopen.json       # an operator's reopen of a settled leaf (§15.7), every phase
   history/          # prior-round artifacts where the phase needs them
   verify/           # failure reports routed back to implement
   assets/           # the ticket assets the build froze (§6.3), every phase:
@@ -2716,11 +2719,13 @@ keeps its branch, workspace and completed phase work. Any other build that has
 not finished keeps its slot, even while paused, blocked on a question, waiting
 for the dispatcher to check a ticket wait, or interrupted between
 `finalize.completed` and its post-steps. When a finished build must restack,
-re-verify, reconcile or run a requested optimization measurement (§13.1.1), or
-a ticket wait ends, the build is admitted before new
-ticket claims, as a node is: intake reserves a slot for it (`resume` for an
-ended wait), and its wait records nothing, consumes no attempt and raises no
-attention. Abort and pause acknowledgements are not gated. A finished or
+re-verify, reconcile or run a requested optimization measurement (§13.1.1), an
+operator reopens it (§15.7), or a ticket wait ends, the build is admitted before
+new ticket claims, as a node is: intake reserves a slot for it (`reopen` for a
+reopened leaf, `resume` for an ended wait), and its wait records nothing,
+consumes no attempt and raises no attention. A reopened leaf stays a finished
+build until it settles again, so, like a blocked reconcile, it holds no slot
+while it waits on a question. Abort and pause acknowledgements are not gated. A finished or
 waiting build keeps its workspace, so retained workspaces can exceed
 `capacity`; running work cannot.
 
@@ -4352,9 +4357,9 @@ with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.land-requested` → `landing.command-acknowledged`; decisive human `build.reopened {feedback?, spec?: {artifact, assets?}}` (§15.7); `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
-| Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
+| Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node or a settled leaf's reopen, §15.7; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict`; agent `implement.declined {round, reason, artifact?}` (decisive), an optimization attempt's alternative implement terminal: the build completes `closed-unmerged` and the dispatcher writes `attempt.settled {outcome: declined, note}` on the node (§13.1.1) |
 | Verify/finalize | `verify.started {step, attempt, feedback?, baseSha?, headSha?, restackId?}`, `verify.completed {step, outcome, skipCause?, baseSha?, headSha?, restackId?}`, `verify.cancelled {step, attempt, cause: {step}, baseSha?, headSha?, restackId?}`, `verify.stage-failed {attempt, cycle, stage, failed, cancelled, baseSha?, headSha?, restackId?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
@@ -4448,6 +4453,18 @@ The additive `implement.started.verifyStageFailure` sequence references the
 complete receipt, retained across crashed implement reruns and guidance rounds.
 Both new event types are decisive under version-tolerant reads, fencing older
 engines while their known event payloads remain valid after projection.
+
+**Reopen.** The reduced `reopen {seq, ts, user, via?, feedback?, spec?,
+specPublishedSeq?}` holds the latest `build.reopened` (§15.7); `spec` mirrors the
+event, keeping `assets` only when the reopen re-pinned them, and
+`specPublishedSeq` is the seq of the operator `spec.revised` that published that
+artifact. The reopen is a verify cycle boundary and clears the code loop's human
+round cap (with a spec, the plan's too); it changes `pinnedAssets` only through
+that publication. The log index exposes `codeRestartSeq`, the later of the spec
+restart and the latest reopen, as the code half's boundary. The reopen governs
+the current spec while it is feedback-only and later than the spec restart, or
+while its publication is that restart. Until the leaf settles again after it,
+the leaf asks for a `reopen` slot and landing readiness declines it.
 
 
 **Mixed-version reads.** Within the supported client window, readers that
@@ -5062,7 +5079,9 @@ boundary. Superseded receipts remain historical evidence.
 `pipeline.settled { cycle }` is advisory capacity evidence. The dispatcher
 appends it once per settlement key (the later of the current verify cycle start
 and the latest `finalize.completed`) when the engine decides `wait awaiting-pr`;
-no pipeline decision reads it (§12).
+no pipeline decision reads it (§12). A leaf counts as finished when its latest
+settlement follows the spec restart, or when that restart published its reopen's
+spec (§15.5).
 
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 
@@ -5076,8 +5095,55 @@ while an unexpired execution lease exists, so no workspace is released under a
 live process tree. After any terminal outcome it also reclaims every
 pending hosted PR-attachment copy. Reclamation success and failure are durable
 correlated facts; a failed delete remains pending and retries on later ticks,
-including after the build is already done. A merged-PR fixup request is a *new
-ticket*, never a reopened build.
+including after the build is already done. A fixup request for a merged or
+closed PR is a *new ticket*, never a reopened build.
+
+**Reopening a settled leaf.** An operator who wants changes to a leaf that
+finished its pipeline and waits for its merge decision sends it back with
+`ab reopen <slug> --feedback <text>`, optionally with `--revise-spec <file>` or
+`--revise-spec-from-ticket` (the `builds.reopen` tool carries the same request).
+The control appends one human-attributed, decisive `build.reopened
+{feedback?, spec?: {artifact, assets?}}` by compare-and-append on a freshly
+reduced tail, and refuses, writing nothing, for an integration node, an
+optimization attempt, a queued or terminal build, a merged or closed PR, a leaf
+that has not settled (still running, conflicted or restacking), a blocked leaf
+(answer it with `ab answer`), and a pending abort or discard. A paused leaf may
+be reopened; the engine parks the reopen until resume. Feedback is 1–20000
+characters after trimming.
+
+Feedback alone re-enters `implement`. The reopen's seq is the code half's
+restart boundary (`codeRestartSeq`, the later of it and the spec restart): code
+loop rounds and verdicts, `implement.completed`, verify and reconcile records,
+configuration captures, wait-resume restacks, `finalize.completed` and finalize
+post-steps at or before it no longer count, while the plan stays approved. The
+engine therefore runs `implement` at the next round, then code review, the
+verify-entry restack, every verify step, finalize and its post-steps, exactly as
+a first pass; the review-round count, stall chains and the verify-failure budget
+restart, and round and attempt numbers continue monotonically. A spec reopen
+deposits a conforming body first (a from-ticket body re-pins its assets, a file
+leaves the pins), then the kernel publishes the recorded artifact and assets as
+the next `spec.revised` in its `operator` form, which restarts from `plan`
+(§6.3). Every publication attempt re-reads, refuses on a pending abort or
+discard, an ended PR or a terminal build, and appends only on that tail; until
+it lands the engine waits on `awaiting-spec`, and a repeated `ab reopen`
+completes the recorded publication without opening its new arguments.
+
+The reopen revokes merge consent and its acknowledgement and clears the landing
+decision, deferral and fallback; a hold stays in force. The leaf keeps its open
+PR and branch. Its armed native auto-merge stays as applied-state evidence: the
+janitor finds the leaf no longer ready and cancels it on its next poll, recording
+`landing.native-applied {enabled: false}`; a forge merge that lands first
+completes the build as merged and later reopens are refused. The reopened leaf
+stays a finished leaf for capacity and asks for a `reopen` slot, admitted ahead
+of new ticket claims like other parked work. Re-finalize adopts the open PR by
+head, keeping its title and prose, and the new `finalize.completed` is a new
+landing candidate that settles and needs fresh consent as usual. `ab context`
+writes `$AB_CONTEXT_DIR/reopen.json` (`{seq, user, via?, at, feedback?,
+specRev?}`, also the manifest's `reopen` block) for every phase while the
+reopen governs the current spec; a later reopen replaces it and a later
+escalation spec revision supersedes it. The epilogue grammar is unchanged: a
+reopen re-enters the mainline at `implement` or `plan`, and the leaf reaches
+merge only through `finalize` again.
 
 **Merge standard: one change per build, replay at reconcile.**
 
@@ -5331,7 +5397,8 @@ its publication intent, from recorded facts only; no poll derives it. The fact
 removes that consent only, so the build returns to the consent queue for its new
 head and needs fresh consent. Clean restacks record no resolution and keep
 consent, as do reconciles that edit no matched file and consent under rules
-without path predicates. Accepted node reparenting also revokes consent.
+without path predicates. Accepted node reparenting and reopening a settled leaf
+(above) also revoke consent.
 The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
 `head-mismatch`, recording nothing, unless `<sha>` (full or at least seven
 characters) is the current candidate head. The consented head is the head of

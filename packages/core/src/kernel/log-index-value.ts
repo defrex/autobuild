@@ -31,6 +31,8 @@ export function decodeLog(log: JsonLogIndex): LogIndex {
   }
   return {
     ...log,
+    // Values persisted before reopen existed carry no code boundary.
+    codeRestartSeq: log.codeRestartSeq ?? log.restartSeq,
     plan: loop(log.plan),
     code: loop(log.code),
     finalizeStepsDone: new Set(log.finalizeStepsDone),
