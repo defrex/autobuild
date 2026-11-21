@@ -183,6 +183,17 @@ In interactive sessions at the repository root, run the CLI from source as
 global install can be a different version from the one the dispatcher runs.
 That includes long-running `watch` and `wait` monitors.
 
+Because that CLI comes from this checkout, an interactive operator session at
+the repository root may fast-forward `main` (`git pull --ff-only`) whenever it
+needs to. A common case is catching up after a merge has deployed a newer
+reducer or CLI to the hosted service, which shows up as `bun bin/ab.ts watch`
+failing with `incompatible reducer …: client version N, server version M`.
+Pull without asking unless the maintainer has noted extenuating circumstances
+or a local source-mode dispatcher is running against this checkout (see
+"Self-hosting dispatcher updates" for how to tell). If the fast-forward fails,
+report it and stop; never merge, rebase, or reset to make it succeed. Pulling
+never involves starting, stopping, restarting, or signaling a dispatcher.
+
 Inside a build session, identified by nonblank `AB_BUILD` and `AB_SESSION`
 environment variables, use plain `ab` on the runner-prepared `PATH`, never
 `bun bin/ab.ts` from the worktree. This applies to context, artifacts, phase
@@ -196,7 +207,8 @@ do not extend it, and do not cite SPEC §7.1.2 as current design.
 
 ## Self-hosting dispatcher updates
 
-This repository's dispatcher runs in `source` mode. It polls authoritative
+This section applies when this repository's dispatcher runs locally in
+`source` mode against this checkout. Such a dispatcher polls authoritative
 origin `main` immediately and every 60 seconds, prepares an immutable runtime
 from the selected commit, and preflights compatibility before handing off.
 Feature branches, checkout HEAD and local main do not select the upgrade target.
@@ -231,6 +243,22 @@ and local main. It compares the recorded current runtime commit and prints
 useful diff/log commands. A difference alone does not require restart. Local
 main need not equal remote main; checking remote freshness requires a fetch.
 
+To decide whether a local dispatcher is running, make both checks every time.
+First, observe processes read-only with
+`pgrep -af 'dispatcher-start|ab(\.ts)? dispatch'`; any match is a running local
+dispatcher, including one draining as a predecessor or holding an expired
+lease. Second, read `bun bin/ab.ts repository status --json`: a local
+dispatcher is running when `dispatcher.holder.host` or
+`dispatcher.expiredHolder.host` equals this machine's `hostname`, or when
+`upgradeStatus.handoff` names a draining predecessor `run` that is not one of
+those holders on another host (the handoff entry carries no host of its own).
+When the status cannot be read, for example because of the same reducer
+incompatibility, the process check decides alone. No holder, or a holder on
+another host, is not by itself evidence that nothing runs locally: an expired
+lease whose run never recorded `run-stopped` reports `holder: null`, and a
+foreign successor can coexist with a local predecessor that is still draining.
+`tools/dispatcher-check.ts` prints no host, so it cannot answer this question.
+
 Local launch records under ignored `.autobuild/dispatcher-starts/` identify the
 launcher ancestor, whose starting SHA is not the current generation's revision.
 Process ancestry, boot and PID identity checks are separate diagnostic evidence.
@@ -244,8 +272,11 @@ not product lifecycle state.
 Orchestrating agents diagnose and report attention or a required maintainer
 restart, following the installed `ab-operate` Boundaries section. They never
 run the start entry, `ab dispatch`, dispatcher stop/start/restart commands, or
-dispatcher signals themselves. An agent may read or fetch as authorized; it
-must never pull the live root checkout or manage its process. Implementation
+dispatcher signals themselves. An agent may read or fetch as authorized. While a
+local source-mode dispatcher is running against the root checkout, an agent
+must not pull that checkout; otherwise interactive operator sessions may
+fast-forward `main` as described under "The orchestrator is an external
+agent". An agent never manages a dispatcher process. Implementation
 and verification of this tooling must not restart the live dispatcher.
 
 ## Development conventions
