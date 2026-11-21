@@ -52,10 +52,10 @@ test('complete seam configurations parse through the production schema', async (
   expect(
     configs
       .get('agent-runtimes')!
-      .slice(0, 3)
+      .slice(0, 4)
       .map((config) => config.roles.default!.runtime),
-  ).toEqual(['claude', 'codex', 'pi'])
-  const roles = configs.get('agent-runtimes')![3]!.roles
+  ).toEqual(['claude', 'codex', 'pi', 'antigravity'])
+  const roles = configs.get('agent-runtimes')![4]!.roles
   for (const role of ['default', 'plan', 'implement']) {
     expect(roles[role]!.runtime).toBe('codex')
     expect(roles[role]!.model).toBe('gpt-6.1-sol')

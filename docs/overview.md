@@ -35,7 +35,7 @@ Merge depends on the configured policy and merge gates. Conflicts are reconciled
 
 Autobuild fits repositories whose work can be stated as clear tickets and checked automatically.
 
-- **Requirements.** Bun, git, and your agent runtime (Claude Code, Codex CLI, or Pi) with its access and credentials.
+- **Requirements.** Bun, git, and your agent runtime (Claude Code, Codex CLI, Pi, or Antigravity CLI) with its access and credentials.
 - **Throughput over latency.** Independent builds run side by side, but each one pays for planning, review, and verification. A small edit you need now is better done directly in your coding agent.
 - **Not a product owner.** It doesn't make product decisions or make vague tickets precise without your input; builds stop for answers, and your agent brings unresolved decisions back to you. If you can't state what done means, or your checks can't detect a broken change, fix grooming and verification first.
 

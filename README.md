@@ -17,7 +17,7 @@ through the pipeline](docs/assets/headline-wide.png)
 ## Quickstart
 
 You need [Bun](https://bun.sh), `git`, and the local prerequisites for the
-agent runtime you select: Claude Code, Codex CLI, or Pi. The GitHub forge also
+agent runtime you select: Claude Code, Codex CLI, Pi, or Antigravity CLI. The GitHub forge also
 needs an authenticated [`gh` CLI](https://cli.github.com) or an exported
 `GITHUB_TOKEN`/`GH_TOKEN`; the local-git forge needs no account or remote.
 
@@ -112,7 +112,7 @@ pipeline stays the same.
 | tickets    | where work comes from | local files, Linear, hosted, plugin        |
 | dispatcher | what starts builds    | local process                              |
 | workspace  | where a build runs    | git worktree, Vercel Sandbox, plugin       |
-| runtime    | who does the thinking | Claude Code, Codex, Pi, plugin             |
+| runtime    | who does the thinking | Claude Code, Codex, Pi, Antigravity, plugin |
 | forge      | where code merges     | local git, GitHub, plugin                  |
 | store      | where state lives     | SQLite, remote HTTP store                  |
 | operators  | how you watch         | terminal, stdio MCP, Operator API           |

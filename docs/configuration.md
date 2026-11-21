@@ -2264,7 +2264,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
 **Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
 
@@ -2355,7 +2355,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
 **Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
 
@@ -2421,7 +2421,9 @@ model uses the default for its own selected account and runtime. Each configured
 one argv token; Autobuild does not shell-expand it. The narrow rejected set is
 derived from the model and machine-readable protocol options each adapter emits:
 Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
-`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude and Codex
+`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`; Antigravity
+rejects `-p`/`--print`/`--prompt`, `--output-format`, `--input-format`, and
+`--model`. Claude and Codex
 also reject a standalone `--` because Autobuild owns and appends that structural
 separator immediately before their positional prompt. Claude routes with a selected
 account additionally reject `--settings`, `--setting-sources`, and `--bare`
@@ -2432,7 +2434,11 @@ configuration routing. This includes using `-c` to set reasoning effort. Routes
 without an account retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
-role/runtime-specific diagnostic. Every other option passes through without
+role/runtime-specific diagnostic. Antigravity also owns conversation
+selection: a role argument naming `--conversation`, `--continue`/`-c`, or
+`--prompt-interactive`/`-i`, including `--option=value` forms, is not an eager
+startup error but fails each turn as a configuration failure before `agy`
+launches. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,
 thinking, extension, lifecycle, unknown options, and arguments that merely
 contain two hyphens, even when they supplement another occurrence emitted by the
@@ -2440,8 +2446,8 @@ adapter. Unknown fields,
 runtimes, and incompatible models in any indexed entry join the aggregated
 eager startup error; they never first surface during an outage.
 
-Three runtimes ship: `claude`, `codex`, and `pi`; `ab plugin list` projects all
-three as builtin agent runtimes, and trusted plugins may register additional
+Four runtimes ship: `claude`, `codex`, `pi`, and `antigravity`; `ab plugin list`
+projects all four as builtin agent runtimes, and trusted plugins may register additional
 names. The `pi` runtime requires a locally installed Pi CLI version 0.84.3 or
 newer and uses that installation's login and model catalog through headless RPC;
 Autobuild does not install Pi. `ab init` reports a missing or older executable
@@ -2452,7 +2458,9 @@ validation and event attribution. With no configured or inherited model, a Claud
 route selecting a Kimi Code account uses `kimi-for-coding`. Other routes use their
 runtime's declared default when present: Claude and Codex delegate to their local
 CLI's selected default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
-ids. Pi ids remain provider-qualified—including the independent
+ids. Antigravity accepts unqualified `gemini-*`, `claude-*` and `gpt-*` slugs,
+delegates an omitted model to its local `agy` default, and declares no tool-free
+one-shot. Pi ids remain provider-qualified—including the independent
 `openai-codex/*` route—and `ab models [query]` looks them up. Pi always passes
 `--no-extensions` to disable ambient package discovery and loads the Autobuild
 bridge explicitly. Repeatable `--extension <path>` tokens in `args` supplement
@@ -2679,7 +2687,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
 **Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
 
@@ -2770,7 +2778,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
 **Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
 
@@ -4033,10 +4041,13 @@ On the first `ab init [target]`, when `autobuild.toml` is absent, Autobuild
 writes a valid stack-neutral skeleton. Deterministic init code does not inspect
 package manifests, infer commands, or ask a fixed adapter survey. It vendors the
 editable skills, records their pristine bases, updates `.gitignore`, and probes
-every registered runtime for executable/authentication usability.
+every registered runtime for executable/authentication usability. The
+Antigravity probe makes one minimal headless request per configured model, in
+an empty temporary directory, because a model listing does not prove
+authentication; it spends a few tokens.
 
 Init reports every probe result and chooses a setup launcher from the fixed
-product preference `claude`, then `codex`, then `pi`. That choice only starts
+product preference `claude`, then `codex`, then `pi`, then `antigravity`. That choice only starts
 setup; the temporary `[roles.default].runtime` skeleton value does not constrain
 the role runtimes or models the setup agent ultimately configures. When a
 shipped runtime is usable, no Claude discovery conflict remains, and both stdin
@@ -4229,7 +4240,11 @@ the existing text-download projection.
   [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions);
 - Pi sessions use Pi's provider authentication: start `pi` and run `/login`
   inside the interactive session, or, for non-interactive use, supply the
-  provider credentials Pi supports (such as provider API keys in the environment).
+  provider credentials Pi supports (such as provider API keys in the environment);
+- Antigravity sessions invoke the local `agy` CLI with its ambient
+  authentication: sign in by running `agy` interactively, export
+  `GEMINI_API_KEY` with `modelProvider = "gemini"` in Antigravity's settings, or
+  set `AGY_ADC_AUTH=true` after `gcloud auth application-default login`.
 
 No provider API key, GitHub token, or remote-store bearer token belongs in
 `autobuild.toml`.
