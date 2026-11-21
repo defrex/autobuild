@@ -8,6 +8,7 @@
  */
 import { z } from 'zod'
 import { ForgeCredentialMissing, ForgeFailure, isForgeFailure } from '../forge-failure'
+import type { ForgeRateLimitObservation } from '../forge-telemetry'
 import { spawnExec } from '../workspace/git-worktree'
 
 export interface GitHubRequestOpts {
@@ -397,6 +398,28 @@ export function githubTokenSource(
   exec?: GitHubCliExec,
 ): () => Promise<GitHubCredential> {
   return () => resolveGitHubToken(env, exec)
+}
+
+/** The primary rate-limit reading a response's headers carry, when they
+ * carry a complete one. GitHub reports `x-ratelimit-reset` in UTC epoch
+ * seconds; a missing `x-ratelimit-resource` means the `core` REST quota. */
+export function githubRateLimitSnapshot(
+  headers: Record<string, string>,
+): ForgeRateLimitObservation | undefined {
+  const integer = (value: string | undefined): number | undefined => {
+    if (value === undefined || !/^\d+$/.test(value.trim())) return undefined
+    const parsed = Number(value.trim())
+    return Number.isSafeInteger(parsed) ? parsed : undefined
+  }
+  const limit = integer(headers['x-ratelimit-limit'])
+  const remaining = integer(headers['x-ratelimit-remaining'])
+  const reset = integer(headers['x-ratelimit-reset'])
+  if (limit === undefined || remaining === undefined || reset === undefined) return undefined
+  const resetAt = new Date(reset * 1000)
+  if (!Number.isFinite(resetAt.getTime())) return undefined
+  const named = headers['x-ratelimit-resource']?.trim()
+  const resource = named !== undefined && named !== '' && named.length <= 64 ? named : 'core'
+  return { resource, limit, remaining, resetAt: resetAt.toISOString() }
 }
 
 /** Documented primary and secondary limits; permission failures are ordinary errors. */

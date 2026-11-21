@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ForgeRateLimitObservation } from './forge-telemetry'
 /** Additive plugin API: recognizable across separately loaded SDK copies. */
 export type ForgeFailureDetails =
   | {
@@ -108,6 +109,8 @@ export function isForgeRejection(error: unknown): error is ForgeRejection {
 export interface ForgeRequestContext {
   outcome?: 'restPrimary' | 'restNotModified' | 'graphql'
   build?: string
+  /** Latest primary-limit headers observed on this response; adapters omit when absent. */
+  rateLimit?: ForgeRateLimitObservation
 }
 /** Called once for each actual provider request, including failed requests. */
 export type ForgeRequestObserver = (context: ForgeRequestContext) => void

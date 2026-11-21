@@ -1,5 +1,5 @@
 import type { Forge } from '../ports/types'
-import { isForgeFailure } from '../ports/forge-failure'
+import { isForgeFailure, type ForgeFailureDetails } from '../ports/forge-failure'
 import {
   withForgeRequestGate,
   forgeRequestGateActive,
@@ -8,6 +8,8 @@ import {
 import type { BuildStore } from '../store/types'
 import { readForgeHealth } from '../store/reduced-reads'
 import { KERNEL } from '../events/envelope'
+
+type RateLimited = Extract<ForgeFailureDetails, { kind: 'rate-limited' }>
 
 /** Scheduling signal, never a failed attempt. */
 export class ForgeCooldown extends ForgeRequestDeferred {}
@@ -81,9 +83,19 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
       active = await health()
     }
   }
-  const failed = async (error: unknown) => {
-    if (!isForgeFailure(error) || error.details.kind !== 'rate-limited') return
-    const details = error.details
+  /** Serializes this guard's post-failure bookkeeping (never the request), so
+   * concurrent limited requests cannot both see "no active episode". */
+  let chain: Promise<void> = Promise.resolve()
+  const serial = (work: () => Promise<void>): Promise<void> => {
+    const next = chain.then(work, work)
+    chain = next.catch(() => {})
+    return next
+  }
+  const failed = (error: unknown): Promise<void> => {
+    if (!isForgeFailure(error) || error.details.kind !== 'rate-limited') return Promise.resolve()
+    return serial(() => recordLimit(error, error.details as RateLimited))
+  }
+  const recordLimit = async (error: Error, details: RateLimited): Promise<void> => {
     if (scope !== 'repository' || details.unauthenticated) {
       // At least one second, so a stale reset cannot spin a waiting retry.
       const until = Math.max(
@@ -116,7 +128,10 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
       return
     }
     const active = await health()
-    if (active?.resetAt === error.details.resetAt && active.message === error.message) return
+    // One episode per cooldown: a limit inside an unexpired degradation only
+    // extends it, durably but marked `continued`, so it never wakes a watch.
+    const ongoing = active !== undefined && Date.parse(active.resetAt) > now().getTime()
+    if (ongoing && Date.parse(details.resetAt) <= Date.parse(active.resetAt)) return
     // Runner/phase credentials cannot administer repositories; their repo
     // already exists. Only the dispatcher may create it.
     if (!deps.wait) await deps.store.ensureRepo(deps.repo)
@@ -126,11 +141,9 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
       payload: {
         forge: deps.name,
         message: error.message,
-        resetAt:
-          active && Date.parse(active.resetAt) > Date.parse(error.details.resetAt)
-            ? active.resetAt
-            : error.details.resetAt,
-        firstFailureAt: active?.firstFailureAt ?? now().toISOString(),
+        resetAt: details.resetAt,
+        firstFailureAt: ongoing ? active.firstFailureAt : now().toISOString(),
+        ...(ongoing ? { continued: true as const } : {}),
       },
     })
   }

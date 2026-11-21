@@ -57,6 +57,7 @@ import type {
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  RepoTickObservation,
   SessionArtifact,
   SessionArtifactMeta,
   SessionRecord,
@@ -117,6 +118,7 @@ export class RepoViewStore implements BuildStore {
   private readonly metaChain = new Chain()
   private initialized = false
   private recorded = false
+  private tickSample: RepoTickObservation['finished']
   private records: BuildRecord[] = []
   private recordsDirty = true
   private discovery = new Map<string, BuildDigest>()
@@ -160,11 +162,18 @@ export class RepoViewStore implements BuildStore {
   async refreshJournal(): Promise<void> {
     if (this.journalWindow) this.journalWindow.dirty = true
     await this.journalChain.run(async () => {
-      const recorded = (await this.backing.getRepo(this.repo)) !== null
+      const record = await this.backing.getRepo(this.repo)
+      const recorded = record !== null
       const facts = (await readRepositoryFacts(this.backing, this.repo, recorded)).value
       this.recorded = recorded
       this.repoFacts = facts
+      this.tickSample = record?.tick?.finished
     })
+  }
+  /** The repository record's latest durable tick sample, as the last journal
+   * refresh read it — published or not. Served from that read; never a new one. */
+  lastTickSample(): RepoTickObservation['finished'] {
+    return this.tickSample === undefined ? undefined : structuredClone(this.tickSample)
   }
   repositoryFacts(): RepositoryReadFacts {
     return structuredClone(this.repoFacts)

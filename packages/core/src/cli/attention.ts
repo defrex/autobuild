@@ -69,6 +69,9 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
     case 'forge.credential-limited':
     case 'ticket.handed-back':
       return true
+    case 'dispatcher.forge-degraded':
+      // An episode's opening cooldown wakes once; its extensions are silent.
+      return event.payload.continued !== true
     case 'dispatcher.config-reloaded':
       return event.payload.restartRequired.length > 0
     case 'dispatcher.run-stopped':
