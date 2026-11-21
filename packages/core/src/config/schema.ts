@@ -655,7 +655,8 @@ documentFields(runtimeAxesSchema, {
   account:
     'Named billing account; inherits independently. Claude selects the sole subscription account when omitted.',
   runtime: 'Select an agent adapter.',
-  model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
+  model:
+    'Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.',
   args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
   extensions:
     'Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.',
@@ -683,7 +684,8 @@ documentFields(roleSchema, {
   account:
     'Named billing account; inherits independently. Claude selects the sole subscription account when omitted.',
   runtime: 'Select an agent adapter.',
-  model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
+  model:
+    'Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.',
   args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
   extensions:
     'Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.',

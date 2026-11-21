@@ -109,7 +109,7 @@ skill = "verify-acceptance"
 
 ## Harness discovery
 
-Codex and Pi read `.agents/skills/` directly. Claude Code reads `.claude/skills/`, where init links each shipped skill to its canonical directory, so there's one editable copy. Link a new local skill from the repository root:
+Codex, Pi and Antigravity read `.agents/skills/` directly. Claude Code reads `.claude/skills/`, where init links each shipped skill to its canonical directory, so there's one editable copy. Link a new local skill from the repository root:
 
 ```sh
 mkdir -p .claude/skills

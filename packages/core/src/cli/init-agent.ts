@@ -1,6 +1,6 @@
 import type { RuntimeRegistry, RuntimeUsabilityResult } from '../ports/runner/runtime'
 
-export const SETUP_RUNTIME_PREFERENCE = ['claude', 'codex', 'pi'] as const
+export const SETUP_RUNTIME_PREFERENCE = ['claude', 'codex', 'pi', 'antigravity'] as const
 
 export interface RuntimeProbeReport {
   runtime: string
@@ -89,6 +89,9 @@ export function setupAgentCommand(runtime: string, prompt: string): string[] {
   if (!SETUP_RUNTIME_PREFERENCE.some((supported) => supported === runtime)) {
     throw new Error(`runtime "${runtime}" has no interactive setup launcher`)
   }
+  // The antigravity runtime's executable is `agy`; its interactive TUI takes
+  // the initial prompt through `--prompt-interactive`.
+  if (runtime === 'antigravity') return ['agy', '--prompt-interactive', prompt]
   return [runtime, prompt]
 }
 
