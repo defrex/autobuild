@@ -698,20 +698,8 @@ interface TargetedDispatch {
   requests: Map<string, PendingTicketStart>
   /** Keyed by ticket id. A ticket without an entry stays pending. */
   outcomes: Map<string, TargetedOutcome>
-  /** The builds the pass measured capacity from, when it got that far. */
-  measured?: CapacityBuild[]
-}
-
-/** A runner lease that has not expired. */
-function leaseLive(record: BuildRecord, now: Date): boolean {
-  return record.lease !== undefined && Date.parse(record.lease.expiresAt) > now.getTime()
-}
-
-/** The `updatedAt` under which a read of `record` at `now` may be served
- * again. A write in the same clock millisecond as the read could leave
- * `updatedAt` unchanged, so such a read keys nothing and is read again. */
-function memoKey(record: BuildRecord, now: Date): string {
-  return Date.parse(record.updatedAt) < now.getTime() ? record.updatedAt : ''
+  /** The capacity inputs the stage measured from this tick's served facts. */
+  measured: CapacityBuild[]
 }
 
 /** An active build's ticket ref, normalized through recorded migrations. */
@@ -1238,14 +1226,6 @@ export class Dispatcher {
   /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
    * projected wait for one of these is one tick stale and reserves nothing. */
   private readonly parkedSettled = new Set<string>()
-  /** Each active build's capacity inputs as the start-request stage last
-   * read them, keyed by slug with the record's `updatedAt` then. Every append
-   * moves `updatedAt`, so an unchanged record serves its entry with no read;
-   * a changed or new one is read once and replaces it (see `memoKey`). Leased
-   * leaves hold a slot whatever their state, so their entry is served while
-   * leased. Only the decision to skip a pass rests on it: admission measures
-   * afresh, so a stale entry can delay a start but never over-admit. */
-  private startCapacity = new Map<string, { updatedAt: string; build: CapacityBuild }>()
   /** Start requests whose ticket has a target and blockers and that have
    * had one full pass with no free slot: the pass that may settle them
    * `blocked`. Later full-capacity ticks wait for a slot without one. */
@@ -1411,6 +1391,11 @@ export class Dispatcher {
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     if (opts.viewRefreshed !== true) await this.store.refresh()
+    // A pending start request measures capacity from the facts this tick's
+    // fleet-wide stages read anyway; keep them only then.
+    this.store.retainBuildFacts(
+      Object.keys(this.store.repositoryFacts().ticketStarts.pending).length > 0,
+    )
     const autoMergeUser = undefined
     const report = emptyTickReport()
     this.restoreScan(report)
@@ -1789,14 +1774,16 @@ export class Dispatcher {
       candidates.push({ request, ticket })
     }
     if (candidates.length === 0 || this.outOfBudget(opts)) return
-    // Measuring capacity reads every active build's facts. The memoized
-    // inputs read only builds that changed since; when they leave no slot,
-    // only a node, or a blocked target not yet checked, needs the pass. A
-    // memo the pass finds stale only delays: admission always measures afresh.
+    // Capacity is measured from the facts this tick's janitor, recovery and
+    // lease sweep already read (`servedBuildFacts`): a build is read again
+    // only when the tick skipped it or wrote to it since, so neither a wait
+    // nor an admission reads the fleet, on a fresh process or a warm one.
+    // With no free slot, only a node, or a blocked target not yet checked,
+    // needs the pass.
     const now = this.deps.clock()
-    const projected = await this.startCapacityBuilds(active, launched, now)
+    const measured = await this.capacityBuilds(launched, true)
     const free =
-      intakeCapacity(dispatchCapacity(projected, config.capacity, now), {
+      intakeCapacity(dispatchCapacity(measured, config.capacity, now), {
         settled: this.parkedSettled,
         denied: this.slotWaiters,
       }) > 0
@@ -1822,12 +1809,11 @@ export class Dispatcher {
       activeIds: new Set(refs.map(({ ref }) => key(ref))),
       requests: new Map(passing.map(({ request, ticket }) => [ticket.ref.id, request])),
       outcomes: new Map(),
+      measured,
     }
     const scratch = emptyTickReport()
     try {
       await this.dispatch(scratch, launched, autoMergeUser, paused, opts, undefined, targeted)
-      for (const build of targeted.measured ?? [])
-        this.startCapacity.set(build.record.slug, { updatedAt: memoKey(build.record, now), build })
     } finally {
       for (const counter of [
         'dispatched',
@@ -3840,64 +3826,35 @@ export class Dispatcher {
   /** Deferral withholds decisions, but cannot free an existing capacity reservation.
    * A leaf's runner reservation is this process's continuation or a launch
    * this tick; another process's continuation holds a heartbeat lease. */
-  private async capacityBuilds(launched?: ReadonlySet<string>): Promise<CapacityBuild[]> {
+  private async capacityBuilds(
+    launched?: ReadonlySet<string>,
+    /** Serve the facts this tick already read (`servedBuildFacts`). */
+    served = false,
+  ): Promise<CapacityBuild[]> {
     const builds: CapacityBuild[] = []
     for (const { record, digest } of await this.repoBuildDigests(true)) {
       if (digest.terminal) continue
-      const facts = await this.store.buildFacts(record.slug)
+      // A leaf with a runner provisioning holds its slot and requests none
+      // whatever its state, so any read this tick serves it, launch or not.
+      const allocatedLeaf =
+        digest.kind !== 'node' &&
+        (this.continuations.has(record.slug) || !!launched?.has(record.slug))
+      const facts = served
+        ? ((allocatedLeaf ? this.store.retainedBuildFacts(record.slug) : undefined) ??
+          (await this.store.servedBuildFacts(record.slug)))
+        : await this.store.buildFacts(record.slug)
       builds.push({
         record,
         state: facts.state,
         workspace: facts.workspace !== null,
         provisioning:
           digest.kind === 'node'
-            ? (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined
+            ? (served
+                ? facts.provisionMarker
+                : (await readBuildFacts(this.store, record.slug)).value.provisionMarker) !==
+              undefined
             : this.continuations.has(record.slug) || !!launched?.has(record.slug),
         restackDue: landingRestackDue(facts.state, facts.log),
-      })
-    }
-    return builds
-  }
-
-  /** `capacityBuilds` for the start-request stage, served from
-   * `startCapacity`: a build is read only when its record changed since its
-   * entry, or when it has none. Runner allocation comes from the current
-   * record and this process's continuations and launches. */
-  private async startCapacityBuilds(
-    active: readonly { record: BuildRecord; digest: BuildDigest }[],
-    launched: ReadonlySet<string>,
-    now: Date,
-  ): Promise<CapacityBuild[]> {
-    const live = new Set(active.map(({ record }) => record.slug))
-    for (const slug of this.startCapacity.keys())
-      if (!live.has(slug)) this.startCapacity.delete(slug)
-    const builds: CapacityBuild[] = []
-    for (const { record, digest } of active) {
-      const node = digest.kind === 'node'
-      const running =
-        !node &&
-        (leaseLive(record, now) || launched.has(record.slug) || this.continuations.has(record.slug))
-      let entry = this.startCapacity.get(record.slug)
-      if (entry === undefined || (!running && entry.updatedAt !== record.updatedAt)) {
-        const facts = await this.store.buildFacts(record.slug)
-        entry = {
-          updatedAt: memoKey(record, now),
-          build: {
-            record,
-            state: facts.state,
-            workspace: facts.workspace !== null,
-            ...(node ? { provisioning: facts.provisionMarker !== undefined } : {}),
-            restackDue: landingRestackDue(facts.state, facts.log),
-          },
-        }
-        this.startCapacity.set(record.slug, entry)
-      }
-      builds.push({
-        ...entry.build,
-        record,
-        provisioning: node
-          ? entry.build.provisioning
-          : this.continuations.has(record.slug) || launched.has(record.slug),
       })
     }
     return builds
@@ -8060,8 +8017,7 @@ export class Dispatcher {
     // even while blocked or paused; a finished build parked for its merge
     // decision holds none. Capacity is per repo (§16.1) — another repo's
     // builds never consume this repo's slots.
-    const capacityBuilds = await this.capacityBuilds(launched)
-    if (targeted) targeted.measured = capacityBuilds
+    const capacityBuilds = targeted?.measured ?? (await this.capacityBuilds(launched))
     // A node awaiting verification, or a parked build that must run again,
     // reserves its slot ahead of new claims until it is admitted; this only
     // ever lowers the claim budget.

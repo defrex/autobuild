@@ -6752,10 +6752,9 @@ export async function ticketStartReadBudget(): Promise<{
   rows: number
   repoRows: number
 }> {
-  // While a request waits at full capacity, the first pass of a process
-  // reads each active build's served facts once, as an intake scan does.
-  // Later passes read only builds whose record changed, so the steady cost
-  // is independent of the fleet and of time.
+  // While a request waits at full capacity, or is admitted, capacity comes
+  // from the build facts the tick's fleet-wide stages already read, so the
+  // stage adds no per-build read on a fresh process or a warm one.
   const { MemoryBuildStore } = await import('../store/memory')
   const { CONFORMING_BODY } = await import('../scenarios/harness')
   const { requestTicketStart } = await import('../operator/ticket-start')
@@ -6763,7 +6762,14 @@ export async function ticketStartReadBudget(): Promise<{
   type Source = import('../ports/types').TicketSource
   type Run = { gets: number; calls: Record<string, number>; rows: number; repoRows: number }
   const results = new Map<string, Run[]>()
-  const open = async (builds: number, history: number, capacity: number, label: string) => {
+  const open = async (
+    builds: number,
+    history: number,
+    capacity: number,
+    label: string,
+    /** AB-0 waits on a blocker whose dependency read fails. */
+    blocked = false,
+  ) => {
     let now = 1_800_000_000_000
     const clock = () => new Date(now)
     const store = new MemoryBuildStore({ clock })
@@ -6785,7 +6791,12 @@ export async function ticketStartReadBudget(): Promise<{
       labels: [],
     })
     const fake = new FakeTicketSource(
-      [ticket('AB-0'), ...Array.from({ length: builds }, (_, i) => ticket(`AB-${i + 1}`))],
+      [
+        { ...ticket('AB-0'), ...(blocked ? { blockedBy: ['AB-B'] } : {}) },
+        { ...ticket('AB-W'), state: 'doing' },
+        ticket('AB-S'),
+        ...Array.from({ length: builds }, (_, i) => ticket(`AB-${i + 1}`)),
+      ],
       { doneState: 'done' },
     )
     const gets: string[] = []
@@ -6805,6 +6816,10 @@ export async function ticketStartReadBudget(): Promise<{
           return (id: string) => {
             claims.push(id)
             return target.claim(id)
+          }
+        if (key === 'dependencyStates' && blocked)
+          return async () => {
+            throw new Error('dependency read failed')
           }
         return Reflect.get(target, key, target)
       },
@@ -6946,22 +6961,21 @@ export async function ticketStartReadBudget(): Promise<{
         pending.fresh()
       }
       // The unleased builds are relaunched until their launch budget blocks
-      // them, and each launch moves a record, which the start stage then
-      // reads once. A fresh process has no memoized capacity inputs: its
-      // first waiting tick reads each active build's served facts once, with
-      // no event rows, and never again while the builds are unchanged.
-      for (let i = 0; i < 4; i++) {
+      // them. Capacity is measured from the facts the tick's own stages
+      // read, so even a fresh process's first waiting tick reads no build
+      // the control does not.
+      for (let i = 0; i < (fresh ? 1 : 2); i++) {
         const base = await control.tick()
         const measured = await pending.tick()
-        if (!fresh || i > 0) continue
-        const calls = difference(measured.calls, base.calls)
         expect(measured.rows - base.rows).toBe(0)
-        expect(calls).toEqual({
-          getReducerValue: builds,
-          readValue: builds,
-          snapshotTail: builds,
-          state: builds,
-        })
+        // Only journal snapshot maintenance may differ while the journals'
+        // lengths differ; no served value or event read is extra.
+        const {
+          putSnapshot: _put,
+          snapshotTail: _tail,
+          ...reads
+        } = difference(measured.calls, base.calls)
+        expect(reads).toEqual({})
       }
       // Each tick advances the clock past the default scan interval, so
       // nothing the stage serves expires with time.
@@ -6969,7 +6983,7 @@ export async function ticketStartReadBudget(): Promise<{
       let rows = 0
       let repoRows = 0
       let extra: string[] = []
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 2; i++) {
         const base = await control.tick()
         const measured = await pending.tick()
         extra = subtract(measured.gets, base.gets)
@@ -7020,44 +7034,92 @@ export async function ticketStartReadBudget(): Promise<{
     expect(runs[0]!.calls).toEqual(baseline.calls)
   }
 
-  // Admission with a free slot: the request is claimed with one get, and a
-  // legacy-alias build of the requested ticket moved back to Ready is matched
-  // through the projection and never claimed.
-  {
-    const builds = 20
-    const world = await open(builds, 100, builds + 1, 'admission')
-    await requestTicketStart({
-      store: world.store,
-      repo: world.repo,
-      source: world.tickets,
-      id: 'AB-0',
-      user: 'budget',
-    })
-    let started = false
-    for (let tick = 0; tick < Math.ceil(builds / 16) + 1 && !started; tick++) {
+  // A free slot: a wait the slot cannot end (a failed dependency read),
+  // repeated on a warm and on a fresh process, then an admission. Each costs
+  // the same beyond the lockstep control at every fleet size.
+  const admissions = new Map<number, Record<string, number>[]>()
+  for (const builds of [5, 50]) {
+    const control = await open(builds, 100, builds + 1, 'admission-control')
+    const world = await open(builds, 100, builds + 1, 'admission', true)
+    const start = (id: string) =>
+      requestTicketStart({
+        store: world.store,
+        repo: world.repo,
+        source: world.tickets,
+        id,
+        user: 'budget',
+      })
+    // `active-1` records the legacy alias `ticket-1` of AB-1, which is
+    // Ready: its request matches through the identity projection and is
+    // never claimed. AB-W is not ready, so its request waits until the
+    // projection is complete, then settles.
+    await start('AB-1')
+    await start('AB-W')
+    const projection = Math.ceil(builds / 16)
+    const settled: unknown[] = []
+    for (let tick = 0; tick < projection; tick++) {
+      await control.tick()
       const measured = await world.tick()
-      started = measured.appended.some(
-        (event) =>
-          event.type === 'ticket.start-settled' &&
-          (event.payload as { outcome: string }).outcome === 'started',
+      expect(measured.appended[0]?.type).toBe('ticket.identity-recorded')
+      settled.push(
+        ...measured.appended
+          .filter((event) => event.type === 'ticket.start-settled')
+          .map((event) => event.payload),
       )
     }
-    expect(started).toBe(true)
-    expect(world.claims).toEqual(['AB-0'])
-    // `active-1` records the legacy alias `ticket-1` of AB-1, which is Ready.
-    await requestTicketStart({
-      store: world.store,
-      repo: world.repo,
-      source: world.tickets,
-      id: 'AB-1',
-      user: 'budget',
-    })
-    const measured = await world.tick()
-    expect(measured.appended.map((event) => event.payload)).toContainEqual(
+    expect(settled).toEqual([
       expect.objectContaining({ outcome: 'already-building', slug: 'active-1' }),
-    )
-    expect(world.claims).toEqual(['AB-0'])
+      expect.objectContaining({ outcome: 'not-ready' }),
+    ])
+    // Settle both worlds' relaunches before measuring.
+    for (let tick = 0; tick < 2; tick++) {
+      await control.tick()
+      await world.tick()
+    }
+    const measure = async (fresh: boolean) => {
+      if (fresh) {
+        control.fresh()
+        world.fresh()
+      }
+      const base = await control.tick()
+      const measured = await world.tick()
+      expect(measured.rows - base.rows).toBe(0)
+      const {
+        putSnapshot: _put,
+        snapshotTail: _tail,
+        ...calls
+      } = difference(measured.calls, base.calls)
+      for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
+        expect(calls[replay]).toBeUndefined()
+      return {
+        calls,
+        settled: measured.appended
+          .filter((event) => event.type === 'ticket.start-settled')
+          .map((event) => event.payload as { outcome: string; ticket: { id: string } }),
+      }
+    }
+    // AB-0's blocker read fails: the request stays pending, unclaimed.
+    await start('AB-0')
+    const waits = []
+    for (const fresh of [false, false, true]) {
+      const wait = await measure(fresh)
+      expect(wait.settled).toEqual([])
+      waits.push(wait.calls)
+    }
+    expect(world.claims).toEqual([])
+    for (const wait of waits) expect(wait).toEqual(waits[0]!)
+    // AB-S takes the free slot beside the still-waiting AB-0.
+    await start('AB-S')
+    const admitted = await measure(false)
+    expect(admitted.settled).toEqual([
+      expect.objectContaining({ outcome: 'started', ticket: { source: 'hosted', id: 'AB-S' } }),
+    ])
+    expect(world.claims).toEqual(['AB-S'])
+    admissions.set(builds, [waits[0]!, admitted.calls])
+    await control.store.close()
     await world.store.close()
   }
+  // No per-build read: identical store requests at 5 and at 50 builds.
+  expect(admissions.get(50)).toEqual(admissions.get(5))
   return baseline
 }
