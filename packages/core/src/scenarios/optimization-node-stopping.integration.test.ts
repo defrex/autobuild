@@ -276,7 +276,7 @@ test('drain mode lets a running attempt finish and cancels a queued one', async 
     h.tickets.add(attemptTicket('A1'))
     await tick(h)
     const a1 = (await buildFor(h, 'A1'))!
-    await h.runLatest()
+    await h.runLaunched(a1.slug)
     expect(reduceBuild(await h.events(a1.slug)).currentPhase).toBeDefined()
     h.tickets.add(attemptTicket('A2'))
     await tick(h)
@@ -360,7 +360,7 @@ test('an optimization node completes only after it stops; stopping is not consen
     await propose(h, node, ['A1'])
     await tick(h)
     const child = (await buildFor(h, 'CHILD'))!
-    await h.runLatest()
+    await h.runLaunched(child.slug)
     const childState = reduceBuild(await h.events(child.slug))
     await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha)
     await tick(h)
