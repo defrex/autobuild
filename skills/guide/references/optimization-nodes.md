@@ -722,7 +722,7 @@ because a request is open. A node that is paused, blocked, has a pending command
 conflicted node restack, a landing intent or a merged or closed PR, or is
 deferred for runtime compatibility gets `optimization.proposal-deferred` with
 that reason instead, and is reconsidered once a fact that can clear it lands.
-The request takes a slot ahead of new ticket claims, like node reconcile and
+The request takes a slot ahead of normal ticket claims, like node reconcile and
 verification. Before the session starts, the dispatcher re-checks the request:
 when the node stopped, the hours budget expired, or room fell below the
 recorded room, it records `optimization.proposal-withdrawn`, which clears the

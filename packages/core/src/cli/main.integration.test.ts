@@ -117,6 +117,7 @@ describe('runCli — routing and exit codes', () => {
       'resume',
       'hold',
       'land',
+      'priority',
       'answer',
       'abort',
     ]) {
@@ -134,6 +135,7 @@ describe('runCli — routing and exit codes', () => {
       'ab resume <slug>',
       'ab hold <slug>',
       'ab merge <slug>',
+      'ab priority <slug> urgent|normal',
       'ab answer <slug>',
       'ab answer <slug> [<text>] --review-round-ceiling <n>',
       'ab answer <slug> [<text>] --dismiss',
@@ -442,6 +444,7 @@ describe('SESSIONLESS_COMMANDS', () => {
       'resume',
       'hold',
       'land',
+      'priority',
       'answer',
       'abort',
       'plugin',
@@ -978,6 +981,31 @@ describe('runCli — sessionless build controls', () => {
     expect(events.at(-1)).toMatchObject({
       type: 'build.hold-requested',
       payload: { reason: 'waiting on T-2' },
+    })
+    await local.close()
+  })
+
+  test('priority sets an active build priority and refuses an unknown value before any write', async () => {
+    const storeRef = join(tmp, 'priority-store')
+    await seedControlStore(storeRef, {})
+    let local = openLocalStore(storeRef)
+    const before = (await local.getEvents(slug)).length
+    await local.close()
+    const usage = controlDeps(storeRef)
+    expect(await runCli(['priority', slug], usage)).toBe(1)
+    expect(usage.err.join('\n')).toContain('usage: ab priority <slug> urgent|normal')
+    const invalid = controlDeps(storeRef)
+    expect(await runCli(['priority', slug, 'high'], invalid)).toBe(1)
+    expect(invalid.err.join('\n')).toContain('expected urgent or normal')
+    const d = controlDeps(storeRef)
+    expect(await runCli(['priority', slug, 'urgent'], d)).toBe(0)
+    expect(d.out).toEqual([`build ${slug}: priority set to urgent`])
+    local = openLocalStore(storeRef)
+    const events = await local.getEvents(slug)
+    expect(events).toHaveLength(before + 1)
+    expect(events.at(-1)).toMatchObject({
+      type: 'build.priority-set',
+      payload: { priority: 'urgent' },
     })
     await local.close()
   })

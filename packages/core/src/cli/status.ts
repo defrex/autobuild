@@ -23,7 +23,13 @@ import {
   type UnmeasuredMergeView,
 } from '../kernel/optimization'
 import { readBuildFacts } from '../store/reduced-reads'
-import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
+import {
+  buildPriority,
+  slotRequest,
+  slotWaitText,
+  type SlotRequest,
+} from '../kernel/dispatch-capacity'
+import { URGENT_MARK } from './dashboard/queue'
 import {
   ticketWaitStatus,
   ticketWaitText,
@@ -172,8 +178,11 @@ export interface BuildSummary {
   lease: LeaseInfo
   /** Durable-event progress, separate from mutable lease renewal. */
   progress: BuildProgress
-  /** A node's or parked build's runner request, admitted ahead of new ticket claims. */
+  /** A node's or parked build's runner request, admitted ahead of normal
+   * ticket claims (urgent work first: SPEC §12 "Slot admission order"). */
   slotWait?: SlotRequest
+  /** The build's slot-admission priority when urgent; omitted means normal. */
+  priority?: 'urgent'
   /** The build's ticket wait while it is requested, open, or ended and not
    * yet resumed (SPEC §11 "Ticket waits"); omitted otherwise. */
   wait?: TicketWaitStatus
@@ -466,6 +475,7 @@ export function summarizeFrom(
     lease: leaseInfo(record, now),
     progress: buildProgress(record, state),
     ...(slotWait ? { slotWait } : {}),
+    ...(buildPriority(state) === 'urgent' ? { priority: 'urgent' as const } : {}),
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
     ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
@@ -801,12 +811,15 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
         : relativeTime(summary.progress.lastEventAt, now)
     const ticketWait =
       summary.wait?.state === 'waiting' ? `, ${waitingOnText(summary.wait.tickets)}` : ''
+    const slotWait = summary.slotWait
+      ? `, ${slotWaitText(summary.slotWait, summary.priority ?? 'normal')}`
+      : ''
     rows.push([
       summary.slug,
-      summaryStatus(summary),
+      `${summaryStatus(summary)}${summary.priority === 'urgent' ? ` ${URGENT_MARK}` : ''}`,
       summary.kind === 'integration'
-        ? `${summary.optimization ? treeVocabulary.optimizationKind : treeVocabulary.integrationKind} ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
-        : `${phaseCell(summary)}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}${ticketWait}`,
+        ? `${summary.optimization ? treeVocabulary.optimizationKind : treeVocabulary.integrationKind} ${summary.integration ?? ''}${slotWait}`
+        : `${phaseCell(summary)}${slotWait}${ticketWait}`,
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
         ? '—'
@@ -931,6 +944,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   lines.push(`  status:   ${summaryStatus(d)}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
+  if (d.priority === 'urgent') lines.push('  priority: urgent')
   if (d.reviewRoundCeilings !== undefined) {
     const ceilings = [
       ...(d.reviewRoundCeilings.plan !== undefined ? [`plan ${d.reviewRoundCeilings.plan}`] : []),
