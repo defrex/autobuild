@@ -20,4 +20,8 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/shape/691nlqt5o8': 'Hold reason on the landing command',
   'buildReadFacts/shape/fjcms3g67h': 'Hold reason on the landing command',
   'buildStreamSeed/shape/cnyes1nf0o': 'Hold reason on the landing command',
+  'build/shape/p4ohsa1w9f': 'AUT-1290 build priority and urgent scan demand',
+  'buildReadFacts/shape/jjcct3w7sh': 'AUT-1290 build priority and urgent scan demand',
+  'buildStreamSeed/shape/x80591dawj': 'AUT-1290 build priority and urgent scan demand',
+  'repositoryReadFacts/shape/hgw4spz5c0': 'AUT-1290 build priority and urgent scan demand',
 }

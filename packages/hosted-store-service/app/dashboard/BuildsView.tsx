@@ -49,7 +49,9 @@ import { BuildTicketSection } from './tickets'
 import { pipelineProvenance } from './view-model'
 
 export type Selection = { kind: 'build'; slug: string } | { kind: 'harvest' }
-export type BuildControlAction = OperatorBuildControlRequest['action']
+/** The payload-free controls the views send; `priority` carries a value and
+ * is an operator-agent control with no dashboard affordance. */
+export type BuildControlAction = Exclude<OperatorBuildControlRequest['action'], 'priority'>
 export type HarvestControl = { action: 'toggle-gate' } | { action: 'run'; run: string }
 
 export function sameSelection(a: Selection | undefined, b: Selection | undefined): boolean {

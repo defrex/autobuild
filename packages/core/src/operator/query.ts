@@ -2,7 +2,12 @@ import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
-import { dispatchCapacity, slotRequest, type CapacityBuild } from '../kernel/dispatch-capacity'
+import {
+  dispatchCapacity,
+  slotRequest,
+  urgentClaimDemand,
+  type CapacityBuild,
+} from '../kernel/dispatch-capacity'
 import { landingRestackDue } from '../kernel/engine'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
@@ -467,6 +472,7 @@ async function dashboardFromView(
     config.capacity,
     opts.clock(),
     migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
+    { urgentClaims: urgentClaimDemand(repositoryEvents) },
   )
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, records),

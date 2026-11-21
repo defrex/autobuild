@@ -173,7 +173,7 @@ The `file`, `hosted` and `github` sources store [forge issue links](tickets.md#g
 
 ### Optional priority
 
-A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` and `hosted` sources store priority: as `priority = "urgent"` frontmatter with no key for normal (`file`), or transactional project data covered by the ticket revision (`hosted`, whose ready listing returns urgent tickets first). `linear` uses its native Urgent priority, described in its section above.
+A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first, ahead of normal builds waiting for a slot. The `file` and `hosted` sources store priority: as `priority = "urgent"` frontmatter with no key for normal (`file`), or transactional project data covered by the ticket revision (`hosted`, whose ready listing returns urgent tickets first). `linear` uses its native Urgent priority, described in its section above.
 
 ### Optional ticket tree
 
