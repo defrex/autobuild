@@ -32,4 +32,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'buildReadFacts/shape/jjcct3w7sh': 'AUT-1290 build priority and urgent scan demand',
   'buildStreamSeed/shape/x80591dawj': 'AUT-1290 build priority and urgent scan demand',
   'repositoryReadFacts/shape/hgw4spz5c0': 'AUT-1290 build priority and urgent scan demand',
+  'repositoryReadFacts/shape/se5kk44boc': 'AUT-1288 open-PR backpressure engagement',
 }
