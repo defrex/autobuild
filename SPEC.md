@@ -541,6 +541,51 @@ clock is therefore consulted only once that window ends, at most one scan
 interval after the recorded measurement; the dispatcher then treats it as a
 clock rollback, rescans, and resets the cache to the current clock.
 
+**Single-ticket start requests.** An operator can ask the running dispatcher,
+local or hosted, to start one named ticket whether or not intake is on:
+`ab start <ticket-id>`, the operator tool `tickets.start`, or HTTP
+`POST …/tickets/{id}/start`. The request canonicalizes the id through the
+configured source's `get` (refusing an unknown ticket) and appends one
+human-attributed repository `ticket.start-requested` naming the canonical ref;
+an equivalent pending request makes it a no-op. `ab start --cancel`
+(`tickets.start {cancel: true}`, `POST …/tickets/{id}/start/cancel`) appends
+`ticket.start-cancelled` for the pending request, and nothing when none is
+pending. A reduced `ticketStarts` part of the repository read facts holds the
+pending requests and the eight most recent settlements; a settlement or
+cancellation applies only to the request sequence it names.
+
+Each tick, after node admission and before ordinary intake, the dispatcher
+evaluates at most eight pending requests, oldest first, and claims nothing else
+for them. With none pending it reads nothing; with one it makes one targeted
+`get` per request. A request whose ticket has an active build settles
+`started` when that build was created after the request (its own claim whose
+settlement was lost) and `already-building` otherwise; a ticket outside the
+configured ready state settles `terminal` when it is done, resolved or rejected
+and `not-ready` otherwise; a missing ticket settles `missing`. Dispatch labels
+and the ready assignee are not applied, because the operator named the ticket.
+The rest is admitted through the ordinary dispatch path in a targeted mode that
+skips the ready listing, the scan checkpoint and the standing queue report but
+keeps every gate: creation holds, profile conflicts, node targets, dependency
+verdicts, the spec-standard quality gate and its bounce, the claim and its
+preparation journal, capacity, repository pause, accounts and forge health.
+Outcomes are `started` with the slug, `invalid` for a bounce (with the missing
+parts) or a profile conflict, `blocked` for unresolved blockers or an
+unavailable target, and `claim-refused` for a refused claim. A pause, no free
+slot, a creation hold, an in-flight preparation, a failed dependency read, a
+ticket-source error or the tick budget leaves the request pending for the next
+tick. Each settlement is one dispatcher `ticket.start-settled` after a journal
+refresh confirms the request is still pending, and it is default watch
+attention. There is no force: capacity is respected and nothing is preempted.
+
+Hosted active builds may record a legacy ticket alias. While a request is
+pending, the dispatcher resolves the canonical identity of each active hosted
+build without one, at most 16 per tick, and saves it durably in an advisory
+`ticket.identity-recorded`, which also releases builds that are no longer
+active. Each build is resolved once in its life. Matching is then a
+case-insensitive comparison over recorded and projected identities with no
+source read, and a hosted request is neither admitted nor settled as building
+until every active hosted build has an identity.
+
 
 ### 3.4 The event log spine
 
@@ -2007,7 +2052,8 @@ which runs these two commands and refuses every other.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the harvest gate. It uses the same
+repository-wide pause, and the harvest gate, plus pending and recently settled
+single-ticket start requests (`ticketStarts`, present when either is nonempty). It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off; the query does not create that stream,
@@ -4139,8 +4185,8 @@ backfill, and migration reruns preserve counters. Hosted reads use one GET
 `/repos/:repo/builds` returns scoped build records. Both routes authorize the
 repository before reading and support repositories with builds but no journal.
 
-Durable operator settings (intake, repository pause, harvest gate) survive
-restarts through the repository journal. Per-merge hold and merge commands
+Durable operator settings (intake, repository pause, harvest gate) and pending
+single-ticket start requests survive restarts through the repository journal. Per-merge hold and merge commands
 live in the build log. Merge policy is declarative dispatcher configuration
 (§15.7); there is no writable repository auto-merge default.
 
@@ -4369,7 +4415,7 @@ with illustrative members:
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. The dispatcher records `exhausted` after two consecutive empty proposals. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?, stream?, substitution?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
-| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
+| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; `ticket.start-requested`, `ticket.start-cancelled`, `ticket.start-settled` and the advisory `ticket.identity-recorded`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
 live, the janitor defers the saga so it cannot race process-tree teardown. Once
