@@ -233,6 +233,10 @@ export const repositoryEventPolicy = {
   'ticket-preparation.resolved': 'decisive',
   'ticket.handed-back': 'decisive',
   'ticket.handback-settled': 'decisive',
+  'ticket.start-requested': 'decisive',
+  'ticket.start-cancelled': 'decisive',
+  'ticket.start-settled': 'decisive',
+  'ticket.identity-recorded': 'advisory',
 
   'tickets.migration-recorded': 'decisive',
   'change-presence.observed': 'decisive',

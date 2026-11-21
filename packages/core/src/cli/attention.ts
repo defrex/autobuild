@@ -68,6 +68,7 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
     case 'hook.skipped':
     case 'forge.credential-limited':
     case 'ticket.handed-back':
+    case 'ticket.start-settled':
       return true
     case 'dispatcher.config-reloaded':
       return event.payload.restartRequired.length > 0
