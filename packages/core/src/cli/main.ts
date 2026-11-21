@@ -1,4 +1,5 @@
 import { abForgeClear } from './forge-clear'
+import { abTicketStart } from './ticket-start'
 import { abAccountsLogin } from './accounts'
 import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
@@ -155,6 +156,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'auto-merge',
   'answer',
   'abort',
+  'start',
   'models',
   'plugin',
   'help',
@@ -1242,6 +1244,40 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       )
       if (parsed.flags.get('json') === true) deps.stdout(JSON.stringify(view, null, 2))
       else deps.stdout(renderObjective(view).join('\n'))
+      return 0
+    }
+
+    case 'start': {
+      const usage = 'usage: ab start <ticket-id> [--cancel] [--json] [--store <ref>]'
+      const parsed = parseArgs(rest, { cancel: 'boolean', json: 'boolean', store: 'value' }, usage)
+      if (parsed.positionals.length !== 1 || !parsed.positionals[0]!.trim()) throw new Error(usage)
+      if (deps.exec === undefined) throw new Error('ab start requires an exec seam')
+      const storeRef = stringFlag(parsed, 'store')
+      const exec = deps.exec
+      await abTicketStart({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec,
+        stdout,
+        id: parsed.positionals[0]!,
+        cancel: parsed.flags.has('cancel'),
+        json: parsed.flags.has('json'),
+        ticketSource: async () =>
+          (
+            await openTicketSource(
+              {
+                targetRepo: deps.workspacePath,
+                env: deps.processEnv ?? {},
+                exec,
+                stdout,
+                ...(storeRef !== undefined ? { storeRef } : {}),
+              },
+              'ab start',
+            )
+          ).source,
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+      })
       return 0
     }
 

@@ -20,4 +20,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/shape/691nlqt5o8': 'Hold reason on the landing command',
   'buildReadFacts/shape/fjcms3g67h': 'Hold reason on the landing command',
   'buildStreamSeed/shape/cnyes1nf0o': 'Hold reason on the landing command',
+  'repositoryReadFacts/shape/xyn7875cxw': 'AUT-1293 carry pending ticket start requests',
 }

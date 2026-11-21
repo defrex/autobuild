@@ -59,6 +59,7 @@ import {
   sessionMessageRequestSchema,
   sessionWakeRequestSchema,
   setRepositorySetting,
+  controlTicketStart,
   settingRequestSchema,
   type OperatorSandboxService,
   type OperatorTicketBackend,
@@ -373,6 +374,26 @@ export function createOperatorServer(opts: OperatorServerOptions): {
               ...(request.role !== undefined ? { role: request.role } : { state: request.state! }),
               expectedRevision: request.expectedRevision,
             },
+          }),
+        )
+      }
+      if (
+        id &&
+        req.method === 'POST' &&
+        rest[2] === 'start' &&
+        (rest.length === 3 || (rest.length === 4 && rest[3] === 'cancel'))
+      ) {
+        const via = 'via' in scope ? scope.via : undefined
+        return json(
+          200,
+          await controlTicketStart({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            id,
+            user,
+            ...(via !== undefined ? { via } : {}),
+            ...(rest.length === 4 ? { cancel: true } : {}),
           }),
         )
       }
