@@ -1089,3 +1089,63 @@ describe('ticket hand-back events', () => {
     ).toThrow(EventValidationError)
   })
 })
+
+describe('ticket start request events', () => {
+  const ticket = { source: 'fake', id: 'T-1' }
+  const write = (type: string, payload: unknown, actor: unknown) => () =>
+    validateRepositoryEventWrite({ actor, type, payload } as never)
+  test('requests and cancellations are human-only', () => {
+    expect(write('ticket.start-requested', { ticket }, humanActor('alice'))()).toMatchObject({
+      type: 'ticket.start-requested',
+    })
+    expect(write('ticket.start-requested', { ticket }, DISPATCHER)).toThrow(EventValidationError)
+    expect(
+      write('ticket.start-cancelled', { request: 3, ticket }, humanActor('alice'))(),
+    ).toMatchObject({ type: 'ticket.start-cancelled' })
+    expect(write('ticket.start-cancelled', { request: 0, ticket }, humanActor('a'))).toThrow(
+      EventValidationError,
+    )
+  })
+  test('settlements are dispatcher-only with a known outcome and nonblank detail', () => {
+    const base = { request: 3, ticket }
+    expect(
+      write('ticket.start-settled', { ...base, outcome: 'started', slug: 'b' }, DISPATCHER)(),
+    ).toMatchObject({ type: 'ticket.start-settled' })
+    expect(
+      write('ticket.start-settled', { ...base, outcome: 'blocked', detail: 'T-2' }, DISPATCHER)(),
+    ).toMatchObject({ type: 'ticket.start-settled' })
+    expect(
+      write('ticket.start-settled', { ...base, outcome: 'blocked' }, humanActor('alice')),
+    ).toThrow(EventValidationError)
+    expect(
+      write('ticket.start-settled', { ...base, outcome: 'blocked', detail: '  ' }, DISPATCHER),
+    ).toThrow(EventValidationError)
+    expect(write('ticket.start-settled', { ...base, outcome: 'gone' }, DISPATCHER)).toThrow(
+      EventValidationError,
+    )
+    expect(write('ticket.start-settled', { ...base, outcome: 'started' }, DISPATCHER)).toThrow(
+      EventValidationError,
+    )
+    expect(
+      write('ticket.start-settled', { ...base, outcome: 'missing', slug: 'b' }, DISPATCHER),
+    ).toThrow(EventValidationError)
+  })
+  test('identity records need a nonempty side and are bounded', () => {
+    const entry = { build: 'b', recorded: 'ticket-1', canonical: 'AB-1' }
+    expect(write('ticket.identity-recorded', { identities: [entry] }, DISPATCHER)()).toMatchObject({
+      type: 'ticket.identity-recorded',
+    })
+    expect(
+      write('ticket.identity-recorded', { identities: [], released: ['b'] }, DISPATCHER)(),
+    ).toMatchObject({ type: 'ticket.identity-recorded' })
+    expect(write('ticket.identity-recorded', { identities: [] }, DISPATCHER)).toThrow(
+      EventValidationError,
+    )
+    expect(
+      write('ticket.identity-recorded', { identities: Array(17).fill(entry) }, DISPATCHER),
+    ).toThrow(EventValidationError)
+    expect(write('ticket.identity-recorded', { identities: [entry] }, humanActor('alice'))).toThrow(
+      EventValidationError,
+    )
+  })
+})

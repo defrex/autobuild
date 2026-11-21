@@ -47,6 +47,7 @@ import type { Via } from '../events/envelope'
 import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { TicketOperationError } from '../ports/tickets/operations'
+import { controlTicketStart } from './ticket-start'
 import { OPERATOR_NOTES_REPO_KIND } from '../store/retention'
 import {
   clearForgeDegradation,
@@ -491,6 +492,15 @@ const ticketsBlockersInput = ticketBlockerRequestSchema.extend({
     .describe(
       'Blocker ticket ids to relate (at least one); the first id is the ticket being changed.',
     ),
+})
+
+const ticketsStartInput = z.strictObject({
+  repo: repoField,
+  id: ticketIdField,
+  cancel: z
+    .boolean()
+    .optional()
+    .describe('Cancel the pending start request for this ticket instead of requesting one.'),
 })
 
 const ticketsMoveInput = ticketMoveRequestShape
@@ -1227,6 +1237,24 @@ export const TOOLS: readonly ToolEntry[] = [
           ...(input.role !== undefined ? { role: input.role } : { state: input.state! }),
           expectedRevision: input.expectedRevision,
         },
+      })
+    },
+  ),
+  defineTool(
+    'tickets.start',
+    'Ask the running dispatcher to start one ticket by id, even while intake is off. Records a durable, attributed request that the dispatcher (local or hosted) honours on its next tick with a free slot, claiming no other ticket. Every gate still applies: ready state, spec standard, resolved blockers, no active build, capacity and repository pause. With cancel, cancels the pending request instead.',
+    ticketsStartInput,
+    'For a request: {status: "pending", existing, request, requestedAt, ticket, event?} — existing is true when an equivalent request was already pending and nothing was written. For cancel: {cancelled: true, request, ticket, event} or {cancelled: false, id} when nothing was pending. The settlement arrives later as a ticket.start-settled repository event (repository.events) and in repository.status ticketStarts.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof ticketsStartInput>
+      return controlTicketStart({
+        store: ctx.store,
+        repo: input.repo,
+        backend: ticketsOf(ctx),
+        id: input.id,
+        user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
+        ...(input.cancel === true ? { cancel: true } : {}),
       })
     },
   ),

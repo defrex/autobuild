@@ -262,7 +262,8 @@ import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { AbortDestination, EventPayload, PinnedAsset } from '../events/payloads'
-import type { RepositoryEventPayload } from '../events/repository'
+import type { RepositoryEventPayload, TicketStartOutcome } from '../events/repository'
+import { ticketStartKey, type PendingTicketStart, type TicketStarts } from '../kernel/ticket-starts'
 import { handbackIdentity } from '../kernel/ticket-handbacks'
 import type { IdSource } from '../ids'
 import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
@@ -691,6 +692,40 @@ export function emptyTickReport(): TickReport {
     sandboxSettleFailures: 0,
   }
 }
+
+/** A settlement `dispatch()` reached for one targeted ticket. */
+type TargetedOutcome = {
+  outcome: TicketStartOutcome
+  slug?: string
+  detail?: string
+}
+
+/** One targeted admission pass for operator start requests (AUT-1293). */
+interface TargetedDispatch {
+  tickets: Ticket[]
+  /** Active ticket identities, matched without source reads. */
+  activeIds: Set<string>
+  /** The request each ticket answers, keyed by ticket id. */
+  requests: Map<string, PendingTicketStart>
+  /** Keyed by ticket id. A ticket without an entry stays pending. */
+  outcomes: Map<string, TargetedOutcome>
+  /** The capacity inputs the stage measured from this tick's served facts. */
+  measured: CapacityBuild[]
+}
+
+/** An active build's ticket ref, normalized through recorded migrations. */
+interface ActiveTicketRef {
+  slug: string
+  createdAt: string
+  ref: TicketRef
+}
+
+/** Start requests one tick evaluates, oldest first. */
+const START_REQUESTS_PER_TICK = 8
+/** Hosted active-build identities one tick resolves; each build once in its life. */
+const IDENTITY_RESOLUTIONS_PER_TICK = 16
+/** Released identity slugs one projection append carries. */
+const IDENTITY_RELEASES_PER_APPEND = 256
 
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
@@ -1226,6 +1261,10 @@ export class Dispatcher {
   /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
    * projected wait for one of these is one tick stale and reserves nothing. */
   private readonly parkedSettled = new Set<string>()
+  /** Start requests whose ticket has a target and blockers and that have
+   * had one full pass with no free slot: the pass that may settle them
+   * `blocked`. Later full-capacity ticks wait for a slot without one. */
+  private startBlockersChecked = new Set<number>()
 
   // Batched confirmed landing evidence is shared across nodes for this tick.
   // Only durable availability facts authorize the shortcut after restart. The
@@ -1234,6 +1273,9 @@ export class Dispatcher {
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+  /** While the start pass's targeted dispatch runs: its deferral checks
+   * serve this tick's retained facts (`servedBuildFacts`). */
+  private startPass = false
   /** Per tick: the janitor's work listing, and the nonterminal children of
    * each node indexed from it on the first landing turn that needs them. The
    * landing gate reads its turn candidates here, never from a new listing. */
@@ -1464,6 +1506,11 @@ export class Dispatcher {
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     if (opts.viewRefreshed !== true) await this.store.refresh()
+    // A pending start request measures capacity from the facts this tick's
+    // fleet-wide stages read anyway; keep them only then.
+    this.store.retainBuildFacts(
+      Object.keys(this.store.repositoryFacts().ticketStarts.pending).length > 0,
+    )
     const autoMergeUser = undefined
     const report = emptyTickReport()
     this.restoreScan(report)
@@ -1523,6 +1570,11 @@ export class Dispatcher {
     // The same pass advances optimization nodes' proposers first.
     await this.admitWaitingNodes(report, launched, opts)
     if (this.outOfBudget(opts)) return report
+    // Operator start requests are independent of intake: they claim only the
+    // named tickets, ahead of ready-order intake, and read nothing when none
+    // is pending.
+    await this.honorStartRequests(report, launched, autoMergeUser, paused, opts)
+    if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
       await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeSeedFact)
     }
@@ -1561,14 +1613,21 @@ export class Dispatcher {
     const { repo } = this.deps
     const records = (await store.listBuilds()).filter((record) => record.repo === repo)
     const digests = await readBuildDigests(store, repo)
+    // Including deferred builds needs no deferral check: the tick's stages
+    // that exclude them already checked and recorded it. The check reads
+    // through the view, so a retaining tick keeps the read for capacity, and
+    // the start pass serves it instead of reading the deferred builds again.
     const blocked = new Set<string>()
-    for (const record of records) {
-      if (
-        (digests.get(record.slug)?.compatibility?.decisiveFacts ?? 0) > 0 &&
-        (await deferMixedVersion(store, record.slug))
-      )
-        blocked.add(record.slug)
-    }
+    const readFacts = (slug: string) =>
+      this.startPass ? store.servedBuildFacts(slug) : store.buildFacts(slug)
+    if (!includeDeferred)
+      for (const record of records) {
+        if (
+          (digests.get(record.slug)?.compatibility?.decisiveFacts ?? 0) > 0 &&
+          (await deferMixedVersion(store, record.slug, undefined, readFacts))
+        )
+          blocked.add(record.slug)
+      }
     return records
       .filter((record) => includeDeferred || !blocked.has(record.slug))
       .map((record) => {
@@ -1738,6 +1797,282 @@ export class Dispatcher {
       const digest = digests.get(slug)
       if (digest === undefined || digest.terminal === 'done') await this.settleBuildHandback(slug)
     }
+  }
+
+  /** Admit pending operator start requests through `dispatch()`'s gates and
+   * settle each one that reaches a decision. Zero reads while none is pending;
+   * otherwise one targeted `get` per request (at most START_REQUESTS_PER_TICK)
+   * over the view-cached build digests. Waiting conditions (pause, no slot,
+   * creation holds, an in-flight preparation, a failed dependency read, a
+   * source error, the tick budget) leave the request pending. */
+  private async honorStartRequests(
+    report: TickReport,
+    launched: Set<string>,
+    autoMergeUser: string | undefined,
+    paused: boolean,
+    opts: TickOpts,
+  ): Promise<void> {
+    const starts = this.store.repositoryFacts().ticketStarts
+    const pending = Object.values(starts.pending)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, START_REQUESTS_PER_TICK)
+    if (pending.length === 0 || paused) return
+    const { tickets, config } = this.deps
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    // Deferred mixed-version builds are still active: include them, so a
+    // build the tick cannot decide is never mistaken for a free ticket.
+    const active = (await this.repoBuildDigests(true)).filter(
+      ({ digest }) => digest.terminal === undefined,
+    )
+    const refs = active.flatMap(({ record }) => {
+      if (!record.ticket) return []
+      try {
+        const ref = resolveTicketRef(migrations, record.ticket, tickets.name, record.slug)
+        return [{ slug: record.slug, createdAt: record.createdAt, ref }]
+      } catch (error) {
+        // The same policy as activeTicketIdentities: a recorded cutover that
+        // omits a live claim must block admission.
+        if (migrations.migrations.some((m) => m.from === record.ticket!.source && m.from !== m.to))
+          throw error
+        return [{ slug: record.slug, createdAt: record.createdAt, ref: record.ticket }]
+      }
+    })
+    const identified =
+      tickets.name !== 'hosted' || (await this.ensureActiveIdentities(refs, active))
+    if (identified === 'rate-limited') return
+    const identities = this.store.repositoryFacts().ticketStarts.identities
+    const lifecycle = ticketLifecycle(config.tickets)
+    const candidates: { request: PendingTicketStart; ticket: Ticket }[] = []
+    for (const request of pending) {
+      if (this.outOfBudget(opts)) return
+      let ref: TicketRef | undefined
+      try {
+        ref = resolveTicketRef(migrations, request.ticket, tickets.name)
+      } catch {
+        ref = undefined
+      }
+      if (ref === undefined || ref.source !== tickets.name) {
+        await this.settleStartRequest(request, 'missing', {
+          detail: `ticket ${request.ticket.source}:${request.ticket.id} is not in the configured ${tickets.name} ticket source`,
+        })
+        continue
+      }
+      let ticket: Ticket | null
+      try {
+        ticket = await tickets.get(ref.id)
+      } catch (error) {
+        if (error instanceof TicketSourceRateLimitError) {
+          await this.sourceFailure(error, 'dependency-check')
+          return
+        }
+        continue
+      }
+      if (ticket === null) {
+        await this.settleStartRequest(request, 'missing', {
+          detail: `no ticket ${ref.id} in the configured ${tickets.name} ticket source`,
+        })
+        continue
+      }
+      const build = this.targetedActiveBuild(ticket.ref, refs, identities)
+      if (build !== undefined) {
+        // A build created after the request is this request's own claim
+        // whose settlement was lost, or intake's claim in the same window.
+        await this.settleStartRequest(
+          request,
+          Date.parse(build.createdAt) > Date.parse(request.ts) ? 'started' : 'already-building',
+          { slug: build.slug },
+        )
+        continue
+      }
+      // Fail closed: a hosted build whose identity is not yet projected might
+      // embody this ticket under a legacy alias.
+      if (identified !== true) continue
+      // Ingesters propose, humans dispatch: only the ready state starts.
+      if (!holdsState(ticket.state, config.tickets.readyState)) {
+        const terminal =
+          ticket.resolved ||
+          holdsState(ticket.state, this.doneState) ||
+          holdsState(ticket.state, lifecycle.rejected)
+        await this.settleStartRequest(request, terminal ? 'terminal' : 'not-ready', {
+          detail: `ticket ${ticket.ref.id} is in ${ticket.state ?? 'an unreported state'}, not ${config.tickets.readyState}`,
+        })
+        continue
+      }
+      if (this.preparing(ticket.ref.source, ticket.ref.id)) continue
+      candidates.push({ request, ticket })
+    }
+    if (candidates.length === 0 || this.outOfBudget(opts)) return
+    // Capacity is measured from the facts this tick's janitor, recovery and
+    // lease sweep already read (`servedBuildFacts`): a build is read again
+    // only when the tick skipped it or wrote to it since, so neither a wait
+    // nor an admission reads the fleet, on a fresh process or a warm one.
+    // With no free slot, only a node, or a blocked target not yet checked,
+    // needs the pass.
+    const now = this.deps.clock()
+    const measured = await this.capacityBuilds(launched, true)
+    const free =
+      intakeCapacity(dispatchCapacity(measured, config.capacity, now), {
+        settled: this.parkedSettled,
+        denied: this.slotWaiters,
+      }) > 0
+    const open = new Set(Object.values(starts.pending).map(({ seq }) => seq))
+    for (const seq of this.startBlockersChecked)
+      if (!open.has(seq)) this.startBlockersChecked.delete(seq)
+    const passing = free
+      ? candidates
+      : candidates.filter(
+          ({ request, ticket }) =>
+            ticket.kind === 'node' ||
+            (ticket.target !== undefined &&
+              !!ticket.blockedBy?.length &&
+              !this.startBlockersChecked.has(request.seq)),
+        )
+    if (passing.length === 0) return
+    if (!free)
+      for (const { request, ticket } of passing)
+        if (ticket.kind !== 'node') this.startBlockersChecked.add(request.seq)
+    const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
+    const targeted: TargetedDispatch = {
+      tickets: passing.map(({ ticket }) => ticket),
+      activeIds: new Set(refs.map(({ ref }) => key(ref))),
+      requests: new Map(passing.map(({ request, ticket }) => [ticket.ref.id, request])),
+      outcomes: new Map(),
+      measured,
+    }
+    const scratch = emptyTickReport()
+    this.startPass = true
+    try {
+      await this.dispatch(scratch, launched, autoMergeUser, paused, opts, undefined, targeted)
+    } finally {
+      this.startPass = false
+      for (const counter of [
+        'dispatched',
+        'authored',
+        'bounced',
+        'claimRaces',
+        'dispatchFailed',
+        'provisioning',
+        'provisioningDeferred',
+        'dependencyCheckFailed',
+      ] as const)
+        report[counter] += scratch[counter]
+      for (const { request, ticket } of passing) {
+        const settled = targeted.outcomes.get(ticket.ref.id)
+        if (settled === undefined) continue
+        const { outcome, ...extra } = settled
+        await this.settleStartRequest(request, outcome, extra)
+      }
+    }
+  }
+
+  /** The active build embodying `requested`, matched with no source reads:
+   * by the build's normalized recorded id, or, for hosted, by its projected
+   * canonical identity. Hosted ids compare case-insensitively. */
+  private targetedActiveBuild(
+    requested: TicketRef,
+    refs: readonly ActiveTicketRef[],
+    identities: TicketStarts['identities'],
+  ): ActiveTicketRef | undefined {
+    const hosted = requested.source === 'hosted'
+    const same = (a: string, b: string) => (hosted ? a.toLowerCase() === b.toLowerCase() : a === b)
+    return refs.find(({ slug, ref }) => {
+      if (ref.source !== requested.source) return false
+      if (same(ref.id, requested.id)) return true
+      const identity = identities[slug]
+      return hosted && identity?.recorded === ref.id && same(identity.canonical, requested.id)
+    })
+  }
+
+  /** Project the canonical identity of every active hosted build once in its
+   * life, at most IDENTITY_RESOLUTIONS_PER_TICK per tick, and release builds
+   * no longer active in the same append. True once every active hosted build
+   * has a current entry; false while resolution is incomplete or failed, and
+   * `rate-limited` after a source rate limit. Zero reads and writes once
+   * complete. */
+  private async ensureActiveIdentities(
+    refs: readonly ActiveTicketRef[],
+    active: readonly { record: BuildRecord }[],
+  ): Promise<boolean | 'rate-limited'> {
+    const identities = this.store.repositoryFacts().ticketStarts.identities
+    const missing = refs.filter(
+      ({ slug, ref }) => ref.source === 'hosted' && identities[slug]?.recorded !== ref.id,
+    )
+    const live = new Set(active.map(({ record }) => record.slug))
+    const released = Object.keys(identities)
+      .filter((slug) => !live.has(slug))
+      .slice(0, IDENTITY_RELEASES_PER_APPEND)
+    if (missing.length === 0 && released.length === 0) return true
+    const resolved: { build: string; recorded: string; canonical: string }[] = []
+    let complete = missing.length <= IDENTITY_RESOLUTIONS_PER_TICK
+    for (const { slug, ref } of missing.slice(0, IDENTITY_RESOLUTIONS_PER_TICK)) {
+      try {
+        const ticket = await this.deps.tickets.get(ref.id)
+        resolved.push({
+          build: slug,
+          recorded: ref.id,
+          canonical: ticket?.ref.source === 'hosted' ? ticket.ref.id : ref.id,
+        })
+      } catch (error) {
+        if (error instanceof TicketSourceRateLimitError) {
+          await this.sourceFailure(error, 'dependency-check')
+          return 'rate-limited'
+        }
+        complete = false
+      }
+    }
+    if (resolved.length === 0 && released.length === 0) return false
+    if (this.deps.holdsRepoAuthority?.() === false) return false
+    try {
+      await this.store.ensureRepo(this.deps.repo)
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'ticket.identity-recorded',
+        payload: { identities: resolved, ...(released.length > 0 ? { released } : {}) },
+      })
+      await this.store.refreshJournal()
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      return false
+    }
+    return complete
+  }
+
+  /** Whether the request a targeted ticket answers is still pending, read
+   * after one journal refresh. */
+  private async startStillPending(targeted: TargetedDispatch, ticket: Ticket): Promise<boolean> {
+    const request = targeted.requests.get(ticket.ref.id)
+    if (request === undefined) return false
+    await this.store.refreshJournal()
+    const current =
+      this.store.repositoryFacts().ticketStarts.pending[ticketStartKey(request.ticket)]
+    return current?.seq === request.seq
+  }
+
+  /** Settle one start request once. The journal is refreshed first, so a
+   * settlement whose acknowledgement was lost is never appended twice. */
+  private async settleStartRequest(
+    request: PendingTicketStart,
+    outcome: TicketStartOutcome,
+    extra: { slug?: string; detail?: string } = {},
+  ): Promise<void> {
+    if (this.deps.holdsRepoAuthority?.() === false) return
+    await this.store.ensureRepo(this.deps.repo)
+    await this.store.refreshJournal()
+    const current =
+      this.store.repositoryFacts().ticketStarts.pending[ticketStartKey(request.ticket)]
+    if (current?.seq !== request.seq) return
+    const detail = extra.detail?.trim().slice(0, 2000)
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'ticket.start-settled',
+      payload: {
+        request: request.seq,
+        ticket: request.ticket,
+        outcome,
+        ...(extra.slug !== undefined ? { slug: extra.slug } : {}),
+        ...(detail ? { detail } : {}),
+      },
+    })
   }
 
   /** Report a preparation attempt's committed hand-back once. */
@@ -3628,18 +3963,33 @@ export class Dispatcher {
   /** Deferral withholds decisions, but cannot free an existing capacity reservation.
    * A leaf's runner reservation is this process's continuation or a launch
    * this tick; another process's continuation holds a heartbeat lease. */
-  private async capacityBuilds(launched?: ReadonlySet<string>): Promise<CapacityBuild[]> {
+  private async capacityBuilds(
+    launched?: ReadonlySet<string>,
+    /** Serve the facts this tick already read (`servedBuildFacts`). */
+    served = false,
+  ): Promise<CapacityBuild[]> {
     const builds: CapacityBuild[] = []
     for (const { record, digest } of await this.repoBuildDigests(true)) {
       if (digest.terminal) continue
-      const facts = await this.store.buildFacts(record.slug)
+      // A leaf with a runner provisioning holds its slot and requests none
+      // whatever its state, so any read this tick serves it, launch or not.
+      const allocatedLeaf =
+        digest.kind !== 'node' &&
+        (this.continuations.has(record.slug) || !!launched?.has(record.slug))
+      const facts = served
+        ? ((allocatedLeaf ? this.store.retainedBuildFacts(record.slug) : undefined) ??
+          (await this.store.servedBuildFacts(record.slug)))
+        : await this.store.buildFacts(record.slug)
       builds.push({
         record,
         state: facts.state,
         workspace: facts.workspace !== null,
         provisioning:
           digest.kind === 'node'
-            ? (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined
+            ? (served
+                ? facts.provisionMarker
+                : (await readBuildFacts(this.store, record.slug)).value.provisionMarker) !==
+              undefined
             : this.continuations.has(record.slug) || !!launched?.has(record.slug),
         restackDue: landingRestackDue(facts.state, facts.log),
       })
@@ -7950,6 +8300,10 @@ export class Dispatcher {
     paused: boolean,
     opts: TickOpts = {},
     autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
+    /** Operator start requests: admit exactly these tickets through every
+     * gate below, without the ready listing or the scan checkpoint, and record
+     * each ticket's outcome. The standing report fields are not published. */
+    targeted?: TargetedDispatch,
   ): Promise<void> {
     if (!this.claimGateOpen()) return
     const store = this.store
@@ -7959,7 +8313,7 @@ export class Dispatcher {
     // is due on its own.
     let force = false
     let deferralBuilds: CapacityBuild[] | undefined
-    if (this.deferredAdmissions.size > 0) {
+    if (!targeted && this.deferredAdmissions.size > 0) {
       deferralBuilds = await this.capacityBuilds(launched)
       const key = this.deferralKey(
         dispatchCapacity(deferralBuilds, config.capacity, this.deps.clock()).occupied,
@@ -7969,19 +8323,24 @@ export class Dispatcher {
         this.forcedDeferralKey = key
       }
     }
-    const checkpoint = await this.scanCheckpoint('admission', { force })
-    if (!checkpoint.due) return
+    const checkpoint = targeted ? undefined : await this.scanCheckpoint('admission', { force })
+    if (checkpoint !== undefined && !checkpoint.due) return
+    const settle = (ticket: Ticket, outcome: TargetedOutcome) =>
+      targeted?.outcomes.set(ticket.ref.id, outcome)
     // Clear only standing measurement fields; action counters belong to this tick.
-    report.queued = report.invalidTickets = report.dependencyBlocked = report.creationWithheld = 0
-    report.ticketDiagnostics = []
-    report.dependencyDiagnostics = []
-    report.creationDiagnostics = []
+    if (!targeted) {
+      report.queued = report.invalidTickets = report.dependencyBlocked = report.creationWithheld = 0
+      report.ticketDiagnostics = []
+      report.dependencyDiagnostics = []
+      report.creationDiagnostics = []
+    }
     // Capacity counts builds running work. An unfinished build holds its slot
     // even while blocked or paused; a finished build parked for its merge
     // decision holds none. Capacity is per repo (§16.1) — another repo's
     // builds never consume this repo's slots.
-    // The checkpoint writes nothing, so a deferral's capacity read is current.
-    const capacityBuilds = deferralBuilds ?? (await this.capacityBuilds(launched))
+    // The checkpoint writes nothing, so a deferral capacity read is current.
+    const capacityBuilds =
+      targeted?.measured ?? deferralBuilds ?? (await this.capacityBuilds(launched))
     // A node awaiting verification, or a parked build that must run again,
     // reserves its slot ahead of claims of its own or a lower priority until
     // it is admitted; this only ever lowers the claim budgets. Urgent claims
@@ -8002,13 +8361,18 @@ export class Dispatcher {
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
     const journalBeforeReady = this.store.repositoryFacts().harvest
-    const listing = await this.listReady()
-    const activeTicketIds = await this.activeTicketIdentities(activeRefs, listing.tickets)
+    const listing = targeted
+      ? { tickets: targeted.tickets, diagnostics: [] as string[] }
+      : await this.listReady()
+    // Targeted admission never fans `get` out over unrelated active builds:
+    // its caller matched them without source reads (see honorStartRequests).
+    const activeTicketIds =
+      targeted?.activeIds ?? (await this.activeTicketIdentities(activeRefs, listing.tickets))
     // A provider listing can race reservation and blocker filing. Preserve
     // the before/after union, refreshing once only when admission is possible.
     if (listing.tickets.length > 0) await this.store.refreshJournal()
     const journalAfterReady = this.store.repositoryFacts()
-    if (journalAfterReady.health?.cause === 'ready-scan-failed') {
+    if (!targeted && journalAfterReady.health?.cause === 'ready-scan-failed') {
       await this.sourceCondition(undefined, 'ready-scan')
     }
     const creationHolds = new Map(
@@ -8027,6 +8391,9 @@ export class Dispatcher {
     // unchanged; a source without the priority capability is all normal.
     // A ticket whose labels select two profiles is never claimed (SPEC §9).
     const conflicts = this.profileConflicts(eligible)
+    // Conflicts and their diagnostics are produced in the same order.
+    for (const [index, ticket] of [...conflicts.tickets].entries())
+      settle(ticket, { outcome: 'invalid', detail: conflicts.diagnostics[index]! })
     const claimable = eligible.filter((ticket) => !conflicts.tickets.has(ticket))
     const ready = this.deps.tickets.priority ? urgentFirst(claimable) : claimable
     report.invalidTickets += listing.diagnostics.length + conflicts.diagnostics.length
@@ -8079,6 +8446,7 @@ export class Dispatcher {
             (ticket.target !== undefined && (ticket.blockedBy?.length ?? 0) > 0),
         ))
     ) {
+      if (checkpoint === undefined) return
       await this.sourceCondition(undefined, 'ready-scan')
       if (!this.outOfBudget(opts)) {
         await this.completeScan(checkpoint, report)
@@ -8168,6 +8536,7 @@ export class Dispatcher {
         targetBlocked.add(ticket.ref.id)
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
+        settle(ticket, { outcome: 'blocked', detail: target })
         continue
       }
       preflightTargets.set(ticket.ref.id, JSON.stringify(target))
@@ -8263,10 +8632,16 @@ export class Dispatcher {
         })
       }
     }
-    for (const verdict of verdicts.values()) {
+    for (const [id, verdict] of verdicts) {
       if (verdict.unresolved.length > 0) {
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(...verdict.diagnostics)
+        targeted?.outcomes.set(id, {
+          outcome: 'blocked',
+          detail:
+            verdict.diagnostics.join('; ') ||
+            `unresolved blockers: ${verdict.unresolved.join(', ')}`,
+        })
       }
     }
     let claimLoopCompleted = true
@@ -8292,6 +8667,7 @@ export class Dispatcher {
       if (typeof target === 'string') {
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
+        settle(ticket, { outcome: 'blocked', detail: target })
         continue
       }
       if (hasNodes && preflightTargets.get(ticket.ref.id) !== JSON.stringify(target)) {
@@ -8330,6 +8706,8 @@ export class Dispatcher {
         claimLoopCompleted = false
         break
       }
+      // Cancellation is checked again before claiming a targeted ticket.
+      if (targeted && !(await this.startStillPending(targeted, ticket))) continue
       await store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
         type: 'ticket-preparation.intended',
@@ -8349,6 +8727,10 @@ export class Dispatcher {
       try {
         if (!(await tickets.claim(ticket.ref.id))) {
           await this.preparationResolved(attempt, 'lost-claim')
+          settle(ticket, {
+            outcome: 'claim-refused',
+            detail: `the ${tickets.name} ticket source refused the claim of ${ticket.ref.id}`,
+          })
           report.claimRaces += 1
           report.queued -= 1
           continue
@@ -8418,6 +8800,12 @@ export class Dispatcher {
             ...(missing ? { missing } : {}),
           })
           await this.preparationResolved(attempt, 'bounced')
+          settle(ticket, {
+            outcome: 'invalid',
+            detail: `bounced to ${attempt.handback}${
+              conformance.missing.length > 0 ? `; missing: ${conformance.missing.join('; ')}` : ''
+            }`,
+          })
           report.bounced += 1
           report.queued -= 1
           continue
@@ -8484,6 +8872,7 @@ export class Dispatcher {
         })
         established = true
         await this.preparationResolved(attempt, 'owned')
+        settle(ticket, { outcome: 'started', slug: record.slug })
       } catch (error) {
         // A lapse is not a preparation failure: the successor recovers the
         // intended attempt through `recoverTicketPreparations`.
@@ -8537,7 +8926,7 @@ export class Dispatcher {
       // means the remote provisioning continuation owns the rest.
       if (outcome === 'completed' || outcome === 'deferred') report.dispatched += 1
     }
-    if (scanSuccessful && !this.outOfBudget(opts)) {
+    if (checkpoint !== undefined && scanSuccessful && !this.outOfBudget(opts)) {
       await this.completeScan(checkpoint, report, urgentWaiting)
       // The only other place this tick authorizes deferred normal admissions.
       if (claimLoopCompleted) this.urgentEvaluated = true

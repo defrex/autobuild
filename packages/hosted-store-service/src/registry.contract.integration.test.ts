@@ -1054,6 +1054,38 @@ describe('agent tool registry contract', () => {
     expectJsonClean(tool)
   })
 
+  test('tickets.start matches the start and cancel routes', async () => {
+    const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
+    const call = api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+        ticketBackend: routeWorld.backend,
+      }),
+    )
+    const path = `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-2/start`
+    const tool = toolFor(toolWorld)
+    for (const [route, input] of [
+      [path, { repo, id: 'AUT-2' }],
+      [path, { repo, id: 'AUT-2' }],
+      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }],
+      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }],
+    ] as const) {
+      const routed = await call('POST', route)
+      expect(routed.status).toBe(200)
+      const result = await tool('tickets.start', input)
+      expectEqual(result, routed.body)
+      expectJsonClean(result)
+    }
+    const missing = await call(
+      'POST',
+      `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-404/start`,
+    )
+    expect(missing.status).toBe(404)
+  })
+
   test('tickets.move by role matches the route, and both refuse zero or two targets', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const call = api(
@@ -1297,6 +1329,7 @@ describe('agent tool registry contract', () => {
       'tickets.block': { repo, id: 'AUT-1', blockerIds: ['AUT-2'] },
       'tickets.unblock': { repo, id: 'AUT-1', blockerIds: ['AUT-2'] },
       'tickets.move': { repo, id: 'AUT-2', state: 'Todo' },
+      'tickets.start': { repo, id: 'AUT-2' },
       'notes.write': { repo, document: 'notes' },
       // Sandbox tools (absent from this registry without a backend) are
       // excluded by name so the unknown-tool refusal above is not hit first.

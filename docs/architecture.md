@@ -1468,6 +1468,14 @@ and `ab context` writes them under `$AB_CONTEXT_DIR/assets/`.
 through `repositoryReadFacts`; `processes/dispatcher.ts` retries them under the
 existing repository ownership before intake. This pre-record recovery differs
 from `dispatch.failed`, which completes an already established build.
+`kernel/ticket-starts.ts` reduces operator single-ticket start requests
+(`ticket.start-*`) and the durable canonical identities of hosted active builds
+(`ticket.identity-recorded`) into `repositoryReadFacts`. `operator/ticket-start.ts`
+is the one request/cancel seam behind `ab start` (`cli/ticket-start.ts`), the
+`tickets.start` tool and the HTTP start routes. The dispatcher's
+`honorStartRequests` stage runs before intake and admits pending requests through
+`dispatch()` in its targeted mode, which skips the ready listing and scan
+checkpoint but keeps every admission gate.
 `kernel/build-creation.ts` derives the keyed canonical slug that the dispatcher and
 the hosted server share. The optional `BuildStore.buildCreationIdentity` port says
 whether a store creates at the exact slug (method absent), at that derived slug for
