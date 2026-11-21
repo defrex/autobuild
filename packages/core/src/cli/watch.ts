@@ -146,6 +146,7 @@ export const BUILD_ATTENTION_EVENTS = [
   'integration.verification-failed',
   'node.item-conflicted',
   'landing.consent-revoked',
+  'pr.checks-failed',
   'optimization.noise-exceeded',
 ] as const satisfies readonly EventType[]
 
@@ -547,6 +548,17 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
         `Merge consent revoked for ${event.build}: reconcile edited files protected by merge[${p.rule.index}] (${p.paths.preview.join(', ')}${more > 0 ? `, +${more} more` : ''}); head ${p.previousHead} → ${p.head}; re-review and run ab merge ${event.build}`,
       )
     }
+    case 'pr.checks-failed': {
+      const p = event.payload
+      const more = p.total - p.checks.length
+      return singleLine(
+        `Forge CI failing for ${event.build} PR #${p.pr} at ${p.head.slice(0, 12)}: ${p.checks.map((check) => check.name).join(', ')}${more > 0 ? `, +${more} more` : ''}; inspect the PR, re-run CI, or reopen the build`,
+      )
+    }
+    case 'pr.checks-cleared':
+      return singleLine(
+        `Forge CI failure cleared for ${event.build} PR #${event.payload.pr} at ${event.payload.head.slice(0, 12)} (${event.payload.cause})`,
+      )
     case 'landing.polling-selected':
       return singleLine(
         landingFallbackReason(

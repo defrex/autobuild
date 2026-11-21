@@ -1,4 +1,5 @@
 import { readBuildRange, isTerminalEventReadError } from '../store/event-reads'
+import { currentCiFailure } from '../kernel/forge-checks'
 import { integrationFailed } from '../kernel/integration-state'
 import { awaitsConsent } from '../kernel/landing-readiness'
 import { actionableEscalations } from '../kernel/ticket-wait'
@@ -235,6 +236,7 @@ function stateSatisfies(
         !!state.nodeRestack?.conflict ||
         !!(restack.active && restack.replay?.conflicted) ||
         actionableEscalations(state).length > 0 ||
+        currentCiFailure(state) !== undefined ||
         attentionFrom(events, state) !== null
       )
   }
@@ -522,6 +524,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           event.type === 'integration.verification-failed' ||
           event.type === 'node.item-conflicted' ||
           event.type === 'landing.consent-revoked' ||
+          event.type === 'pr.checks-failed' ||
           (event.type === 'restack.replayed' && event.payload.conflicted)
         )
           return conditions

@@ -208,3 +208,75 @@ test('a reopened leaf shows who reopened it in summaries, detail and JSON until 
   })
   expect(summarize(record, await store.getEvents(record.slug), now).reopened).toBeUndefined()
 })
+
+const checksFailed = (
+  head: string,
+  buildHead = head,
+  names = ['unit'],
+): EventWrite<'pr.checks-failed'> => ({
+  actor: DISPATCHER,
+  type: 'pr.checks-failed',
+  payload: {
+    pr: 1,
+    head,
+    buildHead,
+    checks: names.map((name) => ({
+      name,
+      source: 'check-run' as const,
+      conclusion: 'failure',
+      url: `https://ci/${name}`,
+    })),
+    total: names.length,
+    digest: 'c'.repeat(64),
+  },
+})
+
+test('failing forge CI shows in detail, JSON and the build list until it clears', async () => {
+  const store = new MemoryBuildStore()
+  const record = await store.createBuild({ slug: 'red', repo: '/repo' })
+  await store.append(record.slug, finalized('aaa'))
+  await store.append(record.slug, checksFailed('aaa', 'aaa', ['unit\u001b[2J', 'lint']))
+  const now = new Date('2026-11-20T00:00:00Z')
+  const events = await store.getEvents(record.slug)
+  const shown = detail(record, events, now)
+  expect(shown.ciFailure).toMatchObject({
+    head: 'aaa',
+    buildHead: 'aaa',
+    total: 2,
+    text: 'forge CI failing at aaa: unit\u001b[2J, lint',
+  })
+  const lines = renderDetail(shown, now)
+  expect(lines).toContain('  forge CI: forge CI failing at aaa: unit\\u{1b}[2J, lint')
+  expect(lines).toContain('    lint: https://ci/lint')
+  expect(shown.tree?.ciFailure).toBe('forge CI failing at aaa: unit\u001b[2J, lint')
+  const summary = summarize(record, events, now)
+  expect(JSON.parse(JSON.stringify(summary)).ciFailure.checks).toHaveLength(2)
+  expect(renderSummaries([summary], now, '')).toContain(
+    '    ! forge CI failing at aaa: unit\\u{1b}[2J, lint',
+  )
+
+  await store.append(record.slug, {
+    actor: DISPATCHER,
+    type: 'pr.checks-cleared',
+    payload: { pr: 1, head: 'aaa', cause: 'passing' },
+  })
+  const cleared = await store.getEvents(record.slug)
+  expect(summarize(record, cleared, now).ciFailure).toBeUndefined()
+  expect(detail(record, cleared, now).tree?.ciFailure).toBeNull()
+  expect(renderDetail(detail(record, cleared, now), now).join('\n')).not.toContain('forge CI')
+})
+
+test('failing forge CI recorded at an older build head is not reported', async () => {
+  const store = new MemoryBuildStore()
+  const record = await store.createBuild({ slug: 'moved', repo: '/repo' })
+  await store.append(record.slug, finalized('aaa'))
+  await store.append(record.slug, checksFailed('live', 'aaa'))
+  const now = new Date('2026-11-20T00:00:00Z')
+  expect(summarize(record, await store.getEvents(record.slug), now).ciFailure?.text).toBe(
+    'forge CI failing at live: unit (live PR head differs from build head aaa)',
+  )
+  await store.append(record.slug, finalized('bbb'))
+  const moved = await store.getEvents(record.slug)
+  expect(summarize(record, moved, now).ciFailure).toBeUndefined()
+  expect(detail(record, moved, now).tree?.ciFailure).toBeNull()
+})
