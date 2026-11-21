@@ -92,10 +92,16 @@ reasons in the ticket body, files, tells you the existing operator will pick it 
 and stops without a watch. Otherwise it takes the operator role for the builds the repository's dispatcher dispatches.
 Your explicit instruction overrides either default; non-ready work needs no watch.
 
-At dispatch, Autobuild pins the spec, so later tracker edits don't change what reviewers approved. A deliberate revision goes through your operator agent answering an escalation, and restarts planning:
+At dispatch, Autobuild pins the spec, so later tracker edits don't change what reviewers approved. Editing the ticket alone publishes nothing; a deliberate revision must be published explicitly, and restarts planning. For a blocked build, your operator agent publishes it while answering an escalation:
 
 ```sh
 bun ab answer <slug> --revise-spec-from-ticket
+```
+
+For a finished leaf that is waiting for its merge decision and not yet merged, reopen it with the revision instead; no escalation is needed, and the open PR is kept. Revising from the ticket also re-pins its assets. See [Send a finished build back](operating.md#send-a-finished-build-back):
+
+```sh
+bun ab reopen <slug> --revise-spec-from-ticket
 ```
 
 
