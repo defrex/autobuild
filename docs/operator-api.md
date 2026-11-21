@@ -291,6 +291,7 @@ The default watch reports actionable conditions only:
 
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
 - `build.janitor-escalated`: a build's janitor failure episode outlasted `policy.janitorFailureEscalationSeconds` and raised one escalation naming the operation, last error, attempt count and episode start. The janitor keeps retrying; a successful attempt closes the escalation, and a bare retry answer attempts on the next tick.
+- `dispatcher.forge-degraded`: the dispatcher's own rate-limit cooldown opened, with its reset; once per episode. Extensions marked `continued` are silent.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`,
@@ -436,12 +437,17 @@ files protected by the consent rule's `paths` or `within` predicates revokes it;
 hold persists until merge. Repository
 auto-merge settings are retired; configure ordered `[[merge]]` rules.
 
-Default attention includes `build.janitor-failing`, `build.janitor-escalated` and
-`dispatcher.forge-persistent`. Raw `dispatcher.forge-degraded` and
-`dispatcher.forge-recovered` facts are available through explicit event filters.
+Default attention includes `build.janitor-failing`, `build.janitor-escalated`,
+the episode-opening `dispatcher.forge-degraded` and `dispatcher.forge-persistent`,
+so a rate-limit episode wakes once when it opens and once more only if it
+outlasts its reset. `continued` degradations, which only extend an open
+episode's reset, and `dispatcher.forge-recovered` facts are available through
+explicit event filters.
 Active janitor attention and an open janitor escalation clear on a successful
 attempt. Repository status
-includes forge degradation/reset and available request counts; `dispatcher.forge-persistent` requires a completed retry opportunity past
+includes forge degradation/reset, available request counts and `forgeRateLimit`:
+the last observed primary quota per resource with its observation time and
+staleness, and whether forge landing/polling is paused until the cooldown's reset; `dispatcher.forge-persistent` requires a completed retry opportunity past
 the original reset, which later rate limits cannot postpone indefinitely.
 Only the dispatcher's own classified limits record that degradation. Status
 also lists active `forgeCredentialLimits`: limits on unauthenticated requests or

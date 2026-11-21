@@ -3017,6 +3017,7 @@ The default watch reports actionable conditions only:
 
 - `build.janitor-failing`: a build has failed janitor attempts for the configured attention threshold. A successful attempt clears it.
 - `build.janitor-escalated`: a build's janitor failure episode outlasted the escalation threshold and raised one escalation. The janitor keeps retrying; a successful attempt closes it unanswered, and a bare retry answer attempts on the next tick.
+- `dispatcher.forge-degraded`: the dispatcher's own rate-limit cooldown opened, with its reset; once per episode. Extensions marked `continued` are silent.
 - `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.
 
 - Build `escalation.raised` or `phase.deferral-escalated`: an operator answer
@@ -3547,6 +3548,14 @@ succeeds.
 
 A rate limit the dispatcher classifies on its own authenticated request
 records repository degradation with `resetAt`.
+The first limit of an episode records an ordinary `dispatcher.forge-degraded`,
+which wakes `ab watch` once. A later reset inside the unexpired episode extends
+the cooldown durably as a degradation marked `continued` that wakes nothing; an
+equal or earlier reset writes nothing. A limit after the reset has passed, or
+after recovery, opens a new episode. A rate-limited or unreadable response on
+landing, gate inspection or PR polling is a typed forge failure or an unproven
+state, never "no checks", "ungated", "closed" or "merged"; merge-freshness
+inspection defers instead of recording best-effort evidence.
 Forge work waits during cooldown; passing the deadline permits a recovery
 request; a successful probe records automatic recovery. An authorized operator
 may explicitly override erroneous recorded state with
@@ -3600,7 +3609,15 @@ using exact-resource ETags; authenticated 304s spare the REST primary quota.
 Adapter caches are bounded and restart/eviction falls back to fresh reads.
 Writes, including Git publication and rewrites, invalidate observations before
 attempting the mutation so acknowledgement reads remain fresh. Leaf PR polling
-keeps its existing cadence. Readiness and merge inspections remain fresh.
+keeps its existing cadence. Gate branch and rules reads, merge-freshness
+protection and rulesets, landing, retarget and auto-merge PR reads, commit and
+history reads, merge-queue activity, summary-comment listing and branch
+existence revalidate the same way. Both caches hold the raw representation and
+every caller validates it with its own schema, so consumers of one resource
+share one request and one ETag; a representation that fails validation loses
+its ETag. Reads that must be fresh, including merge inspections, still reach
+GitHub every time, conditionally when an ETag is cached. Readiness diagnostics
+and post-mutation readbacks stay unconditional.
 
 For node cadence, durable wakes, restart behavior and CLI evidence, see
 [node polling and status](references/integration-tree.md#polling-and-status).
@@ -3610,6 +3627,18 @@ The total includes all attempted requests. Optional `restPrimary`,
 primary quota, REST 304s and GraphQL calls. Transport failures and historical or
 legacy observations can remain unclassified; absent fields never imply zero.
 Shared requests are attributed to their first requester; cache hits count zero.
+
+An adapter may also report the primary rate-limit headers a response carried
+(`resource`, `limit`, `remaining`, `resetAt`), including on 304s and limited
+failures; GitHub does. No extra `/rate_limit` request is made. Tick telemetry's
+optional `rateLimits` carries the latest reading per resource with its
+`observedAt`, at most eight resources and none older than a day, across ticks
+and dispatcher restarts, so a cooldown tick with no requests still reports the
+last known quota. Secondary limits carry no headers and appear only as the
+degradation. `ab repository status` shows them as `forgeRateLimit`: each
+reading, `stale` once its window has reset (current quota unknown), and
+`paused`/`pausedUntil` while the dispatcher's rate-limit cooldown holds forge
+landing and polling. Absent fields mean unknown, never full quota.
 
 Work target distance is advisory `target.distance` telemetry, sampled during
 normal target polls from exact build/target tips, never at render time. It
