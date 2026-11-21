@@ -102,6 +102,8 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:optimization-node-detail:png .ab/dashboard-frames/optimization-node-detail.png --attach
    ab artifact put dashboard-frame:capacity-wide:text .ab/dashboard-frames/capacity-wide.txt --attach
    ab artifact put dashboard-frame:capacity-wide:png .ab/dashboard-frames/capacity-wide.png --attach
+   ab artifact put dashboard-frame:backpressure-wide:text .ab/dashboard-frames/backpressure-wide.txt --attach
+   ab artifact put dashboard-frame:backpressure-wide:png .ab/dashboard-frames/backpressure-wide.png --attach
    ab artifact put dashboard-frame:native-sessions:text .ab/dashboard-frames/native-sessions.txt --attach
    ab artifact put dashboard-frame:native-sessions:png .ab/dashboard-frames/native-sessions.png --attach
    ab artifact put dashboard-frame:judge-sessions:text .ab/dashboard-frames/judge-sessions.txt --attach
