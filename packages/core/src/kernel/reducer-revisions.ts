@@ -33,4 +33,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'buildStreamSeed/shape/x80591dawj': 'AUT-1290 build priority and urgent scan demand',
   'repositoryReadFacts/shape/hgw4spz5c0': 'AUT-1290 build priority and urgent scan demand',
   'repositoryReadFacts/shape/se5kk44boc': 'AUT-1288 open-PR backpressure engagement',
+  'build/shape/0sj01uqgcz': 'Forge CI failure record on finished leaves',
+  'buildReadFacts/shape/42qtslvxvq': 'Forge CI failure record on finished leaves',
+  'buildStreamSeed/shape/9970dr98ff': 'Forge CI failure record on finished leaves',
 }

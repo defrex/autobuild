@@ -172,6 +172,44 @@ test('a held entry carries its reason in JSON and text', async () => {
   expect(out.join('\n')).toContain(' · held — waiting on Q-1 · ')
 })
 
+test('an entry with failing forge CI carries it in JSON and text', async () => {
+  const { abLandings } = await import('../cli/landings')
+  const store = new MemoryBuildStore()
+  await ready(store, 'red', '/repo')
+  await store.append('red', {
+    actor: DISPATCHER,
+    type: 'pr.checks-failed',
+    payload: {
+      pr: 1,
+      head: 'head',
+      buildHead: 'head',
+      checks: [{ name: 'unit', source: 'check-run', conclusion: 'failure' }],
+      total: 1,
+      digest: 'b'.repeat(64),
+    },
+  })
+  const out: string[] = []
+  const opts = {
+    targetRepo: '/repo',
+    storeRef: STORE_REF,
+    env: {},
+    openStore: () => store,
+    stdout: (line: string) => out.push(line),
+    exec: async (cmd: readonly string[]) =>
+      cmd[1] === 'remote'
+        ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+        : { stdout: '/repo/.git\n/repo/.git\n/repo\n', stderr: '', exitCode: 0 },
+  }
+  await abLandings({ ...opts, json: true })
+  expect(JSON.parse(out[0]!)[0]).toMatchObject({
+    slug: 'red',
+    ciFailure: 'forge CI failing at head: unit',
+  })
+  out.length = 0
+  await abLandings(opts)
+  expect(out.join('\n')).toContain(' · forge CI failing at head: unit')
+})
+
 test('terminal inventory is skipped without hydrating finished build facts', async () => {
   const store = new MemoryBuildStore()
   for (let i = 0; i < 12; i++) {

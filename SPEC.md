@@ -4427,7 +4427,7 @@ with illustrative members:
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}` |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Propose (§5, §13.1.1) | Kernel `propose.started {round, request}`; agent `propose.completed {round, request, proposals, artifact}` (the deposited proposal ids and the `attempts` artifact) |
-| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
+| Post-PR [D1] | `pr.merged`, `pr.conflicted`, advisory dispatcher `pr.checks-failed {pr, head, buildHead, checks, total, digest}` and `pr.checks-cleared {pr, head, cause}` (forge CI on finished leaves, §15.7), `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. The dispatcher records `exhausted` after two consecutive empty proposals. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
@@ -5202,6 +5202,29 @@ reopen governs the current spec; a later reopen replaces it and a later
 escalation spec revision supersedes it. The epilogue grammar is unchanged: a
 reopen re-enters the mainline at `implement` or `plan`, and the leaf reaches
 merge only through `finalize` again.
+
+**Forge CI on finished leaves.** A clean restack or a change on the base can
+leave a finished leaf's own CI red on the forge without any local verify step
+re-running. On the same janitor poll of a finished, open leaf PR (no phase or
+session running), the dispatcher reads the check runs and commit statuses at the
+PR's live head through the optional Forge `inspectHeadChecks` capability
+(GitHub: two ETag-conditional REST reads, so an unchanged head costs two 304s).
+A failing latest check run (`failure`, `timed_out`) or commit status (`failure`,
+`error`) records advisory `pr.checks-failed {pr, head, buildHead, checks, total,
+digest}`: `head` is the live PR head, `buildHead` the build's recorded head,
+`checks` a 20-entry preview and `digest` the identity of the complete failing
+set. It is recorded once per `(head, buildHead, digest)` and is default watch
+attention. Advisory `pr.checks-cleared {pr, head, cause}` records that the head
+now has no failing checks (`passing`, `pending`) or that the PR moved to another
+head (`head-changed`); a head change clears the old record on the proof of the
+PR read alone. CI that cannot be read — a missing capability, an authorization,
+rate-limit or network failure, a guarded-forge cooldown, or a truncated listing
+with no visible failure — is unknown: it records nothing, never claims green,
+never raises red, and never becomes a janitor failure. Status surfaces report a
+recorded failure only while it still describes the open PR at the build's
+recorded head, so a reconcile, restack, merge or close hides it at once.
+Autobuild never re-runs forge CI and never re-enters `implement` on red CI; the
+operator inspects the PR, re-runs CI on the forge, or reopens the build.
 
 **Merge standard: one change per build, replay at reconcile.**
 
@@ -6304,12 +6327,13 @@ The web dashboard consumes shared terminology without introducing a tree surface
 same deterministic, repository-scoped ready consent/held candidates. A recorded
 current decision is required; auto-authorized and consented candidates are absent.
 Queue entries and build status show the current candidate head and the head
-consent was given at (null without consent).
+consent was given at (null without consent), and a current forge CI failure
+(`ciFailure`, §15.7) in the shared vocabulary.
 Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listing
 diagnostics; effective build targets remain frozen independently of source metadata.
 
 Default watch attention includes `integration.verification-failed`, `integration.landed`, `node.item-conflicted`,
-`landing.consent-revoked`, `optimization.noise-exceeded`, and conflicted `restack.replayed`. Derived `build.consent-ready` observations
+`landing.consent-revoked`, `pr.checks-failed`, `optimization.noise-exceeded`, and conflicted `restack.replayed`. Derived `build.consent-ready` observations
 carry target, branch, candidate and the durable readiness entry position in the
 existing cursor envelope. Cursor identities retain readiness episodes across
 restart; a new candidate or exit/re-entry can wake again. Explicit event globs

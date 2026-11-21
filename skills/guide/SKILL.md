@@ -3055,6 +3055,15 @@ The default watch reports actionable conditions only:
   `paths` or `within` rule the merge consent was given under.
   It names the matched files and the previous and new heads; the build returns
   to the consent queue and needs fresh consent for its new head.
+- Build `pr.checks-failed`: forge CI is failing at a finished, open leaf's
+  live PR head. It names the failing checks (a preview of up to 20, and the
+  total), the live head and the build's head, and fires once per head and
+  failing set. `ab build status`, `ab builds`, `ab merges` and both dashboards
+  show it as `ciFailure` until a successful CI read finds no failing checks on
+  that head, even while some are still pending, or the PR moves to another
+  head; clearing does not prove green.
+  Unreadable CI is unknown, never red or green. Autobuild reports it and never
+  re-runs CI or re-enters implement.
 - Build `optimization.noise-exceeded`: an optimization node's starting
   measurement found more noise than ε can resolve. It names the spread and ε;
   the node still opens. Raise `target.epsilon` with `ab objective`, or raise
@@ -3253,7 +3262,7 @@ vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `abo
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile`, `propose` — or `verify:<step>`), and
-`attention` (current failed node verification, an open escalation other than a ticket wait's own, janitor failure attention, or a build waiting for a merge decision). Repeatable `--event`
+`attention` (current failed node verification, an open escalation other than a ticket wait's own, janitor failure attention, failing forge CI on a finished leaf, or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
 globs in supply order — and the record names what matched.
@@ -3264,7 +3273,7 @@ means an open escalation exactly as everywhere else. In the manner of `kubectl
 wait`, a condition that already holds when the command starts returns
 immediately with that build's latest event (`--since` does not suppress this);
 otherwise the first later event whose reduction produces it ends the wait.
-`attention` is also a current-state condition: current failed node verification, existing janitor failure attention, an already open escalation other than a
+`attention` is also a current-state condition: current failed node verification, existing janitor failure attention, a current forge CI failure, an already open escalation other than a
 ticket wait's own, or merge decision returns immediately, including with `--since`. Merge matches
 use the same observation as watch. During replay, only new failed-node verification or escalation events
 or undelivered eligible merge decisions satisfy attention. `--event` conditions

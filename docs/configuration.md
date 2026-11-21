@@ -4436,6 +4436,9 @@ queue for its new head. Accepted node reparenting revokes consent; holds survive
 Accepted reopening of a settled, unmerged leaf revokes consent immediately; a
 hold survives. See [Send a finished build back](operating.md#send-a-finished-build-back)
 for the command and for asynchronous cancellation of an armed native auto-merge.
+Failing forge CI at a finished leaf's live PR head raises default
+`pr.checks-failed` attention once per head and failing set; it is reported, not
+acted on, and unreadable CI is unknown rather than green or red.
 It is consent to the merge, not approval of an immutable diff.
 The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
 `head-mismatch`, recording nothing, unless `<sha>` (full or at least seven
