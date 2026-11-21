@@ -282,6 +282,130 @@ describe('GitHubForge.openPr', () => {
   })
 })
 
+describe('GitHubForge.inspectHeadChecks', () => {
+  const sha = 'c'.repeat(40)
+  const runsPath = `repos/acme/app/commits/${sha}/check-runs?filter=latest&per_page=100`
+  const statusPath = `repos/acme/app/commits/${sha}/status?per_page=100`
+  const runs = (...entries: { name: string; status?: string; conclusion: string | null }[]) => ({
+    total_count: entries.length,
+    check_runs: entries.map((entry) => ({
+      status: 'completed',
+      html_url: `https://github.com/acme/app/runs/${entry.name}`,
+      ...entry,
+    })),
+  })
+  const statuses = (...entries: { context: string; state: string }[]) => ({
+    state: 'pending',
+    sha,
+    total_count: entries.length,
+    statuses: entries.map((entry) => ({ target_url: null, ...entry })),
+  })
+  /** The two reads run in parallel; answer each by path. */
+  function routed(byPath: Record<string, Scripted[]>) {
+    const calls: { path: string; opts?: unknown }[] = []
+    const transport: GitHubRequest = async (_method, path, opts) => {
+      calls.push({ path, ...(opts === undefined ? {} : { opts }) })
+      const next = byPath[path]?.shift()
+      if (!next) throw new Error(`unscripted ${path}`)
+      const status = next.status ?? 200
+      const headers = next.headers ?? {}
+      if (status === 304) return { status, headers }
+      if (status >= 300)
+        throw new GitHubApiError(
+          status,
+          (next.json as { message?: string } | undefined)?.message ?? 'GitHub API error',
+          next.json,
+        )
+      return { status, headers, json: next.json }
+    }
+    return { forge: new GitHubForge({ transport, repository: 'acme/app' }), calls }
+  }
+
+  test('a failing check run and an error status both report, with the run url', async () => {
+    const { forge, calls } = routed({
+      [runsPath]: [
+        {
+          json: runs(
+            { name: 'unit', conclusion: 'failure' },
+            { name: 'lint', conclusion: 'success' },
+          ),
+        },
+      ],
+      [statusPath]: [{ json: statuses({ context: 'ci/deploy', state: 'error' }) }],
+    })
+    expect(await forge.inspectHeadChecks('/ws', sha)).toEqual({
+      kind: 'known',
+      pending: false,
+      failing: [
+        {
+          name: 'unit',
+          source: 'check-run',
+          conclusion: 'failure',
+          url: 'https://github.com/acme/app/runs/unit',
+        },
+        { name: 'ci/deploy', source: 'status', conclusion: 'error' },
+      ],
+    })
+    expect(calls.map((call) => call.path).sort()).toEqual([runsPath, statusPath].sort())
+  })
+
+  test('the latest-run filter lets a green re-run pass', async () => {
+    const { forge } = routed({
+      [runsPath]: [{ json: runs({ name: 'unit', conclusion: 'success' }) }],
+      [statusPath]: [{ json: statuses() }],
+    })
+    expect(await forge.inspectHeadChecks('/ws', sha)).toEqual({
+      kind: 'known',
+      pending: false,
+      failing: [],
+    })
+  })
+
+  test('an unchanged head revalidates both reads with If-None-Match and reuses them on 304', async () => {
+    const { forge, calls } = routed({
+      [runsPath]: [
+        { json: runs({ name: 'unit', conclusion: 'failure' }), headers: { etag: '"runs"' } },
+        { status: 304 },
+      ],
+      [statusPath]: [{ json: statuses(), headers: { etag: '"status"' } }, { status: 304 }],
+    })
+    const first = await forge.inspectHeadChecks('/ws', sha)
+    expect(await forge.inspectHeadChecks('/ws', sha)).toEqual(first)
+    expect(
+      calls
+        .slice(2)
+        .map((call) => call.opts)
+        .sort(),
+    ).toEqual(
+      [
+        { headers: { 'If-None-Match': '"runs"' } },
+        { headers: { 'If-None-Match': '"status"' } },
+      ].sort(),
+    )
+  })
+
+  test('a forbidden read throws for the caller to treat as unknown', async () => {
+    const { forge } = routed({
+      [runsPath]: [{ status: 403, json: { message: 'Resource not accessible by integration' } }],
+      [statusPath]: [{ json: statuses() }],
+    })
+    await expect(forge.inspectHeadChecks('/ws', sha)).rejects.toThrow()
+  })
+
+  test('a truncated listing with no visible failure is unknown', async () => {
+    const { forge } = routed({
+      [runsPath]: [
+        { json: { ...runs({ name: 'unit', conclusion: 'success' }), total_count: 150 } },
+      ],
+      [statusPath]: [{ json: statuses() }],
+    })
+    expect(await forge.inspectHeadChecks('/ws', sha)).toEqual({
+      kind: 'unknown',
+      reason: 'truncated',
+    })
+  })
+})
+
 describe('GitHubForge.getPrState', () => {
   const stateJson = (
     state: string,
@@ -2969,7 +3093,11 @@ describe('tick observations', () => {
             ...(hasPr ? { prNumber: 1 } : {}),
           })
           if (hasPr)
-            expect(await forge.getPrState('/ws', 1)).toEqual({ state: 'open', mergeable: true })
+            expect(await forge.getPrState('/ws', 1)).toEqual({
+              state: 'open',
+              mergeable: true,
+              headSha: 'node-sha',
+            })
           expect(await forge.remoteBranchSha('main')).toBe('parent-sha')
           expect(await forge.remoteBranchSha('ab/node')).toBe('node-sha')
           const results = await Promise.all([

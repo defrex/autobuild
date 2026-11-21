@@ -147,6 +147,7 @@ bun ab hold my-build --reason "waiting on AUT-12 to merge"
 - **`hold`** suppresses merge and revokes consent, even before the build is ready. The optional `--reason` (1–2000 characters after trimming) is shown by `build status`, `builds`, `merges` and both dashboards while that hold stands; a later hold replaces it and `merge` clears it.
 - **Reviewed head:** `merge --head <sha>` records consent only while `<sha>` is the current candidate head; otherwise it refuses with `head-mismatch` and records nothing.
 - **Persistence:** consent survives head changes, clean restacks, verification and re-finalization until a hold or completion. Consent given under a `paths` or `within` rule is revoked, with `landing.consent-revoked` attention, when a reconcile's own edits, or a leaf restack's generated-file regeneration, touch a file the rule protects. Accepted node reparenting also revokes it.
+- **Red forge CI:** when CI fails at a finished leaf's live PR head, the dispatcher records `pr.checks-failed` once per head and failing set. It is default attention, and `build status`, `builds`, `merges` and both dashboards show it until a successful CI read finds no failing checks on that head (checks may still be pending, so clearing does not prove green) or the PR moves to another head. CI the forge won't report (missing permission, rate limit, outage) counts as unknown, never as green or red. Autobuild never re-runs CI or reopens the build itself: inspect the PR, re-run CI on the forge, or send the build back with feedback.
 
 ## Choose an operator surface
 

@@ -62,6 +62,12 @@ import {
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
+import {
+  CI_FAILURE_PREVIEW,
+  ciChecksObservable,
+  ciFailureKey,
+  failingSetDigest,
+} from '../kernel/forge-checks'
 import { actionableCommands, leafLandingDeclineReason } from '../kernel/landing-readiness'
 import {
   escalationsBeyondJanitor,
@@ -282,7 +288,9 @@ import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution
 import type {
   DependencyState,
   Forge,
+  HeadChecks,
   IssueLink,
+  PrState,
   Ticket,
   TicketSource,
   WorkspaceProvider,
@@ -5068,6 +5076,92 @@ export class Dispatcher {
     }
   }
 
+  /** Forge CI on a finished leaf (§15.7). Compares this poll's observation
+   * with the reduced `ciFailure` in hand and appends only on a transition, so
+   * an unchanged head reads no store rows. A failure recorded for a head the
+   * PR no longer has is cleared first, on the proof of this poll's PR read
+   * alone. Unknown CI (no capability, any read failure, a truncated listing
+   * with no visible failure) records nothing: never green, never red, and
+   * never a janitor failure. */
+  private async observeHeadChecks(
+    record: BuildRecord,
+    state: BuildState,
+    prState: Extract<PrState, { state: 'open' }>,
+    workspacePath: string,
+  ): Promise<void> {
+    if (!ciChecksObservable(state)) return
+    const pr = state.pr!
+    const liveHead = prState.headSha ?? pr.headSha
+    let prior = state.ciFailure
+    const append = async (
+      transition: (current: BuildState) => boolean,
+      event: EventWrite<'pr.checks-failed'> | EventWrite<'pr.checks-cleared'>,
+    ): Promise<void> => {
+      const current = (await this.store.buildFacts(record.slug)).state
+      if (!ciChecksObservable(current) || current.pr?.headSha !== pr.headSha) return
+      if (!transition(current)) return
+      // A lost race is observed again on the next poll.
+      await this.store.appendIfCurrent(record.slug, current.lastSeq, event)
+    }
+    if (prior && (prior.head !== liveHead || prior.buildHead !== pr.headSha)) {
+      const stale = prior
+      await append(
+        (current) =>
+          current.ciFailure !== undefined &&
+          ciFailureKey(current.ciFailure) === ciFailureKey(stale),
+        {
+          actor: DISPATCHER,
+          type: 'pr.checks-cleared',
+          payload: { pr: pr.number, head: stale.head, cause: 'head-changed' },
+        },
+      )
+      prior = undefined
+    }
+    const forge = this.deps.forge
+    if (!forge.inspectHeadChecks) return
+    let checks: HeadChecks
+    try {
+      checks = await forge.inspectHeadChecks(workspacePath, liveHead)
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      return
+    }
+    if (checks.kind === 'unknown') return
+    if (checks.failing.length > 0) {
+      const payload = {
+        pr: pr.number,
+        head: liveHead,
+        buildHead: pr.headSha,
+        checks: checks.failing.slice(0, CI_FAILURE_PREVIEW),
+        total: checks.failing.length,
+        digest: failingSetDigest(checks.failing),
+      }
+      const key = ciFailureKey(payload)
+      if (prior && ciFailureKey(prior) === key) return
+      await append(
+        (current) => current.ciFailure === undefined || ciFailureKey(current.ciFailure) !== key,
+        { actor: DISPATCHER, type: 'pr.checks-failed', payload },
+      )
+      return
+    }
+    if (!prior) return
+    const cleared = prior
+    await append(
+      (current) =>
+        current.ciFailure !== undefined &&
+        ciFailureKey(current.ciFailure) === ciFailureKey(cleared),
+      {
+        actor: DISPATCHER,
+        type: 'pr.checks-cleared',
+        payload: {
+          pr: pr.number,
+          head: cleared.head,
+          cause: checks.pending ? 'pending' : 'passing',
+        },
+      },
+    )
+  }
+
   /** Post-PR epilogue (§15.7): poll the forge, emit `pr.*` facts (deduped
    * against the reduced `prState`), release/complete, project to the ticket. */
   private async checkPr(
@@ -5336,6 +5430,8 @@ export class Dispatcher {
         type: 'landing.command-acknowledged',
         payload: { commandSeq: command.seq },
       })
+    if (!integration && !recoverLanding && prState.state === 'open')
+      await this.observeHeadChecks(record, state, prState, workspacePath)
 
     // A positive conflict re-enters reconcile before any enable attempt. In
     // particular, an ungated fallback can never race ahead of the conflict
