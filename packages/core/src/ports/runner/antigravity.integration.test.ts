@@ -694,6 +694,75 @@ describe('AntigravityAgentRunner streaming', () => {
     await runner.end(session)
   })
 
+  /** Streams `partial`, then aborts and rejects the result promise. */
+  function interruptedStream(partial: Event[]): AntigravityCliStreamFn {
+    return (call) => {
+      const rejected = new Promise<AntigravityCliResult>((_, reject) => {
+        void Promise.resolve().then(() => reject(new Error('agy read failed')))
+      })
+      rejected.catch(() => {})
+      return {
+        lines: (async function* () {
+          for (const event of partial) yield JSON.stringify(event)
+          ;(call.signal as AbortSignal | undefined)?.throwIfAborted()
+        })(),
+        result: rejected,
+      }
+    }
+  }
+
+  test('a rejected result after partial output keeps it on start', async () => {
+    const controller = new AbortController()
+    const partial = [
+      init('partial-conversation'),
+      delta('partial-conversation', 1, 'partial answer', 'ACTIVE'),
+    ]
+    const runner = new AntigravityAgentRunner({
+      runCliStream: (call) => {
+        controller.abort(new Error('cancelled'))
+        return interruptedStream(partial)(call)
+      },
+      createSessionId: () => 'random-replacement',
+    })
+    const { session, result: turn } = await runner.start(startOpts({ signal: controller.signal }))
+    expect(turn.kind).toBe('failed')
+    expect(turn.text).toBe('partial answer')
+    expect(session.id).toBe('partial-conversation')
+    const content = JSON.parse((await runner.end(session)).content) as {
+      nativeConversationId: string
+      turns: Array<{ events: unknown[]; text: string; conversationId: string }>
+    }
+    expect(content.nativeConversationId).toBe('partial-conversation')
+    expect(content.turns[0]?.events).toEqual(partial)
+    expect(content.turns[0]?.text).toBe('partial answer')
+    expect(content.turns[0]?.conversationId).toBe('partial-conversation')
+  })
+
+  test('a rejected result after partial output keeps it on continue', async () => {
+    const first = fakeStream([output([init('c'), result('c', { response: 'one' })])])
+    const partial = [
+      init('c'),
+      userInput('c', 2),
+      delta('c', 3, 'half', 'ACTIVE', { input_tokens: 5, output_tokens: 1 }),
+      tool('c', 4, 'run_command', { command: 'ls' }, 'a'),
+    ]
+    let calls = 0
+    const runner = new AntigravityAgentRunner({
+      runCliStream: (call) =>
+        calls++ === 0 ? first.runCliStream(call) : interruptedStream(partial)(call),
+    })
+    const { session } = await runner.start(startOpts())
+    const turn = await runner.continue(session, 'again')
+    expect(turn.kind).toBe('failed')
+    expect(turn.text).toBe('half')
+    const content = JSON.parse((await runner.end(session)).content) as {
+      turns: Array<{ events: unknown[]; conversationId: string; toolSteps: string[] }>
+    }
+    expect(content.turns[1]?.events).toEqual(partial)
+    expect(content.turns[1]?.conversationId).toBe('c')
+    expect(content.turns[1]?.toolSteps).toEqual(['run_command'])
+  })
+
   test('the production registration labels its stream by the Autobuild session', async () => {
     const registration = createProductionRuntimes().runtimes.antigravity!
     const opened: string[] = []

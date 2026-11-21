@@ -538,7 +538,7 @@ export class AntigravityAgentRunner implements AgentRunner {
     try {
       cli = await handle.result
     } catch (error) {
-      return launchFailure(error, invocation.signal)
+      return interruptedTurn(error, acc.snapshot(), invocation.signal, previous)
     }
     return finishTurn(cli, acc.snapshot(), invocation.signal, previous)
   }
@@ -1027,6 +1027,27 @@ function isEnoent(error: unknown): boolean {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A launched CLI whose result rejected after streaming: the launch failure,
+ * keeping the output and native identity already accumulated so the
+ * transcript stays complete and the session keeps its conversation id. */
+function interruptedTurn(
+  error: unknown,
+  parsed: ParsedAgyOutput,
+  signal: AbortSignal | undefined,
+  previous: ResultUsage | undefined,
+): AntigravityTurn {
+  const failed = launchFailure(error, signal)
+  return {
+    ...failed,
+    text: parsed.deltas.join(''),
+    usage: turnUsage(parsed.stepUsage, undefined, undefined, previous),
+    events: parsed.events,
+    malformedLines: parsed.malformedLines,
+    ...(parsed.conversationId !== undefined ? { conversationId: parsed.conversationId } : {}),
+    toolSteps: parsed.toolSteps,
+  }
 }
 
 /** A CLI that never ran (or was torn down): missing executable vs. a failed
