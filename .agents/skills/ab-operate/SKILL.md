@@ -258,10 +258,14 @@ that appear after you arm. Finishing the initially queued set is no reason to st
    `ab watch --operator --json --since <watch-cursor>`. If it reports
    `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge
    the unavailable historical gap.
-2. Right after arming and after each timeout, run `ab builds --all --json`, adopt
-   newly dispatched builds, inspect active builds with `ab build status <slug> --json`,
-   and reconcile `ab repository status --json`. Historical attention is baselined
-   by a fresh watch, so status reconciliation closes the attachment gap.
+2. Right after arming and after each timeout, run `ab builds --json` (active
+   builds only), adopt newly dispatched builds, inspect active builds with
+   `ab build status <slug> --json`, and reconcile `ab repository status --json`.
+   When a build you were tracking leaves the active listing, check how it ended
+   with `ab build status <slug> --json`; do not list every historical build with
+   `--all`, whose cost and output grow with the repository's whole history.
+   Historical attention is baselined by a fresh watch, so status reconciliation
+   closes the attachment gap.
 3. Handle each attention record using the shared rules. Repository records have
    no build slug: inspect repository status. Re-arm from the standing watch's
    latest cursor, including its trailing cursor after a timeout or count exit.
@@ -278,6 +282,9 @@ operator presence is not exposed there, and its
 ### Inspect
 
 - `ab builds [--queued] [--all] [--json]` — builds and their effective status.
+  Active builds by default; `--queued` adds queued builds; `--all` is an
+  explicit historical listing of every build, for when you were asked for
+  history, not for routine reconciliation.
   A build parked on a ticket wait lists as `waiting`, with `waiting on <ids>`
   after its phase; in `--json` its `status` stays `blocked` and `wait` carries
   `state` and `tickets`.
