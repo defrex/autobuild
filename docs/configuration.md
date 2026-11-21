@@ -2421,7 +2421,9 @@ model uses the default for its own selected account and runtime. Each configured
 one argv token; Autobuild does not shell-expand it. The narrow rejected set is
 derived from the model and machine-readable protocol options each adapter emits:
 Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
-`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude and Codex
+`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`; Antigravity
+rejects `-p`/`--print`/`--prompt`, `--output-format`, `--input-format`, and
+`--model`. Claude and Codex
 also reject a standalone `--` because Autobuild owns and appends that structural
 separator immediately before their positional prompt. Claude routes with a selected
 account additionally reject `--settings`, `--setting-sources`, and `--bare`
@@ -2432,7 +2434,11 @@ configuration routing. This includes using `-c` to set reasoning effort. Routes
 without an account retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
-role/runtime-specific diagnostic. Every other option passes through without
+role/runtime-specific diagnostic. Antigravity also owns conversation
+selection: a role argument naming `--conversation`, `--continue`/`-c`, or
+`--prompt-interactive`/`-i`, including `--option=value` forms, is not an eager
+startup error but fails each turn as a configuration failure before `agy`
+launches. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,
 thinking, extension, lifecycle, unknown options, and arguments that merely
 contain two hyphens, even when they supplement another occurrence emitted by the

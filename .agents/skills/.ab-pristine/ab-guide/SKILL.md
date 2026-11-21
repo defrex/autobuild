@@ -1334,7 +1334,9 @@ model families; all problems in `default` and every declared role are
 aggregated by one eager resolver construction before judgment runs. Runtime
 adapters reject the model and parsed protocol/output-mode options they
 emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
-rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude
+rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`;
+Antigravity rejects `-p`/`--print`/`--prompt`, `--output-format`,
+`--input-format`, and `--model`. Claude
 routes with a selected account additionally reject `--settings`,
 `--setting-sources`, and `--bare` because Autobuild owns their authentication
 settings. Codex routes selecting a ChatGPT subscription account additionally
@@ -1343,7 +1345,10 @@ because Autobuild owns their provider and configuration routing. This includes
 using `-c` to set reasoning effort. Routes without an account retain the existing
 argument behavior. Exact
 spellings, `--option=value` forms, and documented compact short aliases join
-that same role-naming aggregate. Every other option passes through without
+that same role-naming aggregate. Antigravity also owns conversation
+selection: `--conversation`, `--continue`/`-c`, and `--prompt-interactive`/`-i`
+(including `=` forms) in `args` fail each turn as a configuration failure
+before `agy` launches rather than at startup. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,
 thinking, extension, lifecycle, and unknown options, even when it supplements
 another adapter-emitted occurrence. Pi always

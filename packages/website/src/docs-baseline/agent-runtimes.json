@@ -4,7 +4,7 @@
   "title": "Agent runtimes",
   "group": "reference",
   "description": "Choose Claude Code, Codex, Pi, or Antigravity, route producer and reviewer models, and implement a runtime adapter.",
-  "textHash": "e8378e9ce8cd3b1cc191d767a8101fdd1d2e7fc41a79a919b97da180351140d3",
+  "textHash": "141a9b9450113f28a5bb63d5b39381fab39969e5f58804beab7e459b7c116ad7",
   "headings": [
     "Responsibility",
     "Shipped adapters",
