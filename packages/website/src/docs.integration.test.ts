@@ -151,6 +151,7 @@ test('published pages keep navigation on-site and link only declared repository 
         'docs/integration-tree.md',
       ],
     ],
+    ['docs/tickets.md', ['docs/configuration.md#policy']],
     ['docs/workspaces.md', ['docs/architecture.md#key-boundaries']],
     [
       'docs/troubleshooting.md',
