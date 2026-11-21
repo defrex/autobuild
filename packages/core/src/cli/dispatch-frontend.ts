@@ -9,7 +9,7 @@ import {
 } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
-import { dispatchCapacity } from '../kernel/dispatch-capacity'
+import { dispatchCapacity, urgentClaimDemand } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
@@ -525,6 +525,7 @@ export class DispatchFrontend {
           config.capacity,
           this.clock(),
           migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
+          { urgentClaims: urgentClaimDemand(repositoryFacts) },
         ),
         // A viewer shows only its own read; headless ticks publish no count.
         ...(this.opts.viewer

@@ -86,15 +86,20 @@ import {
   type ForgeRateLimitSnapshot,
 } from '../ports/forge-telemetry'
 import {
+  buildPriority,
   dispatchCapacity,
   epilogueLeaf,
   intakeCapacity,
   nodeCapacity,
+  occupiesCapacity,
+  reservedAhead,
   settlementDue,
   settlementKey,
   slotRequest,
   strandedNodeWorkspace,
+  urgentClaimDemand,
   type CapacityBuild,
+  type DispatchCapacity,
 } from '../kernel/dispatch-capacity'
 import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import {
@@ -210,7 +215,7 @@ import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../st
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
-import { urgentFirst } from '../ports/tickets/priority'
+import { ticketPriority, urgentFirst } from '../ports/tickets/priority'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
@@ -284,6 +289,7 @@ import type {
   Forge,
   IssueLink,
   Ticket,
+  TicketPriority,
   TicketSource,
   WorkspaceProvider,
   WorkspaceProvisionResult,
@@ -1194,8 +1200,29 @@ export class Dispatcher {
   /** Per tick, rebuilt from durable state: builds launched so far, which
    * occupy a slot before their runner claims a lease. */
   private tickLaunched: ReadonlySet<string> = new Set()
-  /** Per tick: finished leaves the admission gate turned away. Intake reserves their slots. */
-  private readonly slotWaiters = new Set<string>()
+  /** Per tick: finished leaves the admission gate turned away or deferred,
+   * with their priority. Intake reserves their slots. */
+  private readonly slotWaiters = new Map<string, TicketPriority>()
+  /** Per tick, in visit order: normal parked admissions that would have taken
+   * a free slot before this tick's dispatch evaluated urgent claims (SPEC §12
+   * "Slot admission order"). Nothing was written for them;
+   * `admitDeferredParked` retries each through its generic path. */
+  private readonly deferredAdmissions = new Map<string, 'leaf' | 'node' | 'proposer'>()
+  /** Per tick: admission may defer normal parked work. Opened by `runTick`
+   * when claims can run, closed once urgent claims were evaluated. */
+  private admissionBoundary = false
+  /** Per tick: this tick's admission scan completed its urgent decision. Only
+   * `dispatch` sets it. */
+  private urgentEvaluated = false
+  /** Per tick: the deferral key this tick's admission scan was forced for. */
+  private forcedDeferralKey: string | undefined
+  /** In memory: the last deferral key whose forced scan completed and whose
+   * retries ran. An unchanged key lists again only when a scan is due on its
+   * own, so idle ticks repeating one blocked state cost no extra listing. */
+  private lastForcedDeferralKey: string | undefined
+  /** Per tick: `opts.acceptNewWork` and the repository pause sampled by `runTick`. */
+  private tickAcceptsNewWork = false
+  private tickPaused = false
   /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
    * projected wait for one of these is one tick stale and reserves nothing. */
   private readonly parkedSettled = new Set<string>()
@@ -1429,6 +1456,10 @@ export class Dispatcher {
     this.nodePollingTickReads.clear()
     this.slotWaiters.clear()
     this.parkedSettled.clear()
+    this.deferredAdmissions.clear()
+    this.admissionBoundary = false
+    this.urgentEvaluated = false
+    this.forcedDeferralKey = undefined
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -1448,6 +1479,11 @@ export class Dispatcher {
     const repoFacts = this.store.repositoryFacts()
     if (this.deps.missingAccounts) await this.reconcileAccountPresence(this.deps.missingAccounts())
     const paused = repoFacts.settings.paused
+    this.tickAcceptsNewWork = opts.acceptNewWork !== false
+    this.tickPaused = paused
+    // Normal parked work never takes a free slot before this tick's dispatch
+    // has evaluated urgent claims, while claims can run at all.
+    this.admissionBoundary = !opts.observationOnly && this.claimsPossible(opts, paused)
     const autoMergeSeedFact = undefined
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
     // provider liveness and settle their completion, lease, and publication.
@@ -1490,6 +1526,7 @@ export class Dispatcher {
     if (opts.acceptNewWork !== false) {
       await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeSeedFact)
     }
+    await this.admitDeferredParked(report, launched, paused, opts)
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
     // watch ticks. Durable pause and infrastructure-error stops suppress
@@ -1864,7 +1901,9 @@ export class Dispatcher {
       report[key] = [...previous[key]]
   }
 
-  private async scanCheckpoint(mode: 'admission' | 'observation') {
+  /** `force` makes the scan due now, skipping the interval and the journal
+   * deferral: a deferred normal admission waits on this tick's urgent claims. */
+  private async scanCheckpoint(mode: 'admission' | 'observation', { force = false } = {}) {
     const digest = (await this.repoBuildDigests())
       .filter(({ digest }) => digest.readinessChangeSeq !== undefined)
       .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq] as const)
@@ -1889,6 +1928,7 @@ export class Dispatcher {
       readinessFingerprint,
       criteriaFingerprint,
     }
+    if (force) return { ...checkpoint, allowClockRollback: false, due: true }
     // The journal measurement alone proves deferral, so the cadence row is not read.
     if (ticketScanDeferredByJournal(input))
       return { ...checkpoint, allowClockRollback: false, due: false }
@@ -1899,6 +1939,7 @@ export class Dispatcher {
   private async completeScan(
     checkpoint: Awaited<ReturnType<Dispatcher['scanCheckpoint']>>,
     report: TickReport,
+    urgentWaiting = 0,
   ): Promise<void> {
     const payload = {
       startedAt: checkpoint.startedAt,
@@ -1912,10 +1953,12 @@ export class Dispatcher {
       dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
       creationWithheld: report.creationWithheld,
       creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
+      ...(urgentWaiting > 0 ? { urgentWaiting } : {}),
     }
     const previous = this.latestScan()
     const unchanged =
       previous !== undefined &&
+      previous.urgentWaiting === payload.urgentWaiting &&
       Object.keys(payload)
         .filter((key) => key !== 'startedAt')
         .every(
@@ -2037,7 +2080,8 @@ export class Dispatcher {
         return 'already-active'
     }
     if (launched.has(slug)) return 'already-active'
-    if (launchState.kind !== 'node' && !(await this.leafAdmission(slug))) return 'already-active'
+    if (launchState.kind !== 'node' && (await this.leafAdmission(slug)) !== 'admit')
+      return 'already-active'
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
     // Callers reap and reprovision a flagged workspace; an agent never starts
@@ -2440,7 +2484,7 @@ export class Dispatcher {
       return 'budget-wait'
     // A finished leaf waits for a slot before its continuation reserves one.
     // Nothing is written: the wait costs no attempt and raises no attention.
-    if (tail === 'launch' && !(await this.leafAdmission(slug))) return 'slot-wait'
+    if (tail === 'launch' && (await this.leafAdmission(slug)) !== 'admit') return 'slot-wait'
     const branch = record.branch ?? `ab/${slug}`
     const generation = events.workspaceGenerations
     // The latest attempt at this same generation was cut off by a recorded
@@ -3603,12 +3647,62 @@ export class Dispatcher {
     return builds
   }
 
+  /** Whether ticket claims can run this tick: the one predicate both
+   * `dispatch` and the urgent admission boundary use. Without the source's
+   * priority capability every claim is normal, so nothing ever defers. */
+  private claimsPossible(opts: Pick<TickOpts, 'acceptNewWork'>, paused: boolean): boolean {
+    return (
+      !!this.deps.tickets.priority &&
+      opts.acceptNewWork !== false &&
+      !paused &&
+      this.claimGateOpen()
+    )
+  }
+
+  /** Accounts are present and the forge is not cooling down: `dispatch`'s own
+   * early returns. */
+  private claimGateOpen(): boolean {
+    if (!this.accountsAvailable()) return false
+    const health = this.store.repositoryFacts().forgeHealth
+    return !(health && Date.parse(health.resetAt) > this.deps.clock().getTime())
+  }
+
+  /** Urgent ticket claims the latest admission scan found waiting for a slot.
+   * In memory: the journal view is refreshed each tick. */
+  private urgentClaims(): number {
+    return this.tickAcceptsNewWork ? urgentClaimDemand(this.store.repositoryFacts()) : 0
+  }
+
+  /** A normal waiter must defer: claims can run and this tick's dispatch has
+   * not yet evaluated urgent claims. */
+  private urgentBoundaryOpen(): boolean {
+    return (
+      this.admissionBoundary &&
+      this.claimsPossible({ acceptNewWork: this.tickAcceptsNewWork }, this.tickPaused)
+    )
+  }
+
+  /** One parked waiter's admission into a free slot (SPEC §12 "Slot admission
+   * order"): urgent parked work, urgent claims, normal parked work, normal
+   * claims. `occupied` counts every other build holding a slot. */
+  private slotAdmission(
+    slug: string,
+    priority: TicketPriority,
+    occupied: number,
+    projection: DispatchCapacity,
+  ): 'admit' | 'wait' | 'defer' {
+    if (occupied + reservedAhead(projection, { slug, priority }) >= this.deps.config.capacity)
+      return 'wait'
+    return priority === 'normal' && this.urgentBoundaryOpen() ? 'defer' : 'admit'
+  }
+
   /** Whether a leaf may reserve a runner now. A leaf that has not finished its
    * pipeline already holds its slot, and abort and pause acknowledgements park
    * at once, so only a finished leaf that must run again is gated: it needs
-   * a free slot among every other build. A denial is recorded only in memory,
-   * for this tick's intake reservation. */
-  private async leafAdmission(slug: string): Promise<boolean> {
+   * a free slot among every other build, after urgent work ahead of it. A
+   * denial or deferral is recorded only in memory, for this tick's intake
+   * reservation; a deferral is retried after this tick's dispatch. */
+  private async leafAdmission(slug: string): Promise<'admit' | 'wait' | 'defer'> {
     const { state } = await this.store.buildFacts(slug)
     if (
       !(epilogueLeaf(state) || waitParked(state)) ||
@@ -3616,17 +3710,83 @@ export class Dispatcher {
         (command) => command.command === 'abort' || command.command === 'pause',
       )
     )
-      return true
-    const others = (await this.capacityBuilds(this.tickLaunched)).filter(
-      (build) => build.record.slug !== slug,
-    )
+      return 'admit'
+    const builds = await this.capacityBuilds(this.tickLaunched)
+    const others = builds.filter((build) => build.record.slug !== slug)
     const capacity = this.deps.config.capacity
-    if (dispatchCapacity(others, capacity, this.deps.clock()).occupied < capacity) {
+    const now = this.deps.clock()
+    const priority = buildPriority(state)
+    const outcome = this.slotAdmission(
+      slug,
+      priority,
+      dispatchCapacity(others, capacity, now).occupied,
+      dispatchCapacity(builds, capacity, now, undefined, { urgentClaims: this.urgentClaims() }),
+    )
+    if (outcome === 'admit') {
       this.slotWaiters.delete(slug)
-      return true
+      return 'admit'
     }
-    this.slotWaiters.add(slug)
-    return false
+    this.slotWaiters.set(slug, priority)
+    if (outcome === 'defer' && !this.deferredAdmissions.has(slug))
+      this.deferredAdmissions.set(slug, 'leaf')
+    return outcome
+  }
+
+  /**
+   * Retry every admission deferred this tick, once this tick's admission scan
+   * has evaluated urgent claims. Each retry re-enters its generic path with
+   * fresh state: a leaf through the lease sweep's per-build pass, a node
+   * through node admission, a proposer through proposer admission. Without a
+   * completed evaluation nothing launches: the waiters stay reserved in
+   * `slotWaiters` against normal claims and are decided again next tick.
+   */
+  private async admitDeferredParked(
+    report: TickReport,
+    launched: Set<string>,
+    paused: boolean,
+    opts: TickOpts,
+  ): Promise<void> {
+    const deferred = [...this.deferredAdmissions]
+    this.deferredAdmissions.clear()
+    if (deferred.length === 0) {
+      this.lastForcedDeferralKey = undefined
+      return
+    }
+    if (!this.urgentEvaluated) return
+    this.admissionBoundary = false
+    for (const [slug, kind] of deferred) {
+      if (this.outOfBudget(opts)) return
+      if (launched.has(slug)) continue
+      try {
+        const record = await this.store.getBuild(slug)
+        if (record === null) continue
+        if (kind === 'leaf')
+          await this.sweepBuild(record, report, launched, paused, this.deps.clock().getTime())
+        else if (kind === 'node') {
+          const builds = await this.capacityBuilds()
+          const build = builds.find((entry) => entry.record.slug === slug)
+          if (build) await this.admitNode(build, this.deps.clock(), report, launched)
+        } else {
+          const builds = await this.capacityBuilds()
+          await this.admitProposers(builds, this.deps.clock(), 0, report, launched, opts, slug)
+        }
+      } catch (error) {
+        rethrowAuthorityLapse(error)
+        if (error instanceof ForgeRequestDeferred || error instanceof MixedVersionDeferral) continue
+        if (error instanceof ForgeCooldown) throw error
+        const message =
+          error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+        report.janitorDiagnostics.push(`build ${slug}: deferred admission failed — ${message}`)
+      }
+    }
+    if (this.forcedDeferralKey !== undefined) this.lastForcedDeferralKey = this.forcedDeferralKey
+  }
+
+  /** The deferral key a forced admission scan is bounded by: the deferred
+   * slugs and the occupied count. */
+  private deferralKey(occupied: number): string | undefined {
+    if (this.deferredAdmissions.size === 0) return undefined
+    return JSON.stringify([[...this.deferredAdmissions.keys()].sort(), occupied])
   }
 
   /** Admit every node awaiting verification that has a slot, in slug order,
@@ -3661,29 +3821,40 @@ export class Dispatcher {
           slotRequest({ ...build, workspace: false }, now) === 'verification'),
     )
     const before = launched.size
-    for (const { record, state } of waiting) {
+    for (const build of waiting) {
       if (this.outOfBudget(opts)) return
-      if (
-        launched.has(record.slug) ||
-        this.hasLiveExecutionLease(record) ||
-        !state.nodeOpened ||
-        !janitorDue(state.janitor, now)
-      )
-        continue
-      await withForgeRequestContext({ build: record.slug }, async () => {
-        try {
-          if (!(await this.nodeHasCapacity(record.slug))) return
-          if (nodeMeasurementDue(state)) await this.prepareNodeMeasurement(record, report, launched)
-          else await this.prepareIntegration(record, state, report, launched)
-        } catch (error) {
-          rethrowAuthorityLapse(error)
-          report.janitorDiagnostics.push(
-            `build ${record.slug}: node admission failed — ${String(error)}`,
-          )
-        }
-      })
+      await this.admitNode(build, now, report, launched)
     }
     await this.admitProposers(builds, now, launched.size - before, report, launched, opts)
+  }
+
+  /** One waiting node's admission: a measurement or its integration
+   * verification, through the janitor's own admission path. */
+  private async admitNode(
+    { record, state }: CapacityBuild,
+    now: Date,
+    report: TickReport,
+    launched: Set<string>,
+  ): Promise<void> {
+    if (
+      launched.has(record.slug) ||
+      this.hasLiveExecutionLease(record) ||
+      !state.nodeOpened ||
+      !janitorDue(state.janitor, now)
+    )
+      return
+    await withForgeRequestContext({ build: record.slug }, async () => {
+      try {
+        if ((await this.nodeHasCapacity(record.slug)) !== 'admit') return
+        if (nodeMeasurementDue(state)) await this.prepareNodeMeasurement(record, report, launched)
+        else await this.prepareIntegration(record, state, report, launched)
+      } catch (error) {
+        rethrowAuthorityLapse(error)
+        report.janitorDiagnostics.push(
+          `build ${record.slug}: node admission failed — ${String(error)}`,
+        )
+      }
+    })
   }
 
   /**
@@ -3729,6 +3900,7 @@ export class Dispatcher {
    * longer fits current state (a stop, a spent budget, or a room shrunk below
    * its allowance); the node requests again at the current room once room
    * exists. A session that already started keeps its allowance and resumes.
+   * `only` restricts the pass to one deferred proposer's retry.
    */
   private async admitProposers(
     builds: CapacityBuild[],
@@ -3737,15 +3909,19 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     opts: TickOpts,
+    only?: string,
   ): Promise<void> {
     const proposers = builds.filter(
-      (build) => build.state.kind === 'node' && proposeRunDue(build.state.optimization),
+      (build) =>
+        build.state.kind === 'node' &&
+        proposeRunDue(build.state.optimization) &&
+        (only === undefined || build.record.slug === only),
     )
     if (proposers.length === 0) return
-    let free =
-      this.deps.config.capacity -
-      dispatchCapacity(builds, this.deps.config.capacity, now).occupied -
-      admittedThisPass
+    const projection = dispatchCapacity(builds, this.deps.config.capacity, now, undefined, {
+      urgentClaims: this.urgentClaims(),
+    })
+    let occupied = projection.occupied + admittedThisPass
     for (const build of proposers) {
       if (this.outOfBudget(opts)) return
       const { record, state } = build
@@ -3784,8 +3960,16 @@ export class Dispatcher {
           )
             return
           if (!holding) {
-            if (free <= 0 || !this.accountsAvailable()) return
-            free--
+            if (!this.accountsAvailable()) return
+            const outcome = this.slotAdmission(
+              record.slug,
+              buildPriority(state),
+              occupied,
+              projection,
+            )
+            if (outcome === 'defer') this.deferredAdmissions.set(record.slug, 'proposer')
+            if (outcome !== 'admit') return
+            occupied++
           }
           await this.launchProposer(record, report, launched)
         } catch (error) {
@@ -4126,16 +4310,37 @@ export class Dispatcher {
     await this.recordExhausted(record.slug)
   }
 
-  private async nodeHasCapacity(slug: string): Promise<boolean> {
+  /** A node's admission into a free slot. A verification or measurement
+   * request (`reserving`) yields to urgent work ahead of it and defers while
+   * urgent claims are unevaluated. A node that already holds its slot — a
+   * restack-conflict reconcile, or runner work that kept its workspace across
+   * a failed launch or expired lease — only needs the node's own room:
+   * priority orders free slots, never one the node owns. */
+  private async nodeHasCapacity(
+    slug: string,
+    reserving = true,
+  ): Promise<'admit' | 'wait' | 'defer'> {
     const builds = await this.capacityBuilds()
-    return (
-      nodeCapacity(
-        builds,
-        slug,
-        this.deps.clock(),
-        migrationIdentity(this.store.repositoryFacts().ticketMigrations, this.deps.tickets.name),
-      ).occupied < this.deps.config.capacity
+    const now = this.deps.clock()
+    const identity = migrationIdentity(
+      this.store.repositoryFacts().ticketMigrations,
+      this.deps.tickets.name,
     )
+    const { occupied } = nodeCapacity(builds, slug, now, identity)
+    const node = builds.find((build) => build.record.slug === slug)
+    if (!reserving || (node && occupiesCapacity(node, now)))
+      return occupied < this.deps.config.capacity ? 'admit' : 'wait'
+    const outcome = this.slotAdmission(
+      slug,
+      node ? buildPriority(node.state) : 'normal',
+      occupied,
+      dispatchCapacity(builds, this.deps.config.capacity, now, identity, {
+        urgentClaims: this.urgentClaims(),
+      }),
+    )
+    if (outcome === 'defer' && !this.deferredAdmissions.has(slug))
+      this.deferredAdmissions.set(slug, 'node')
+    return outcome
   }
 
   private hasLiveExecutionLease(record: BuildRecord): boolean {
@@ -6471,6 +6676,7 @@ export class Dispatcher {
           kind?: 'work' | 'node'
           target?: EventPayload<'build.created'>['target']
           baseBranch?: string
+          priority?: 'urgent'
         }
       | undefined,
   ): EventPayload<'build.created'> {
@@ -6496,7 +6702,15 @@ export class Dispatcher {
           }
         : {}),
       ...(seed?.profile !== undefined ? { profile: seed.profile } : {}),
+      ...(seed?.priority !== undefined ? { priority: seed.priority } : {}),
     }
+  }
+
+  /** The claimed ticket's priority, frozen on `build.created`; normal is omitted. */
+  private claimedPriority(ticket: Ticket): { priority?: 'urgent' } {
+    return this.deps.tickets.priority && ticketPriority(ticket) === 'urgent'
+      ? { priority: 'urgent' }
+      : {}
   }
 
   /** Every boundary before runner attachment is derived from durable facts.
@@ -6566,6 +6780,7 @@ export class Dispatcher {
               ? { issueLinks: seed.ticket.issueLinks }
               : {}),
             ...(seed !== undefined ? this.selectedProfile(seed.ticket) : {}),
+            ...(seed !== undefined ? this.claimedPriority(seed.ticket) : {}),
           }),
         })
         events = (await readBuildFacts(store, record.slug)).value
@@ -7057,7 +7272,7 @@ export class Dispatcher {
   /**
    * End open ticket waits whose tickets settled (SPEC §11 "Ticket waits").
    * Every waited ticket completed: `wait.ended {cause: automatic}`, and the
-   * build resumes ahead of new claims. Any waited ticket rejected (the
+   * build resumes ahead of normal claims. Any waited ticket rejected (the
    * configured rejected role) or deleted: one `policy/wait-unresolvable`
    * escalation naming it, which the reducer reads as the wait's end. A wait
    * with tickets still pending stays in place.
@@ -7436,7 +7651,7 @@ export class Dispatcher {
     const runs = decision.kind !== 'wait' || publicationRecoveryDue || orphanRecoveryDue
     // A finished leaf with work to run waits for a slot before anything is
     // reaped, provisioned or launched for it.
-    if (runs && state.kind !== 'node' && !(await this.leafAdmission(record.slug))) return
+    if (runs && state.kind !== 'node' && (await this.leafAdmission(record.slug)) !== 'admit') return
     // A finished parked leaf keeps its workspace until merge or close; a
     // stale environment is reaped only for an admitted replacement.
     // A leaf waiting on tickets, or on the dispatcher's check of its wait,
@@ -7736,12 +7951,25 @@ export class Dispatcher {
     opts: TickOpts = {},
     autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
-    if (!this.accountsAvailable()) return
-    const health = this.store.repositoryFacts().forgeHealth
-    if (health && Date.parse(health.resetAt) > this.deps.clock().getTime()) return
+    if (!this.claimGateOpen()) return
     const store = this.store
     const { tickets, config } = this.deps
-    const checkpoint = await this.scanCheckpoint('admission')
+    // A normal parked admission deferred this tick waits on urgent claims:
+    // list now, once per deferral key; an unchanged key waits for a scan that
+    // is due on its own.
+    let force = false
+    let deferralBuilds: CapacityBuild[] | undefined
+    if (this.deferredAdmissions.size > 0) {
+      deferralBuilds = await this.capacityBuilds(launched)
+      const key = this.deferralKey(
+        dispatchCapacity(deferralBuilds, config.capacity, this.deps.clock()).occupied,
+      )
+      if (key !== this.lastForcedDeferralKey) {
+        force = true
+        this.forcedDeferralKey = key
+      }
+    }
+    const checkpoint = await this.scanCheckpoint('admission', { force })
     if (!checkpoint.due) return
     // Clear only standing measurement fields; action counters belong to this tick.
     report.queued = report.invalidTickets = report.dependencyBlocked = report.creationWithheld = 0
@@ -7752,18 +7980,22 @@ export class Dispatcher {
     // even while blocked or paused; a finished build parked for its merge
     // decision holds none. Capacity is per repo (§16.1) — another repo's
     // builds never consume this repo's slots.
-    const capacityBuilds = await this.capacityBuilds(launched)
+    // The checkpoint writes nothing, so a deferral's capacity read is current.
+    const capacityBuilds = deferralBuilds ?? (await this.capacityBuilds(launched))
     // A node awaiting verification, or a parked build that must run again,
-    // reserves its slot ahead of new claims until it is admitted; this only
-    // ever lowers the claim budget.
+    // reserves its slot ahead of claims of its own or a lower priority until
+    // it is admitted; this only ever lowers the claim budgets. Urgent claims
+    // wait only for urgent parked work (SPEC §12 "Slot admission order").
     const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock())
     const activeRefs: TicketRef[] = capacityBuilds
       .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
-    let capacity = intakeCapacity(projection, {
-      settled: this.parkedSettled,
-      denied: this.slotWaiters,
-    })
+    const adjust = { settled: this.parkedSettled, denied: this.slotWaiters }
+    let capacity = intakeCapacity(projection, adjust)
+    let urgentCapacity = tickets.priority ? intakeCapacity(projection, adjust, 'urgent') : capacity
+    let urgentWaiting = 0
+    const urgentClaim = (ticket: Ticket) =>
+      !!tickets.priority && ticket.kind !== 'node' && ticketPriority(ticket) === 'urgent'
 
     // The ready scan runs even at full capacity: `queued` is the operator's
     // standing queue-depth report and must stay honest exactly when the
@@ -7834,9 +8066,13 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
+    // Saturated, an urgent ticket still runs the preflight: it claims an
+    // urgent budget, or counts as urgent demand waiting for a slot.
+    const urgentReady = ready.some((ticket) => urgentClaim(ticket) && !withheld.has(ticket.ref.id))
     if (
       paused ||
       (capacity <= 0 &&
+        !urgentReady &&
         !ready.some(
           (ticket) =>
             ticket.kind === 'node' ||
@@ -7844,7 +8080,11 @@ export class Dispatcher {
         ))
     ) {
       await this.sourceCondition(undefined, 'ready-scan')
-      if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
+      if (!this.outOfBudget(opts)) {
+        await this.completeScan(checkpoint, report)
+        // No urgent ticket is ready: this scan decided urgent claims.
+        if (!paused) this.urgentEvaluated = true
+      }
       return
     }
     // One dependency-node cache per scan: blockers are commonly shared across
@@ -8029,12 +8269,24 @@ export class Dispatcher {
         report.dependencyDiagnostics.push(...verdict.diagnostics)
       }
     }
+    let claimLoopCompleted = true
     for (const ticket of ready) {
-      if (this.outOfBudget(opts)) break
-      if (ticket.kind !== 'node' && capacity <= 0) continue
+      if (this.outOfBudget(opts)) {
+        claimLoopCompleted = false
+        break
+      }
+      const urgent = urgentClaim(ticket)
+      const budget = urgent ? urgentCapacity : capacity
+      if (ticket.kind !== 'node' && budget <= 0 && !urgent) continue
       if (withheld.has(ticket.ref.id)) continue
       if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
       if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
+      // An urgent ticket that passed every gate but capacity is demand that
+      // normal parked work yields to until the next admission scan.
+      if (ticket.kind !== 'node' && budget <= 0) {
+        urgentWaiting += 1
+        continue
+      }
 
       const target = await this.resolveNodeTarget(ticket, targetScan)
       if (typeof target === 'string') {
@@ -8074,7 +8326,10 @@ export class Dispatcher {
       }
       await store.ensureRepo(this.deps.repo)
       // A lapsed run leaves the ticket Ready for whoever holds the repository.
-      if (this.deps.holdsRepoAuthority?.() === false) break
+      if (this.deps.holdsRepoAuthority?.() === false) {
+        claimLoopCompleted = false
+        break
+      }
       await store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
         type: 'ticket-preparation.intended',
@@ -8196,6 +8451,7 @@ export class Dispatcher {
           ...(ticket.issueLinks !== undefined ? { issueLinks: ticket.issueLinks } : {}),
           // Fixed at claim from the same sample: relabelling never changes it.
           ...this.selectedProfile(ticket),
+          ...this.claimedPriority(ticket),
         }
         // `build.created` rides with the record so the pinned assets and the
         // record exist together or not at all.
@@ -8267,7 +8523,10 @@ export class Dispatcher {
         )
       }
       report.queued -= 1
-      if (ticket.kind !== 'node') capacity -= 1
+      if (ticket.kind !== 'node') {
+        capacity -= 1
+        urgentCapacity -= 1
+      }
       const outcome = await this.attemptDispatchCompletion(record, launched, report, {
         ticket,
         body,
@@ -8278,7 +8537,11 @@ export class Dispatcher {
       // means the remote provisioning continuation owns the rest.
       if (outcome === 'completed' || outcome === 'deferred') report.dispatched += 1
     }
-    if (scanSuccessful && !this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
+    if (scanSuccessful && !this.outOfBudget(opts)) {
+      await this.completeScan(checkpoint, report, urgentWaiting)
+      // The only other place this tick authorizes deferred normal admissions.
+      if (claimLoopCompleted) this.urgentEvaluated = true
+    }
   }
 
   /**
@@ -8814,7 +9077,7 @@ export class Dispatcher {
         }
 
         if (!this.accountsAvailable()) return
-        if (!(await this.nodeHasCapacity(record.slug))) return
+        if ((await this.nodeHasCapacity(record.slug, false)) !== 'admit') return
         // `launch()` refuses a flagged workspace and leaves the reap to its
         // callers; this is the node's caller for conflict work.
         const current = await this.replaceFlaggedWorkspace(record, facts, launched)
@@ -9080,7 +9343,7 @@ export class Dispatcher {
         await this.releaseWorkspace(record.slug, facts)
       return
     }
-    if (!(await this.nodeHasCapacity(record.slug))) return
+    if ((await this.nodeHasCapacity(record.slug)) !== 'admit') return
     await this.observeIntegration(record.slug)
     state = (await this.store.buildFacts(record.slug)).state
     if (!integrationCurrent(state)) return

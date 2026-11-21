@@ -294,6 +294,12 @@ describe('operator behavioral parity contract', () => {
       direct: { kind: 'hold', reason: '  waiting on T-2 ' },
       request: { action: 'hold', reason: '  waiting on T-2 ' },
     },
+    {
+      name: 'priority',
+      seed: async () => {},
+      direct: { kind: 'priority', priority: 'urgent' },
+      request: { action: 'priority', priority: 'urgent' },
+    },
   ]
 
   for (const item of buildCases) {
@@ -605,6 +611,35 @@ describe('operator behavioral parity contract', () => {
     expect((await toolStore.getEvents(SLUG)).at(-1)).toMatchObject({
       type: 'build.hold-requested',
       payload: { reason: 'waiting on T-2' },
+    })
+  })
+
+  test('the MCP priority action requires its value and nothing else takes one', async () => {
+    const failed = (promise: Promise<unknown>) =>
+      promise.then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    const store = await makeStore()
+    const before = (await store.getEvents(SLUG)).length
+    const registry = buildRegistry({ store, clock })
+    const control = (args: Record<string, unknown>) =>
+      registry.call('builds.control', { repo: REPO, slug: SLUG, ...args }, { identity: USER })
+    expect(((await failed(control({ action: 'priority' }))) as RegistryError).body).toEqual({
+      kind: 'validation',
+      error: '"priority" is required with the priority action',
+    })
+    expect(
+      ((await failed(control({ action: 'pause', priority: 'urgent' }))) as RegistryError).body,
+    ).toEqual({
+      kind: 'validation',
+      error: '"priority" applies only to the priority action, not "pause"',
+    })
+    expect((await store.getEvents(SLUG)).length).toBe(before)
+    await control({ action: 'priority', priority: 'urgent' })
+    expect((await store.getEvents(SLUG)).at(-1)).toMatchObject({
+      type: 'build.priority-set',
+      payload: { priority: 'urgent' },
     })
   })
 
