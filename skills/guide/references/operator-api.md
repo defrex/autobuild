@@ -296,6 +296,9 @@ The default watch reports actionable conditions only:
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`,
   `landing.consent-revoked` (protected merge consent revoked by a reconcile's
   edits, naming the matched files and both heads),
+  `pr.checks-failed` (failing forge CI at a finished leaf's live PR head, once
+  per head and failing set; build summaries, details and merge-queue entries
+  carry it as `ciFailure` until it clears),
   `optimization.noise-exceeded` (an optimization node's ε is below its
   measured noise, naming both), or conflicted
   `restack.replayed` events. `build.consent-ready` is the single
@@ -382,7 +385,7 @@ learn their outcomes from status reconciliation at exit.
 
 `ab wait --for attention` is build-only and uses the same build conditions:
 current failed node verification, an open escalation other than a ticket wait's
-own, janitor failure attention,
+own, janitor failure attention, a current forge CI failure,
 consent readiness, merge/conflict attention or a merge decision. Current failed
 verification satisfies attention even before its notification is written. Existing conditions return immediately,
 even with `--since`; live and backlog matches ignore routine outcomes and
