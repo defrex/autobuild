@@ -292,8 +292,10 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         expect(frame.text).toContain('Unicode warning')
       }
     } else if (frame.id === 'parked-slot-wait-wide') {
-      expect(frame.text).toContain('1 parked build waiting for a slot ahead of new ticket claims')
-      expect(frame.text).toContain('! reconcile waiting for a slot ahead of new ticket claims')
+      expect(frame.text).toContain(
+        '1 parked build waiting for a slot ahead of normal ticket claims',
+      )
+      expect(frame.text).toContain('! reconcile waiting for a slot ahead of normal ticket claims')
       expect(frame.model.capacity?.waitingBuilds).toEqual([
         { slug: 'cache-warm-on-deploy', request: 'reconcile' },
       ])
