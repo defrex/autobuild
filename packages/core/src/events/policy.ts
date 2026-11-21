@@ -195,6 +195,10 @@ export const buildEventPolicy = {
   'pr.merged': 'decisive',
   'pr.closed': 'decisive',
   'pr.conflicted': 'decisive',
+  // Advisory: forge CI observations only feed attention displays. A reader
+  // that ignores them never lands, merges or dispatches differently.
+  'pr.checks-failed': 'advisory',
+  'pr.checks-cleared': 'advisory',
   'reconcile.progress-checked': 'decisive',
   'reconcile.started': 'decisive',
   'reconcile.prepared': 'decisive',

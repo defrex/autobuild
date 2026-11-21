@@ -1857,6 +1857,29 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(stepFor(enabled, 'merge')?.reason).toBeUndefined()
   })
 
+  test('failing forge CI at the PR head is a red row alert until it clears', () => {
+    const red = ev('pr.checks-failed', {
+      pr: 7,
+      head: 'sha-r1',
+      buildHead: 'sha-r1',
+      checks: [{ name: 'unit', source: 'check-run', conclusion: 'failure' }],
+      total: 3,
+      digest: 'e'.repeat(64),
+    })
+    expect(project(toLog(throughPr)).alert).toBeUndefined()
+    const build = project(toLog([...throughPr, red]))
+    expect(build.alert).toEqual({ tone: 'red', text: 'Forge CI failing at sha-r1: unit (+2 more)' })
+    expect(build.tree?.ciFailure).toBe('forge CI failing at sha-r1: unit (+2 more)')
+    const cleared = project(
+      toLog([
+        ...throughPr,
+        red,
+        ev('pr.checks-cleared', { pr: 7, head: 'sha-r1', cause: 'passing' }),
+      ]),
+    )
+    expect(cleared.alert).toBeUndefined()
+  })
+
   test('a fallback landing route names itself on the row, the merge step and the blockers', () => {
     const candidate = { head: 'sha-r1', parent: 'base', cycle: '1' }
     const decided = [

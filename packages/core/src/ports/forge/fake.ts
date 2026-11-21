@@ -30,6 +30,7 @@ import type {
   IssueLink,
   PrRef,
   PrState,
+  HeadChecks,
 } from '../types'
 import type { HostedPrAttachmentAsset } from '../../ontology'
 
@@ -152,6 +153,20 @@ export class FakeForge implements Forge {
     return gate === 'absent'
       ? { kind: 'proved-ungated' }
       : { kind: 'gated', reason: 'Fake destination requires merge gates' }
+  }
+  /** Seeded forge CI per exact head sha; an `Error` is thrown on read.
+   * Unseeded heads report `unknown/unavailable`. */
+  readonly headChecks = new Map<string, HeadChecks | Error>()
+  /** Each `inspectHeadChecks` read, in order. */
+  readonly headCheckReads: { workspacePath: string; sha: string }[] = []
+  setHeadChecks(sha: string, checks: HeadChecks | Error): void {
+    this.headChecks.set(sha, checks)
+  }
+  async inspectHeadChecks(workspacePath: string, sha: string): Promise<HeadChecks> {
+    this.headCheckReads.push({ workspacePath, sha })
+    const seeded = this.headChecks.get(sha)
+    if (seeded instanceof Error) throw seeded
+    return seeded ? structuredClone(seeded) : { kind: 'unknown', reason: 'unavailable' }
   }
   readonly name = 'fake'
   /** Absent by default, matching a forge without issue-closing support. */

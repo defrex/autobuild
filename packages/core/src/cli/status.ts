@@ -8,6 +8,8 @@ import { indexLog } from '../kernel/log-index'
 import { projectTree, treeVocabulary, type TreeProjection } from './dashboard/tree'
 import { holdReason, mergeVocabulary } from './dashboard/landing-display'
 import { reopenedSummary, reopenedText, type ReopenedSummary } from './dashboard/reopen-display'
+import { ciFailureText, currentCiFailure } from '../kernel/forge-checks'
+import type { HeadCheck } from '../ports/types'
 import { buildVocabulary } from './dashboard/model'
 import {
   objectiveSegments,
@@ -185,6 +187,16 @@ export interface BuildSummary {
   holdReason?: string
   /** An operator reopened this leaf and it has not settled again (§15.7). */
   reopened?: ReopenedSummary
+  /** Failing forge CI recorded at the open PR's live head, while it still
+   * describes the build's head (`currentCiFailure`). Absent CI is unknown or
+   * passing, never claimed green. */
+  ciFailure?: {
+    head: string
+    buildHead: string
+    checks: HeadCheck[]
+    total: number
+    text: string
+  }
 }
 
 export interface VerifyProgress {
@@ -419,6 +431,7 @@ export function summarizeFrom(
   const measurement = measurementSummary(state)
   const heldBecause = holdReason(state.landing)
   const reopened = reopenedSummary(state)
+  const ciFailure = currentCiFailure(state)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -474,6 +487,17 @@ export function summarizeFrom(
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
     ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
     ...(reopened !== undefined ? { reopened } : {}),
+    ...(ciFailure !== undefined
+      ? {
+          ciFailure: {
+            head: ciFailure.head,
+            buildHead: ciFailure.buildHead,
+            checks: structuredClone(ciFailure.checks),
+            total: ciFailure.total,
+            text: ciFailureText(ciFailure),
+          },
+        }
+      : {}),
   }
 }
 
@@ -821,9 +845,8 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       prCell(summary),
     ])
   }
-  // An optimization node's objective progress, a held merge's reason and a
-  // reopen ride on continuation lines under the row, so they cost the table's
-  // column alignment nothing.
+  // Objective progress, hold reasons, reopen details and failing forge CI
+  // ride on continuation lines without affecting the table's column alignment.
   return padColumns(rows).flatMap((line, index) => {
     const summary = index === 0 ? undefined : summaries[index - 1]!
     const objective = summary?.objective
@@ -838,6 +861,9 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
         ? []
         : [`    ${mergeVocabulary.label} ${safeStatusText(mergeVocabulary.held(held))}`]),
       ...(reopened === undefined ? [] : [`    ${safeStatusText(reopenedText(reopened))}`]),
+      ...(summary?.ciFailure === undefined
+        ? []
+        : [`    ! ${safeStatusText(summary.ciFailure.text)}`]),
     ]
   })
 }
@@ -1025,6 +1051,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
             : 'consented (head not recorded)'
           : 'no consent recorded'
     lines.push(`  merge:    ${consent} · current head ${d.tree.currentHead ?? 'unknown'}`)
+  }
+  if (d.ciFailure !== undefined) {
+    lines.push(`  forge CI: ${safeStatusText(d.ciFailure.text)}`)
+    for (const check of d.ciFailure.checks)
+      if (check.url !== undefined)
+        lines.push(`    ${safeStatusText(check.name)}: ${safeStatusText(check.url)}`)
   }
   if (d.wait !== undefined)
     lines.push(

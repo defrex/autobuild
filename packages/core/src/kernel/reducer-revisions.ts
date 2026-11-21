@@ -28,4 +28,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'logIndex/fold/oj2ejk6qgb': 'Reopen of a settled leaf (build.reopened)',
   'executionNoProgress/fold/e37vc1wkgl': 'Reopen of a settled leaf (build.reopened)',
   'terminalGuard/fold/stc1et9vcy': 'A reopen re-runs verify and finalize terminals',
+  'build/shape/0sj01uqgcz': 'Forge CI failure record on finished leaves',
+  'buildReadFacts/shape/42qtslvxvq': 'Forge CI failure record on finished leaves',
+  'buildStreamSeed/shape/9970dr98ff': 'Forge CI failure record on finished leaves',
 }
