@@ -83,6 +83,23 @@ describe('stored consent eligibility', () => {
     state.landing!.command = { kind: 'land', seq: 9, decisionSeq: 6, head: 'head' }
     expect(projectTree(record, state, restack).holdReason).toBeNull()
   })
+  test('projects a current forge CI failure and hides it once the build head moves', () => {
+    const record = { slug: 'leaf', repo: 'repo', createdAt: '', updatedAt: '' }
+    const state = ready()
+    expect(projectTree(record, state, restack).ciFailure).toBeNull()
+    state.ciFailure = {
+      pr: 1,
+      head: 'head',
+      buildHead: 'head',
+      checks: [{ name: 'unit', source: 'check-run', conclusion: 'failure' }],
+      total: 1,
+      digest: 'd'.repeat(64),
+      seq: 7,
+    }
+    expect(projectTree(record, state, restack).ciFailure).toBe('forge CI failing at head: unit')
+    state.pr = { ...state.pr!, headSha: 'reconciled' }
+    expect(projectTree(record, state, restack).ciFailure).toBeNull()
+  })
   test('unknown children are unknown and frozen target never comes from source metadata', () => {
     const state = {
       ...ready(),
