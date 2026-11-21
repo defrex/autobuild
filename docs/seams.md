@@ -21,7 +21,7 @@ See [Build store](build-store.md) and [Tickets](ticket-sources.md).
 
 ## Agents, code, and workspaces
 
-- **Agent runtimes.** Claude Code, Codex and Pi. Roles choose runtime and model.
+- **Agent runtimes.** Claude Code, Codex, Pi and Antigravity. Roles choose runtime and model.
 - **Forges.** GitHub and local git. Remote setups need GitHub.
 - **Workspaces.** Local git worktrees, or Vercel Sandbox machines for runners, agents and checks.
 
@@ -57,7 +57,7 @@ See [Dispatcher hosting](dispatcher-hosting.md).
 ## Seam guides
 
 - [Tickets](ticket-sources.md): file, Linear, hosted, GitHub, ticket trees.
-- [Agent runtimes](agent-runtimes.md): Claude Code, Codex, Pi, models.
+- [Agent runtimes](agent-runtimes.md): Claude Code, Codex, Pi, Antigravity, models.
 - [Workspaces](workspaces.md): git worktree, Vercel Sandbox, provisioning.
 - [Forges](forges.md): GitHub, local git, publication adapters.
 - [Build store](build-store.md): SQLite, remote HTTP, contracts.
