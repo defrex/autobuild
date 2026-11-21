@@ -368,6 +368,33 @@ function corpora(): unknown[][] {
         role: 'ready',
       },
     },
+    {
+      type: 'ticket.start-requested',
+      actor: { kind: 'human', user: 'alice' },
+      payload: { ticket: preparationTicket },
+    },
+    {
+      type: 'ticket.start-settled',
+      payload: {
+        request: 9,
+        ticket: preparationTicket,
+        outcome: 'started',
+        slug: 'build',
+        detail: 'claimed',
+      },
+    },
+    {
+      type: 'ticket.start-requested',
+      actor: { kind: 'human', user: 'alice' },
+      payload: { ticket: { source: 'fake', id: 'T-2' } },
+    },
+    {
+      type: 'ticket.identity-recorded',
+      payload: {
+        identities: [{ build: 'build', recorded: 'ticket-1', canonical: 'T-1' }],
+        released: ['gone'],
+      },
+    },
   ].map((event, index) => ({
     seq: index + 1,
     ts: '2026-10-24T00:00:00.000Z',
