@@ -457,7 +457,7 @@ test('human repository status explains actual, configured and descendant-held ca
     waitingNodes: [{ slug: 'release-node', request: 'verification' }],
   }
   expect(renderRepositoryStatus(status)).toContain(
-    'capacity: 2/2 effective; 2 configured; 0 nodes using descendant-held slots; 1 node waiting for a slot ahead of new ticket claims: release-node (verification)',
+    'capacity: 2/2 effective; 2 configured; 0 nodes using descendant-held slots; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification)',
   )
   expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
 })

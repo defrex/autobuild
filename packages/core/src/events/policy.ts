@@ -22,6 +22,8 @@ export const buildEventPolicy = {
   // Decisive: a reader that ignored it would merge on revoked consent.
   'landing.consent-revoked': 'decisive',
   'build.hold-requested': 'decisive',
+  // A reader that ignores it only admits the build in normal order.
+  'build.priority-set': 'advisory',
   'build.land-requested': 'decisive',
   'landing.command-acknowledged': 'decisive',
   'landing.native-enable-started': 'decisive',

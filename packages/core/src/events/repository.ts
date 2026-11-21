@@ -474,6 +474,9 @@ export const dispatcherStatusEventPayloadSchemas = {
     dependencyDiagnostics: boundedDiagnostics,
     creationWithheld: z.number().int().nonnegative(),
     creationDiagnostics: boundedDiagnostics,
+    /** Urgent non-node ready tickets that passed every intake gate except
+     * capacity in this admission scan; omitted when none. */
+    urgentWaiting: z.number().int().positive().optional(),
   }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */

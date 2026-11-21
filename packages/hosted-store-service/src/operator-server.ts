@@ -625,7 +625,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
                         kind: 'hold',
                         ...(request.reason !== undefined ? { reason: request.reason } : {}),
                       }
-                    : { kind: request.action }
+                    : request.action === 'priority'
+                      ? { kind: 'priority', priority: request.priority }
+                      : { kind: request.action }
         return json(
           200,
           await controlBuild({
