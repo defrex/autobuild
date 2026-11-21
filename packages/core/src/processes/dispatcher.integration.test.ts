@@ -17418,12 +17418,15 @@ test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 1
     preLimit: failingTick,
     threshold: { ...failingTick, append: 2 },
     escalated: failingTick,
+    // The recovering poll reaches the open-PR epilogue, whose forge CI read
+    // pays the forge guard's constant cooldown check before and after the
+    // call (two served repository reads, no event rows), like getPrState.
     recovery: {
       append: 1,
       getArtifact: 2,
       getLatestArtifactMeta: 1,
-      getReducerValue: 22,
-      getRepo: 5,
+      getReducerValue: 24,
+      getRepo: 7,
       getRepoBuildDigests: 1,
       listBuilds: 2,
     },
