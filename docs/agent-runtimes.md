@@ -1,7 +1,7 @@
 ---
 title: "Agent runtimes"
 group: "reference"
-description: "Choose Claude Code, Codex, or Pi, route producer and reviewer models, and implement a runtime adapter."
+description: "Choose Claude Code, Codex, Pi, or Antigravity, route producer and reviewer models, and implement a runtime adapter."
 label: "Agent runtimes"
 order: 14
 ---
@@ -16,13 +16,14 @@ A runtime transports agent turns: it starts, continues, cancels and ends session
 
 Install with `bun add -d --exact @defrex/autobuild`. Examples are complete minimal configs for local execution: install and authenticate the CLI on the dispatcher host, then run `bun ab init --validate`.
 
-Claude Code supports named subscription and Kimi Code billing [accounts](configuration-overview.md#accounts). In a remote sandbox, the guest holds placeholders and host egress policy supplies credentials only to the selected provider. Use the unmodified runtime with your own subscription for ordinary individual usage. Provision every selected runtime and alternate; Pi retains its existing authentication. Codex can explicitly select a ChatGPT subscription account; see [billing accounts](configuration-overview.md#accounts). See [Workspaces](workspaces.md).
+Claude Code supports named subscription and Kimi Code billing [accounts](configuration-overview.md#accounts). In a remote sandbox, the guest holds placeholders and host egress policy supplies credentials only to the selected provider. Use the unmodified runtime with your own subscription for ordinary individual usage. Provision every selected runtime and alternate; Pi and Antigravity retain their existing authentication. Codex can explicitly select a ChatGPT subscription account; see [billing accounts](configuration-overview.md#accounts). See [Workspaces](workspaces.md).
 
 | Runtime | Models | Model ids | Default model |
 |---|---|---|---|
 | `claude` | Anthropic or a selected Kimi Code account, via Claude Code | `claude-` family; Kimi membership IDs with a Kimi account | CLI default; `kimi-for-coding` for Kimi |
 | `codex` | OpenAI, via the Codex CLI | `gpt-` family | the CLI's default |
 | `pi` | many providers | `provider/model` | `kimi-coding/k3` |
+| `antigravity` | Google models and Antigravity's Claude and GPT models, via the Antigravity CLI (`agy`) | `gemini-`, `claude-`, `gpt-` slugs (see `agy models`) | the CLI's default |
 
 Set the model with the role's `model` field, not in `args`; the adapter owns model and output-protocol flags.
 
@@ -73,6 +74,32 @@ model = "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
 <!-- seam-config:end -->
 
 Set an explicit route for any provider other than the `kimi-coding/k3` default. Example ids show syntax, not availability.
+
+### Antigravity (`antigravity`)
+
+Install the Antigravity CLI ([getting started](https://antigravity.google/docs/getting-started)); the installer puts `agy` in `~/.local/bin`, which must be on `PATH`. Authentication is ambient, and Autobuild has no named accounts for it. Use one of:
+
+- an interactive `agy` sign-in, stored in the OS keyring (a locked keyring fails the turn)
+- `GEMINI_API_KEY` with `modelProvider = "gemini"` in Antigravity's settings
+- Google Cloud application default credentials, with `AGY_ADC_AUTH=true` after `gcloud auth application-default login`
+
+Sessions run headless with `--dangerously-skip-permissions`, so no tool-approval prompt can stall them. A turn that ends waiting for input, for example under an artifact review policy that asks for review or in plan mode, is a configuration failure: set `artifactReviewPolicy` to always proceed and do not use plan mode for Autobuild sessions. Model and protocol flags belong to the adapter; options such as `--effort high` pass through `args`. Turning on agy's terminal sandbox can cut shell commands off from the network the session's `ab` commands need.
+
+Antigravity declares no tool-free `oneShot`, because agy cannot guarantee a turn runs no tools. Callers take their deterministic fallbacks: slug naming uses the ticket title, and an upgrade conflict stays for manual resolution. `ab init` verifies authentication with one minimal request per configured model, run in an empty temporary directory.
+
+<!-- seam-config:start -->
+```toml
+[tickets]
+source = "file"
+readyState = "ready"
+
+[roles.default]
+runtime = "antigravity"
+model = "gemini-3.8-flash-medium"
+```
+<!-- seam-config:end -->
+
+Omit `model` to use the CLI's configured default. Example ids show syntax, not availability.
 
 ## Choosing models
 
@@ -149,7 +176,7 @@ Optional capabilities:
 - **`startPrompt(opts)`** returns the exact first message `start` sends for those inputs. The kernel records it on `session.started` so `ab build status` shows what the model was sent; omit it when unknown, and the fact records no prompt.
 - **Native resume.** Declaring it means running `describeNativeResumeContract` with a `NativeResumeContractFixture` and preserving fresh-process identity and continuation semantics.
 
-Test with an `AgentRunnerContractFactory` whose `AgentRunnerContractHarness` fixtures cover successful turns, typed failures, cancellation, turn-environment observations and cleanup. Run `describeAgentRunnerContract` unchanged, or expose its fixture through the plugin descriptor and run:
+Test with an `AgentRunnerContractFactory` whose `AgentRunnerContractHarness` fixtures cover successful turns, typed failures, cancellation, turn-environment observations and cleanup. Set the harness's `idempotentEnd` when a repeated `end` returns the first transcript instead of rejecting. Run `describeAgentRunnerContract` unchanged, or expose its fixture through the plugin descriptor and run:
 
 ```sh
 bun ab plugin test agent-runtime acme

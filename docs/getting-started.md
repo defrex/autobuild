@@ -11,7 +11,7 @@ order: 1
 Start in the repository you want Autobuild to build. You need:
 
 - [Bun](https://bun.sh) and git
-- your agent runtime's local prerequisites: Claude Code, Codex CLI, or Pi
+- your agent runtime's local prerequisites: Claude Code, Codex CLI, Pi, or Antigravity CLI
 - for the GitHub forge, an authenticated [gh CLI](https://cli.github.com) or an exported `GITHUB_TOKEN` or `GH_TOKEN`; the local-git forge needs no account or remote
 
 
