@@ -4,6 +4,7 @@ import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentRunner, AgentStartOpts, NativeSessionHandle } from '../types'
+import { AntigravityAgentRunner, type AntigravityCliRunFn } from './antigravity'
 import { ClaudeAgentRunner, type ClaudeCliRunFn } from './claude'
 import { CodexAgentRunner, type CodexCliRunFn } from './codex'
 import { PiAgentRunner } from './pi'
@@ -21,26 +22,55 @@ const opts: AgentStartOpts = {
 }
 function output(provider: string, id: string, text: string, failure = false) {
   const events =
-    provider === 'claude'
+    provider === 'antigravity'
       ? [
-          { type: 'system', subtype: 'init', session_id: id },
+          { event: 'init', conversation_id: id, init: { cwd: '/tmp' } },
+          ...(!failure
+            ? [
+                {
+                  event: 'step_update',
+                  step_update: {
+                    conversation_id: id,
+                    step_index: 1,
+                    state: 'DONE',
+                    step_type: 'agent_response',
+                    text_delta: text,
+                    usage: { input_tokens: 1, output_tokens: 1 },
+                  },
+                },
+              ]
+            : []),
           {
-            type: 'result',
-            subtype: failure ? 'error_during_execution' : 'success',
-            result: text,
-            is_error: failure,
-            usage: { input_tokens: 1, output_tokens: 1 },
+            event: 'result',
+            result: {
+              conversation_id: id,
+              status: failure ? 'ERROR' : 'SUCCESS',
+              ...(failure ? { error: text } : { response: text }),
+              num_turns: 1,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
           },
         ]
-      : [
-          { type: 'thread.started', thread_id: id },
-          failure
-            ? { type: 'turn.failed', error: { message: text } }
-            : { type: 'item.completed', item: { type: 'agent_message', text } },
-          ...(!failure
-            ? [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }]
-            : []),
-        ]
+      : provider === 'claude'
+        ? [
+            { type: 'system', subtype: 'init', session_id: id },
+            {
+              type: 'result',
+              subtype: failure ? 'error_during_execution' : 'success',
+              result: text,
+              is_error: failure,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          ]
+        : [
+            { type: 'thread.started', thread_id: id },
+            failure
+              ? { type: 'turn.failed', error: { message: text } }
+              : { type: 'item.completed', item: { type: 'agent_message', text } },
+            ...(!failure
+              ? [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }]
+              : []),
+          ]
   return {
     stdout: events.map((e) => JSON.stringify(e)).join('\n'),
     stderr: '',
@@ -48,7 +78,24 @@ function output(provider: string, id: string, text: string, failure = false) {
   }
 }
 
-for (const provider of ['claude', 'codex', 'pi', 'scripted']) {
+type CliRunFn = ClaudeCliRunFn & CodexCliRunFn & AntigravityCliRunFn
+type CliStreamFn = NonNullable<
+  ConstructorParameters<typeof ClaudeAgentRunner>[0] &
+    ConstructorParameters<typeof CodexAgentRunner>[0] &
+    ConstructorParameters<typeof AntigravityAgentRunner>[0]
+>['runCliStream']
+
+/** The direct-subprocess adapters share one injectable CLI boundary shape. */
+function cliRunner(
+  provider: 'claude' | 'codex' | 'antigravity',
+  deps: { runCli?: CliRunFn; runCliStream?: CliStreamFn },
+): AgentRunner {
+  if (provider === 'claude') return new ClaudeAgentRunner(deps)
+  if (provider === 'codex') return new CodexAgentRunner(deps)
+  return new AntigravityAgentRunner(deps)
+}
+
+for (const provider of ['claude', 'codex', 'pi', 'scripted', 'antigravity']) {
   describeNativeResumeContract(provider, async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'ab-native-contract-'))
     const path = join(cwd, 'session.jsonl')
@@ -56,11 +103,24 @@ for (const provider of ['claude', 'codex', 'pi', 'scripted']) {
     let available = false
     let memory = ''
     const fakeState = new Map<string, string[]>()
-    const runCli: ClaudeCliRunFn & CodexCliRunFn = async (invocation) => {
-      const resume = invocation.args.includes('resume') || invocation.args.includes('--resume')
-      if (resume && !available) return { stdout: '', stderr: 'Session not found', exitCode: 1 }
+    const runCli: CliRunFn = async (invocation) => {
+      const conversation = invocation.args.indexOf('--conversation')
+      const resume =
+        invocation.args.includes('resume') ||
+        invocation.args.includes('--resume') ||
+        conversation >= 0
+      if (resume && !available)
+        return {
+          stdout: '',
+          stderr:
+            provider === 'antigravity'
+              ? `conversation ${invocation.args[conversation + 1]} not found`
+              : 'Session not found',
+          exitCode: 1,
+        }
       available = true
-      const message = invocation.args.at(-1)!
+      // agy's prompt is the value after `-p`, which the adapter places last.
+      const message = invocation.args.at(-1)!.replace(/^\n(?=-)/, '')
       if (message.startsWith('remember ')) memory = message.slice(9)
       return output(
         provider,
@@ -76,6 +136,7 @@ for (const provider of ['claude', 'codex', 'pi', 'scripted']) {
       createRunner(): AgentRunner {
         if (provider === 'claude') return new ClaudeAgentRunner({ runCli })
         if (provider === 'codex') return new CodexAgentRunner({ runCli })
+        if (provider === 'antigravity') return new AntigravityAgentRunner({ runCli })
         if (provider === 'scripted')
           return new ScriptedAgentRunner({
             nativeState: fakeState,
@@ -122,7 +183,7 @@ for (const provider of ['claude', 'codex', 'pi', 'scripted']) {
   })
 }
 
-for (const provider of ['claude', 'codex'] as const) {
+for (const provider of ['claude', 'codex', 'antigravity'] as const) {
   describe(`${provider} native observation`, () => {
     for (const streaming of [false, true])
       test(`reports identity while the turn is blocked (UI streaming ${streaming})`, async () => {
@@ -144,10 +205,7 @@ for (const provider of ['claude', 'codex'] as const) {
           })(),
           result: blocked.then(() => cli),
         })
-        const runner =
-          provider === 'claude'
-            ? new ClaudeAgentRunner({ runCliStream })
-            : new CodexAgentRunner({ runCliStream })
+        const runner = cliRunner(provider, { runCliStream })
         const running = runner.start({
           ...opts,
           onNativeSession: async (value) => {
@@ -171,9 +229,7 @@ for (const provider of ['claude', 'codex'] as const) {
     test('observer rejection propagates and conflicting identities are rejected', async () => {
       const cli = output(provider, 'native-id', 'done')
       const make = (stdout = cli.stdout) =>
-        provider === 'claude'
-          ? new ClaudeAgentRunner({ runCli: async () => ({ ...cli, stdout }) })
-          : new CodexAgentRunner({ runCli: async () => ({ ...cli, stdout }) })
+        cliRunner(provider, { runCli: async () => ({ ...cli, stdout }) })
       await expect(
         make().start({
           ...opts,
@@ -196,16 +252,12 @@ for (const provider of ['claude', 'codex'] as const) {
       const failedLaunch = async () => {
         throw new Error('launch failed')
       }
-      const a =
-        provider === 'claude'
-          ? new ClaudeAgentRunner({ runCli: failedLaunch })
-          : new CodexAgentRunner({ runCli: failedLaunch })
+      const a = cliRunner(provider, { runCli: failedLaunch })
       const launched = await a.start({ ...opts, onNativeSession: observe })
       expect(handles).toHaveLength(0)
       await a.end(launched.session)
       const runCli = async () => output(provider, 'native-id', 'provider unavailable', true)
-      const b =
-        provider === 'claude' ? new ClaudeAgentRunner({ runCli }) : new CodexAgentRunner({ runCli })
+      const b = cliRunner(provider, { runCli })
       const failed = await b.start({ ...opts, onNativeSession: observe })
       expect(failed.result.kind).toBe('failed')
       expect(handles).toHaveLength(1)
@@ -309,7 +361,7 @@ test('Pi refuses malformed state or a different initialized identity before prom
   }
 })
 
-for (const provider of ['claude', 'codex'] as const)
+for (const provider of ['claude', 'codex', 'antigravity'] as const)
   test(`${provider}: streamed observer failures propagate and resume rejects replacement identities`, async () => {
     const cli = output(provider, 'replacement', 'done')
     const runCliStream = () => ({
@@ -318,10 +370,7 @@ for (const provider of ['claude', 'codex'] as const)
       })(),
       result: Promise.resolve(cli),
     })
-    const create = () =>
-      provider === 'claude'
-        ? new ClaudeAgentRunner({ runCliStream })
-        : new CodexAgentRunner({ runCliStream })
+    const create = () => cliRunner(provider, { runCliStream })
     await expect(
       create().start({
         ...opts,
@@ -339,39 +388,64 @@ for (const provider of ['claude', 'codex'] as const)
     expect(result).toMatchObject({ kind: 'not-resumable', reason: 'missing-state' })
   })
 
-for (const provider of ['claude', 'codex', 'pi'])
+for (const provider of ['claude', 'codex', 'pi', 'antigravity'])
   test(`${provider}: conflicting persistence arguments are configuration failures`, async () => {
     const runner =
-      provider === 'claude'
-        ? new ClaudeAgentRunner({
+      provider === 'antigravity'
+        ? new AntigravityAgentRunner({
             runCli: async () => {
               throw new Error('must not launch')
             },
           })
-        : provider === 'codex'
-          ? new CodexAgentRunner({
+        : provider === 'claude'
+          ? new ClaudeAgentRunner({
               runCli: async () => {
                 throw new Error('must not launch')
               },
             })
-          : new PiAgentRunner({
-              createSessionFn: async () => {
-                throw new Error('must not launch')
-              },
-            })
+          : provider === 'codex'
+            ? new CodexAgentRunner({
+                runCli: async () => {
+                  throw new Error('must not launch')
+                },
+              })
+            : new PiAgentRunner({
+                createSessionFn: async () => {
+                  throw new Error('must not launch')
+                },
+              })
     const result = await runner.start({
       ...opts,
       args: [
-        provider === 'claude'
-          ? '--no-session-persistence'
-          : provider === 'codex'
-            ? '--ephemeral'
-            : '--no-session',
+        provider === 'antigravity'
+          ? '--conversation'
+          : provider === 'claude'
+            ? '--no-session-persistence'
+            : provider === 'codex'
+              ? '--ephemeral'
+              : '--no-session',
       ],
     })
     expect(result.result).toMatchObject({ kind: 'failed', failure: { cause: 'configuration' } })
     await runner.end(result.session)
   })
+
+test('antigravity: a credential failure on resume is a failed resumed turn, not missing state', async () => {
+  const runner = new AntigravityAgentRunner({
+    runCli: async () => ({ stdout: '', stderr: 'authentication required', exitCode: 1 }),
+  })
+  const result = await resumeAgent(
+    runner,
+    nativeHandle('antigravity', 'native-id', opts.workspacePath),
+    'hello',
+    opts,
+  )
+  expect(result).toMatchObject({
+    kind: 'resumed',
+    result: { kind: 'failed', failure: { cause: 'credentials', permanent: true } },
+  })
+  if (result.kind === 'resumed') await runner.end(result.session)
+})
 
 test('native lookup classification preserves provider availability and credential failures', async () => {
   const { nativeStateUnavailable } = await import('./native-session')

@@ -277,6 +277,45 @@ describe('agent-driven ab init', () => {
     expect(invocation?.prompt).not.toContain('one groomed,\n   dispatchable ticket')
   })
 
+  test('launches agy when Antigravity is the only usable runtime', async () => {
+    const fallback: string[] = []
+    await init({ stdout: (line) => fallback.push(line) })
+    const fallbackPrompt = fallback.at(-1)!
+
+    await rm(target, { recursive: true, force: true })
+    await mkdir(target)
+    const unusable = { initUsable: async () => ({ usable: false, reason: 'not installed' }) }
+    const runtimes: RuntimeRegistry = {
+      claude: { ...production.claude!, ...unusable },
+      codex: { ...production.codex!, ...unusable },
+      pi: { ...production.pi!, ...unusable },
+      antigravity: {
+        ...production.antigravity!,
+        initUsable: async () => ({ usable: true, reason: 'agy signed in' }),
+      },
+    }
+    const lines: string[] = []
+    let invocation: SetupAgentInvocation | undefined
+    const report = await abInit({
+      targetRepo: target,
+      runtimes,
+      env: {},
+      stdout: (line) => lines.push(line),
+      interactive: true,
+      launcher: async (input) => {
+        invocation = input
+        return 0
+      },
+    })
+    expect(report.exitCode).toBe(0)
+    expect(lines).toContain('  antigravity: usable — agy signed in')
+    expect(invocation?.runtime).toBe('antigravity')
+    expect(invocation?.prompt).toBe(fallbackPrompt)
+    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toContain(
+      'runtime = "antigravity"',
+    )
+  })
+
   test('a partial distribution without the setup reference still installs and prints the pointer', async () => {
     const partial = await mkdtemp(join(tmpdir(), 'ab-init-partial-'))
     try {

@@ -12,12 +12,20 @@ if (args.includes('--version')) {
   process.exit(0)
 }
 const path = flag('--session') ?? join(process.env.AB_NATIVE_FIXTURE_STATE!, 'session.jsonl')
-const resuming = args.includes('resume') || args.includes('--resume') || args.includes('--session')
+const resuming =
+  args.includes('resume') ||
+  args.includes('--resume') ||
+  args.includes('--session') ||
+  args.includes('--conversation')
 if (resuming) {
   try {
     await access(path)
   } catch {
-    console.error('Session not found')
+    console.error(
+      provider === 'antigravity'
+        ? `conversation ${flag('--conversation')} not found`
+        : 'Session not found',
+    )
     process.exit(1)
   }
 }
@@ -31,7 +39,9 @@ const identify = () =>
   emit(
     provider === 'claude'
       ? { type: 'system', subtype: 'init', session_id: state.id }
-      : { type: 'thread.started', thread_id: state.id },
+      : provider === 'antigravity'
+        ? { event: 'init', conversation_id: state.id, init: { cwd: process.cwd() } }
+        : { type: 'thread.started', thread_id: state.id },
   )
 async function prompt(message: string, env: Record<string, string | undefined>): Promise<string> {
   // The start prompt carries the invocation as a quoted, labelled identifier.
@@ -71,8 +81,33 @@ if (provider === 'pi') {
   }
 } else {
   identify()
-  const text = await prompt(args.at(-1)!, process.env)
-  if (provider === 'claude')
+  // agy takes the prompt as the value after `-p`, guarded by one leading
+  // newline when it would otherwise start with `-`.
+  const message = provider === 'antigravity' ? flag('-p')!.replace(/^\n(?=-)/, '') : args.at(-1)!
+  const text = await prompt(message, process.env)
+  if (provider === 'antigravity') {
+    emit({
+      event: 'step_update',
+      step_update: {
+        conversation_id: state.id,
+        step_index: 1,
+        state: 'DONE',
+        step_type: 'agent_response',
+        text_delta: text,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    })
+    emit({
+      event: 'result',
+      result: {
+        conversation_id: state.id,
+        status: 'SUCCESS',
+        response: text,
+        num_turns: 1,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    })
+  } else if (provider === 'claude')
     emit({
       type: 'result',
       subtype: 'success',
