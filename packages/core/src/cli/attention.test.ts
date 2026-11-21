@@ -68,6 +68,8 @@ describe('repository attention projection', () => {
     ['ticket.handed-back', { cause: 'abort', state: 'Ready', role: 'ready' }, true],
     ['ticket.handed-back', { cause: 'spec-bounce', state: 'Triage', role: 'triage' }, true],
     ['ticket.handback-settled', { build: 'b' }, false],
+    ['dispatcher.forge-degraded', { forge: 'github' }, true],
+    ['dispatcher.forge-degraded', { forge: 'github', continued: true }, false],
   ])('%s %j direct=%s', (type, payload, expected) => {
     expect(repositoryNeedsAttention(repo(type as string, payload, 1))).toBe(expected as boolean)
   })
@@ -88,6 +90,35 @@ describe('repository attention projection', () => {
     expect(projection.pending(at(60 * 60_000))).toEqual([])
     projection.fold(degraded(5, 60 * 60_000))
     expect(projection.pending(at(75 * 60_000))[0]?.identity).toBe('source:5')
+  })
+
+  test('a forge episode wakes once; continued extensions neither wake nor postpone persistence', () => {
+    const forgeDegraded = (seq: number, resetMs: number, continued?: true) =>
+      repo(
+        'dispatcher.forge-degraded',
+        {
+          forge: 'github',
+          message: 'secondary limit',
+          resetAt: at(resetMs).toISOString(),
+          firstFailureAt: at(0).toISOString(),
+          ...(continued ? { continued } : {}),
+        },
+        seq,
+      )
+    const events = [
+      forgeDegraded(1, 60_000),
+      forgeDegraded(2, 61_000, true),
+      forgeDegraded(3, 62_000, true),
+      forgeDegraded(4, 63_000, true),
+    ]
+    expect(events.filter(repositoryNeedsAttention).map((event) => event.seq)).toEqual([1])
+    const projection = new RepositoryAttention()
+    for (const event of events) projection.fold(event)
+    projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, 5, 60_001))
+    projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 6, 60_002))
+    expect(projection.pending(at(60_002))).toMatchObject([
+      { identity: 'forge:1', observation: { type: 'dispatcher.forge-persistent', episodeSeq: 1 } },
+    ])
   })
 
   test('reset deadline cannot be postponed; independent sources retain their clocks', () => {

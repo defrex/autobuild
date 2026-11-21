@@ -175,6 +175,7 @@ Optional `Forge.observeRequests(observer): () => void` returns a disposer and ca
 
 - Pass `ForgeRequestContext` with the build slug, or `{}` when unknown; the host fills missing attribution from its current build-scoped operation, else the request is repository/unattributed. Capture context before awaiting transport; notify after the outcome.
 - Credential discovery and skipped calls are not provider requests.
+- Optionally add `rateLimit: { resource, limit, remaining, resetAt }` from the response's primary rate-limit headers (`resetAt` as an ISO timestamp), including on 304s and limited failures; omit it when the response carries none, and never make an extra request for it. The host carries the latest valid reading per resource in tick telemetry and `ab repository status`.
 
 | `outcome` | Request |
 |---|---|

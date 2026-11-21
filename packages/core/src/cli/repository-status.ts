@@ -23,7 +23,11 @@ import {
   type ForgeCredentialLimit,
   type ForgeDegradation,
 } from '../kernel/forge-health'
-import { forgeHotspot, type ForgeRequestCounts } from '../ports/forge-telemetry'
+import {
+  forgeHotspot,
+  type ForgeRateLimitSnapshot,
+  type ForgeRequestCounts,
+} from '../ports/forge-telemetry'
 import { configSchema, hooksSchema } from '../config/schema'
 import { readHookProgress } from '../processes/hooks'
 import type { BuildStore } from '../store/types'
@@ -189,6 +193,15 @@ export interface RepositoryStatus extends DispatchSettings {
   dispatcher: DispatcherLiveness
   forgeRequests?: ForgeRequestCounts
   forgeRequestHotspot?: string
+  /** Latest observed primary rate limit per forge resource, carried by the
+   * last tick sample (`stale` once its window has reset, so the current
+   * quota is unknown), and whether the dispatcher's forge landing/polling is
+   * paused for a rate-limit cooldown. Absent with no reading and no pause. */
+  forgeRateLimit?: {
+    limits: Array<ForgeRateLimitSnapshot & { stale?: true }>
+    paused: boolean
+    pausedUntil?: string
+  }
   forgeDegradation?: ForgeDegradation
   /** Active rate limits outside the dispatcher's credential (unauthenticated
    * requests, build runners, phase sessions). They never pause dispatcher
@@ -228,6 +241,36 @@ export interface RepositoryStatusOpts {
   storeRef?: string
   now?: () => Date
   openStore?: StoreOpener
+}
+
+/** The last tick sample's request counts plus the forge rate-limit view:
+ * the readings that sample carries and the dispatcher's own cooldown. */
+function forgeRequestStatus(
+  dispatcher: DispatcherLiveness,
+  degradation: ForgeDegradation | undefined,
+  now: Date,
+): Pick<RepositoryStatus, 'forgeRequests' | 'forgeRequestHotspot' | 'forgeRateLimit'> {
+  const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
+  const forgeRequests =
+    tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
+  const forgeRateLimit = forgeRateLimitView(forgeRequests, degradation, now)
+  return {
+    ...(forgeRequests ? { forgeRequests, forgeRequestHotspot: forgeHotspot(forgeRequests) } : {}),
+    ...(forgeRateLimit ? { forgeRateLimit } : {}),
+  }
+}
+
+export function forgeRateLimitView(
+  forgeRequests: ForgeRequestCounts | undefined,
+  degradation: ForgeDegradation | undefined,
+  now: Date,
+): RepositoryStatus['forgeRateLimit'] {
+  const limits = (forgeRequests?.rateLimits ?? []).map((limit) =>
+    Date.parse(limit.resetAt) <= now.getTime() ? { ...limit, stale: true as const } : { ...limit },
+  )
+  const paused = degradation !== undefined && Date.parse(degradation.resetAt) > now.getTime()
+  if (limits.length === 0 && !paused) return undefined
+  return { limits, paused, ...(paused ? { pausedUntil: degradation.resetAt } : {}) }
 }
 
 export function projectRepositoryStatus(
@@ -297,14 +340,7 @@ export function projectRepositoryStatus(
     ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
-    ...(() => {
-      const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
-      const forgeRequests =
-        tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
-      return forgeRequests
-        ? { forgeRequests, forgeRequestHotspot: forgeHotspot(forgeRequests) }
-        : {}
-    })(),
+    ...forgeRequestStatus(dispatcher, forgeHealthReducer.reduce(events), now),
     ...reduceDispatchSettings(events),
     sandboxes: sandboxStates(events)
       .filter((state) => state.state !== 'released')
@@ -344,14 +380,7 @@ export function repositoryStatusFromFacts(
     ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
-    ...(() => {
-      const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
-      const forgeRequests =
-        tick?.outcome === 'completed' ? tick.counters.forgeRequests : tick?.forgeRequests
-      return forgeRequests
-        ? { forgeRequests, forgeRequestHotspot: forgeHotspot(forgeRequests) }
-        : {}
-    })(),
+    ...forgeRequestStatus(dispatcher, facts.forgeHealth, now),
     ...facts.settings,
     ...(facts.forgeHealth ? { forgeDegradation: facts.forgeHealth } : {}),
     ...(credentialLimits.length ? { forgeCredentialLimits: credentialLimits } : {}),
@@ -454,6 +483,15 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     requests
       ? `forge requests: ${requests.total}${requests.restPrimary === undefined ? '' : `; REST primary ${requests.restPrimary}`}${requests.restNotModified === undefined ? '' : `; REST 304 ${requests.restNotModified}`}${requests.graphql === undefined ? '' : `; GraphQL ${requests.graphql}`} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
       : 'forge requests: unavailable',
+    ...(status.forgeRateLimit?.limits ?? []).map(
+      (limit) =>
+        `forge rate limit ${limit.resource}: ${limit.remaining}/${limit.limit} remaining; resets ${limit.resetAt} (observed ${limit.observedAt})${limit.stale ? '; window since reset, current quota unknown' : ''}`,
+    ),
+    ...(status.forgeRateLimit?.paused
+      ? [
+          `forge landing/polling paused until ${status.forgeRateLimit.pausedUntil} (rate-limit cooldown)`,
+        ]
+      : []),
     ...(status.forgeDegradation
       ? [
           `forge ${status.forgeDegradation.forge}: degraded — ${status.forgeDegradation.message}; reset ${status.forgeDegradation.resetAt}`,
