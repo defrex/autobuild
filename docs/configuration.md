@@ -2813,7 +2813,9 @@ that defaults to `false`.
 
 While open unmerged root PRs (leaves and integration nodes; not children of a
 node) reach `maxOpenPrs`, the dispatcher claims no new `normal`-priority
-ticket until the count drops to `resumeOpenPrs`. Urgent claims, in-flight
+ticket until the count drops to `resumeOpenPrs`. Reaching `maxOpenPrs` takes
+precedence: when `resumeOpenPrs` equals `maxOpenPrs`, intake stays paused at
+that count and resumes once the count falls below it. Urgent claims, in-flight
 builds, reconciles and landings continue; capacity is unchanged. `ab repository
 status` reports the state as `capacity.backpressure`.
 
@@ -3088,7 +3090,7 @@ status` reports the state as `capacity.backpressure`.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Inert without `maxOpenPrs`.
+**Description:** Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Reaching `maxOpenPrs` takes precedence, so when this equals `maxOpenPrs` intake stays paused at that count and resumes once the count falls below `maxOpenPrs`. Inert without `maxOpenPrs`.
 
 **Constraints:** safe integer; ≥ 0; Must not exceed `maxOpenPrs`.
 

@@ -2711,7 +2711,9 @@ PR and no integration-node target, root leaves and root integration nodes
 alike. Children targeting a node do not count. A PR whose active landing
 command is `hold` counts unless `excludeHeldOpenPrs = true`. Backpressure
 engages when the count reaches `maxOpenPrs` and stays engaged until the count
-drops to or below `resumeOpenPrs` (default `maxOpenPrs - 1`). While engaged,
+drops to or below `resumeOpenPrs` (default `maxOpenPrs - 1`). Reaching
+`maxOpenPrs` takes precedence, so with `resumeOpenPrs = maxOpenPrs` intake
+stays paused at that count and resumes once it falls below. While engaged,
 the dispatcher claims no new `normal`-priority ticket; `urgent` claims,
 in-flight builds, parked-build admission, reconciles, verification and
 landings continue, and capacity accounting is unchanged. The count is derived

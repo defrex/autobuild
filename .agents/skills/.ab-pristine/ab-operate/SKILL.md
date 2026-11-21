@@ -384,8 +384,8 @@ refuses `urgent` and names itself; tell the human.
 When ready tickets sit unclaimed with free slots, check
 `capacity.backpressure` in `ab repository status --json`. While `active` is
 true, `[policy].maxOpenPrs` open-PR backpressure is pausing normal claims
-until the open root PR count drains to `resumeOpenPrs`; urgent tickets still
-dispatch. Relieve it by getting PRs merged or closed (or, where the repository
+until the open root PR count drains to `resumeOpenPrs` (below `maxOpenPrs`
+when the two are equal); urgent tickets still dispatch. Relieve it by getting PRs merged or closed (or, where the repository
 sets `excludeHeldOpenPrs`, by holding them), not by raising `capacity`.
 
 On GitHub tickets, `--assignees` on create or update sets who a ticket is

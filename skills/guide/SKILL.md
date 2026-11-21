@@ -94,8 +94,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   workspace until it merges or closes. Priority never preempts a running build.
   With `[policy].maxOpenPrs` set, open-PR backpressure pauses new
   normal-priority claims once that many root PRs are open and unmerged, until
-  the count drains to `resumeOpenPrs`; urgent claims and in-flight work
-  continue, and capacity is unchanged.
+  the count drains to `resumeOpenPrs` (below `maxOpenPrs` when the two are
+  equal); urgent claims and in-flight work continue, and capacity is
+  unchanged.
 - **Ticket waits.** A work build that cannot proceed until other tickets
   complete parks without a slot. A phase agent ends its session with
   `ab wait-on <ticket-id>... --reason <text>`, a terminal that needs no
@@ -1464,7 +1465,7 @@ backpressure keys `maxOpenPrs` (no default; unset disables backpressure),
 | `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
 | `maxOpenPrs` | unset | positive integer | Open unmerged root PRs (leaves and integration nodes, not children of a node) at which the dispatcher stops claiming `normal`-priority tickets. Urgent claims, in-flight builds, reconciles and landings continue. Unset disables open-PR backpressure. |
-| `resumeOpenPrs` | `maxOpenPrs - 1` | nonnegative integer, at most `maxOpenPrs` | Once engaged, normal claims stay paused until the open root PR count is at or below this. Inert without `maxOpenPrs`. |
+| `resumeOpenPrs` | `maxOpenPrs - 1` | nonnegative integer, at most `maxOpenPrs` | Once engaged, normal claims stay paused until the open root PR count is at or below this. Reaching `maxOpenPrs` takes precedence, so when this equals `maxOpenPrs` claims resume once the count falls below it. Inert without `maxOpenPrs`. |
 | `excludeHeldOpenPrs` | `false` | boolean | Leave PRs whose active landing command is `hold` out of the count. Inert without `maxOpenPrs`. |
 
 Dispatch failures share one budget across stages until runner attachment. At

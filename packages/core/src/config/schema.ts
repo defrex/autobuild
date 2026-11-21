@@ -846,7 +846,7 @@ documentFields(policySchema, {
   maxOpenPrs:
     'Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.',
   resumeOpenPrs:
-    'Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Inert without `maxOpenPrs`.',
+    'Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Reaching `maxOpenPrs` takes precedence, so when this equals `maxOpenPrs` intake stays paused at that count and resumes once the count falls below `maxOpenPrs`. Inert without `maxOpenPrs`.',
   excludeHeldOpenPrs:
     'Leave PRs whose active landing command is `hold` out of the open-PR backpressure count. Inert without `maxOpenPrs`.',
 })
