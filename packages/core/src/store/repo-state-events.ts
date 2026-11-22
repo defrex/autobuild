@@ -8,6 +8,7 @@ import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
   ticketPreparationEventPayloadSchemas,
   ticketHandbackEventPayloadSchemas,
+  ticketStartEventPayloadSchemas,
   changePresenceEventPayloadSchemas,
   ticketSourceHealthEventPayloadSchemas,
   dispatcherSettingEventPayloadSchemas,
@@ -42,6 +43,7 @@ export const DISPATCH_HANDOFF_EVENT_TYPES = [
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   ...Object.keys(ticketPreparationEventPayloadSchemas),
   ...Object.keys(ticketHandbackEventPayloadSchemas),
+  ...Object.keys(ticketStartEventPayloadSchemas),
   'tickets.migration-recorded',
   ...DISPATCH_HANDOFF_EVENT_TYPES,
   'dispatcher.forge-degraded',

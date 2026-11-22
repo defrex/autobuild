@@ -633,6 +633,22 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       ]
       return singleLine(`ticket ${p.ticket.id} handed back to ${p.state} (${details.join('; ')})`)
     }
+    case 'ticket.start-requested':
+      return singleLine(
+        `ticket ${event.payload.ticket.id} start requested (${event.payload.priority})${event.actor.kind === 'human' ? ` by ${event.actor.user}` : ''}`,
+      )
+    case 'ticket.start-cancelled':
+      return singleLine(`ticket ${event.payload.ticket.id} start request cancelled`)
+    case 'ticket.start-settled': {
+      const p = event.payload
+      return singleLine(
+        p.outcome === 'started'
+          ? `ticket ${p.ticket.id} start started → build ${p.slug} (${p.priority})`
+          : `ticket ${p.ticket.id} start refused: ${p.outcome}${p.slug !== undefined ? ` (build ${p.slug})` : ''}${p.detail !== undefined ? ` — ${p.detail}` : ''} (${p.priority})`,
+      )
+    }
+    case 'ticket.identity-recorded':
+      return `ticket identities recorded for ${event.payload.identities.length} build(s)`
     case 'dispatcher.kernel-git-unavailable':
       return `Kernel Git unavailable (${event.payload.executable}): ${singleLine(event.payload.detail)}`
     case 'dispatcher.kernel-git-recovered':

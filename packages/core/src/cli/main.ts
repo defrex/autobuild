@@ -86,6 +86,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'answer',
   'reopen',
   'abort',
+  'start',
   'models',
   'plugin',
   'help',
@@ -1313,6 +1314,54 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       )
       if (parsed.flags.get('json') === true) deps.stdout(JSON.stringify(view, null, 2))
       else deps.stdout(renderObjective(view).join('\n'))
+      return 0
+    }
+
+    case 'start': {
+      const { openTicketSource } = await import('./ticket')
+      const { abTicketStart } = await import('./ticket-start')
+      const { parseStartPriorityFlag } = await import('../ports/tickets/priority')
+      const usage =
+        'usage: ab start <ticket-id> [--priority manual|urgent|normal] [--cancel] [--json] [--store <ref>]'
+      const parsed = parseArgs(
+        rest,
+        { cancel: 'boolean', json: 'boolean', priority: 'value', store: 'value' },
+        usage,
+      )
+      if (parsed.positionals.length !== 1 || !parsed.positionals[0]!.trim()) throw new Error(usage)
+      const priorityFlag = stringFlag(parsed, 'priority')
+      const startPriority =
+        priorityFlag !== undefined ? parseStartPriorityFlag(priorityFlag) : undefined
+      if (startPriority !== undefined && parsed.flags.has('cancel'))
+        throw new Error('ab start: --priority applies to a request, not to --cancel')
+      if (deps.exec === undefined) throw new Error('ab start requires an exec seam')
+      const storeRef = stringFlag(parsed, 'store')
+      const exec = deps.exec
+      await abTicketStart({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec,
+        stdout,
+        id: parsed.positionals[0]!,
+        cancel: parsed.flags.has('cancel'),
+        ...(startPriority !== undefined ? { priority: startPriority } : {}),
+        json: parsed.flags.has('json'),
+        ticketSource: async () =>
+          (
+            await openTicketSource(
+              {
+                targetRepo: deps.workspacePath,
+                env: deps.processEnv ?? {},
+                exec,
+                stdout,
+                ...(storeRef !== undefined ? { storeRef } : {}),
+              },
+              'ab start',
+            )
+          ).source,
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+      })
       return 0
     }
 

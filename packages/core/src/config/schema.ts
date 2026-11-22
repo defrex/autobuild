@@ -846,7 +846,7 @@ documentFields(policySchema, {
   harvestMaxDrift:
     'Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.',
   maxOpenPrs:
-    'Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.',
+    'Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops ordinary ready-queue claims of `normal`-priority tickets. In-flight work, reconciles, landings, `urgent` claims and every `ab start` (`tickets.start`) request continue, subject to capacity and repository pause. Unset disables open-PR backpressure.',
   resumeOpenPrs:
     'Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Reaching `maxOpenPrs` takes precedence, so when this equals `maxOpenPrs` intake stays paused at that count and resumes once the count falls below `maxOpenPrs`. Inert without `maxOpenPrs`.',
   excludeHeldOpenPrs:
