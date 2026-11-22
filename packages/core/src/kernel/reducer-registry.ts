@@ -1,5 +1,6 @@
 import { ticketPreparationReducer } from './ticket-preparation'
 import { ticketHandbacksReducer } from './ticket-handbacks'
+import { ticketStartsReducer } from './ticket-starts'
 import { ticketMigrationsReducer } from './ticket-migrations'
 import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import { forgeHealthReducer } from './forge-health'
@@ -96,6 +97,7 @@ export interface RegisteredReducer {
 const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   ticketPreparation: { reducer: ticketPreparationReducer, covers: [] },
   ticketHandbacks: { reducer: ticketHandbacksReducer, covers: [] },
+  ticketStarts: { reducer: ticketStartsReducer, covers: [] },
   ticketMigrations: { reducer: ticketMigrationsReducer, covers: [] },
   nodeRestack: { reducer: nodeRestackReducer, covers: ['advanceNodeRestack'] },
   leafRestack: { reducer: leafRestackReducer, covers: ['advanceLeafRestack'] },
@@ -231,6 +233,7 @@ const repositoryValues = new Set([
   'dispatchPlacement',
   'ticketPreparation',
   'ticketHandbacks',
+  'ticketStarts',
   'ticketMigrations',
   'forgeHealthValue',
   'repositoryReadFacts',
