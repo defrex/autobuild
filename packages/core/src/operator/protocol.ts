@@ -4,6 +4,7 @@ import { issueLinksInputSchema } from '../ports/tickets/issue-links'
 import { TICKET_MOVE_ROLES } from '../ports/tickets/lifecycle'
 import { ticketPrioritySchema } from '../ports/tickets/priority'
 import { ticketAssigneesSchema } from '../ports/tickets/assignees'
+import { ticketStartPrioritySchema } from '../events/repository'
 
 const issueLinksField = issueLinksInputSchema
   .optional()
@@ -171,6 +172,10 @@ export const ticketMoveRequestSchema = ticketMoveRequestShape.refine(
   exactlyOneMoveTarget,
   MOVE_TARGET_MESSAGE,
 )
+/** `POST …/tickets/{id}/start`'s optional body; an empty body is manual. */
+export const ticketStartRequestSchema = z.strictObject({
+  priority: ticketStartPrioritySchema.optional(),
+})
 export const ticketBlockerRequestSchema = z.strictObject({
   expectedRevision: expectedRevisionSchema,
   blockerIds: z.array(z.string().min(1)).min(1),
@@ -179,6 +184,7 @@ export type OperatorTicketCreateRequest = z.infer<typeof ticketCreateRequestSche
 export type OperatorTicketUpdateRequest = z.infer<typeof ticketUpdateRequestSchema>
 export type OperatorTicketMoveRequest = z.infer<typeof ticketMoveRequestSchema>
 export type OperatorTicketBlockerRequest = z.infer<typeof ticketBlockerRequestSchema>
+export type OperatorTicketStartRequest = z.infer<typeof ticketStartRequestSchema>
 
 export const operatorErrorSchema = z.strictObject({
   kind: z.enum(['validation', 'auth', 'not-found', 'conflict', 'refusal', 'internal']),
