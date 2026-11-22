@@ -11,7 +11,8 @@ export class OperatorControlError extends Error {
       | 'stale-harvest-run'
       | 'harvest-paused'
       | 'harvest-pending'
-      | 'harvest-unavailable',
+      | 'harvest-unavailable'
+      | 'invalid-start-request',
     message: string,
   ) {
     super(message)
