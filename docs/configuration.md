@@ -2820,11 +2820,13 @@ to `maxOpenPrs - 1` and may not exceed it, and `excludeHeldOpenPrs` is a boolean
 that defaults to `false`.
 
 While open unmerged root PRs (leaves and integration nodes; not children of a
-node) reach `maxOpenPrs`, the dispatcher claims no new `normal`-priority
-ticket until the count drops to `resumeOpenPrs`. Reaching `maxOpenPrs` takes
+node) reach `maxOpenPrs`, the dispatcher makes no new ordinary ready-queue
+claim of a `normal`-priority ticket until the count drops to `resumeOpenPrs`. Reaching `maxOpenPrs` takes
 precedence: when `resumeOpenPrs` equals `maxOpenPrs`, intake stays paused at
 that count and resumes once the count falls below it. Urgent claims, in-flight
-builds, reconciles and landings continue; capacity is unchanged. `ab repository
+builds, reconciles and landings continue; capacity is unchanged. Every `ab start`
+(`tickets.start`) tier bypasses backpressure for its one ticket, still subject to
+capacity and repository pause. `ab repository
 status` reports the state as `capacity.backpressure`.
 
 <!-- configuration-reference:policy -->
@@ -3085,7 +3087,7 @@ status` reports the state as `capacity.backpressure`.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.
+**Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops ordinary ready-queue claims of `normal`-priority tickets. In-flight work, reconciles, landings, `urgent` claims and every `ab start` (`tickets.start`) request continue, subject to capacity and repository pause. Unset disables open-PR backpressure.
 
 **Constraints:** safe integer; > 0
 

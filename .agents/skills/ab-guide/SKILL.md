@@ -89,15 +89,16 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   starts builds up to the top-level `capacity` bound, after slots reserved for
   integration nodes awaiting verification, reconcile or propose, for finished builds
   waiting to re-verify or reconcile, and for builds whose ticket wait ended.
-  Free slots go to urgent waiting work, then urgent tickets, then normal
-  waiting work, then normal tickets; a build takes its ticket's priority at
+  Free slots go to `manual` start requests, then urgent waiting work, then
+  urgent start requests and urgent tickets, then normal waiting work, then
+  normal start requests and normal tickets; a build takes its ticket's priority at
   claim, and `ab priority <slug> urgent|normal` changes an active build's
   priority. Priority orders free slots only.
   `capacity` counts builds running work: a build that finished its pipeline
   holds no slot while it waits for a merge decision, though it keeps its
   workspace until it merges or closes. Priority never preempts a running build.
-  With `[policy].maxOpenPrs` set, open-PR backpressure pauses new
-  normal-priority claims once that many root PRs are open and unmerged, until
+  With `[policy].maxOpenPrs` set, open-PR backpressure pauses new ordinary
+  normal-priority claims (not `ab start` requests) once that many root PRs are open and unmerged, until
   the count drains to `resumeOpenPrs` (below `maxOpenPrs` when the two are
   equal); urgent claims and in-flight work continue, and capacity is
   unchanged.

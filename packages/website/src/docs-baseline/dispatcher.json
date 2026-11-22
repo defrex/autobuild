@@ -4,7 +4,7 @@
   "title": "The dispatcher and durable state",
   "group": "concepts",
   "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-  "textHash": "60ccf161f12b0b8112ed34a1a39ba112dbda192d5daa9bc4dae3b434d0ba8291",
+  "textHash": "7be1f95c39221cb5792d38ed4402000979e1ee5449ced27676bbe5fb0e3bf962",
   "headings": [
     "Watch a dispatcher running elsewhere",
     "Ready work becomes a build",
