@@ -9,7 +9,7 @@ import {
 } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
-import { dispatchCapacity, urgentClaimDemand } from '../kernel/dispatch-capacity'
+import { dispatchCapacity, startClaimDemand, urgentClaimDemand } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
@@ -531,6 +531,7 @@ export class DispatchFrontend {
               policy: config.policy,
               engaged: repositoryFacts.openPrBackpressure !== undefined,
             },
+            startRequests: startClaimDemand(repositoryFacts),
           },
         ),
         // A viewer shows only its own read; headless ticks publish no count.
