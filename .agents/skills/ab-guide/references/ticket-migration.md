@@ -6,7 +6,8 @@ forge, except that a GitHub source reads and writes the repository's issues.
 File, hosted and GitHub sources support import. Every built-in source supports
 export.
 
-1. Pause intake and quiesce build-related ticket writes and other ticket writers
+1. Pause intake, cancel any pending `ab start` request (`ab repository status`
+   lists them), and quiesce build-related ticket writes and other ticket writers
    for the cutover. In-flight builds need not be aborted. Import preflight does
    not reserve numbers against concurrent writers.
 2. With the old `[tickets]` configuration, run `ab ticket export /path/to/export`.

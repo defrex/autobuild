@@ -277,3 +277,37 @@ test('the retained tick sample tracks the journal refresh read and committed fin
   await view.finishRepoTick('repo', 'run', { outcome: 'failed', error: 'b' }, boundaries('b'))
   expect(view.lastTickSample()).toMatchObject({ outcome: 'failed', error: 'b' })
 })
+
+test('served facts reuse this epoch’s retained read until a write or refresh', async () => {
+  const { store, view } = await setup()
+  let reads = 0
+  const read = store.getReducerValue.bind(store)
+  store.getReducerValue = async (...args) => {
+    if (args[1].reducer === 'buildReadFacts') reads++
+    return read(...args)
+  }
+  await view.refresh()
+  // Not retained: every served read reads.
+  await view.buildFacts('build')
+  await view.servedBuildFacts('build')
+  expect(reads).toBe(2)
+  view.retainBuildFacts(true)
+  const first = await view.buildFacts('build')
+  expect(await view.servedBuildFacts('build')).toBe(first)
+  expect(reads).toBe(3)
+  // An own append ends serving; the retained read stays available.
+  await view.append('build', { actor: KERNEL, type: 'build.paused', payload: {} })
+  expect(view.retainedBuildFacts('build')).toBe(first)
+  expect((await view.servedBuildFacts('build')).state.status).toBe('paused')
+  expect(reads).toBe(4)
+  await view.servedBuildFacts('build')
+  expect(reads).toBe(4)
+  // A foreign write surfaces on the next epoch, never through a served read.
+  await store.append('build', { actor: KERNEL, type: 'build.resumed', payload: {} })
+  await view.refresh()
+  expect(view.retainedBuildFacts('build')).toBeUndefined()
+  expect((await view.servedBuildFacts('build')).state.status).not.toBe('paused')
+  expect(reads).toBe(5)
+  view.retainBuildFacts(false)
+  expect(view.retainedBuildFacts('build')).toBeUndefined()
+})
