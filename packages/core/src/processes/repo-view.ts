@@ -125,6 +125,16 @@ export class RepoViewStore implements BuildStore {
   private readonly dirtyDigests = new Set<string>()
   private discoveryDirty = true
   private repoFacts = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+  /** While retained (`retainBuildFacts`): each build's facts as
+   * `buildFacts` last read them in this epoch, with this view's append count
+   * for the build and its record's `updatedAt` at that read. Only
+   * `servedBuildFacts` serves them; `buildFacts` always reads. */
+  private retained?: Map<
+    string,
+    { epoch: number; appends: number; updatedAt?: string; facts: CurrentBuildFacts }
+  >
+  /** Appends this view made per build: a served read must postdate them. */
+  private readonly appends = new Map<string, number>()
   constructor(
     private readonly backing: BuildStore,
     opts: RepoViewOptions,
@@ -182,13 +192,60 @@ export class RepoViewStore implements BuildStore {
     return this.recorded
   }
   async refreshBuild(slug: string): Promise<void> {
-    await this.build(slug, async () => {})
+    await this.build(slug, async () => {
+      this.retained?.delete(slug)
+    })
   }
   buildState(slug: string): Promise<BuildState> {
     return this.build(slug, async () => (await readBuildFacts(this.backing, slug)).value.state)
   }
   buildFacts(slug: string): Promise<CurrentBuildFacts> {
-    return this.build(slug, async () => (await readBuildFacts(this.backing, slug)).value)
+    return this.build(slug, () => this.readFacts(slug))
+  }
+  /** Keep (or stop keeping) this epoch's `buildFacts` reads for
+   * `servedBuildFacts`. Off by default, so ordinary reads retain nothing.
+   * A served value is the object the earlier read returned: its readers
+   * treat it as read-only, and the dispatcher updates a state it holds only
+   * after appending, which ends serving for that build. */
+  retainBuildFacts(retain: boolean): void {
+    this.retained = retain ? new Map() : undefined
+  }
+  /** The facts an earlier `buildFacts` read for `slug` in this epoch while
+   * retained, when this view has appended nothing to the build since and the
+   * record's `updatedAt` it lists is unchanged; otherwise a fresh read. A
+   * tick's fleet-wide stages read each nonterminal build once, so a later
+   * stage that only needs this tick's view of the fleet reads nothing more. */
+  servedBuildFacts(slug: string): Promise<CurrentBuildFacts> {
+    return this.build(slug, async () => {
+      const entry = this.retained?.get(slug)
+      if (
+        entry !== undefined &&
+        entry.epoch === this.epoch &&
+        entry.appends === (this.appends.get(slug) ?? 0) &&
+        entry.updatedAt === this.recordUpdatedAt(slug)
+      )
+        return entry.facts
+      return this.readFacts(slug)
+    })
+  }
+  /** This epoch's retained read of `slug`, whatever was written since. */
+  retainedBuildFacts(slug: string): CurrentBuildFacts | undefined {
+    const entry = this.retained?.get(slug)
+    return entry?.epoch === this.epoch ? entry.facts : undefined
+  }
+  private recordUpdatedAt(slug: string): string | undefined {
+    return this.records.find((record) => record.slug === slug)?.updatedAt
+  }
+  /** One served read, retained when asked. Runs on the build's chain. */
+  private async readFacts(slug: string): Promise<CurrentBuildFacts> {
+    const facts = (await readBuildFacts(this.backing, slug)).value
+    this.retained?.set(slug, {
+      epoch: this.epoch,
+      appends: this.appends.get(slug) ?? 0,
+      updatedAt: this.recordUpdatedAt(slug),
+      facts,
+    })
+    return facts
   }
   getRepoChangePosition(repo: string): Promise<string> {
     return this.backing.getRepoChangePosition(repo)
@@ -354,7 +411,10 @@ export class RepoViewStore implements BuildStore {
   }
   private invalidate(slug?: string): void {
     this.recordsDirty = true
-    if (slug) this.dirtyDigests.add(slug)
+    if (slug) {
+      this.dirtyDigests.add(slug)
+      this.appends.set(slug, (this.appends.get(slug) ?? 0) + 1)
+    }
   }
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
     const record = await this.backing.createBuild(input)

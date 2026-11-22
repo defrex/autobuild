@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { TicketStartPriority } from '../../events/repository'
 import type { Ticket, TicketPriority, TicketSource } from '../types'
 
 export type { TicketPriority } from '../types'
@@ -52,4 +53,14 @@ export function parsePriorityFlag(value: string, flag = '--priority'): TicketPri
   const result = ticketPrioritySchema.safeParse(value.trim())
   if (!result.success) throw new Error(`${flag}: expected urgent or normal, got "${value}"`)
   return result.data
+}
+
+const START_PRIORITIES: readonly TicketStartPriority[] = ['manual', 'urgent', 'normal']
+
+/** `ab start --priority`: a start request's admission tier. */
+export function parseStartPriorityFlag(value: string, flag = '--priority'): TicketStartPriority {
+  const priority = START_PRIORITIES.find((tier) => tier === value.trim())
+  if (priority === undefined)
+    throw new Error(`${flag}: expected manual, urgent or normal, got "${value}"`)
+  return priority
 }

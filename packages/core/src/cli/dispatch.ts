@@ -36,7 +36,7 @@ import { formatDispatcherError, runtimeIdentity } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
 import { guardForge } from '../kernel/guarded-forge'
-import { dispatchCapacity, urgentClaimDemand } from '../kernel/dispatch-capacity'
+import { dispatchCapacity, startClaimDemand, urgentClaimDemand } from '../kernel/dispatch-capacity'
 import { lazyTicketSource, openTicketSource } from './ticket'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import {
@@ -4248,6 +4248,7 @@ class DispatchLoop {
               policy: configSnapshot.config.policy,
               engaged: repositoryEvents.openPrBackpressure !== undefined,
             },
+            startRequests: startClaimDemand(repositoryEvents),
           },
         ),
         ...(this.triageSampler?.value !== undefined ? { triage: this.triageSampler.value } : {}),
