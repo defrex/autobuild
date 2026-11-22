@@ -70,6 +70,11 @@ describe('repository attention projection', () => {
     ['ticket.handback-settled', { build: 'b' }, false],
     ['dispatcher.forge-degraded', { forge: 'github' }, true],
     ['dispatcher.forge-degraded', { forge: 'github', continued: true }, false],
+    ['ticket.start-settled', { request: 1, outcome: 'started', slug: 'b' }, true],
+    ['ticket.start-settled', { request: 1, outcome: 'blocked', detail: 'T-2' }, true],
+    ['ticket.start-requested', {}, false],
+    ['ticket.start-cancelled', { request: 1 }, false],
+    ['ticket.identity-recorded', { identities: [] }, false],
   ])('%s %j direct=%s', (type, payload, expected) => {
     expect(repositoryNeedsAttention(repo(type as string, payload, 1))).toBe(expected as boolean)
   })

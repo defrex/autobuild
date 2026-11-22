@@ -140,6 +140,13 @@ bun ab priority my-build urgent
 
 - **`priority`** sets an active build's slot-admission priority to `urgent` or `normal` without touching its ticket. An urgent build waiting to re-verify, reconcile or resume takes the next free slot ahead of normal work; see [slot admission order](dispatcher.md#slot-admission-order). It never interrupts running work.
 
+```
+bun ab start AUT-12
+bun ab start AUT-13 --priority urgent
+```
+
+- **`start`** asks the running dispatcher to claim one ticket on its next tick with a free slot, even while intake is off or open-PR backpressure is engaged, and nothing else. By default (`--priority manual`) the request goes ahead of all waiting work; `--priority urgent` waits for urgent parked work and makes the build urgent, and `--priority normal` waits for normal parked work and urgent claims. Repeating the command with another priority updates the pending request. The ticket must still be ready, meet the spec standard and have no unresolved blockers; a request that cannot start settles once with its reason. `ab watch` reports the outcome and `ab repository status` lists pending requests with their priority. `--cancel` withdraws a pending request.
+
 ## Authorize merge
 
 Ordered merge rules choose automatic authorization or explicit consent. With no matching rule, leaves default to auto and integration nodes to consent. Verification, checks, protection and merge gates still apply.

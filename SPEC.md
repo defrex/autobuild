@@ -541,6 +541,79 @@ clock is therefore consulted only once that window ends, at most one scan
 interval after the recorded measurement; the dispatcher then treats it as a
 clock rollback, rescans, and resets the cache to the current clock.
 
+**Single-ticket start requests.** An operator can ask the running dispatcher,
+local or hosted, to start one named ticket whether or not intake is on:
+`ab start <ticket-id> [--priority manual|urgent|normal]`, the operator tool
+`tickets.start {priority?}`, or HTTP `POST …/tickets/{id}/start` with an
+optional `{priority}` body. The priority is the request's slot-admission tier
+(§12 "Slot admission order") and defaults to `manual`. The request
+canonicalizes the id through the configured source's `get` (refusing an
+unknown ticket) and appends one human-attributed repository
+`ticket.start-requested {ticket, priority}` naming the canonical ref. A pending
+request with the same priority makes it a no-op; one with another priority is
+updated by the new event, keeping the first request's sequence, so settlement
+and cancellation still name one request. `ab start --cancel`
+(`tickets.start {cancel: true}`, `POST …/tickets/{id}/start/cancel`), which
+takes no priority, appends
+`ticket.start-cancelled` for the pending request, and nothing when none is
+pending. A reduced `ticketStarts` part of the repository read facts holds the
+pending requests and the eight most recent settlements; a settlement or
+cancellation applies only to the request sequence it names.
+
+Each tick evaluates pending requests in two passes, at most eight per pass,
+each in tier order and then oldest first, and claims nothing else for them:
+`manual` and `urgent` requests after node admission and before ordinary
+intake, and `normal` requests after ordinary intake and the deferred normal
+parked admissions, so that urgent claims and normal parked work found in the
+same tick go first. Each request belongs to one pass. With none pending a pass
+reads nothing; otherwise it makes one targeted `get` per request. Every tier
+bypasses intake off, and open-PR backpressure, without enabling intake for any
+other ticket. A request whose ticket has an active build settles
+`started` when that build was created after the request (its own claim whose
+settlement was lost) and `already-building` otherwise; a ticket outside the
+configured ready state settles `terminal` when it is done, resolved or rejected
+and `not-ready` otherwise; a missing ticket settles `missing`. Dispatch labels
+and the ready assignee are not applied, because the operator named the ticket.
+The rest is admitted through the ordinary dispatch path in a targeted mode that
+skips the ready listing, the scan checkpoint and the standing queue report but
+keeps every gate: creation holds, profile conflicts, node targets, dependency
+verdicts, the spec-standard quality gate and its bounce, the claim and its
+preparation journal, capacity, repository pause, accounts and forge health.
+A claimed build's priority (§13) is `urgent` when the request's priority was
+`urgent`, even on a source without the priority capability, and otherwise its
+ticket's own; `manual` is admission-only and never a build priority.
+Outcomes are `started` with the slug, `invalid` for a bounce (with the missing
+parts) or a profile conflict, `blocked` for unresolved blockers or an
+unavailable target, and `claim-refused` for a refused claim. A pause, no free
+slot, a creation hold, an in-flight preparation, a failed dependency read, a
+ticket-source error or the tick budget leaves the request pending for the next
+tick. Each settlement is one dispatcher `ticket.start-settled` carrying the
+request's priority, after a journal refresh confirms the request is still
+pending, and it is default watch attention. There is no force: capacity is
+respected and nothing is preempted.
+The claim itself proceeds only after a journal refresh confirms the request is
+still pending, so a cancellation that lands while a pass is reading the ticket
+prevents it. The stage measures capacity, for a wait and for an admission
+alike, from the build facts the same tick's janitor, dispatch recovery, lease
+sweep and mixed-version deferral check have already read, and the stage's own
+deferral checks serve those reads too. A build is read again only when the tick skipped it,
+or wrote to it after reading it, unless it is a leaf provisioning a runner,
+which holds its slot whatever its state. So a pending request adds no per-build
+read on a fresh dispatcher process or a long-lived one, and a write by another
+process during the tick is seen on the next tick, as it is by intake. The
+admission pass runs when that measurement shows a free slot in a request's
+tier, or for a node or a blocked target not yet checked. A claim spends only
+its own tier's slot: lower tiers already reserved it while it was pending.
+
+Hosted active builds may record a legacy ticket alias. While a request is
+pending, the dispatcher resolves the canonical identity of each active hosted
+build without one, at most 16 per tick, and saves it durably in an advisory
+`ticket.identity-recorded`, which also releases builds that are no longer
+active. Each build is resolved once in its life. Matching is then a
+case-insensitive comparison over recorded and projected identities with no
+source read, and a hosted request is neither admitted nor settled as building
+until every active hosted build has an identity.
+
 
 ### 3.4 The event log spine
 
@@ -2010,7 +2083,8 @@ which runs these two commands and refuses every other.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the harvest gate. It uses the same
+repository-wide pause, and the harvest gate, plus pending and recently settled
+single-ticket start requests with their priority (`ticketStarts`, present when either is nonempty). It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off; the query does not create that stream,
@@ -2708,11 +2782,21 @@ creation holds, capacity, intake off and repository pause — so a blocked urgen
 ticket never holds back normal work. Priority never preempts: an urgent ticket
 does not stop, pause or displace a running build.
 
-**Slot admission order.** Free slots are admitted in four tiers: urgent parked
-work (nodes and parked leaves waiting for verification, reconcile, resume or
-propose), then urgent ticket claims, then normal parked work, then normal
-ticket claims. Each tier keeps its own order: parked leaves in the tick's visit
-order, nodes in slug order, tickets in the source's listing order. A build's
+**Slot admission order.** Free slots are admitted in five tiers:
+
+1. `manual` single-ticket start requests (the `ab start` default, §11);
+2. urgent parked work (nodes and parked leaves waiting for verification,
+   reconcile, resume or propose);
+3. urgent ticket claims: `urgent` start requests, then ordinary urgent ready
+   tickets while intake is on;
+4. normal parked work;
+5. normal ticket claims: `normal` start requests, then ordinary normal ready
+   tickets while intake is on.
+
+Each tier keeps its own order: start requests oldest first, parked leaves in
+the tick's visit order, nodes in slug order, tickets in the source's listing
+order. Start requests bypass intake off and open-PR backpressure; ordinary
+ready tickets do not. A build's
 priority is frozen from its claimed ticket on `build.created` (`priority:
 urgent`; omitted for normal and in historical logs) and changed by the
 human-authored advisory `build.priority-set {priority: urgent | normal}`
@@ -2720,14 +2804,22 @@ human-authored advisory `build.priority-set {priority: urgent | normal}`
 `priority`); a later ticket priority edit does not reach an existing build.
 Absent priority reads as normal. Admission is arithmetic over reduced facts: a
 waiter is admitted when the slots occupied by every other build plus the
-slots reserved ahead of it are below `capacity`. Nothing is reserved ahead of
-urgent parked work. Ahead of normal parked work are the urgent waiters' slot
-reservations and the urgent claim demand of the latest admission scan:
+slots reserved ahead of it are below `capacity`. Pending start requests are
+durable demand: the reduced `ticketStarts` counts them by tier, whatever
+intake says, and nothing while the repository is paused. Each reserves one slot
+ahead of the tiers below it until it settles or is cancelled, and never
+preempts. Only `manual` requests are reserved ahead of urgent parked work.
+Ahead of normal parked work are the `manual` and `urgent` requests, the urgent
+waiters' slot reservations and the urgent claim demand of the latest admission
+scan:
 `dispatcher.ticket-scan-completed` records `urgentWaiting`, the urgent non-node
 ready tickets that passed every intake gate except capacity (omitted when
-none; counted only while intake is on and the repository unpaused). An urgent
-claim waits only for urgent reservations; a normal claim waits for every
-waiter, as before. Because demand discovered by an earlier scan can be stale,
+none; counted only while intake is on and the repository unpaused). An
+`urgent` start request waits for urgent reservations and `manual` requests; an
+ordinary urgent claim also for `urgent` requests. A `normal` start request
+waits for every waiter, the `manual` and `urgent` requests and the urgent claim
+demand; an ordinary normal claim waits for every waiter and every pending start
+request. Because demand discovered by an earlier scan can be stale,
 the dispatcher also defers, within a tick, any normal parked admission into a
 free slot while ticket claims can run (the source supports priority, intake is
 on, the repository is unpaused, accounts are present and the forge is not
@@ -3017,7 +3109,9 @@ operator and MCP ticket requests take `issueLinks`.
 **Ticket priority.** A ticket's priority is `urgent` or `normal`; absent means
 normal. Urgent ready work is claimed before normal ready work, and ahead of
 normal parked work (§12 "Slot admission order"); a claimed ticket's priority
-becomes its build's priority, and nothing else changes. Sources declare support. The file source stores
+becomes its build's priority, and nothing else changes. A single-ticket start
+request has its own admission tier (§11); an `urgent` request also makes its
+build urgent. Sources declare support. The file source stores
 `priority = "urgent"` in its frontmatter, writes no key for normal, and covers
 urgent priority in its revisions; the in-memory fake behaves the same way.
 The hosted source stores priority in the hosted ticket store, covers it in its
@@ -3205,9 +3299,10 @@ node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
 Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of normal ticket claims, marking urgent waiters and the urgent ticket
-claims waiting ahead of normal parked work, and report a finished work build
-waiting to run again the same way. Idle collecting nodes remain free.
+ahead of normal ticket claims, marking urgent waiters, the pending start
+requests of each tier and the urgent ticket claims waiting ahead of normal
+parked work, and report a finished work build waiting to run again the same
+way. Idle collecting nodes remain free.
 
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
@@ -4181,8 +4276,8 @@ backfill, and migration reruns preserve counters. Hosted reads use one GET
 `/repos/:repo/builds` returns scoped build records. Both routes authorize the
 repository before reading and support repositories with builds but no journal.
 
-Durable operator settings (intake, repository pause, harvest gate) survive
-restarts through the repository journal. Per-merge hold and merge commands
+Durable operator settings (intake, repository pause, harvest gate) and pending
+single-ticket start requests survive restarts through the repository journal. Per-merge hold and merge commands
 live in the build log. Merge policy is declarative dispatcher configuration
 (§15.7); there is no writable repository auto-merge default.
 
@@ -4411,7 +4506,7 @@ with illustrative members:
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
 | Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. The dispatcher records `exhausted` after two consecutive empty proposals. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?, stream?, substitution?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
-| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
+| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; `ticket.start-requested`, `ticket.start-cancelled`, `ticket.start-settled` and the advisory `ticket.identity-recorded`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
 live, the janitor defers the saga so it cannot race process-tree teardown. Once

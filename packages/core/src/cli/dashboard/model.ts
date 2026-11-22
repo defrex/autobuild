@@ -14,6 +14,7 @@ import {
 import {
   dispatchCapacity,
   slotWaitText,
+  startClaimDemand,
   urgentClaimDemand,
   type DispatchCapacity,
 } from '../../kernel/dispatch-capacity'
@@ -1566,7 +1567,12 @@ export function buildDashboard(
         : repositoryEvents.ticketMigrations,
       config.tickets.source,
     ),
-    Array.isArray(repositoryEvents) ? {} : { urgentClaims: urgentClaimDemand(repositoryEvents) },
+    Array.isArray(repositoryEvents)
+      ? {}
+      : {
+          urgentClaims: urgentClaimDemand(repositoryEvents),
+          startRequests: startClaimDemand(repositoryEvents),
+        },
   )
   const activeCount = capacityProjection.occupied
   return buildDashboardFromProjected(

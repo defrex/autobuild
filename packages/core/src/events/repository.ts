@@ -939,6 +939,74 @@ export const ticketHandbackEventPayloadSchemas = {
   'ticket.handback-settled': z.strictObject({ build: z.string().min(1) }),
 }
 
+/** Outcomes a dispatcher records when it settles an operator's single-ticket
+ * start request. `started` and `already-building` name the build. */
+export const ticketStartOutcomeSchema = z.enum([
+  'started',
+  'already-building',
+  'blocked',
+  'invalid',
+  'missing',
+  'not-ready',
+  'terminal',
+  'claim-refused',
+])
+export type TicketStartOutcome = z.infer<typeof ticketStartOutcomeSchema>
+
+/** A start request's slot-admission tier (SPEC §12). `manual` is
+ * admission-only: a claimed build carries `urgent` only when the request
+ * asked for it, otherwise its ticket's own priority. */
+export const ticketStartPrioritySchema = z.enum(['manual', 'urgent', 'normal'])
+export type TicketStartPriority = z.infer<typeof ticketStartPrioritySchema>
+
+const startRequest = z.number().int().positive()
+const nonblank = z.string().trim().min(1)
+
+/** Operator single-ticket start requests (AUT-1293). A request names one
+ * canonical ticket and its admission tier; the running dispatcher admits it
+ * through the ordinary gates on its next tick with a free slot in that tier,
+ * whether or not intake is on, and settles it exactly once. A request for a
+ * pending ticket with another priority updates the pending request's tier.
+ * `request` is the first requested event's seq. */
+export const ticketStartEventPayloadSchemas = {
+  'ticket.start-requested': z.strictObject({
+    ticket: ticketRefSchema,
+    priority: ticketStartPrioritySchema,
+  }),
+  'ticket.start-cancelled': z.strictObject({ request: startRequest, ticket: ticketRefSchema }),
+  'ticket.start-settled': z
+    .strictObject({
+      request: startRequest,
+      ticket: ticketRefSchema,
+      priority: ticketStartPrioritySchema,
+      outcome: ticketStartOutcomeSchema,
+      slug: z.string().min(1).optional(),
+      detail: nonblank.max(2000).optional(),
+    })
+    .superRefine((value, ctx) => {
+      const named = value.outcome === 'started' || value.outcome === 'already-building'
+      if (named !== (value.slug !== undefined))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'slug is required for started and already-building, and only for them',
+        })
+    }),
+  /** Canonical identities of hosted active builds whose recorded ticket ref
+   * may be a legacy alias, resolved once per build. `released` prunes builds
+   * the writer saw were no longer non-terminal. A derived cache. */
+  'ticket.identity-recorded': z
+    .strictObject({
+      identities: z
+        .array(z.strictObject({ build: nonblank, recorded: nonblank, canonical: nonblank }))
+        .max(16),
+      released: z.array(nonblank).max(256).optional(),
+    })
+    .superRefine((value, ctx) => {
+      if (value.identities.length === 0 && (value.released?.length ?? 0) === 0)
+        ctx.addIssue({ code: 'custom', message: 'identities or released must be nonempty' })
+    }),
+}
+
 export const dispatchPlacementFactSchema = z.discriminatedUnion('hosted', [
   z.strictObject({
     hosted: z.literal(true),
@@ -967,6 +1035,7 @@ export const repositoryEventPayloadSchemas = {
   'dispatcher.placement-set': dispatchPlacementFactSchema,
   ...ticketPreparationEventPayloadSchemas,
   ...ticketHandbackEventPayloadSchemas,
+  ...ticketStartEventPayloadSchemas,
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...kernelGitHealthEventPayloadSchemas,
@@ -1032,6 +1101,10 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'ticket-preparation.resolved': ['dispatcher'],
   'ticket.handed-back': ['dispatcher'],
   'ticket.handback-settled': ['dispatcher'],
+  'ticket.start-requested': ['human'],
+  'ticket.start-cancelled': ['human'],
+  'ticket.start-settled': ['dispatcher'],
+  'ticket.identity-recorded': ['dispatcher'],
 
   'tickets.migration-recorded': ['human'],
   'change-presence.observed': ['dispatcher', 'kernel'],

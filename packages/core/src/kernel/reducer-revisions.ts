@@ -32,4 +32,9 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'buildReadFacts/shape/jjcct3w7sh': 'AUT-1290 build priority and urgent scan demand',
   'buildStreamSeed/shape/x80591dawj': 'AUT-1290 build priority and urgent scan demand',
   'repositoryReadFacts/shape/hgw4spz5c0': 'AUT-1290 build priority and urgent scan demand',
+  'repositoryReadFacts/shape/xyn7875cxw': 'AUT-1293 carry pending ticket start requests',
+  'ticketStarts/shape/eecofz22vy': 'AUT-1293 start request priority',
+  'repositoryReadFacts/shape/7hbgb52kw8': 'AUT-1293 start request priority',
+  'ticketStarts/fold/eglrhnb0ta': 'AUT-1293 re-request updates pending start priority',
+  'repositoryReadFacts/fold/fk3ka9gb3z': 'AUT-1293 re-request updates pending start priority',
 }

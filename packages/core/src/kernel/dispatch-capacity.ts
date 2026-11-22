@@ -1,3 +1,4 @@
+import type { TicketStartPriority } from '../events/repository'
 import type { TicketRef } from '../ontology'
 import type { TicketPriority } from '../ports/types'
 import type { BuildRecord } from '../store/types'
@@ -43,8 +44,9 @@ export interface SlotWaiter {
 }
 
 /** Slot admission order for free slots (SPEC §12, "Slot admission order"):
- * urgent parked work, urgent ticket claims, normal parked work, normal ticket
- * claims; each tier keeps its own order. */
+ * manual start requests, urgent parked work, urgent ticket claims (urgent
+ * start requests first), normal parked work, normal ticket claims (normal
+ * start requests first); each tier keeps its own order. */
 export interface DispatchCapacity {
   configured: number
   occupied: number
@@ -58,6 +60,10 @@ export interface DispatchCapacity {
    * (`urgentClaimDemand`); they go ahead of normal parked work. Omitted when
    * none, and when the caller has no repository facts. */
   urgentClaims?: number
+  /** Pending operator start requests by tier (`startClaimDemand`); each
+   * reserves a slot ahead of the lower tiers. Omitted when none, by an older
+   * server, and when the caller has no repository facts. */
+  startRequests?: Partial<Record<TicketStartPriority, number>>
 }
 
 /** A build's slot-admission priority; absent (historical builds, sources
@@ -75,6 +81,24 @@ export function urgentClaimDemand(facts: {
 }): number {
   if (!facts.settings.intake || facts.settings.paused || facts.scan?.mode !== 'admission') return 0
   return facts.scan.urgentWaiting ?? 0
+}
+
+/** Pending operator start requests by tier, counted whatever intake says:
+ * a start request bypasses intake. Nothing while the repository is paused. */
+export function startClaimDemand(facts: {
+  ticketStarts: { pending: Record<string, { priority: TicketStartPriority }> }
+  settings: { paused: boolean }
+}): Partial<Record<TicketStartPriority, number>> {
+  const demand: Partial<Record<TicketStartPriority, number>> = {}
+  if (facts.settings.paused) return demand
+  for (const { priority } of Object.values(facts.ticketStarts.pending))
+    demand[priority] = (demand[priority] ?? 0) + 1
+  return demand
+}
+
+/** Pending start requests of the named tiers. */
+function startsOf(capacity: DispatchCapacity, tiers: readonly TicketStartPriority[]): number {
+  return tiers.reduce((sum, tier) => sum + (capacity.startRequests?.[tier] ?? 0), 0)
 }
 
 /** A provisioning marker or continuation, or a live lease: a runner is working. */
@@ -306,7 +330,10 @@ export function dispatchCapacity(
   configured: number,
   now: Date,
   identity: Identity = exactIdentity,
-  opts: { urgentClaims?: number } = {},
+  opts: {
+    urgentClaims?: number
+    startRequests?: Partial<Record<TicketStartPriority, number>>
+  } = {},
 ): DispatchCapacity {
   const unique = [...new Map(builds.map((build) => [build.record.slug, build])).values()]
   const occupied = unique.filter((build) => occupiesCapacity(build, now)).length
@@ -345,7 +372,17 @@ export function dispatchCapacity(
     ...(waitingNodes.length ? { waitingNodes } : {}),
     ...(waitingBuilds.length ? { waitingBuilds } : {}),
     ...(opts.urgentClaims ? { urgentClaims: opts.urgentClaims } : {}),
+    ...startRequestsOf(opts.startRequests),
   }
+}
+
+function startRequestsOf(
+  demand: Partial<Record<TicketStartPriority, number>> | undefined,
+): Pick<DispatchCapacity, 'startRequests'> {
+  const startRequests: Partial<Record<TicketStartPriority, number>> = {}
+  for (const tier of ['manual', 'urgent', 'normal'] as const)
+    if (demand?.[tier]) startRequests[tier] = demand[tier]
+  return Object.keys(startRequests).length ? { startRequests } : {}
 }
 
 /** A node verification or propose request reserves a slot until the node
@@ -354,40 +391,36 @@ function nodeReserves(node: SlotWaiter): boolean {
   return node.request === 'verification' || node.request === 'propose'
 }
 
-/** Slots reserved ahead of one parked waiter: nothing for urgent work; for
- * normal work, every other urgent reservation and the urgent ticket claims
- * still waiting. A waiter is admitted when `occupied + reservedAhead` is below
- * the configured budget, so the order waiters are visited in never matters
- * across tiers. */
+/** Slots reserved ahead of one parked waiter: manual start requests for
+ * urgent work; for normal work, also every other urgent reservation, the
+ * urgent start requests and the urgent ticket claims still waiting. A waiter
+ * is admitted when `occupied + reservedAhead` is below the configured budget,
+ * so the order waiters are visited in never matters across tiers. */
 export function reservedAhead(
   capacity: DispatchCapacity,
   waiter: { slug: string; priority: TicketPriority },
 ): number {
-  if (waiter.priority === 'urgent') return 0
+  if (waiter.priority === 'urgent') return startsOf(capacity, ['manual'])
   const urgent = (entry: SlotWaiter) => entry.priority === 'urgent' && entry.slug !== waiter.slug
   return (
     (capacity.waitingNodes ?? []).filter((node) => nodeReserves(node) && urgent(node)).length +
     (capacity.waitingBuilds ?? []).filter(urgent).length +
-    (capacity.urgentClaims ?? 0)
+    (capacity.urgentClaims ?? 0) +
+    startsOf(capacity, ['manual', 'urgent'])
   )
 }
 
-/** Slots left for ticket claims of one priority. Parked work of the same or
- * a higher priority reserves ahead of them: an urgent claim waits only for
- * urgent parked work, a normal claim for every waiter. A node verification or
- * propose request reserves one slot until the node holds it; a node reconcile
- * request already occupies one. A parked build's request occupies nothing, so
- * each one reserves a slot. Never more than the configured budget minus
- * occupied builds.
- *
- * The dispatcher refines the projection with its own decisions this tick:
- * `settled` drops waiters it found waiting for their PR, `denied` adds
- * builds its admission gate turned away, with their priority. Status surfaces
- * omit `adjust`. */
-export function intakeCapacity(
+type CapacityAdjust = {
+  settled?: ReadonlySet<string>
+  denied?: ReadonlyMap<string, TicketPriority>
+}
+
+/** Waiters reserving a slot ahead of claims of one priority: urgent waiters
+ * only for urgent claims, every waiter for normal ones. */
+function waitersAhead(
   capacity: DispatchCapacity,
-  adjust: { settled?: ReadonlySet<string>; denied?: ReadonlyMap<string, TicketPriority> } = {},
-  priority: TicketPriority = 'normal',
+  adjust: CapacityAdjust,
+  priority: TicketPriority,
 ): number {
   const counts = (entry: { priority?: TicketPriority }) =>
     priority === 'normal' || entry.priority === 'urgent'
@@ -401,7 +434,58 @@ export function intakeCapacity(
   )
   for (const [slug, denied] of adjust.denied ?? [])
     if (counts({ priority: denied })) builds.add(slug)
-  return capacity.configured - capacity.occupied - nodes - builds.size
+  return nodes + builds.size
+}
+
+/** Slots left for ordinary ticket claims of one priority. Parked work of the
+ * same or a higher priority reserves ahead of them: an urgent claim waits only
+ * for urgent parked work, a normal claim for every waiter. Pending start
+ * requests of the same or a higher tier reserve ahead too: manual and urgent
+ * ones for an urgent claim, every one for a normal claim. A node verification or
+ * propose request reserves one slot until the node holds it; a node reconcile
+ * request already occupies one. A parked build's request occupies nothing, so
+ * each one reserves a slot. Never more than the configured budget minus
+ * occupied builds.
+ *
+ * The dispatcher refines the projection with its own decisions this tick:
+ * `settled` drops waiters it found waiting for their PR, `denied` adds
+ * builds its admission gate turned away, with their priority. Status surfaces
+ * omit `adjust`. */
+export function intakeCapacity(
+  capacity: DispatchCapacity,
+  adjust: CapacityAdjust = {},
+  priority: TicketPriority = 'normal',
+): number {
+  return (
+    capacity.configured -
+    capacity.occupied -
+    waitersAhead(capacity, adjust, priority) -
+    startsOf(
+      capacity,
+      priority === 'urgent' ? ['manual', 'urgent'] : ['manual', 'urgent', 'normal'],
+    )
+  )
+}
+
+/** Slots left for operator start requests of one tier: a manual request
+ * waits for nothing; an urgent one for urgent parked work and manual
+ * requests; a normal one for every waiter, the manual and urgent requests and
+ * the urgent ticket claims still waiting. `adjust` is `intakeCapacity`'s. */
+export function startCapacity(
+  capacity: DispatchCapacity,
+  adjust: CapacityAdjust,
+  tier: TicketStartPriority,
+): number {
+  const free = capacity.configured - capacity.occupied
+  if (tier === 'manual') return free
+  if (tier === 'urgent')
+    return free - waitersAhead(capacity, adjust, 'urgent') - startsOf(capacity, ['manual'])
+  return (
+    free -
+    waitersAhead(capacity, adjust, 'normal') -
+    startsOf(capacity, ['manual', 'urgent']) -
+    (capacity.urgentClaims ?? 0)
+  )
 }
 
 /** Shared wording for one node or parked build waiting on a runner slot. */
@@ -411,8 +495,9 @@ export function slotWaitText(request: SlotRequest, priority: TicketPriority = 'n
     : `${request} waiting for a slot ahead of normal ticket claims`
 }
 
-/** Shared wording for every node and parked build waiting on a runner slot,
- * and for urgent ticket claims waiting ahead of normal parked work, or `''`. */
+/** Shared wording for pending operator start requests, every node and parked
+ * build waiting on a runner slot, and urgent ticket claims waiting ahead of
+ * normal parked work, in slot admission order, or `''`. */
 export function waitingExplanation(
   capacity?: DispatchCapacity,
   opts: { requests?: boolean } = {},
@@ -435,7 +520,14 @@ export function waitingExplanation(
     ]
   }
   const urgentClaims = capacity?.urgentClaims ?? 0
+  const starts = (tier: TicketStartPriority, waiting: string) => {
+    const count = capacity?.startRequests?.[tier] ?? 0
+    return count ? [`${count} ${tier} start request${count === 1 ? '' : 's'} ${waiting}`] : []
+  }
   return [
+    ...starts('manual', 'waiting ahead of all other work'),
+    ...starts('urgent', 'waiting ahead of normal parked work'),
+    ...starts('normal', 'waiting for a slot'),
     ...clause('node', capacity?.waitingNodes ?? []),
     ...clause('parked build', capacity?.waitingBuilds ?? []),
     ...(urgentClaims

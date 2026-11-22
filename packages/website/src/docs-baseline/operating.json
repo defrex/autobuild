@@ -4,7 +4,7 @@
   "title": "Working with your operator agent",
   "group": "guides",
   "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
-  "textHash": "9caeff9c2489f0c9017fa3c754a326357a1ab00db6a35968a224166ab91357be",
+  "textHash": "fdbc00d226051f31772378740d79b4efb96f32681c84fa9f0fd62c3efd0afaba",
   "headings": [
     "Choose a harness",
     "Give the agent memory",
@@ -23,6 +23,7 @@
     "bun ab answer my-build \"Keep the public API compatible\"",
     "bun ab pause my-build\nbun ab resume my-build",
     "bun ab priority my-build urgent",
+    "bun ab start AUT-12\nbun ab start AUT-13 --priority urgent",
     "bun ab merge my-build\nbun ab hold my-build --reason \"waiting on AUT-12 to merge\"",
     "bun ab reopen my-build --feedback \"rename the flag and update the docs\"\nbun ab reopen my-build --revise-spec-from-ticket"
   ]
