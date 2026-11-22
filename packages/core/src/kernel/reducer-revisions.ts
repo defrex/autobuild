@@ -36,4 +36,9 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'build/shape/0sj01uqgcz': 'Forge CI failure record on finished leaves',
   'buildReadFacts/shape/42qtslvxvq': 'Forge CI failure record on finished leaves',
   'buildStreamSeed/shape/9970dr98ff': 'Forge CI failure record on finished leaves',
+  'repositoryReadFacts/shape/xyn7875cxw': 'AUT-1293 carry pending ticket start requests',
+  'ticketStarts/shape/eecofz22vy': 'AUT-1293 start request priority',
+  'repositoryReadFacts/shape/7hbgb52kw8': 'AUT-1293 start request priority',
+  'ticketStarts/fold/eglrhnb0ta': 'AUT-1293 re-request updates pending start priority',
+  'repositoryReadFacts/fold/fk3ka9gb3z': 'AUT-1293 re-request updates pending start priority',
 }

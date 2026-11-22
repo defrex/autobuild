@@ -44,11 +44,13 @@ run `ab dispatch`, including `--viewer`.
 
 A ticket is claimed when it passes every gate:
 
-- **Ready state.** The configured workflow state, required labels and source filters.
+- **Ready state.** The configured workflow state, plus, for ordinary intake, the required labels and source-specific listing filters such as the ready assignee.
 - **Blockers.** Every dependency is done.
 - **Destination.** Its target (`main` or an integration node) accepts new work.
 
 Others stay queued. Urgent tickets are claimed before normal ones, each in the source's order; priority never preempts a running build. With `[policy].maxOpenPrs` set, open-PR backpressure pauses new normal-priority claims while that many root PRs are open and unmerged, until the count drains to `resumeOpenPrs` (below `maxOpenPrs` when the two are equal); urgent claims and in-flight work continue. See [`[policy]`](configuration.md#policy). See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
+
+To start one ticket without turning intake on for the whole ready queue, run `ab start <ticket-id> [--priority manual|urgent|normal]` (or the `tickets.start` operator tool). The running dispatcher, local or hosted, claims just that ticket on its next tick with a free slot in the request's tier and records the outcome as a `ticket.start-settled` event shown by `ab watch` and `ab repository status`. The default `manual` tier goes ahead of all waiting work; `urgent` and `normal` wait their turn as described below. The ticket must still be in the ready state, meet the spec standard, have no unresolved blockers and a destination that accepts work, and is deduplicated against existing builds; capacity and repository pause still apply. Listing labels and the ready assignee are not applied, because the ticket is named. Every tier bypasses intake off and open-PR backpressure for that ticket only. See `ab help start`.
 
 Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps the builds running work: a work build holds a slot until it finishes its pipeline (verification and finalize), even while paused or blocked on a question. Once it waits for a merge decision it holds none; if its target moves or its PR conflicts, it waits for a slot ahead of normal ticket claims to restack, re-verify or reconcile. A work build waiting on other tickets (`ab wait-on`) also holds none, and when the wait ends it waits for a slot ahead of normal ticket claims to resume. Finished and waiting builds keep their workspaces, so retained workspaces can exceed `capacity` while running work cannot. An integration node holds a slot only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
 
@@ -56,12 +58,13 @@ Each build gets its own workspace (local git worktree or remote sandbox) and a b
 
 A free slot goes, in order, to:
 
-1. urgent parked work: nodes and finished or waiting builds that must verify, reconcile, resume or propose;
-2. urgent ready tickets;
-3. normal parked work;
-4. normal ready tickets.
+1. `manual` start requests (`ab start`'s default);
+2. urgent parked work: nodes and finished or waiting builds that must verify, reconcile, resume or propose;
+3. urgent ticket claims: `ab start --priority urgent` requests, then urgent ready tickets;
+4. normal parked work;
+5. normal ticket claims: `ab start --priority normal` requests, then normal ready tickets.
 
-Each tier keeps its usual order. A build takes its ticket's priority when it is claimed. `ab priority <slug> urgent|normal` (or the `builds.control` action `priority`) changes an active build's priority, for example to expedite a waiting reconcile that now blocks other work; it never changes the ticket. While urgent tickets are ready, normal parked work waits for a slot until the dispatcher has offered urgent tickets the free slots that tick. An urgent ticket blocked on a dependency reserves nothing. Priority orders free slots only: it never interrupts a running build. `ab repository status`, `ab builds` and both dashboards mark urgent waiters and urgent ticket claims waiting ahead of normal parked work.
+Each tier keeps its usual order, start requests oldest first. A pending start request reserves its slot ahead of the tiers below it until it settles or is cancelled. A build takes its ticket's priority when it is claimed; a build started by an `urgent` request is urgent, and `manual` never becomes a build priority. `ab priority <slug> urgent|normal` (or the `builds.control` action `priority`) changes an active build's priority, for example to expedite a waiting reconcile that now blocks other work; it never changes the ticket. While urgent tickets are ready, normal parked work waits for a slot until the dispatcher has offered urgent tickets the free slots that tick. An urgent ticket blocked on a dependency reserves nothing. Priority orders free slots only: it never interrupts a running build. `ab repository status`, `ab builds` and both dashboards mark urgent waiters, pending start requests by tier and urgent ticket claims waiting ahead of normal parked work.
 
 
 ## The log is the source of truth

@@ -70,6 +70,7 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
     case 'hook.skipped':
     case 'forge.credential-limited':
     case 'ticket.handed-back':
+    case 'ticket.start-settled':
       return true
     case 'dispatcher.forge-degraded':
       // An episode's opening cooldown wakes once; its extensions are silent.
