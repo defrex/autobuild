@@ -20,6 +20,8 @@ import {
   settlementKey,
   slotRequest,
   slotWaitText,
+  startCapacity,
+  startClaimDemand,
   strandedNodeWorkspace,
   urgentClaimDemand,
   waitingExplanation,
@@ -592,6 +594,104 @@ describe('slot admission order', () => {
     expect(urgentClaimDemand({ scan: { ...scan, mode: 'observation' }, settings })).toBe(0)
     expect(urgentClaimDemand({ scan: { mode: 'admission' }, settings })).toBe(0)
     expect(urgentClaimDemand({ settings })).toBe(0)
+  })
+
+  describe('start request tiers', () => {
+    const admitted = (capacity: DispatchCapacity, slug: string, priority: 'urgent' | 'normal') =>
+      capacity.occupied + reservedAhead(capacity, { slug, priority }) < capacity.configured
+
+    test('start demand counts pending requests by tier, nothing while paused', () => {
+      const pending = {
+        a: { priority: 'manual' as const },
+        b: { priority: 'manual' as const },
+        c: { priority: 'normal' as const },
+      }
+      const settings = { paused: false }
+      expect(startClaimDemand({ ticketStarts: { pending }, settings })).toEqual({
+        manual: 2,
+        normal: 1,
+      })
+      expect(startClaimDemand({ ticketStarts: { pending }, settings: { paused: true } })).toEqual(
+        {},
+      )
+      expect(
+        dispatchCapacity([], 2, now, undefined, { startRequests: { manual: 1, urgent: 0 } })
+          .startRequests,
+      ).toEqual({ manual: 1 })
+      expect(dispatchCapacity([], 2, now, undefined, { startRequests: {} })).not.toHaveProperty(
+        'startRequests',
+      )
+    })
+
+    for (const configured of [1, 2])
+      test(`capacity ${configured}: a manual request goes ahead of urgent parked work`, () => {
+        const capacity = dispatchCapacity([urgent(reverify('u'))], configured, now, undefined, {
+          startRequests: { manual: 1 },
+        })
+        expect(reservedAhead(capacity, { slug: 'u', priority: 'urgent' })).toBe(1)
+        expect(admitted(capacity, 'u', 'urgent')).toBe(configured > 1)
+        expect(startCapacity(capacity, {}, 'manual')).toBe(configured)
+        expect(intakeCapacity(capacity, {}, 'urgent')).toBe(configured - 2)
+      })
+
+    for (const configured of [1, 2])
+      test(`capacity ${configured}: an urgent request waits for urgent parked work only`, () => {
+        const behindUrgent = dispatchCapacity([urgent(reverify('u'))], configured, now, undefined, {
+          startRequests: { urgent: 1 },
+        })
+        expect(startCapacity(behindUrgent, {}, 'urgent')).toBe(configured - 1)
+        expect(admitted(behindUrgent, 'u', 'urgent')).toBe(true)
+        expect(startCapacity(behindUrgent, { settled: new Set(['u']) }, 'urgent')).toBe(configured)
+        const aheadOfNormal = dispatchCapacity([reverify('n')], configured, now, undefined, {
+          startRequests: { urgent: 1 },
+          urgentClaims: 1,
+        })
+        expect(startCapacity(aheadOfNormal, {}, 'urgent')).toBe(configured)
+        expect(reservedAhead(aheadOfNormal, { slug: 'n', priority: 'normal' })).toBe(2)
+        expect(admitted(aheadOfNormal, 'n', 'normal')).toBe(configured > 2)
+        // An ordinary urgent claim waits behind the urgent request.
+        expect(intakeCapacity(aheadOfNormal, {}, 'urgent')).toBe(configured - 1)
+      })
+
+    for (const configured of [1, 2])
+      test(`capacity ${configured}: a normal request waits for normal parked work and urgent claims`, () => {
+        const capacity = dispatchCapacity([reverify('n')], configured, now, undefined, {
+          startRequests: { normal: 1 },
+        })
+        expect(startCapacity(capacity, {}, 'normal')).toBe(configured - 1)
+        expect(admitted(capacity, 'n', 'normal')).toBe(true)
+        expect(
+          startCapacity({ ...capacity, urgentClaims: 1 }, { settled: new Set(['n']) }, 'normal'),
+        ).toBe(configured - 1)
+        // Ordinary normal claims leave the request's slot.
+        expect(intakeCapacity(capacity)).toBe(configured - 2)
+        expect(intakeCapacity(capacity, {}, 'urgent')).toBe(configured)
+      })
+
+    test('every tier reserves ahead of the ones below it', () => {
+      const capacity = dispatchCapacity([], 3, now, undefined, {
+        startRequests: { manual: 1, urgent: 1, normal: 1 },
+      })
+      expect(startCapacity(capacity, {}, 'manual')).toBe(3)
+      expect(startCapacity(capacity, {}, 'urgent')).toBe(2)
+      expect(startCapacity(capacity, {}, 'normal')).toBe(1)
+      expect(intakeCapacity(capacity, {}, 'urgent')).toBe(1)
+      expect(intakeCapacity(capacity)).toBe(0)
+    })
+
+    test('wording names each start tier ahead of parked work', () => {
+      const capacity: DispatchCapacity = {
+        configured: 1,
+        occupied: 1,
+        effective: 1,
+        borrowingNodes: [],
+        waitingBuilds: [{ slug: 'a', request: 'verification' }],
+        startRequests: { manual: 1, urgent: 2, normal: 1 },
+      }
+      expect(waitingExplanation(capacity)).toBe(
+        '1 manual start request waiting ahead of all other work; 2 urgent start requests waiting ahead of normal parked work; 1 normal start request waiting for a slot; 1 parked build waiting for a slot ahead of normal ticket claims: a',
+      )
+    })
   })
 
   test('wording names priority and urgent claims', () => {

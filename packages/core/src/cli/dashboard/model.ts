@@ -15,6 +15,7 @@ import {
 import {
   dispatchCapacity,
   slotWaitText,
+  startClaimDemand,
   urgentClaimDemand,
   type DispatchCapacity,
 } from '../../kernel/dispatch-capacity'
@@ -1579,7 +1580,10 @@ export function buildDashboard(
     {
       ...(Array.isArray(repositoryEvents)
         ? {}
-        : { urgentClaims: urgentClaimDemand(repositoryEvents) }),
+        : {
+            urgentClaims: urgentClaimDemand(repositoryEvents),
+            startRequests: startClaimDemand(repositoryEvents),
+          }),
       openPrs: {
         policy: config.policy,
         engaged:

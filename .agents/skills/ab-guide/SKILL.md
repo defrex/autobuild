@@ -2584,7 +2584,9 @@ Intake off skips only new ticket claims while janitor, stale-runner, harvest,
 and in-flight work continue — it deliberately does **not** set the repository
 hold, so a build the repository has already accepted still starts and finishes.
 Every dispatcher samples the current value on each tick, so a change in one
-process gates all dispatchers for that repository.
+process gates all dispatchers for that repository. Intake is not the only way
+to claim a ticket: `ab start <ticket-id>` asks the running dispatcher to claim
+one named ticket whether or not intake is on (see the controls table below).
 
 The repository hold has no launch flag and no setter of its own: `p` and `r` on
 the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
@@ -2675,14 +2677,46 @@ to the build's event log and apply the same write-time checks.
 | Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
 | Settle an unmeasured merge | `ab objective <node> --settle-unmeasured <proposal\|build> --policy release-unmeasured [--note <text>] [--json] [--store <ref>]` | CLI/tool request (`optimization.settle-unmeasured`). Only for an attempt listed as an unmeasured merge; releases its slot once, never as accepted. | `attempt.settled {outcome: merged-unmeasured}` |
 | Hold merge | `ab hold <slug> [--reason <text>] [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested` (optional `reason`), then `landing.command-acknowledged` after native cancellation |
-| Set build priority | `ab priority <slug> urgent\|normal [--store <ref>]` | CLI/tool request (`builds.control` action `priority`); changes only the build's slot-admission order, never its ticket, and never preempts running work. | `build.priority-set` |
+| Set build priority | `ab priority <slug> urgent\|normal [--store <ref>]` | CLI/tool request (`builds.control` action `priority`); changes only the build's slot-admission order, never its ticket, and never preempts running work. A build priority is only `urgent` or `normal`; `ab start`'s `manual` tier is admission-only. | `build.priority-set` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
 | Reopen a finished leaf | `ab reopen <slug> [--feedback <text>] [--revise-spec <file> \| --revise-spec-from-ticket] [--store <ref>]` | CLI/tool request (`builds.reopen`); only for a leaf waiting for its merge decision. Feedback alone returns to implement; a spec revision restarts from plan; the PR and branch are kept. | `build.reopened`; with a spec, kernel `spec.revised` with operator provenance |
+| Start one ticket | `ab start <ticket-id> [--priority manual\|urgent\|normal] [--cancel] [--json] [--store <ref>]` | CLI/tool request (`tickets.start`, optional `priority`); works while intake is off or open-PR backpressure is engaged, takes a free slot in its priority's admission tier, and claims no other ticket. | `ticket.start-requested {priority}` (or `ticket.start-cancelled`), then one dispatcher `ticket.start-settled` with its outcome and priority |
 | Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket (an optimization attempt instead settles `aborted` and its ticket moves to the rejected role) |
+
+`ab start <ticket-id>` is for working one ticket while intake stays off — a
+single fix, or draining a backlog one ticket at a time. The id resolves through
+the configured source (an unknown ticket is refused, and GitHub `#123` and `123`
+are the same ticket); a repeat with the same priority while the request is
+pending is a no-op, and one with another priority updates the pending request.
+On its next tick with a free slot in the request's tier, the running
+dispatcher — local or hosted — claims that ticket and nothing else, through
+every ordinary gate: it must be in
+the configured ready state, meet the spec standard (a nonconforming body is
+bounced to triage as usual), have no unresolved `blockedBy` dependency and no
+active build. Dispatch labels and the ready assignee are not applied, because
+the ticket is named. Capacity and the repository pause are respected; the
+request waits for a free slot and never preempts a build, and there is no
+force. Each request settles exactly once with a dispatcher `ticket.start-settled`
+(default `ab watch` attention): `started` names the build; `already-building`,
+`blocked`, `invalid`, `missing`, `not-ready`, `terminal` and `claim-refused`
+say why it could not start. While pending, the request is listed by
+`ab repository status` with its priority; `ab start --cancel <ticket-id>`
+withdraws it.
+
+`--priority` picks the request's slot-admission tier. `manual`, the default, goes
+ahead of every waiting build and ticket claim, urgent ones included. `urgent`
+waits for urgent parked work (nodes and finished or waiting builds that must
+run again), then goes ahead of urgent ready tickets and all normal work.
+`normal` waits for normal parked work and urgent claims, then goes ahead of
+normal ready tickets. A pending request reserves its slot ahead of the tiers it
+outranks until it settles or is cancelled. Every tier bypasses intake off and
+open-PR backpressure for the named ticket only, and none preempts a running
+build. The claimed build is `urgent` when the request was `urgent` and
+otherwise keeps its ticket's priority; `manual` is never a build priority.
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
 The repository pause is written first and intake second, both absolutely —
@@ -2874,7 +2908,8 @@ across startup, a successful attempt closes it unanswered, and a bare retry only
 brings the next attempt forward. Startup still recovers actionable builds and
 delivers pending operator commands, but it never records an answer or re-arms a budget.
 
-Durable repository intake has launch-flag setters and a global-row toggle.
+Durable repository intake has launch-flag setters and a global-row toggle;
+`ab start` claims one ticket without changing it.
 Merge policy is configured through ordered rules, with per-merge hold/merge
 commands; no writable repository auto-merge default remains.
 Abort is available through both its CLI command and the confirmed build-row/detail
@@ -2901,7 +2936,9 @@ and are safe to run at any time.
 
 **`ab repository status [--json] [--store <ref>]`** reports ticket intake
 (`intake`, default `true`) and repository-wide pause (`paused`, default
-`false`), alongside dispatcher and infrastructure status. Its historical
+`false`), alongside dispatcher and infrastructure status, plus `ticketStarts`
+(pending start requests and the most recent settlements, each with its
+`priority`) when either is nonempty. Its historical
 `defaultAutoMerge` field remains an inert compatibility value; it is not
 claim-time policy or a writable setting. Merge decisions and command state
 are queried on the build. A repository with no journal row uses the defaults
@@ -3114,6 +3151,10 @@ The default watch reports actionable conditions only:
   destination `state` and `role`, `requested` when an abort to ready fell back,
   the spec-standard parts `missing`, and the operator's `reason`. Each hand-back
   emits it once; moving the ticket on receipt is never overridden.
+- Repository `ticket.start-settled`: a single-ticket start request reached its
+  outcome, with the request's `priority` — `started` with the build `slug`, or `already-building` (with the
+  slug), `blocked`, `invalid`, `missing`, `not-ready`, `terminal` or
+  `claim-refused`, with a `detail`. Each request settles once.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
