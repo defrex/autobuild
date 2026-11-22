@@ -18,6 +18,7 @@ export {
   ticketCreateRequestSchema,
   ticketMoveRequestSchema,
   ticketPageSchema,
+  ticketStartRequestSchema,
   ticketUpdateRequestSchema,
 } from './protocol'
 export type {
@@ -29,6 +30,7 @@ export type {
   OperatorSessionMessageRequest,
   OperatorSessionWakeRequest,
   OperatorTicketBlockerRequest,
+  OperatorTicketStartRequest,
   OperatorTicketCreateRequest,
   OperatorTicketMoveRequest,
   OperatorTicketUpdateRequest,
@@ -97,6 +99,8 @@ export {
   listOperatorTickets,
   mutateOperatorTicket,
 } from './tickets'
+export { cancelTicketStart, controlTicketStart, requestTicketStart } from './ticket-start'
+export type { TicketStartCancelled, TicketStartRequested } from './ticket-start'
 export type { OperatorSandboxService } from './sandbox'
 export * from './presentation'
 
