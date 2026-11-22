@@ -2064,15 +2064,18 @@ export class Dispatcher {
     return complete
   }
 
-  /** Whether the request a targeted ticket answers is still pending, read
-   * after one journal refresh. */
+  /** Whether the request a targeted ticket answers is still pending at the
+   * priority the pass admitted it under, read after one journal refresh. A
+   * re-request at another priority keeps its `seq` but changes the tier and
+   * build priority, so the claim defers to the next pass, which admits it
+   * from current inputs. */
   private async startStillPending(targeted: TargetedDispatch, ticket: Ticket): Promise<boolean> {
     const request = targeted.requests.get(ticket.ref.id)
     if (request === undefined) return false
     await this.store.refreshJournal()
     const current =
       this.store.repositoryFacts().ticketStarts.pending[ticketStartKey(request.ticket)]
-    return current?.seq === request.seq
+    return current?.seq === request.seq && current.priority === request.priority
   }
 
   /** Settle one start request once. The journal is refreshed first, so a
@@ -8767,7 +8770,7 @@ export class Dispatcher {
         claimLoopCompleted = false
         break
       }
-      // Cancellation is checked again before claiming a targeted ticket.
+      // Cancellation and a priority change are checked again before claiming.
       if (targeted && !(await this.startStillPending(targeted, ticket))) continue
       await store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,

@@ -321,6 +321,56 @@ test('a cancellation landing while the pass reads the ticket prevents the claim'
   ])
 })
 
+test('a priority change landing while the pass reads the ticket defers to its current tier', async () => {
+  for (const [from, to] of [
+    ['manual', 'urgent'],
+    ['urgent', 'normal'],
+  ] as const) {
+    let armed = false
+    // The operator re-requests at another priority during the targeted `get`.
+    const w: Awaited<ReturnType<typeof world>> = await world([ticket('T-1')], {
+      get: (id) => {
+        if (!armed) return undefined
+        armed = false
+        return (async () => {
+          await w.registry.call(
+            'tickets.start',
+            { repo: REPO, id, priority: to },
+            { identity: 'operator' },
+          )
+          return w.source.get(id)
+        })()
+      },
+    })
+    await w.registry.call(
+      'tickets.start',
+      { repo: REPO, id: 'T-1', priority: from },
+      { identity: 'operator' },
+    )
+    armed = true
+    await w.tick()
+    // The first pass admitted it under the old tier, so it does not claim on
+    // it. A request now normal is admitted afresh by the same tick's normal
+    // pass; one now urgent waits for the next tick's first pass.
+    if (to === 'urgent') {
+      expect(w.calls.claim).toEqual([])
+      expect(await w.settled()).toEqual([])
+      await w.tick()
+    }
+    expect(w.calls.claim).toEqual(['T-1'])
+    expect((await w.settled()).map((event) => event.payload)).toMatchObject([
+      { outcome: 'started', priority: to },
+    ])
+    const [build] = await w.store.listBuilds()
+    const created = (await w.store.getEvents(build!.slug)).find(
+      (event) => event.type === 'build.created',
+    )
+    expect((created!.payload as { priority?: string }).priority).toBe(
+      to === 'urgent' ? 'urgent' : undefined,
+    )
+  }
+})
+
 test('a repository pause leaves the request pending', async () => {
   const w = await world([ticket('T-1')])
   await w.store.appendRepo(REPO, {
