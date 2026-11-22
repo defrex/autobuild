@@ -96,6 +96,8 @@ import {
   settlementDue,
   settlementKey,
   slotRequest,
+  startCapacity,
+  startClaimDemand,
   strandedNodeWorkspace,
   urgentClaimDemand,
   type CapacityBuild,
@@ -262,7 +264,11 @@ import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { AbortDestination, EventPayload, PinnedAsset } from '../events/payloads'
-import type { RepositoryEventPayload, TicketStartOutcome } from '../events/repository'
+import type {
+  RepositoryEventPayload,
+  TicketStartOutcome,
+  TicketStartPriority,
+} from '../events/repository'
 import { ticketStartKey, type PendingTicketStart, type TicketStarts } from '../kernel/ticket-starts'
 import { handbackIdentity } from '../kernel/ticket-handbacks'
 import type { IdSource } from '../ids'
@@ -711,6 +717,9 @@ interface TargetedDispatch {
   outcomes: Map<string, TargetedOutcome>
   /** The capacity inputs the stage measured from this tick's served facts. */
   measured: CapacityBuild[]
+  /** Slots left for each start tier (`startCapacity`). A claim spends only
+   * its own tier's: lower tiers already reserved it as a pending request. */
+  budgets: Record<TicketStartPriority, number>
 }
 
 /** An active build's ticket ref, normalized through recorded migrations. */
@@ -720,8 +729,9 @@ interface ActiveTicketRef {
   ref: TicketRef
 }
 
-/** Start requests one tick evaluates, oldest first. */
+/** Start requests one pass evaluates, in tier order, oldest first. */
 const START_REQUESTS_PER_TICK = 8
+const START_TIER_ORDER: readonly TicketStartPriority[] = ['manual', 'urgent', 'normal']
 /** Hosted active-build identities one tick resolves; each build once in its life. */
 const IDENTITY_RESOLUTIONS_PER_TICK = 16
 /** Released identity slugs one projection append carries. */
@@ -1571,14 +1581,21 @@ export class Dispatcher {
     await this.admitWaitingNodes(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     // Operator start requests are independent of intake: they claim only the
-    // named tickets, ahead of ready-order intake, and read nothing when none
-    // is pending.
-    await this.honorStartRequests(report, launched, autoMergeUser, paused, opts)
+    // named tickets, and read nothing when none is pending. Manual and urgent
+    // requests run here, ahead of ordinary claims; normal requests run after
+    // urgent claims and normal parked work (SPEC §12 "Slot admission order").
+    await this.honorStartRequests(report, launched, autoMergeUser, paused, opts, [
+      'manual',
+      'urgent',
+    ])
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
       await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeSeedFact)
     }
     await this.admitDeferredParked(report, launched, paused, opts)
+    // Ordinary normal claims left this pass's reserved slots free.
+    if (!this.outOfBudget(opts))
+      await this.honorStartRequests(report, launched, autoMergeUser, paused, opts, ['normal'])
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
     // watch ticks. Durable pause and infrastructure-error stops suppress
@@ -1799,10 +1816,11 @@ export class Dispatcher {
     }
   }
 
-  /** Admit pending operator start requests through `dispatch()`'s gates and
-   * settle each one that reaches a decision. Zero reads while none is pending;
-   * otherwise one targeted `get` per request (at most START_REQUESTS_PER_TICK)
-   * over the view-cached build digests. Waiting conditions (pause, no slot,
+  /** Admit pending operator start requests of the given tiers through
+   * `dispatch()`'s gates and settle each one that reaches a decision. Zero
+   * reads while none of those tiers is pending; otherwise one targeted `get`
+   * per request (at most START_REQUESTS_PER_TICK) over the view-cached build
+   * digests. Waiting conditions (pause, no slot in the request's tier,
    * creation holds, an in-flight preparation, a failed dependency read, a
    * source error, the tick budget) leave the request pending. */
   private async honorStartRequests(
@@ -1811,10 +1829,13 @@ export class Dispatcher {
     autoMergeUser: string | undefined,
     paused: boolean,
     opts: TickOpts,
+    tiers: readonly TicketStartPriority[],
   ): Promise<void> {
     const starts = this.store.repositoryFacts().ticketStarts
+    const rank = (request: PendingTicketStart) => START_TIER_ORDER.indexOf(request.priority)
     const pending = Object.values(starts.pending)
-      .sort((a, b) => a.seq - b.seq)
+      .filter((request) => tiers.includes(request.priority))
+      .sort((a, b) => rank(a) - rank(b) || a.seq - b.seq)
       .slice(0, START_REQUESTS_PER_TICK)
     if (pending.length === 0 || paused) return
     const { tickets, config } = this.deps
@@ -1906,31 +1927,36 @@ export class Dispatcher {
     // lease sweep already read (`servedBuildFacts`): a build is read again
     // only when the tick skipped it or wrote to it since, so neither a wait
     // nor an admission reads the fleet, on a fresh process or a warm one.
-    // With no free slot, only a node, or a blocked target not yet checked,
-    // needs the pass.
+    // Each tier's budget leaves the slots reserved ahead of it (SPEC §12).
+    // With no free slot in its tier, only a node, or a blocked target not yet
+    // checked, needs the pass.
     const now = this.deps.clock()
     const measured = await this.capacityBuilds(launched, true)
-    const free =
-      intakeCapacity(dispatchCapacity(measured, config.capacity, now), {
-        settled: this.parkedSettled,
-        denied: this.slotWaiters,
-      }) > 0
+    const projection = dispatchCapacity(measured, config.capacity, now, undefined, {
+      urgentClaims: this.urgentClaims(),
+      startRequests: this.startClaims(),
+    })
+    const adjust = { settled: this.parkedSettled, denied: this.slotWaiters }
+    const budgets = {
+      manual: startCapacity(projection, adjust, 'manual'),
+      urgent: startCapacity(projection, adjust, 'urgent'),
+      normal: startCapacity(projection, adjust, 'normal'),
+    }
     const open = new Set(Object.values(starts.pending).map(({ seq }) => seq))
     for (const seq of this.startBlockersChecked)
       if (!open.has(seq)) this.startBlockersChecked.delete(seq)
-    const passing = free
-      ? candidates
-      : candidates.filter(
-          ({ request, ticket }) =>
-            ticket.kind === 'node' ||
-            (ticket.target !== undefined &&
-              !!ticket.blockedBy?.length &&
-              !this.startBlockersChecked.has(request.seq)),
-        )
+    const free = (request: PendingTicketStart) => budgets[request.priority] > 0
+    const passing = candidates.filter(
+      ({ request, ticket }) =>
+        free(request) ||
+        ticket.kind === 'node' ||
+        (ticket.target !== undefined &&
+          !!ticket.blockedBy?.length &&
+          !this.startBlockersChecked.has(request.seq)),
+    )
     if (passing.length === 0) return
-    if (!free)
-      for (const { request, ticket } of passing)
-        if (ticket.kind !== 'node') this.startBlockersChecked.add(request.seq)
+    for (const { request, ticket } of passing)
+      if (!free(request) && ticket.kind !== 'node') this.startBlockersChecked.add(request.seq)
     const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
     const targeted: TargetedDispatch = {
       tickets: passing.map(({ ticket }) => ticket),
@@ -1938,6 +1964,7 @@ export class Dispatcher {
       requests: new Map(passing.map(({ request, ticket }) => [ticket.ref.id, request])),
       outcomes: new Map(),
       measured,
+      budgets,
     }
     const scratch = emptyTickReport()
     this.startPass = true
@@ -2068,6 +2095,7 @@ export class Dispatcher {
       payload: {
         request: request.seq,
         ticket: request.ticket,
+        priority: current.priority,
         outcome,
         ...(extra.slug !== undefined ? { slug: extra.slug } : {}),
         ...(detail ? { detail } : {}),
@@ -4023,6 +4051,12 @@ export class Dispatcher {
     return this.tickAcceptsNewWork ? urgentClaimDemand(this.store.repositoryFacts()) : 0
   }
 
+  /** Pending operator start requests by tier; nothing while no claim can
+   * run. In memory, like `urgentClaims`. */
+  private startClaims(): Partial<Record<TicketStartPriority, number>> {
+    return this.claimGateOpen() ? startClaimDemand(this.store.repositoryFacts()) : {}
+  }
+
   /** A normal waiter must defer: claims can run and this tick's dispatch has
    * not yet evaluated urgent claims. */
   private urgentBoundaryOpen(): boolean {
@@ -4070,7 +4104,10 @@ export class Dispatcher {
       slug,
       priority,
       dispatchCapacity(others, capacity, now).occupied,
-      dispatchCapacity(builds, capacity, now, undefined, { urgentClaims: this.urgentClaims() }),
+      dispatchCapacity(builds, capacity, now, undefined, {
+        urgentClaims: this.urgentClaims(),
+        startRequests: this.startClaims(),
+      }),
     )
     if (outcome === 'admit') {
       this.slotWaiters.delete(slug)
@@ -4270,6 +4307,7 @@ export class Dispatcher {
     if (proposers.length === 0) return
     const projection = dispatchCapacity(builds, this.deps.config.capacity, now, undefined, {
       urgentClaims: this.urgentClaims(),
+      startRequests: this.startClaims(),
     })
     let occupied = projection.occupied + admittedThisPass
     for (const build of proposers) {
@@ -4686,6 +4724,7 @@ export class Dispatcher {
       occupied,
       dispatchCapacity(builds, this.deps.config.capacity, now, identity, {
         urgentClaims: this.urgentClaims(),
+        startRequests: this.startClaims(),
       }),
     )
     if (outcome === 'defer' && !this.deferredAdmissions.has(slug))
@@ -8345,7 +8384,16 @@ export class Dispatcher {
     // reserves its slot ahead of claims of its own or a lower priority until
     // it is admitted; this only ever lowers the claim budgets. Urgent claims
     // wait only for urgent parked work (SPEC §12 "Slot admission order").
-    const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock())
+    // Pending start requests reserve ahead of the ordinary claims they outrank.
+    const projection = dispatchCapacity(
+      capacityBuilds,
+      config.capacity,
+      this.deps.clock(),
+      undefined,
+      {
+        startRequests: this.startClaims(),
+      },
+    )
     const activeRefs: TicketRef[] = capacityBuilds
       .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
@@ -8354,7 +8402,13 @@ export class Dispatcher {
     let urgentCapacity = tickets.priority ? intakeCapacity(projection, adjust, 'urgent') : capacity
     let urgentWaiting = 0
     const urgentClaim = (ticket: Ticket) =>
-      !!tickets.priority && ticket.kind !== 'node' && ticketPriority(ticket) === 'urgent'
+      !targeted &&
+      !!tickets.priority &&
+      ticket.kind !== 'node' &&
+      ticketPriority(ticket) === 'urgent'
+    // A targeted ticket's tier is its request's, never its ticket's priority.
+    const startTier = (ticket: Ticket): TicketStartPriority =>
+      targeted?.requests.get(ticket.ref.id)?.priority ?? 'manual'
 
     // The ready scan runs even at full capacity: `queued` is the operator's
     // standing queue-depth report and must stay honest exactly when the
@@ -8395,7 +8449,8 @@ export class Dispatcher {
     for (const [index, ticket] of [...conflicts.tickets].entries())
       settle(ticket, { outcome: 'invalid', detail: conflicts.diagnostics[index]! })
     const claimable = eligible.filter((ticket) => !conflicts.tickets.has(ticket))
-    const ready = this.deps.tickets.priority ? urgentFirst(claimable) : claimable
+    // A targeted pass keeps its tier-then-request order.
+    const ready = !targeted && this.deps.tickets.priority ? urgentFirst(claimable) : claimable
     report.invalidTickets += listing.diagnostics.length + conflicts.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics, ...conflicts.diagnostics)
     report.queued = ready.length
@@ -8436,10 +8491,12 @@ export class Dispatcher {
     // Saturated, an urgent ticket still runs the preflight: it claims an
     // urgent budget, or counts as urgent demand waiting for a slot.
     const urgentReady = ready.some((ticket) => urgentClaim(ticket) && !withheld.has(ticket.ref.id))
+    const noBudget = targeted
+      ? ready.every((ticket) => targeted.budgets[startTier(ticket)] <= 0)
+      : capacity <= 0 && !urgentReady
     if (
       paused ||
-      (capacity <= 0 &&
-        !urgentReady &&
+      (noBudget &&
         !ready.some(
           (ticket) =>
             ticket.kind === 'node' ||
@@ -8651,7 +8708,11 @@ export class Dispatcher {
         break
       }
       const urgent = urgentClaim(ticket)
-      const budget = urgent ? urgentCapacity : capacity
+      const budget = targeted
+        ? targeted.budgets[startTier(ticket)]
+        : urgent
+          ? urgentCapacity
+          : capacity
       if (ticket.kind !== 'node' && budget <= 0 && !urgent) continue
       if (withheld.has(ticket.ref.id)) continue
       if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
@@ -8839,7 +8900,10 @@ export class Dispatcher {
           ...(ticket.issueLinks !== undefined ? { issueLinks: ticket.issueLinks } : {}),
           // Fixed at claim from the same sample: relabelling never changes it.
           ...this.selectedProfile(ticket),
-          ...this.claimedPriority(ticket),
+          // `manual` is admission-only; an explicit urgent start is urgent.
+          ...(startTier(ticket) === 'urgent' && targeted
+            ? { priority: 'urgent' as const }
+            : this.claimedPriority(ticket)),
         }
         // `build.created` rides with the record so the pinned assets and the
         // record exist together or not at all.
@@ -8912,7 +8976,8 @@ export class Dispatcher {
         )
       }
       report.queued -= 1
-      if (ticket.kind !== 'node') {
+      if (ticket.kind !== 'node' && targeted) targeted.budgets[startTier(ticket)] -= 1
+      else if (ticket.kind !== 'node') {
         capacity -= 1
         urgentCapacity -= 1
       }

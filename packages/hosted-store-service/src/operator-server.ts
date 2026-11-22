@@ -69,6 +69,7 @@ import {
   ticketStateCreateRequestSchema,
   ticketMoveRequestSchema,
   ticketPageSchema,
+  ticketStartRequestSchema,
   ticketUpdateRequestSchema,
   toggleHarvestGate,
   toggleRepositorySetting,
@@ -384,6 +385,11 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         (rest.length === 3 || (rest.length === 4 && rest[3] === 'cancel'))
       ) {
         const via = 'via' in scope ? scope.via : undefined
+        // A request may carry `{priority}`; an empty body is a manual request.
+        const request =
+          rest.length === 3 && (await req.clone().text()).trim() !== ''
+            ? await body(req, ticketStartRequestSchema)
+            : {}
         return json(
           200,
           await controlTicketStart({
@@ -394,6 +400,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             user,
             ...(via !== undefined ? { via } : {}),
             ...(rest.length === 4 ? { cancel: true } : {}),
+            ...(request.priority !== undefined ? { priority: request.priority } : {}),
           }),
         )
       }

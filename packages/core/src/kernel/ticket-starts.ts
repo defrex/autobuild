@@ -1,4 +1,4 @@
-import type { RepositoryEvent, TicketStartOutcome } from '../events/repository'
+import type { RepositoryEvent, TicketStartOutcome, TicketStartPriority } from '../events/repository'
 import type { TicketRef } from '../ontology'
 import { defineReducer } from './incremental'
 
@@ -8,6 +8,10 @@ export interface PendingTicketStart {
   seq: number
   ts: string
   ticket: TicketRef
+  /** The request's slot-admission tier; a re-request may change it. */
+  priority: TicketStartPriority
+  /** When a re-request last changed `priority`; omitted while unchanged. */
+  prioritySetAt?: string
   by?: string
 }
 
@@ -15,6 +19,7 @@ export interface PendingTicketStart {
 export interface SettledTicketStart {
   request: number
   ticket: TicketRef
+  priority: TicketStartPriority
   outcome: TicketStartOutcome | 'cancelled'
   slug?: string
   detail?: string
@@ -43,8 +48,9 @@ export function ticketStartKey(ref: TicketRef): string {
 }
 
 /** Pending operator start requests, the most recent settlements, and the
- * durable canonical identities of hosted active builds. A duplicate request
- * for a pending key is ignored (the first wins), and a settle or cancel
+ * durable canonical identities of hosted active builds. A repeated request
+ * for a pending key keeps the first request's seq and only updates its
+ * priority when that differs, and a settle or cancel
  * applies only to the pending request it names, so a stale one never closes
  * a newer request. Bounded by pending requests, the recent cap, and builds
  * not yet released. */
@@ -60,11 +66,19 @@ export const ticketStartsReducer = defineReducer<TicketStarts, RepositoryEvent, 
     for (const event of events) {
       if (event.type === 'ticket.start-requested') {
         const key = ticketStartKey(event.payload.ticket)
-        if (acc.pending[key] !== undefined) continue
+        const existing = acc.pending[key]
+        if (existing !== undefined) {
+          if (existing.priority !== event.payload.priority) {
+            existing.priority = event.payload.priority
+            existing.prioritySetAt = event.ts
+          }
+          continue
+        }
         acc.pending[key] = {
           seq: event.seq,
           ts: event.ts,
           ticket: event.payload.ticket,
+          priority: event.payload.priority,
           ...(event.actor.kind === 'human' ? { by: event.actor.user } : {}),
         }
       } else if (event.type === 'ticket.start-cancelled' || event.type === 'ticket.start-settled') {
@@ -77,6 +91,7 @@ export const ticketStartsReducer = defineReducer<TicketStarts, RepositoryEvent, 
             ? {
                 request: pending.seq,
                 ticket: pending.ticket,
+                priority: pending.priority,
                 outcome: 'cancelled',
                 at: event.ts,
                 ...(event.actor.kind === 'human' ? { by: event.actor.user } : {}),
@@ -84,6 +99,7 @@ export const ticketStartsReducer = defineReducer<TicketStarts, RepositoryEvent, 
             : {
                 request: pending.seq,
                 ticket: pending.ticket,
+                priority: pending.priority,
                 outcome: event.payload.outcome,
                 ...(event.payload.slug !== undefined ? { slug: event.payload.slug } : {}),
                 ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),

@@ -4,7 +4,7 @@ import type { Ticket, TicketSource } from '../ports/types'
 import { MemoryBuildStore } from '../store/memory'
 import { readRepositoryFacts } from '../store/reduced-reads'
 import { manualClock } from '../testing/fixed'
-import { cancelTicketStart, requestTicketStart } from './ticket-start'
+import { cancelTicketStart, controlTicketStart, requestTicketStart } from './ticket-start'
 
 const REPO = '/start/repo'
 
@@ -82,4 +82,53 @@ test('cancel writes only for a pending request', async () => {
   const facts = (await readRepositoryFacts(w.store, REPO)).value
   expect(facts.ticketStarts.pending).toEqual({})
   expect(facts.ticketStarts.recent).toMatchObject([{ outcome: 'cancelled', by: 'alice' }])
+})
+
+test('a request defaults to manual; another priority updates the pending request once', async () => {
+  const w = await world()
+  const first = await requestTicketStart(w.control('T-1'))
+  expect(first).toMatchObject({ priority: 'manual', updated: false })
+  expect(first.event?.payload).toMatchObject({ priority: 'manual' })
+  const same = await requestTicketStart({ ...w.control('T-1'), priority: 'manual' })
+  expect(same).toMatchObject({ existing: true, updated: false, priority: 'manual' })
+  expect(same.event).toBeUndefined()
+  const urgent = await requestTicketStart({ ...w.control('T-1'), priority: 'urgent' })
+  expect(urgent).toMatchObject({
+    existing: true,
+    updated: true,
+    request: first.request,
+    priority: 'urgent',
+  })
+  expect(urgent.event?.payload).toMatchObject({ priority: 'urgent' })
+  expect(await requestTicketStart({ ...w.control('T-1'), priority: 'urgent' })).toMatchObject({
+    updated: false,
+  })
+  expect((await w.events())?.map((event) => event.type)).toEqual([
+    'ticket.start-requested',
+    'ticket.start-requested',
+  ])
+  const facts = (await readRepositoryFacts(w.store, REPO)).value
+  expect(facts.ticketStarts.pending['fake:T-1']).toMatchObject({
+    seq: first.request,
+    priority: 'urgent',
+  })
+})
+
+test('an unknown priority and a priority with cancel are refused before any write', async () => {
+  const w = await world()
+  await expect(
+    requestTicketStart({ ...w.control('T-1'), priority: 'high' as never }),
+  ).rejects.toThrow()
+  await expect(
+    controlTicketStart({
+      store: w.store,
+      repo: REPO,
+      backend: {} as never,
+      id: 'T-1',
+      user: 'alice',
+      cancel: true,
+      priority: 'urgent',
+    }),
+  ).rejects.toThrow('a priority applies to a start request')
+  expect((await w.events()) || []).toEqual([])
 })

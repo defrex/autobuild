@@ -371,13 +371,19 @@ function corpora(): unknown[][] {
     {
       type: 'ticket.start-requested',
       actor: { kind: 'human', user: 'alice' },
-      payload: { ticket: preparationTicket },
+      payload: { ticket: preparationTicket, priority: 'normal' },
+    },
+    {
+      type: 'ticket.start-requested',
+      actor: { kind: 'human', user: 'alice' },
+      payload: { ticket: preparationTicket, priority: 'urgent' },
     },
     {
       type: 'ticket.start-settled',
       payload: {
         request: 9,
         ticket: preparationTicket,
+        priority: 'urgent',
         outcome: 'started',
         slug: 'build',
         detail: 'claimed',
@@ -386,7 +392,7 @@ function corpora(): unknown[][] {
     {
       type: 'ticket.start-requested',
       actor: { kind: 'human', user: 'alice' },
-      payload: { ticket: { source: 'fake', id: 'T-2' } },
+      payload: { ticket: { source: 'fake', id: 'T-2' }, priority: 'manual' },
     },
     {
       type: 'ticket.identity-recorded',

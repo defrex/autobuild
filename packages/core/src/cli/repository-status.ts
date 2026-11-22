@@ -1,3 +1,4 @@
+import type { TicketStartPriority } from '../events/repository'
 import { repositoryReadFactsReducer } from '../kernel/read-facts'
 import {
   ticketStartsReducer,
@@ -17,6 +18,7 @@ import { formatRuntimeIdentity } from '../events/runtime'
 import { landingRestackDue } from '../kernel/engine'
 import {
   dispatchCapacity,
+  startClaimDemand,
   urgentClaimDemand,
   waitingExplanation,
   type DispatchCapacity,
@@ -243,6 +245,7 @@ export interface RepositoryTicketStarts {
   pending: Array<{
     ticket: { source: string; id: string }
     request: number
+    priority: TicketStartPriority
     requestedAt: string
     by?: string
   }>
@@ -255,6 +258,7 @@ function projectTicketStarts(starts: TicketStarts): { ticketStarts?: RepositoryT
     .map((entry) => ({
       ticket: entry.ticket,
       request: entry.seq,
+      priority: entry.priority,
       requestedAt: entry.ts,
       ...(entry.by !== undefined ? { by: entry.by } : {}),
     }))
@@ -545,7 +549,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `repository: ${status.repo}`,
     ...(status.capacity
       ? [
-          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
+          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims || status.capacity.startRequests ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
     ...(status.warningLines ?? []),
@@ -573,11 +577,11 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
     ...(status.ticketStarts?.pending ?? []).map(
       (entry) =>
-        `start request ${entry.ticket.id}: pending since ${entry.requestedAt}${entry.by !== undefined ? ` (by ${entry.by})` : ''}`,
+        `start request ${entry.ticket.id} (${entry.priority}): pending since ${entry.requestedAt}${entry.by !== undefined ? ` (by ${entry.by})` : ''}`,
     ),
     ...(status.ticketStarts?.recent ?? []).map(
       (entry) =>
-        `start request ${entry.ticket.id}: ${entry.outcome}${entry.slug !== undefined ? ` → build ${entry.slug}` : ''}${entry.detail !== undefined ? ` — ${entry.detail.replace(/\s+/g, ' ')}` : ''} (${entry.at})`,
+        `start request ${entry.ticket.id} (${entry.priority}): ${entry.outcome}${entry.slug !== undefined ? ` → build ${entry.slug}` : ''}${entry.detail !== undefined ? ` — ${entry.detail.replace(/\s+/g, ' ')}` : ''} (${entry.at})`,
     ),
     ...(status.ticketDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...(status.dependencyDiagnostics ?? []).map((line) => `queue: ${line}`),
@@ -689,7 +693,7 @@ export async function readRepositoryCapacity(
         config.capacity,
         now,
         migrationIdentity(facts.ticketMigrations, config.tickets.source),
-        { urgentClaims: urgentClaimDemand(facts) },
+        { urgentClaims: urgentClaimDemand(facts), startRequests: startClaimDemand(facts) },
       )
     }
   }

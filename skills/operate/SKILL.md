@@ -346,15 +346,20 @@ Read events with a cursor or a small `--events` count; logs are long.
   blocked one), merged or closed PRs (file a new ticket), and pending abort or
   discard. Re-run `ab reopen` with the same arguments after an interrupted spec
   reopen; it completes the recorded one.
-- `ab start <ticket-id> [--cancel]` — ask the running dispatcher to claim one
-  ticket on its next tick with a free slot, even while intake is off, and no
-  other. Use it to work a backlog one ticket at a time, or to run a single fix,
+- `ab start <ticket-id> [--priority manual|urgent|normal] [--cancel]` — ask
+  the running dispatcher to claim one ticket on its next tick with a free slot,
+  even while intake is off or open-PR backpressure is engaged, and no other.
+  The default `manual` priority goes ahead of all waiting work, urgent included;
+  choose `urgent` when urgent waiting builds should still go first (the build
+  is then urgent), or `normal` when the ticket should wait behind normal
+  waiting builds and urgent tickets. Repeating it with another priority
+  updates the pending request. Use it to work a backlog one ticket at a time, or to run a single fix,
   instead of turning intake on or moving other tickets out of ready. Every gate
   still applies (ready state, spec standard, resolved blockers, no active
   build, capacity, repository pause). Act on the `ticket.start-settled`
   repository event: `started` names the build; any other outcome says why it
   did not start and needs a fix before you ask again. `ab repository status`
-  lists pending requests; `--cancel` withdraws one.
+  lists pending requests with their priority; `--cancel` withdraws one.
 - `ab hold <slug> [--reason <text>]` — persistently hold a merge and revoke
   earlier consent. Record why with `--reason` when holding during queue work;
   status, merges, builds and both dashboards show it until a later hold or
@@ -412,8 +417,10 @@ out of ready to make room. A claimed ticket's priority becomes its build's.
 To expedite a build that already exists — a waiting reconcile or re-verify
 that now blocks other work — run `ab priority <slug> urgent` (MCP:
 `builds.control` with action `priority` and `priority: "urgent"`); `normal`
-returns it to normal order. Free slots go to urgent waiting work, urgent
-tickets, normal waiting work, then normal tickets. Urgency never preempts a
+returns it to normal order. Free slots go to `manual` start requests, urgent
+waiting work, urgent tickets (urgent start requests first), normal waiting
+work, then normal tickets (normal start requests first); an `ab start`
+request goes ahead per its tier. Urgency never preempts a
 running build, and a blocked urgent ticket still waits on its blockers. A
 source that cannot store priority refuses `urgent` and names itself; tell the
 human.
@@ -521,8 +528,9 @@ that does the job, and say what you are doing before you do it:
   into the ready state sends it to dispatch — do that only when the ticket
   genuinely conforms and the human's intent is clear.
 - `tickets.start` — ask the running dispatcher to start one ticket even while
-  intake is off, as `ab start` does; `cancel: true` withdraws a pending
-  request. The outcome arrives as `ticket.start-settled` in `repository.events`.
+  intake is off, as `ab start` does, with optional `priority` (`manual` by
+  default, `urgent` or `normal`, chosen as for `ab start`); `cancel: true`
+  withdraws a pending request. The outcome arrives as `ticket.start-settled` in `repository.events`.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
   human-readable notes about this repository's operation. Write what the
   next operator or human will need; explicitly read it before acting on
@@ -627,7 +635,7 @@ Treat every default-watch record as a call to act:
   dispatcher write for the same hand-back overrides it. Each hand-back reports
   once.
 - Single-ticket start settlement (`ticket.start-settled`): an `ab start` or
-  `tickets.start` request reached its outcome. `started` names the build to
+  `tickets.start` request reached its outcome, with its `priority`. `started` names the build to
   follow. `already-building` names the build already embodying the ticket.
   `blocked` (unresolved blockers or target), `invalid` (bounced to triage, or a
   profile conflict), `not-ready` (not in the ready state), `terminal`, `missing`

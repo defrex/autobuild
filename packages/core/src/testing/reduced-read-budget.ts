@@ -6896,6 +6896,7 @@ export async function ticketStartReadBudget(): Promise<{
     const gets: string[] = []
     const claims: string[] = []
     const launches: string[] = []
+    const listings = { count: 0 }
     // A hosted-named source whose `get` also resolves legacy `ticket-<n>` aliases.
     const tickets = new Proxy(fake, {
       get(target, key) {
@@ -6911,6 +6912,11 @@ export async function ticketStartReadBudget(): Promise<{
           return (id: string) => {
             claims.push(id)
             return target.claim(id)
+          }
+        if (key === 'listReady')
+          return (...args: Parameters<typeof target.listReady>) => {
+            listings.count += 1
+            return target.listReady(...args)
           }
         if (key === 'dependencyStates' && blocked)
           return async () => {
@@ -7004,16 +7010,18 @@ export async function ticketStartReadBudget(): Promise<{
       fresh: () => {
         current = dispatcher()
       },
-      tick: async () => {
+      tick: async (acceptNewWork = false) => {
         now += 60_000
         gets.length = 0
+        listings.count = 0
         const before = (await store.getRepoEvents(repo)).length
         const metrics = await measureStoreReads(store, async () => {
-          await current.tick({ acceptNewWork: false })
+          await current.tick({ acceptNewWork })
         })
         const appended = (await store.getRepoEvents(repo)).slice(before)
         return {
           gets: [...gets],
+          listReady: listings.count,
           calls: metrics.calls,
           rows: metrics.rows,
           repoRows: metrics.repoRows,
@@ -7251,5 +7259,64 @@ export async function ticketStartReadBudget(): Promise<{
   }
   // No per-build read: identical store requests at 5 and at 50 builds.
   expect(admissions.get(50)).toEqual(admissions.get(5))
+
+  // Priority tiers at full capacity: a normal request is read only by the
+  // post-dispatch pass, once per tick; re-requesting another priority is one
+  // append; a manual request with intake on forces no ready listing. Each is
+  // identical at a short and a long history.
+  const tiers = new Map<number, Record<string, number>[]>()
+  for (const history of [100, 5_000]) {
+    const control = await open(5, history, 5, 'tiers-control')
+    const world = await open(5, history, 5, 'tiers')
+    const request = (priority: 'manual' | 'urgent' | 'normal') =>
+      requestTicketStart({
+        store: world.store,
+        repo: world.repo,
+        source: world.tickets,
+        id: 'AB-0',
+        user: 'budget',
+        priority,
+      })
+    const steady = async (acceptNewWork = false) => {
+      const base = await control.tick(acceptNewWork)
+      const measured = await world.tick(acceptNewWork)
+      expect(subtract(measured.gets, base.gets)).toEqual(['AB-0'])
+      expect(measured.listReady).toBe(base.listReady)
+      expect(measured.rows - base.rows).toBe(0)
+      // With intake on, both worlds record the same ordinary scan.
+      const types = (events: { type: string }[]) => events.map((event) => event.type)
+      expect(types(measured.appended)).toEqual(types(base.appended))
+      // Snapshot upkeep after the request's own append is not a read.
+      const {
+        putSnapshot: _put,
+        snapshotTail: _tail,
+        ...calls
+      } = difference(measured.calls, base.calls)
+      for (const replay of ['getEvents', 'getRepoEvents', 'getBuildEventPage'])
+        expect(calls[replay]).toBeUndefined()
+      return calls
+    }
+    await request('normal')
+    // The identity projection ticks first in both worlds.
+    await control.tick()
+    await world.tick()
+    const normal = await steady()
+    world.gets.length = 0
+    const update = await measureStoreReads(world.store, async () => {
+      expect(await request('urgent')).toMatchObject({ updated: true })
+    })
+    expect(world.gets).toEqual(['AB-0'])
+    expect(update.calls.appendRepo).toBe(1)
+    expect(update.calls.getReducerValue).toBe(1)
+    const urgent = await steady()
+    await request('manual')
+    const manual = await steady(true)
+    expect(world.claims).toEqual([])
+    tiers.set(history, [normal, urgent, manual])
+    await control.store.close()
+    await world.store.close()
+  }
+  expect(tiers.get(5_000)).toEqual(tiers.get(100))
+  for (const calls of tiers.get(100)!) expect(calls).toEqual({})
   return baseline
 }

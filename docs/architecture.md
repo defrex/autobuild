@@ -802,9 +802,12 @@ without special cases, and the terminal guard lets the re-run finalize and
 verify attempts complete again.
 Slot admission order (SPEC §12) is arithmetic in `kernel/dispatch-capacity.ts`:
 waiting entries carry the build's reduced `priority` (`build.created`,
-`build.priority-set`), `reservedAhead` counts the urgent reservations and the
-latest admission scan's `urgentWaiting` ahead of a normal waiter, and
-`intakeCapacity` gives urgent and normal claims separate budgets. The
+`build.priority-set`), `startClaimDemand` counts pending start requests by
+tier, `reservedAhead` counts the manual requests ahead of an urgent waiter and
+also the urgent reservations, urgent requests and the latest admission scan's
+`urgentWaiting` ahead of a normal waiter, `intakeCapacity` gives ordinary urgent
+and normal claims separate budgets, and `startCapacity` gives each start tier
+its own. The
 dispatcher's `leafAdmission`, `nodeHasCapacity` and proposer admission defer a
 normal waiter that fits while claims can run; `dispatch` forces that tick's
 admission scan once per deferral key, and `admitDeferredParked` retries the
@@ -1473,9 +1476,11 @@ from `dispatch.failed`, which completes an already established build.
 (`ticket.identity-recorded`) into `repositoryReadFacts`. `operator/ticket-start.ts`
 is the one request/cancel seam behind `ab start` (`cli/ticket-start.ts`), the
 `tickets.start` tool and the HTTP start routes. The dispatcher's
-`honorStartRequests` stage runs before intake and admits pending requests through
-`dispatch()` in its targeted mode, which skips the ready listing and scan
-checkpoint but keeps every admission gate.
+`honorStartRequests` stage runs twice per tick, for `manual` and `urgent`
+requests before intake and for `normal` requests after intake and the deferred
+parked admissions. It admits pending requests through `dispatch()` in its
+targeted mode, which skips the ready listing and scan checkpoint, budgets each
+ticket by its request's tier, but keeps every admission gate.
 `kernel/build-creation.ts` derives the keyed canonical slug that the dispatcher and
 the hosted server share. The optional `BuildStore.buildCreationIdentity` port says
 whether a store creates at the exact slug (method absent), at that derived slug for

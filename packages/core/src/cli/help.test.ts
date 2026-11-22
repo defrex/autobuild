@@ -339,7 +339,15 @@ describe('layered CLI help catalog', () => {
         'use --all',
       ],
       answer: ['answer <slug>', 'bare retry', 'resume is requested last'],
-      start: ['start <ticket-id>', '--cancel', 'even while intake is off', 'ticket.start-settled'],
+      start: [
+        'start <ticket-id>',
+        '--priority manual|urgent|normal',
+        '--cancel',
+        'whether or not intake is on',
+        'open-PR backpressure',
+        'manual is admission-only',
+        'ticket.start-settled',
+      ],
       abort: ['abort <slug>', '--store', 'sessionless'],
       restack: ['restack <node>', '--store', 'sessionless'],
       objective: [

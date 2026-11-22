@@ -953,20 +953,32 @@ export const ticketStartOutcomeSchema = z.enum([
 ])
 export type TicketStartOutcome = z.infer<typeof ticketStartOutcomeSchema>
 
+/** A start request's slot-admission tier (SPEC §12). `manual` is
+ * admission-only: a claimed build carries `urgent` only when the request
+ * asked for it, otherwise its ticket's own priority. */
+export const ticketStartPrioritySchema = z.enum(['manual', 'urgent', 'normal'])
+export type TicketStartPriority = z.infer<typeof ticketStartPrioritySchema>
+
 const startRequest = z.number().int().positive()
 const nonblank = z.string().trim().min(1)
 
 /** Operator single-ticket start requests (AUT-1293). A request names one
- * canonical ticket; the running dispatcher admits it through the ordinary
- * gates on its next tick with a free slot, whether or not intake is on, and
- * settles it exactly once. `request` is the requested event's seq. */
+ * canonical ticket and its admission tier; the running dispatcher admits it
+ * through the ordinary gates on its next tick with a free slot in that tier,
+ * whether or not intake is on, and settles it exactly once. A request for a
+ * pending ticket with another priority updates the pending request's tier.
+ * `request` is the first requested event's seq. */
 export const ticketStartEventPayloadSchemas = {
-  'ticket.start-requested': z.strictObject({ ticket: ticketRefSchema }),
+  'ticket.start-requested': z.strictObject({
+    ticket: ticketRefSchema,
+    priority: ticketStartPrioritySchema,
+  }),
   'ticket.start-cancelled': z.strictObject({ request: startRequest, ticket: ticketRefSchema }),
   'ticket.start-settled': z
     .strictObject({
       request: startRequest,
       ticket: ticketRefSchema,
+      priority: ticketStartPrioritySchema,
       outcome: ticketStartOutcomeSchema,
       slug: z.string().min(1).optional(),
       detail: nonblank.max(2000).optional(),

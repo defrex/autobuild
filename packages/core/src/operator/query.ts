@@ -5,6 +5,7 @@ import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import {
   dispatchCapacity,
   slotRequest,
+  startClaimDemand,
   urgentClaimDemand,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
@@ -472,7 +473,10 @@ async function dashboardFromView(
     config.capacity,
     opts.clock(),
     migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
-    { urgentClaims: urgentClaimDemand(repositoryEvents) },
+    {
+      urgentClaims: urgentClaimDemand(repositoryEvents),
+      startRequests: startClaimDemand(repositoryEvents),
+    },
   )
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, records),

@@ -623,7 +623,7 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
     }
     case 'ticket.start-requested':
       return singleLine(
-        `ticket ${event.payload.ticket.id} start requested${event.actor.kind === 'human' ? ` by ${event.actor.user}` : ''}`,
+        `ticket ${event.payload.ticket.id} start requested (${event.payload.priority})${event.actor.kind === 'human' ? ` by ${event.actor.user}` : ''}`,
       )
     case 'ticket.start-cancelled':
       return singleLine(`ticket ${event.payload.ticket.id} start request cancelled`)
@@ -631,8 +631,8 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       const p = event.payload
       return singleLine(
         p.outcome === 'started'
-          ? `ticket ${p.ticket.id} start started → build ${p.slug}`
-          : `ticket ${p.ticket.id} start refused: ${p.outcome}${p.slug !== undefined ? ` (build ${p.slug})` : ''}${p.detail !== undefined ? ` — ${p.detail}` : ''}`,
+          ? `ticket ${p.ticket.id} start started → build ${p.slug} (${p.priority})`
+          : `ticket ${p.ticket.id} start refused: ${p.outcome}${p.slug !== undefined ? ` (build ${p.slug})` : ''}${p.detail !== undefined ? ` — ${p.detail}` : ''} (${p.priority})`,
       )
     }
     case 'ticket.identity-recorded':

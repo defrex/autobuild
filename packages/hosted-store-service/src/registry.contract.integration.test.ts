@@ -1067,18 +1067,27 @@ describe('agent tool registry contract', () => {
     )
     const path = `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-2/start`
     const tool = toolFor(toolWorld)
-    for (const [route, input] of [
-      [path, { repo, id: 'AUT-2' }],
-      [path, { repo, id: 'AUT-2' }],
-      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }],
-      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }],
+    for (const [route, input, body] of [
+      [path, { repo, id: 'AUT-2' }, undefined],
+      [path, { repo, id: 'AUT-2' }, undefined],
+      // Another priority updates the pending request; the body carries it.
+      [path, { repo, id: 'AUT-2', priority: 'urgent' }, { priority: 'urgent' }],
+      [path, { repo, id: 'AUT-2', priority: 'urgent' }, { priority: 'urgent' }],
+      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }, undefined],
+      [`${path}/cancel`, { repo, id: 'AUT-2', cancel: true }, undefined],
     ] as const) {
-      const routed = await call('POST', route)
+      const routed =
+        body === undefined ? await call('POST', route) : await call('POST', route, body)
       expect(routed.status).toBe(200)
       const result = await tool('tickets.start', input)
       expectEqual(result, routed.body)
       expectJsonClean(result)
     }
+    expect(await tool('tickets.start', { repo, id: 'AUT-2', priority: 'normal' })).toMatchObject({
+      priority: 'normal',
+      updated: false,
+    })
+    expect((await call('POST', path, { priority: 'high' })).status).toBe(400)
     const missing = await call(
       'POST',
       `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-404/start`,

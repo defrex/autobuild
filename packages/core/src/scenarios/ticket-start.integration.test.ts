@@ -335,7 +335,7 @@ test('a repository pause leaves the request pending', async () => {
   expect(await w.store.listBuilds()).toEqual([])
 })
 
-test('with intake on, the request takes the only free slot ahead of ready order', async () => {
+test('with intake on, a manual request takes the only free slot ahead of ready order', async () => {
   const w = await world([ticket('T-0'), ticket('T-1')], {
     config: `capacity = 1\n${FILE_CONFIG}`,
   })
@@ -361,8 +361,10 @@ test('the CLI records the request and ab watch delivers the settlement', async (
     })
   await cli()
   await cli()
-  expect(out[0]).toMatch(/^start requested for T-1 \(request \d+\); the dispatcher claims it/)
-  expect(out[1]).toMatch(/^start request for T-1 already pending since /)
+  expect(out[0]).toMatch(
+    /^start requested for T-1 at manual priority \(request \d+\); the dispatcher claims it/,
+  )
+  expect(out[1]).toMatch(/^start request for T-1 already pending at manual priority since /)
   await expect(
     abTicketStart({
       targetRepo: REPO,
@@ -396,9 +398,74 @@ test('the CLI records the request and ab watch delivers the settlement', async (
     .filter((entry) => entry.event !== undefined)
   expect(record?.event?.type).toBe('ticket.start-settled')
   const settled = record!.event!
-  expect(summarizeEvent(settled, undefined as never)).toMatch(/^ticket T-1 start started → build /)
+  expect(summarizeEvent(settled, undefined as never)).toMatch(
+    /^ticket T-1 start started → build .* \(manual\)$/,
+  )
   const rendered = renderRepositoryStatus(projectRepositoryStatus(REPO, await w.events()))
-  expect(rendered.some((line) => /^start request T-1: started → build /.test(line))).toBe(true)
+  expect(
+    rendered.some((line) => /^start request T-1 \(manual\): started → build /.test(line)),
+  ).toBe(true)
+})
+
+test('the CLI updates a pending request priority and refuses unknown or cancel-time priorities', async () => {
+  const w = await world([ticket('T-1')], { config: `capacity = 1\n${FILE_CONFIG}` })
+  await seedBuild(w.store, 'occupant', { source: 'fake', id: 'T-9' })
+  const out: string[] = []
+  const cli = (args: { priority?: 'manual' | 'urgent' | 'normal'; cancel?: boolean }) =>
+    abTicketStart({
+      targetRepo: REPO,
+      env: { USER: 'operator' },
+      exec: fakeExec,
+      stdout: (line) => out.push(line),
+      openStore: () => w.store,
+      id: 'T-1',
+      ticketSource: async () => w.tickets,
+      ...args,
+    })
+  await cli({ priority: 'normal' })
+  await cli({ priority: 'urgent' })
+  expect(out[1]).toMatch(/^start request for T-1 now urgent priority \(request \d+\)$/)
+  const length = (await w.events()).length
+  await expect(cli({ priority: 'urgent', cancel: true })).rejects.toThrow(
+    '--priority applies to a request',
+  )
+  const { parseStartPriorityFlag } = await import('../ports/tickets/priority')
+  expect(() => parseStartPriorityFlag('high')).toThrow('expected manual, urgent or normal')
+  expect((await w.events()).length).toBe(length)
+  // Waiting for the slot, status names the request's tier and the reservation.
+  await w.tick()
+  const starts = (await w.status()).ticketStarts as unknown as {
+    pending: { ticket: { id: string }; priority: string }[]
+  }
+  expect(starts.pending).toMatchObject([{ ticket: { id: 'T-1' }, priority: 'urgent' }])
+  const rendered = renderRepositoryStatus(projectRepositoryStatus(REPO, await w.events()))
+  expect(rendered.some((line) => /^start request T-1 \(urgent\): pending since /.test(line))).toBe(
+    true,
+  )
+  const lines = (await w.events())
+    .filter((event) => event.type === 'ticket.start-requested')
+    .map((event) => summarizeEvent(event, undefined as never))
+  expect(lines).toEqual([
+    'ticket T-1 start requested (normal) by operator',
+    'ticket T-1 start requested (urgent) by operator',
+  ])
+})
+
+test('with intake off, every start priority claims only its own ticket', async () => {
+  for (const priority of ['manual', 'urgent', 'normal'] as const) {
+    const w = await world([ticket('T-1'), ticket('T-2')])
+    await w.registry.call(
+      'tickets.start',
+      { repo: REPO, id: 'T-1', priority },
+      { identity: 'operator' },
+    )
+    expect((await w.tick()).dispatched).toBe(1)
+    expect(w.calls.listReady).toBe(0)
+    expect(w.calls.claim).toEqual(['T-1'])
+    expect((await w.settled()).map((event) => event.payload)).toMatchObject([
+      { outcome: 'started', priority },
+    ])
+  }
 })
 
 function hostedTicket(id: string, state: string): Ticket {

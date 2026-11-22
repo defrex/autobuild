@@ -1095,10 +1095,12 @@ describe('ticket start request events', () => {
   const write = (type: string, payload: unknown, actor: unknown) => () =>
     validateRepositoryEventWrite({ actor, type, payload } as never)
   test('requests and cancellations are human-only', () => {
-    expect(write('ticket.start-requested', { ticket }, humanActor('alice'))()).toMatchObject({
-      type: 'ticket.start-requested',
-    })
-    expect(write('ticket.start-requested', { ticket }, DISPATCHER)).toThrow(EventValidationError)
+    expect(
+      write('ticket.start-requested', { ticket, priority: 'manual' }, humanActor('alice'))(),
+    ).toMatchObject({ type: 'ticket.start-requested' })
+    expect(write('ticket.start-requested', { ticket, priority: 'manual' }, DISPATCHER)).toThrow(
+      EventValidationError,
+    )
     expect(
       write('ticket.start-cancelled', { request: 3, ticket }, humanActor('alice'))(),
     ).toMatchObject({ type: 'ticket.start-cancelled' })
@@ -1106,8 +1108,27 @@ describe('ticket start request events', () => {
       EventValidationError,
     )
   })
+  test('requests name one known priority', () => {
+    for (const priority of ['manual', 'urgent', 'normal'])
+      expect(
+        write('ticket.start-requested', { ticket, priority }, humanActor('alice'))(),
+      ).toMatchObject({ payload: { priority } })
+    expect(write('ticket.start-requested', { ticket }, humanActor('alice'))).toThrow(
+      EventValidationError,
+    )
+    expect(
+      write('ticket.start-requested', { ticket, priority: 'high' }, humanActor('alice')),
+    ).toThrow(EventValidationError)
+    expect(
+      write(
+        'ticket.start-settled',
+        { request: 3, ticket, outcome: 'invalid', detail: 'x' },
+        DISPATCHER,
+      ),
+    ).toThrow(EventValidationError)
+  })
   test('settlements are dispatcher-only with a known outcome and nonblank detail', () => {
-    const base = { request: 3, ticket }
+    const base = { request: 3, ticket, priority: 'manual' }
     expect(
       write('ticket.start-settled', { ...base, outcome: 'started', slug: 'b' }, DISPATCHER)(),
     ).toMatchObject({ type: 'ticket.start-settled' })

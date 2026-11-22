@@ -18,6 +18,7 @@ export {
   ticketCreateRequestSchema,
   ticketMoveRequestSchema,
   ticketPageSchema,
+  ticketStartRequestSchema,
   ticketUpdateRequestSchema,
 } from './protocol'
 export type {
@@ -29,6 +30,7 @@ export type {
   OperatorSessionMessageRequest,
   OperatorSessionWakeRequest,
   OperatorTicketBlockerRequest,
+  OperatorTicketStartRequest,
   OperatorTicketCreateRequest,
   OperatorTicketMoveRequest,
   OperatorTicketUpdateRequest,

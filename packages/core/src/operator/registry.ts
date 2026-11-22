@@ -497,6 +497,12 @@ const ticketsBlockersInput = ticketBlockerRequestSchema.extend({
 const ticketsStartInput = z.strictObject({
   repo: repoField,
   id: ticketIdField,
+  priority: z
+    .enum(['manual', 'urgent', 'normal'])
+    .optional()
+    .describe(
+      'Slot-admission tier for the request (default "manual"): manual goes ahead of all waiting work; urgent waits for urgent parked work; normal waits for normal parked work and urgent claims. Not allowed with cancel.',
+    ),
   cancel: z
     .boolean()
     .optional()
@@ -1242,9 +1248,9 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.start',
-    'Ask the running dispatcher to start one ticket by id, even while intake is off. Records a durable, attributed request that the dispatcher (local or hosted) honours on its next tick with a free slot, claiming no other ticket. Every gate still applies: ready state, spec standard, resolved blockers, no active build, capacity and repository pause. With cancel, cancels the pending request instead.',
+    "Ask the running dispatcher to start one ticket by id, even while intake is off. Records a durable, attributed request that the dispatcher (local or hosted) honours on its next tick with a free slot in the request's priority tier (manual by default, ahead of all waiting work; or urgent, or normal), claiming no other ticket. The claimed build is urgent when priority is urgent, otherwise it keeps its ticket's priority. Every gate still applies: ready state, spec standard, resolved blockers, no active build, capacity and repository pause. Repeating the request with another priority updates the pending request. With cancel, cancels the pending request instead.",
     ticketsStartInput,
-    'For a request: {status: "pending", existing, request, requestedAt, ticket, event?} — existing is true when an equivalent request was already pending and nothing was written. For cancel: {cancelled: true, request, ticket, event} or {cancelled: false, id} when nothing was pending. The settlement arrives later as a ticket.start-settled repository event (repository.events) and in repository.status ticketStarts.',
+    'For a request: {status: "pending", existing, updated, request, priority, requestedAt, ticket, event?} — existing is true when a request for the ticket was already pending; updated is true when its priority was changed to this one (event is the update), and false with no event when nothing was written. For cancel: {cancelled: true, request, ticket, event} or {cancelled: false, id} when nothing was pending. The settlement arrives later as a ticket.start-settled repository event (repository.events) and in repository.status ticketStarts.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsStartInput>
       return controlTicketStart({
@@ -1255,6 +1261,7 @@ export const TOOLS: readonly ToolEntry[] = [
         user: attributed(ctx),
         ...(ctx.via !== undefined ? { via: ctx.via } : {}),
         ...(input.cancel === true ? { cancel: true } : {}),
+        ...(input.priority !== undefined ? { priority: input.priority } : {}),
       })
     },
   ),

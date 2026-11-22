@@ -3,7 +3,7 @@ import { abTicketStart } from './ticket-start'
 import { abAccountsLogin } from './accounts'
 import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
-import { parsePriorityFlag } from '../ports/tickets/priority'
+import { parsePriorityFlag, parseStartPriorityFlag } from '../ports/tickets/priority'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
 import { requestNodeRestack } from '../operator/restack'
@@ -1341,9 +1341,19 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'start': {
-      const usage = 'usage: ab start <ticket-id> [--cancel] [--json] [--store <ref>]'
-      const parsed = parseArgs(rest, { cancel: 'boolean', json: 'boolean', store: 'value' }, usage)
+      const usage =
+        'usage: ab start <ticket-id> [--priority manual|urgent|normal] [--cancel] [--json] [--store <ref>]'
+      const parsed = parseArgs(
+        rest,
+        { cancel: 'boolean', json: 'boolean', priority: 'value', store: 'value' },
+        usage,
+      )
       if (parsed.positionals.length !== 1 || !parsed.positionals[0]!.trim()) throw new Error(usage)
+      const priorityFlag = stringFlag(parsed, 'priority')
+      const startPriority =
+        priorityFlag !== undefined ? parseStartPriorityFlag(priorityFlag) : undefined
+      if (startPriority !== undefined && parsed.flags.has('cancel'))
+        throw new Error('ab start: --priority applies to a request, not to --cancel')
       if (deps.exec === undefined) throw new Error('ab start requires an exec seam')
       const storeRef = stringFlag(parsed, 'store')
       const exec = deps.exec
@@ -1354,6 +1364,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stdout,
         id: parsed.positionals[0]!,
         cancel: parsed.flags.has('cancel'),
+        ...(startPriority !== undefined ? { priority: startPriority } : {}),
         json: parsed.flags.has('json'),
         ticketSource: async () =>
           (
