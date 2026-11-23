@@ -289,7 +289,7 @@ describe('the node clock fold', () => {
     ]
     const signal = reduceBuildDigest(read.adapt(log as never) as never).optimization
     const state = reduceBuild(log).optimization!
-    expect(signal && signal.clock).toEqual(clockView(state.clock))
+    expect((signal || undefined)?.clock).toEqual(clockView(state.clock))
   })
 })
 

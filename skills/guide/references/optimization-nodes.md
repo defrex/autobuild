@@ -218,10 +218,23 @@ not the code under improvement, so leave that code out. Keep selectors narrow:
 a harness that covers the code being optimized pins the very code attempts are
 meant to change.
 
+### Measuring where builds run
+
+Measure the evidence, the threshold and ε in the environment builds run in.
+
+- With a remote workspace such as a sandbox, get the benchmark run there.
+- If you can't, say so in the evidence. Leave the threshold out, and set it
+  with `ab objective <node> --threshold n` once the node reports its starting
+  value.
+- Why: absolute timings from a workstation don't transfer to a sandbox. The
+  node's opening measurement and noise check run in the build environment, so
+  a threshold or ε from elsewhere may be unreachable or below the noise.
+
 ### Choosing ε and the noise check
 
 Choose ε above the noise. ε is the smallest gain worth landing. Run the
-command several times on the same tree first. If the median moves by more than
+command several times on the same tree first, in the environment builds run
+in. If the median moves by more than
 your ε between identical runs, raise ε or `samples`. The node checks this when
 it opens: its starting measurement raises `optimization.noise-exceeded` when ε
 is below the measured spread. A panel node judges its opening head against
@@ -254,8 +267,10 @@ should not decide an ε of 0.1. See [judge panels](#judge-panels).
 ### Choosing a budget
 
 Choose a budget you would sign off on unattended. It is the limit a human
-approves once for the whole run. `maxAttempts` bounds cost; `maxHours` bounds wall-clock
-time. Set a plateau when a run of failed strategies should end the search
+approves once for the whole run. `maxAttempts` bounds cost; `maxHours` bounds
+[active hours](#active-hours): time the node's attempts, proposer or
+measurements actually run, not wall-clock time since opening. Time an attempt
+spends queued for a slot, parked on an escalation or paused is not charged. Set a plateau when a run of failed strategies should end the search
 early. Set a threshold only when there is a value at which you would stop
 looking. Use `concurrency` above 1 only when attempts are independent enough to
 run side by side.
@@ -590,7 +605,7 @@ blinded order.
 | `optimization.objective-revised` | node | changes, revision (human) |
 | `optimization.baseline-measured` | node | revision, head, harnessPin, samples, median, spread, report |
 | `optimization.noise-exceeded` | node | revision, head, harnessPin, median, spread, epsilon, effective ε (advisory) |
-| `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, hours) (dispatcher) |
+| `optimization.proposal-requested` | node | id, node head, room, budget used (attempts, active hours) (dispatcher) |
 | `optimization.attempts-proposed` | node | request, proposals (id, ticket, title, strategy), reason when empty; recorded after every ticket exists (dispatcher) |
 | `attempt.measurement-requested` | attempt | id, node, candidate, baseline, harnessPin, revision, metric, purpose (panel) |
 | `attempt.sampled` | attempt | request, candidate, baseline, harnessPin, revision, samples (judges for a panel), medians or win rate, report |
@@ -604,6 +619,8 @@ blinded order.
 | `attempt.settled` | node | attempt (proposal, ticket, build, branch?), outcome, measurement (revision, baseline, candidate, delta), policy?, mergedSha?, note, head (accepted only) |
 | `attempt.merged-unmeasured` | node | proposal, ticket, build, merged head (sha?), reason, measuredCandidate? |
 | `optimization.stopped` | node | cause, mode |
+| `optimization.activity-recorded` | node | attempt execution facts (build, n, instance, started or ended, at), accounted counts, released builds?, watermark, settles? (dispatcher) |
+| `execution.accounted` | attempt | count: execution facts the node has accounted (dispatcher, advisory) |
 | `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
 | `attempt.branch-deleted` | node | proposal, build, branch |
 | `attempt.branch-cleanup-failed` | node | proposal, build?, branch, error |
@@ -661,7 +678,7 @@ Progress is derived from the node's log, never recorded:
   unmeasured (slot held)` while any remain.
 - **Plateau counter**: consecutive `no-improvement` or `declined` settlements
   since the last `accepted`; `stopped` and `aborted` leave it unchanged.
-- **Elapsed budget**: hours since the first acceptance, against `maxHours`, and
+- **Budget used**: [active hours](#active-hours), against `maxHours`, and
   attempts filed, against `maxAttempts`.
 - **Stop eligibility** by threshold, plateau and budget, and whether the node
   has stopped. Once stopped, `ab objective` also shows what still blocks
@@ -689,14 +706,16 @@ Every surface shows the same objective row, read from the node's digest alone:
 ```text
 objective 50 → 44 (minimize) · threshold 35 · noise ±1.5
 attempts 1 accepted · 3 rejected · 0 running
-budget 4/60 attempts · 3.1/24 hours
+budget 4/60 attempts · 3.1/24 active hours
 stopped plateau (drain)
 ```
 
 A panel shows `win rate 50% → 70%` instead. Only configured budgets appear,
 `no threshold` and `objective not measured` stand in for absent values, and
-the `stopped` segment appears once the node stops. Budget hours stop at the
-stop time; a watch record evaluates them at its own timestamp. `ab objective`
+the `stopped` segment appears once the node stops. Budget hours are active
+hours and stop growing at the stop; `(settling)` follows them until the
+dispatcher has accounted attempt runs from before the stop. A watch record
+evaluates them at its own timestamp. `ab objective`
 remains the full view, with the best value, plateau and stop eligibility.
 
 ## Proposer phase
@@ -724,7 +743,7 @@ deferred for runtime compatibility gets `optimization.proposal-deferred` with
 that reason instead, and is reconsidered once a fact that can clear it lands.
 The request takes a slot ahead of normal ticket claims, like node reconcile and
 verification. Before the session starts, the dispatcher re-checks the request:
-when the node stopped, the hours budget expired, or room fell below the
+when the node stopped, the active-hours budget is spent, or room fell below the
 recorded room, it records `optimization.proposal-withdrawn`, which clears the
 request and never counts as an empty proposal. A session that already started
 keeps the room it was granted.
@@ -808,6 +827,12 @@ build as an ordinary child.
 
 An attempt keeps the ordinary work grammar: plan, plan review, implement, code
 review, verify and finalize.
+
+An attempt claims at its node's priority. `ab priority <node> urgent` puts
+the node's attempts claimed afterwards in the urgent tier; an attempt already
+claimed keeps its build's priority. Nothing is reserved: an attempt waits for
+a free slot like any ready ticket, preempts nothing, and follows the source's
+order within its tier.
 
 ### Attempt context
 
@@ -969,6 +994,34 @@ slot, and retries on later polls without changing the settlement. An attempt
 that never published needs no deletion. Aborted and stopped attempts keep abort
 cleanup's own branch deletion.
 
+## Active hours
+
+`maxHours` counts the time the node's optimization work actually runs:
+
+- **What counts.** An attempt from its `execution.started` to its
+  `execution.ended`, and the node's own runs that started while its proposer
+  or a measurement was due. Overlapping runs count once.
+- **What doesn't.** An attempt queued for a slot has no execution. A runner
+  ends its execution whenever the build waits: paused, blocked on an
+  escalation, on a ticket wait or awaiting merge. Other node runs, such as a
+  branch reconcile, don't count.
+- **How it is kept.** The node's digest holds an exact union of execution
+  intervals. Its own runs fold from its log. Attempt runs arrive in
+  `optimization.activity-recorded` batches: on each tick the dispatcher reads
+  an attempt build's `executionIntervals` value only when the build's digest
+  shows new execution facts, records them on the node, then acknowledges them
+  on the build with `execution.accounted`. An idle tick reads nothing.
+- **At a stop.** `optimization.stopped` closes every interval at the stop
+  time, so the value never grows afterwards. The next tick records one
+  settling batch with every attempt run from before the stop the node had not
+  yet accounted. Until then surfaces show `settling`, because that batch may
+  change the value once.
+- **Nodes opened before active hours.** Their own past proposer and
+  measurement runs count. Attempts still in flight are charged their whole
+  run history once the dispatcher first sees them; attempts that settled
+  before the upgrade are not charged. A completed node reports its own runs,
+  clipped at its stop.
+
 ## Stopping and completion
 
 An optimization node is done when the number is good enough, when it stops
@@ -982,7 +1035,7 @@ any point lands real, verified progress.
 |---|---|
 | `threshold` | The node head's current value has reached `target.threshold` in the objective's direction; for a panel, the head's recorded win rate against the starting head. |
 | `plateau` | `stop.plateau.attempts` consecutive `no-improvement` or `declined` settlements. |
-| `budget` | Attempts filed reached `maxAttempts`, or hours since the first acceptance reached `maxHours`. |
+| `budget` | Attempts filed reached `maxAttempts`, or [active hours](#active-hours) reached `maxHours`. |
 | `exhausted` | The proposer has nothing left to try. |
 | `operator` | A human stopped it with `ab objective <node> --stop` or `optimization.stop`. |
 

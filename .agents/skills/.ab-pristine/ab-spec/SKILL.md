@@ -51,7 +51,8 @@ lands. The marker rules and the objective schema are in
 
 To groom an optimization node, follow the
 [grooming guidance](../ab-guide/references/optimization-nodes.md#grooming-an-optimization-node)
-for writing the purpose and choosing the harness, ε and budget. For a panel
+for writing the purpose, measuring where builds run, and choosing the
+harness, ε and budget. For a panel
 objective (`kind = "panel"`), write the rubric as criteria for comparing two
 variants side by side, keep the rubric and any fixtures the judges read inside
 the harness, and choose `judges` for cost against noise; the
