@@ -9,13 +9,21 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
 import { ArchiveConflictError, ForgeFailure } from '../ports/forge-failure'
 import {
   archiveRef,
+  preserveRetained,
   recordRetention,
   restoreCommit,
+  restoreRetainedHead,
   retainCommit,
   UNRETAINED_OBSERVATION,
   type RetentionContext,
 } from './history-retention'
-import { readRetainedPack } from './replay-retention'
+import {
+  historyCopyBase,
+  readRetainedPack,
+  retainHistoryCopy,
+  retainReplay,
+  RetainedCopyInvalid,
+} from './replay-retention'
 import type { BuildStore } from '../store/types'
 
 const mkdtemp = temporaryDirectories(afterEach)
@@ -248,4 +256,163 @@ test('a store-only prepared change is restored and archived on an accepting forg
   expect(outcome).toEqual({ sha: change, in: 'forge', ref: archiveRef(BUILD, change) })
   expect(await git(['rev-parse', archiveRef(BUILD, change)], w.origin)).toBe(change)
   expect(await store.getArtifact(BUILD, `history-objects-${change}`)).toBeNull()
+})
+
+const present = async (cwd: string, sha: string) =>
+  (await bunExec(['git', 'cat-file', '-e', `${sha}^{commit}`], { cwd })).exitCode === 0
+
+/** Unpublished work beyond the published build branch head, as a workspace
+ * holds it at release: several commits only this checkout has. */
+async function unpublishedRange(w: Awaited<ReturnType<typeof world>>) {
+  await git(['checkout', '-q', BRANCH], w.seed)
+  const shas: string[] = []
+  for (const name of ['wip-1', 'wip-2']) {
+    await writeFile(join(w.seed, name), `${name}\n`)
+    await git(['add', name], w.seed)
+    await git(['commit', '-qm', name], w.seed)
+    shas.push(await git(['rev-parse', 'HEAD'], w.seed))
+  }
+  return shas
+}
+
+test('a refused preservation keeps the whole unpublished range for another host', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  const range = await unpublishedRange(w)
+  const tip = range.at(-1)!
+  // The published build branch head is the preservation base.
+  const ctx = { ...w.context(store, w.seed), exclude: w.unpublished }
+  await git(['push', '-q', 'origin', `${w.unpublished}:refs/heads/${BRANCH}`], w.seed)
+  expect(await preserveRetained(ctx, tip)).toEqual({ storeBase: w.unpublished })
+  // Another host with only the published branches restores every commit.
+  const host = await w.clone('main')
+  expect(await present(host, tip)).toBe(false)
+  expect(
+    await restoreRetainedHead({ ...w.context(store, host), exclude: w.unpublished }, tip),
+  ).toBe(true)
+  for (const sha of range) expect(await present(host, sha)).toBe(true)
+  await git(['rev-list', '--objects', '--quiet', tip], host)
+})
+
+test('an accepting forge preserves under the archive ref without a store copy', async () => {
+  const w = await world(false)
+  const store = await seedStore()
+  expect(await preserveRetained(w.context(store, w.seed), w.unpublished)).toEqual({
+    remoteRef: archiveRef(BUILD, w.unpublished),
+  })
+  expect(await store.getArtifact(BUILD, `history-objects-${w.unpublished}`)).toBeNull()
+})
+
+test('preservation refuses when neither the forge nor the store keeps the work', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  store.putArtifact = async () => {
+    throw new Error('store write refused')
+  }
+  await expect(preserveRetained(w.context(store, w.seed), w.unpublished)).rejects.toThrow(
+    /archive refused[\s\S]*BuildStore copy failed \(store write refused\)/,
+  )
+  for (const failure of [
+    new ArchiveConflictError('immutable archive names another commit'),
+    new ForgeFailure('connection reset', { kind: 'transient', retry: 'retryable' }),
+  ])
+    await expect(
+      preserveRetained(
+        {
+          ...w.context(store, w.seed),
+          archive: async () => {
+            throw failure
+          },
+        },
+        w.unpublished,
+      ),
+    ).rejects.toBe(failure)
+})
+
+test('repeated preservation over a rewritten published base keeps the saved base recoverable', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  // First preservation: H over the published build branch head B1.
+  const b1 = w.head
+  const h = w.unpublished
+  expect(await preserveRetained({ ...w.context(store, w.seed), exclude: b1 }, h)).toEqual({
+    storeBase: b1,
+  })
+  // The published build branch is force-rewritten to B2, which B1 is not under.
+  await git(['checkout', '-q', '-b', 'rewritten', w.base], w.seed)
+  await writeFile(join(w.seed, 'rewritten'), 'rewritten\n')
+  await git(['add', 'rewritten'], w.seed)
+  await git(['commit', '-qm', 'rewritten'], w.seed)
+  const b2 = await git(['rev-parse', 'HEAD'], w.seed)
+  await git(['push', '-q', '-f', 'origin', `${b2}:refs/heads/${BRANCH}`], w.seed)
+  // Second preservation reuses the copy and its saved base, retaining B1.
+  expect(await preserveRetained({ ...w.context(store, w.seed), exclude: b2 }, h)).toEqual({
+    storeBase: b1,
+  })
+  expect(await historyCopyBase(store, BUILD, h)).toBe(b1)
+  expect(await historyCopyBase(store, BUILD, b1)).toBe(b2)
+  // A host holding only the published branches restores B1, then H.
+  const host = await w.clone(BRANCH)
+  await git(['fetch', '-q', 'origin', 'main'], host)
+  expect(await present(host, b1)).toBe(false)
+  expect(await restoreCommit({ ...w.context(store, host), exclude: b2 }, h)).toBe(false)
+  expect(await restoreRetainedHead({ ...w.context(store, host), exclude: b2 }, h)).toBe(true)
+  for (const sha of [b1, w.first, h]) expect(await present(host, sha)).toBe(true)
+})
+
+test('a saved base that cannot be retained refuses the repeated preservation', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  await preserveRetained({ ...w.context(store, w.seed), exclude: w.head }, w.unpublished)
+  const put = store.putArtifact.bind(store)
+  store.putArtifact = async (slug, input) => {
+    if (input.kind.startsWith('replay-v1-') || input.kind === `history-objects-${w.head}`)
+      throw new Error('store write refused')
+    return put(slug, input)
+  }
+  // The new base does not contain the saved base, which cannot be kept.
+  await expect(
+    preserveRetained({ ...w.context(store, w.seed), exclude: w.target }, w.unpublished),
+  ).rejects.toThrow(/BuildStore copy failed/)
+})
+
+test('a chain of saved bases that repeats ends instead of looping', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  const [x, y] = ['1'.repeat(40), '2'.repeat(40)]
+  const manifest = (head: string, base: string) =>
+    JSON.stringify({
+      version: 1,
+      head,
+      base,
+      digest: '0'.repeat(64),
+      bytes: 1,
+      chunkBytes: 1024 * 1024,
+      chunks: 1,
+    })
+  await store.putArtifact(BUILD, { kind: `history-objects-${x}`, content: manifest(x, y) })
+  await store.putArtifact(BUILD, { kind: `history-objects-${y}`, content: manifest(y, x) })
+  const host = await w.clone('main')
+  expect(await restoreRetainedHead(w.context(store, host), x)).toBe(false)
+})
+
+test('a history copy keeps the base it was saved with; replay copies stay exact', async () => {
+  const w = await world(true)
+  const store = await seedStore()
+  const deps = { store, slug: BUILD, exec: bunExec, workspacePath: w.seed }
+  expect(await retainHistoryCopy(deps, w.unpublished, w.head)).toBe(w.head)
+  const writes: string[] = []
+  const put = store.putArtifact.bind(store)
+  store.putArtifact = async (slug, input) => {
+    writes.push(input.kind)
+    return put(slug, input)
+  }
+  expect(await retainHistoryCopy(deps, w.unpublished, w.target)).toBe(w.head)
+  expect(writes).toEqual([])
+  expect(await historyCopyBase(store, BUILD, w.unpublished)).toBe(w.head)
+  expect(await historyCopyBase(store, BUILD, w.target)).toBeNull()
+  await retainReplay(deps, w.unpublished, w.head)
+  await expect(retainReplay(deps, w.unpublished, w.target)).rejects.toBeInstanceOf(
+    RetainedCopyInvalid,
+  )
 })
