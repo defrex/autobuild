@@ -27,15 +27,19 @@ import { randomSessionLog } from './generators/session-log'
 import { EXCLUDED, REDUCERS } from './reducer-registry'
 import {
   IDENTIFIED,
+  LEDGER_PATH,
   LEGACY_REDUCER_VERSIONS,
   PARTS,
+  REVISION_GUARD_SKIPPED_PREFIX,
   canonicalJson,
   checkAgainstBase,
   checkIdentityRecords,
+  checkRevisionsSinceBase,
   deriveReducerVersion,
   evaluationCorpora,
   foldDigest,
   formatBaseRelativeSkipped,
+  formatRevisionGuardSkipped,
   formatUnregeneratedCombination,
   parseLedgerSource,
   parseRecordFile,
@@ -983,9 +987,9 @@ function currentIdentities(records: readonly IdentityRecord[]): CurrentIdentity[
 }
 
 const directory = temporaryDirectories(afterEach)
-const LEDGER_PATH = 'packages/core/src/kernel/reducer-revisions.ts'
 const RECORDS_PATH = 'packages/core/src/kernel/__snapshots__/reducer-identity-records'
 const REGISTRY_PATH = 'packages/core/src/kernel/reducer-registry.ts'
+const IDENTITY_PATH = 'packages/core/src/kernel/reducer-identity.ts'
 /** The trees base code needs to load; corpora and records stay behind. */
 const BASE_CODE_PATHS = [
   'packages/core/src',
@@ -1038,31 +1042,27 @@ function readBaseRecords(root: string, base: string): IdentityRecord[] {
     )
 }
 
-/** Fold `logs` through the base's own reducer code for each named reducer.
- * The base's code tree is extracted into a temporary directory that resolves
- * packages through this checkout's `node_modules`, imported in-process, and
- * removed. A name the base does not register, or registers under another
- * identity, is new at the head and gets no entry. */
-async function foldAtBase(input: {
-  root: string
-  base: string
-  names: ReadonlyMap<string, string>
-  logs: ReadonlyMap<string, readonly unknown[]>
-  /** Receives the extraction directory, so a test can prove its removal. */
-  onExtract?: (dir: string) => void
-}): Promise<Map<string, Record<string, string>>> {
+/** Extract the base's code tree into a temporary directory that resolves
+ * packages through this checkout's `node_modules`, run `use` on it, and remove
+ * it. `onExtract` receives the directory, so a test can prove its removal. */
+async function withBaseCode<T>(
+  root: string,
+  base: string,
+  use: (dir: string) => Promise<T>,
+  onExtract?: (dir: string) => void,
+): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'ab-identity-base-'))
-  input.onExtract?.(dir)
+  onExtract?.(dir)
   try {
-    const paths = BASE_CODE_PATHS.filter((path) => gitHas(input.root, `${input.base}:${path}`))
-    const archive = Bun.spawnSync(['git', 'archive', '--format=tar', input.base, '--', ...paths], {
-      cwd: input.root,
+    const paths = BASE_CODE_PATHS.filter((path) => gitHas(root, `${base}:${path}`))
+    const archive = Bun.spawnSync(['git', 'archive', '--format=tar', base, '--', ...paths], {
+      cwd: root,
       stdout: 'pipe',
       stderr: 'pipe',
     })
     if (archive.exitCode !== 0)
       throw new Error(
-        `git archive ${input.base} exited ${archive.exitCode}: ${archive.stderr.toString().trim()}`,
+        `git archive ${base} exited ${archive.exitCode}: ${archive.stderr.toString().trim()}`,
       )
     const extract = Bun.spawnSync(['tar', '-x', '-C', dir], {
       stdin: archive.stdout,
@@ -1070,7 +1070,7 @@ async function foldAtBase(input: {
       stderr: 'pipe',
     })
     if (extract.exitCode !== 0)
-      throw new Error(`extracting ${input.base} failed: ${extract.stderr.toString().trim()}`)
+      throw new Error(`extracting ${base} failed: ${extract.stderr.toString().trim()}`)
     const checkout = repoRoot()
     for (const modules of ['node_modules', 'packages/core/node_modules']) {
       const target = join(dir, modules)
@@ -1079,26 +1079,135 @@ async function foldAtBase(input: {
         symlinkSync(join(checkout, modules), target)
       }
     }
-    let registry: { REDUCERS?: Record<string, { reducer: RegisteredReducer['reducer'] }> }
-    try {
-      registry = await import(join(dir, REGISTRY_PATH))
-    } catch (error) {
-      throw new Error(
-        `importing the reducer registry at verify base ${input.base} failed: ${(error as Error).message}`,
-      )
-    }
-    const out = new Map<string, Record<string, string>>()
-    for (const [name, identity] of input.names) {
-      const reducer = registry.REDUCERS?.[name]?.reducer
-      if (reducer?.identity !== identity) continue
-      out.set(
-        name,
-        Object.fromEntries([...input.logs].map(([cid, log]) => [cid, foldCorpus(reducer, log)])),
-      )
-    }
-    return out
+    return await use(dir)
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/** Import the base's reducer registry from an extracted tree, which fills the
+ * base's own identity graph. */
+async function importBaseRegistry(
+  dir: string,
+  base: string,
+): Promise<{ REDUCERS?: Record<string, { reducer: RegisteredReducer['reducer'] }> }> {
+  try {
+    return await import(join(dir, REGISTRY_PATH))
+  } catch (error) {
+    throw new Error(
+      `importing the reducer registry at verify base ${base} failed: ${(error as Error).message}`,
+    )
+  }
+}
+
+/** Fold `logs` through the base's own reducer code for each named reducer. A
+ * name the base does not register, or registers under another identity, is new
+ * at the head and gets no entry. */
+async function foldAtBase(input: {
+  root: string
+  base: string
+  names: ReadonlyMap<string, string>
+  logs: ReadonlyMap<string, readonly unknown[]>
+  /** Receives the extraction directory, so a test can prove its removal. */
+  onExtract?: (dir: string) => void
+}): Promise<Map<string, Record<string, string>>> {
+  return withBaseCode(
+    input.root,
+    input.base,
+    async (dir) => {
+      const registry = await importBaseRegistry(dir, input.base)
+      const out = new Map<string, Record<string, string>>()
+      for (const [name, identity] of input.names) {
+        const reducer = registry.REDUCERS?.[name]?.reducer
+        if (reducer?.identity !== identity) continue
+        out.set(
+          name,
+          Object.fromEntries([...input.logs].map(([cid, log]) => [cid, foldCorpus(reducer, log)])),
+        )
+      }
+      return out
+    },
+    input.onExtract,
+  )
+}
+
+/** Each identity the base's code constructs, at the version the base's own
+ * identity module derives from its own ledger, frozen bases and parts graph.
+ * The base modules are separate instances from the head's, so nothing here
+ * reads the head's identity graph. Fails closed when the base module lacks
+ * either export. */
+async function readBaseVersions(
+  root: string,
+  base: string,
+  onExtract?: (dir: string) => void,
+): Promise<Map<string, number>> {
+  return withBaseCode(
+    root,
+    base,
+    async (dir) => {
+      await importBaseRegistry(dir, base)
+      const identity = (await import(join(dir, IDENTITY_PATH))) as {
+        IDENTIFIED?: unknown
+        deriveReducerVersion?: unknown
+      }
+      if (
+        !(identity.IDENTIFIED instanceof Set) ||
+        typeof identity.deriveReducerVersion !== 'function'
+      )
+        throw new Error(
+          `the reducer identity module at verify base ${base} exports no IDENTIFIED or deriveReducerVersion`,
+        )
+      const derive = identity.deriveReducerVersion as (input: { identity: string }) => number
+      return new Map(
+        [...(identity.IDENTIFIED as Set<string>)]
+          .sort()
+          .map((name) => [name, derive({ identity: name })] as const),
+      )
+    },
+    onExtract,
+  )
+}
+
+/** Every identity this process constructs, at its derived version. */
+function headVersions(): Map<string, number> {
+  return new Map(
+    [...IDENTIFIED].sort().map((identity) => [identity, deriveReducerVersion({ identity })]),
+  )
+}
+
+/** The revision guard: no base ledger key disappears and no identity derives a
+ * lower version than the base's own code derived. Skips, with a notice, when
+ * no base is given or the base predates the ledger. */
+async function revisionGuard(input: {
+  root: string
+  base: string | undefined
+  headLedger: ReadonlySet<string>
+  headVersions: ReadonlyMap<string, number>
+  onExtract?: (dir: string) => void
+}): Promise<{ skipped: string } | { violations: string[]; compared: string }> {
+  const base = input.base?.trim()
+  if (!base)
+    return {
+      skipped: formatRevisionGuardSkipped(
+        `${VERIFY_BASE_ENV} is not set (outside a build or under an older runtime)`,
+      ),
+    }
+  const baseLedger = readBaseLedger(input.root, base)
+  if (baseLedger === null)
+    return {
+      skipped: formatRevisionGuardSkipped(`the verify base ${base} predates the revision ledger`),
+    }
+  const baseVersions = await readBaseVersions(input.root, base, input.onExtract)
+  const violations = checkRevisionsSinceBase({
+    base,
+    baseLedger,
+    headLedger: input.headLedger,
+    baseVersions,
+    headVersions: input.headVersions,
+  })
+  return {
+    violations: violations.map((violation) => violation.message),
+    compared: `reducer identity: revision guard compared ${baseLedger.size} base revisions and ${baseVersions.size} identities against the verify base ${base}`,
   }
 }
 
@@ -1164,7 +1273,10 @@ describe('reducer registry', () => {
       })
     }
     const revisions = parseRevisions(REDUCER_REVISIONS)
-    for (const revision of revisions) expect(IDENTIFIED).toContain(revision.identity)
+    // A revision may name an identity no reducer constructs any more: a
+    // deregistered identity keeps its ledger lines, inert, because the revision
+    // guard refuses removing them. tools/reducer-revision.ts refuses appending
+    // a revision for an unknown identity.
     expect(new Set(revisions.map((revision) => revision.id)).size).toBe(revisions.length)
     for (const identity of Object.keys(LEGACY_REDUCER_VERSIONS))
       expect(IDENTIFIED).toContain(identity)
@@ -1249,6 +1361,24 @@ describe('reducer registry', () => {
     expect(violations.map((violation) => violation.message)).toEqual([])
   }, 120_000)
 
+  test('no change removes a base revision or lowers a reducer version', async () => {
+    // Revert by revision: a ledger line present at the verify base never
+    // disappears, and no reducer derives a lower version than the base did,
+    // whether through the ledger, a frozen legacy base or a part.
+    const result = await revisionGuard({
+      root: repoRoot(),
+      base: process.env[VERIFY_BASE_ENV],
+      headLedger: new Set(parseRevisions(REDUCER_REVISIONS).map((revision) => revision.key)),
+      headVersions: headVersions(),
+    })
+    if ('skipped' in result) {
+      console.warn(result.skipped)
+      return
+    }
+    console.warn(result.compared)
+    expect(result.violations).toEqual([])
+  }, 120_000)
+
   test('base code folds through the same digest as head code', async () => {
     const root = await directory(join(tmpdir(), 'ab-identity-fixture-'))
     const toy = (step: number) => `export const REDUCERS = {
@@ -1295,6 +1425,89 @@ describe('reducer registry', () => {
     })
     const atSecond = await fold(second)
     expect(atSecond.get('toy')!.corpus).not.toBe(atFirst.get('toy')!.corpus)
+    expect(extracted).toHaveLength(2)
+    for (const dir of extracted) expect(existsSync(dir)).toBe(false)
+  })
+
+  test("the revision guard reads base revisions and versions from the base's own code", async () => {
+    const root = await directory(join(tmpdir(), 'ab-revision-guard-fixture-'))
+    const write = (path: string, content: string) => {
+      mkdirSync(join(root, dirname(path)), { recursive: true })
+      writeFileSync(join(root, path), content)
+    }
+    const commit = (message: string) => {
+      git(root, ['add', '-A'])
+      git(root, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', message])
+      return git(root, ['rev-parse', 'HEAD']).trim()
+    }
+    git(root, ['init', '-q'])
+    write('README', 'before the ledger\n')
+    const preLedger = commit('before the ledger')
+    write(
+      LEDGER_PATH,
+      `export const REDUCER_REVISIONS = {
+  __ledger__: 'not a revision; append revisions below',
+  'toy/fold/aaaaaaaaaa': 'why',
+  'part/shape/bbbbbbbbbb': 'why',
+}
+`,
+    )
+    write(
+      REGISTRY_PATH,
+      `import { IDENTIFIED } from './reducer-identity'\nexport const REDUCERS = {}\n`,
+    )
+    write(
+      IDENTITY_PATH,
+      `export const IDENTIFIED = new Set(['toy', 'part', 'gone'])
+const VERSIONS = { toy: 5, part: 3, gone: 2 }
+export function deriveReducerVersion({ identity }) {
+  return VERSIONS[identity]
+}
+`,
+    )
+    const withLedger = commit('ledger')
+    const extracted: string[] = []
+    const guard = (
+      base: string | undefined,
+      headLedger: readonly string[],
+      versions: Record<string, number>,
+    ) =>
+      revisionGuard({
+        root,
+        base,
+        headLedger: new Set(headLedger),
+        headVersions: new Map(Object.entries(versions)),
+        onExtract: (dir) => extracted.push(dir),
+      })
+
+    const unset = await guard(undefined, [], {})
+    expect('skipped' in unset && unset.skipped).toStartWith(REVISION_GUARD_SKIPPED_PREFIX)
+    expect('skipped' in unset && unset.skipped).toContain(VERIFY_BASE_ENV)
+    const blank = await guard('  ', [], {})
+    expect('skipped' in blank && blank.skipped).toContain(VERIFY_BASE_ENV)
+    const predates = await guard(preLedger, [], {})
+    expect('skipped' in predates && predates.skipped).toContain(
+      `the verify base ${preLedger} predates the revision ledger`,
+    )
+
+    const removed = await guard(withLedger, ['part/shape/bbbbbbbbbb'], { toy: 4, part: 3 })
+    if (!('violations' in removed)) throw new Error('expected a comparison')
+    expect(removed.compared).toContain('compared 2 base revisions and 3 identities')
+    expect(removed.violations).toHaveLength(2)
+    expect(removed.violations[0]).toContain('reducer revision toy/fold/aaaaaaaaaa (identity toy)')
+    expect(removed.violations[1]).toContain(
+      'reducer identity toy derives version 4 at HEAD, below version 5',
+    )
+    expect(removed.violations.join('\n')).not.toContain('gone')
+    expect(removed.violations.join('\n')).not.toContain('identity part')
+
+    const reverted = await guard(
+      withLedger,
+      ['toy/fold/aaaaaaaaaa', 'part/shape/bbbbbbbbbb', 'toy/fold/cccccccccc'],
+      { toy: 6, part: 3, fresh: 1 },
+    )
+    expect('violations' in reverted && reverted.violations).toEqual([])
+
     expect(extracted).toHaveLength(2)
     for (const dir of extracted) expect(existsSync(dir)).toBe(false)
   })
