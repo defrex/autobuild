@@ -81,7 +81,7 @@ function reduceBuildDigest(events: DigestEvent[]): ReturnType<typeof reduceBuild
 
 describe('reduceBuildDigest', () => {
   test('an empty log derives an empty, terminal-less digest', () => {
-    expect(reduceBuildDigest([])).toEqual({ observations: [], nodeTargets: [] })
+    expect(reduceBuildDigest([])).toEqual({ observations: [], executionFacts: 0, nodeTargets: [] })
   })
 
   test('terminal is the latest terminal fact, in-order overwrite, exactly reduceBuild', () => {
@@ -112,24 +112,28 @@ describe('reduceBuildDigest', () => {
     }
     // Explicit shape pins for the nontrivial orderings.
     expect(reduceBuildDigest(logs[0]!)).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 3,
     })
     expect(reduceBuildDigest(logs[1]!)).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 2,
     })
     expect(reduceBuildDigest(logs[2]!)).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       terminal: 'aborted',
       readinessChangeSeq: 2,
     })
     expect(reduceBuildDigest(logs[5]!)).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [
         { seq: 2, ts: event('observation.recorded', 2).ts },
@@ -145,6 +149,7 @@ describe('reduceBuildDigest', () => {
     const second = event('observation.recorded', 7)
     const third = event('observation.recorded', 9)
     expect(reduceBuildDigest([first, event('build.completed', 4), second, third])).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [
         { seq: 3, ts: first.ts },
@@ -158,6 +163,7 @@ describe('reduceBuildDigest', () => {
 
   test('merged is the latest pr.merged ts, in-order overwrite, absent without one', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       terminal: 'done',
@@ -168,6 +174,7 @@ describe('reduceBuildDigest', () => {
     // Multiple merges: the log's latest wins (in-order overwrite, the
     // terminal-fact pattern).
     expect(reduceBuildDigest([event('observation.recorded', 1), first, second])).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [{ seq: 1, ts: event('observation.recorded', 1).ts }],
       merged: second.ts,
@@ -175,6 +182,7 @@ describe('reduceBuildDigest', () => {
     })
     // A single merge carries its own ts.
     expect(reduceBuildDigest([first])).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       merged: first.ts,
@@ -189,6 +197,7 @@ describe('reduceBuildDigest', () => {
         event('build.completed', 4),
       ]),
     ).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       merged: '2026-07-15T12:00:03.000Z',
@@ -336,6 +345,7 @@ describe('reduceBuildDigest pending-work flags', () => {
 
   test('neither flag is present for a log without those facts', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
+      executionFacts: 0,
       nodeTargets: [],
       observations: [],
       terminal: 'done',

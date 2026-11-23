@@ -20,7 +20,7 @@ import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import type { AttemptOutcome } from '../events/payloads'
 import {
   advanceOptimization,
-  isOptimizationEvent,
+  foldsIntoOptimization,
   isProposerWakeEvent,
   optimizationSignal,
   PROPOSER_WAKE_EVENT_TYPES,
@@ -58,6 +58,8 @@ export const DIGEST_EVENT_TYPES = [
   'escalation.answered',
   'attempt.settled',
   'attempt.ticket-rejected',
+  // The node's active-hours clock: attempt execution batches.
+  'optimization.activity-recorded',
   // The optimization signal: the node's optimization facts, its proposer
   // deferrals, and every fact that can clear a deferral.
   'optimization.proposal-deferred',
@@ -121,6 +123,9 @@ export interface DigestAcc {
   reclaimed: number[]
   /** `openExecution`: the latest start's instance, cleared only by an instance-matched end. */
   openInstance: string | null
+  /** Every `execution.started` and `execution.ended`: the count an
+   * optimization node compares with what its clock has accounted. */
+  executionFacts: number
   /** Sorted unique node slugs any target or parent move has named. */
   nodeTargets: string[]
   /** The latest ticket-wait fact is a request without its outcome. */
@@ -144,12 +149,14 @@ export interface DigestAcc {
 export class BuildDigestCapabilityError extends Error {
   constructor(
     readonly slug: string,
-    readonly capability: 'nodeTargets' | 'optimization' = 'nodeTargets',
+    readonly capability: 'nodeTargets' | 'optimization' | 'execution' = 'nodeTargets',
   ) {
     super(
       capability === 'nodeTargets'
         ? `build digest for ${slug} has no nodeTargets: the store's digest answer predates node targets`
-        : `build digest for node ${slug} has no optimization signal: the store's digest answer predates optimization proposing`,
+        : capability === 'optimization'
+          ? `build digest for node ${slug} has no optimization signal: the store's digest answer predates optimization proposing`
+          : `build digest for ${slug} has no executionFacts: the store's digest answer predates active-hours budgets`,
     )
     this.name = 'BuildDigestCapabilityError'
   }
@@ -186,12 +193,13 @@ export const buildDigestReducer: IncrementalReducer<
     hosted: [],
     reclaimed: [],
     openInstance: null,
+    executionFacts: 0,
     nodeTargets: [],
   }),
   fold(acc, events) {
     for (const event of events) {
       if (event.rawUnknown) advanceCompatibility(acc.compatibility, [event.rawUnknown])
-      if (event.optimizationEvent !== undefined && isOptimizationEvent(event.optimizationEvent))
+      if (event.optimizationEvent !== undefined && foldsIntoOptimization(event.optimizationEvent))
         acc.optimization = advanceOptimization(acc.optimization, [event.optimizationEvent])
       if (event.type === 'optimization.proposal-deferred') acc.proposerDeferredSeq = event.seq
       else if (isProposerWakeEvent(event)) acc.proposerWakeSeq = event.seq
@@ -258,8 +266,11 @@ export const buildDigestReducer: IncrementalReducer<
           const remaining = acc.pendingRejections.filter((p) => p !== event.attemptProposal)
           acc.pendingRejections = remaining.length > 0 ? remaining : undefined
         }
-      } else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
-      else if (event.type === 'execution.ended') {
+      } else if (event.type === 'execution.started') {
+        acc.executionFacts += 1
+        acc.openInstance = event.instance ?? null
+      } else if (event.type === 'execution.ended') {
+        acc.executionFacts += 1
         if (acc.openInstance !== null && event.instance === acc.openInstance)
           acc.openInstance = null
       }
@@ -280,6 +291,7 @@ export const buildDigestReducer: IncrementalReducer<
     hosted,
     reclaimed,
     openInstance,
+    executionFacts,
     nodeTargets,
     waitPending,
     ticketWait,
@@ -306,6 +318,7 @@ export const buildDigestReducer: IncrementalReducer<
       ...(terminal !== undefined ? { terminal } : {}),
       ...(reclaimPending ? { reclaimPending: true as const } : {}),
       ...(openInstance !== null ? { executionOpen: true as const } : {}),
+      executionFacts,
       ...(waitPending ? { waitPending } : {}),
       ...(ticketWait !== undefined ? { ticketWait: structuredClone(ticketWait) } : {}),
       ...(pendingRejections?.length ? { rejectionsPending: true as const } : {}),

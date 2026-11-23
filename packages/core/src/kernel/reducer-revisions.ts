@@ -47,4 +47,10 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'repositoryReadFacts/fold/fk3ka9gb3z': 'AUT-1293 re-request updates pending start priority',
   'buildReadFacts/shape/grk476irlr': 'history.retained fold for best-effort leaf history retention',
   'buildReadFacts/fold/iub07xo6kf': '#1051 commits-retained and node.history-retained folds',
+  'optimization/shape/wy6151hb4q': '#1069 active-hours clock and execution fact counts',
+  'build/shape/d3jt2tcoj6': '#1069 active-hours clock and execution fact counts',
+  'buildDigest/shape/7dw02b53nl': '#1069 active-hours clock and execution fact counts',
+  'optimization/fold/px86golc8e': '#1069 active-hours clock and execution fact counts',
+  'build/fold/qt6bkt4ezw': '#1069 active-hours clock and execution fact counts',
+  'buildDigest/fold/2lfn4ripe4': '#1069 active-hours clock and execution fact counts',
 }

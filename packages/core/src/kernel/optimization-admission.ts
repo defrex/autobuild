@@ -4,9 +4,10 @@
  * dispatch capacity, which the browser dashboards bundle, imports these, so
  * this module must not reach the reducer definitions or `Bun` APIs.
  */
-import type { OptimizationStopCause } from '../events/payloads'
+import type { EventPayload, OptimizationStopCause } from '../events/payloads'
 import type { Objective } from '../objective'
-import type { OptimizationState } from './optimization'
+import type { ExecutionIntervalsValue } from './execution-intervals'
+import type { OptimizationClock, OptimizationState } from './optimization'
 import type { BuildState } from './reducer'
 
 export function direction(objective: Objective): 'minimize' | 'maximize' {
@@ -15,8 +16,222 @@ export function direction(objective: Objective): 'minimize' | 'maximize' {
 
 export const HOUR_MS = 3_600_000
 
+// ── The active-hours clock (SPEC §13.1.1) ─────────────────────────────────
+
+/** A closed interval of ISO timestamps, `[start, end]`. */
+export type ClockSpan = [string, string]
+
+/** Merge spans into a sorted, disjoint list. Adjacent and overlapping spans
+ * join; empty spans vanish. ISO timestamps of one format order as strings. */
+export function unionSpans(spans: readonly ClockSpan[]): ClockSpan[] {
+  const sorted = spans
+    .filter(([start, end]) => start < end)
+    .map(([start, end]) => [start, end] as ClockSpan)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  const merged: ClockSpan[] = []
+  for (const span of sorted) {
+    const last = merged.at(-1)
+    if (last !== undefined && span[0] <= last[1]) {
+      if (span[1] > last[1]) last[1] = span[1]
+    } else merged.push(span)
+  }
+  return merged
+}
+
+/** The length in milliseconds of the union of `spans`. */
+export function unionLength(spans: readonly ClockSpan[]): number {
+  return unionSpans(spans).reduce(
+    (total, [start, end]) => total + (Date.parse(end) - Date.parse(start)),
+    0,
+  )
+}
+
+/** `spans` clipped to `[from, to]`; parts outside vanish. */
+export function clipSpans(spans: readonly ClockSpan[], from?: string, to?: string): ClockSpan[] {
+  return spans.flatMap(([start, end]) => {
+    const clipped: ClockSpan = [
+      from !== undefined && start < from ? from : start,
+      to !== undefined && end > to ? to : end,
+    ]
+    return clipped[0] < clipped[1] ? [clipped] : []
+  })
+}
+
+/** What active hours need from a clock: open intervals as start times. */
+export interface OptimizationClockView {
+  activeMs: number
+  spans: ClockSpan[]
+  open: string[]
+  stoppedAt?: string
+  /** A stopped clock whose pre-stop attempt facts are all accounted. */
+  settled?: true
+}
+
+export function clockView(clock: OptimizationClock): OptimizationClockView {
+  return {
+    activeMs: clock.activeMs,
+    spans: clock.spans.map(([start, end]) => [start, end] as ClockSpan),
+    open: Object.values(clock.open)
+      .map(({ start }) => start)
+      .sort(),
+    ...(clock.stoppedAt !== undefined ? { stoppedAt: clock.stoppedAt } : {}),
+    ...(clock.settled ? { settled: true as const } : {}),
+  }
+}
+
+/** Active hours at `now`: the union of every execution interval the node
+ * counts, each open one running to `now`, all ending at the stop. A stopped
+ * view is constant in `now`. */
+export function activeHours(view: OptimizationClockView, now: Date): number {
+  const iso = now.toISOString()
+  const end = view.stoppedAt !== undefined && view.stoppedAt < iso ? view.stoppedAt : iso
+  const live = unionLength(
+    clipSpans(
+      [...view.spans, ...view.open.map((start) => [start, end] as ClockSpan)],
+      undefined,
+      end,
+    ),
+  )
+  return Math.max(0, (view.activeMs + live) / HOUR_MS)
+}
+
+/** Whether a stopped node still has pre-stop attempt facts to account: its
+ * value may rise once more, when the dispatcher settles it. */
+export function clockSettling(view: Pick<OptimizationClockView, 'stoppedAt' | 'settled'>): boolean {
+  return view.stoppedAt !== undefined && !view.settled
+}
+
+/** The budget's hours: active hours, never wall-clock time since opening. */
 export function optimizationElapsedHours(state: OptimizationState, now: Date): number {
-  return Math.max(0, (now.getTime() - Date.parse(state.openedAt)) / HOUR_MS)
+  return activeHours(clockView(state.clock), now)
+}
+
+/** Most attempt execution facts one `optimization.activity-recorded` carries. */
+export const ACTIVITY_FACTS_PER_EVENT = 200
+
+/** One relevant attempt build, as the dispatcher's activity pass sees it. */
+export interface ActivityBuildInput {
+  build: string
+  /** The build is an in-flight attempt's newest build. */
+  inFlightNewest: boolean
+  /** The listing has no such build: nothing can ever be read for it. */
+  missing?: true
+  /** The build digest's `executionFacts`. */
+  digestCount?: number
+  /** The build digest shows an open execution. */
+  digestOpen?: boolean
+  /** The build's `executionIntervals` value, when the pass read it. */
+  value?: ExecutionIntervalsValue
+}
+
+export type ActivityBatch = EventPayload<'optimization.activity-recorded'>
+
+/** A value lacks a fact the node needs: an invariant violation the
+ * dispatcher reports, never repairs from events. */
+export class ExecutionFactsMissingError extends Error {
+  constructor(
+    readonly build: string,
+    readonly n: number,
+  ) {
+    super(
+      `execution fact ${n} of build ${build} is missing from its executionIntervals value: it was acknowledged before the node accounted it`,
+    )
+    this.name = 'ExecutionFactsMissingError'
+  }
+}
+
+/**
+ * The attempt execution facts a node's clock has not yet accounted, as one
+ * batch payload, or undefined when there is nothing to record. A live clock
+ * takes each build's facts above its accounted count up to the digest's
+ * count; a stopped, unsettled clock takes every unaccounted fact up to the
+ * stop and settles. Releases fully accounted builds that no in-flight
+ * attempt runs on any more.
+ */
+export function optimizationActivityBatch(
+  clock: OptimizationClock,
+  inputs: readonly ActivityBuildInput[],
+  fallbackWatermark: string,
+): ActivityBatch | undefined {
+  if (clock.settled) return undefined
+  const settling = clock.stoppedAt !== undefined
+  const facts: ActivityBatch['facts'] = []
+  const accounted: Record<string, number> = {}
+  const released: string[] = []
+  for (const input of inputs) {
+    const tracked = clock.builds[input.build] !== undefined
+    const seen = clock.builds[input.build] ?? 0
+    // The instance the clock holds open for this build after this batch.
+    let open = clock.open[input.build]?.instance
+    let through = seen
+    if (!input.missing && input.value !== undefined) {
+      const value = input.value
+      // Facts at or below the acknowledgment were accounted by this node
+      // before it released the build; the acknowledgment follows the record.
+      const from = Math.max(seen, value.acknowledged)
+      const last = settling ? value.count : Math.min(input.digestCount ?? 0, value.count)
+      for (let n = from + 1; n <= last; n++) {
+        const fact = value.facts.find((candidate) => candidate.n === n)
+        if (fact === undefined) throw new ExecutionFactsMissingError(input.build, n)
+        if (settling && fact.at > clock.stoppedAt!) continue
+        facts.push({ build: input.build, n, instance: fact.instance, kind: fact.kind, at: fact.at })
+        if (fact.kind === 'started') open = fact.instance
+        else if (fact.instance === open) open = undefined
+      }
+      through = Math.max(seen, last)
+    }
+    if (through > seen) accounted[input.build] = through
+    if (settling || input.inFlightNewest || open !== undefined) continue
+    if (!tracked && through === seen) continue
+    if (
+      input.missing ||
+      (!input.digestOpen && input.digestCount !== undefined && through >= input.digestCount)
+    )
+      released.push(input.build)
+  }
+  facts.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.n - b.n))
+  if (
+    !settling &&
+    facts.length === 0 &&
+    Object.keys(accounted).length === 0 &&
+    released.length === 0
+  )
+    return undefined
+  const latest = settling ? clock.stoppedAt! : (facts.at(-1)?.at ?? fallbackWatermark)
+  const watermark =
+    clock.watermark !== undefined && clock.watermark > latest ? clock.watermark : latest
+  return {
+    facts,
+    accounted,
+    ...(released.length > 0 ? { released: released.sort() } : {}),
+    watermark,
+    ...(settling ? { settles: true as const } : {}),
+  }
+}
+
+/** Split a batch into events of at most `ACTIVITY_FACTS_PER_EVENT` facts, in
+ * `at` order. Each chunk accounts only the facts it and earlier chunks carry
+ * and watermarks at its last fact; the last chunk carries the batch's
+ * accounted counts, releases, watermark and settlement. */
+export function chunkActivityBatch(batch: ActivityBatch): ActivityBatch[] {
+  if (batch.facts.length <= ACTIVITY_FACTS_PER_EVENT) return [batch]
+  const chunks: ActivityBatch[] = []
+  const through: Record<string, number> = {}
+  for (let index = 0; index < batch.facts.length; index += ACTIVITY_FACTS_PER_EVENT) {
+    const facts = batch.facts.slice(index, index + ACTIVITY_FACTS_PER_EVENT)
+    const last = index + ACTIVITY_FACTS_PER_EVENT >= batch.facts.length
+    if (last) {
+      chunks.push({ ...batch, facts })
+      break
+    }
+    const accounted: Record<string, number> = {}
+    for (const fact of facts) {
+      through[fact.build] = Math.max(through[fact.build] ?? 0, fact.n)
+      accounted[fact.build] = through[fact.build]!
+    }
+    chunks.push({ facts, accounted, watermark: facts.at(-1)!.at })
+  }
+  return chunks
 }
 
 export interface OptimizationStopEligibility {

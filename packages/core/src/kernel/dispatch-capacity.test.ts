@@ -807,6 +807,7 @@ function measuringNode(slug: string): CapacityBuild {
       acceptedAt: now.toISOString(),
     },
     openedAt: now.toISOString(),
+    clock: { activeMs: 0, spans: [], open: {}, builds: {} },
     objective,
     revision: 1,
     revisedFields: [],

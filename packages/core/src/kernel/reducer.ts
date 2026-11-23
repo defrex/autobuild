@@ -19,7 +19,7 @@ import type { IssueLink, NativeSessionHandle, TicketPriority } from '../ports/ty
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
-import { advanceOptimization, isOptimizationEvent, type OptimizationState } from './optimization'
+import { advanceOptimization, foldsIntoOptimization, type OptimizationState } from './optimization'
 import { advanceLandingMeasurement, type LandingMeasurementState } from './landing-measurement'
 import { advancePanel, isPanelEvent, type PanelRunState } from './panel'
 import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
@@ -900,7 +900,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       acc.nodeRestack ??= { items: [] }
       advanceNodeRestack(acc.nodeRestack, [event])
     }
-    if (isOptimizationEvent(event))
+    if (foldsIntoOptimization(event))
       acc.optimization = advanceOptimization(acc.optimization, [event])
     if (event.type === 'attempt.measurement-requested') {
       const { observedHead: _observedHead, ...measurement } = acc.attemptMeasurement ?? {}
