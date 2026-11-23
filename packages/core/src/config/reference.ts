@@ -2,6 +2,7 @@ import type { z } from 'zod'
 import { referenceMetadata, type ReferenceMetadata } from './reference-metadata'
 import { BUILTIN_WORKSPACE_PROVIDER_CONFIG, configRootSchema } from './schema'
 import { BUILD_OWNED_CONFIG_PATHS, CONFIG_RELOAD_CLASSIFICATION } from './live'
+import { LOCAL_OVERRIDE_CLASSIFICATION } from './local'
 
 /** Zod 4 input adapter. Unsupported nodes/checks fail closed at their TOML path. */
 interface Definition {
@@ -202,6 +203,7 @@ export interface ReferenceField {
   default: string
   required: string
   reload: string
+  localOverride: string
   description: string
   constraints: string[]
   examples: string[]
@@ -239,10 +241,22 @@ export function reloadBehavior(path: string): string {
   const owned = BUILD_OWNED_CONFIG_PATHS.some((prefix) => parts[0] === prefix)
   return `${dispatcher}${owned ? ' Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch.' : ''} A running invocation keeps its captured values.`
 }
+/** Whether a field may be set in `.autobuild/local.toml`, from its root key. */
+export function localOverrideBehavior(path: string): string {
+  const root = path.split(/[.[]/, 1)[0]!
+  const classification = Object.hasOwn(LOCAL_OVERRIDE_CLASSIFICATION, root)
+    ? LOCAL_OVERRIDE_CLASSIFICATION[root as keyof typeof LOCAL_OVERRIDE_CLASSIFICATION]
+    : undefined
+  if (classification === undefined) fail(path, 'missing local-override classification')
+  return classification === 'local'
+    ? 'Allowed in .autobuild/local.toml.'
+    : 'Committed only: set in autobuild.toml.'
+}
 export function schemaFields(
   schema: z.ZodType,
   path: string,
   reload: (path: string) => string = reloadBehavior,
+  localOverride: (path: string) => string = localOverrideBehavior,
 ): ReferenceField[] {
   const fields: ReferenceField[] = []
   function visit(schema: z.ZodType, path: string, variant?: string): void {
@@ -266,6 +280,7 @@ export function schemaFields(
         value.metadata.required ??
         (value.optional ? 'Optional' : 'Required') + (variant ? ` when ${variant}` : ''),
       reload: reload(path),
+      localOverride: localOverride(path),
       description,
       constraints: [...new Set(constraints)],
       examples: value.metadata.examples ?? [],
@@ -345,6 +360,7 @@ export function renderFields(fields: readonly ReferenceField[]): string {
         `- **Default:** \`${field.default}\``,
         `- **Required:** ${field.required}`,
         `- **Reload:** ${field.reload}`,
+        `- **Local override:** ${field.localOverride}`,
         '',
         `**Description:** ${field.description}`,
         '',
