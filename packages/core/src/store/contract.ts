@@ -849,6 +849,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(digests.get('dg-no-journal')).toEqual({
             slug: 'dg-no-journal',
             observations: [],
+            executionFacts: 0,
             nodeTargets: [],
           })
           // Read-only: no journal record was implicitly created.
@@ -865,7 +866,12 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           // that started from the events side would silently drop it.
           const digests = await store.getRepoBuildDigests('acme/dga')
           expect([...digests.keys()]).toEqual(['dg-a'])
-          expect(digests.get('dg-a')).toEqual({ slug: 'dg-a', observations: [], nodeTargets: [] })
+          expect(digests.get('dg-a')).toEqual({
+            slug: 'dg-a',
+            observations: [],
+            executionFacts: 0,
+            nodeTargets: [],
+          })
           const other = await store.getRepoBuildDigests('acme/dgb')
           expect([...other.keys()]).toEqual(['dg-other'])
         })
@@ -1157,11 +1163,13 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             expectedObservations[slug]!.find((item) => item.seq === seq)!.ts
           expect(digests.get('dg-open')).toEqual({
             slug: 'dg-open',
+            executionFacts: 0,
             nodeTargets: [],
             observations: [{ seq: 2, ts: tsOf('dg-open', 2) }],
           })
           expect(digests.get('dg-done')).toEqual({
             slug: 'dg-done',
+            executionFacts: 0,
             nodeTargets: [],
             readinessChangeSeq: 2,
             terminal: 'done',
@@ -1169,6 +1177,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           })
           expect(digests.get('dg-cleaning')).toEqual({
             slug: 'dg-cleaning',
+            executionFacts: 0,
             nodeTargets: [],
             readinessChangeSeq: 2,
             terminal: 'aborted',
@@ -1176,6 +1185,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           })
           expect(digests.get('dg-abandoned')).toEqual({
             slug: 'dg-abandoned',
+            executionFacts: 0,
             nodeTargets: [],
             readinessChangeSeq: 3,
             terminal: 'done',
@@ -1183,6 +1193,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           })
           expect(digests.get('dg-overwrite')).toEqual({
             slug: 'dg-overwrite',
+            executionFacts: 0,
             nodeTargets: [],
             readinessChangeSeq: 4,
             terminal: 'done',
@@ -1251,6 +1262,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             terminal: 'done',
             merged: secondMergeTs,
             mergedSha: 'abc222',
+            executionFacts: 0,
             nodeTargets: [],
             observations: [
               { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
