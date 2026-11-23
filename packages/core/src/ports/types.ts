@@ -469,12 +469,14 @@ export class WorkspaceCleanupRequired extends Error {
   }
 }
 
-export interface WorkspacePreservationHead {
+/** A preserved head is kept either under an immutable forge archive ref
+ * (`remoteRef`) or, where the forge refused one, as a BuildStore copy that
+ * completes over `storeBase`. */
+export type WorkspacePreservationHead = {
   sha: string
-  remoteRef: string
   role: 'branch' | 'producer'
   commits: string[]
-}
+} & ({ remoteRef: string; storeBase?: never } | { storeBase: string; remoteRef?: never })
 export type WorkspaceFenceOutcome =
   | { outcome: 'confirmed' | 'absent' }
   | { outcome: 'unknown'; error: string }
@@ -513,6 +515,19 @@ export interface WorkspacePublication {
      * it lacks mean nothing to preserve rather than an error. Absent keeps
      * every object probe strict. */
     neverExecuted?: boolean
+    /** Store fallback for a head whose archive ref the forge refused. The
+     * provider calls it after its own archive transport refuses, handing over
+     * its trusted Git transport; it keeps the head as a BuildStore copy over
+     * `base` and resolves to the copy's actual exclusion base, which the
+     * provider records as the head's `storeBase`. It throws when the head
+     * cannot be kept, and the provider rethrows. Providers that ignore it
+     * preserve strictly. */
+    retain?: (input: {
+      exec: import('./workspace/git-worktree').Exec
+      workspacePath: string
+      sha: string
+      base: string
+    }) => Promise<string>
   }): Promise<{ outcome: 'preserved'; heads: WorkspacePreservationHead[] } | { outcome: 'absent' }>
 
   /** Trusted after-teardown path; never route a restack through plain publish. */
@@ -622,6 +637,16 @@ export interface WorkspaceProvider {
      * means the repository already holds them and restoration must not
      * consult a remote; `remote` means they may exist only on origin. */
     restorationArchives?: 'local' | 'remote'
+    /** Restores a `restoration` head kept as a BuildStore copy (`storeBase`),
+     * or a replaced head the forge refused to archive. The provider calls it
+     * with its trusted Git transport when the commit is absent; it resolves
+     * false when no copy can restore it. Present only when some head is
+     * store-kept. */
+    restoreStored?: (input: {
+      exec: import('./workspace/git-worktree').Exec
+      workspacePath: string
+      sha: string
+    }) => Promise<boolean>
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */

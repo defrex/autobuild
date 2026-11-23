@@ -2293,3 +2293,85 @@ describe('history.retained', () => {
     expect(buildEventPolicy['history.retained']).toBe('decisive')
   })
 })
+
+describe('workspace.commits-retained', () => {
+  const sha = 'a'.repeat(40)
+  const base = 'b'.repeat(40)
+  const metadata = {
+    workspace: 1,
+    execution: 2,
+    ref: 'w',
+    branch: 'ab/x',
+    phase: 'implement',
+    round: 1,
+  }
+  const forge = {
+    sha,
+    role: 'producer',
+    commits: [sha],
+    remoteRef: `refs/autobuild/archive/x/${sha}`,
+  }
+  const store = { sha, role: 'branch', commits: [sha], storeBase: base }
+  const write = (heads: unknown[]) =>
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'workspace.commits-retained',
+      payload: { ...metadata, heads },
+    })
+  test('records forge and store heads, each self-describing', () => {
+    expect(write([store])).toBeDefined()
+    expect(write([forge, store])).toBeDefined()
+  })
+  test('a head names exactly one location, and some head is store-kept', () => {
+    expect(() => write([{ ...store, remoteRef: forge.remoteRef }])).toThrow()
+    expect(() => write([{ sha, role: 'branch', commits: [sha] }])).toThrow()
+    expect(() => write([forge])).toThrow()
+    expect(() => write([{ ...store, storeBase: 'main' }])).toThrow()
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'workspace.commits-retained',
+        payload: { ...metadata, heads: [store] },
+      }),
+    ).toThrow()
+  })
+  test('is decisive, so an older reader defers instead of misreading the receipt', () => {
+    expect(buildEventPolicy['workspace.commits-retained']).toBe('decisive')
+  })
+})
+
+describe('node.history-retained', () => {
+  const sha = 'a'.repeat(40)
+  const payload = {
+    operation: 'landing',
+    id: 'reservation-1',
+    base: 'b'.repeat(40),
+    store: [],
+    target: [sha],
+    unretained: [],
+  }
+  const write = (payload: unknown) =>
+    validateEventWrite({ actor: KERNEL, type: 'node.history-retained', payload })
+  test('records where node write history is kept', () => {
+    for (const operation of ['restack', 'landing', 'integration-landing', 'verify'])
+      expect(write({ ...payload, operation })).toBeDefined()
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'node.history-retained', payload }),
+    ).toBeDefined()
+  })
+  test('names at least one commit and a known node operation', () => {
+    expect(() => write({ ...payload, target: [] })).toThrow()
+    expect(() => write({ ...payload, operation: 'reconcile' })).toThrow()
+    expect(() => write({ ...payload, extra: true })).toThrow()
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('implement', 's'),
+        type: 'node.history-retained',
+        payload,
+      }),
+    ).toThrow()
+  })
+  test('is decisive, so an older reader defers instead of strictly re-archiving', () => {
+    expect(buildEventPolicy['node.history-retained']).toBe('decisive')
+  })
+})

@@ -415,10 +415,10 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       lines.push(`Preserved from ${preserved.ref}, ${preserved.phase}@${preserved.round}:`)
       for (const head of preserved.heads)
         lines.push(
-          `- ${head.role}: ${head.sha} (${head.remoteRef}); commits: ${head.commits.join(', ')}`,
+          `- ${head.role}: ${head.sha} (${'storeBase' in head ? `store copy (base ${head.storeBase})` : head.remoteRef}); commits: ${head.commits.join(', ')}`,
         )
       lines.push(
-        'Replacement provisioning restores these exact refs before starting a session.',
+        'Replacement provisioning restores these exact commits before starting a session.',
         '',
       )
     }

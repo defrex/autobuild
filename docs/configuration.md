@@ -1427,7 +1427,8 @@ generation does. A named sandbox left without the completion marker, for example
 after a provision timeout, is flagged `cleanup-required` and never launched into.
 The dispatcher releases it automatically, recording an empty
 `workspace.commits-lost` when no checkout exists, or `workspace.commits-preserved`
-when a checkout that never started executing lacks its objects, and provisions
+(`workspace.commits-retained` when an earlier head is a store copy) when a
+checkout that never started executing lacks its objects, and provisions
 the next generation. A sandbox whose provisioning a dispatcher teardown cut off
 is different: the next invocation verifies it and finishes it in the same
 generation. If it cannot be finished, it is released and replaced without

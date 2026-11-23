@@ -13,6 +13,12 @@ import { consentRevocation, resolutionPathsFor, revocableConsent } from './conse
 import type { RestackDeps } from './reconcile-restack'
 import { retainReplay, restoreReplay, requireRewrite } from './reconcile-restack'
 import {
+  recordRetention,
+  recoverReservedInput,
+  retainCommit,
+  type RetentionContext,
+} from './history-retention'
+import {
   prepareNodeReplay,
   assertSafeNodeReplay,
   replayNodeChange,
@@ -27,6 +33,27 @@ export interface NodeTransactionDeps extends RestackDeps {
   holder: string
   /** Lifecycle and writer authority are rechecked at each effect boundary. */
   canWrite: () => Promise<boolean>
+}
+/** Best-effort retention for node writes: the forge archive ref, else a
+ * BuildStore copy excluding `exclude`, else one warning. */
+export function nodeRetention(
+  deps: Pick<RestackDeps, 'store' | 'slug' | 'exec' | 'workspacePath' | 'forge'>,
+  archive: RetentionContext['archive'],
+  exclude: string,
+  branches: { branch?: string; targetBranch?: string },
+  exec: RestackDeps['exec'] = deps.exec,
+): RetentionContext {
+  return {
+    store: deps.store,
+    slug: deps.slug,
+    exec,
+    workspacePath: deps.workspacePath,
+    archive,
+    exclude,
+    local: deps.forge.name === 'local-git',
+    ...(branches.branch === undefined ? {} : { branch: branches.branch }),
+    ...(branches.targetBranch === undefined ? {} : { targetBranch: branches.targetBranch }),
+  }
 }
 async function current(store: BuildStore, slug: string) {
   return (await readBuildFacts(store, slug)).value.state
@@ -233,21 +260,25 @@ export async function runNodeTransaction(
       throw new Error('node inputs changed during native cancellation')
     const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent }, evidence)
     // Preserve frozen source objects before the reservation can survive a
-    // workspace loss. Archives also retain the previous boundary's history.
+    // workspace loss, best effort: a forge archive ref, else a store copy
+    // over the published parent, else one warning. The inputs stay reachable
+    // from published branches until the guarded update lands.
     await authority(deps)
     const archive = `refs/autobuild/archive/${deps.slug}/${expected}`
-    await rewrite.archive({ workspacePath: deps.workspacePath, ref: archive, sha: expected })
-    await rewrite.archive({
-      workspacePath: deps.workspacePath,
-      ref: `refs/autobuild/archive/${deps.slug}/${oldBase}`,
-      sha: oldBase,
+    const ctx = nodeRetention(deps, rewrite.archive, parent, {
+      branch: input.branch,
+      targetBranch: input.parentBranch,
     })
+    const outcomes = [await retainCommit(ctx, expected), await retainCommit(ctx, oldBase)]
     await authority(deps)
-    await rewrite.archive({
-      workspacePath: deps.workspacePath,
-      ref: `refs/autobuild/archive/${deps.slug}/${parent}`,
-      sha: parent,
-    })
+    outcomes.push(await retainCommit(ctx, parent))
+    await recordRetention(
+      deps.store,
+      deps.slug,
+      { event: 'node.history-retained', operation: 'restack', id: input.id, base: parent },
+      outcomes,
+      append,
+    )
     await append({
       actor: KERNEL,
       type: 'node.writer-reserved',
@@ -286,6 +317,18 @@ export async function runNodeTransaction(
   }
   await deps.beforeReplay?.(active.id)
   await authority(deps)
+  // A retained prefix is restored before any Git read uses it, even if its
+  // original workspace and all unreferenced Git objects have disappeared.
+  const inputs = await restoreNodeInputs(deps, rewrite, active, input, !!node!.rewritten)
+  if (inputs === 'unavailable') {
+    // Retained nowhere and not yet published: redo from the published branches.
+    await append({
+      actor: KERNEL,
+      type: 'node.writer-settled',
+      payload: { id: active.id, outcome: 'abandoned' },
+    })
+    return runNodeTransaction(deps, input)
+  }
   const frozen = { ...active, oldHead: active.expected }
   assertSafeNodeReplay(frozen)
   const replayEvidence = {
@@ -294,18 +337,6 @@ export async function runNodeTransaction(
       await observePresence(deps, active.parent, evidence.landings, evidence.aliases, true),
     ),
   }
-  // A retained prefix is restored before it is used, even if its original
-  // workspace and all unreferenced Git objects have disappeared.
-  await rewrite.archive({
-    workspacePath: deps.workspacePath,
-    ref: active.archive,
-    sha: active.expected,
-  })
-  await rewrite.archive({
-    workspacePath: deps.workspacePath,
-    ref: `refs/autobuild/archive/${deps.slug}/${active.parent}`,
-    sha: active.parent,
-  })
   for (const item of node!.items) {
     if (!item.dropped && !(await restoreReplay(deps, item.head)))
       throw new Error(`missing retained node replay ${item.head}`)
@@ -443,4 +474,30 @@ export async function runNodeTransaction(
       payload: { id, parent: active.parent, outcome: 'covered' },
     })
   return 'completed'
+}
+
+/** Restore a reservation's frozen inputs: the parent first, since a store copy
+ * of `expected` completes only over it. After the guarded update landed,
+ * `expected` is used only as a sha, and the parent, an ancestor of the
+ * published node head, must come back. */
+async function restoreNodeInputs(
+  deps: NodeTransactionDeps,
+  rewrite: ReturnType<typeof requireRewrite>,
+  active: { parent: string; expected: string; archive: string },
+  input: { branch: string; parentBranch: string },
+  rewritten: boolean,
+): Promise<'present' | 'unavailable'> {
+  const ctx = nodeRetention(deps, rewrite.archive, active.parent, {
+    branch: input.branch,
+    targetBranch: input.parentBranch,
+  })
+  if (!(await recoverReservedInput(ctx, active.parent))) {
+    if (rewritten)
+      throw new Error(`node restack parent ${active.parent} is unavailable after its rewrite`)
+    return 'unavailable'
+  }
+  if (rewritten) return 'present'
+  return (await recoverReservedInput(ctx, active.expected, active.archive))
+    ? 'present'
+    : 'unavailable'
 }

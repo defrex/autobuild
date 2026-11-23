@@ -317,7 +317,7 @@ export async function inspectGitHubReadiness(opts: {
     set(
       'archive-refs',
       'unknown',
-      `Recommendation: GitHub branch protection APIs do not establish publication permission for non-head refs/autobuild/archive/. ${access} Where archive refs are refused, leaf restacks and reconciles fall back to a BuildStore copy or warn and proceed.`,
+      `Recommendation: GitHub branch protection APIs do not establish publication permission for non-head refs/autobuild/archive/. ${access} Where archive refs are refused, rewrites, node writes and workspace preservation fall back to a BuildStore copy.`,
     )
 
   try {

@@ -107,7 +107,7 @@ An adapter must provide:
 - guarded merge and comments
 - every capability it advertises
 
-Reconciliation needs the optional `Forge.rewrite` group: immutable exact-SHA archives, branch snapshots and head-guarded replacement. Leaf rewrites archive best effort: throw a plain error for a refusal (the kernel keeps a BuildStore copy and proceeds) and `ArchiveConflictError` when the immutable ref names a different SHA. Node rewrites still require the archive. Report lease mismatches separately and preserve unknown work. Without it, reconciliation fails with an actionable refusal, never an ordinary push.
+Reconciliation needs the optional `Forge.rewrite` group: immutable exact-SHA archives, branch snapshots and head-guarded replacement. Archives are best effort: throw a plain error for a refusal (the kernel keeps a BuildStore copy instead) and `ArchiveConflictError` when the immutable ref names a different SHA. Report lease mismatches separately and preserve unknown work. Without it, reconciliation fails with an actionable refusal, never an ordinary push.
 
 Classify failures with `ForgeFailure` (API 1.8):
 

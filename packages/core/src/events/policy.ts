@@ -125,6 +125,9 @@ export const buildEventPolicy = {
   'workspace.cleanup-required': 'decisive',
   'workspace.fenced': 'decisive',
   'workspace.commits-preserved': 'decisive',
+  // An older reader would see no receipt, or a forge-only one, and lose or
+  // misfetch store-kept unpublished commits; it defers instead.
+  'workspace.commits-retained': 'decisive',
   'workspace.commits-lost': 'decisive',
   'workspace.released': 'decisive',
   'execution.relaunch-requested': 'decisive',
@@ -145,6 +148,8 @@ export const buildEventPolicy = {
   // An older reader that ignored it would fetch forge archive refs that were
   // never written; deferring until upgrade is the mixed-version rule.
   'history.retained': 'decisive',
+  // An older reader would strictly re-archive node inputs on recovery.
+  'node.history-retained': 'decisive',
   'publication.retry-scheduled': 'decisive',
   'publication.retry-exhausted': 'decisive',
   'abort.remote-branch-deleted': 'decisive',
