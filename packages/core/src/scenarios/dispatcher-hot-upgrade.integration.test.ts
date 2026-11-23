@@ -1,3 +1,4 @@
+import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterAll, expect, test } from 'bun:test'
 import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
@@ -270,7 +271,12 @@ scenario(
       ],
       {
         cwd: repo,
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          ...inheritedGitConfigIsolation(),
+          TMPDIR: process.env.TMPDIR,
+        },
         stdout: 'pipe',
         stderr: 'pipe',
       },
@@ -462,7 +468,12 @@ scenario(
       ],
       {
         cwd: repo,
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          ...inheritedGitConfigIsolation(),
+          TMPDIR: process.env.TMPDIR,
+        },
         stdout: 'pipe',
         stderr: 'pipe',
       },
@@ -750,7 +761,12 @@ sys.exit(os.waitstatus_to_exitcode(status))
           stdin: 'pipe',
           stdout: 'pipe',
           stderr: 'pipe',
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            ...inheritedGitConfigIsolation(),
+            TMPDIR: process.env.TMPDIR,
+          },
         },
       )
       const stderr = new Response(child.stderr).text(),
@@ -993,7 +1009,12 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
         ],
         {
           cwd: repo,
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            ...inheritedGitConfigIsolation(),
+            TMPDIR: process.env.TMPDIR,
+          },
           stdout: 'pipe',
           stderr: 'pipe',
         },

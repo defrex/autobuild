@@ -16,6 +16,7 @@ import {
   abWatch,
   bundleJudgeLauncher,
   DISPATCHER,
+  inheritedGitConfigIsolation,
   KERNEL,
   steppingClock,
   type Exec,
@@ -69,6 +70,7 @@ function bareEnv(): Record<string, string> {
   return {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
+    ...inheritedGitConfigIsolation(),
   }
 }
 

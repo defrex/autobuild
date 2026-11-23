@@ -1,3 +1,4 @@
+import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdir, writeFile, rm, access } from 'node:fs/promises'
@@ -35,6 +36,7 @@ for (const signal of GENERATION_SIGNALS)
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
+          ...inheritedGitConfigIsolation(),
           AB_DISPATCH_GENERATION: JSON.stringify({
             version: 999,
             runtimeRoot: '/wrong',
@@ -299,7 +301,7 @@ finally:
         '0.05',
       ],
       {
-        env: { PATH: process.env.PATH, HOME: process.env.HOME },
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...inheritedGitConfigIsolation() },
         stdout: 'pipe',
         stderr: 'pipe',
       },

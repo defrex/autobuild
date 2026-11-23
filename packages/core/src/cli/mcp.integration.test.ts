@@ -16,6 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { KERNEL, DISPATCHER } from '../events/envelope'
 import { openLocalStore } from '../store/local/store'
+import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
@@ -38,6 +39,7 @@ function bareEnv(): Record<string, string> {
   return {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
+    ...inheritedGitConfigIsolation(),
   }
 }
 

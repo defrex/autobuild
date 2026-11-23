@@ -22,6 +22,7 @@ import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { BUN_REPORTER_ENVS, expectBunContractPassed } from './testkit'
+import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
@@ -54,6 +55,7 @@ function bareEnv(): Record<string, string> {
   return {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
+    ...inheritedGitConfigIsolation(),
   }
 }
 
