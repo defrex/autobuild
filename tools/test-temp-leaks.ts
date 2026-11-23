@@ -1,6 +1,6 @@
-import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createFailureCollector, formatFailureDigest } from './test-failure-digest'
 
 export const checkoutRoot = resolve(import.meta.dir, '..')
@@ -39,6 +39,27 @@ export async function inspectionRoot(root = checkoutRoot): Promise<string> {
   throw new Error('No external OS temporary directory outside a Git worktree is available')
 }
 
+/**
+ * The global git config every suite child reads instead of the developer's.
+ * Integration tests drive real git, and a developer's global or XDG config —
+ * rerere autoupdate, commit signing, a default branch — must not change their
+ * outcome. It carries only an explicit test identity; a fixture that needs
+ * anything else sets it in its own repository.
+ */
+export const ISOLATED_GIT_CONFIG = '[user]\n\tname = Autobuild Test\n\temail = test@example.com\n'
+
+/** Write {@link ISOLATED_GIT_CONFIG} into its own directory beside `scratch`
+ * (never inside it: tests list the temporary root) and return the child env
+ * that selects it in place of the global, XDG and system config. */
+async function isolatedGitConfig(
+  scratch: string,
+): Promise<{ directory: string; env: { GIT_CONFIG_GLOBAL: string; GIT_CONFIG_NOSYSTEM: '1' } }> {
+  const directory = await mkdtemp(join(dirname(scratch), 'ab-test-git-'))
+  const file = join(directory, 'gitconfig')
+  await writeFile(file, ISOLATED_GIT_CONFIG)
+  return { directory, env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1' } }
+}
+
 /** Forward a child stream unchanged, feeding each decoded chunk to `observe`. */
 async function forward(
   stream: ReadableStream<Uint8Array>,
@@ -60,19 +81,33 @@ async function forward(
  * characters of a verify step's output. When a command fails, a bounded
  * failure digest (each failing test's message, diff and stack) is reported as
  * the runner's final write, so the stored report keeps every failure's detail.
+ * Every child also reads git config from {@link ISOLATED_GIT_CONFIG} alone.
  */
 export async function runInspected(
   commands: readonly (readonly string[])[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; report?: (message: string) => void } = {},
+  options: {
+    cwd?: string
+    env?: Record<string, string | undefined>
+    report?: (message: string) => void
+  } = {},
 ): Promise<number> {
   const scratch = await inspectionRoot()
   const report = options.report ?? console.error
+  let git: Awaited<ReturnType<typeof isolatedGitConfig>> | undefined
   try {
+    git = await isolatedGitConfig(scratch)
     for (const command of commands) {
       const before = new Set(await readdir(scratch))
       const child = Bun.spawn([...command], {
         cwd: options.cwd ?? checkoutRoot,
-        env: { ...process.env, ...options.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+        env: {
+          ...process.env,
+          ...options.env,
+          TMPDIR: scratch,
+          TMP: scratch,
+          TEMP: scratch,
+          ...git.env,
+        },
         stdin: 'inherit',
         stdout: 'pipe',
         stderr: 'pipe',
@@ -108,6 +143,7 @@ export async function runInspected(
     return 0
   } finally {
     await rm(scratch, { recursive: true, force: true })
+    if (git) await rm(git.directory, { recursive: true, force: true })
   }
 }
 

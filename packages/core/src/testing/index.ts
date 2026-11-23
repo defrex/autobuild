@@ -28,6 +28,7 @@ export { createTicketSource } from '../ports/tickets/create'
 export { createOperatorSandboxService } from '../operator/sandbox'
 export { parseConfig } from '../config/load'
 export { spawnExec, type Exec } from '../ports/workspace/git-worktree'
+export { GIT_CONFIG_ISOLATION_KEYS, inheritedGitConfigIsolation } from './git-config-isolation'
 // Durable guest-launch state readers + the in-process guest runner for the
 // hosted-dispatcher integration test's GuestExecution double, which supervises
 // a real BuildRunner exactly as a real sandbox execution would.
