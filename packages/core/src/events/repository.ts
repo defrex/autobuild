@@ -2,7 +2,7 @@ import { selectedAccountSchema } from '../config/accounts'
 import { nativeSessionHandleSchema } from './native-session'
 import { runtimeIdentitySchema } from './runtime'
 import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
-import { hardReadinessKeys } from '../ports/forge/readiness'
+import { readinessFailureKeys } from '../ports/forge/readiness'
 /**
  * Repository-scoped event catalog. These events deliberately do not enter the
  * build event union: repository controls and harvest runs are not synthetic
@@ -591,7 +591,7 @@ export const dispatcherStatusEventPayloadSchemas = {
     run: dispatchRun,
     forge: z.string().min(1),
     rootBranch: z.string().min(1),
-    check: z.enum(hardReadinessKeys),
+    check: z.enum(readinessFailureKeys),
     detail: z.string().min(1),
     remediation: z.string().min(1),
   }),

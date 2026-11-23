@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { bunExec } from './github'
 import { gitRewrite } from './git-rewrite'
 import type { Exec } from '../workspace/git-worktree'
-import { ForgeFailure, isForgeFailure } from '../forge-failure'
+import { ArchiveConflictError, ForgeFailure, isForgeFailure } from '../forge-failure'
 import { ForgeRequestDeferred } from '../forge-request-context'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -380,7 +380,7 @@ describe('refused archive push falls back to the supplied ref creation', () => {
       `archive publication rejected for ${ref} at ${sha}: git push refused (`,
       refusal,
       'GitHub REST ref creation failed (policy)',
-      'enable refs/autobuild/archive/ publication before branch rewrites',
+      '(archive refs are optional; Autobuild falls back to a BuildStore copy)',
     ])
       expect(message).toContain(part)
   })
@@ -401,12 +401,14 @@ describe('refused archive push falls back to the supplied ref creation', () => {
     await expect(h.run()).rejects.toThrow(
       `immutable archive ${ref} names ${other}, expected ${sha}`,
     )
+    await expect(h.run()).rejects.toBeInstanceOf(ArchiveConflictError)
   })
 
   test('pre-existing different archive runs neither transport', async () => {
     const other = 'b'.repeat(40)
     const h = harness({ before: other })
     await expect(h.run()).rejects.toThrow(`immutable archive ${ref} names ${other}`)
+    await expect(h.run()).rejects.toBeInstanceOf(ArchiveConflictError)
     expect(h.commands.some((c) => c[1] === 'push')).toBe(false)
     expect(h.calls).toEqual([])
   })

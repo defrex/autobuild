@@ -534,8 +534,12 @@ The distinctions that change an administrator's answer:
   successful content-producing finalize post-step. History rewrites (reconcile,
   leaf verify-entry, wait-resume and waiting restacks, and node restacks on demand; see
   [restacking](references/restacking.md)) replace a branch only with an exact
-  expected-head guard after archiving every recorded Git tip under
-  `refs/autobuild/archive/<slug>/<sha>`.
+  expected-head guard after retaining every recorded Git tip. Node restacks and
+  landing require immutable `refs/autobuild/archive/<slug>/<sha>` refs. Leaf
+  restacks and reconciles retain best effort: the archive ref where the forge
+  accepts it, else a BuildStore `history-objects-<sha>` copy, else one
+  `history-unretained` warning per build, and the rewrite proceeds;
+  `history.retained` records the non-forge outcomes.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
   operation: durable PR records live under private Git refs, and the review
   locator is `refs/heads/ab/<slug>`. Once merge authorization (auto or consent;
@@ -3509,7 +3513,7 @@ default, when you need to know what this repo's version says).
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec and check implement-session fit; escalate clearly oversized required work with a proposed split. Verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
-| `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |
+| `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel retains evidence and publishes with an exact expected-head guard. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
 | `ab-judge` | A judge panel run | One judge of a panel objective: compare the blind variants `A/` and `B/` against the rubric and purpose, then record one preference (`A`, `B` or `tie`) with a reason through `ab judge prefer`. Runner-only; its session reads no build state. |
 | `ab-propose` | `propose` phase (optimization nodes) | Read an optimization node's attempt ledger, objective, progress and head, then deposit typed proposals for new attempts, or none with a reason, with `ab propose`; the dispatcher files them. Never creates tickets. |
@@ -3583,14 +3587,15 @@ recovery and read-cost bounds.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate is archived under its exact archive ref,
-with the refused-push fallback where supported, before guarded publication continues.
-A failed archive, including a failed fallback, defers to a later attempt and neither
-proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
+store copies first. Replay copies are read in either format (chunked manifest or
+legacy base64 pack); a thin pack whose base is missing fetches the published target
+first and applies with `git index-pack --fix-thin`. An available candidate is
+retained best effort before guarded publication continues; a refused archive does
+not block it. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
-retired candidate is excluded from archive requirements unless independently
+retired candidate is excluded from retention requirements unless independently
 required by proven history. This reconstruction consumes no infrastructure
 attempt and no additional conflict occurrence; it needs no operator guidance.
 A bare retry also clears an existing infrastructure-limit escalation through

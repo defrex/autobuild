@@ -127,6 +127,7 @@ export const executionProgress = {
   'publication.requested': 'progress',
   'publication.candidate-retired': 'progress',
   'publication.lost': 'progress',
+  'history.retained': 'bookkeeping',
   'publication.retry-scheduled': 'failure',
   'publication.retry-exhausted': 'failure',
   'abort.remote-branch-deleted': 'progress',

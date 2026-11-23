@@ -1457,6 +1457,27 @@ export const eventPayloadSchemas = {
     sha: gitOid,
     replacementId: z.string().min(1),
   }),
+  /** Best-effort retention of history a leaf rewrite displaces when the forge
+   * refused an immutable `refs/autobuild/archive/` ref. `store` shas are kept
+   * as `history-objects-<sha>` BuildStore copies (a thin pack excluding
+   * `base`), `target` shas are reachable from the published target base and
+   * need no copy, and `unretained` shas are kept nowhere: the rewrite
+   * proceeded anyway. Forge-archived shas stay on the rewrite fact's
+   * `archives`. */
+  'history.retained': z
+    .strictObject({
+      operation: z.enum(['restack', 'reconcile']),
+      /** Rewrite transaction id. */
+      id: z.string().min(1),
+      /** Exclusion base of every store copy: the transaction's target base. */
+      base: gitOid,
+      store: z.array(gitOid),
+      target: z.array(gitOid),
+      unretained: z.array(gitOid),
+    })
+    .refine((p) => p.store.length + p.target.length + p.unretained.length > 0, {
+      message: 'history.retained must name at least one commit',
+    }),
   'publication.lost': z.strictObject({
     /** seq of the lost `publication.requested` event. */
     request: z.number().int().positive(),
