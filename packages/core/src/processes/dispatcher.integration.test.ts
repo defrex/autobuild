@@ -20721,8 +20721,41 @@ describe('optimization proposer read budget', () => {
         }
         // Idle: an expired hours budget, full concurrency, stopped, and a long
         // settled history.
-        await node('idle-expired', commandObjective({ budget: { maxHours: 1 } }))
+        // Its opening measurement ran two active hours.
+        await node('idle-expired', null)
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'optimization.objective-accepted',
+          payload: {
+            objective: commandObjective({ budget: { maxHours: 1 } }),
+            revision: 1,
+            harnessPin: BASE_SHA,
+            specRev: 0,
+          },
+        })
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'fake', workspaceRef: '/ws/idle-expired', instance: 'measure' },
+        })
         clock.advance(2 * 3_600_000)
+        await store.append('idle-expired', {
+          actor: KERNEL,
+          type: 'optimization.baseline-measured',
+          payload: {
+            revision: 1,
+            head: BASE_SHA,
+            harnessPin: BASE_SHA,
+            samples: 5,
+            median: 50,
+            spread: 1,
+          },
+        })
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance: 'measure', workspaceRef: '/ws/idle-expired', outcome: 'completed' },
+        })
         await node('idle-full', commandObjective({ proposer: { concurrency: 1 } }))
         await request('idle-full', 1)
         await store.append('idle-full', {
@@ -21475,6 +21508,72 @@ describe('optimization active hours and attempt priority', () => {
       expect(await hours(h, '23:00')).toBe(1)
     })
   })
+
+  test('the activity pass has bounded reads at 100 and 100000 node events', async () => {
+    const h = harness()
+    h.clock.set(day('08:00'))
+    await openNode(h, { concurrency: 1 })
+    await propose(h, ['a'])
+    const attempt = await attemptBuild(h, 'a')
+    await tickAt(h, '08:01')
+    await tickAt(h, '08:02')
+    let instance = 0
+    const append = (type: 'execution.started' | 'execution.ended') => async () => {
+      if (type === 'execution.started') instance += 1
+      await h.store.append(attempt, {
+        actor: DISPATCHER,
+        type,
+        payload:
+          type === 'execution.started'
+            ? { provider: 'fake', workspaceRef: `/ws/${attempt}`, instance: `i${instance}` }
+            : { instance: `i${instance}`, workspaceRef: `/ws/${attempt}`, outcome: 'completed' },
+      } as EventWrite)
+    }
+    const activity = {
+      build: attempt,
+      start: append('execution.started'),
+      end: append('execution.ended'),
+      between: async () => {
+        await append('execution.started')()
+        await append('execution.ended')()
+      },
+      pad: async (count: number) => {
+        const polling = (await readBuildFacts(h.store, NODE)).value.state.nodePolling!
+        for (let index = 0; index < count; index++)
+          await h.store.append(attempt, {
+            actor: DISPATCHER,
+            type: 'node.poll-checked',
+            payload: {
+              activityKey: polling.activityKey,
+              unchangedSince: polling.unchangedSince,
+              nodeIdleAfterSeconds: polling.nodeIdleAfterSeconds,
+              nodeIdlePollSeconds: polling.nodeIdlePollSeconds,
+            },
+          })
+      },
+    }
+    // The attempt has run and been padded before either length is measured,
+    // so both lengths start from the same shape.
+    await activity.between()
+    await activity.pad(1)
+    await tickAt(h, '08:03')
+    const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+    await nodePollingReadBudget({
+      store: h.store as MemoryBuildStore,
+      slug: NODE,
+      advance: (ms) => h.clock.advance(ms),
+      tick: () =>
+        harness({
+          store: h.store,
+          clock: h.clock,
+          wrapTickets: () => h.tickets,
+          dispatchForge: h.forge,
+        }).dispatcher.tick({ acceptNewWork: false }),
+      activity,
+    })
+    // Every run was charged, and nothing else.
+    expect(await hours(h)).toBeGreaterThan(0)
+  }, 300_000)
 
   describe('stop settlement', () => {
     const operatorStop = async (h: Harness, time: string) => {
