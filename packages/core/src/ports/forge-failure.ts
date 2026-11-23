@@ -63,6 +63,25 @@ export class ForgeCredentialMissing extends Error {
   }
 }
 
+/** An immutable `refs/autobuild/archive/` ref already names a different
+ * commit. This is an integrity failure: it is never retried and never falls
+ * back to another retention store. */
+export class ArchiveConflictError extends Error {
+  readonly archiveConflict = 'autobuild.archive-conflict.v1' as const
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'ArchiveConflictError'
+  }
+}
+
+export function isArchiveConflict(error: unknown): error is ArchiveConflictError {
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    (error as ArchiveConflictError).archiveConflict === 'autobuild.archive-conflict.v1'
+  )
+}
+
 export interface ForgeRejectionDetails {
   /** Human-readable forge name, e.g. `GitHub`. */
   forge: string

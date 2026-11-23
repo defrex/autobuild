@@ -142,6 +142,9 @@ export const buildEventPolicy = {
   'publication.requested': 'decisive',
   'publication.candidate-retired': 'decisive',
   'publication.lost': 'decisive',
+  // An older reader that ignored it would fetch forge archive refs that were
+  // never written; deferring until upgrade is the mixed-version rule.
+  'history.retained': 'decisive',
   'publication.retry-scheduled': 'decisive',
   'publication.retry-exhausted': 'decisive',
   'abort.remote-branch-deleted': 'decisive',
