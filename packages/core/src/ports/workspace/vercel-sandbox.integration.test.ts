@@ -4649,6 +4649,75 @@ describe('refused guest archive pushes', () => {
     expect(calls).toEqual([[archiveRef, SHA]])
   })
 
+  test('preservation keeps a store copy once the guest push and the host fallback both refuse', async () => {
+    const { h, workspace } = await fenced({
+      refusedArchive: async () => {
+        throw new Error('GitHub API 403 Resource not accessible')
+      },
+    })
+    const refs = scriptGuestRemote(h, { refuseArchive: true })
+    const base = 'b'.repeat(40)
+    const retained: { sha: string; base: string; workspacePath: string }[] = []
+    const saved = 'd'.repeat(40)
+    const preserved = await h.provider.publication.preserve!({
+      ref: workspace.ref,
+      slug: 'remote-build',
+      branch: workspace.branch,
+      base,
+      candidates: [],
+      retain: async ({ exec, sha, base, workspacePath }) => {
+        // The trusted transport runs in the guest checkout, credential-free.
+        expect((await exec(['git', 'rev-parse', 'HEAD'], { cwd: workspacePath })).exitCode).toBe(0)
+        retained.push({ sha, base, workspacePath })
+        return saved
+      },
+    })
+    // The receipt records the copy's actual base, whatever base was asked for.
+    expect(preserved).toEqual({
+      outcome: 'preserved',
+      heads: [{ sha: SHA, role: 'branch', commits: [SHA], storeBase: saved }],
+    })
+    expect(retained).toEqual([
+      { sha: SHA, base: expect.any(String), workspacePath: VERCEL_WORKSPACE_PATH },
+    ])
+    expect(refs.has(archiveRef)).toBe(false)
+  })
+
+  test('provisioning restores a store-kept head through the dispatcher callback', async () => {
+    const h = harness()
+    let present = false
+    const original = h.sandbox.runCommand.bind(h.sandbox)
+    const output = (exitCode: number, stdout = '') => ({
+      exitCode,
+      stdout: async () => stdout,
+      stderr: async () => (exitCode === 0 ? '' : 'missing'),
+    })
+    h.sandbox.runCommand = async (params) => {
+      const args = (params.args ?? []) as string[]
+      if (params.cmd === 'git' && args[0] === 'cat-file') return output(present ? 0 : 1)
+      if (
+        params.cmd === 'git' &&
+        args.join(' ') === 'rev-parse --verify refs/heads/ab/remote-build^{commit}'
+      )
+        return output(0, `${SHA}\n`)
+      return original(params)
+    }
+    const asked: string[] = []
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+      restoration: [{ sha: SHA, role: 'producer', commits: [SHA], storeBase: 'b'.repeat(40) }],
+      restoreStored: async ({ sha, workspacePath }) => {
+        expect(workspacePath).toBe(VERCEL_WORKSPACE_PATH)
+        asked.push(sha)
+        present = true
+        return true
+      },
+    })
+    expect(asked).toEqual([SHA])
+  })
+
   test('a restack rewrite archives through the fallback before replacing the branch', async () => {
     const old = 'c'.repeat(40)
     const archive = `refs/autobuild/archive/remote-build/${old}`

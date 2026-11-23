@@ -711,18 +711,23 @@ explicitly.
 `processes/workspace-preservation.ts` owns the non-destructive fence, immutable
 checkpoint and durable receipt ordering shared by both release paths in the
 dispatcher. `ports/workspace/commit-preservation.ts` inventories the unpublished
-change and restores exact refs, keeping detached producer objects separate from
-the named branch. Provider provisioning and start failures signal
+change and restores exact refs or store copies, keeping detached producer objects
+separate from the named branch. Provider provisioning and start failures signal
 `WorkspaceCleanupRequired`; they cannot delete an existing build checkout.
 
 Before releasing or replacing a build workspace, the dispatcher confirms a
 non-destructive execution fence for the exact workspace and execution generation.
 It preserves unpublished branch commits and distinct detached producer candidates
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
-readback, and records `workspace.commits-preserved` before cleanup. Replacement
-provisioning restores those exact refs before starting an agent, reading them
-from the local repository with the local-git forge and fetching each exact ref
-from the remote otherwise. A preserved
+readback, and records `workspace.commits-preserved` before cleanup. Where the
+forge refuses an archive ref, the head is kept as a BuildStore copy instead
+and the receipt is the decisive `workspace.commits-retained`, whose heads each
+name either `remoteRef` or `storeBase`; a head kept by neither refuses the
+release. Replacement provisioning restores those exact commits before starting
+an agent, reading archive refs from the local repository with the local-git forge
+and fetching each exact ref from the remote otherwise, and restoring store copies
+through a dispatcher-side callback on any host, so a remote guest never holds
+store credentials. A preserved
 branch head that the build's latest 64 replaced heads cover, as the replaced
 head itself or one of its ancestors, is kept only as archived objects: it is
 never preserved or restored as the branch, and provisioning records the skip as
@@ -733,8 +738,8 @@ that exists without a provisioned checkout, records `workspace.commits-lost`,
 naming known candidates and explicitly noting that any additional unpublished
 SHAs could not be inspected. An environment that never started executing holds
 no unpublished work: objects its checkout lacks mean nothing to preserve, so
-cleanup records `workspace.commits-preserved` carrying forward earlier preserved
-heads, then releases and replaces it. Unknown fencing, inspection, transport, or
+cleanup records `workspace.commits-preserved` (or `workspace.commits-retained`)
+carrying forward earlier preserved heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
 releases it and provisions the next generation. Provisioning cut off by a
@@ -1880,8 +1885,13 @@ target and unretained commits. Its readers restore from the local repository,
 the archive ref, store copies, then the published branches, and a commit
 retained nowhere redoes the work (`<id>-redo`, or candidate retirement). A
 refusal is a plain error; `ArchiveConflictError` (an immutable ref naming a
-different SHA) and classified transient failures never fall back. Node paths
-call `archive` strictly.
+different SHA) and classified transient failures never fall back. Node writes
+use the same order and record `node.history-retained`; node recovery restores
+reserved inputs before reading them and abandons a reservation whose inputs are
+kept nowhere. Workspace preservation (`preserveRetained`, `retainPreservedCopy`)
+is strict: archive ref, else store copy, else release is refused; a reused copy
+keeps its saved base, which preservation retains in turn and
+`restoreRetainedHead` follows to a bounded depth.
 GitHub uses explicit Git transport leases; local-git uses shared-database
 `update-ref` CAS without network calls. Exact authoritative readback acknowledges
 publication. Remote-backed local refs are caches refreshed without expected-old

@@ -61,8 +61,8 @@ predicates revokes it.
 
 The old ban protected event-recorded SHAs and avoided resolving the same conflict
 for every WIP commit. The new standard replays one net leaf change or ordered
-node contributions, retains displaced history through immutable archive refs (for
-leaves best effort, with a BuildStore copy where the forge refuses them) and
+node contributions, retains displaced history through immutable archive refs
+(best effort, with a BuildStore copy where the forge refuses them) and
 durable rewrite facts, and resolves each conflicted item once. Ordinary agent
 rebase of WIP history is still inappropriate. Agents resolve kernel-prepared
 replay; the kernel owns branch replacement with expected-head guards.

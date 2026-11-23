@@ -534,12 +534,14 @@ The distinctions that change an administrator's answer:
   successful content-producing finalize post-step. History rewrites (reconcile,
   leaf verify-entry, wait-resume and waiting restacks, and node restacks on demand; see
   [restacking](references/restacking.md)) replace a branch only with an exact
-  expected-head guard after retaining every recorded Git tip. Node restacks and
-  landing require immutable `refs/autobuild/archive/<slug>/<sha>` refs. Leaf
-  restacks and reconciles retain best effort: the archive ref where the forge
-  accepts it, else a BuildStore `history-objects-<sha>` copy, else one
-  `history-unretained` warning per build, and the rewrite proceeds;
-  `history.retained` records the non-forge outcomes.
+  expected-head guard after retaining every recorded Git tip. Leaf rewrites and
+  node writes retain best effort: the immutable
+  `refs/autobuild/archive/<slug>/<sha>` ref where the forge accepts it, else a
+  BuildStore `history-objects-<sha>` copy, else one `history-unretained` warning
+  per build, and the write proceeds; `history.retained` (leaf) and
+  `node.history-retained` (node) record the non-forge outcomes. Workspace
+  preservation of unpublished commits is strict: archive ref, else store copy
+  (`workspace.commits-retained`), else the release is refused.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
   operation: durable PR records live under private Git refs, and the review
   locator is `refs/heads/ab/<slug>`. Once merge authorization (auto or consent;
@@ -1114,10 +1116,15 @@ Before releasing or replacing a build workspace, the dispatcher confirms a
 non-destructive execution fence for the exact workspace and execution generation.
 It preserves unpublished branch commits and distinct detached producer candidates
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
-readback, and records `workspace.commits-preserved` before cleanup. Replacement
-provisioning restores those exact refs before starting an agent, reading them
-from the local repository with the local-git forge and fetching each exact ref
-from the remote otherwise. A preserved
+readback, and records `workspace.commits-preserved` before cleanup. Where the
+forge refuses an archive ref, the head is kept as a BuildStore copy instead
+and the receipt is the decisive `workspace.commits-retained`, whose heads each
+name either `remoteRef` or `storeBase`; a head kept by neither refuses the
+release. Replacement provisioning restores those exact commits before starting
+an agent, reading archive refs from the local repository with the local-git forge
+and fetching each exact ref from the remote otherwise, and restoring store copies
+through a dispatcher-side callback on any host, so a remote guest never holds
+store credentials. A preserved
 branch head that the build's latest 64 replaced heads cover, as the replaced
 head itself or one of its ancestors, is kept only as archived objects: it is
 never preserved or restored as the branch, and provisioning records the skip as
@@ -1128,8 +1135,8 @@ that exists without a provisioned checkout, records `workspace.commits-lost`,
 naming known candidates and explicitly noting that any additional unpublished
 SHAs could not be inspected. An environment that never started executing holds
 no unpublished work: objects its checkout lacks mean nothing to preserve, so
-cleanup records `workspace.commits-preserved` carrying forward earlier preserved
-heads, then releases and replaces it. Unknown fencing, inspection, transport, or
+cleanup records `workspace.commits-preserved` (or `workspace.commits-retained`)
+carrying forward earlier preserved heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
 releases it and provisions the next generation. Provisioning cut off by a

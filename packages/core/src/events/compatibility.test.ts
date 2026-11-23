@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { eventPayloadSchemas } from './payloads'
 import { repositoryEventPayloadSchemas } from './repository'
-import { buildEventPolicy, repositoryEventPolicy } from './policy'
+import { buildEventPolicy, repositoryEventPolicy, stampCompatibility } from './policy'
 import {
   catalogIdentity,
   projectPayload,
@@ -386,4 +386,18 @@ test('persisted polling checkpoints remain advisory for a reader without the typ
   expect(state.decisiveFacts).toBe(1)
   advanceCompatibility(state, [{ ...newerFact(event.seq + 2), compatibility: undefined }])
   expect(state.decisiveFacts).toBe(2)
+})
+
+test('store-kept retention facts make an older reader defer rather than misread', () => {
+  for (const type of ['workspace.commits-retained', 'node.history-retained'] as const) {
+    // A runtime from before these types reads them as unknown facts carrying
+    // the writer's catalog classification.
+    const stamped = stampCompatibility(buildEventPolicy[type])
+    expect(stamped.classification).toBe('decisive')
+    const unknown = { ...newerFact(1), type, compatibility: stamped }
+    const state = initialCompatibility()
+    advanceCompatibility(state, [{ ...unknown, type: `${type}.from-a-newer-writer` }])
+    expect(state.decisiveFacts).toBe(1)
+    expect(mixedVersionDeferred({ compatibility: state })).toBe(true)
+  }
 })

@@ -1354,6 +1354,72 @@ test('complete nodes verify and land a linear stack only after explicit consent'
   }
 }, 30_000)
 
+test('node writes proceed on a forge refusing archive refs and record where history is kept', async (makeHarness) => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Release child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    const rewrite = h.forgeAdapter.rewrite!
+    const refused: string[] = []
+    Object.defineProperty(h.forgeAdapter, 'rewrite', {
+      value: {
+        ...rewrite,
+        archive: async ({ ref, sha }: { ref: string; sha: string }) => {
+          refused.push(sha)
+          throw new Error(`archive publication rejected for ${ref}: only branches are allowed`)
+        },
+      },
+    })
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
+    const childState = reduceBuild(await h.events(child.slug))
+    await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+      buildSlug: child.slug,
+    })
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+    await h.runLatest()
+    await h.dispatcher.tick()
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: node.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+    h.clock.advance(180_000)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const events = await h.events(node.slug)
+    const landed = reduceBuild(events)
+    expect(landed.integration?.landing).toMatchObject({ provenance: 'kernel', verified: true })
+    expect(landed.status).toBe('done')
+    expect(refused.length).toBeGreaterThan(0)
+    const retained = ofType(events, 'node.history-retained')
+    // The verify head is the head integration landing retains: it is recorded
+    // once, and the landing adds no duplicate fact.
+    expect(retained.map((event) => event.payload.operation)).toEqual(['verify'])
+    expect(retained[0]!.payload.store).toEqual([landed.integration!.cycle!.head])
+    // Every refused archive is kept: reachable from a published head or copied.
+    const kept = new Set(retained.flatMap((e) => [...e.payload.store, ...e.payload.target]))
+    for (const event of retained) expect(event.payload.unretained).toEqual([])
+    for (const sha of retained.flatMap((e) => e.payload.store))
+      expect(await h.store.getArtifact(node.slug, `history-objects-${sha}`)).not.toBeNull()
+    expect(kept.size).toBeGreaterThan(0)
+    expect(ofType(events, 'escalation.raised')).toEqual([])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
 test('a node whose integration preparation keeps failing retries it while escalated and recovers', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,

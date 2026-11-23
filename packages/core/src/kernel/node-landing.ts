@@ -15,6 +15,32 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { KERNEL, DISPATCHER } from '../events/envelope'
 import { buildTrailers } from './build-identity'
 import type { EventWrite } from '../events/catalog'
+import {
+  recordRetention,
+  recoverReservedInput,
+  retainCommit,
+  type RetentionContext,
+} from './history-retention'
+
+/** Retention for a node write: the node's log owns the reservation and its
+ * archive namespace; a store copy excludes the published `exclude`. */
+function landingRetention(
+  deps: { store: BuildStore; forge: Forge; exec: Exec; workspacePath: string },
+  node: string,
+  exclude: string,
+  branches: { branch?: string; targetBranch?: string },
+): RetentionContext {
+  return {
+    store: deps.store,
+    slug: node,
+    exec: deps.exec,
+    workspacePath: deps.workspacePath,
+    archive: deps.forge.rewrite!.archive,
+    exclude,
+    local: deps.forge.name === 'local-git',
+    ...branches,
+  }
+}
 
 export interface NodeLandingDeps {
   store: BuildStore
@@ -231,15 +257,24 @@ export async function landIntoNode(
           if (!intended) return undefined
         }
       }
+      // Best effort: both stay reachable from the published source branch
+      // until the guarded fast-forward lands.
       const archive = `refs/autobuild/archive/${node}/${expected}`
-      await authority()
-      await forge.rewrite.archive({ workspacePath, ref: archive, sha: expected })
-      await authority()
-      await forge.rewrite.archive({
-        workspacePath,
-        ref: `refs/autobuild/archive/${node}/${candidate}`,
-        sha: candidate,
+      const ctx = landingRetention(deps, node, candidate, {
+        branch: deps.branch,
+        targetBranch: deps.destination,
       })
+      await authority()
+      const outcomes = [await retainCommit(ctx, expected)]
+      await authority()
+      outcomes.push(await retainCommit(ctx, candidate))
+      await recordRetention(
+        store,
+        node,
+        { event: 'node.history-retained', operation: 'landing', id: deps.id, base: candidate },
+        outcomes,
+        append,
+      )
       await append({
         actor: KERNEL,
         type: 'node.writer-reserved',
@@ -259,17 +294,25 @@ export async function landIntoNode(
       active = (await readBuildFacts(store, node)).value.state.nodeRestack!.active!
     }
     state = await authority()
-    await forge.rewrite.archive({
-      workspacePath,
-      ref: `refs/autobuild/archive/${node}/${active.parent}`,
-      sha: active.parent,
-    })
     const abandon = async () =>
       append({
         actor: KERNEL,
         type: 'node.writer-settled',
         payload: { id: active!.id, outcome: 'abandoned' },
       })
+    const restored = await recoverReservedInput(
+      landingRetention(deps, node, active.parent, {
+        branch: deps.branch,
+        targetBranch: deps.destination,
+      }),
+      active.parent,
+    )
+    if (!restored && !state.nodeRestack?.rewritten) {
+      // Retained nowhere and not landed: the next attempt reserves again from
+      // the published branches.
+      await abandon()
+      return undefined
+    }
     if (state.nodeRestack?.intent && !state.nodeRestack.rewritten) {
       const observed = await forge.rewrite.snapshot({
         workspacePath,
@@ -451,11 +494,12 @@ export async function settleClosedNode(deps: {
     let landed = !!node.rewritten
     if (active.operation === 'landing' && node.intent && !landed) {
       if (!forge.rewrite) return false
-      await forge.rewrite.archive({
-        workspacePath,
-        ref: `refs/autobuild/archive/${slug}/${active.parent}`,
-        sha: active.parent,
-      })
+      // The readback compares shas only, so an input retained nowhere still
+      // settles the reservation.
+      await recoverReservedInput(
+        landingRetention(deps, slug, active.parent, { branch: deps.branch }),
+        active.parent,
+      )
       const actual = await forge.rewrite.snapshot({
         workspacePath,
         branch: deps.branch,

@@ -68,7 +68,7 @@ import {
   retainReplay,
   requireRewrite,
 } from '../kernel/reconcile-restack'
-import { RetainedHistoryUnavailable } from '../kernel/history-retention'
+import { RetainedHistoryUnavailable, restoreRetainedHead } from '../kernel/history-retention'
 import { reconcileHead, reconcileRewriteHead } from '../kernel/reconcile-head'
 import {
   readBuildFacts,
@@ -2015,19 +2015,28 @@ export class BuildRunner {
       return
     }
     if (!this.recovery) {
-      try {
-        for (const sha of [active.expected, active.parent]) {
-          const exists = await this.deps.exec(['git', 'cat-file', '-e', `${sha}^{commit}`], {
-            cwd: this.deps.workspacePath,
-          })
-          if (exists.exitCode !== 0) {
-            const fetched = await this.deps.exec(
-              ['git', 'fetch', '--no-tags', 'origin', `refs/autobuild/archive/${slug}/${sha}`],
-              { cwd: this.deps.workspacePath },
-            )
-            if (fetched.exitCode !== 0) throw new Error(`missing archived node input ${sha}`)
-          }
+      // Archived node inputs come back from wherever they are retained: the
+      // forge archive ref, a store copy, or the published branches. The parent
+      // first, since a store copy of `expected` completes only over it.
+      const retention = {
+        store,
+        slug,
+        exec: this.deps.exec,
+        workspacePath: this.deps.workspacePath,
+        local: this.deps.forge.name === 'local-git',
+        exclude: active.parent,
+        branch: this.deps.branch,
+        ...(state.baseBranch === undefined ? {} : { targetBranch: state.baseBranch }),
+        archive: async () => {
+          throw new Error('restore only')
+        },
+      }
+      for (const sha of [active.parent, active.expected])
+        if (!(await restoreRetainedHead(retention, sha))) {
+          await this.abandonUnavailableNodeInputs(active.id, state.lastSeq)
+          return
         }
+      try {
         if (change.build) {
           for (const kind of ['spec', 'plan', 'implement-notes']) {
             if (
@@ -2134,6 +2143,24 @@ export class BuildRunner {
       priorFailures: failures.count,
       isTerminal: (event) => event.type === 'reconcile.completed',
     })
+  }
+
+  /** A reserved node input retained nowhere: abandon the reservation under
+   * the node writer, so the next node transaction reserves again from the
+   * published branches. A contended writer or log retries later. */
+  private async abandonUnavailableNodeInputs(id: string, seq: number): Promise<void> {
+    const { store, slug } = this.deps
+    const holder = this.deps.ids('node-writer')
+    if (!(await store.claimNodeWriter(slug, holder, 60_000))) return
+    try {
+      await store.appendIfCurrent(slug, seq, {
+        actor: KERNEL,
+        type: 'node.writer-settled',
+        payload: { id, outcome: 'abandoned' },
+      })
+    } finally {
+      await store.releaseNodeWriter(slug, holder)
+    }
   }
 
   /**

@@ -91,14 +91,25 @@ function validateIdentity(m: Manifest | string, head: string, base?: string) {
     throw new RetainedCopyInvalid('retained replay identity mismatch')
 }
 /** Completion is published last; incomplete digest-keyed chunks are never a
- * copy. Chunks are content-addressed, so every manifest kind shares them. */
-async function retainObjects(deps: ObjectDeps, prefix: string, head: string, base: string) {
+ * copy. Chunks are content-addressed, so every manifest kind shares them.
+ * Resolves to the completed copy's exclusion base. With `reuseAnyBase`, an
+ * existing copy of `head` saved over another base is reused, not refused. */
+async function retainObjects(
+  deps: ObjectDeps,
+  prefix: string,
+  head: string,
+  base: string,
+  reuseAnyBase = false,
+): Promise<string> {
   if (!shaPattern.test(head) || !shaPattern.test(base)) throw new Error('invalid replay identity')
-  const completed = await deps.store.getArtifact(deps.slug, `${prefix}${head}`)
-  if (completed !== null) {
-    validateIdentity(parse(completed.content), head, base)
-    return
+  const existing = (content: Uint8Array) => {
+    const m = parse(content)
+    validateIdentity(m, head, reuseAnyBase ? undefined : base)
+    // A legacy copy is a complete pack: it needs no base to restore.
+    return typeof m === 'string' ? base : m.base
   }
+  const completed = await deps.store.getArtifact(deps.slug, `${prefix}${head}`)
+  if (completed !== null) return existing(completed.content)
   const path = await scratch(deps)
   try {
     await run(deps, [
@@ -143,12 +154,12 @@ async function retainObjects(deps: ObjectDeps, prefix: string, head: string, bas
       } else await deps.store.putArtifact(deps.slug, { kind: chunkKind(m, i), content })
     }
     const prior = await deps.store.getArtifact(deps.slug, `${prefix}${head}`)
-    if (prior !== null) validateIdentity(parse(prior.content), head, base)
-    else
-      await deps.store.putArtifact(deps.slug, {
-        kind: `${prefix}${head}`,
-        content: JSON.stringify(m),
-      })
+    if (prior !== null) return existing(prior.content)
+    await deps.store.putArtifact(deps.slug, {
+      kind: `${prefix}${head}`,
+      content: JSON.stringify(m),
+    })
+    return base
   } finally {
     await run(deps, ['rm', '-f', path])
   }
@@ -214,7 +225,8 @@ async function restoreObjects(
 }
 
 export async function retainReplay(deps: ObjectDeps, head: string, base: string) {
-  return retainObjects(deps, REPLAY, head, base)
+  // A replay result's base is its parent by definition: never reuse another.
+  await retainObjects(deps, REPLAY, head, base)
 }
 
 export async function restoreReplay(deps: ObjectDeps, head: string): Promise<boolean> {
@@ -228,9 +240,35 @@ export async function restoreReplay(deps: ObjectDeps, head: string): Promise<boo
 }
 
 /** Keep `sha` as a BuildStore copy of only the objects it reaches that the
- * published `exclude` does not. Idempotent per sha. */
-export async function retainHistoryCopy(deps: ObjectDeps, sha: string, exclude: string) {
-  return retainObjects(deps, HISTORY, sha, exclude)
+ * published `exclude` does not. Idempotent per sha: an existing copy, even one
+ * saved over another base, is reused. Resolves to the copy's actual exclusion
+ * base, which must be present to restore it. */
+export async function retainHistoryCopy(
+  deps: ObjectDeps,
+  sha: string,
+  exclude: string,
+): Promise<string> {
+  return retainObjects(deps, HISTORY, sha, exclude, true)
+}
+
+/** The exclusion base a `history-objects-<sha>` copy was saved over, read from
+ * its manifest without unpacking; null when no usable copy exists. */
+export async function historyCopyBase(
+  store: BuildStore,
+  slug: string,
+  sha: string,
+): Promise<string | null> {
+  if (!shaPattern.test(sha)) return null
+  const artifact = await store.getArtifact(slug, `${HISTORY}${sha}`)
+  if (artifact === null) return null
+  try {
+    const m = parse(artifact.content)
+    validateIdentity(m, sha)
+    return typeof m === 'string' ? null : m.base
+  } catch (error) {
+    if (error instanceof RetainedCopyInvalid) return null
+    throw error
+  }
 }
 
 /** False when no copy exists or its exclusion base is not present locally;

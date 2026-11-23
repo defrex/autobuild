@@ -47,7 +47,7 @@ const inventory: readonly [ReadinessKey, string][] = [
   ],
   [
     'archive-refs',
-    'Optional: allow immutable refs/autobuild/archive/ refs as forge-side backup of displaced leaf history. Where refused, leaf restacks and reconciles keep a BuildStore copy or warn and proceed. Node restack and landing still publish archive refs.',
+    'Optional: allow immutable refs/autobuild/archive/ refs as forge-side backup of displaced leaf and node history and of unpublished workspace commits. Where refused, rewrites and node writes keep a BuildStore copy or warn and proceed, and workspace preservation keeps a BuildStore copy or refuses the release.',
   ],
   ['linear-history', 'Enable Require linear history on protected root and node target branches.'],
   [

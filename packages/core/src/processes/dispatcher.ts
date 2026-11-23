@@ -1,5 +1,11 @@
 import { proveTargetLineage } from '../kernel/target-lineage'
 import {
+  recordRetention,
+  restoreRetainedHead,
+  retainCommit,
+  type RetentionOutcome,
+} from '../kernel/history-retention'
+import {
   computeHeadPaths,
   headPathsFor,
   headPathsWrite,
@@ -6793,16 +6799,40 @@ export class Dispatcher {
       facts.workspacePreservation?.payload.heads,
       facts.replacedHeads,
     )
+    const local = this.deps.forge.name === 'local-git'
     try {
       const handle = await this.deps.workspaces.provision({
         ...input,
         restoration,
         ...(facts.replacedHeads.length ? { restorationReplaced: facts.replacedHeads } : {}),
+        // Store reads happen only while provisioning a build whose receipt
+        // keeps some head in the BuildStore.
+        ...(restoration?.some((head) => head.storeBase !== undefined)
+          ? {
+              restoreStored: ({ exec, workspacePath, sha }) =>
+                restoreRetainedHead(
+                  {
+                    store: this.store,
+                    slug,
+                    exec,
+                    workspacePath,
+                    local,
+                    branch: input.branch,
+                    targetBranch: facts.state.baseBranch ?? input.baseBranch,
+                    exclude: sha,
+                    archive: async () => {
+                      throw new Error('restore only')
+                    },
+                  },
+                  sha,
+                ),
+            }
+          : {}),
         // Same predicate preservation archives under: only local-git keeps
         // archive refs in the local repository.
         ...(restoration?.length
           ? {
-              restorationArchives: this.deps.forge.name === 'local-git' ? 'local' : 'remote',
+              restorationArchives: local ? 'local' : 'remote',
             }
           : {}),
       })
@@ -9839,6 +9869,7 @@ export class Dispatcher {
         }
         let context: string | undefined
         let headPaths: HeadPathsArtifact | undefined
+        let retained: RetentionOutcome | undefined
         await this.withKernelRepository(async (path) => {
           const head = await forge.rewrite!.snapshot({
             workspacePath: path,
@@ -9847,11 +9878,6 @@ export class Dispatcher {
           })
           if (head !== exact.headSha)
             throw new Error('node head moved while preparing verification')
-          await forge.rewrite!.archive({
-            workspacePath: path,
-            ref: `refs/autobuild/archive/${record.slug}/${head}`,
-            sha: head,
-          })
           const exec = forge.kernelExec ?? this.deps.exec
           // Snapshot fetch brings the complete head ancestry, including merge sides.
           // A parent may have advanced independently and need its own fetch.
@@ -9865,6 +9891,22 @@ export class Dispatcher {
             if (fetched.exitCode !== 0)
               throw new Error(`cannot fetch node verification parent: ${fetched.stderr}`)
           }
+          // Best effort, once the parent a store copy excludes is present: the
+          // head stays reachable from the published node branch.
+          retained = await retainCommit(
+            {
+              store: this.store,
+              slug: record.slug,
+              exec,
+              workspacePath: path,
+              archive: forge.rewrite!.archive,
+              exclude: exact.parentSha,
+              local: forge.name === 'local-git',
+              branch: record.branch!,
+              targetBranch: state.baseBranch!,
+            },
+            head,
+          )
           // The cycle's candidate head is recorded once, with the cycle.
           if (!headPathsFor(current, exact.headSha).recorded)
             headPaths = await computeHeadPaths(exec, path, {
@@ -9886,6 +9928,31 @@ export class Dispatcher {
         })
         if (!(await this.store.renewNodeWriter(record.slug, holder))) return
         let expectedSeq = current.lastSeq
+        if (retained !== undefined && retained.in !== 'forge') {
+          // Recorded under the writer lease, then the guards are re-read so the
+          // compare-and-append below starts from the retention fact.
+          await recordRetention(
+            this.store,
+            record.slug,
+            {
+              event: 'node.history-retained',
+              operation: 'verify',
+              id: cycle.id,
+              base: exact.parentSha,
+            },
+            [retained],
+          )
+          const latest = (await this.store.buildFacts(record.slug)).state
+          if (
+            latest.nodeRestack?.active ||
+            latest.nodeRestack?.parentRequest ||
+            latest.nodeRestack?.parentChange ||
+            latest.pendingCommands.length ||
+            latest.integration?.landing
+          )
+            return
+          expectedSeq = latest.lastSeq
+        }
         if (headPaths !== undefined) {
           const { artifacts, makeEvent } = headPathsWrite(headPaths, 'integration', DISPATCHER)
           const recorded = await this.store.appendWithArtifactsIfCurrent(

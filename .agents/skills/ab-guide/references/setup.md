@@ -487,10 +487,12 @@ performs test pushes.
 
 Archive refs are a recommendation (WARN or UNKNOWN, never FAIL):
 
-- **Leaf builds** treat them as optional forge-side backup of displaced history.
-  Where refused, leaf restacks and reconciles keep a BuildStore copy, or warn
-  once per build and proceed.
-- **Node restack and landing** still publish archive refs and stop when refused.
+- **Leaf rewrites and node writes** treat them as optional forge-side backup of
+  displaced history. Where refused, they keep a BuildStore copy, or warn once per
+  build and proceed.
+- **Workspace preservation** keeps unpublished workspace commits as BuildStore
+  copies where refused, and refuses to release the workspace only when the store
+  copy fails too.
 
 Require **linear history** on protected root and node target branches to prevent
 merge commits from GitHub's update-branch action. On the configured root, enable

@@ -3,10 +3,20 @@ import { remoteBranchHead } from '../ports/forge/git-rewrite'
 import type { Forge, WorkspacePreservationHead, WorkspaceProvider } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { preserveGitCommits } from '../ports/workspace/commit-preservation'
+import { restoreRetainedHead, retainPreservedCopy } from '../kernel/history-retention'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 
 export class WorkspaceFenceUnknown extends Error {}
+
+/** Key-order-independent identity of a preserved head. */
+const headIdentity = (head: WorkspacePreservationHead) => [
+  head.sha,
+  head.role,
+  head.commits,
+  head.remoteRef ?? null,
+  head.storeBase ?? null,
+]
 
 /** Provider-independent exact supersession: a preserved branch head that a
  * recorded rewrite replaced keeps its objects as a producer and never moves
@@ -105,6 +115,27 @@ export async function preserveWorkspaceBeforeRelease(deps: {
     phase: current.value.state.phase ?? 'implement',
     round: current.value.state.round ?? 1,
   }
+  const local = deps.forge.name === 'local-git'
+  const rewriteCapability = deps.forge.kernelRewrite ?? deps.forge.rewrite
+  // Strict store fallback for heads the forge refused to archive; it runs on
+  // the trusted transport the caller hands over, never inside the guest.
+  const context = (exec: Exec, workspacePath: string, exclude: string) => ({
+    store: deps.store,
+    slug: deps.slug,
+    exec,
+    workspacePath,
+    exclude,
+    local,
+    branch: handle.branch,
+    targetBranch: current.value.state.baseBranch,
+    archive:
+      rewriteCapability?.archive ??
+      (async () => {
+        throw new Error('archive unavailable during store retention')
+      }),
+  })
+  const retain = (input: { exec: Exec; workspacePath: string; sha: string; base: string }) =>
+    retainPreservedCopy(context(input.exec, input.workspacePath, input.base), input.sha)
   let preserved:
     | { outcome: 'preserved'; heads: import('../ports/types').WorkspacePreservationHead[] }
     | { outcome: 'absent' }
@@ -120,9 +151,10 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       candidates,
       replaced: current.value.replacedHeads,
       neverExecuted,
+      retain,
     })
   } else {
-    const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
+    const rewrite = rewriteCapability
     if (!rewrite) throw new Error('forge lacks immutable workspace commit archives')
     let base: string
     try {
@@ -142,10 +174,11 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       if (remote !== null) throw error
       base = source.payload.base.sha
     }
+    const exec = deps.forge.kernelExec ?? deps.exec
     preserved = {
       outcome: 'preserved',
       heads: await preserveGitCommits({
-        exec: deps.forge.kernelExec ?? deps.exec,
+        exec,
         workspacePath: handle.path,
         branch: handle.branch,
         slug: deps.slug,
@@ -153,8 +186,10 @@ export async function preserveWorkspaceBeforeRelease(deps: {
         candidates,
         archive: rewrite.archive,
         replaced: current.value.replacedHeads,
-        local: deps.forge.name === 'local-git',
+        local,
         neverExecuted,
+        retain,
+        restore: (sha) => restoreRetainedHead(context(exec, handle.path, base), sha),
       }),
     }
   }
@@ -168,20 +203,43 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       heads: [...preserved.heads, ...prior.heads.filter((head) => !found.has(head.sha))],
     }
   }
+  // Forge-only receipts keep their original type, so accepting forges see no
+  // change; any store-kept head makes the receipt `commits-retained`.
+  const preservedType =
+    preserved.outcome === 'preserved' &&
+    preserved.heads.some((head) => head.storeBase !== undefined)
+      ? ('workspace.commits-retained' as const)
+      : ('workspace.commits-preserved' as const)
   if (
     preserved.outcome === 'preserved' &&
+    current.value.workspacePreservation?.type === preservedType &&
     prior?.workspace === source.seq &&
     prior.execution === executionSeq &&
-    JSON.stringify(prior.heads) === JSON.stringify(preserved.heads)
+    JSON.stringify(prior.heads.map(headIdentity)) ===
+      JSON.stringify(preserved.heads.map(headIdentity))
   )
     return
   const write =
     preserved.outcome === 'preserved'
-      ? {
-          actor: DISPATCHER,
-          type: 'workspace.commits-preserved' as const,
-          payload: { ...metadata, heads: preserved.heads },
-        }
+      ? preservedType === 'workspace.commits-retained'
+        ? {
+            actor: DISPATCHER,
+            type: 'workspace.commits-retained' as const,
+            payload: { ...metadata, heads: preserved.heads },
+          }
+        : {
+            actor: DISPATCHER,
+            type: 'workspace.commits-preserved' as const,
+            payload: {
+              ...metadata,
+              heads: preserved.heads.map(({ sha, remoteRef, role, commits }) => ({
+                sha,
+                remoteRef: remoteRef!,
+                role,
+                commits,
+              })),
+            },
+          }
       : {
           actor: DISPATCHER,
           type: 'workspace.commits-lost' as const,

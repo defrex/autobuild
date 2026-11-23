@@ -518,7 +518,7 @@ test('node opening adopts advanced history and reachability distinguishes a movi
   await expect(forge.createNodeBranch('ab-node/collision', opening)).rejects.toThrow('collision')
 })
 
-for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
+for (const mode of ['open', 'gated', 'unknown', 'crash-after-push', 'refused-archives'] as const) {
   test(`controlled node merge uses guarded identity-preserving fast-forward: ${mode}`, async () => {
     const { MemoryBuildStore } = await import('../../store/memory')
     const { sampleBuildInput } = await import('../../store/contract')
@@ -548,6 +548,17 @@ for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
       h.forge.inspectLandingGate = async () => ({ kind: 'gated', reason: 'Required checks' })
     if (mode === 'unknown')
       h.forge.inspectLandingGate = async () => ({ kind: 'unproven', reason: 'Policy unavailable' })
+    if (mode === 'refused-archives') {
+      const rewrite = h.forge.rewrite!
+      Object.defineProperty(h.forge, 'rewrite', {
+        value: {
+          ...rewrite,
+          archive: async ({ ref }: { ref: string }) => {
+            throw new Error(`archive publication rejected for ${ref}`)
+          },
+        },
+      })
+    }
     const deps = {
       store,
       forge: h.forge,
@@ -591,6 +602,24 @@ for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
         (await readBuildFacts(store, 'target')).value.state.nodeRestack?.active,
       ).toBeUndefined()
       expect((await h.forge.getPrState(h.workspace, pr.number)).state).toBe('closed')
+      const retained = (await store.getEvents('target')).filter(
+        (e) => e.type === 'node.history-retained',
+      )
+      // Both inputs stay reachable from the published source branch.
+      expect(retained.map((e) => e.payload)).toEqual(
+        mode === 'refused-archives'
+          ? [
+              {
+                operation: 'landing',
+                id: 'landing',
+                base: candidate,
+                store: [],
+                target: [base, candidate],
+                unretained: [],
+              },
+            ]
+          : [],
+      )
     }
   })
 }
