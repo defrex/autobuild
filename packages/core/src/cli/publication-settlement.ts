@@ -14,6 +14,53 @@ import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { completeFinalizePr } from './terminals'
 import { finalizePrRejectionGate, raiseFinalizePrRejection } from '../kernel/finalize-pr-rejection'
 import { isForgeRejection } from '../ports/forge-failure'
+import { recordRetention, retainCommit, type RetentionOutcome } from '../kernel/history-retention'
+
+/** Best-effort history retention through a provider's trusted transport. The
+ * rewrite fact records confirmed forge archives only; a provider that ignores
+ * `retain` archived every entry strictly. */
+function settlementRetention(
+  deps: PublicationSettlementDeps,
+  slug: string,
+  transaction: { branch: string; targetBase: string },
+  targetBranch: string | undefined,
+) {
+  const outcomes: RetentionOutcome[] = []
+  const retain: NonNullable<
+    Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]['retain']
+  > = async (input) => {
+    const ctx = {
+      store: deps.store,
+      slug,
+      exec: input.exec,
+      workspacePath: input.workspacePath,
+      archive: input.archive,
+      exclude: transaction.targetBase,
+      local: false,
+      branch: transaction.branch,
+      ...(targetBranch === undefined ? {} : { targetBranch }),
+    }
+    outcomes.push(await retainCommit(ctx, input.sha))
+  }
+  return {
+    retain,
+    /** Called once per settlement attempt, after the rewrite effect. */
+    record: (scope: { operation: 'restack' | 'reconcile'; id: string; base: string }) =>
+      recordRetention(deps.store, slug, scope, outcomes),
+    archives: (requested: { ref: string; sha: string }[]) =>
+      outcomes.length === 0
+        ? requested
+        : [
+            ...new Map(
+              outcomes.flatMap((outcome) =>
+                outcome.in === 'forge'
+                  ? [[outcome.sha, { ref: outcome.ref, sha: outcome.sha }]]
+                  : [],
+              ) as [string, { ref: string; sha: string }][],
+            ).values(),
+          ],
+  }
+}
 
 export interface PublicationSettlementDeps {
   store: BuildStore
@@ -118,10 +165,16 @@ export async function settlePendingPublication(
       throw new Error('restack publication request does not match its durable intent')
     const retryDeps = { ...deps, slug, clock: deps.clock ?? systemClock, actor: DISPATCHER }
     await publicationRetryGate(retryDeps, 'restack', transaction.id)
-    const archives = [...new Set([...events.gitTips, request.payload.sha])].map((sha) => ({
+    const requested = [...new Set([...events.gitTips, request.payload.sha])].map((sha) => ({
       ref: `refs/autobuild/archive/${slug}/${sha}`,
       sha,
     }))
+    const retention = settlementRetention(
+      deps,
+      slug,
+      transaction,
+      events.state.baseBranch ?? events.lastCreated?.payload.baseBranch,
+    )
     const external = <T>(effect: () => Promise<T>) =>
       retryPublicationEffect(
         retryDeps,
@@ -131,16 +184,27 @@ export async function settlePendingPublication(
         effect,
       )
     await external(() => suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`))
-    const result = await external(() =>
-      publication.rewrite!({
-        ref,
-        sha: request.payload.sha,
-        branch: transaction.branch,
-        expected: transaction.oldHead,
-        localExpected: transaction.localBranchHead,
-        archives,
-      }),
-    )
+    let result: Awaited<ReturnType<NonNullable<WorkspacePublication['rewrite']>>>
+    try {
+      result = await external(() =>
+        publication.rewrite!({
+          ref,
+          sha: request.payload.sha,
+          branch: transaction.branch,
+          expected: transaction.oldHead,
+          localExpected: transaction.localBranchHead,
+          archives: requested,
+          retain: retention.retain,
+        }),
+      )
+    } finally {
+      await retention.record({
+        operation: 'restack',
+        id: transaction.id,
+        base: transaction.targetBase,
+      })
+    }
+    const archives = retention.archives(requested)
     if (result.kind === 'published')
       await external(() =>
         confirmDispatcherCache(deps, request.payload.branch, request.payload.sha),
@@ -210,20 +274,40 @@ export async function settlePendingPublication(
     const retryDeps = { ...deps, slug, clock: deps.clock ?? systemClock, actor: DISPATCHER }
     await publicationRetryGate(retryDeps, 'reconcile', transaction.id)
     const tips = new Set([...events.gitTips, request.payload.sha])
-    const archives = [...tips].map((sha) => ({ ref: `refs/autobuild/archive/${slug}/${sha}`, sha }))
+    const requested = [...tips].map((sha) => ({
+      ref: `refs/autobuild/archive/${slug}/${sha}`,
+      sha,
+    }))
+    const retention = settlementRetention(
+      deps,
+      slug,
+      transaction,
+      events.state.baseBranch ?? events.lastCreated?.payload.baseBranch,
+    )
     const external = <T>(effect: () => Promise<T>) =>
       retryPublicationEffect(retryDeps, 'reconcile', transaction.id, transaction.attempt, effect)
     await external(() => suspendNativeLanding({ ...deps, slug }, `publication:${request.seq}`))
-    const result = await external(() =>
-      publication.rewrite!({
-        ref,
-        sha: request.payload.sha,
-        branch: request.payload.branch,
-        expected: transaction.oldHead,
-        localExpected: transaction.localBranchHead,
-        archives,
-      }),
-    )
+    let result: Awaited<ReturnType<NonNullable<WorkspacePublication['rewrite']>>>
+    try {
+      result = await external(() =>
+        publication.rewrite!({
+          ref,
+          sha: request.payload.sha,
+          branch: request.payload.branch,
+          expected: transaction.oldHead,
+          localExpected: transaction.localBranchHead,
+          archives: requested,
+          retain: retention.retain,
+        }),
+      )
+    } finally {
+      await retention.record({
+        operation: 'reconcile',
+        id: transaction.id,
+        base: transaction.targetBase,
+      })
+    }
+    const archives = retention.archives(requested)
     if (result.kind === 'published')
       await external(() =>
         confirmDispatcherCache(deps, request.payload.branch, request.payload.sha),

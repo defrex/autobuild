@@ -250,15 +250,22 @@ No result is undone by rewriting the target.
 
 ## Forge requirements
 
-The kernel must publish and fetch immutable exact archive refs under
-`refs/autobuild/archive/<slug>/<sha>` and replace branches with an exact
-expected-old-head guard. Namespace or permission failures stop publication;
-there is no branch/tag fallback. When an environment refuses non-branch Git pushes,
-as Claude Code on the web's GitHub proxy does, the GitHub adapter creates the same
-archive ref through REST ref creation and confirms it by exact readback. Commits that
-exist only in the local workspace cannot use this fallback and fail with an actionable
-error. Archive retention remains indefinite pending a
-retention policy. See [restacking](restacking.md).
+The kernel replaces branches with an exact expected-old-head guard and retains
+displaced history under immutable exact archive refs
+`refs/autobuild/archive/<slug>/<sha>`:
+
+- **Node restack and landing** require archive refs. Namespace or permission
+  failures stop publication.
+- **Leaf restacks and reconciles** use archive refs where the forge accepts them.
+  Where it refuses, they keep a BuildStore copy (`history-objects-<sha>`), or
+  record one `history-unretained` warning and proceed.
+- There is never a branch or tag fallback. When an environment refuses non-branch
+  Git pushes, as Claude Code on the web's GitHub proxy does, the GitHub adapter
+  creates the same archive ref through REST ref creation and confirms it by exact
+  readback. Commits that exist only in the local workspace cannot use that path.
+
+Archive refs and store copies are retained indefinitely pending a retention
+policy. See [restacking](restacking.md).
 
 Tree admission requires node branch creation, authoritative branch-head reads
 and comparison. Reparenting additionally requires PR retargeting. Controlled

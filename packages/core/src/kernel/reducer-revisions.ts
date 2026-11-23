@@ -45,4 +45,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'repositoryReadFacts/shape/7hbgb52kw8': 'AUT-1293 start request priority',
   'ticketStarts/fold/eglrhnb0ta': 'AUT-1293 re-request updates pending start priority',
   'repositoryReadFacts/fold/fk3ka9gb3z': 'AUT-1293 re-request updates pending start priority',
+  'buildReadFacts/shape/grk476irlr': 'history.retained fold for best-effort leaf history retention',
 }

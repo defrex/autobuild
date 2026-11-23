@@ -1112,6 +1112,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'publication.retry-scheduled':
       case 'publication.retry-exhausted':
       case 'publication.candidate-retired':
+      case 'history.retained':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
       case 'pr-attachment.hosted':

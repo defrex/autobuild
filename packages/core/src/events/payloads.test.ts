@@ -2254,3 +2254,42 @@ test('forge CI facts bind heads, bound the preview and carry a set digest', () =
   expect(buildEventPolicy['pr.checks-failed']).toBe('advisory')
   expect(buildEventPolicy['pr.checks-cleared']).toBe('advisory')
 })
+
+describe('history.retained', () => {
+  const sha = 'a'.repeat(40)
+  const write = (payload: unknown) =>
+    validateEventWrite({ actor: KERNEL, type: 'history.retained', payload })
+  const payload = {
+    operation: 'restack',
+    id: 'restack-1',
+    base: 'b'.repeat(40),
+    store: [sha],
+    target: [],
+    unretained: [],
+  }
+  test('records where displaced leaf history is kept', () => {
+    expect(write(payload)).toMatchObject({ type: 'history.retained', payload })
+    expect(
+      write({ ...payload, operation: 'reconcile', store: [], unretained: [sha] }),
+    ).toBeDefined()
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'history.retained', payload }),
+    ).toBeDefined()
+  })
+  test('names at least one commit, exact ids and a known operation', () => {
+    expect(() => write({ ...payload, store: [] })).toThrow()
+    expect(() => write({ ...payload, store: ['main'] })).toThrow()
+    expect(() => write({ ...payload, operation: 'land' })).toThrow()
+    expect(() => write({ ...payload, extra: true })).toThrow()
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('implement', 's'),
+        type: 'history.retained',
+        payload,
+      }),
+    ).toThrow()
+  })
+  test('is decisive, so an older reader defers instead of fetching absent archive refs', () => {
+    expect(buildEventPolicy['history.retained']).toBe('decisive')
+  })
+})

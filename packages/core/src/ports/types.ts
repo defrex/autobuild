@@ -480,12 +480,19 @@ export type WorkspaceFenceOutcome =
   | { outcome: 'unknown'; error: string }
 
 export interface WorkspacePublication {
+  /** Probe a lost rewrite candidate in the replacement workspace. A refused
+   * archive of an available candidate is not an error: the later trusted
+   * rewrite retains it through `retain`. */
   recoverCandidate?(input: {
     ref: string
     slug: string
     branch: string
     sha: string
     replayPack?: string
+    /** The thin replay pack's exclusion base; obtain it before applying. */
+    replayBase?: string
+    /** The published target branch that holds `replayBase`. */
+    targetBranch?: string
   }): Promise<boolean>
 
   /** Dispatcher-only, after a durable non-destructive fence. `absent` means
@@ -516,6 +523,17 @@ export interface WorkspacePublication {
     expected: string
     localExpected?: string
     archives: { ref: string; sha: string }[]
+    /** Best-effort history retention. When present, the provider calls it once
+     * per `archives` entry in place of `archive`, handing over its trusted Git
+     * transport; the callback owns the fallback and does not throw for a
+     * refusal. Providers that ignore it archive strictly. */
+    retain?: (input: {
+      exec: import('./workspace/git-worktree').Exec
+      workspacePath: string
+      archive: ForgeRewrite['archive']
+      ref: string
+      sha: string
+    }) => Promise<void>
   }): Promise<RewriteResult>
   /** Observe whether the exact requested commit already reached the durable
    * remote branch after an interrupted acknowledgement. `ref` optionally

@@ -241,6 +241,8 @@ export interface BuildReadAcc {
     ts: string
   }[]
   observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
+  /** Shas `history.retained` recorded, by where the displaced commit is kept. */
+  retainedHistory: { store: string[]; target: string[]; unretained: string[] }
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
@@ -268,6 +270,7 @@ export const buildReadFactsReducer = defineReducer({
     dashboard: dashboardFactsReducer.initial(),
     deferral: currentDeferralObservationReducer.initial(),
     observations: [],
+    retainedHistory: { store: [], target: [], unretained: [] },
     observationFacts: [],
     mergeTimes: [],
     summaryHistory: [],
@@ -529,6 +532,10 @@ export const buildReadFactsReducer = defineReducer({
         acc.observationFacts.push({ payload: event.payload, seq: event.seq, ts: event.ts })
       }
       if (event.type === 'pr.merged') acc.mergeTimes.push(event.ts)
+      if (event.type === 'history.retained')
+        for (const where of ['store', 'target', 'unretained'] as const)
+          for (const sha of event.payload[where])
+            if (!acc.retainedHistory[where].includes(sha)) acc.retainedHistory[where].push(sha)
     }
   },
   finish: (acc: BuildReadAcc) => ({
@@ -555,6 +562,7 @@ export const buildReadFactsReducer = defineReducer({
     observationFacts: structuredClone(acc.observationFacts),
     mergeTimes: [...acc.mergeTimes],
     observations: structuredClone(acc.observations),
+    retainedHistory: structuredClone(acc.retainedHistory),
     terminalEvent: acc.terminalEvent,
     summaryHistory: structuredClone(acc.summaryHistory),
     summaryAttempts: [...acc.summaryAttempts],

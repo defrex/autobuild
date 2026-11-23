@@ -208,7 +208,7 @@ describe('kernel shell Git on a hosted dispatcher', () => {
         replayPack: pack.toString('base64'),
       }),
     ).toBe(true)
-    expect(await git.calls()).toContain('unpack-objects')
+    expect(await git.calls()).toContain('index-pack')
   })
 
   test('without the wiring the same restore reproduces the incident', async () => {

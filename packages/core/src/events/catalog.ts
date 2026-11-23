@@ -163,6 +163,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   // the kernel never destroys one, so it never records a loss.
   'publication.candidate-retired': ['dispatcher', 'kernel'],
   'publication.lost': ['dispatcher'],
+  'history.retained': ['dispatcher', 'kernel'],
   'publication.retry-scheduled': ['kernel', 'dispatcher'],
   'publication.retry-exhausted': ['kernel', 'dispatcher'],
   'abort.remote-branch-deleted': ['dispatcher'],

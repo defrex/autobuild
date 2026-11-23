@@ -209,7 +209,7 @@ const GIT_SHELL_INVENTORY = [
   // RestackDeps.exec via `run(deps, …)`: unpack-objects / index-pack (two literals).
   'kernel/replay-retention.ts restore-replay',
   // RestackDeps.exec: hash-object of a durable replayed commit.
-  'kernel/reconcile-restack.ts printf %s … | git hash-object -t commit -w --stdin',
+  'kernel/replay-retention.ts printf %s … | git hash-object -t commit -w --stdin',
   // `input.exec`, the forge kernelExec or deps.exec from recoverLostCandidate.
   'ports/workspace/commit-preservation.ts restore-replay',
 ]

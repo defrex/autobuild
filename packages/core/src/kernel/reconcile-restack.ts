@@ -15,6 +15,16 @@ import { reconcileScratchViolations, phaseScratchRejection } from '../ports/work
 import type { GeneratedEntry } from '../config/schema'
 import { classifyGenerated, generatedSelectors } from './generated-files'
 import { regenerateConflict, regenerationReason } from './generated-regeneration'
+import {
+  recordRetention,
+  restoreCommit,
+  retainCommit,
+  RetainedHistoryUnavailable,
+  archiveRef,
+  type RetentionContext,
+  type RetentionOutcome,
+} from './history-retention'
+import { readRetainedPack, RetainedCopyInvalid } from './replay-retention'
 
 export type ReconcileTransaction = EventPayload<'reconcile.prepared'>
 export interface RestackDeps {
@@ -32,6 +42,10 @@ export interface RestackDeps {
     branch: string
     sha: string
     replayPack?: string
+    /** The thin replay pack's exclusion base, present before it is applied. */
+    replayBase?: string
+    /** The published target branch that holds `replayBase`. */
+    targetBranch?: string
   }) => Promise<boolean>
   automatic?: Pick<
     EventPayload<'restack.prepared'>,
@@ -109,27 +123,46 @@ async function commitGit(deps: RestackDeps, source: string, args: string[], allo
 export function requireRewrite(forge: Forge) {
   if (forge.rewrite === undefined)
     throw new Error(
-      `${forge.name} lacks the reconcile rewrite capability; upgrade the forge plugin to support authoritative snapshots, immutable refs/autobuild/archive/ refs and expected-head guarded replacement`,
+      `${forge.name} lacks the reconcile rewrite capability; upgrade the forge plugin to support authoritative snapshots and expected-head guarded replacement`,
     )
   return forge.rewrite
 }
 
+type BuildFacts = Awaited<ReturnType<typeof readBuildFacts>>['value']
+function targetBranchOf(facts: BuildFacts): string | undefined {
+  return facts.state.baseBranch ?? facts.lastCreated?.payload.baseBranch
+}
+/** Best-effort history retention for one leaf rewrite transaction. */
+function retention(
+  deps: RestackDeps,
+  facts: BuildFacts,
+  transaction: { branch: string; targetBase: string },
+  archive: RetentionContext['archive'],
+  exec: RestackDeps['exec'] = deps.exec,
+): RetentionContext {
+  const targetBranch = targetBranchOf(facts)
+  return {
+    store: deps.store,
+    slug: deps.slug,
+    exec,
+    workspacePath: deps.workspacePath,
+    archive,
+    exclude: transaction.targetBase,
+    local: deps.forge.name === 'local-git',
+    branch: transaction.branch,
+    ...(targetBranch === undefined ? {} : { targetBranch }),
+  }
+}
+async function restoreOrRedo(ctx: RetentionContext, sha: string) {
+  if (!(await restoreCommit(ctx, sha))) throw new RetainedHistoryUnavailable(sha)
+}
+
 export { retainReplay, restoreReplay } from './replay-retention'
-import { restoreReplay, retainReplay } from './replay-retention'
+import { restoreChangeCommit, restoreReplay, retainReplay } from './replay-retention'
 
 /** Restore a sandbox-only change from durable bytes without remote write access. */
 export async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
-  const artifact = await deps.store.getArtifact(deps.slug, `reconcile-change-${sha}`)
-  if (artifact === null) return restoreReplay(deps, sha)
-  const content = new TextDecoder().decode(artifact.content)
-  const quoted = `'${content.replaceAll("'", "'\\''")}'`
-  const result = await deps.exec(
-    ['sh', '-c', `printf %s ${quoted} | git hash-object -t commit -w --stdin`],
-    { cwd: deps.workspacePath },
-  )
-  if (result.exitCode !== 0 || result.stdout.trim() !== sha)
-    throw new Error(`durable replay object ${sha} failed integrity verification`)
-  return true
+  return (await restoreChangeCommit(deps, sha)) || restoreReplay(deps, sha)
 }
 
 /** Exact availability probes only. Transport/auth errors defer recovery;
@@ -161,8 +194,19 @@ export async function recoverLostCandidate(
   )
     return 'none'
   const sha = payload.sha
-  const artifact = await deps.store.getArtifact(deps.slug, `replay-objects-${sha}`)
-  const replayPack = artifact ? new TextDecoder().decode(artifact.content) : undefined
+  let retained: Awaited<ReturnType<typeof readRetainedPack>> = null
+  try {
+    retained = await readRetainedPack(deps.store, deps.slug, sha)
+  } catch (error) {
+    // A corrupt copy cannot restore the candidate; the other sources still can.
+    if (!(error instanceof RetainedCopyInvalid)) throw error
+  }
+  const replayPack = retained ? Buffer.from(retained.pack).toString('base64') : undefined
+  const targetBranch = targetBranchOf(current.value)
+  const thin = {
+    ...(retained?.base === undefined ? {} : { replayBase: retained.base }),
+    ...(targetBranch === undefined ? {} : { targetBranch }),
+  }
   const available = deps.probeCandidate
     ? await deps.probeCandidate({
         ref: current.value.workspace?.ref ?? '',
@@ -170,25 +214,55 @@ export async function recoverLostCandidate(
         branch: payload.branch,
         sha,
         replayPack,
+        ...thin,
       })
     : await inspectGitCandidate({
         exec: deps.forge.kernelExec ?? deps.exec,
         workspacePath: deps.workspacePath,
         branch: payload.branch,
         sha,
-        archiveRef: `refs/autobuild/archive/${deps.slug}/${sha}`,
+        archiveRef: archiveRef(deps.slug, sha),
         local: deps.forge.name === 'local-git',
         replayPack,
+        ...thin,
       })
   if (available) {
-    if (!current.value.workspace || !isRemoteWorkspace(current.value.workspace))
-      await (deps.forge.kernelRewrite ?? requireRewrite(deps.forge)).archive({
-        workspacePath: deps.workspacePath,
-        ref: `refs/autobuild/archive/${deps.slug}/${sha}`,
+    if (!current.value.workspace || !isRemoteWorkspace(current.value.workspace)) {
+      const capability = deps.forge.kernelRewrite ?? requireRewrite(deps.forge)
+      const rewrite = payload.rewrite
+      const outcome = await retainCommit(
+        retention(
+          deps,
+          current.value,
+          { branch: payload.branch, targetBase: rewrite.targetBase },
+          capability.archive,
+          deps.forge.kernelExec ?? deps.exec,
+        ),
         sha,
-      })
+      )
+      await recordRetention(
+        deps.store,
+        deps.slug,
+        { operation: payload.operation, id: rewrite.id, base: rewrite.targetBase },
+        [outcome],
+      )
+    }
     return 'available'
   }
+  await retireCandidate(deps, current, request)
+  return 'retired'
+}
+
+/** Retire a rewrite candidate that cannot be published: its request is
+ * abandoned and the operation replays under a replacement id. */
+export async function retireCandidate(
+  deps: RestackDeps,
+  current: Awaited<ReturnType<typeof readBuildFacts>>,
+  request: NonNullable<ReturnType<BuildFacts['publication']['latestUncompletedRequest']>>,
+): Promise<void> {
+  const payload = request.payload
+  if ((payload.operation !== 'reconcile' && payload.operation !== 'restack') || !payload.rewrite)
+    throw new Error('only a rewrite candidate can be retired')
   if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) throw new MixedVersionDeferral()
   if (
     !(await deps.store.appendIfCurrent(deps.slug, current.cursor, {
@@ -198,34 +272,44 @@ export async function recoverLostCandidate(
         request: request.seq,
         operation: payload.operation,
         id: payload.rewrite.id,
-        sha,
+        sha: payload.sha,
         replacementId: `${payload.rewrite.id}-recovery-${request.seq}`,
       },
     }))
   )
     throw new Error('publication changed during candidate recovery; retry')
-  return 'retired'
 }
 
-export async function archiveTips(deps: RestackDeps, extra: string[] = []) {
+/** Retain every recorded Git tip before a branch rewrite, best effort: a
+ * forge archive ref, else a BuildStore copy, else one warning. Returns the
+ * confirmed forge archives for the rewrite fact. */
+export async function retainTips(
+  deps: RestackDeps,
+  transaction: { id: string; branch: string; targetBase: string },
+  extra: string[] = [],
+): Promise<{ ref: string; sha: string }[]> {
   const capability = requireRewrite(deps.forge)
   const facts = (await readBuildFacts(deps.store, deps.slug)).value
-  const tips = new Set([...facts.gitTips, ...extra])
-  const archives: { ref: string; sha: string }[] = []
-  for (const sha of tips) {
-    const ref = `refs/autobuild/archive/${deps.slug}/${sha}`
-    // Restore durable local changes first; the remote capability recovers other objects.
-    if (
-      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0 &&
-      !(await restoreChange(deps, sha))
-    ) {
-      if (deps.forge.name === 'local-git')
-        throw new Error(`missing recorded Git object ${sha}; restore it before reconcile`)
-    }
-    await capability.archive({ workspacePath: deps.workspacePath, ref, sha })
-    archives.push({ ref, sha })
+  const ctx = retention(deps, facts, transaction, capability.archive)
+  const outcomes: RetentionOutcome[] = []
+  for (const sha of new Set([...facts.gitTips, ...extra])) {
+    // The forge capability may archive a remote-only object; after a refusal
+    // retainCommit restores what it can and records anything else unretained.
+    outcomes.push(await retainCommit(ctx, sha))
   }
-  return archives
+  await recordRetention(
+    deps.store,
+    deps.slug,
+    {
+      operation: deps.automatic ? 'restack' : 'reconcile',
+      id: transaction.id,
+      base: transaction.targetBase,
+    },
+    outcomes,
+  )
+  return outcomes.flatMap((outcome) =>
+    outcome.in === 'forge' ? [{ ref: outcome.ref, sha: outcome.sha }] : [],
+  )
 }
 
 /** Prepare one durable replay. HEAD is detached; the published branch remains
@@ -273,42 +357,41 @@ export async function prepareRestack(
     if (contended?.type === 'reconcile.contended') {
       if (contended.payload.actual === null)
         throw new Error('build branch was deleted; restore its known history before retrying')
-      const observed = await capability.snapshot({
-        workspacePath: deps.workspacePath,
-        branch: input.branch,
-        destinationRef: `refs/autobuild/reconcile/${deps.slug}/head`,
-      })
-      const intent = events.findLast(
-        (e) => e.type === 'reconcile.publish-intended' && e.payload.id === prior.payload.id,
+      return reprepareFromPublished(
+        deps,
+        input,
+        prior.payload,
+        events,
+        deps.automatic === undefined ? input.id : `${input.id}-retry`,
+        true,
       )
-      const candidate =
-        intent?.type === 'reconcile.publish-intended' ? intent.payload.headSha : undefined
-      const basedOnCandidate =
-        candidate !== undefined &&
-        (observed === candidate ||
-          (events.some(
-            (e) =>
-              e.type === 'reconcile.rewritten' &&
-              e.payload.id === prior.payload.id &&
-              e.payload.headSha === candidate,
-          ) &&
-            (await git(deps, ['merge-base', '--is-ancestor', candidate, observed], true))
-              .exitCode === 0))
-      if (
-        !basedOnCandidate &&
-        (await git(deps, ['merge-base', '--is-ancestor', prior.payload.oldHead, observed], true))
-          .exitCode !== 0
-      )
-        throw new Error(`build branch diverged to ${observed}; operator provenance review required`)
-      return prepareRestack(deps, {
-        ...input,
-        ...(deps.automatic === undefined ? {} : { id: `${input.id}-retry` }),
-        restackId: prior.payload.restackId,
-        oldHead: observed,
-        oldBase: basedOnCandidate ? prior.payload.targetBase : prior.payload.oldBase,
-      })
     }
-    await continuePreparation(deps, prior.payload, events)
+    try {
+      await continuePreparation(deps, prior.payload, events)
+    } catch (error) {
+      if (!(error instanceof RetainedHistoryUnavailable)) throw error
+      // A candidate already requested for publication is retired by its caller.
+      const request = (
+        await readBuildFacts(deps.store, deps.slug)
+      ).value.publication.latestUncompletedRequest()
+      if (
+        request !== undefined &&
+        'rewrite' in request.payload &&
+        request.payload.rewrite?.id === prior.payload.id
+      )
+        throw error
+      // History the transaction needs is retained nowhere: redo the replay
+      // from the published branch under a fresh id, so same-id replay and
+      // intent facts never steer recovery back to the lost commit.
+      return reprepareFromPublished(
+        deps,
+        input,
+        prior.payload,
+        events,
+        `${prior.payload.id}-redo`,
+        false,
+      )
+    }
     return prior.payload
   }
   const oldHead =
@@ -389,34 +472,96 @@ export async function prepareRestack(
   await continuePreparation(deps, transaction, events)
   return transaction
 }
+/** Replay again from a fresh snapshot of the published build branch. A
+ * contended publication checks the observed head for divergence; a redo after
+ * lost history relies on the ancestry check of the fresh preparation. */
+async function reprepareFromPublished(
+  deps: RestackDeps,
+  input: Parameters<typeof prepareRestack>[1],
+  prior: ReconcileTransaction,
+  events: readonly AbEvent[],
+  id: string,
+  contended: boolean,
+): Promise<ReconcileTransaction> {
+  // An earlier redo already prepared this id: continue it, never write another.
+  if (
+    !contended &&
+    deps.automatic !== undefined &&
+    events.some((e) => e.type === 'reconcile.prepared' && e.payload.id === id)
+  )
+    return prepareRestack(deps, { ...input, id })
+  const observed = await requireRewrite(deps.forge).snapshot({
+    workspacePath: deps.workspacePath,
+    branch: input.branch,
+    destinationRef: `refs/autobuild/reconcile/${deps.slug}/head`,
+  })
+  const intent = events.findLast(
+    (e) => e.type === 'reconcile.publish-intended' && e.payload.id === prior.id,
+  )
+  const candidate =
+    intent?.type === 'reconcile.publish-intended' ? intent.payload.headSha : undefined
+  const basedOnCandidate =
+    candidate !== undefined &&
+    (observed === candidate ||
+      (events.some(
+        (e) =>
+          e.type === 'reconcile.rewritten' &&
+          e.payload.id === prior.id &&
+          e.payload.headSha === candidate,
+      ) &&
+        (await git(deps, ['merge-base', '--is-ancestor', candidate, observed], true)).exitCode ===
+          0))
+  if (
+    contended &&
+    !basedOnCandidate &&
+    (await git(deps, ['merge-base', '--is-ancestor', prior.oldHead, observed], true)).exitCode !== 0
+  )
+    throw new Error(`build branch diverged to ${observed}; operator provenance review required`)
+  return prepareRestack(deps, {
+    ...input,
+    id,
+    ...(prior.restackId === undefined ? {} : { restackId: prior.restackId }),
+    oldHead: observed,
+    oldBase: basedOnCandidate ? prior.targetBase : prior.oldBase,
+  })
+}
+
+/** Redo an automatic restack whose retained history is lost, from the
+ * published branch under a fresh transaction id. */
+export async function redoRestack(
+  deps: RestackDeps,
+  transaction: EventPayload<'restack.prepared'>,
+): Promise<ReconcileTransaction> {
+  return reprepareFromPublished(
+    deps,
+    {
+      attempt: 1,
+      branch: transaction.branch,
+      oldBase: transaction.oldBase,
+      targetBase: transaction.targetBase,
+      id: transaction.id,
+    },
+    { ...transaction, attempt: 1 },
+    await replayHistory(deps),
+    `${transaction.id}-redo`,
+    false,
+  )
+}
+
 async function continuePreparation(
   deps: RestackDeps,
   transaction: ReconcileTransaction,
   events: readonly AbEvent[],
 ) {
+  const facts = (await readBuildFacts(deps.store, deps.slug)).value
+  const ctx = retention(deps, facts, transaction, requireRewrite(deps.forge).archive)
   for (const sha of [
     transaction.oldHead,
     transaction.oldBase,
     transaction.targetBase,
     transaction.changeSha,
-  ]) {
-    if (
-      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0 &&
-      !(await restoreChange(deps, sha))
-    ) {
-      if (deps.forge.name === 'local-git')
-        throw new Error(
-          `missing retained replay object ${sha}; restore the Git database before retrying`,
-        )
-      await git(deps, [
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        'origin',
-        `refs/autobuild/archive/${deps.slug}/${sha}`,
-      ])
-    }
-  }
+  ])
+    await restoreOrRedo(ctx, sha)
   const replayed = events.findLast(
     (e) => e.type === 'reconcile.replayed' && e.payload.id === transaction.id,
   )
@@ -439,17 +584,7 @@ async function continuePreparation(
           'cannot restore an intended replay over local changes; preserve and inspect them',
         )
       const candidate = intent.payload.headSha
-      if (
-        (await git(deps, ['cat-file', '-e', `${candidate}^{commit}`], true)).exitCode !== 0 &&
-        !(await restoreReplay(deps, candidate))
-      )
-        await git(deps, [
-          'fetch',
-          '--no-tags',
-          '--no-write-fetch-head',
-          'origin',
-          `refs/autobuild/archive/${deps.slug}/${candidate}`,
-        ])
+      await restoreOrRedo(ctx, candidate)
       await deps.beforeRewrite?.()
       await git(deps, ['checkout', '--detach', candidate])
       return
@@ -464,10 +599,10 @@ async function continuePreparation(
     // change; no resolver-authored result is discarded.
   }
   const workspace = events.findLast((e) => e.type === 'workspace.provisioned')
-  // Remote execution has read-only Git credentials. Trusted publication archives
+  // Remote execution has read-only Git credentials. Trusted publication retains
   // these tips after execution teardown, before replacing the branch.
   if (workspace?.type !== 'workspace.provisioned' || !isRemoteWorkspace(workspace.payload))
-    await archiveTips(deps, [
+    await retainTips(deps, transaction, [
       transaction.oldHead,
       transaction.oldBase,
       transaction.targetBase,
@@ -638,11 +773,11 @@ export async function adoptRegeneratedRestack(
     await git(deps, ['cherry-pick', '--abort'], true)
     await deps.beforeRewrite?.()
     await git(deps, ['reset', '-q', '--hard'])
-    if (
-      (await git(deps, ['cat-file', '-e', `${head}^{commit}`], true)).exitCode !== 0 &&
-      !(await restoreReplay(deps, head))
+    const facts = (await readBuildFacts(deps.store, deps.slug)).value
+    await restoreOrRedo(
+      retention(deps, facts, transaction, requireRewrite(deps.forge).archive),
+      head,
     )
-      throw new Error(`the regenerated replay ${head} was not retained`)
     await git(deps, ['checkout', '-q', '--detach', head])
   }
   if ((await output(deps, ['show', '-s', '--format=%P', head])) !== transaction.targetBase)
@@ -728,7 +863,7 @@ export async function publishRestack(
       })
     }
   }
-  const archives = await archiveTips(deps, [intent.headSha])
+  const archives = await retainTips(deps, intent, [intent.headSha])
   await deps.beforeRewrite?.()
   await suspendNativeLanding(deps, intent.id)
   const result = await capability.replace({

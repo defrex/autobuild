@@ -1,5 +1,5 @@
 import { ForgeRequestDeferred } from '../forge-request-context'
-import { classifyGitNetworkFailure, isForgeFailure } from '../forge-failure'
+import { ArchiveConflictError, classifyGitNetworkFailure, isForgeFailure } from '../forge-failure'
 import type { ForgeRewrite, RewriteResult } from '../types'
 import type { Exec } from '../workspace/git-worktree'
 import { isValidGitBranchName } from '../../kernel/origin'
@@ -138,7 +138,9 @@ export function gitRewrite(
         throw new Error(`invalid immutable archive ref: ${input.ref}`)
       const existing = await read(input.workspacePath, input.ref)
       if (existing !== null && existing !== input.sha)
-        throw new Error(`immutable archive ${input.ref} names ${existing}, expected ${input.sha}`)
+        throw new ArchiveConflictError(
+          `immutable archive ${input.ref} names ${existing}, expected ${input.sha}`,
+        )
       const missing =
         !local &&
         (await git(input.workspacePath, ['cat-file', '-e', `${input.sha}^{commit}`], true))
@@ -191,7 +193,7 @@ export function gitRewrite(
           throw error
         }
         if (confirmed !== null && confirmed !== input.sha)
-          throw new Error(
+          throw new ArchiveConflictError(
             `immutable archive ${input.ref} names ${confirmed}, expected ${input.sha}`,
             { cause: failure },
           )
@@ -206,7 +208,7 @@ export function gitRewrite(
                 ? `git push refused (${refusal.trim()}); GitHub REST ref creation was acknowledged but exact readback did not confirm publication`
                 : 'exact readback did not confirm publication'
           throw new Error(
-            `archive publication rejected for ${input.ref} at ${input.sha}: ${detail}; enable refs/autobuild/archive/ publication before branch rewrites`,
+            `archive publication rejected for ${input.ref} at ${input.sha}: ${detail} (archive refs are optional; Autobuild falls back to a BuildStore copy)`,
             { cause: failure },
           )
         }

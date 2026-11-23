@@ -966,7 +966,8 @@ read-only settings/policy inspection, keeping incomplete evidence unknown. Host
 init validation invokes the configured registry forge outside guest probes.
 Dispatch inspects after acquiring its repository lease and writes validated
 `dispatcher.forge-readiness-failed` facts once per run/check for known hard
-failures. `kernel/dispatch-status.ts` retains their typed collection across ticks
+failures. `archive-refs` is a recommendation; historical facts naming it still
+decode. `kernel/dispatch-status.ts` retains their typed collection across ticks
 and reloads; the independent frontend and operator query project the same warnings.
 `ab watch` follows these repository attention events for external orchestrators.
 See [setup](setup.md#forge-readiness) for requirements and access guidance.
@@ -1871,11 +1872,22 @@ fetch of only that exact archive ref (without tags, configured refmap expansion 
 depth limit) restores missing commits and their missing ancestry, writes no shallow
 boundary, leaves an already-shallow repository's existing boundaries unchanged, and
 verifies the commits locally before returning.
+`kernel/history-retention.ts` retains leaf history best effort: the archive ref
+where the forge accepts it, else a `history-objects-<sha>` BuildStore thin pack
+excluding the frozen target base (`kernel/replay-retention.ts`), else one
+build-scoped `history-unretained` observation; `history.retained` records store,
+target and unretained commits. Its readers restore from the local repository,
+the archive ref, store copies, then the published branches, and a commit
+retained nowhere redoes the work (`<id>-redo`, or candidate retirement). A
+refusal is a plain error; `ArchiveConflictError` (an immutable ref naming a
+different SHA) and classified transient failures never fall back. Node paths
+call `archive` strictly.
 GitHub uses explicit Git transport leases; local-git uses shared-database
 `update-ref` CAS without network calls. Exact authoritative readback acknowledges
 publication. Remote-backed local refs are caches refreshed without expected-old
-CAS after confirmation, even if absent or recreated; checkout files are untouched. Trusted remote publication archives before
-replacement after guest teardown; it never uses ordinary append-only publication
+CAS after confirmation, even if absent or recreated; checkout files are untouched. Trusted remote publication retains history before
+replacement after guest teardown, through the kernel's `retain` callback over the
+provider's Git transport; it never uses ordinary append-only publication
 for restacks. Prepared, replayed, intended and rewritten facts support recovery.
 A contended rewrite preserves the observed work and retries on the same base.
 
@@ -1891,7 +1903,7 @@ uncommitted tracked changes; a wait
 declared by an unintended reconcile occurrence on a moved target first abandons
 that occurrence with `reconcile.superseded`, then replays onto the new target
 (see Ticket waits above). `reconcile-restack.ts` shares collapse, detached replay,
-archive-before-replacement and expected-head publication mechanics. Automatic
+retain-before-replacement and expected-head publication mechanics. Automatic
 transactions emit `restack.*`; clean completion never starts a reconcile cycle.
 Pre-PR conflicts adopt the prepared replay through ordinary reconcile. Initial
 verification remains mandatory; waiting conflicts use post-reconcile policy.
@@ -2201,14 +2213,15 @@ polls read no receipts or event rows.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate is archived under its exact archive ref,
-with the refused-push fallback where supported, before guarded publication continues.
-A failed archive, including a failed fallback, defers to a later attempt and neither
-proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
+store copies first. Replay copies are read in either format (chunked manifest or
+legacy base64 pack); a thin pack whose base is missing fetches the published target
+first and applies with `git index-pack --fix-thin`. An available candidate is
+retained best effort before guarded publication continues; a refused archive does
+not block it. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
-retired candidate is excluded from archive requirements unless independently
+retired candidate is excluded from retention requirements unless independently
 required by proven history. This reconstruction consumes no infrastructure
 attempt and no additional conflict occurrence; it needs no operator guidance.
 A bare retry also clears an existing infrastructure-limit escalation through

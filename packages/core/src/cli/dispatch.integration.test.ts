@@ -13006,13 +13006,19 @@ test('startup forge hard failures are durable once per run, redacted, and do not
     const events = (await fx.store.getRepoEvents(fx.origin)).filter(
       (event) => event.type === 'dispatcher.forge-readiness-failed',
     )
-    expect(events).toHaveLength(10)
+    // Four hard checks per run; archive refs are a recommendation with a
+    // BuildStore fallback for leaf rewrites.
+    expect(events).toHaveLength(8)
     expect(new Set(events.map((event) => event.payload.run)).size).toBe(2)
     expect(JSON.stringify(events)).not.toContain('secret-token')
     expect(
-      events.every((event) => !['linear-history', 'root-freshness'].includes(event.payload.check)),
+      events.every(
+        (event) =>
+          !['linear-history', 'root-freshness', 'archive-refs'].includes(event.payload.check),
+      ),
     ).toBe(true)
     expect(fx.err.join('\n')).toContain('WARN Forge linear-history')
+    expect(fx.err.join('\n')).toContain('WARN Forge archive-refs')
   } finally {
     await fx.cleanup()
   }
@@ -13081,7 +13087,7 @@ test('startup journal failures fail dispatch instead of claiming forge notices w
   }
 })
 test('multiple watch ticks and refreshes inspect and publish each hard requirement only once', async () => {
-  const { readinessChecks } = await import('../ports/forge/readiness')
+  const { hardReadinessKeys, readinessChecks } = await import('../ports/forge/readiness')
   const fx = await makeFixture([], {})
   try {
     fx.forge.readiness = readinessChecks('fail', 'Disabled')
@@ -13109,7 +13115,7 @@ test('multiple watch ticks and refreshes inspect and publish each hard requireme
       (await fx.store.getRepoEvents(fx.origin)).filter(
         (event) => event.type === 'dispatcher.forge-readiness-failed',
       ),
-    ).toHaveLength(5)
+    ).toHaveLength(hardReadinessKeys.length)
   } finally {
     await fx.cleanup()
   }

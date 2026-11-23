@@ -4,7 +4,7 @@
   "title": "Forges",
   "group": "reference",
   "description": "Choose GitHub or local git and implement safe code publication and merge.",
-  "textHash": "af9e9d9cdac60f72cdbcf49ac8f4bb324c7abef13830834a15dc14e88a3d763f",
+  "textHash": "e9d56897c62eef0aeed7a85378afb8f23acd2bd387d4daf958267eb7aa2e4a1a",
   "headings": [
     "Responsibility",
     "Shipped adapters",

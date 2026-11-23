@@ -1,14 +1,26 @@
 import { z } from 'zod'
 import type { Forge } from '../types'
 
-export const hardReadinessKeys = [
+/** Every check a `dispatcher.forge-readiness-failed` fact may name, including
+ * `archive-refs`, which historical facts recorded while it was required. */
+export const readinessFailureKeys = [
   'squash',
   'rebase',
   'build-refs',
   'node-refs',
   'archive-refs',
 ] as const
-export const readinessKeySchema = z.enum([...hardReadinessKeys, 'linear-history', 'root-freshness'])
+/** Checks whose failure stops publication. */
+export const hardReadinessKeys = ['squash', 'rebase', 'build-refs', 'node-refs'] as const
+export const readinessKeySchema = z.enum([
+  'squash',
+  'rebase',
+  'build-refs',
+  'node-refs',
+  'archive-refs',
+  'linear-history',
+  'root-freshness',
+])
 export type ReadinessKey = z.infer<typeof readinessKeySchema>
 export const forgeReadinessCheckSchema = z.object({
   check: readinessKeySchema,
@@ -35,7 +47,7 @@ const inventory: readonly [ReadinessKey, string][] = [
   ],
   [
     'archive-refs',
-    'Allow publication of immutable refs/autobuild/archive/ refs; manually verify access without overwriting archives.',
+    'Optional: allow immutable refs/autobuild/archive/ refs as forge-side backup of displaced leaf history. Where refused, leaf restacks and reconciles keep a BuildStore copy or warn and proceed. Node restack and landing still publish archive refs.',
   ],
   ['linear-history', 'Enable Require linear history on protected root and node target branches.'],
   [
