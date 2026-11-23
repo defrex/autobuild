@@ -1,4 +1,5 @@
 import type { Exec } from './git-worktree'
+import { classifyGitNetworkFailure, isForgeFailure } from '../forge-failure'
 import type { ForgeRewrite, RestorationSkip, WorkspacePreservationHead } from '../types'
 
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
@@ -237,7 +238,11 @@ export async function restoreGitCommits(input: {
   return { skipped }
 }
 
-/** Trusted exact-resource probe shared by hosted and local recovery. */
+/** Trusted exact-resource probe shared by hosted and local recovery. A thin
+ * replay pack completes only over its exclusion base `replayBase`, which the
+ * published target branch holds; it is fetched first when absent. A copy that
+ * cannot restore the candidate proves it unavailable (`false`, so recovery
+ * retires and redoes it); transport failures stay errors, so recovery defers. */
 export async function inspectGitCandidate(input: {
   exec: Exec
   workspacePath: string
@@ -246,14 +251,20 @@ export async function inspectGitCandidate(input: {
   archiveRef: string
   local?: boolean
   replayPack?: string
+  replayBase?: string
+  targetBranch?: string
 }): Promise<boolean> {
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(input.sha)) throw new Error('invalid candidate SHA')
+  if (input.replayBase !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(input.replayBase))
+    throw new Error('invalid replay base SHA')
   const git = async (args: string[], optional = false) => {
     const r = await input.exec(['git', ...args], { cwd: input.workspacePath })
     if (r.exitCode !== 0 && !optional) throw new Error(`candidate probe failed: ${r.stderr}`)
     return r
   }
-  if ((await git(['cat-file', '-e', `${input.sha}^{commit}`], true)).exitCode === 0) return true
+  const present = async (sha: string) =>
+    (await git(['cat-file', '-e', `${sha}^{commit}`], true)).exitCode === 0
+  if (await present(input.sha)) return true
   for (const ref of [`refs/heads/${input.branch}`, input.archiveRef]) {
     const r = await git(
       input.local
@@ -273,7 +284,33 @@ export async function inspectGitCandidate(input: {
     return true
   }
   if (!input.replayPack) return false
-  if (!/^[A-Za-z0-9+/=]+$/.test(input.replayPack)) throw new Error('invalid retained replay pack')
+  if (!/^[A-Za-z0-9+/=]+$/.test(input.replayPack)) return false
+  if (input.replayBase !== undefined && !(await present(input.replayBase))) {
+    if (!input.local && input.targetBranch !== undefined) {
+      let fetched: Awaited<ReturnType<Exec>>
+      try {
+        fetched = await git(
+          [
+            'fetch',
+            '--no-tags',
+            '--no-write-fetch-head',
+            '--refmap=',
+            'origin',
+            `refs/heads/${input.targetBranch}`,
+          ],
+          true,
+        )
+      } catch (error) {
+        throw classifyGitNetworkFailure(error)
+      }
+      if (fetched.exitCode !== 0) {
+        const classified = classifyGitNetworkFailure(new Error(fetched.stderr || fetched.stdout))
+        if (isForgeFailure(classified)) throw classified
+      }
+    }
+    // The target no longer contains the base: the copy cannot complete.
+    if (!(await present(input.replayBase))) return false
+  }
   const temporary = await input.exec(['mktemp'], { cwd: input.workspacePath })
   const path = temporary.stdout.trim()
   if (temporary.exitCode !== 0 || !path) throw new Error('cannot stage replay pack')
@@ -292,21 +329,21 @@ export async function inspectGitCandidate(input: {
       )
       if (r.exitCode !== 0) throw new Error('cannot stage replay pack')
     }
+    // index-pack applies legacy full packs and current thin packs alike.
     const r = await input.exec(
       [
         'bash',
         '-o',
         'pipefail',
         '-c',
-        'base64 -d "$1" | git unpack-objects -q',
+        'base64 -d "$1" | git index-pack --stdin --fix-thin',
         'restore-replay',
         path,
       ],
       { cwd: input.workspacePath },
     )
-    if (r.exitCode !== 0) throw new Error('cannot restore replay pack')
-    await git(['cat-file', '-e', `${input.sha}^{commit}`])
-    return true
+    if (r.exitCode !== 0) return false
+    return present(input.sha)
   } finally {
     await input.exec(['rm', '-f', path], { cwd: input.workspacePath })
   }
