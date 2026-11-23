@@ -954,7 +954,12 @@ test('a server one ledger revision ahead keeps seeds typed, values canonical and
   const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
     const request = new Request(url, init)
     calls.push(`${request.method} ${new URL(request.url).pathname}`)
-    return answer(request)
+    // A source checkout between releases: its catalog matches no published
+    // contract. The release gate freezes this checkout's catalog before
+    // publishing, so without this the client would be answered as a release.
+    const unreleased = new Headers(request.headers)
+    unreleased.set(CATALOG_IDENTITY_HEADER, `${unreleased.get(CATALOG_IDENTITY_HEADER)}+source`)
+    return answer(new Request(request, { headers: unreleased }))
   }) as typeof fetch
   const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
   const scopes = {
