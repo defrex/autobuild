@@ -45,8 +45,16 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
      is a contract on observable visual and reference outcomes, not on implementation: judge the rendered output against it wherever the code lets you
      check, and treat a divergence as a finding. A gap in the asset is not a
      reason to invent requirements.
-   - **Tests** — do the new tests exercise the seams this change created or
-     moved? Would they fail if the change were wrong?
+   - **Tests** — two questions about the tests this change adds or changes.
+     Would they fail if the change were wrong: do they exercise the seams it
+     created or moved? And is each committed test worth running on every
+     future build? Each of these is a finding, rated like any other: a test
+     that duplicates existing coverage; one that asserts implementation
+     details instead of behavior; one that exists only to scaffold the build;
+     a slow test where a faster one at a narrower seam would catch the same
+     regression. Do not demand tests the spec does not warrant. Tests outside
+     the diff are out of scope; record low-value ones with `ab observe`, never
+     as findings.
    - **Fit** — matches the codebase's idioms; no needless indirection.
    - **Optimization attempts** — when the manifest has an `attempt` block,
      read the attempt's `objective.md` (the block's `path`) and judge the
