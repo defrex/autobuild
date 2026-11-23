@@ -65,7 +65,8 @@ describe('local override classification', () => {
   })
 
   test('the allowlist is exactly the personal and machine-local sections', () => {
-    expect([...LOCAL_OVERRIDE_KEYS].sort()).toEqual(
+    const allowlist: string[] = [...LOCAL_OVERRIDE_KEYS].sort()
+    expect(allowlist).toEqual(
       ['accounts', 'capacity', 'hooks', 'roles', 'ticketScanIntervalSeconds', 'upgrade'].sort(),
     )
   })
