@@ -1059,6 +1059,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'workspace.cleanup-required':
       case 'workspace.fenced':
       case 'workspace.commits-preserved':
+      case 'workspace.commits-retained':
       case 'workspace.commits-lost':
       case 'workspace.released':
       case 'pr-summary.requested':
@@ -1113,6 +1114,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'publication.retry-exhausted':
       case 'publication.candidate-retired':
       case 'history.retained':
+      case 'node.history-retained':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
       case 'pr-attachment.hosted':

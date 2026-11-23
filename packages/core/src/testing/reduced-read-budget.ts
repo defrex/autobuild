@@ -1616,6 +1616,67 @@ export async function parkedSweepReadBudget(opts: {
       expect({ meta: metrics.meta, bodies: metrics.bodies }).toEqual(baseline)
       expect(retainedHistoryReads).toBe(0)
     }
+    // So does one whose unpublished workspace commits and node write history
+    // are held in the store: provisioning and recovery read them, idle ticks never.
+    const nodeSha = (length === 100 ? 'c' : 'd').repeat(40)
+    await store.putArtifact(slugs[0]!, {
+      kind: `history-objects-${nodeSha}`,
+      content: JSON.stringify({
+        version: 1,
+        head: nodeSha,
+        base: transaction.targetBase,
+        digest,
+        bytes: 3,
+        chunkBytes: 1024 * 1024,
+        chunks: 1,
+      }),
+    })
+    await store.append(slugs[0]!, {
+      actor: KERNEL,
+      type: 'node.history-retained',
+      payload: {
+        operation: 'restack',
+        id: `node-retained-${length}`,
+        base: transaction.targetBase,
+        store: [nodeSha],
+        target: [],
+        unretained: [],
+      },
+    })
+    await store.append(slugs[0]!, {
+      actor: DISPATCHER,
+      type: 'workspace.commits-retained',
+      payload: {
+        workspace: 1,
+        execution: 0,
+        ref: 'retained-workspace',
+        branch: `ab/${slugs[0]!}`,
+        phase: 'implement',
+        round: 1,
+        heads: [
+          {
+            sha: retainedSha,
+            role: 'producer',
+            commits: [retainedSha],
+            storeBase: transaction.targetBase,
+          },
+        ],
+      },
+    })
+    opts.advance()
+    await idle.tick({ acceptNewWork: true })
+    for (const _ of [0, 1]) {
+      opts.advance()
+      reset()
+      retainedHistoryReads = 0
+      const requests = await countStoreRequests(store, () =>
+        idle.tick({ acceptNewWork: true }).then(() => undefined),
+      )
+      expect(requests).toEqual(idleRequests[0]!)
+      expect(metrics.historicalRows).toBe(0)
+      expect({ meta: metrics.meta, bodies: metrics.bodies }).toEqual(baseline)
+      expect(retainedHistoryReads).toBe(0)
+    }
     const refusedEvents = Reflect.get(store, 'builds').get(refusedSlug)
       .events as import('../events/catalog').AbEvent[]
     while (refusedEvents.length < length)

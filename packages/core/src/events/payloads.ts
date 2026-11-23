@@ -1262,6 +1262,41 @@ export const eventPayloadSchemas = {
       }),
     ),
   }),
+  /** `workspace.commits-preserved` for a release where the forge refused an
+   * archive ref for at least one head. A head is self-describing: `remoteRef`
+   * names its immutable forge archive, `storeBase` says it is kept as a
+   * `history-objects-<sha>` BuildStore copy (a thin pack of the objects it
+   * reaches that `storeBase` does not), which restoration completes over a
+   * present `storeBase`. A separate decisive type, so a runtime that knows
+   * only forge-held heads defers instead of fetching a ref never written. */
+  'workspace.commits-retained': z
+    .strictObject({
+      workspace: z.number().int().positive(),
+      execution: z.number().int().nonnegative(),
+      ref: z.string().min(1),
+      branch: z.string().min(1),
+      phase: z.string().min(1),
+      round: z.number().int().nonnegative(),
+      heads: z.array(
+        z.union([
+          z.strictObject({
+            sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+            role: z.enum(['branch', 'producer']),
+            commits: z.array(z.string().regex(/^[0-9a-f]{40,64}$/i)),
+            remoteRef: z.string().regex(/^refs\/autobuild\/archive\//),
+          }),
+          z.strictObject({
+            sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+            role: z.enum(['branch', 'producer']),
+            commits: z.array(z.string().regex(/^[0-9a-f]{40,64}$/i)),
+            storeBase: gitOid,
+          }),
+        ]),
+      ),
+    })
+    .refine((p) => p.heads.some((head) => 'storeBase' in head), {
+      message: 'workspace.commits-retained must hold at least one store-kept head',
+    }),
   'workspace.commits-lost': z.strictObject({
     workspace: z.number().int().positive(),
     execution: z.number().int().nonnegative(),
@@ -1469,7 +1504,8 @@ export const eventPayloadSchemas = {
       operation: z.enum(['restack', 'reconcile']),
       /** Rewrite transaction id. */
       id: z.string().min(1),
-      /** Exclusion base of every store copy: the transaction's target base. */
+      /** Exclusion base of a store copy this rewrite made: the transaction's
+       * target base. A copy an earlier write made keeps its own base. */
       base: gitOid,
       store: z.array(gitOid),
       target: z.array(gitOid),
@@ -1477,6 +1513,25 @@ export const eventPayloadSchemas = {
     })
     .refine((p) => p.store.length + p.target.length + p.unretained.length > 0, {
       message: 'history.retained must name at least one commit',
+    }),
+  /** `history.retained` for node writes: history a node restack, node
+   * landing, integration landing or node verify head reserved when the forge
+   * refused its immutable archive ref. Same field meanings; `base` is the
+   * published head the write builds on. A separate decisive type, so an
+   * older runtime defers instead of strictly re-archiving on recovery. */
+  'node.history-retained': z
+    .strictObject({
+      operation: z.enum(['restack', 'landing', 'integration-landing', 'verify']),
+      /** Reservation id, or the integration cycle id. */
+      id: z.string().min(1),
+      /** Exclusion base of a store copy this write made. */
+      base: gitOid,
+      store: z.array(gitOid),
+      target: z.array(gitOid),
+      unretained: z.array(gitOid),
+    })
+    .refine((p) => p.store.length + p.target.length + p.unretained.length > 0, {
+      message: 'node.history-retained must name at least one commit',
     }),
   'publication.lost': z.strictObject({
     /** seq of the lost `publication.requested` event. */

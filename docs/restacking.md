@@ -169,7 +169,19 @@ displaced heads and the temporary change, best effort, per commit:
 - A commit retained nowhere redoes the work: an unpublished transaction
   re-prepares from the published branch as `<id>-redo`; a requested candidate is
   retired through `publication.candidate-retired`.
-- Node restack and node landing still require archive refs; a refusal stops them.
+- Node writes (restack, landing, integration landing, node verify head) retain
+  the same way, excluding the published head they build on, and record non-forge
+  outcomes in decisive `node.history-retained {operation: restack | landing |
+  integration-landing | verify, ...}`. Inputs kept nowhere stay reachable from
+  published branches, so the write proceeds after the shared warning.
+- Node recovery (restack, landing, closed-node settlement, node-conflict
+  reconcile) restores reserved inputs before reading them; an input kept nowhere
+  before the guarded update landed abandons the reservation, and the next node
+  transaction reserves again from the published branches.
+- Workspace preservation is strict: archive ref, else a `history-objects-<sha>`
+  store copy over the preservation base, else release is refused. Store-kept
+  heads go on decisive `workspace.commits-retained`, and replacement
+  provisioning restores them on any host.
 
 Remote archives also publish
 commits present only on the remote: GitHub uses create-only Git-reference REST creation

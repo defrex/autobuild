@@ -176,7 +176,11 @@ export interface BuildReadAcc {
   summaryEligibleAfter?: string
   finalizePublicationRequested: boolean
   workspaceFence?: Extract<AbEvent, { type: 'workspace.fenced' }>
-  workspacePreservation?: Extract<AbEvent, { type: 'workspace.commits-preserved' }>
+  /** The latest preservation receipt, forge-only or with store-kept heads. */
+  workspacePreservation?: Extract<
+    AbEvent,
+    { type: 'workspace.commits-preserved' | 'workspace.commits-retained' }
+  >
   /** Bounded record of the latest distinct shas a recorded rewrite replaced,
    * newest last. Preserved branch heads it covers are superseded. */
   replacedHeads: string[]
@@ -241,7 +245,8 @@ export interface BuildReadAcc {
     ts: string
   }[]
   observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
-  /** Shas `history.retained` recorded, by where the displaced commit is kept. */
+  /** Shas `history.retained` and `node.history-retained` recorded, by where
+   * the displaced commit is kept. */
   retainedHistory: { store: string[]; target: string[]; unretained: string[] }
 }
 export const buildReadFactsReducer = defineReducer({
@@ -388,7 +393,11 @@ export const buildReadFactsReducer = defineReducer({
           ]
       }
       if (event.type === 'workspace.fenced') acc.workspaceFence = event
-      if (event.type === 'workspace.commits-preserved') acc.workspacePreservation = event
+      if (
+        event.type === 'workspace.commits-preserved' ||
+        event.type === 'workspace.commits-retained'
+      )
+        acc.workspacePreservation = event
       if (event.type === 'workspace.commits-lost') acc.workspaceLoss = event
       if (event.type === 'workspace.provisioned' || event.type === 'workspace.cleanup-required')
         acc.latestWorkspace = event
@@ -532,7 +541,7 @@ export const buildReadFactsReducer = defineReducer({
         acc.observationFacts.push({ payload: event.payload, seq: event.seq, ts: event.ts })
       }
       if (event.type === 'pr.merged') acc.mergeTimes.push(event.ts)
-      if (event.type === 'history.retained')
+      if (event.type === 'history.retained' || event.type === 'node.history-retained')
         for (const where of ['store', 'target', 'unretained'] as const)
           for (const sha of event.payload[where])
             if (!acc.retainedHistory[where].includes(sha)) acc.retainedHistory[where].push(sha)

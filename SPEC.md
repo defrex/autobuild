@@ -192,9 +192,10 @@ by init validation and once at dispatch startup after repository lease acquisiti
 It reports squash/rebase merge methods and kernel build/node publication
 permissions as hard requirements, and archive-ref publication, protected-target
 linear history and root freshness as recommendations. Archive refs are optional
-forge-side backup of displaced leaf history: where the forge refuses them, leaf
-restacks and reconciles keep a BuildStore copy or warn and proceed (§15.7);
-node restack and landing still publish archive refs. Results are pass, fail, or unknown; incomplete
+forge-side backup of displaced leaf and node history and of unpublished
+workspace commits: where the forge refuses them, rewrites and node writes keep a
+BuildStore copy or warn and proceed, and workspace preservation keeps a
+BuildStore copy or refuses the release (§15.7). Results are pass, fail, or unknown; incomplete
 inspection never proves permission. Local Git passes trivially; legacy plugins
 report unknown. Known hard failures fail init validation and produce one durable
 `dispatcher.forge-readiness-failed` repository fact per run/check; historical
@@ -3488,7 +3489,7 @@ Node branches have one writer at a time. A distinct mutable node writer lease
 (serialized independently of runner execution leases) guards both restacks and
 controlled child merges. A revision-checked `node.writer-reserved` fact freezes
 the operation, original expected head, parent snapshot, previous contribution
-boundary, immutable archives, ordered changes, and merge proofs. Expiry permits
+boundary, retained inputs, ordered changes, and merge proofs. Expiry permits
 recovery of that reservation, never an incompatible operation. Each change has
 prepared, conflicted, or replayed receipts. Resolved objects are retained in the
 BuildStore before their receipts. `node.publish-intended`, `node.rewritten`, and
@@ -3496,7 +3497,8 @@ BuildStore before their receipts. `node.publish-intended`, `node.rewritten`, and
 is authoritative: exact intended-head readback confirms publication, while local
 refs are caches refreshed without CAS. An unconfirmed descendant is contention;
 a durable confirmed receipt can preserve a historical write. Exact
-expected-head replacement and immutable archive refs preserve displaced history;
+expected-head replacement and best-effort retained history (immutable archive
+refs, else BuildStore copies, §15.7) preserve displaced history;
 contention retains the previous contribution boundary and retries the complete
 observed contribution. An untagged commit, including an empty commit, is foreign.
 `node.inventory` retains the sampled source boundary without promoting the confirmed
@@ -4517,7 +4519,7 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, decisive `workspace.commits-retained` (the same receipt when some head is a BuildStore copy, §15.7), `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.priority-set {priority}` (advisory slot-admission priority, §12); `build.land-requested` → `landing.command-acknowledged`; decisive human `build.reopened {feedback?, spec?: {artifact, assets?}}` (§15.7); `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node or a settled leaf's reopen, §15.7; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
@@ -4710,7 +4712,10 @@ dispatcher-authored. Existing merged/closed PR, abort and completion facts close
 Node transaction state reduces `node.writer-reserved`, `node.item-prepared`,
 `node.item-conflicted`, `node.item-regenerated`, `node.item-replayed`, `node.publish-intended`,
 `node.rewritten`, `node.writer-settled`, and `node.inventory` (§13.1 integration
-restacking). Durable `node.restack-requested` facts retain operator/presence demand,
+restacking). The decisive kernel or dispatcher `node.history-retained {operation:
+restack | landing | integration-landing | verify, id, base, store, target,
+unretained}` records node write history kept outside forge archive refs (§15.7).
+Durable `node.restack-requested` facts retain operator/presence demand,
 including destination, sampled parent, dependent ticket and required identities.
 Reservations freeze covered request ids; confirmed settlement acknowledges only
 that coverage, and `node.restack-satisfied` records coverage or destination change.
@@ -5104,10 +5109,17 @@ Before releasing or replacing a build workspace, the dispatcher confirms a
 non-destructive execution fence for the exact workspace and execution generation.
 It preserves unpublished branch commits and distinct detached producer candidates
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
-readback, and records `workspace.commits-preserved` before cleanup. Replacement
-provisioning restores those exact refs before starting an agent, reading them
-from the local repository with the local-git forge and fetching each exact ref
-from the remote otherwise. A preserved
+readback, and records `workspace.commits-preserved` before cleanup. Where the
+forge refuses an archive ref, the head is kept as a BuildStore copy instead
+(§15.7) and the receipt is the decisive `workspace.commits-retained`, whose heads
+each name either `remoteRef` or `storeBase`; a head kept by neither refuses the
+release. Replacement provisioning restores those exact commits before starting
+an agent, reading archive refs from the local repository with the local-git forge
+and fetching each exact ref from the remote otherwise, and restoring store copies
+through a dispatcher-side callback on any host, so a remote guest never holds
+store credentials. A runtime from before store-kept heads defers on the decisive
+receipt instead of misreading it; one that releases before seeing it preserves
+strictly, as it always did, and at worst refuses the release. A preserved
 branch head that the build's latest 64 replaced heads cover, as the replaced
 head itself or one of its ancestors, is kept only as archived objects: it is
 never preserved or restored as the branch, and provisioning records the skip as
@@ -5118,8 +5130,8 @@ that exists without a provisioned checkout, records `workspace.commits-lost`,
 naming known candidates and explicitly noting that any additional unpublished
 SHAs could not be inspected. An environment that never started executing holds
 no unpublished work: objects its checkout lacks mean nothing to preserve, so
-cleanup records `workspace.commits-preserved` carrying forward earlier preserved
-heads, then releases and replaces it. Unknown fencing, inspection, transport, or
+cleanup records `workspace.commits-preserved` (or `workspace.commits-retained`)
+carrying forward earlier preserved heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
 releases it and provisions the next generation. Provisioning cut off by a
@@ -5379,8 +5391,32 @@ rewrite fact's `archives`. Older runtimes treat it as an unknown decisive fact
 and defer. Retention is never a branch or tag. An immutable ref that already
 names a different commit is an `ArchiveConflictError`: never retried, never a
 fallback. Classified transient forge failures still retry rather than fall back.
-Node restack, node landing, integration landing and node verify heads still
-require archive refs, and a refusal stops them.
+
+Node writes retain the same way. Node restack retains the frozen expected head,
+previous boundary and parent; node landing retains the destination head and the
+leaf candidate; integration landing and the node verify head retain the node
+head. Each store copy excludes the published head the write builds on, and the
+decisive `node.history-retained {operation: restack | landing |
+integration-landing | verify, id, base, store, target, unretained}` records the
+non-forge outcomes; the `history-unretained` warning is shared with leaf
+retention. A node write whose inputs are kept nowhere still proceeds: they stay
+reachable from published branches until its guarded update lands. Node recovery
+(restack recovery, landing recovery, closed-node settlement and node-conflict
+reconcile) restores its reserved inputs before any Git read of them, from the
+archive ref, a store copy, or the published branches. An input kept nowhere
+before the guarded update landed abandons the reservation
+(`node.writer-settled {outcome: abandoned}`), and the next node transaction
+reserves again from the published branches.
+
+Workspace commit preservation (§12 D) is the strict exception: its unpublished
+commits may exist nowhere else. It tries the forge archive ref, then a
+`history-objects-<sha>` store copy excluding the preservation base, and never
+classifies a commit as `target` or proceeds unretained. When both fail, release
+is refused and cleanup stays pending. A history copy is identified by its head:
+a later retention of the same commit reuses the existing copy and its saved
+base. Preservation records that base and, when it is no longer an ancestor of
+the current preservation base, retains the base itself the same way, to a
+bounded depth; restoration follows that chain.
 
 Readers (restack and reconcile preparation, regenerated-restack adoption,
 candidate recovery) restore a missing commit in the same order: the local

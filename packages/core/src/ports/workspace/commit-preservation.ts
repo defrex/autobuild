@@ -1,24 +1,32 @@
 import type { Exec } from './git-worktree'
 import { classifyGitNetworkFailure, isForgeFailure } from '../forge-failure'
 import type { ForgeRewrite, RestorationSkip, WorkspacePreservationHead } from '../types'
+import { isArchiveRefusal } from '../../kernel/history-retention'
 
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 /** The replaced sha in the bounded record that equals or contains `sha`.
  * Replaced commits were published once and stay archived under
- * `<archivePrefix><sha>`; a remote workspace fetches only those it lacks.
+ * `<archivePrefix><sha>` or, where the forge refused that, as store copies
+ * `restore` brings back; a remote workspace fetches only those it lacks.
  * Missing objects or unreadable archives mean "not covered", never an error. */
 export async function supersedingReplacedHead(input: {
   exec: Exec
   workspacePath: string
   sha: string
   replaced: string[]
-  archivePrefix: string
+  /** Archive namespace of the replaced heads; absent skips forge lookup. */
+  archivePrefix?: string
   local?: boolean
+  /** Restores a replaced head from wherever its history is retained. */
+  restore?: (sha: string) => Promise<boolean>
 }): Promise<string | undefined> {
   if (!OID.test(input.sha) || !input.replaced.every((sha) => OID.test(sha)))
     throw new Error('invalid replaced head')
-  if (!/^refs\/autobuild\/archive\/[a-z0-9-]+\/$/.test(input.archivePrefix))
+  if (
+    input.archivePrefix !== undefined &&
+    !/^refs\/autobuild\/archive\/[a-z0-9-]+\/$/.test(input.archivePrefix)
+  )
     throw new Error('invalid replaced head archive prefix')
   if (input.replaced.includes(input.sha)) return input.sha
   const run = (args: string[]) => input.exec(['git', ...args], { cwd: input.workspacePath })
@@ -32,16 +40,26 @@ export async function supersedingReplacedHead(input: {
     }
     return { covering: undefined, missing }
   }
-  const first = await contain(newestFirst)
-  if (first.covering || input.local || first.missing.length === 0) return first.covering
-  const refs = first.missing.map((sha) => `${input.archivePrefix}${sha}`)
+  let first = await contain(newestFirst)
+  if (first.covering || first.missing.length === 0) return first.covering
+  if (input.restore) {
+    const restored: string[] = []
+    for (const sha of first.missing) if (await input.restore(sha)) restored.push(sha)
+    const retried = await contain(restored)
+    if (retried.covering) return retried.covering
+    first = { covering: undefined, missing: first.missing.filter((sha) => !restored.includes(sha)) }
+    if (first.missing.length === 0) return undefined
+  }
+  const prefix = input.archivePrefix
+  if (input.local || prefix === undefined) return undefined
+  const refs = first.missing.map((sha) => `${prefix}${sha}`)
   const listed = await run(['ls-remote', '--refs', 'origin', ...refs])
   if (listed.exitCode !== 0) return undefined
   const advertised = new Set(
     listed.stdout
       .split('\n')
       .map((line) => line.trim().split(/\s+/))
-      .filter(([sha, ref]) => ref === `${input.archivePrefix}${sha}`)
+      .filter(([sha, ref]) => ref === `${prefix}${sha}`)
       .map(([, ref]) => ref!),
   )
   const fetchable = refs.filter((ref) => advertised.has(ref))
@@ -57,7 +75,7 @@ export async function supersedingReplacedHead(input: {
   if (fetched.exitCode !== 0) return undefined
   const verified: string[] = []
   for (const ref of fetchable) {
-    const sha = ref.slice(input.archivePrefix.length)
+    const sha = ref.slice(prefix.length)
     const actual = await run(['rev-parse', '--verify', `${ref}^{commit}`])
     if (actual.exitCode === 0 && actual.stdout.trim() === sha) verified.push(sha)
   }
@@ -66,9 +84,11 @@ export async function supersedingReplacedHead(input: {
 
 /** Boundary-only Git inspection. Inventory traverses the unpublished change,
  * while immutable archive acknowledgement proves the tip and its ancestry.
- * With `neverExecuted`, a non-zero object probe means the checkout lacks that
- * object: a missing base preserves nothing, and a missing `HEAD`, branch or
- * candidate is skipped. Traversal and archive failures stay strict. */
+ * Where the forge refuses the archive ref, `retain` keeps the head as a
+ * BuildStore copy instead. With `neverExecuted`, a non-zero object probe means
+ * the checkout lacks that object: a missing base preserves nothing, and a
+ * missing `HEAD`, branch or candidate is skipped. Traversal failures, and a
+ * head neither the forge nor the store keeps, stay strict. */
 export async function preserveGitCommits(input: {
   exec: Exec
   workspacePath: string
@@ -84,6 +104,17 @@ export async function preserveGitCommits(input: {
   /** No execution ever started in this environment, so it holds no
    * unpublished work and absent objects are not an error. */
   neverExecuted?: boolean
+  /** Keeps a head the forge refused to archive as a BuildStore copy over
+   * `base` and resolves to the copy's actual exclusion base; throws when it
+   * cannot. Absent, a refusal stays an error. */
+  retain?: (input: {
+    exec: Exec
+    workspacePath: string
+    sha: string
+    base: string
+  }) => Promise<string>
+  /** Restores a replaced head kept as a store copy, for supersession checks. */
+  restore?: (sha: string) => Promise<boolean>
 }): Promise<WorkspacePreservationHead[]> {
   const git = async (args: string[], optional = false) => {
     const result = await input.exec(['git', ...args], { cwd: input.workspacePath })
@@ -124,7 +155,28 @@ export async function preserveGitCommits(input: {
       .filter(Boolean)
     if (commits.length === 0) continue
     const remoteRef = `refs/autobuild/archive/${input.slug}/${sha}`
-    await input.archive({ workspacePath: input.workspacePath, ref: remoteRef, sha })
+    let location: { remoteRef: string } | { storeBase: string }
+    try {
+      await input.archive({ workspacePath: input.workspacePath, ref: remoteRef, sha })
+      location = { remoteRef }
+    } catch (error) {
+      if (!input.retain || !isArchiveRefusal(error)) throw error
+      try {
+        location = {
+          storeBase: await input.retain({
+            exec: input.exec,
+            workspacePath: input.workspacePath,
+            sha,
+            base: input.base,
+          }),
+        }
+      } catch (copy) {
+        throw new Error(
+          `workspace preservation of ${sha} failed: archive refused (${error instanceof Error ? error.message : String(error)}); BuildStore copy failed (${copy instanceof Error ? copy.message : String(copy)})`,
+          { cause: copy },
+        )
+      }
+    }
     const superseded =
       sha === branchSha &&
       !!input.replaced?.length &&
@@ -135,21 +187,23 @@ export async function preserveGitCommits(input: {
         replaced: input.replaced,
         archivePrefix: `refs/autobuild/archive/${input.slug}/`,
         local: input.local,
+        restore: input.restore,
       })) !== undefined
-    heads.push({
-      sha,
-      remoteRef,
-      role: sha === branchSha && !superseded ? 'branch' : 'producer',
-      commits,
-    })
+    const role = sha === branchSha && !superseded ? 'branch' : 'producer'
+    heads.push(
+      'remoteRef' in location
+        ? { sha, remoteRef: location.remoteRef, role, commits }
+        : { sha, role, commits, storeBase: location.storeBase },
+    )
   }
   return heads
 }
 
-/** Fetch only recorded immutable refs. Attaching an unpublished branch is safe
- * only over an ancestor; detached producer objects never move the branch.
- * Branch heads the branch contains, or that a replaced head in the bounded
- * record covers, are classified before any mutation and skipped. */
+/** Fetch only recorded immutable refs, or restore recorded store copies
+ * through `restoreStored`. Attaching an unpublished branch is safe only over
+ * an ancestor; detached producer objects never move the branch. Branch heads
+ * the branch contains, or that a replaced head in the bounded record covers,
+ * are classified before any mutation and skipped. */
 export async function restoreGitCommits(input: {
   exec: Exec
   workspacePath: string
@@ -158,6 +212,11 @@ export async function restoreGitCommits(input: {
   /** The build's bounded replaced-head record, newest last. */
   replaced?: string[]
   local?: boolean
+  /** Restores a commit kept as a BuildStore copy (a `storeBase` head, or a
+   * replaced head the forge refused to archive). */
+  restoreStored?: (sha: string) => Promise<boolean>
+  /** Archive namespace for replaced heads when no head names one. */
+  slug?: string
 }): Promise<{ skipped: RestorationSkip[] }> {
   const skipped: RestorationSkip[] = []
   const git = async (args: string[], optional = false) => {
@@ -167,11 +226,67 @@ export async function restoreGitCommits(input: {
     return result
   }
   for (const head of input.heads) {
+    if (head.storeBase !== undefined) {
+      if (!OID.test(head.sha) || !OID.test(head.storeBase))
+        throw new Error('invalid workspace restoration store copy')
+      if ((await git(['cat-file', '-e', `${head.sha}^{commit}`], true)).exitCode !== 0) {
+        if (!input.restoreStored || !(await input.restoreStored(head.sha)))
+          throw new Error(`workspace restoration store copy for ${head.sha} is unavailable`)
+      }
+    } else if (head.remoteRef === undefined) throw new Error('invalid workspace restoration ref')
+    else await fetchArchived(head.remoteRef, head.sha)
+    for (const sha of [head.sha, ...head.commits]) await git(['cat-file', '-e', `${sha}^{commit}`])
+    if (head.role !== 'branch') continue
+    const ref = `refs/heads/${input.branch}`
+    const current = (await git(['rev-parse', '--verify', ref])).stdout.trim()
+    const preservedAncestor =
+      current === head.sha ||
+      (await git(['merge-base', '--is-ancestor', head.sha, current], true)).exitCode === 0
+    if (preservedAncestor) {
+      skipped.push({ sha: head.sha, reason: 'contained' })
+      continue
+    }
+    // Every head of one receipt shares the build's archive namespace.
+    const archived = input.heads.find((h) => h.remoteRef !== undefined)
+    const archivePrefix =
+      archived?.remoteRef !== undefined
+        ? archived.remoteRef.slice(0, -archived.sha.length)
+        : input.slug !== undefined
+          ? `refs/autobuild/archive/${input.slug}/`
+          : undefined
     if (
-      !/^refs\/autobuild\/archive\/[a-z0-9-]+\/[0-9a-f]+$/.test(head.remoteRef) ||
-      !head.remoteRef.endsWith(`/${head.sha}`)
+      input.replaced?.length &&
+      (await supersedingReplacedHead({
+        exec: input.exec,
+        workspacePath: input.workspacePath,
+        sha: head.sha,
+        replaced: input.replaced,
+        archivePrefix,
+        local: input.local,
+        restore: input.restoreStored,
+      })) !== undefined
+    ) {
+      skipped.push({ sha: head.sha, reason: 'superseded' })
+      continue
+    }
+    const currentAncestor = await git(['merge-base', '--is-ancestor', current, head.sha], true)
+    if (currentAncestor.exitCode !== 0)
+      throw new Error('workspace restoration would overwrite divergent branch work')
+    const status = await git(['status', '--porcelain'])
+    if (status.stdout.trim()) throw new Error('workspace restoration requires a clean checkout')
+    await git(['update-ref', ref, head.sha, current])
+    const attached = (await git(['symbolic-ref', '--quiet', 'HEAD'], true)).stdout.trim()
+    if (attached === ref) await git(['reset', '--hard', head.sha])
+  }
+  return { skipped }
+
+  async function fetchArchived(remoteRef: string, sha: string) {
+    if (
+      !/^refs\/autobuild\/archive\/[a-z0-9-]+\/[0-9a-f]+$/.test(remoteRef) ||
+      !remoteRef.endsWith(`/${sha}`)
     )
       throw new Error('invalid workspace restoration ref')
+    const head = { remoteRef, sha }
     if (!input.local) {
       const fetched = await git(
         [
@@ -201,41 +316,7 @@ export async function restoreGitCommits(input: {
         `workspace restoration git ${resolveArgs.join(' ')} failed: ${resolved.stderr}`,
       )
     if (actual !== head.sha) throw new Error(`workspace restoration ref ${head.remoteRef} changed`)
-    for (const sha of [head.sha, ...head.commits]) await git(['cat-file', '-e', `${sha}^{commit}`])
-    if (head.role !== 'branch') continue
-    const ref = `refs/heads/${input.branch}`
-    const current = (await git(['rev-parse', '--verify', ref])).stdout.trim()
-    const preservedAncestor =
-      current === head.sha ||
-      (await git(['merge-base', '--is-ancestor', head.sha, current], true)).exitCode === 0
-    if (preservedAncestor) {
-      skipped.push({ sha: head.sha, reason: 'contained' })
-      continue
-    }
-    if (
-      input.replaced?.length &&
-      (await supersedingReplacedHead({
-        exec: input.exec,
-        workspacePath: input.workspacePath,
-        sha: head.sha,
-        replaced: input.replaced,
-        archivePrefix: head.remoteRef.slice(0, -head.sha.length),
-        local: input.local,
-      })) !== undefined
-    ) {
-      skipped.push({ sha: head.sha, reason: 'superseded' })
-      continue
-    }
-    const currentAncestor = await git(['merge-base', '--is-ancestor', current, head.sha], true)
-    if (currentAncestor.exitCode !== 0)
-      throw new Error('workspace restoration would overwrite divergent branch work')
-    const status = await git(['status', '--porcelain'])
-    if (status.stdout.trim()) throw new Error('workspace restoration requires a clean checkout')
-    await git(['update-ref', ref, head.sha, current])
-    const attached = (await git(['symbolic-ref', '--quiet', 'HEAD'], true)).stdout.trim()
-    if (attached === ref) await git(['reset', '--hard', head.sha])
   }
-  return { skipped }
 }
 
 /** Trusted exact-resource probe shared by hosted and local recovery. A thin

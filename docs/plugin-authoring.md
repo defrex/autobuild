@@ -149,6 +149,16 @@ provider that ignores these fields stays safe. `preserve` also receives
 `neverExecuted` when no execution ever started in the environment: a missing
 base, `HEAD`, branch, or candidate object then means nothing to preserve rather
 than an error. A provider that ignores it stays strict, and cleanup fails safely.
+`preserve` may also receive `retain({ exec, workspacePath, sha, base })`: when your
+archive transport refuses a head's archive ref, call it with your trusted Git
+transport. It keeps the head as a BuildStore copy and resolves to the copy's
+exclusion base; record the head with that `storeBase` in place of `remoteRef`.
+It throws when the head cannot be kept; rethrow so release is refused. A
+provider that ignores it preserves strictly. A `restoration` head may name
+`storeBase` instead of `remoteRef`. Then `provision` receives
+`restoreStored({ exec, workspacePath, sha })`: when the commit is absent, call
+it with your trusted transport, and fail provisioning when it resolves false.
+The store is read dispatcher-side, so the guest never holds store credentials.
 Provision/start failures signal `WorkspaceCleanupRequired` rather than deleting
 or implicitly recreating an existing checkout. A confirmed `snapshot_not_found`
 lookup establishes filesystem absence, while retaining the stale name for

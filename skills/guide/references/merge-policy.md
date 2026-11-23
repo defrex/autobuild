@@ -254,11 +254,12 @@ The kernel replaces branches with an exact expected-old-head guard and retains
 displaced history under immutable exact archive refs
 `refs/autobuild/archive/<slug>/<sha>`:
 
-- **Node restack and landing** require archive refs. Namespace or permission
-  failures stop publication.
-- **Leaf restacks and reconciles** use archive refs where the forge accepts them.
-  Where it refuses, they keep a BuildStore copy (`history-objects-<sha>`), or
-  record one `history-unretained` warning and proceed.
+- **Leaf restacks and reconciles, node restacks and landings, integration
+  landing and the node verify head** use archive refs where the forge accepts
+  them. Where it refuses, they keep a BuildStore copy (`history-objects-<sha>`),
+  or record one `history-unretained` warning and proceed.
+- **Workspace preservation** keeps unpublished workspace commits under archive
+  refs, else as BuildStore copies. When neither holds them, release is refused.
 - There is never a branch or tag fallback. When an environment refuses non-branch
   Git pushes, as Claude Code on the web's GitHub proxy does, the GitHub adapter
   creates the same archive ref through REST ref creation and confirms it by exact

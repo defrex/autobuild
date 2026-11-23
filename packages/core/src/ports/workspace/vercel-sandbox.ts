@@ -1493,6 +1493,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
                     branch: input.branch,
                     destinationRef: `refs/autobuild/reconcile/${input.slug}/preservation`,
                   })
+            // After the guest push and the host REST fallback both refuse,
+            // `input.retain` keeps the head as a store copy host-side.
             return preserveGitCommits({
               ...input,
               base,
@@ -1531,6 +1533,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     /** Ignored: a sandbox clone never holds archive refs, so restoration here
      * always fetches each exact ref from origin, whatever the forge. */
     restorationArchives?: 'local' | 'remote'
+    restoreStored?: Parameters<WorkspaceProvider['provision']>[0]['restoreStored']
     adoptAbandoned?: boolean
   }): Promise<WorkspaceProvisionResult> {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
@@ -1747,6 +1750,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             branch: opts.branch,
             heads: opts.restoration!,
             replaced: opts.restorationReplaced,
+            // Store copies are read host-side and applied over the trusted
+            // transport; the guest never holds store credentials.
+            ...(opts.restoreStored
+              ? {
+                  restoreStored: (sha: string) =>
+                    opts.restoreStored!({ exec, workspacePath: VERCEL_WORKSPACE_PATH, sha }),
+                }
+              : {}),
           })
         ).skipped
         const result = await exec(
