@@ -41,8 +41,12 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # integration, both heavy, overran 5 s test defaults on the 4-vCPU sandbox;
 # with unit reduced to seconds of CPU, integration plus build carries the same
 # load the old unit plus build stage did.
-# app-load is a short local Chromium run that writes only .ab/app-load, distinct
-# from every capture directory, so it joins the independent suites.
+# Nothing in this stage may write inside the checkout while build packs it:
+# build's `bun pm pack --dry-run` opens every directory under the root package,
+# gitignored .ab/ included, and an app-load Chromium profile there failed it
+# with ENOENT (#1043). app-load keeps its bundles, pages and per-page profiles
+# in a per-invocation OS temporary directory, removed when it finishes, and
+# refuses a TMPDIR inside the worktree, so it joins the independent suites.
 # All deterministic checks precede agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
 # ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
