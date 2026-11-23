@@ -3,7 +3,7 @@ import type { CompatibilityState } from '../events/compatibility'
 import type { BuildState } from './reducer'
 import type { BuildStore } from '../store/types'
 import type { Actor } from '../events/envelope'
-import { readBuildFacts } from '../store/reduced-reads'
+import { readBuildFacts, type CurrentBuildFacts as BuildFacts } from '../store/reduced-reads'
 
 const drainingExecutions = new WeakMap<BuildStore, { instance: string; runtime: RuntimeIdentity }>()
 /** Carry the caller's own immutable execution identity through nested kernel
@@ -51,14 +51,17 @@ export function mixedVersionDeferred(state: Pick<BuildState, 'compatibility'>): 
   return (state.compatibility?.decisiveFacts ?? 0) > 0
 }
 /** Compare-and-append deduplicates concurrent dispatchers/runners at the same
- * decisive boundary; upgrading clears the guard through local replay. */
+ * decisive boundary; upgrading clears the guard through local replay.
+ * `readFacts` replaces the served facts read, so a caller's view can keep it. */
 export async function deferMixedVersion(
   store: BuildStore,
   slug: string,
   actor: Actor = { kind: 'dispatcher' },
+  readFacts: (slug: string) => Promise<Pick<BuildFacts, 'state'>> = async (slug) =>
+    (await readBuildFacts(store, slug)).value,
 ): Promise<boolean> {
   for (;;) {
-    const { state } = (await readBuildFacts(store, slug)).value
+    const { state } = await readFacts(slug)
     const diagnostic = compatibilityDiagnostic(state.compatibility)
     if (!diagnostic) return false
     if (await authorizedDrainingExecution(store, slug)) return true

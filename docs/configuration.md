@@ -2820,11 +2820,13 @@ to `maxOpenPrs - 1` and may not exceed it, and `excludeHeldOpenPrs` is a boolean
 that defaults to `false`.
 
 While open unmerged root PRs (leaves and integration nodes; not children of a
-node) reach `maxOpenPrs`, the dispatcher claims no new `normal`-priority
-ticket until the count drops to `resumeOpenPrs`. Reaching `maxOpenPrs` takes
+node) reach `maxOpenPrs`, the dispatcher makes no new ordinary ready-queue
+claim of a `normal`-priority ticket until the count drops to `resumeOpenPrs`. Reaching `maxOpenPrs` takes
 precedence: when `resumeOpenPrs` equals `maxOpenPrs`, intake stays paused at
 that count and resumes once the count falls below it. Urgent claims, in-flight
-builds, reconciles and landings continue; capacity is unchanged. `ab repository
+builds, reconciles and landings continue; capacity is unchanged. Every `ab start`
+(`tickets.start`) tier bypasses backpressure for its one ticket, still subject to
+capacity and repository pause. `ab repository
 status` reports the state as `capacity.backpressure`.
 
 <!-- configuration-reference:policy -->
@@ -3085,7 +3087,7 @@ status` reports the state as `capacity.backpressure`.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops claiming `normal`-priority tickets. In-flight work, reconciles, landings and `urgent` claims continue. Unset disables open-PR backpressure.
+**Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops ordinary ready-queue claims of `normal`-priority tickets. In-flight work, reconciles, landings, `urgent` claims and every `ab start` (`tickets.start`) request continue, subject to capacity and repository pause. Unset disables open-PR backpressure.
 
 **Constraints:** safe integer; > 0
 
@@ -4214,7 +4216,7 @@ poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only ordinary ready-queue listing, claims, and dispatch. A pending `ab start` (`tickets.start`) request still claims its one named ticket while intake is off, subject to repository pause, capacity, and the usual ticket gates. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
 | Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` while retaining its literal `QUEUED` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
@@ -4340,9 +4342,12 @@ that runtime serves.
 In plain/non-TTY mode, `tick: idle` means the pass recorded no dispatcher
 action. Check the gates in this order:
 
-1. **Durable intake:** the dashboard header must show intake on, or explicitly
-   run a future dispatcher with `--intake`. Intake off skips the ready scan
-   even when tickets exist.
+1. **Durable intake:** for ordinary ready-queue work, the dashboard header must
+   show intake on, or explicitly run a future dispatcher with `--intake`.
+   Intake off skips the ready scan even when tickets exist. To run one ticket
+   without opening the whole queue, use `ab start <ticket-id>` instead; its
+   pending request and settled outcome appear in `ab repository status` and
+   `ab watch`.
 2. **Repository pause:** a pause all holds every queued build, so the dashboard
    controls line shows `repository PAUSED` and an existing held build shows
    `(held)` beside its literal `QUEUED` status. Intake off alone shows neither

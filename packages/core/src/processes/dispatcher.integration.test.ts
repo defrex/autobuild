@@ -1,5 +1,5 @@
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
-import { readBuildFacts } from '../store/reduced-reads'
+import { readBuildFacts, readRepositoryFacts } from '../store/reduced-reads'
 import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
 import {
   flaggedWorkspaceSweepReadBudget,
@@ -19,6 +19,8 @@ import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext, decideNextFromFacts } from '../kernel/engine'
 import { epilogueLeaf, settlementKey } from '../kernel/dispatch-capacity'
 import { listOperatorBuilds } from '../operator/query'
+import { requestTicketStart } from '../operator/ticket-start'
+import type { TicketStartPriority } from '../events/repository'
 import { projectBuildFromFacts } from '../cli/dashboard/model'
 import { abWait } from '../cli/wait'
 import { publicationPending } from './publication-state'
@@ -18968,6 +18970,130 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       // the scan interval never list once per tick.
       expect(calls).toBeLessThanOrEqual(2)
       expect(h.launches.length).toBeLessThanOrEqual(launches + 1)
+    })
+
+    // Five tiers: manual starts, urgent parked work, urgent claims (urgent
+    // starts first), normal parked work, normal claims (normal starts first).
+    describe('operator start requests', () => {
+      const requestStart = (h: Harness, id: string, priority?: TicketStartPriority) =>
+        requestTicketStart({
+          store: h.store,
+          repo: REPO,
+          source: h.tickets,
+          id,
+          user: 'operator',
+          ...(priority !== undefined ? { priority } : {}),
+        })
+      const builtPriority = async (h: Harness, slug: string) =>
+        (await readBuildFacts(h.store, slug)).value.state.priority
+      const pending = async (h: Harness) =>
+        Object.values((await readRepositoryFacts(h.store, REPO, true)).value.ticketStarts.pending)
+
+      for (const [parkedPriority, startPriority, startWins] of [
+        ['urgent', 'manual', true],
+        ['urgent', 'urgent', false],
+        ['normal', 'urgent', true],
+        ['normal', 'normal', false],
+      ] as const)
+        test(`${parkedPriority} parked work and a ${startPriority} start: ${startWins ? 'the start' : 'the parked build'} takes the slot`, async () => {
+          const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+          const parked = await conflictedParked(h, 'a-parked', 2)
+          if (parkedPriority === 'urgent') await setPriority(h, parked, 'urgent')
+          h.tickets.add(readyTicket('S1'))
+          await requestStart(h, 'S1', startPriority)
+          await h.dispatcher.tick({ acceptNewWork: false })
+          const started = await buildFor(h, 'S1')
+          if (startWins) {
+            expect(started).toBeDefined()
+            expect(h.launches).toEqual([started!])
+            expect(await slotWait(h, parked)).toBe('reconcile')
+            // Only an explicit urgent start makes the build urgent.
+            expect(await builtPriority(h, started!)).toBe(
+              startPriority === 'urgent' ? 'urgent' : undefined,
+            )
+          } else {
+            expect(started).toBeUndefined()
+            expect(h.launches).toEqual([parked])
+            expect(await pending(h)).toMatchObject([{ priority: startPriority }])
+          }
+          expect(await failures(h, parked)).toEqual([])
+        })
+
+      for (const [startPriority, startWins] of [
+        ['manual', true],
+        ['urgent', true],
+        ['normal', false],
+      ] as const)
+        test(`intake on, an urgent ready ticket and a ${startPriority} start: ${startWins ? 'the start' : 'the urgent ticket'} is claimed`, async () => {
+          const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+          h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
+          h.tickets.add(readyTicket('S1'))
+          await requestStart(h, 'S1', startPriority)
+          await h.dispatcher.tick()
+          const started = await buildFor(h, 'S1')
+          const urgent = await buildFor(h, 'U1')
+          expect((await h.store.listBuilds()).length).toBe(1)
+          if (startWins) {
+            expect(urgent).toBeUndefined()
+            expect(await builtPriority(h, started!)).toBe(
+              startPriority === 'urgent' ? 'urgent' : undefined,
+            )
+            return
+          }
+          expect(started).toBeUndefined()
+          expect(await builtPriority(h, urgent!)).toBe('urgent')
+          expect(await pending(h)).toMatchObject([{ priority: 'normal' }])
+          // The freed slot goes to the normal start ahead of ready order.
+          await finish(h, urgent!)
+          h.tickets.add(readyTicket('N1'))
+          h.clock.advance(60_000)
+          await h.dispatcher.tick()
+          expect(await buildFor(h, 'S1')).toBeDefined()
+          expect(await buildFor(h, 'N1')).toBeUndefined()
+        })
+
+      test('intake on, a normal ready ticket waits behind a normal start', async () => {
+        const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+        h.tickets.add(readyTicket('N1'))
+        h.tickets.add(readyTicket('S1'))
+        await requestStart(h, 'S1', 'normal')
+        await h.dispatcher.tick()
+        expect(await buildFor(h, 'S1')).toBeDefined()
+        expect(await buildFor(h, 'N1')).toBeUndefined()
+        expect(await pending(h)).toEqual([])
+      })
+
+      test('two free slots: a manual and an urgent start both start in one tick', async () => {
+        const h = harness({ toml: `capacity = 2\n${VERIFY_TOML}`, onLaunch: claimOnLaunch })
+        h.tickets.add(readyTicket('S1'))
+        h.tickets.add(readyTicket('S2'))
+        await requestStart(h, 'S1', 'manual')
+        await requestStart(h, 'S2', 'urgent')
+        await h.dispatcher.tick({ acceptNewWork: false })
+        expect(await buildFor(h, 'S1')).toBeDefined()
+        expect(await buildFor(h, 'S2')).toBeDefined()
+        expect(await pending(h)).toEqual([])
+      })
+
+      test('a re-request with another priority keeps the request and moves its tier', async () => {
+        const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+        const parked = await conflictedParked(h, 'a-parked', 2)
+        const busy = await busyBuild(h, 'b-busy')
+        h.tickets.add(readyTicket('S1'))
+        const first = await requestStart(h, 'S1', 'normal')
+        await h.dispatcher.tick({ acceptNewWork: false })
+        expect(h.launches).toEqual([])
+        const second = await requestStart(h, 'S1', 'urgent')
+        expect(second).toMatchObject({ updated: true, request: first.request })
+        expect(await pending(h)).toMatchObject([{ seq: first.request, priority: 'urgent' }])
+        await finish(h, busy)
+        h.clock.advance(60_000)
+        await h.dispatcher.tick({ acceptNewWork: false })
+        const started = await buildFor(h, 'S1')
+        expect(h.launches).toEqual([started!])
+        expect(await slotWait(h, parked)).toBe('reconcile')
+        expect(await builtPriority(h, started!)).toBe('urgent')
+      })
     })
   })
 })
