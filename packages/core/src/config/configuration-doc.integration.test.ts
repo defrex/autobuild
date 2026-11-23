@@ -26,6 +26,7 @@ import { parseConfig } from './load'
 import { configurationReference } from './reference'
 import { rewriteConfigurationReference } from '../../../../tools/configuration-reference'
 import { CONFIG_RELOAD_CLASSIFICATION, RESTART_REQUIRED_CONFIG_PATHS } from './live'
+import { LOCAL_OVERRIDE_CLASSIFICATION, LOCAL_OVERRIDE_KEYS } from './local'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
@@ -859,6 +860,35 @@ describe('docs/configuration.md — schema coverage', () => {
     ]) {
       expect(doc).not.toContain(token)
     }
+  })
+})
+
+/** Root keys named by backticked spellings such as `capacity`, `[upgrade]` or
+ * `[[merge]]`. */
+function rootKeys(text: string): string[] {
+  return [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]!.replace(/^\[+|\]+$/g, ''))
+}
+
+describe('local override documentation', () => {
+  test('the configuration reference classifies every root key as the loader does', () => {
+    const section = headingSection(doc, 2, 'Local overrides (`.autobuild/local.toml`)')
+    expect(section).toBeDefined()
+    const documented = new Map<string, string>()
+    for (const row of section!.matchAll(/^\| (.+?) \| (Allowed|Committed only[^|]*?) \|$/gm))
+      for (const key of rootKeys(row[1]!))
+        documented.set(key, row[2]!.startsWith('Allowed') ? 'local' : 'committed')
+    expect(Object.fromEntries([...documented].sort())).toEqual(
+      Object.fromEntries(Object.entries(LOCAL_OVERRIDE_CLASSIFICATION).sort()),
+    )
+  })
+
+  test('the ab-guide subsection names exactly the allowlist', () => {
+    const section = headingSection(guide, 3, 'Local overrides')
+    expect(section).toBeDefined()
+    // The whole bullet, including its wrapped continuation lines.
+    const allowed = /^- \*\*Allowed:\*\*[\s\S]*?(?=\n- |\n\n|(?![\s\S]))/m.exec(section!)?.[0]
+    expect(allowed).toBeDefined()
+    expect(rootKeys(allowed!).sort()).toEqual([...LOCAL_OVERRIDE_KEYS].sort())
   })
 })
 

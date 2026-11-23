@@ -9,7 +9,9 @@ Commands in the file are shell strings; the file itself is never evaluated as
 code. A running dispatcher owns an accepted snapshot from the main checkout,
 while scoped phase commands read the build worktree's branch-owned file.
 Configuration changes therefore move through review like any other change and,
-once merged, can be adopted by the running dispatcher.
+once merged, can be adopted by the running dispatcher. Personal settings, such
+as capacity, roles and hooks, can be overridden per checkout in an uncommitted
+[`.autobuild/local.toml`](#local-overrides-autobuildlocaltoml).
 
 This document covers the complete accepted TOML surface. Follow the
 [installation and repository setup procedure](setup.md) for the supported local
@@ -105,6 +107,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `{}`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named Claude subscription, Kimi Code, or ChatGPT subscription billing accounts. Descriptors contain credential variable names only.
 
@@ -118,6 +121,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named nonsecret billing account descriptor.
 
@@ -131,6 +135,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "chatgpt-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
@@ -144,6 +149,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "chatgpt-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
@@ -157,6 +163,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
@@ -170,6 +177,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
@@ -183,6 +191,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
@@ -196,6 +205,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
@@ -209,6 +219,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `"overseas"`
 - **Required:** Optional when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Membership region: overseas (default) or china. Selects the base URL and exact egress host together.
 
@@ -228,6 +239,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Optional remote BuildStore connection. Credentials live outside TOML.
 
@@ -241,6 +253,7 @@ instead; the first hosted build is the live check. See
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized.
 
@@ -419,6 +432,82 @@ generated markers is maintained by hand. Defaults below are parser input default
 resolver inheritance is described separately. Nested required fields are required
 when their containing table or array entry is supplied.
 
+## Local overrides (`.autobuild/local.toml`)
+
+Some settings are personal: how many builds one machine runs, which model
+subscriptions a person holds, which notifications they want. Put those in
+`.autobuild/local.toml` instead of editing the committed file.
+
+- **Location:** `.autobuild/local.toml` beside `autobuild.toml` in the checkout.
+  `ab init` adds `.autobuild/` to `.gitignore`, so the file is never committed.
+  Edit it by hand; it uses the same TOML spelling as `autobuild.toml`.
+- **Readers:** every `ab` command that reads configuration from that checkout,
+  including a checkout-mode `ab dispatch`. Build worktrees never contain the
+  file, so scoped phase commands are unaffected. Origin-mode and hosted
+  dispatchers have no checkout and never read it.
+- **Merge:** tables merge key by key, so setting `[roles.default] model` keeps
+  the role's committed `runtime` and `args`. Scalars and arrays (including
+  arrays of tables) replace the committed value whole. A local file adds or
+  changes keys; it cannot remove a committed key, role or hook.
+- **Validation:** the merged result is validated exactly like `autobuild.toml`.
+  An invalid local value gets the same message it would get in
+  `autobuild.toml`, prefixed with the local file's path.
+- **Committed-only sections are rejected:** a local file that sets one, or an
+  unknown key, is refused with
+  `<path>/.autobuild/local.toml: <key> can only be set in autobuild.toml`. No
+  flag overrides this.
+- **Reload:** a running dispatcher reads both files before every tick as one
+  candidate, with the same hot or restart treatment per field. A rejected local
+  file leaves the last accepted configuration running, exactly like a rejected
+  `autobuild.toml` save. Deleting the file returns to the committed values.
+- **Visibility:** the dispatcher records the settings it took from the file in
+  the metadata of its `dispatcher-effective-config` artifact.
+  `ab repository status` prints `dispatcher local overrides (<path>): <settings>`
+  and its `--json` output carries `localOverrides: { file, settings }`.
+
+| Section | Local override |
+|---|---|
+| `capacity` | Allowed |
+| `ticketScanIntervalSeconds` | Allowed |
+| `[upgrade]` | Allowed |
+| `[hooks]` | Allowed |
+| `[roles]` | Allowed |
+| `[accounts]` | Allowed |
+| `[store]` | Committed only |
+| `baseBranch` | Committed only |
+| `forge` | Committed only |
+| `plugins` | Committed only |
+| `[[merge]]` (and deprecated `[[landing]]`) | Committed only |
+| `[pr]` | Committed only |
+| `[[generated]]` | Committed only |
+| `[profiles]` | Committed only |
+| `[policy]` | Committed only |
+| `[orchestrator]` | Committed only |
+| `[tickets]` | Committed only |
+| `[workspace]` | Committed only (build-owned) |
+| `[commands]` | Committed only (build-owned) |
+| `[verify]` | Committed only (build-owned) |
+| `[finalize]` | Committed only (build-owned) |
+
+Allowed sections describe the local machine and process (`capacity`,
+`ticketScanIntervalSeconds`, `[upgrade]`), personal notifications (`[hooks]`),
+or the subscriptions a person holds (`[roles]`, `[accounts]`). Everything else
+must agree across everyone sharing the repository's store, ticket source and
+forge, or defines a build's pipeline, which comes from the build's own branch
+on every machine. Each field block below repeats its section's classification.
+
+<!-- config-fragment:local-overrides -->
+```toml
+# .autobuild/local.toml
+capacity = 4
+
+[roles.plan-review]
+model = "claude-opus-5-5"
+
+[hooks.desk]
+command = "notify-send autobuild"
+```
+
 ## Root scalars
 
 All root scalars are optional and receive defaults. They must appear before
@@ -434,6 +523,7 @@ any table header.
 - **Default:** `"main"`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Branch used to cut builds, target PRs, and merge during reconciliation.
 
@@ -447,6 +537,7 @@ any table header.
 - **Default:** `1`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of normal ticket claims when it must run again, urgent work first (see [slot admission order](dispatcher.md#slot-admission-order)). Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).
 
@@ -460,6 +551,7 @@ any table header.
 - **Default:** `60`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Ticket-source ready scan cadence; tick spacing is the effective minimum.
 
@@ -473,6 +565,7 @@ any table header.
 - **Default:** `"github"`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names.
 
@@ -486,6 +579,7 @@ any table header.
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes.
 
@@ -730,6 +824,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered merge rules; the first matching rule controls consent.
 
@@ -743,6 +838,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Optional destination: `root`, any `node`, or an exact frozen destination node ticket id.
 
@@ -756,6 +852,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Restrict this rule to one source build kind; omission matches all kinds.
 
@@ -769,6 +866,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Optional exact, case-sensitive label on the source ticket. Blank labels are invalid.
 
@@ -782,6 +880,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Match when at least one changed path matches a selector. Same glob grammar and case sensitivity as `[verify.<step>].paths`.
 
@@ -795,6 +894,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Match when every changed path matches a selector and at least one path changed.
 
@@ -808,6 +908,7 @@ old key without changing policy values or order. See [deprecated spellings](merg
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Choose automatic merge or require recorded consent.
 
@@ -843,6 +944,7 @@ still receive exact BuildStore download commands in the PR summary.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Pull request review image hosting configuration.
 
@@ -856,6 +958,7 @@ still receive exact BuildStore download commands in the PR summary.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Copy attached images to a temporary public review location so they can render inline.
 
@@ -875,6 +978,7 @@ still receive exact BuildStore download commands in the PR summary.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the GitHub release adapter.
 
@@ -888,6 +992,7 @@ still receive exact BuildStore download commands in the PR summary.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Public repository containing the existing review release.
 
@@ -901,6 +1006,7 @@ still receive exact BuildStore download commands in the PR summary.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Numeric id of an existing published, mutable release.
 
@@ -962,6 +1068,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Workspace provider selector and provider-specific configuration.
 
@@ -975,6 +1082,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Default:** `"git-worktree"`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release.
 
@@ -988,6 +1096,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Adapter-specific declarative configuration passed unchanged to the selected plugin factory.
 
@@ -1001,6 +1110,7 @@ table is strict; only the explicit nested `config` table is plugin-owned.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Plugin-owned value passed through unchanged. Builtin providers validate their own declared schema.
 
@@ -1072,6 +1182,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Strict Vercel workspace provisioning configuration.
 
@@ -1085,6 +1196,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `"vercel/sandbox/universal:latest"`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Managed image used to provision the workspace.
 
@@ -1098,6 +1210,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `4`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Virtual CPUs allocated to each workspace; provider account limits may further restrict allocation.
 
@@ -1111,6 +1224,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** VM/session lifetime in seconds and abrupt-orphan bound. Provider plan limits also apply.
 
@@ -1124,6 +1238,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `30000`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Deadline in milliseconds for each provider acknowledgement, independent of session lifetime.
 
@@ -1137,6 +1252,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Snapshot expiration in seconds. Omission uses the provider expiration policy.
 
@@ -1150,6 +1266,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Primary region; omission uses the provider region selection.
 
@@ -1163,6 +1280,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered alternative regions used if the primary region cannot provision a workspace.
 
@@ -1176,6 +1294,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** unique API-credential variable names copied into runtime and agent/check commands
 
@@ -1189,6 +1308,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique
 
@@ -1202,6 +1322,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Unique provisioning step name. Must contain a non-whitespace character.
 
@@ -1215,6 +1336,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Shell command executed in declaration order during provisioning. Must contain a non-whitespace character.
 
@@ -1228,6 +1350,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight`
 
@@ -1241,6 +1364,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Installation and preflight commands for an effective runtime. Every effective role or alternate runtime must have an entry.
 
@@ -1254,6 +1378,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** required nonblank shell command; use an immutable package version, digest, or commit
 
@@ -1267,6 +1392,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** required nonblank shell command; verify the expected executable and exact version
 
@@ -1280,6 +1406,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv`
 
@@ -1293,6 +1420,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv`
 
@@ -1498,6 +1626,7 @@ schema fields.
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named shell commands used by setup and deterministic checks.
 
@@ -1511,6 +1640,7 @@ schema fields.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named deterministic shell command.
 
@@ -1553,6 +1683,7 @@ declares nothing, and restacks behave exactly as they do without it.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Generated files that a declared command rebuilds. Restack replays that conflict only in these files are regenerated instead of reconciled by an agent.
 
@@ -1566,6 +1697,7 @@ declares nothing, and restacks behave exactly as they do without it.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Generated files this entry owns. When selectors of several entries match a file, the first entry in declaration order owns it.
 
@@ -1579,6 +1711,7 @@ declares nothing, and restacks behave exactly as they do without it.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Shell command, run with `sh -c` from the workspace root after `[commands].setup`, that rebuilds every file this entry owns.
 
@@ -1670,6 +1803,7 @@ There are two strict step variants:
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
@@ -1683,6 +1817,7 @@ There are two strict step variants:
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
@@ -1696,6 +1831,7 @@ There are two strict step variants:
 - **Default:** `true`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Whether verification runs after reconciliation. A step override takes precedence.
 
@@ -1709,6 +1845,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
 
@@ -1722,6 +1859,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1735,6 +1873,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
@@ -1748,6 +1887,7 @@ There are two strict step variants:
 - **Default:** `false (omission is preserved)`
 - **Required:** Optional when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
 
@@ -1761,6 +1901,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
 
@@ -1774,6 +1915,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Apply only when at least one changed path matches. Available to both variants.
 
@@ -1787,6 +1929,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
 
@@ -1800,6 +1943,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -1813,6 +1957,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 
@@ -1826,6 +1971,7 @@ There are two strict step variants:
 - **Default:** `false (omission is preserved)`
 - **Required:** Optional when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
 
@@ -1839,6 +1985,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only.
 
@@ -1852,6 +1999,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Apply only when at least one changed path matches. Available to both variants.
 
@@ -1865,6 +2013,7 @@ There are two strict step variants:
 - **Default:** `omitted`
 - **Required:** Optional when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants.
 
@@ -2047,6 +2196,7 @@ are errors.
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.
 
@@ -2060,6 +2210,7 @@ are errors.
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
@@ -2073,6 +2224,7 @@ are errors.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named step. Select exactly one strict variant using kind; command belongs only to check, skill only to agent.
 
@@ -2086,6 +2238,7 @@ are errors.
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -2099,6 +2252,7 @@ are errors.
 - **Default:** `omitted`
 - **Required:** Required when kind = "check"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
@@ -2112,6 +2266,7 @@ are errors.
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the strict step variant. Fields from another variant are rejected.
 
@@ -2125,6 +2280,7 @@ are errors.
 - **Default:** `omitted`
 - **Required:** Required when kind = "agent"
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the execution checkout each verify cycle; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 
@@ -2212,6 +2368,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named agent roles. The reserved default role provides inherited runtime axes.
 
@@ -2225,6 +2382,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named role inheriting each omitted axis from roles.default. The default role must name a registered runtime.
 
@@ -2238,6 +2396,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
 
@@ -2251,6 +2410,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Select an agent adapter.
 
@@ -2264,6 +2424,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
@@ -2277,6 +2438,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
 
@@ -2290,6 +2452,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
 
@@ -2303,6 +2466,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
 
@@ -2316,6 +2480,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.
 
@@ -2329,6 +2494,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
 
@@ -2342,6 +2508,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Select an agent adapter.
 
@@ -2355,6 +2522,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
@@ -2368,6 +2536,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
 
@@ -2381,6 +2550,7 @@ session starts, with a copyable table and all registered runtime names.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
 
@@ -2596,6 +2766,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named role profiles selected by ticket label. A profile overrides only the role fields it declares, for the builds that selected it.
 
@@ -2609,6 +2780,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named role profile. The build's profile is fixed when its ticket is claimed; the profile's contents are read at each session boundary.
 
@@ -2622,6 +2794,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ticket label that selects this profile, matched case-insensitively after trimming. A ticket carrying two profiles' labels is not claimed.
 
@@ -2635,6 +2808,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `{} (input supplied on omission)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Role entries this profile overrides. Any role name is accepted except the reserved default.
 
@@ -2648,6 +2822,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Role override for builds whose ticket carries the profile's label. Omitted fields inherit `[roles.<role>]`, then `[roles.default]`; a declared alternates list, including [], replaces the inherited list.
 
@@ -2661,6 +2836,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
 
@@ -2674,6 +2850,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select an agent adapter.
 
@@ -2687,6 +2864,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
@@ -2700,6 +2878,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
 
@@ -2713,6 +2892,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
 
@@ -2726,6 +2906,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Active-time budget for each build phase session routed through this role in a profiled build. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
 
@@ -2739,6 +2920,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.
 
@@ -2752,6 +2934,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
 
@@ -2765,6 +2948,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select an agent adapter.
 
@@ -2778,6 +2962,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the exact model. Codex uses unqualified `gpt-*`; Antigravity uses unqualified `gemini-*`, `claude-*` or `gpt-*` slugs; Pi ids are provider-qualified.
 
@@ -2791,6 +2976,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
 
@@ -2804,6 +2990,7 @@ a deprecated skill-name key, or deprecated `extensions`, naming the
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
 
@@ -2840,6 +3027,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Lifecycle budgets, retries, convergence and harvest limits.
 
@@ -2853,6 +3041,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `900`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain.
 
@@ -2866,6 +3055,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `60`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** How long the repository dispatch lease survives without renewal. A dispatcher that stalls longer reclaims it on waking unless another run took it; a standby takes over a dead holder within this bound. A change takes effect at the dispatcher's next tick.
 
@@ -2879,6 +3069,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `20`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Interval between repository dispatch lease renewals; adopted together with the timeout.
 
@@ -2892,6 +3083,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3600`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it.
 
@@ -2905,6 +3097,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Escalate when the same review finding survives this many rounds.
 
@@ -2918,6 +3111,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Bound failure-driven verify → implement retry cycles.
 
@@ -2931,6 +3125,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Bound consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation.
 
@@ -2944,6 +3139,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Bound consecutive workspace setup failures before a setup-targeted policy escalation.
 
@@ -2957,6 +3153,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget. Provisioning abandoned at a recorded dispatcher teardown never consumes it.
 
@@ -2970,6 +3167,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound.
 
@@ -2983,6 +3181,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `6`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Default bound for each plan/review and implement/review convergence loop. Your agent may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected.
 
@@ -2996,6 +3195,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `5`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** New unclaimed observation occurrences needed to start one harvest run.
 
@@ -3009,6 +3209,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `600`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Consecutive janitor failure duration before build attention.
 
@@ -3022,6 +3223,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3600`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Consecutive janitor failure duration before the build raises one escalation; the janitor keeps retrying.
 
@@ -3035,6 +3237,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `600`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Quiet period before opened integration nodes enter idle polling.
 
@@ -3048,6 +3251,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `120`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Interval between idle node checks; durable activity wakes the next tick.
 
@@ -3061,6 +3265,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `300`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Cap on exponential janitor retry delay, starting at 30 seconds.
 
@@ -3074,6 +3279,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `3`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.
 
@@ -3087,6 +3293,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Open unmerged root build PRs (leaves and integration nodes) at which the dispatcher stops ordinary ready-queue claims of `normal`-priority tickets. In-flight work, reconciles, landings, `urgent` claims and every `ab start` (`tickets.start`) request continue, subject to capacity and repository pause. Unset disables open-PR backpressure.
 
@@ -3100,6 +3307,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Open root PR count at or below which paused `normal` intake resumes; defaults to `maxOpenPrs - 1`. Reaching `maxOpenPrs` takes precedence, so when this equals `maxOpenPrs` intake stays paused at that count and resumes once the count falls below `maxOpenPrs`. Inert without `maxOpenPrs`.
 
@@ -3113,6 +3321,7 @@ status` reports the state as `capacity.backpressure`.
 - **Default:** `false`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Leave PRs whose active landing command is `hold` out of the open-PR backpressure count. Inert without `maxOpenPrs`.
 
@@ -3226,6 +3435,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `{"source":"file"} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Mixed: see individual fields for dispatcher reload behavior. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ticket source and lifecycle vocabulary. Omitting the table supplies source=file but still requires readyState.
 
@@ -3239,6 +3449,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Ticket service independent of [store] url and AB_STORE. Required with local builds.
 
@@ -3252,6 +3463,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Select the ticket adapter after configured plugins load.
 
@@ -3265,6 +3477,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Require every listed label in addition to the state gate.
 
@@ -3278,6 +3491,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Required unless source = "hosted" or "github"; omission there resolves to "ready". GitHub states are `autobuild:<state>` labels.
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** The one workflow state eligible for dispatch.
 
@@ -3291,6 +3505,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Require the ticket to be assigned to one user, in addition to the state and label gates.
 
@@ -3304,6 +3519,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to one user unless the create names its own assignees.
 
@@ -3317,6 +3533,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Add these labels to every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals, optimization attempts), unioned with any labels the create names.
 
@@ -3330,6 +3547,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Required for linear and hosted; forbidden for file and github; optional for plugins.
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Backend team key such as `"ENG"`, or an existing plugin config field.
 
@@ -3343,6 +3561,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Workflow state entered when a ticket is claimed.
 
@@ -3356,6 +3575,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Project completion state and merged-ticket transition.
 
@@ -3369,6 +3589,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Default state for newly created tickets when `ab ticket create` omits `--state`.
 
@@ -3382,6 +3603,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** State used for spec-gate bounces, aborts (unless `ab abort --to ready` with a ticket that meets the spec standard), and closed-unmerged PRs. An optimization attempt never returns here: an abort or closed PR settles it `aborted` and moves its ticket to rejectedState.
 
@@ -3395,6 +3617,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.
 
@@ -3408,6 +3631,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.
 
@@ -3421,6 +3645,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended; an optimization node requires it and is refused at dispatch without it, and the dispatcher moves each attempt that settles no-improvement, declined, stopped or aborted into it.
 
@@ -3434,6 +3659,7 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.
 
@@ -3659,6 +3885,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Operator-agent sandbox settings. This table does not start or host an operator agent.
 
@@ -3672,6 +3899,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Default:** `false`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses.
 
@@ -3685,6 +3913,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Sandbox behavior knobs.
 
@@ -3698,6 +3927,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Default:** `30`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it.
 
@@ -3711,6 +3941,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
+- **Local override:** Committed only: set in autobuild.toml.
 
 **Description:** Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.
 
@@ -3786,6 +4017,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `{}`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named observe-only hooks: the dispatcher delivers each matching watch record to a command or URL, in order and at least once.
 
@@ -3799,6 +4031,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Named observe-only hook delivered matching watch records by the dispatcher.
 
@@ -3812,6 +4045,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Shell command run from the repository checkout once per record, with the record as one JSON line on stdin. Exit status 0 within the timeout is success. Set exactly one of command or url.
 
@@ -3825,6 +4059,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** HTTPS endpoint that receives each record as a signed JSON POST; http only to loopback. A 2xx response within the timeout is success; redirects are not followed.
 
@@ -3838,6 +4073,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Name of the dispatcher environment variable holding the HMAC signing secret; required with url. The value never appears in config, events, status or logs.
 
@@ -3851,6 +4087,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Event globs with `ab watch --event` grammar, validated against the build and repository catalogs. Absent means the default attention filter of `ab watch`.
 
@@ -3864,6 +4101,7 @@ phase, verdict or merge decision; gating belongs to `[verify]`, `[finalize]` and
 - **Default:** `30`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Seconds one delivery may take (a command run or a request) before it is stopped and counted as a failure.
 
@@ -4589,6 +4827,7 @@ direct execution paths.
 - **Default:** `{} (input supplied on omission; nested defaults apply)`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Automatic dispatcher runtime target checks and adoption.
 
@@ -4602,6 +4841,7 @@ direct execution paths.
 - **Default:** `true`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Allowed in .autobuild/local.toml.
 
 **Description:** Check and adopt changed runtime targets automatically.
 

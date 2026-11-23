@@ -171,6 +171,7 @@ function parsePipeline(
       // Merge policy is dispatcher-owned (composeBuildConfig), so a branch's
       // deprecated spelling is not reported per launch; the dispatcher reports
       // its own config's deprecations at startup and reload.
+      // Committed text only: a build's pipeline never sees a local override file.
       config: parseConfig(content, `autobuild.toml@${label}`, () => {}),
     }
   } catch (error) {
@@ -414,6 +415,7 @@ export async function readVerifyPipeline(
         ? { ref: 'branch-head', commit: head }
         : { ref: 'worktree-dirty' },
     // Dispatcher-owned keys are not read from here; see parsePipeline.
+    // Committed text only: a build's pipeline never sees a local override file.
     config: parseConfig(content, `autobuild.toml@${head}`, () => {}),
   }
 }

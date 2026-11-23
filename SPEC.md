@@ -5900,6 +5900,24 @@ The dispatcher emits an actionable operator notice without repeating it for the
 same failure. Restoring a valid `autobuild.toml` clears the rejection and
 ordinary boundary reload resumes.
 
+**Local overrides.** A checkout may carry an uncommitted `.autobuild/local.toml`
+beside `autobuild.toml`. Every process that reads configuration from that
+checkout, including a checkout-mode dispatcher's startup and every reload,
+layers it over the committed file: the raw TOML tables merge key by key (scalars
+and arrays replace whole) before schema validation, so defaults and
+cross-validation run on the merged input and an invalid local value gets the
+committed file's message naming the local file. Every root key carries an
+exhaustive local-override classification. Only `capacity`,
+`ticketScanIntervalSeconds`, `[upgrade]`, `[hooks]`, `[roles]` and `[accounts]`
+are local; every other key, including the build-owned sections, is
+committed-only, and a local file that sets one is a rejected candidate under the
+rules above. The dispatcher reads both files as one candidate with the same
+hot/restart treatment per field. It records the dotted settings it took from the
+local file as `localOverrides` in the metadata of its effective-config artifact,
+which `ab repository status` reports. Build-owned sections still come from the
+build's own branch, and origin-mode and hosted dispatchers never read a local
+file.
+
 Merge policy is an ordered `[[merge]]` array. Each rule requires
 `mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,
 `from = "leaf" | "node"`, an exact, case-sensitive `label`, and changed-path
