@@ -10,44 +10,21 @@ import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
-const CODEX = { runtime: 'codex', model: 'gpt-6.1-sol', account: 'chatgpt' }
-const CLAUDE = { runtime: 'claude', model: 'claude-opus-5-5', account: 'claude' }
+const CODEX = { runtime: 'codex', model: 'gpt-6.1-sol' }
+const CLAUDE = { runtime: 'claude', model: 'claude-opus-5-5' }
 
-test('repository builds in Vercel Sandbox on subscription-billed Claude Code and Codex', async () => {
+test('repository builds locally in git worktrees on the host CLI logins', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
-  expect(config.workspace.provider).toBe('vercel-sandbox')
-  const sandbox = config.workspace.config as {
-    provisioning: { name: string }[]
-    runtimeProvisioning: Record<string, { install: string; preflight: string }>
-    environmentVariables?: string[]
-  }
-  expect(sandbox.provisioning.map((step) => step.name)).toEqual([
-    'system-install',
-    'browser-smoke',
-    'postgres',
-    'git-identity',
-  ])
-  // Each runtime is pinned, and its preflight checks that exact version.
-  for (const [runtime, pin] of [
-    ['claude', '@anthropic-ai/claude-code@'],
-    ['codex', '@openai/codex@'],
-  ] as const) {
-    const provisioning = sandbox.runtimeProvisioning[runtime]!
-    const version = provisioning.install.split(pin)[1] ?? ''
-    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
-    expect(provisioning.preflight).toContain(version)
-  }
-  // Accounts carry the credentials; nothing is forwarded into the guest.
-  expect(sandbox.environmentVariables ?? []).toEqual([])
-  expect(config.accounts).toEqual({
-    claude: { kind: 'claude-subscription', credentialEnv: 'CLAUDE_CODE_OAUTH_TOKEN' },
-    chatgpt: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS_TOKEN' },
-  })
+  // A contributor needs no hosted service: the default workspace, the local
+  // BuildStore, and the host's own Claude Code and Codex logins.
+  expect(config.workspace.provider).toBe('git-worktree')
+  expect(config.store).toBeUndefined()
+  expect(config.accounts ?? {}).toEqual({})
 
   // Producers run on Claude and reviewers on Codex, each falling back to the
-  // other provider. Every route bills a named subscription account: no Pi,
-  // no gateway-qualified model id.
+  // other provider. No route names a billing account: no Pi, no
+  // gateway-qualified model id.
   const expected: Record<string, typeof CODEX> = {
     default: CODEX,
     plan: CLAUDE,
@@ -59,6 +36,7 @@ test('repository builds in Vercel Sandbox on subscription-billed Claude Code and
   for (const [key, primary] of Object.entries(expected)) {
     const role = config.roles[key]!
     expect(role).toMatchObject(primary)
+    expect(role.account).toBeUndefined()
     const fallback = primary === CODEX ? CLAUDE : CODEX
     expect(role.alternates).toEqual([fallback])
   }
@@ -68,7 +46,7 @@ test('repository builds in Vercel Sandbox on subscription-billed Claude Code and
   await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
 })
 
-test('remote rollout preserves this repository pipeline on the hosted ticket tracker', async () => {
+test('this repository pipeline runs on its GitHub issues', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
   expect(config.commands).toMatchObject({
@@ -146,16 +124,20 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
     kind: 'agent',
     skill: 'finalize-changelog',
   })
+  // Each collaborator's dispatcher builds and files issues assigned to the
+  // owner of its own GitHub credential.
   expect(config.tickets).toMatchObject({
-    source: 'hosted',
-    url: 'https://app.autobuild.run',
-    teamKey: 'AUT',
+    source: 'github',
     readyState: 'ready',
+    readyLabels: [],
+    readyAssignee: 'me',
+    createAssignee: 'me',
     createState: 'ready',
     triageState: 'triage',
     proposalState: 'triage',
+    backlogState: 'icebox',
+    rejectedState: 'rejected',
   })
-  expect(config.store).toEqual({ url: 'https://app.autobuild.run' })
 })
 
 test('the ui-website step covers site source, design references and evidence tooling', async () => {
