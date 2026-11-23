@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { connectedProject } from './connect'
-import { parseConfig } from '../config/load'
+import { parseLayeredConfig, readLocalConfig } from '../config/local'
 import { ProjectCredentials } from './project-credentials'
 import { LocalCredentials } from '../accounts/local-credentials'
 import { transaction, authorizationUrl, exchangeCode } from '../accounts/chatgpt-oauth'
@@ -25,7 +25,12 @@ export async function abAccountsLogin(
   },
 ): Promise<void> {
   const project = await connectedProject(opts)
-  const account = parseConfig(project.text).accounts[name]
+  // A locally declared account (`.autobuild/local.toml`) is usable too.
+  const localConfig = await readLocalConfig(project.checkout)
+  const account = parseLayeredConfig({
+    committed: { text: project.text, source: 'autobuild.toml' },
+    local: localConfig,
+  }).config.accounts[name]
   if (account?.kind !== 'chatgpt-subscription')
     throw new Error('Select a declared ChatGPT subscription account')
   const destination = opts.destination ?? (project.service ? 'project' : 'local')

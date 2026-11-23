@@ -11,6 +11,8 @@ slug: "configuration"
 
 `autobuild.toml` declares your repository's infrastructure, commands, agent roles, checks and operating limits.
 
+The file is committed and shared. Personal settings — capacity, scan cadence, upgrades, hooks, roles and accounts — can be overridden per checkout in an uncommitted `.autobuild/local.toml`; see [local overrides](configuration.md#local-overrides-autobuildlocaltoml).
+
 
 ## Commands and extension steps
 

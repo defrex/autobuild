@@ -101,7 +101,13 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import semver from 'semver'
-import { ConfigError, parseConfig } from '../config/load'
+import { ConfigError, loadConfig, parseConfig } from '../config/load'
+import {
+  localConfigPath,
+  parseLayeredConfig,
+  readLocalConfig,
+  type LocalOverrideRecord,
+} from '../config/local'
 import {
   composeBuildConfig,
   DISPATCHER_CONFIG_ARTIFACT,
@@ -4998,8 +5004,9 @@ class DispatchLoop {
       // Read-only policy supervision: never another tick or config fan-out.
       try {
         // Deprecations were reported at startup/reload; this re-read stays quiet.
+        // Layered with the checkout's local override file, like the snapshot.
         const path = join(this.opts.targetRepo, 'autobuild.toml')
-        const config = parseConfig(await Bun.file(path).text(), path, () => {})
+        const config = await loadConfig(path, () => {})
         const { createRuntimeResolver } = await import('../ports/runner/routing')
         createRuntimeResolver(
           this.wiring.runtimes,
@@ -5638,6 +5645,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let configContent: string
   let config: Config
+  // Checkout mode only: the local override file layered over autobuild.toml.
+  let localContent: string | undefined
+  let localSource: string | undefined
+  let startupLocalOverrides: LocalOverrideRecord | undefined
   // Collected, never written at parse time: the dispatcher reports them once
   // with its other configuration notices (`reportRoleDiagnostics`).
   let startupDeprecations: readonly string[] = []
@@ -5675,8 +5686,16 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   } else {
     try {
       configContent = await Bun.file(configPath).text()
+      localSource = localConfigPath(resolvedOpts.targetRepo)
+      const local = await readLocalConfig(resolvedOpts.targetRepo)
+      localContent = local?.text
       const deprecations: string[] = []
-      config = parseConfig(configContent, configPath, (line) => deprecations.push(line))
+      const layered = parseLayeredConfig(
+        { committed: { text: configContent, source: configPath }, local },
+        (line) => deprecations.push(line),
+      )
+      config = layered.config
+      startupLocalOverrides = layered.localOverrides
       startupDeprecations = deprecations
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -5752,21 +5771,29 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const liveConfig = new LiveConfig(
     configPath,
     config,
-    configContent,
+    localContent === undefined ? configContent : { committed: configContent, local: localContent },
     wiring.runtimes,
-    async ({ content, effectiveConfig, restartRequired, effectiveChanged }) => {
+    async ({ content, localOverrides, effectiveConfig, restartRequired, effectiveChanged }) => {
       await wiring.store.appendRepoWithArtifacts(
         state.repo,
         [
           {
             kind: DISPATCHER_CONFIG_ARTIFACT,
             content,
-            metadata: { restartRequired: [...restartRequired], effectiveChanged },
+            metadata: {
+              restartRequired: [...restartRequired],
+              effectiveChanged,
+              ...(localOverrides ? { localOverrides } : {}),
+            },
           },
           {
             kind: _effectiveConfigKind,
             content: effectiveBuildConfigContent(effectiveConfig),
-            metadata: { run: runId, effectiveChanged },
+            metadata: {
+              run: runId,
+              effectiveChanged,
+              ...(localOverrides ? { localOverrides } : {}),
+            },
           },
         ],
         (deposited) => {
@@ -5800,6 +5827,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       assertCreateAssigneeAccepted(next.tickets, wiring.tickets)
       assertHooksDeliverable(next, resolvedOpts)
     },
+    {
+      ...(localSource !== undefined ? { localSource } : {}),
+      ...(startupLocalOverrides ? { startupLocalOverrides } : {}),
+    },
   )
 
   // Launch flags are durable repository setters. Omission writes nothing, so
@@ -5830,7 +5861,11 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       {
         kind: _effectiveConfigKind,
         content: effectiveBuildConfigContent(config),
-        metadata: { run: runId, revision: 0 },
+        metadata: {
+          run: runId,
+          revision: 0,
+          ...(startupLocalOverrides ? { localOverrides: startupLocalOverrides } : {}),
+        },
       },
     ],
     (deposited) => {
