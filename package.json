@@ -144,7 +144,9 @@
     "test": "bun tools/test-temp-leaks.ts unit",
     "test:integration": "bun tools/test-temp-leaks.ts integration",
     "typecheck": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit",
-    "ui:catalog": "bun packages/ui/scripts/catalog.ts"
+    "ui:catalog": "bun packages/ui/scripts/catalog.ts",
+    "ui:tokens": "bun packages/ui/scripts/tokens.ts",
+    "ui:web": "bun packages/ui/scripts/web.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "4.0.82",

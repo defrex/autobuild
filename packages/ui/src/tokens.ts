@@ -1,7 +1,8 @@
 /**
  * Autobuild ANSI tokens. This file is the source of truth: the CSS custom
- * properties in `generated/tokens.css` are generated from it by
- * `bun packages/ui/scripts/tokens.ts`, and a freshness test keeps them equal.
+ * properties in `generated/tokens.css`, the front matter of the root
+ * `DESIGN.md` and the token keys of `.impeccable/design.json` are generated
+ * from it by `bun run ui:tokens`, and freshness tests keep them equal.
  */
 
 export type Ground = 'light' | 'dark'
@@ -113,6 +114,8 @@ export const type = {
   machine: { size: '0.93em' },
   detailHeading: { size: '1.05em' },
   pageHeading: { size: '1.6em', lineHeight: 1.2 },
+  /** Row titles and actions: body size at the semibold weight. */
+  title: { size: '1em' },
   weight: { regular: 400, semibold: 600, bold: 700 },
 } as const
 
@@ -131,6 +134,22 @@ export const layout = {
   identityColumn: '6.5rem',
   gutter: '16px',
   narrowAt: '720px',
+} as const
+
+/** Every corner is square (the Square Rules rule). */
+export const rounded = { square: '0' } as const
+
+/** Control padding: outlined buttons and well fields. */
+export const control = {
+  button: { padding: '3px 12px' },
+  field: { padding: '4px 10px' },
+} as const
+
+/** Named breakpoints, derived from the layout and type scales: below
+ * `phone` the narrow layout applies; from `wide` the body type grows. */
+export const breakpoint = {
+  phone: `${Number.parseInt(layout.narrowAt, 10) - 1}px`,
+  wide: type.body.wideAt,
 } as const
 
 export const stroke = { rule: '1px', control: '1.5px', tabBar: '2px', focus: '2px' } as const
