@@ -1111,6 +1111,6 @@ for (const variant of ['published parent', 'parent moved away'] as const)
     const abandonedAt = settled[0]!.seq
     const later = reserved.filter((e) => e.seq > abandonedAt)
     for (const event of later)
-      expect(event.type === 'node.writer-reserved' && event.payload.parent).toBe(moved)
+      expect(event.type === 'node.writer-reserved' && event.payload.parent).toBe(moved!)
     expect(['completed', 'idle']).toContain(outcome)
   })
