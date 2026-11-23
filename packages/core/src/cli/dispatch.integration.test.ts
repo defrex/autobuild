@@ -8031,6 +8031,14 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
+      // Rendering starts concurrently with the first tick, so the first frame
+      // can paint before that tick journals. Snapshot only after it completes;
+      // the 60 s interval keeps a second tick out of the window.
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'dispatcher.tick-completed',
+        ),
+      )
       const before = await fx.store.getRepoEvents(fx.origin)
 
       // Down/Up are serialization fences. If either preceding Enter opened a
