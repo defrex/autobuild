@@ -2,6 +2,8 @@ import type { ScanCadence } from './scan-cadence'
 import type { BoundedEventReads } from './event-reads'
 import type { OperatorIdentity, OperatorPresence } from './operator-presence'
 export type { OperatorIdentity, OperatorPresence } from './operator-presence'
+import type { BuildPage, BuildPageOptions, ChangedBuilds } from './build-feed'
+export type { BuildPage, BuildPageOptions, ChangedBuild, ChangedBuilds } from './build-feed'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 /**
  * The BuildStore seam (SPEC §7): the durable home of everything a build
@@ -342,13 +344,40 @@ export interface BuildStore extends BoundedEventReads {
    */
   listBuildsForRepo(repo: string): Promise<BuildRecord[]>
 
-  /** Repository-wide invalidation position, a canonical unsigned decimal string.
+  /** Repository-wide change position, a canonical unsigned decimal string.
    * Advances atomically with repository/build event insertions, build creation,
-   * and stored repository lease holder transitions. Unknown repos return "0"
-   * without creating state. Renewals/heartbeats and passive expiry do not move
-   * it. Independent of event cursors; consumers compare only for equality and
-   * periodically refresh mutable facts outside its coverage. */
+   * and stored repository lease holder transitions. Positions are ordered: a
+   * later such write yields a strictly greater value, compared numerically
+   * (`compareChangePositions`). Unknown repos return "0" without creating
+   * state. Renewals/heartbeats and passive expiry do not move it. Independent
+   * of event cursors; consumers periodically refresh mutable facts outside its
+   * coverage. */
   getRepoChangePosition(repo: string): Promise<string>
+
+  /**
+   * The changed-builds feed: builds of `repo` whose latest change position is
+   * greater than `position`, ascending by position, each once at its latest
+   * position. A build's position moves in the same transaction as its creation
+   * and every build event. The returned `position` is the repository head,
+   * read in the same snapshot, so a caller may save it as its next watermark.
+   * Cost is proportional to the answer and reads no event rows. An unknown
+   * repository answers `{position: '0', builds: []}` and creates no state; an
+   * argument at or above the head answers no builds; a head below the
+   * argument means the repository was reset. A non-canonical position rejects
+   * with `BuildFeedValidationError`.
+   */
+  listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds>
+
+  /**
+   * One page of `repo`'s builds, newest first by creation with slug
+   * descending to break ties. Records match `listBuildsForRepo` records,
+   * including the ticket projection. `next` is null on the last page. Cursors
+   * are opaque and valid only for the adapter that issued them. A page's cost
+   * does not depend on the repository's build count. An unknown repository
+   * answers `{builds: [], next: null}` and creates no state. A malformed
+   * cursor or a limit outside 1..100 rejects with `BuildFeedValidationError`.
+   */
+  listBuildsPage(repo: string, opts?: BuildPageOptions): Promise<BuildPage>
 
   /**
    * Append one validated event; the store assigns `seq` (per-build,

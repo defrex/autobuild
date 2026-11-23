@@ -954,6 +954,125 @@ if (testUrl)
     }
   })
 
+/** The build triggers a database from before the changed-builds feed had,
+ * frozen as that release's migrate wrote them. */
+const PRE_FEED_TRIGGERS = `
+CREATE OR REPLACE FUNCTION ab_build_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO repo_change_positions(repo, position)
+ SELECT repo, 1 FROM builds WHERE slug = NEW.build
+ ON CONFLICT(repo) DO UPDATE SET position = repo_change_positions.position + 1;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS builds_repo_change ON builds;
+CREATE TRIGGER builds_repo_change AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_repo_changed();
+DROP TRIGGER IF EXISTS events_repo_change ON events;
+CREATE TRIGGER events_repo_change AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_changed();
+`
+
+if (testUrl)
+  test('build change positions backfill once, stay ordered beside old triggers, and page exactly', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      const marker = await sql`SELECT * FROM ab_schema_migrations`
+      const blobs = new MemoryBlobStore()
+      const store = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await store.createBuild({ slug: 'feed-a', repo: 'repo' })
+        await store.createBuild({ slug: 'feed-b', repo: 'repo' })
+        await store.append('feed-a', sampleEventWrite())
+        // Rebuild a database from before the feed: no table, the old triggers.
+        await sql.unsafe(`DROP TABLE build_change_positions;
+          DROP TRIGGER builds_change_recorded ON builds;
+          DROP TRIGGER events_change_recorded ON events;
+          ${PRE_FEED_TRIGGERS}`)
+        await store.append('feed-b', sampleEventWrite())
+        expect(await store.getRepoChangePosition('repo')).toBe('4')
+
+        await migratePostgres(database.url)
+        expect(await store.getRepoChangePosition('repo')).toBe('5')
+        const backfilled = await store.listBuildsChangedSince('repo', '4')
+        expect(backfilled.position).toBe('5')
+        expect(backfilled.builds.toSorted((a, b) => a.slug.localeCompare(b.slug))).toEqual([
+          { slug: 'feed-a', position: '5' },
+          { slug: 'feed-b', position: '5' },
+        ])
+        expect(await sql`SELECT * FROM ab_schema_migrations`).toEqual(marker)
+        const triggers = (
+          await sql`SELECT tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY tgname`
+        ).map((row: { tgname: string }) => row.tgname)
+        expect(triggers).not.toContain('builds_repo_change')
+        expect(triggers).not.toContain('events_repo_change')
+
+        await Promise.all([
+          runWorker(database.url, 'build', 'feed-a', 20),
+          runWorker(database.url, 'build', 'feed-b', 20),
+        ])
+        expect(await store.getRepoChangePosition('repo')).toBe('45')
+        const concurrent = await store.listBuildsChangedSince('repo', '5')
+        expect(concurrent.position).toBe('45')
+        expect(concurrent.builds.map((build) => build.slug).toSorted()).toEqual([
+          'feed-a',
+          'feed-b',
+        ])
+        expect(concurrent.builds.at(-1)!.position).toBe('45')
+        expect(BigInt(concurrent.builds[0]!.position)).toBeLessThan(45n)
+
+        // A second migrate is a no-op for positions.
+        await migratePostgres(database.url)
+        expect(await store.getRepoChangePosition('repo')).toBe('45')
+        expect(await store.listBuildsChangedSince('repo', '45')).toEqual({
+          position: '45',
+          builds: [],
+        })
+
+        // An older release re-running migrate recreates its triggers: each
+        // write advances twice, and the feed stays strictly ordered.
+        await sql.unsafe(PRE_FEED_TRIGGERS)
+        let previous = '45'
+        for (const write of [
+          () => store.append('feed-a', sampleEventWrite()),
+          () => store.createBuild({ slug: 'feed-c', repo: 'repo' }),
+          () => store.append('feed-b', sampleEventWrite()),
+        ]) {
+          await write()
+          const changed = await store.listBuildsChangedSince('repo', previous)
+          expect(BigInt(changed.position)).toBeGreaterThan(BigInt(previous))
+          expect(changed.builds).toHaveLength(1)
+          expect(BigInt(changed.builds[0]!.position)).toBeGreaterThan(BigInt(previous))
+          previous = changed.position
+        }
+        await migratePostgres(database.url)
+
+        // Microsecond rows written by another writer page without repeats or gaps.
+        for (const slug of ['micro-a', 'micro-b', 'micro-c'])
+          await sql`INSERT INTO builds(slug, repo, created_at, updated_at) VALUES (${slug}, 'repo', clock_timestamp(), clock_timestamp())`
+        const walked: string[] = []
+        let cursor: string | undefined
+        do {
+          const page = await store.listBuildsPage('repo', {
+            limit: 1,
+            ...(cursor === undefined ? {} : { cursor }),
+          })
+          walked.push(...page.builds.map((build) => build.slug))
+          cursor = page.next ?? undefined
+        } while (cursor !== undefined)
+        expect(walked).toEqual(
+          (await store.listBuildsForRepo('repo')).map((build) => build.slug).reverse(),
+        )
+        expect(walked).toHaveLength(6)
+        const later = await store.listBuildsChangedSince('repo', previous)
+        expect(later.builds.map((build) => build.slug)).toEqual(['micro-a', 'micro-b', 'micro-c'])
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 30_000)
+
 if (testUrl) {
   test('mixed-version persisted events retain opaque bytes and replay under catalog-specific checkpoints', async () => {
     const {

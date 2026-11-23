@@ -32,7 +32,13 @@ import { StreamBatchTooLargeError, StreamClosedError, type StreamPart } from '..
 import { EVENT_WAIT_POLL_MS } from '../streams/wait'
 import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
-import { openLocalStore, SqliteBuildStore } from './store'
+import {
+  BUILD_PAGE_AFTER_SQL,
+  BUILD_PAGE_SQL,
+  CHANGED_BUILDS_SQL,
+  openLocalStore,
+  SqliteBuildStore,
+} from './store'
 
 const mkdtemp = temporaryDirectories(afterEach)
 
@@ -1142,19 +1148,148 @@ test('opening a pre-counter database installs additive triggers without replay',
   const old = openLocalStore(root)
   await old.createBuild({ slug: 'before-upgrade', repo: 'repo' })
   const sqlite = (old as unknown as { sqlite: Database }).sqlite
-  sqlite.exec(`DROP TRIGGER builds_repo_change;
-    DROP TRIGGER events_repo_change;
+  sqlite.exec(`DROP TRIGGER builds_change_recorded;
+    DROP TRIGGER events_change_recorded;
     DROP TRIGGER repo_events_repo_change;
     DROP TRIGGER repo_holder_change;
+    DROP TABLE build_change_positions;
     DROP TABLE repo_change_positions;`)
   await old.close()
   const upgraded = openLocalStore(root)
   try {
-    expect(await upgraded.getRepoChangePosition('repo')).toBe('0')
-    await upgraded.append('before-upgrade', sampleEventWrite())
+    // The build-position backfill advances the fresh counter once.
     expect(await upgraded.getRepoChangePosition('repo')).toBe('1')
+    await upgraded.append('before-upgrade', sampleEventWrite())
+    expect(await upgraded.getRepoChangePosition('repo')).toBe('2')
+    expect((await upgraded.listBuildsChangedSince('repo', '1')).builds).toEqual([
+      { slug: 'before-upgrade', position: '2' },
+    ])
   } finally {
     await upgraded.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+/** The triggers a store from before the changed-builds feed had, frozen as
+ * that release wrote them, so a test can rebuild such a database. */
+const PRE_FEED_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS builds_repo_change AFTER INSERT ON builds
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+CREATE TRIGGER IF NOT EXISTS events_repo_change AFTER INSERT ON events
+ BEGIN INSERT INTO repo_change_positions(repo, position) VALUES ((SELECT repo FROM builds WHERE slug = NEW.build), 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
+`
+
+function sqliteOf(store: SqliteBuildStore): Database {
+  return (store as unknown as { sqlite: Database }).sqlite
+}
+
+test('opening a pre-feed database backfills build positions once at a bumped head', async () => {
+  const root = await freshRoot()
+  const old = openLocalStore(root)
+  await old.createBuild({ slug: 'old-a', repo: 'repo' })
+  await old.createBuild({ slug: 'old-b', repo: 'repo' })
+  await old.append('old-a', sampleEventWrite())
+  await old.createBuild({ slug: 'old-other', repo: 'other' })
+  sqliteOf(old).exec(`DROP TRIGGER builds_change_recorded;
+    DROP TRIGGER events_change_recorded;
+    DROP TABLE build_change_positions;
+    ${PRE_FEED_TRIGGERS}`)
+  // The old triggers still count: a pre-feed write moves only the counter.
+  await old.append('old-b', sampleEventWrite())
+  expect(await old.getRepoChangePosition('repo')).toBe('4')
+  await old.close()
+  const upgraded = openLocalStore(root)
+  try {
+    expect(await upgraded.getRepoChangePosition('repo')).toBe('5')
+    expect(await upgraded.getRepoChangePosition('other')).toBe('2')
+    expect(await upgraded.listBuildsChangedSince('repo', '4')).toEqual({
+      position: '5',
+      builds: [
+        { slug: 'old-a', position: '5' },
+        { slug: 'old-b', position: '5' },
+      ],
+    })
+    const triggers = sqliteOf(upgraded)
+      .query("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+      .all() as { name: string }[]
+    expect(triggers.map((trigger) => trigger.name)).not.toContain('events_repo_change')
+    expect(triggers.map((trigger) => trigger.name)).not.toContain('builds_repo_change')
+    await upgraded.append('old-b', sampleEventWrite())
+    expect(await upgraded.listBuildsChangedSince('repo', '5')).toEqual({
+      position: '6',
+      builds: [{ slug: 'old-b', position: '6' }],
+    })
+  } finally {
+    await upgraded.close()
+  }
+  // A later open finds the table and bumps nothing.
+  const reopened = openLocalStore(root)
+  try {
+    expect(await reopened.getRepoChangePosition('repo')).toBe('6')
+    expect(await reopened.getRepoChangePosition('other')).toBe('2')
+  } finally {
+    await reopened.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('old triggers recreated by an older runtime keep positions strictly ordered', async () => {
+  const root = await freshRoot()
+  const store = openLocalStore(root)
+  try {
+    await store.createBuild({ slug: 'mixed', repo: 'repo' })
+    // A predecessor generation's bootstrap recreates its triggers.
+    sqliteOf(store).exec(PRE_FEED_TRIGGERS)
+    let previous = await store.getRepoChangePosition('repo')
+    for (const write of [
+      () => store.append('mixed', sampleEventWrite()),
+      () => store.createBuild({ slug: 'mixed-2', repo: 'repo' }),
+      () => store.append('mixed', sampleEventWrite()),
+    ]) {
+      await write()
+      const changed = await store.listBuildsChangedSince('repo', previous)
+      expect(BigInt(changed.position)).toBeGreaterThan(BigInt(previous))
+      expect(changed.builds).toHaveLength(1)
+      expect(BigInt(changed.builds[0]!.position)).toBeGreaterThan(BigInt(previous))
+      previous = changed.position
+    }
+  } finally {
+    await store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('feed and page statements range-scan their indexes', async () => {
+  const root = await freshRoot()
+  const store = openLocalStore(root)
+  try {
+    const plan = (statement: string, ...params: (string | number | bigint)[]) =>
+      (
+        sqliteOf(store)
+          .query(`EXPLAIN QUERY PLAN ${statement}`)
+          .all(...params) as { detail: string }[]
+      ).map((row) => row.detail)
+    const feed = plan(CHANGED_BUILDS_SQL, 'repo', 0n)
+    expect(
+      feed.some((detail) =>
+        /SEARCH c USING .*INDEX build_change_positions_repo_position/.test(detail),
+      ),
+    ).toBe(true)
+    expect(feed.some((detail) => /SCAN (c|build_change_positions)\b/.test(detail))).toBe(false)
+    for (const page of [
+      plan(BUILD_PAGE_SQL, 'repo', 26),
+      plan(BUILD_PAGE_AFTER_SQL, 'repo', 26, '2026-01-01T00:00:00.000Z', 'slug'),
+    ]) {
+      expect(
+        page.some((detail) => /SEARCH builds USING INDEX builds_repo_created_slug/.test(detail)),
+      ).toBe(true)
+      expect(page.some((detail) => /SCAN builds\b/.test(detail))).toBe(false)
+      expect(page.some((detail) => /TEMP B-TREE/.test(detail))).toBe(false)
+    }
+  } finally {
+    await store.close()
     await rm(root, { recursive: true, force: true })
   }
 })
