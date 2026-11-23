@@ -31,6 +31,37 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
+/** One packed distribution for every test that consumes the tarball. */
+let packed: Promise<Uint8Array> | undefined
+const packedDistribution = () => (packed ??= packageAutobuildDistribution())
+
+/** A plugin whose only Autobuild dependency is erased types. */
+const ERASED_TYPES_PLUGIN = `
+      import type {
+        AutobuildPluginManifest,
+        PluginFactoryContext,
+      } from '@defrex/autobuild/plugin-sdk'
+      interface SampleConfig { endpoint: string }
+      const manifest = {
+        name: 'erased-types',
+        apiVersion: '^1.1.0',
+        ticketSources: {
+          sample: {
+            requiredEnv: ['SAMPLE_TOKEN'],
+            factory: async ({ config }: PluginFactoryContext<SampleConfig>) => {
+              throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
+            },
+            contract: {
+              factory: (_context: PluginFactoryContext) => async () => {
+                throw new Error('contract fixture is lazy')
+              },
+            },
+          },
+        },
+      } satisfies AutobuildPluginManifest
+      export default manifest
+    `
+
 const TYPECHECK_DEADLINE_EXCEEDED = Symbol('typecheck-deadline-exceeded')
 
 /** Races a spawned tsc against an injected wall-clock deadline; kills the
@@ -68,7 +99,7 @@ async function typecheckExitWithinDeadline(
   ])
   if (raceResult === TYPECHECK_DEADLINE_EXCEEDED) {
     throw new Error(
-      `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${deadlineMs}ms (${elapsedMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the per-test timeout comment above`,
+      `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${deadlineMs}ms (${elapsedMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the deadline comment at its call site`,
     )
   }
   return { exitCode: raceResult, elapsedMs, output, error }
@@ -106,109 +137,20 @@ describe('plugin SDK package surface', () => {
     }
   })
 
-  test('a dev-only type dependency checks and builds a plugin with no Autobuild runtime import', async () => {
-    const source = `
-      import type {
-        AutobuildPluginManifest,
-        PluginFactoryContext,
-      } from '@defrex/autobuild/plugin-sdk'
-      interface SampleConfig { endpoint: string }
-      const manifest = {
-        name: 'erased-types',
-        apiVersion: '^1.1.0',
-        ticketSources: {
-          sample: {
-            requiredEnv: ['SAMPLE_TOKEN'],
-            factory: async ({ config }: PluginFactoryContext<SampleConfig>) => {
-              throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
-            },
-            contract: {
-              factory: (_context: PluginFactoryContext) => async () => {
-                throw new Error('contract fixture is lazy')
-              },
-            },
-          },
-        },
-      } satisfies AutobuildPluginManifest
-      export default manifest
-    `
+  test('a dev-only type dependency builds a plugin with no Autobuild runtime import', async () => {
+    // The plugin's type check against the packed SDK runs in the packed
+    // consumer below ("the packed artifact contains the SDK…").
     const destination = await mkdtemp(join(tmpdir(), 'ab-erased-plugin-'))
     temporary.push(destination)
-    await writeFile(
-      join(destination, 'package.json'),
-      JSON.stringify({
-        name: 'sample-autobuild-plugin',
-        type: 'module',
-        devDependencies: { '@defrex/autobuild': '2.0.0', '@types/bun': '^1.3.14' },
-      }),
+    const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(
+      ERASED_TYPES_PLUGIN,
     )
-    await writeFile(join(destination, 'plugin.ts'), source)
-    const dependencyDir = join(destination, 'node_modules')
-    await mkdir(join(dependencyDir, '@types'), { recursive: true })
-    await mkdir(join(dependencyDir, '@defrex'), { recursive: true })
-    await symlink(root, join(dependencyDir, '@defrex', 'autobuild'), 'dir')
-    await symlink(
-      join(root, 'node_modules', '@types', 'bun'),
-      join(dependencyDir, '@types', 'bun'),
-      'dir',
-    )
-
-    const typecheck = Bun.spawn(
-      [
-        join(root, 'node_modules', '.bin', 'tsc'),
-        '--noEmit',
-        '--target',
-        'ESNext',
-        '--module',
-        'ESNext',
-        '--moduleResolution',
-        'bundler',
-        '--types',
-        'bun',
-        '--skipLibCheck',
-        'plugin.ts',
-      ],
-      {
-        cwd: destination,
-        env: { ...process.env, NODE_COMPILE_CACHE: join(destination, '.node-compile-cache') },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    )
-    // This test runs a full `tsc --noEmit` plus a transpile and a dynamic
-    // import inside bun's per-test timeout, and the compile alone is
-    // machine-speed-bound right at bun's 5000ms default cap: on the 4-vcpu
-    // vercel-sandbox guest it failed 3/3 isolated and 2/2 full-suite runs
-    // with "this test timed out after 5000ms" and empty typecheck output
-    // (build pin-the-dashboard, event seq 118), while it passed on the faster
-    // verify hardware. Measured warm on that same guest the fixture's tsc
-    // takes ~3.6-4.9s (well under the cap on faster machines), so this one
-    // test gets a 120s per-test budget — roughly 25x the observed compile —
-    // and an internal 90s deadline around the tsc step fails with a
-    // diagnostic naming the heavy step before bun's own timeout can ever be
-    // the first signal. A genuine type error still fails via the
-    // typecheck-exit guard below; only the time budget and the failure
-    // labeling changed.
-    const {
-      exitCode: typecheckExit,
-      elapsedMs: typecheckMs,
-      output: typecheckOutput,
-      error: typecheckError,
-    } = await typecheckExitWithinDeadline(typecheck, 90_000)
-    if (typecheckExit !== 0) {
-      throw new Error(
-        `sample plugin typecheck failed after ${typecheckMs}ms:\n${typecheckOutput}${typecheckError}`,
-      )
-    }
-
-    const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(source)
     expect(output).not.toContain('@defrex/autobuild/plugin-sdk')
     const built = join(destination, 'plugin.mjs')
     await writeFile(built, output)
-    await rm(dependencyDir, { recursive: true, force: true })
     const loaded = await import(pathToFileURL(built).href)
     expect(loaded.default.name).toBe('erased-types')
-  }, 120_000)
+  })
 
   test('an injected short deadline deterministically drives the tsc-deadline branch, independent of compile speed', async () => {
     // The deadline branch's race/kill/diagnostic mechanics were verified by
@@ -242,7 +184,7 @@ describe('plugin SDK package surface', () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
     temporary.push(destination)
     const archive = join(destination, 'autobuild.tgz')
-    await writeFile(archive, await packageAutobuildDistribution())
+    await writeFile(archive, await packedDistribution())
     const listingProcess = Bun.spawn(['tar', '-tzf', archive], {
       stdout: 'pipe',
       stderr: 'pipe',
@@ -346,7 +288,10 @@ describe('plugin SDK package surface', () => {
       join(consumer, 'node_modules', '@types', 'bun'),
       'dir',
     )
-    const consumerTypes = await spawnExec(
+    // A plugin with only a dev-time type dependency checks against the same
+    // packed SDK in the same compile.
+    await writeFile(join(consumer, 'plugin.ts'), ERASED_TYPES_PLUGIN)
+    const typecheck = Bun.spawn(
       [
         join(root, 'node_modules', '.bin', 'tsc'),
         '--noEmit',
@@ -360,10 +305,19 @@ describe('plugin SDK package surface', () => {
         '--types',
         'bun',
         'verify.ts',
+        'plugin.ts',
       ],
-      { cwd: consumer, env: { NODE_COMPILE_CACHE: join(consumer, '.node-compile-cache') } },
+      {
+        cwd: consumer,
+        env: { ...process.env, NODE_COMPILE_CACHE: join(consumer, '.node-compile-cache') },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
     )
-    expect(consumerTypes.exitCode, consumerTypes.stdout + consumerTypes.stderr).toBe(0)
+    // The compile is machine-speed-bound (~4-5 s warm on a 4-vCPU sandbox):
+    // an internal deadline names it before the test's own timeout can.
+    const consumerTypes = await typecheckExitWithinDeadline(typecheck, 90_000)
+    expect(consumerTypes.exitCode, consumerTypes.output + consumerTypes.error).toBe(0)
     const consumerImport = Bun.spawn(['bun', 'verify.ts'], {
       cwd: consumer,
       stdout: 'pipe',
@@ -421,7 +375,7 @@ describe('plugin SDK package surface', () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-pack-patch-consumer-'))
     temporary.push(destination)
     const archive = join(destination, 'autobuild.tgz')
-    await writeFile(archive, await packageAutobuildDistribution())
+    await writeFile(archive, await packedDistribution())
 
     const consumer = join(destination, 'consumer')
     await mkdir(consumer)
