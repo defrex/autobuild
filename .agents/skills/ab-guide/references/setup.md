@@ -485,6 +485,13 @@ prove archive-domain access: manually verify it with your administrator without
 creating probe refs or overwriting archives. Autobuild never changes settings or
 performs test pushes.
 
+Archive refs are a recommendation (WARN or UNKNOWN, never FAIL):
+
+- **Leaf builds** treat them as optional forge-side backup of displaced history.
+  Where refused, leaf restacks and reconciles keep a BuildStore copy, or warn
+  once per build and proceed.
+- **Node restack and landing** still publish archive refs and stop when refused.
+
 Require **linear history** on protected root and node target branches to prevent
 merge commits from GitHub's update-branch action. On the configured root, enable
 **Require branches to be up to date before merging**, with nonempty required
