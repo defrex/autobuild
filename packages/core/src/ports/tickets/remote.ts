@@ -38,6 +38,8 @@ import {
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
   TICKET_POLICY_ROLES_CAPABILITY,
+  TICKET_POLICY_CREATE_LABELS_HEADER,
+  TICKET_POLICY_CREATE_LABELS_CAPABILITY,
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_CAPABILITY,
   TICKET_TARGETING_PROBE_NODE,
@@ -72,8 +74,9 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
 }
 
 /** The project ticket policy a hosted `[tickets]` table publishes. The backlog
- * and rejected roles appear only when configured, so a policy without them is
- * exactly what services predating the roles accept. */
+ * and rejected roles appear only when configured, and `createLabels` only when
+ * nonempty, so a policy without them is exactly what services predating them
+ * accept. */
 export function hostedTicketPolicy(tickets: TicketsConfig): HostedTicketPolicy {
   if (tickets.teamKey === undefined) throw new Error('[tickets].source = "hosted" requires teamKey')
   const lifecycle = ticketLifecycle(tickets)
@@ -91,6 +94,7 @@ export function hostedTicketPolicy(tickets: TicketsConfig): HostedTicketPolicy {
       ...(tickets.readyLabels !== undefined ? { readyLabels: tickets.readyLabels } : {}),
       ...(lifecycle.backlog !== undefined ? { backlogState: lifecycle.backlog } : {}),
       ...(lifecycle.rejected !== undefined ? { rejectedState: lifecycle.rejected } : {}),
+      ...(tickets.createLabels?.length ? { createLabels: tickets.createLabels } : {}),
     },
   }
 }
@@ -160,7 +164,10 @@ export class HostedTicketSource implements TicketSource {
     const parsed = hostedTicketPolicySchema.parse(policy)
     const namesRoles =
       parsed.tickets.backlogState !== undefined || parsed.tickets.rejectedState !== undefined
-    await this.request('policy', parsed, successWireSchema, { policyRoles: namesRoles })
+    await this.request('policy', parsed, successWireSchema, {
+      policyRoles: namesRoles,
+      policyCreateLabels: parsed.tickets.createLabels !== undefined,
+    })
   }
 
   /** Present only once the service has positively advertised `list-targeting`;
@@ -216,6 +223,7 @@ export class HostedTicketSource implements TicketSource {
         [TICKET_PRIORITY_HEADER]: TICKET_PRIORITY_CAPABILITY,
         [TICKET_DEPENDENCY_STATE_HEADER]: TICKET_DEPENDENCY_STATE_CAPABILITY,
         [TICKET_POLICY_ROLES_HEADER]: TICKET_POLICY_ROLES_CAPABILITY,
+        [TICKET_POLICY_CREATE_LABELS_HEADER]: TICKET_POLICY_CREATE_LABELS_CAPABILITY,
         [TICKET_TARGETING_HEADER]: TICKET_TARGETING_CAPABILITY,
         [TICKET_PAGING_HEADER]: TICKET_PAGING_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -235,7 +243,12 @@ export class HostedTicketSource implements TicketSource {
     operation: string,
     input: unknown,
     schema: { parse(value: unknown): T },
-    names: { issueLinks?: boolean; priority?: boolean; policyRoles?: boolean } = {},
+    names: {
+      issueLinks?: boolean
+      priority?: boolean
+      policyRoles?: boolean
+      policyCreateLabels?: boolean
+    } = {},
   ): Promise<T> {
     const response = await this.send(operation, input)
     if (!response.ok) {
@@ -265,8 +278,17 @@ export class HostedTicketSource implements TicketSource {
           'ticket service predates paged listing (list-page); upgrade the service',
         )
       }
-      // A service predating the roles refuses them with its strict policy schema
-      // and never echoes the capability header.
+      // A service predating createLabels or the roles refuses them with its
+      // strict policy schema and never echoes the capability header.
+      if (
+        names.policyCreateLabels &&
+        response.status === 400 &&
+        response.headers.get(TICKET_POLICY_CREATE_LABELS_HEADER) !==
+          TICKET_POLICY_CREATE_LABELS_CAPABILITY
+      )
+        throw new Error(
+          'ticket service predates createLabels in ticket policy; upgrade the service or unset [tickets].createLabels',
+        )
       if (
         names.policyRoles &&
         response.status === 400 &&

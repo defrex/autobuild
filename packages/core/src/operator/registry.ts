@@ -1132,7 +1132,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.create',
-    'Create a ticket in the configured source, optionally labelled, pre-blocked, linked to the forge issues it addresses, urgent so it dispatches before normal ready work, assigned (explicit assignees replace the [tickets].createAssignee default), or filed in a nondefault state.',
+    'Create a ticket in the configured source, optionally labelled (explicit labels are unioned with the [tickets].createLabels default), pre-blocked, linked to the forge issues it addresses, urgent so it dispatches before normal ready work, assigned (explicit assignees replace the [tickets].createAssignee default), or filed in a nondefault state.',
     ticketsCreateInput,
     '{ticket, blockers, build}: the created ticket and its (usually empty) dependency states.',
     async (raw, ctx) => {

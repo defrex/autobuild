@@ -4271,3 +4271,235 @@ describe('HarvestRunner hosted execution authority', () => {
     expect(large.unchanged).toEqual(small.unchanged)
   })
 })
+
+describe('harvest proposals carry [tickets].createLabels', () => {
+  /** Seed one observation and an approved run whose proposals `build` makes. */
+  async function approvedRun(
+    store: MemoryBuildStore,
+    tickets: TicketSource,
+    run: string,
+    build: (observations: Array<{ occurrence: { build: string; seq: number } }>) => {
+      proposals: unknown[]
+    },
+  ): Promise<void> {
+    await seedObservation(store, `labels-${run}`, `${run} defect`)
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    const packet = await makeHarvestScanPacket({
+      store,
+      tickets,
+      repo: '/repo',
+      run,
+      observations: scan.observations,
+      state: scan.state,
+    })
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run,
+          observations: scan.observations.map((item) => item.occurrence),
+          scan: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-proposals', content: JSON.stringify(build(scan.observations)) }],
+      (deposited) => ({
+        actor: agentActor('harvest', `hs_${run}`),
+        type: 'harvest.proposals.submitted',
+        payload: { run, round: 1, artifact: artifactRef(deposited[0]!) },
+      }),
+    )
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-review', content: 'approved\n' }],
+      (deposited) => ({
+        actor: agentActor('harvest-review', `hr_${run}`),
+        type: 'harvest.review.verdict',
+        payload: {
+          run,
+          round: 1,
+          verdict: 'approve',
+          findings: [],
+          artifact: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+  }
+
+  function runner(opts: {
+    store: MemoryBuildStore
+    tickets: TicketSource
+    config: ReturnType<typeof parseConfig>
+    workspace: string
+    instance: string
+  }): HarvestRunner {
+    return new HarvestRunner({
+      store: opts.store,
+      tickets: opts.tickets,
+      config: opts.config,
+      runtimes: {
+        scripted: {
+          runner: new ScriptedAgentRunner({
+            script: () => {
+              throw new Error('an approved run files without another agent')
+            },
+          }),
+          servesModels: [''],
+        },
+      },
+      repo: '/repo',
+      workspacePath: opts.workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: opts.instance,
+      opts: { heartbeatMs: 100_000 },
+    })
+  }
+
+  function githubSource() {
+    const github = new FakeGitHubIssues()
+    const tickets = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: ticketLifecycle(ticketsSchema.parse({ source: 'github' })),
+      readyLabels: [],
+    })
+    return { github, tickets }
+  }
+
+  const githubConfig = parseConfig(
+    [
+      '[tickets]',
+      'source = "github"',
+      'createLabels = ["autobuild"]',
+      '[roles.default]',
+      'runtime = "scripted"',
+      '[policy]',
+      'harvestThreshold = 1',
+    ].join('\n'),
+  )
+  const fileConfig = config(1, {}, ['createLabels = ["autobuild"]'])
+
+  async function workspaceFor(name: string): Promise<string> {
+    const workspace = await mkdtemp(join(tmpdir(), `ab-harvest-labels-${name}-`))
+    roots.push(workspace)
+    return workspace
+  }
+
+  test('github: a filed proposal carries the provenance and creation labels', async () => {
+    const workspace = await workspaceFor('github')
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const { github, tickets } = githubSource()
+    await approvedRun(store, tickets, 'h_labels_github', proposalSet)
+    expect(
+      await runner({ store, tickets, config: githubConfig, workspace, instance: 'i' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    const filed = (await tickets.listAll()).tickets
+    expect(filed).toHaveLength(1)
+    expect(filed[0]!.labels).toEqual([HARVEST_PROPOSAL_LABEL, 'autobuild'])
+    expect(github.label('autobuild')).toBeDefined()
+  })
+
+  test('file: a filed proposal carries the provenance and creation labels', async () => {
+    const workspace = await workspaceFor('file')
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const tickets = new FileTicketSource({ dir: join(workspace, 'tickets') })
+    await approvedRun(store, tickets, 'h_labels_file', proposalSet)
+    expect(
+      await runner({ store, tickets, config: fileConfig, workspace, instance: 'i' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    const filed = (await tickets.listAll()).tickets
+    expect(filed).toHaveLength(1)
+    expect(filed[0]!.labels).toEqual([HARVEST_PROPOSAL_LABEL, 'autobuild'])
+  })
+
+  test('github: a retried create adopting the issue adds the dropped labels once', async () => {
+    const workspace = await workspaceFor('github-retry')
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const { github, tickets } = githubSource()
+    await approvedRun(store, tickets, 'h_labels_github_retry', proposalSet)
+    github.dropLabels = true
+    expect(
+      await runner({ store, tickets, config: githubConfig, workspace, instance: 'a' }).run(),
+    ).toMatchObject({ outcome: 'failed' })
+    expect(github.issueCount()).toBe(1)
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toEqual([])
+    github.dropLabels = false
+    expect(
+      await runner({ store, tickets, config: githubConfig, workspace, instance: 'b' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    expect(github.issueCount()).toBe(1)
+    expect([...github.issue(1001)!.labels].sort()).toEqual(['autobuild', HARVEST_PROPOSAL_LABEL])
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toHaveLength(1)
+  })
+
+  test('file: a retried create adopting the ticket keeps both labels', async () => {
+    const workspace = await workspaceFor('file-retry')
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    class CreateThenCrash extends FileTicketSource {
+      crashed = false
+      override async create(...args: Parameters<TicketSource['create']>) {
+        const ticket = await super.create(...args)
+        if (!this.crashed) {
+          this.crashed = true
+          throw new Error('simulated crash after external create')
+        }
+        return ticket
+      }
+    }
+    const tickets = new CreateThenCrash({ dir: join(workspace, 'tickets') })
+    await approvedRun(store, tickets, 'h_labels_file_retry', proposalSet)
+    expect(
+      await runner({ store, tickets, config: fileConfig, workspace, instance: 'a' }).run(),
+    ).toMatchObject({ outcome: 'failed' })
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toEqual([])
+    expect(
+      await runner({ store, tickets, config: fileConfig, workspace, instance: 'b' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    const filed = (await tickets.listAll()).tickets
+    expect(filed).toHaveLength(1)
+    expect(filed[0]!.labels).toEqual([HARVEST_PROPOSAL_LABEL, 'autobuild'])
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toHaveLength(1)
+  })
+
+  test('github: a join writes no labels while a create in the same run is labelled', async () => {
+    const workspace = await workspaceFor('github-join')
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const { github, tickets } = githubSource()
+    await approvedRun(store, tickets, 'h_labels_first', proposalSet)
+    expect(
+      await runner({ store, tickets, config: githubConfig, workspace, instance: 'a' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    const [first] = (await tickets.listAll()).tickets
+    // A person relabels the earlier proposal; the join must leave it alone.
+    await tickets.update(first!.ref.id, { labels: ['groomed'] })
+    await seedObservation(store, 'labels-unrelated', 'unrelated defect')
+    await approvedRun(store, tickets, 'h_labels_join', (observations) => ({
+      proposals: [
+        {
+          action: 'join' as const,
+          ticket: first!.ref,
+          reason: 'Same defect',
+          observations: [observations[0]!.occurrence],
+        },
+        ...proposalSet(observations.slice(1), 'Unrelated new defect').proposals,
+      ],
+    }))
+    expect(
+      await runner({ store, tickets, config: githubConfig, workspace, instance: 'b' }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+    expect(github.issue(Number(first!.ref.id))!.labels).toEqual(['groomed'])
+    const created = (await tickets.listAll()).tickets.find(
+      (ticket) => ticket.title === 'Unrelated new defect',
+    )
+    expect(created?.labels).toEqual([HARVEST_PROPOSAL_LABEL, 'autobuild'])
+  })
+})
