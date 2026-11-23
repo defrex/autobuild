@@ -2929,7 +2929,7 @@ The fixed workflow is:
    still-existing unresolved origins. The filing fact and report preserve those
    two provenance sets separately. Creates are rendered to the spec standard
    and filed into `[tickets].proposalState`, Triage by default, with the reserved
-   `autobuild:proposal` provenance label.
+   `autobuild:proposal` provenance label and any `[tickets].createLabels`.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -3175,6 +3175,17 @@ configured `createAssignee`, with an error naming the source, before anything
 is written; their tickets carry no `assignees` field. `ab ticket create` and
 `update` take `--assignees a,b`; operator and MCP ticket requests take
 `assignees`.
+
+`[tickets].createLabels` lists labels added to every ticket Autobuild creates
+(`ab ticket create`, operator `tickets.create`, harvest proposals and
+optimization attempts). The caller unions them after the labels the create
+names, never replacing them, so a source receives exact draft labels and needs
+no capability; `ab ticket import` never applies them. They are ordinary labels
+and count toward `readyLabels` only when also listed there. Parse refuses names
+a builtin source reserves: on GitHub `autobuild:<state>`, `autobuild-link:` and
+`node`, on Linear `node`. A retried keyed GitHub create that adopts its issue
+adds any requested labels it is missing. Hosted publishes the value in the
+project ticket policy so the service's own operator create applies it.
 
 A build freezes its ticket's links into `build.created` when it claims the
 ticket, from the same sample as the body. Later ticket edits and spec revisions

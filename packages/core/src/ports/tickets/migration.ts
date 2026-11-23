@@ -577,6 +577,8 @@ export async function importTickets(opts: MigrationOptions): Promise<MigrationRe
     for (const ticket of tickets) {
       const key = manifest.keys[ticket.ref.id]!
       const links = createLinks(ticket)
+      // Import preserves the exported labels exactly: it never applies
+      // [tickets].createLabels, which only Autobuild's own creates add.
       const result =
         byKey.get(key) ??
         (await opts.source.create(

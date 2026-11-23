@@ -133,7 +133,8 @@ ab ticket create "…" --body spec.md --state "<state>"
 Do not ask a placement question solely to obtain a state, and do not infer one
 from the ticket. If grooming named no destination, omit `--state`; the create
 then uses `[tickets].createState`, or the ticket source's own default when that
-setting is absent.
+setting is absent. The create carries any configured `[tickets].createLabels`
+automatically.
 
 When the work originates from a forge issue, attach it at creation and still
 cite it in Evidence: `--issues 824` when the ticket fully resolves the issue

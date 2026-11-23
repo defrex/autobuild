@@ -1198,6 +1198,59 @@ describe('parseConfig — [tickets]', () => {
     ).toBe('me')
   })
 
+  test('createLabels accepts label lists on every source and refuses reserved names', () => {
+    const configs: Record<string, string> = {
+      file: '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      github: '[tickets]\nsource = "github"\n',
+      linear: '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+      hosted:
+        '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nurl = "https://tickets.example.com"\n',
+      'jira-cloud': '[tickets]\nsource = "jira-cloud"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+    }
+    const labelled = (source: string, value: string) =>
+      `${configs[source]}createLabels = ${value}\n`
+    for (const source of Object.keys(configs)) {
+      expect(parseConfig(configs[source]!).tickets.createLabels).toBeUndefined()
+      expect(parseConfig(labelled(source, '["autobuild"]')).tickets.createLabels).toEqual([
+        'autobuild',
+      ])
+      expect(parseConfig(labelled(source, '[]')).tickets.createLabels).toEqual([])
+      for (const bad of ['""', '" autobuild"', '"autobuild "']) {
+        const message = parseError(labelled(source, `["ok", ${bad}]`)).message
+        expect(message).toContain('tickets.createLabels[1]')
+        expect(message).toContain('[tickets].createLabels entries must be nonblank label names')
+      }
+    }
+    for (const [label, reason] of [
+      ['autobuild:ready', 'reserved autobuild: prefix'],
+      ['AUTOBUILD:doing', 'reserved autobuild: prefix'],
+      ['autobuild-link:closes #1', 'reserved autobuild-link: prefix'],
+      ['node', 'node kind label'],
+    ] as const) {
+      const message = parseError(labelled('github', JSON.stringify(['ok', label]))).message
+      expect(message).toContain('tickets.createLabels[1]')
+      expect(message).toContain(`[tickets].createLabels entry "${label}"`)
+      expect(message).toContain(reason)
+      expect(message).toContain('selected source: "github"')
+    }
+    expect(
+      parseConfig(labelled('github', '["autobuild:proposal", "autobuild:aborted", "Node"]')).tickets
+        .createLabels,
+    ).toEqual(['autobuild:proposal', 'autobuild:aborted', 'Node'])
+    const linear = parseError(labelled('linear', '["node"]')).message
+    expect(linear).toContain('tickets.createLabels[0]')
+    expect(linear).toContain('node kind label')
+    expect(linear).toContain('selected source: "linear"')
+    expect(parseConfig(labelled('linear', '["autobuild:ready"]')).tickets.createLabels).toEqual([
+      'autobuild:ready',
+    ])
+    for (const source of ['file', 'hosted', 'jira-cloud'])
+      expect(
+        parseConfig(labelled(source, '["node", "autobuild:ready", "autobuild-link:x"]')).tickets
+          .createLabels,
+      ).toEqual(['node', 'autobuild:ready', 'autobuild-link:x'])
+  })
+
   test('github needs no other key and refuses Linear, file and hosted keys', () => {
     const tickets = parseConfig('[tickets]\nsource = "github"\n').tickets
     expect(tickets.readyState).toBe('ready')

@@ -700,6 +700,75 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
   })
 }
 
+// createLabels needs its own capability, independent of the roles: every
+// published client publishes and decodes policy strictly without it.
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} policy publishes keep saved createLabels and reads omit them`, async () => {
+    const repo = 'https://github.com/acme/compat-labels'
+    const policies = new MemoryTicketPolicyStore()
+    const server = createTicketServer({
+      secret,
+      sourceFor: () => new FakeTicketSource(),
+      policy: policies,
+    })
+    const base = {
+      source: 'hosted' as const,
+      teamKey: 'ENG',
+      readyState: 'ready',
+      triageState: 'triage',
+      claimedState: 'doing',
+      doneState: 'done',
+      createState: 'triage',
+      proposalState: 'triage',
+    }
+    await new HostedTicketSource({
+      url: 'https://tickets.example',
+      token: admin,
+      repo,
+      teamKey: 'ENG',
+      fetchFn: (input, init) => server.fetch(new Request(input.toString(), init)),
+    }).synchronizePolicy({
+      version: 1,
+      tickets: { ...base, backlogState: 'icebox', createLabels: ['autobuild'] },
+    })
+    const send = async (input: unknown, headers: Record<string, string> = {}) => {
+      const req = request(
+        '/tickets/policy',
+        version,
+        { context: { teamKey: 'ENG', repo }, input },
+        admin,
+        publication.protocol!,
+      )
+      for (const [name, value] of Object.entries(headers)) req.headers.set(name, value)
+      const response = await server.fetch(req)
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    // The frozen strict shape: no roles, no createLabels.
+    const frozen = (tickets: Partial<typeof base>) =>
+      ticket120.hostedTicketPolicySchema.parse({ version: 1, tickets: { ...base, ...tickets } })
+    ticket120.successWireSchema.parse(await send(frozen({ doneState: 'Done' })))
+    expect((await policies.get(repo))?.tickets).toMatchObject({
+      doneState: 'Done',
+      backlogState: 'icebox',
+      createLabels: ['autobuild'],
+    })
+    const read = ticket120.hostedTicketPolicySchema.parse(await send(null))
+    expect(read.tickets).toEqual({ ...base, doneState: 'Done' })
+    // A roles-aware publisher that predates createLabels replaces the roles but
+    // keeps the saved createLabels, and reads without them.
+    const roles = { 'x-autobuild-ticket-policy-roles': '1' }
+    await send({ version: 1, tickets: { ...base, rejectedState: 'rejected' } }, roles)
+    expect((await policies.get(repo))?.tickets).toEqual({
+      ...base,
+      rejectedState: 'rejected',
+      createLabels: ['autobuild'],
+    })
+    expect((await send(null, roles)).tickets).toEqual({ ...base, rejectedState: 'rejected' })
+  })
+}
+
 test('a current client receives each existing blocker native state', async () => {
   const backend = new FakeTicketSource()
   const server = createTicketServer({ secret, sourceFor: () => backend })

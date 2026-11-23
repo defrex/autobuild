@@ -4,13 +4,15 @@
   "title": "Tickets",
   "group": "reference",
   "description": "Configure file, Linear, hosted, or GitHub tickets and implement a ticket-source adapter.",
-  "textHash": "722e57b09d90edb5d8513bf3f465c43009769943a96c3574d6eefd748947625d",
+  "textHash": "50847c2ff41f4e26ac45f024174cc9bcec8d975d65c2d47d7c3b7b6b1a15ed38",
   "headings": [
     "Responsibility",
+    "Creation labels",
     "Shipped adapters",
     "Writing your own"
   ],
   "code": [
+    "[tickets]\nsource = \"github\"\nreadyLabels = []\ncreateLabels = [\"autobuild\"]",
     "[tickets]\nsource = \"file\"\ndir = \".tickets\"\nreadyState = \"ready\"\nreadyLabels = []\ncreateState = \"triage\"\ntriageState = \"triage\"\nproposalState = \"triage\"\ndoneState = \"done\"\nbacklogState = \"backlog\"\nrejectedState = \"rejected\"",
     "[tickets]\nsource = \"linear\"\nteamKey = \"ENG\"\nreadyState = \"Todo\"\nreadyLabels = [\"autobuild\"]\nclaimedState = \"In Progress\"\ncreateState = \"Backlog\"\ntriageState = \"Backlog\"\nproposalState = \"Backlog\"\ndoneState = \"Done\"\nrejectedState = \"Canceled\"",
     "bun ab connect --tickets https://tickets.example.com",

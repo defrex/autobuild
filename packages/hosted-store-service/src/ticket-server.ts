@@ -41,6 +41,8 @@ import {
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
   TICKET_POLICY_ROLES_CAPABILITY,
+  TICKET_POLICY_CREATE_LABELS_HEADER,
+  TICKET_POLICY_CREATE_LABELS_CAPABILITY,
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_CAPABILITY,
   TICKET_PAGING_HEADER,
@@ -71,13 +73,14 @@ export interface TicketServerOptions {
   grants?: TicketGrantStore
   policy?: {
     get(repo: string): Promise<HostedTicketPolicy | null>
-    /** `retain-roles` keeps saved roles a publisher predating them omits;
-     * `kept` reports a publish left unchanged rather than erase a role. */
+    /** `retain-roles` keeps saved roles a publisher predating them omits, and
+     * `retainCreateLabels` a saved `createLabels`; `kept` reports a publish
+     * left unchanged rather than erase a role. */
     put(
       repo: string,
       policy: HostedTicketPolicy,
       writer: string,
-      options: { mode: 'replace' | 'retain-roles' },
+      options: { mode: 'replace' | 'retain-roles'; retainCreateLabels: boolean },
     ): Promise<{ kept?: string[] } | void>
   }
   /** Receives operator-facing notices, such as a kept legacy policy publish. */
@@ -492,6 +495,9 @@ export function createTicketServer(options: TicketServerOptions): {
             )
           const rolesAware =
             req.headers.get(TICKET_POLICY_ROLES_HEADER) === TICKET_POLICY_ROLES_CAPABILITY
+          const createLabelsAware =
+            req.headers.get(TICKET_POLICY_CREATE_LABELS_HEADER) ===
+            TICKET_POLICY_CREATE_LABELS_CAPABILITY
           const repo =
             envelope.data.context.repo ?? (principal.kind !== 'admin' ? principal.repo : undefined)
           if (!repo || !options.policy)
@@ -505,7 +511,7 @@ export function createTicketServer(options: TicketServerOptions): {
             )
               throw new MachineAuthError(403, 'credential cannot read ticket policy')
             const policy = await options.policy.get(repo)
-            return json(200, policy && projectTicketPolicy(policy, rolesAware))
+            return json(200, policy && projectTicketPolicy(policy, rolesAware, createLabelsAware))
           }
           if (principal.kind !== 'project' && principal.kind !== 'admin')
             throw new MachineAuthError(
@@ -514,8 +520,10 @@ export function createTicketServer(options: TicketServerOptions): {
             )
           // A publisher predating the roles never erases them: absent roles keep
           // their saved values, and a colliding publish keeps the saved policy.
+          // One predating createLabels likewise keeps the saved createLabels.
           const published = await options.policy.put(repo, envelope.data.input, principal.user, {
             mode: rolesAware ? 'replace' : 'retain-roles',
+            retainCreateLabels: !createLabelsAware,
           })
           if (published?.kept)
             (options.diagnostic ?? console.warn)(
@@ -597,15 +605,16 @@ export function createTicketServer(options: TicketServerOptions): {
   }
   return {
     // Every ticket response, failures included, advertises issue-link,
-    // priority, policy-role, targeted-listing and paged-listing support so a
-    // current client can recognize an older server's strict-schema refusal or
-    // missing route.
+    // priority, policy-role, policy create-label, targeted-listing and
+    // paged-listing support so a current client can recognize an older
+    // server's strict-schema refusal or missing route.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
       headers.set(TICKET_ISSUE_LINKS_HEADER, TICKET_ISSUE_LINKS_CAPABILITY)
       headers.set(TICKET_PRIORITY_HEADER, TICKET_PRIORITY_CAPABILITY)
       headers.set(TICKET_POLICY_ROLES_HEADER, TICKET_POLICY_ROLES_CAPABILITY)
+      headers.set(TICKET_POLICY_CREATE_LABELS_HEADER, TICKET_POLICY_CREATE_LABELS_CAPABILITY)
       headers.set(TICKET_TARGETING_HEADER, TICKET_TARGETING_CAPABILITY)
       headers.set(TICKET_PAGING_HEADER, TICKET_PAGING_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })

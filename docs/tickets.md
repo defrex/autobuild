@@ -61,6 +61,8 @@ On the `github` source a ticket has assignees. `--assignees alice,me` on `ab tic
 bun ab ticket update 412 --assignees octocat
 ```
 
+Set `[tickets].createLabels` to label every ticket Autobuild creates, including harvest proposals, so a shared tracker separates them from reports people file. `--labels` on create adds to them instead of replacing them, and `ab ticket import` never applies them. See [Creation labels](ticket-sources.md#creation-labels).
+
 
 ## Backlog and rejected
 
