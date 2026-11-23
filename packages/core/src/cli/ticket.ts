@@ -6,6 +6,7 @@ import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/t
 import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-links'
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
 import { creationAssignees, parseAssigneesFlag } from '../ports/tickets/assignees'
+import { creationLabels } from '../ports/tickets/labels'
 import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import {
@@ -402,6 +403,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   const body = await readBody(opts.bodyFile)
   const { source, config } = await resolveTicketCommand(opts, 'create')
   const assignees = creationAssignees(config.tickets, opts.assignees)
+  const labels = creationLabels(config.tickets, opts.labels)
 
   const ticket = await createTicket(
     source,
@@ -410,7 +412,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       ...(opts.target !== undefined ? { target: opts.target } : {}),
       title: opts.title,
       body,
-      ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+      ...(labels !== undefined ? { labels } : {}),
       ...(opts.blockedBy !== undefined ? { blockedBy: opts.blockedBy } : {}),
       ...(opts.issueLinks !== undefined ? { issueLinks: opts.issueLinks } : {}),
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),

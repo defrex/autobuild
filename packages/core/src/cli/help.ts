@@ -232,6 +232,8 @@ tree shows all tickets nested by target, including completed work and empty node
 These fields describe intent; dispatch and merge behavior are unchanged.`,
       '--state overrides [tickets].createState (or the provider default) for that',
       'create only; it is passed through unchanged and validated by the source.',
+      'On create, --labels are unioned with [tickets].createLabels, never replaced;',
+      'import keeps the exported labels and never adds them.',
       'update partially replaces editable fields: omitted fields survive, --labels',
       '"" clears labels, and update never changes state. block and unblock accept',
       'comma-separated blocker ids and are idempotent. Every id is validated before',

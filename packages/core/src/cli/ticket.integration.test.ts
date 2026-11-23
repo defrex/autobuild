@@ -2325,6 +2325,112 @@ describe('ticket metadata CLI', () => {
   })
 })
 
+describe('[tickets].createLabels on ab ticket create', () => {
+  const GITHUB_LIFECYCLE = {
+    triage: 'triage',
+    ready: 'ready',
+    doing: 'doing',
+    done: 'done',
+    create: 'triage',
+    proposal: 'triage',
+  }
+
+  async function createJson(
+    opts: Parameters<typeof abTicket>[1] & { stdout: (line: string) => void },
+    out: string[],
+    args: string[],
+  ): Promise<Ticket> {
+    const body = join(tmp, 'spec.md')
+    await writeFile(body, 'spec')
+    await abTicket(['create', ...args, '--body', body, '--json'], opts)
+    return JSON.parse(out.pop()!) as Ticket
+  }
+
+  test('file: created tickets carry the creation labels, unioned with --labels', async () => {
+    await writeRepo(`${FILE_TICKETS_TOML}createLabels = ["autobuild"]\n`)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const source = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    const configured = await createJson(opts, out, ['Configured'])
+    const union = await createJson(opts, out, ['Union', '--labels', 'bug'])
+    const explicit = await createJson(opts, out, ['Explicit', '--labels', 'autobuild,bug'])
+    const reread = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    expect((await reread.get(configured.ref.id))?.labels).toEqual(['autobuild'])
+    expect((await reread.get(union.ref.id))?.labels).toEqual(['bug', 'autobuild'])
+    expect((await reread.get(explicit.ref.id))?.labels).toEqual(['autobuild', 'bug'])
+  })
+
+  test('github: created issues carry the creation labels, unioned with --labels', async () => {
+    await writeRepo('[tickets]\nsource = "github"\ncreateLabels = ["autobuild"]\n')
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: GITHUB_LIFECYCLE,
+      readyLabels: [],
+    })
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    expect(issues.label('autobuild')).toBeUndefined()
+    const configured = await createJson(opts, out, ['Configured'])
+    const union = await createJson(opts, out, ['Union', '--labels', 'bug'])
+    // A label missing from the repository is created on demand.
+    expect(issues.label('autobuild')).toBeDefined()
+    // triage is an open issue with no state label.
+    expect(issues.issue(Number(configured.ref.id))!.labels).toEqual(['autobuild'])
+    expect([...issues.issue(Number(union.ref.id))!.labels].sort()).toEqual(['autobuild', 'bug'])
+    expect(union.labels).toEqual(['bug', 'autobuild'])
+  })
+
+  test('import keeps the exported labels and never adds the creation labels', async () => {
+    await writeRepo(`${FILE_TICKETS_TOML}createLabels = ["autobuild"]\n`)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { exportTickets } = await import('../ports/tickets/migration')
+    const { MemoryBuildStore } = await import('../store/memory')
+    const original = new FileTicketSource({ dir: join(tmp, 'old') })
+    await original.create({ title: 'Plain', body: 'spec' }, { idempotencyKey: 'plain' })
+    await original.create(
+      { title: 'Labelled', body: 'spec', labels: ['bug'] },
+      { idempotencyKey: 'labelled' },
+    )
+    const dir = join(tmp, 'export')
+    await exportTickets({ source: original, repo: 'https://example.test/owner/repo', dir })
+    const target = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    await abTicket(['import', dir], {
+      targetRepo: tmp,
+      env: {},
+      exec: async (cmd: string[]) => ({
+        stdout: cmd.includes('remote.origin.url')
+          ? 'https://example.test/owner/repo.git'
+          : `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+        stderr: '',
+        exitCode: 0,
+      }),
+      stdout: () => {},
+      stderr: () => {},
+      openStore: () => new MemoryBuildStore(),
+      sourceFactory: () => target,
+    })
+    const imported = await target.listAll()
+    expect(
+      Object.fromEntries(imported.tickets.map((ticket) => [ticket.title, ticket.labels])),
+    ).toEqual({ Plain: [], Labelled: ['bug'] })
+  })
+})
+
 describe('ticket issue links on a source without support', () => {
   test('create and update refuse, name the source, and write nothing', async () => {
     await writeRepo(FILE_TICKETS_TOML)
