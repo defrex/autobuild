@@ -6551,6 +6551,17 @@ succeeds.
 
 A rate limit the dispatcher classifies on its own authenticated request
 records repository degradation with `resetAt`.
+The built-in GitHub forge also treats a successful response, 304 included,
+that reports `x-ratelimit-remaining: 0` with a future reset at most 65 minutes
+away (one hour plus five minutes of clock skew) as that quota's limit.
+The response keeps its result, and the process's next
+request for the same quota (`core`, `graphql`, …) fails as that rate limit
+without being sent, so cooldown follows the rules here without an avoidable
+refusal. Other quotas are unaffected. A missing, malformed, past or
+implausible reset enters no cooldown, and no later response clears one early:
+only the reset passing, or an explicit `forge-clear`, does. After a clear, the
+next request goes to GitHub as a probe, and an actual limit restores the
+cooldown.
 The first limit of an episode records an ordinary `dispatcher.forge-degraded`,
 which wakes `ab watch` once. A later reset inside the unexpired episode extends
 the cooldown durably as a degradation marked `continued` that wakes nothing; an
