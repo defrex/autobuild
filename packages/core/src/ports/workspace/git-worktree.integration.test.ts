@@ -1747,6 +1747,101 @@ test('private checkpoint retains two unpublished branch commits and detached wor
   ).rejects.toThrow('immutable archive')
 })
 
+test('a forge refusing archive refs preserves the unpublished range in the store for another host', async () => {
+  const { preserveGitCommits, restoreGitCommits } = await import('./commit-preservation')
+  const { gitRewrite } = await import('../forge/git-rewrite')
+  const { retainPreservedCopy, restoreRetainedHead } = await import(
+    '../../kernel/history-retention'
+  )
+  const { seedStore, BUILD } = await import('../../cli/testkit')
+  const root = await mkdtemp(join(tmpdir(), 'ab-commit-retained-'))
+  const origin = join(root, 'origin.git')
+  const source = join(root, 'source')
+  await initRepo(source)
+  await run(['git', 'init', '--bare', origin], root)
+  // Branch pushes are accepted; archive refs are refused, like a proxy.
+  await writeFile(
+    join(origin, 'hooks', 'update'),
+    '#!/bin/sh\ncase "$1" in refs/autobuild/archive/*) echo "only branches" >&2; exit 1;; esac\nexit 0\n',
+    { mode: 0o755 },
+  )
+  await run(['git', 'remote', 'add', 'origin', origin], source)
+  await run(['git', 'push', 'origin', 'main'], source)
+  const base = await run(['git', 'rev-parse', 'HEAD'], source)
+  await run(['git', 'checkout', '-b', 'ab/retained'], source)
+  await run(['git', 'push', 'origin', 'ab/retained'], source)
+  const first = await commitFile(source, 'one', 'one', 'first unpublished')
+  const second = await commitFile(source, 'two', 'two', 'second unpublished')
+  const store = await seedStore()
+  const archive = gitRewrite(spawnExec, false).archive
+  const context = (exec: Exec, workspacePath: string, exclude: string) => ({
+    store,
+    slug: BUILD,
+    exec,
+    workspacePath,
+    exclude,
+    local: false,
+    branch: 'ab/retained',
+    targetBranch: 'main',
+    archive,
+  })
+  const preserve = () =>
+    preserveGitCommits({
+      exec: spawnExec,
+      workspacePath: source,
+      slug: BUILD,
+      branch: 'ab/retained',
+      base,
+      candidates: [],
+      archive,
+      retain: (input) =>
+        retainPreservedCopy(context(input.exec, input.workspacePath, input.base), input.sha),
+    })
+  const heads = await preserve()
+  expect(heads).toEqual([
+    { sha: second, role: 'branch', commits: [second, first], storeBase: base },
+  ])
+  expect(await store.getArtifact(BUILD, `history-objects-${second}`)).not.toBeNull()
+  // A repeated preservation reuses the copy.
+  expect(await preserve()).toEqual(heads)
+  // Another host clones only the published branch and restores exactly those commits.
+  const replacement = join(root, 'replacement')
+  await run(['git', 'clone', '--branch', 'ab/retained', origin, replacement], root)
+  const restore = (sha: string) => restoreRetainedHead(context(spawnExec, replacement, sha), sha)
+  await restoreGitCommits({
+    exec: spawnExec,
+    workspacePath: replacement,
+    branch: 'ab/retained',
+    heads,
+    restoreStored: restore,
+  })
+  expect(await run(['git', 'rev-parse', 'HEAD'], replacement)).toBe(second)
+  expect(await run(['git', 'log', '--format=%s', `${base}..HEAD`], replacement)).toBe(
+    'second unpublished\nfirst unpublished',
+  )
+  // Kept nowhere: preservation fails and the work stays in the checkout.
+  const refusing = await seedStore()
+  refusing.putArtifact = async () => {
+    throw new Error('store write refused')
+  }
+  await expect(
+    preserveGitCommits({
+      exec: spawnExec,
+      workspacePath: source,
+      slug: BUILD,
+      branch: 'ab/retained',
+      base,
+      candidates: [],
+      archive,
+      retain: (input) =>
+        retainPreservedCopy(
+          { ...context(input.exec, input.workspacePath, input.base), store: refusing },
+          input.sha,
+        ),
+    }),
+  ).rejects.toThrow(/BuildStore copy failed/)
+})
+
 describe('preserved branch heads superseded by a recorded rewrite', () => {
   /** base ← A ← P (replaced, archived) and base ← Q (the current branch). */
   async function history() {
