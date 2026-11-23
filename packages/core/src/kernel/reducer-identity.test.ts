@@ -10,18 +10,22 @@ import {
 } from '../store/reducer-values'
 import {
   BASE_RELATIVE_SKIPPED_PREFIX,
+  LEDGER_PATH,
   LEGACY_REDUCER_VERSIONS,
   LEDGER_SENTINEL,
   REGENERATE_COMMAND,
+  REVISION_GUARD_SKIPPED_PREFIX,
   UNREGENERATED_COMBINATION_PREFIX,
   appendRevision,
   canonicalJson,
   checkAgainstBase,
   checkIdentityRecords,
+  checkRevisionsSinceBase,
   deriveReducerVersion,
   evaluationCorpora,
   foldDigest,
   formatBaseRelativeSkipped,
+  formatRevisionGuardSkipped,
   formatUnregeneratedCombination,
   parseLedgerSource,
   parseRecordFile,
@@ -32,6 +36,7 @@ import {
   revisionSet,
   unrevisedSinceBase,
   type CurrentIdentity,
+  type IdentityGraph,
   type IdentityRecord,
   type Ledger,
 } from './reducer-identity'
@@ -557,6 +562,161 @@ describe('identity changes relative to the verify base', () => {
     const notice = formatBaseRelativeSkipped('AB_VERIFY_BASE is not set')
     expect(notice.startsWith(`${BASE_RELATIVE_SKIPPED_PREFIX}: AB_VERIFY_BASE is not set`)).toBe(
       true,
+    )
+  })
+})
+
+describe('revision guard', () => {
+  const BASE = 'c'.repeat(40)
+  const keysOf = (ledger: Ledger) => new Set(parseRevisions(ledger).map((r) => r.key))
+  /** Versions as each side's code derives them through the real formula. */
+  const versions = (input: {
+    identities: readonly string[]
+    ledger: Ledger
+    legacy?: Readonly<Record<string, number>>
+    graph?: IdentityGraph
+  }) =>
+    new Map(
+      input.identities.map((identity) => [
+        identity,
+        deriveReducerVersion({
+          identity,
+          ledger: input.ledger,
+          legacy: input.legacy ?? {},
+          graph: input.graph ?? new Map(),
+        }),
+      ]),
+    )
+  const guard = (input: {
+    identities: readonly string[]
+    base: { ledger: Ledger; legacy?: Record<string, number>; graph?: IdentityGraph }
+    head: {
+      ledger: Ledger
+      legacy?: Record<string, number>
+      graph?: IdentityGraph
+      identities?: readonly string[]
+    }
+  }) =>
+    checkRevisionsSinceBase({
+      base: BASE,
+      baseLedger: keysOf(input.base.ledger),
+      headLedger: keysOf(input.head.ledger),
+      baseVersions: versions({ identities: input.identities, ...input.base }),
+      headVersions: versions({
+        ...input.head,
+        identities: input.head.identities ?? input.identities,
+      }),
+    })
+  const A = 'build/fold/aaaaaaaaaa'
+  const B = 'build/fold/bbbbbbbbbb'
+
+  test('a removed revision fails, naming the key, its identity and the lowered version', () => {
+    const violations = guard({
+      identities: ['build'],
+      base: { ledger: { [A]: 'why' }, legacy: { build: 51 } },
+      head: { ledger: {}, legacy: { build: 51 } },
+    })
+    expect(violations.map((v) => v.kind)).toEqual(['removed-revision', 'lowered-version'])
+    expect(violations.map((v) => v.name)).toEqual(['build', 'build'])
+    expect(violations[0]!.message).toContain(`reducer revision ${A} (identity build)`)
+    expect(violations[0]!.message).toContain(BASE.slice(0, 12))
+    expect(violations[1]!.message).toContain(
+      'reducer identity build derives version 51 at HEAD, below version 52',
+    )
+  })
+
+  test('a lowered frozen legacy version fails', () => {
+    const violations = guard({
+      identities: ['build'],
+      base: { ledger: { [A]: 'why' }, legacy: { build: 51 } },
+      head: { ledger: { [A]: 'why' }, legacy: { build: 50 } },
+    })
+    expect(violations.map((v) => v.kind)).toEqual(['lowered-version'])
+    expect(violations[0]!.message).toContain('version 51 at HEAD, below version 52')
+  })
+
+  test('a version lowered through a part fails for the part and the composite', () => {
+    const graph = new Map([['composite', ['part']]])
+    const violations = guard({
+      identities: ['composite', 'part'],
+      base: { ledger: {}, legacy: { part: 3 }, graph },
+      head: { ledger: {}, legacy: { part: 2 }, graph },
+    })
+    expect(violations.map((v) => [v.kind, v.name])).toEqual([
+      ['lowered-version', 'composite'],
+      ['lowered-version', 'part'],
+    ])
+  })
+
+  test('a composite that drops a declared part fails', () => {
+    const violations = guard({
+      identities: ['composite', 'part', 'other'],
+      base: { ledger: {}, graph: new Map([['composite', ['part', 'other']]]) },
+      head: { ledger: {}, graph: new Map([['composite', ['part']]]) },
+    })
+    expect(violations.map((v) => [v.kind, v.name])).toEqual([['lowered-version', 'composite']])
+    expect(violations[0]!.message).toContain('version 2 at HEAD, below version 3')
+  })
+
+  test('an added revision passes', () => {
+    expect(
+      guard({
+        identities: ['build', 'harvest'],
+        base: { ledger: { [A]: 'why' } },
+        head: { ledger: { [A]: 'why', 'harvest/shape/cccccccccc': 'why' } },
+      }),
+    ).toEqual([])
+  })
+
+  test('a revert by revision keeps the base line, adds one, and passes', () => {
+    expect(
+      guard({
+        identities: ['build'],
+        base: { ledger: { [A]: 'why' } },
+        head: { ledger: { [A]: 'why', [B]: 'revert' } },
+      }),
+    ).toEqual([])
+  })
+
+  test('a deregistered reducer that keeps its ledger lines passes, and a new one is ignored', () => {
+    const ledger = { [A]: 'why', 'gone/fold/dddddddddd': 'why' }
+    expect(
+      guard({
+        identities: ['build', 'gone'],
+        base: { ledger },
+        head: { ledger, identities: ['build', 'fresh'] },
+      }),
+    ).toEqual([])
+  })
+
+  test('every message states the remedy without suggesting a ledger edit or deletion', () => {
+    const violations = guard({
+      identities: ['build'],
+      base: { ledger: { [A]: 'why' }, legacy: { build: 51 } },
+      head: { ledger: {}, legacy: { build: 50 } },
+    })
+    expect(violations).toHaveLength(2)
+    for (const { message } of violations) {
+      expect(message).toContain('bun tools/reducer-revision.ts')
+      expect(message).toContain('restore')
+      expect(message).toContain(LEDGER_PATH)
+      expect(message).not.toMatch(/delete/i)
+      expect(message).not.toMatch(/\bedit/i)
+    }
+  })
+
+  test('a skipped revision guard is named, never silent', () => {
+    expect(formatRevisionGuardSkipped('x').startsWith(`${REVISION_GUARD_SKIPPED_PREFIX}: x`)).toBe(
+      true,
+    )
+  })
+
+  test('the legacy input defaults to the frozen versions', () => {
+    expect(deriveReducerVersion({ identity: 'build' })).toBe(
+      deriveReducerVersion({ identity: 'build', legacy: LEGACY_REDUCER_VERSIONS }),
+    )
+    expect(deriveReducerVersion({ identity: 'build', ledger: {}, graph: new Map() })).toBe(
+      LEGACY_REDUCER_VERSIONS.build!,
     )
   })
 })

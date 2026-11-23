@@ -9,7 +9,11 @@
  * --reason "…"`. Never edit, reorder or delete a line, and never resolve this
  * file by choosing a side: a deleted line lowers a version, and saved values
  * under the higher version would then be reduced again on every read. A revert
- * adds a revision rather than removing one.
+ * adds a revision rather than removing one. Verify enforces this: the registry
+ * integration test fails any change that drops a line present at its verify
+ * base or lowers any reducer's version below the base's, and the remedy is to
+ * restore the lines and record the undo with the revision tool. A deregistered
+ * identity keeps its lines; they stay inert.
  */
 export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   __ledger__: 'not a revision; append revisions below',
