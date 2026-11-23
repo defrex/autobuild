@@ -4,7 +4,12 @@ import { validateReducerValue } from './reducer-value-validation'
 import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { AUTOBUILD_VERSION } from './remote/version'
 import { sameParentRejection } from '../kernel/node-restack-state'
-import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
+import {
+  readBuildFacts,
+  readBuildSelector,
+  readExecutionIntervals,
+  readRepositoryFacts,
+} from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
@@ -952,6 +957,34 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await flags()).toEqual({ executionOpen: true })
           await store.append(slug, ended('b'))
           expect(await flags()).toEqual({})
+          // Every execution fact counts toward executionFacts, and only
+          // those; the served executionIntervals value numbers them and
+          // drops what an acknowledgment covers.
+          const executionFacts = async () =>
+            (await store.getRepoBuildDigests(repo)).get(slug)!.executionFacts
+          expect(await executionFacts()).toBe(5)
+          expect((await readExecutionIntervals(store, slug)).value).toMatchObject({
+            count: 5,
+            acknowledged: 0,
+            facts: [
+              { n: 1, kind: 'started', instance: 'a' },
+              { n: 2 },
+              { n: 3 },
+              { n: 4 },
+              { n: 5 },
+            ],
+          })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'execution.accounted',
+            payload: { count: 4 },
+          })
+          expect(await executionFacts()).toBe(5)
+          expect((await readExecutionIntervals(store, slug)).value).toMatchObject({
+            count: 5,
+            acknowledged: 4,
+            facts: [{ n: 5, kind: 'ended', instance: 'b' }],
+          })
 
           const hosted = await store.append(slug, {
             actor: KERNEL,

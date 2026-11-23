@@ -514,3 +514,65 @@ describe('executionIntervals', () => {
     })
   })
 })
+
+describe('surfaces of the clock', () => {
+  const opened = () =>
+    new OptimizationLogBuilder()
+      .push({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo: 'r', ticket: { source: 'file', id: 'n' }, baseBranch: 'm', kind: 'node' },
+      })
+      .accept(commandObjective({ budget: { maxHours: 2 } }), 1)
+      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: 'a'.repeat(40) } })
+      .baseline(1, 50, 1)
+
+  test('the signal gates a request on active hours, and an older service skips the hours condition', async () => {
+    const { signalDue } = await import('./optimization')
+    const read = REDUCERS.buildDigest!.valueRead
+    if ('excluded' in read) throw new Error('buildDigest has no value read')
+    const signal = (builder: OptimizationLogBuilder) => {
+      const value = reduceBuildDigest(read.adapt(builder.events as never) as never).optimization
+      if (!value) throw new Error('no signal')
+      return value
+    }
+    const spent = opened()
+    batch(spent, 180, [
+      ['attempt-a', 1, 'started', 'i', 0],
+      ['attempt-a', 2, 'ended', 'i', 180],
+    ])
+    expect(signalDue(signal(opened()), at(10_000))).toBe('request')
+    expect(signalDue(signal(spent), at(180))).toBeUndefined()
+    const { clock: _clock, ...older } = signal(spent)
+    expect(signalDue(older, at(180))).toBe('request')
+  })
+
+  test('the digest clock and executionFacts round-trip the wire protocol', async () => {
+    const { buildDigestWireSchema } = await import('../store/remote/protocol')
+    const builder = opened()
+    batch(builder, 30, [['attempt-a', 1, 'started', 'i', 0]])
+    builder.wait(5).stop('operator', 'abort')
+    const read = REDUCERS.buildDigest!.valueRead
+    if ('excluded' in read) throw new Error('buildDigest has no value read')
+    const digest = { slug: 'n', ...reduceBuildDigest(read.adapt(builder.events as never) as never) }
+    expect(digest.executionFacts).toBe(0)
+    expect(buildDigestWireSchema.parse(JSON.parse(JSON.stringify(digest)))).toEqual(digest)
+    const { executionFacts: _facts, ...older } = digest
+    expect(buildDigestWireSchema.parse(older)).toEqual(older)
+  })
+
+  test('ab objective prints active hours and marks a settling stop', async () => {
+    const { objectiveView } = await import('../operator/optimization')
+    const { renderObjective } = await import('../cli/objective')
+    const builder = opened()
+    batch(builder, 30, [['attempt-a', 1, 'started', 'i', 0]])
+    const running = renderObjective(objectiveView('n', digest(builder), at(90)))
+    expect(running).toContain('  active: 1.5 hours')
+    builder.wait(30).stop('operator', 'abort')
+    const stopped = objectiveView('n', digest(builder), at(10_000))
+    expect(stopped.progress).toMatchObject({ elapsedHours: 1, settling: true })
+    expect(renderObjective(stopped).find((line) => line.startsWith('  active:'))).toStartWith(
+      '  active: 1.0 hours (settling',
+    )
+  })
+})
