@@ -1,3 +1,4 @@
+import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 import { openLocalStore } from '../store/local/store'
 import { expect, test } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises'
@@ -197,6 +198,7 @@ readyState = "ready"
           env: {
             PATH: process.env.PATH,
             HOME: process.env.HOME,
+            ...inheritedGitConfigIsolation(),
             AB_DISPATCH_GENERATION: 'inherited-invalid-marker',
           },
           stdout: 'pipe',

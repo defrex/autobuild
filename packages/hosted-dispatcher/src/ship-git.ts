@@ -147,8 +147,14 @@ export interface LddEntry {
   path: string
 }
 
+const LOADER_PATH = /\/ld-linux[^/]*\.so/
+
 /** Parse `ldd` output: the resolved libraries, the loader, and anything
- * `not found`. The vDSO is skipped. */
+ * `not found`. The vDSO is skipped. glibc prints the loader either bare,
+ * `/lib64/ld-linux-x86-64.so.2 (0x…)` (Debian, Amazon Linux), or in arrow
+ * form, `/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2
+ * (0x…)` (Arch); either way the left-hand path is the loader, never a
+ * library. */
 export function parseLdd(output: string): {
   libraries: LddEntry[]
   loader?: string
@@ -163,6 +169,10 @@ export function parseLdd(output: string): {
     const arrow = /^(\S+)\s+=>\s+(.*)$/.exec(line)
     if (arrow) {
       const [, soname, rest] = arrow
+      if (soname!.startsWith('/')) {
+        if (LOADER_PATH.test(soname!)) loader = soname
+        continue
+      }
       if (/^not found/.test(rest!)) missing.push(soname!)
       else {
         const path = /^(\/\S+)/.exec(rest!)?.[1]
@@ -171,7 +181,7 @@ export function parseLdd(output: string): {
       continue
     }
     const direct = /^(\/\S+)\s+\(0x[0-9a-f]+\)$/.exec(line)
-    if (direct && /\/ld-linux[^/]*\.so/.test(direct[1]!)) loader = direct[1]
+    if (direct && LOADER_PATH.test(direct[1]!)) loader = direct[1]
   }
   return { libraries, ...(loader !== undefined ? { loader } : {}), missing }
 }

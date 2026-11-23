@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { KERNEL } from '../events/envelope'
-import { spawnExec } from '../ports/workspace/git-worktree'
+import { type Exec, spawnExec } from '../ports/workspace/git-worktree'
 import { sampleBuildInput } from '../store/contract'
 import { MemoryBuildStore } from '../store/memory'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -18,10 +19,13 @@ import {
 
 const temporary = temporaryDirectories(afterEach)
 
-async function repository() {
+/** A scratch repository. `env` reaches every git process the fixture and the
+ * returned `exec` start, overriding the runner's git config isolation. */
+async function repository(env: Record<string, string> = {}) {
   const cwd = await temporary(join(tmpdir(), 'head-paths-'))
+  const exec: Exec = (cmd, opts) => spawnExec(cmd, { ...opts, env: { ...opts.env, ...env } })
   const git = async (...args: string[]) => {
-    const result = await spawnExec(['git', ...args], { cwd })
+    const result = await exec(['git', ...args], { cwd })
     if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
     return result.stdout.trim()
   }
@@ -35,7 +39,7 @@ async function repository() {
   await git('config', 'user.name', 'Test')
   await git('config', 'user.email', 'test@example.com')
   await git('config', 'commit.gpgsign', 'false')
-  return { cwd, git, write, commit }
+  return { cwd, exec, git, write, commit }
 }
 
 describe('changed paths against real git', () => {
@@ -86,8 +90,8 @@ describe('changed paths against real git', () => {
 
 /** The finding's example: the change edits a and d; the destination edits a
  * (conflict) and b (arrives cleanly); the resolver settles a and also edits c. */
-async function conflictedReplay() {
-  const repo = await repository()
+async function conflictedReplay(env?: Record<string, string>) {
+  const repo = await repository(env)
   const { git, write, commit } = repo
   for (const name of ['a', 'b', 'c', 'd']) await write(`${name}.txt`, '1\n')
   const base = await commit('base')
@@ -100,7 +104,7 @@ async function conflictedReplay() {
   await write('b.txt', 'destination\n')
   const onto = await commit('destination')
   await git('checkout', '-q', '--detach', onto)
-  await spawnExec(['git', 'cherry-pick', change], { cwd: repo.cwd })
+  await repo.exec(['git', 'cherry-pick', change], { cwd: repo.cwd })
   await write('a.txt', 'resolved\n')
   await write('c.txt', 'extra\n')
   await git('add', '-A')
@@ -198,4 +202,30 @@ test('the worktree fallback leaves the caller worktree and registry untouched', 
   expect(before.worktrees.split('\n').filter((line) => line.startsWith('worktree '))).toHaveLength(
     1,
   )
+})
+
+describe('a global rerere.autoupdate does not change the outcome', () => {
+  async function hostile() {
+    const directory = await temporary(join(tmpdir(), 'head-paths-rerere-'))
+    const config = join(directory, 'gitconfig')
+    await writeFile(
+      config,
+      '[rerere]\n\tenabled = true\n\tautoupdate = true\n[user]\n\tname = Test\n\temail = test@example.com\n',
+    )
+    const replay = await conflictedReplay({ GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' })
+    // The hostile config was live: rerere recorded the resolution.
+    const cache = await replay.git('rev-parse', '--git-path', 'rr-cache')
+    expect(await readdir(isAbsolute(cache) ? cache : join(replay.cwd, cache))).not.toHaveLength(0)
+    return replay
+  }
+
+  for (const mergeBaseOption of [true, false])
+    test(`${mergeBaseOption ? 'merge-tree' : 'temporary worktree'} replay ignores recorded resolutions`, async () => {
+      const { cwd, exec, base, change, onto, head } = await hostile()
+      expect(
+        await computeResolutionPaths(exec, cwd, [{ change, parent: base, onto, head }], {
+          mergeBaseOption,
+        }),
+      ).toEqual(['a.txt', 'c.txt'])
+    })
 })

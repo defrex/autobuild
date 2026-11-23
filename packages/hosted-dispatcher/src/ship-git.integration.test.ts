@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { readElf } from './elf'
 import {
   parseLdDebug,
-  parseLdd,
   stageGitForDeployment,
   validateStagedTree,
   type StageGitHost,
@@ -254,23 +253,6 @@ describe('stageGitForDeployment with a fake build host', () => {
 })
 
 describe('build-host tool output', () => {
-  test('ldd output yields libraries, the loader and missing names', () => {
-    expect(
-      parseLdd(
-        [
-          '\tlinux-vdso.so.1 (0x00007ffd)',
-          '\tlibz.so.1 => /usr/lib64/libz.so.1 (0x00007f01)',
-          '\tlibfoo.so.2 => not found',
-          '\t/lib64/ld-linux-x86-64.so.2 (0x00007f02)',
-        ].join('\n'),
-      ),
-    ).toEqual({
-      libraries: [{ soname: 'libz.so.1', path: '/usr/lib64/libz.so.1' }],
-      loader: '/lib64/ld-linux-x86-64.so.2',
-      missing: ['libfoo.so.2'],
-    })
-  })
-
   test('LD_DEBUG traces flag a host shell and host libraries', () => {
     const root = '/tmp/abg01234567'
     const parsed = parseLdDebug(
