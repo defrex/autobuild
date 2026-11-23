@@ -14,6 +14,7 @@ import {
 } from './integration-stack'
 import { nodeContributionBase } from './node-verification-context'
 import { acknowledgeNodeLanding } from './node-landing'
+import { recordRetention, retainCommit } from './history-retention'
 import { nodeIssueLinksForForge, nodeIssueLinksPublished } from './node-issue-links'
 
 export interface IntegrationLandingDeps {
@@ -145,11 +146,33 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
             evidence: ['Freshness enforcement unavailable'],
           })
       await authority()
-      await forge.rewrite.archive({
-        workspacePath,
-        ref: `refs/autobuild/archive/${slug}/${head}`,
-        sha: head,
-      })
+      // Best effort: the head stays reachable from the published node branch
+      // until the guarded landing.
+      const retained = await retainCommit(
+        {
+          store,
+          slug,
+          exec,
+          workspacePath,
+          archive: forge.rewrite.archive,
+          exclude: parent,
+          local,
+          branch: deps.branch,
+          targetBranch: deps.destination,
+        },
+        head,
+      )
+      await recordRetention(
+        store,
+        slug,
+        {
+          event: 'node.history-retained',
+          operation: 'integration-landing',
+          id: deps.id,
+          base: parent,
+        },
+        [retained],
+      )
       if (!existing) {
         await store.append(slug, {
           actor: KERNEL,

@@ -1733,7 +1733,7 @@ test('private checkpoint retains two unpublished branch commits and detached wor
     heads,
   })
   expect(await run(['git', 'rev-parse', 'HEAD'], replacement)).toBe(second)
-  await run(['git', 'update-ref', heads[0]!.remoteRef, base], origin)
+  await run(['git', 'update-ref', heads[0]!.remoteRef!, base], origin)
   await expect(
     preserveGitCommits({
       exec: spawnExec,
@@ -1919,7 +1919,7 @@ describe('local worktree restoration from forge archives (#916)', () => {
     // The branch moved back after preservation, as a restack does, so
     // restoration must actually advance it to the preserved head.
     await run(['git', 'update-ref', `refs/heads/${branch}`, published], repo)
-    const ref = heads[0]!.remoteRef
+    const ref = heads[0]!.remoteRef!
     const localRef = () =>
       spawnExec(['git', 'rev-parse', '--verify', '--quiet', ref], { cwd: repo })
     const restore = (restorationArchives: 'local' | 'remote') =>
