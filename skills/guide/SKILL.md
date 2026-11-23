@@ -1562,11 +1562,12 @@ state eligible.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `source` | — | **required**, nonblank builtin or plugin registration name | Which provider backs all ticket operations. Unknown names report every available builtin and plugin source. |
-| `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
+| `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. Creation labels (`createLabels`) are ordinary labels and never satisfy this gate unless listed here; with the github/linear default `["autobuild"]`, `createLabels = ["autobuild"]` makes every Autobuild-filed ticket pass it. |
 | `url` | selected build service | HTTPS URL (loopback HTTP allowed), no userinfo/query/fragment; hosted only | Ticket service independent of builds; required for local builds. |
 | `readyState` | hosted, github: `ready` | non-blank string; required for other sources | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`); github matches the `autobuild:<state>` label ignoring case. There is no any-state mode. |
 | `readyAssignee` | — | optional; sources that declare the capability: `linear` (`"me"` or an email), `github` (`"me"` or a username, managed-user `name_shortcode` logins included), declaring plugins; refused for `file`/`hosted` | Also require the ticket to be assigned to that user; unassigned tickets are never ready. With `github`, each ready scan reports ready issues that have no assignee in the ticket diagnostics; assign one to make it claimable. `me` is the credential owner: of `LINEAR_API_KEY` for `linear`, of the GitHub token for `github`. A `github` issue with several assignees matches any one of them. |
 | `createAssignee` | — | optional; sources that declare the `assignees` capability: `github` (`"me"` or a username), declaring plugins; refused for `file`/`hosted`/`linear` | Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to that user unless the create names its own assignees. `me` is the creating credential's owner, so a harvest proposal belongs to the filing dispatcher's owner. Pairs with `readyAssignee = "me"`. |
+| `createLabels` | — | optional; array of nonblank label names with no surrounding whitespace; every source, with reserved names refused on `github` (`autobuild:<state>`, `autobuild-link:…`, `node`) and `linear` (`node`) | Add these labels to every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals, optimization attempts), unioned after the labels the create names, never replacing them. A harvest proposal carries `autobuild:proposal` plus these. `ab ticket import` never applies them. `[]` or absent adds none. |
 | `teamKey` | — | required by `linear` and `hosted`, forbidden by `file` and `github`, allowed for plugins | The Linear team key (e.g. `"ENG"`), the captured prefix for new hosted ticket ids (`ENG-1`), or a plugin configuration field. Hosted numbers are project-local and continue across prefix changes; legacy ids remain aliases and readable inputs are case-insensitive. |
 | `claimedState` | hosted, github: `doing` | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `doneState` | hosted, github: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted and github tickets only. A github ticket is done when its issue is closed as completed. |
@@ -1610,6 +1611,10 @@ Cross-field rules, each an **error**:
   `linear`, or a plugin source without the `assignees` capability), the same
   way. `ab init --validate` also reports a `"me"` whose credential has no user
   and a user who can't be assigned issues in the repository.
+- A `createLabels` entry a builtin source reserves: on `github` an
+  `autobuild:<state>` label (the `autobuild:proposal` and `autobuild:aborted`
+  markers are allowed), an `autobuild-link:` label, or `node`; on `linear`,
+  `node`. A live reload that adds one is rejected.
 - `source = "file"` with `teamKey` or `claimedState` set. `dir` is **optional**
   here — absent means the default above, which is why the schema leaves it
   optional rather than giving it a `.default()`: that is what keeps the
@@ -1662,7 +1667,8 @@ issue is always a `closes` link. Links to other issues show on GitHub as
 and intent, never deleted when unused; state and link labels are never ticket
 labels, and writes naming them are refused. The `autobuild:proposal` and
 `autobuild:aborted` labels that harvest and abort apply are ordinary labels,
-so `proposal` and `aborted` cannot be states. Dispatcher notices post as issue
+so `proposal` and `aborted` cannot be states. Creation labels are ordinary
+labels too, created on demand like any other. Dispatcher notices post as issue
 comments, but tickets carry no comment history, so `ab ticket show` lists none;
 export and import read it explicitly.
 Assets live in the BuildStore. A node is an issue with the exact `node` label,
@@ -2208,6 +2214,9 @@ Harvest's creation reservations cover Harvest only, not interactive CLI creates.
 Dependency order and JSON id extraction are still required, but do not alone
 prevent an active dispatcher from claiming a partially created ready ticket.
 
+On create, `--labels` is unioned with `[tickets].createLabels`: the configured
+labels are added after the named ones, never replaced. `ab ticket import`
+keeps the exported labels and never adds them.
 Update is partial: omitted fields remain untouched, including labels, assignee,
 and provider metadata. `--labels` is a complete replacement and an explicitly
 empty value (`--labels ''`) clears the list. `--issues` records the forge issues

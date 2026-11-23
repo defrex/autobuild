@@ -18,6 +18,9 @@ export interface TicketPolicyPutOptions {
   /** `replace` (default) stores the publish as the complete policy;
    * `retain-roles` keeps saved roles a publisher predating them omits. */
   mode?: 'replace' | 'retain-roles'
+  /** Keep a saved `createLabels` the publish omits — a publisher predating
+   * `createLabels` in ticket policy. */
+  retainCreateLabels?: boolean
 }
 
 /** `kept` names the collisions when a `retain-roles` publish left the saved
@@ -82,7 +85,9 @@ export class PostgresTicketPolicyStore implements TicketPolicyStore {
           )
         : undefined
       // Merged under the lock, so concurrent publishes never lose a role.
-      const published = publishedTicketPolicy(old, incoming, options.mode ?? 'replace')
+      const published = publishedTicketPolicy(old, incoming, options.mode ?? 'replace', {
+        retainCreateLabels: options.retainCreateLabels === true,
+      })
       if (published.kept) return { kept: published.kept }
       const parsed = hostedTicketPolicySchema.parse(published.policy)
       await seedTicketStates(
@@ -117,6 +122,7 @@ export class MemoryTicketPolicyStore implements TicketPolicyStore {
       this.policies.get(repo),
       hostedTicketPolicySchema.parse(policy),
       options.mode ?? 'replace',
+      { retainCreateLabels: options.retainCreateLabels === true },
     )
     if (published.kept) return { kept: published.kept }
     this.policies.set(repo, hostedTicketPolicySchema.parse(published.policy))

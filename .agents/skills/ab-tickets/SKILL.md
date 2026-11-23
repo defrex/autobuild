@@ -132,6 +132,9 @@ usernames, or `me` for the owner of the GitHub credential. Without it, a
 configured `[tickets].createAssignee` assigns the ticket, and `--assignees ''`
 files it unassigned. Under `[tickets].readyAssignee` an unassigned ticket never
 becomes ready, so assign a ticket to whoever's dispatcher should build it.
+A configured `[tickets].createLabels` is added to every create alongside any
+`--labels`, so don't pass those labels by hand. `ab ticket import` keeps the
+exported labels and never adds them.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).

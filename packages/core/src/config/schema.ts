@@ -39,6 +39,7 @@ import {
   LINEAR_READY_ASSIGNEE,
   readyAssigneeUnsupported,
 } from './ready-assignee'
+import { createLabelRefusal } from './create-labels'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
@@ -939,6 +940,25 @@ export const ticketsInputSchema = z.strictObject({
       '[tickets].createAssignee must be a nonblank value with no surrounding whitespace',
     )
     .optional(),
+  /**
+   * Labels added to every ticket Autobuild creates (`ab ticket create`,
+   * operator `tickets.create`, harvest proposals, optimization attempts),
+   * unioned with any labels the create names — never replacing them. Callers
+   * apply them, so `ab ticket import` never does: it preserves the exported
+   * labels. Ordinary labels: they never count toward `readyLabels` unless also
+   * listed there. Reserved names are refused per source below. Absent or `[]`
+   * adds none.
+   */
+  createLabels: z
+    .array(
+      z
+        .string()
+        .refine(
+          (s) => s.trim().length > 0 && s === s.trim(),
+          '[tickets].createLabels entries must be nonblank label names with no surrounding whitespace',
+        ),
+    )
+    .optional(),
   /** Backend team key (e.g. "ENG") — required for linear and hosted;
    * forbidden for github. */
   teamKey: z.string().min(1).optional(),
@@ -1018,6 +1038,8 @@ documentFields(ticketsInputSchema, {
     'Require the ticket to be assigned to one user, in addition to the state and label gates.',
   createAssignee:
     'Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to one user unless the create names its own assignees.',
+  createLabels:
+    'Add these labels to every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals, optimization attempts), unioned with any labels the create names.',
   teamKey: 'Backend team key such as `"ENG"`, or an existing plugin config field.',
   claimedState: 'Workflow state entered when a ticket is claimed.',
   doneState: 'Project completion state and merged-ticket transition.',
@@ -1056,6 +1078,10 @@ documentSchema(ticketsInputSchema.shape.readyAssignee, {
 documentSchema(ticketsInputSchema.shape.createAssignee, {
   constraints:
     'Allowed for github ("me" or a GitHub username) and plugin sources that declare assignees. Refused for file, hosted and linear.',
+})
+documentSchema(ticketsInputSchema.shape.createLabels, {
+  constraints:
+    'Omission or [] adds none. Refused on github for `autobuild:<state>` and `autobuild-link:` labels and `node`, and on linear for `node`. On hosted, the ticket service must support createLabels in the published ticket policy. Ordinary labels: a name also in readyLabels, or covered by the github/linear default ["autobuild"], makes every Autobuild-filed ticket pass the label gate. `ab ticket import` never applies them.',
 })
 documentSchema(ticketsInputSchema.shape.readyLabels, {
   constraints:
@@ -1865,6 +1891,13 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
       })
     }
   }
+  // createLabels: reserved names are refused where the source reserves them.
+  // file and hosted reserve none; a plugin source refuses its own at create.
+  tickets.createLabels?.forEach((label, index) => {
+    const refusal = createLabelRefusal(tickets.source, label)
+    if (refusal !== undefined)
+      ctx.addIssue({ code: 'custom', path: ['tickets', 'createLabels', index], message: refusal })
+  })
   // Plugin sources receive the existing ticket lifecycle/configuration fields
   // unchanged; adapter-specific validation belongs to their factory.
 

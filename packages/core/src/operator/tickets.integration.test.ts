@@ -541,3 +541,99 @@ test('a move by role resolves through the repository configuration', async () =>
   })
   expect(rejected.ticket.state).toBe('Canceled')
 })
+
+describe('operator tickets.create applies [tickets].createLabels', () => {
+  const LIFECYCLE = {
+    triage: 'triage',
+    ready: 'ready',
+    doing: 'doing',
+    done: 'done',
+    create: 'triage',
+    proposal: 'triage',
+  }
+
+  async function createBoth(
+    tickets: ReturnType<typeof parseConfig>['tickets'],
+    source: import('../ports/types').TicketSource,
+  ) {
+    const common = {
+      store: new MemoryBuildStore(),
+      repo,
+      backend: {
+        contextFor: async () => ({ repo, tickets, teamKey: tickets.teamKey ?? '' }),
+        sourceFor: () => source,
+        statesFor: () => [],
+      },
+    }
+    const configured = await mutateOperatorTicket({
+      ...common,
+      operation: { kind: 'create', title: 'Configured', body: 'spec' },
+    })
+    const union = await mutateOperatorTicket({
+      ...common,
+      operation: { kind: 'create', title: 'Union', body: 'spec', labels: ['bug'] },
+    })
+    return { configured: configured.ticket.ref.id, union: union.ticket.ref.id }
+  }
+
+  test('file: configured-only and union, read back from the files', async () => {
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'operator-create-labels-'))
+    try {
+      const tickets = parseConfig(
+        '[tickets]\nsource = "file"\nreadyState = "ready"\ncreateLabels = ["autobuild"]\n',
+      ).tickets
+      const ids = await createBoth(tickets, new FileTicketSource({ dir }))
+      const reread = new FileTicketSource({ dir })
+      expect((await reread.get(ids.configured))?.labels).toEqual(['autobuild'])
+      expect((await reread.get(ids.union))?.labels).toEqual(['bug', 'autobuild'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('github: configured-only and union, missing labels created on demand', async () => {
+    const { FakeGitHubIssues } = await import('../ports/tickets/github-fake')
+    const { GitHubTicketSource } = await import('../ports/tickets/github')
+    const github = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    const tickets = parseConfig(
+      '[tickets]\nsource = "github"\ncreateLabels = ["autobuild"]\n',
+    ).tickets
+    const ids = await createBoth(tickets, source)
+    expect(github.label('autobuild')).toBeDefined()
+    expect(github.issue(Number(ids.configured))?.labels).toEqual(['autobuild'])
+    expect([...github.issue(Number(ids.union))!.labels].sort()).toEqual(['autobuild', 'bug'])
+  })
+
+  test('hosted service context: the published policy carries the creation labels', async () => {
+    const { hostedTicketPolicy } = await import('../ports/tickets/remote')
+    const policy = hostedTicketPolicy(
+      parseConfig('[tickets]\nsource = "hosted"\nteamKey = "AUT"\ncreateLabels = ["autobuild"]\n')
+        .tickets,
+    )
+    // Exactly the context the hosted service builds from a saved policy.
+    const source = new FakeTicketSource()
+    const ids = await createBoth(policy.tickets, source)
+    expect((await source.get(ids.configured))?.labels).toEqual(['autobuild'])
+    expect((await source.get(ids.union))?.labels).toEqual(['bug', 'autobuild'])
+  })
+
+  test('no configured creation labels leaves operator creates unchanged', async () => {
+    const source = new FakeTicketSource()
+    const ids = await createBoth(
+      parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n').tickets,
+      source,
+    )
+    expect((await source.get(ids.configured))?.labels).toEqual([])
+    expect((await source.get(ids.union))?.labels).toEqual(['bug'])
+  })
+})

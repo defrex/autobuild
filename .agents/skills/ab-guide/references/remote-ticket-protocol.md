@@ -100,7 +100,8 @@ loads the project's durable independent ticket policy. Project authority publish
 version 1 policy through `POST /tickets/policy`, using the usual context/input
 envelope. The input contains only `version` and `tickets`: source, teamKey,
 readyState, triageState, claimedState, doneState, createState, proposalState,
-optional readyLabels, and the optional backlogState and rejectedState roles. URL,
+optional readyLabels, the optional backlogState and rejectedState roles, and
+optional createLabels (present only when nonempty). URL,
 secrets, and pipeline configuration are rejected.
 Only project or owner authority can publish. This does not append BuildStore
 history. Registration removal invalidates policy and grants from that registration.
@@ -136,6 +137,16 @@ policy read (`input: null`) includes the roles only with the header. Every
 `/tickets/*` response, including errors, carries
 `x-autobuild-ticket-policy-roles: 1`; a client publishing a role that receives
 `400` without it reports that the service predates policy roles.
+
+`createLabels` is `[tickets].createLabels`: the service's own operator ticket
+create (MCP and `POST …/tickets`) unions it into the labels a create names.
+Clients that understand it send `x-autobuild-ticket-policy-create-labels: 1`,
+independently of the roles header. With it, a publish is complete and omitting
+`createLabels` removes it. Without it, as from every client released before the
+field, a saved `createLabels` is kept, and a policy read omits it. Every
+`/tickets/*` response carries `x-autobuild-ticket-policy-create-labels: 1`; a
+client publishing `createLabels` that receives `400` without it reports that
+the service predates createLabels in ticket policy.
 
 `[tickets] url` selects the ticket service independently of the build store;
 otherwise the selected remote build store is used. A local build store requires
