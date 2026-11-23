@@ -717,10 +717,12 @@ Repository journals are separate resources with independent event sequences,
 artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
 repository to exist. An unknown repository returns `404 not-found` — with one
-carve-out: the build-digest batch read of this section is keyed to build
-records, not the repository journal record, so it authorizes the project credential
-but answers `200` (possibly empty) even for an unknown repository, a repository
-without a journal record, or a repository without builds.
+carve-out: the build-record reads of this section (`change-position`,
+`builds`, `changed-builds`, `build-page` and `build-digests`) are keyed to
+build records, not the repository journal record, so they authorize the
+project credential but answer `200` (possibly empty) even for an unknown
+repository, a repository without a journal record, or a repository without
+builds.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
@@ -735,10 +737,20 @@ without a journal record, or a repository without builds.
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
 | `listRepoArtifacts` | `GET /repos/{repo}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
+| `getRepoChangePosition` | `GET /repos/{repo}/change-position` | none | `200 {"position": string}`: the canonical unsigned decimal change position, `"0"` for an unknown repository. Positions are ordered: a later build creation, build event, repository event or repository lease holder change yields a strictly greater value, compared numerically |
+| `listBuildsForRepo` | `GET /repos/{repo}/builds` | none | `200` + `BuildRecord[]` ordered by creation time, then slug |
+| `listBuildsChangedSince` | `GET /repos/{repo}/changed-builds?since={p}` | required `since`, a canonical unsigned decimal no greater than 9223372036854775807; anything else is `400 validation` | `200 {"position": string, "builds": [{"slug": string, "position": string}]}`: the builds whose latest change position is greater than `since`, ascending by position and each once, with the repository head read in the same snapshot. Reads no event rows. An unknown repository answers `{"position": "0", "builds": []}` |
+| `listBuildsPage` | `GET /repos/{repo}/build-page?limit={n}&cursor={c}` | optional `limit`, a decimal integer from 1 to 100 (default 25); optional `cursor`, a `next` value this server issued. A bad limit or a malformed cursor is `400 validation` | `200 {"builds": BuildRecord[], "next": string \| null}`: one page newest first by creation time, slug descending to break ties, with records as `builds` returns them; `next` is `null` on the last page. A page's cost does not depend on the repository's build count |
 | `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
 | `releaseRepoLease` | `POST /repos/{repo}/lease/release` | holder request | `200 {"ok": true}`; a wrong holder is a successful no-op |
+
+The `changed-builds` and `build-page` routes are additive and keep the
+protocol version. A server on the same release line that lacks them answers
+`501 unsupported-operation` or `404 not-found`; the shipped client reports
+that as a typed `BuildFeedUnsupportedError` and never falls back to listing
+builds or reading events.
 
 There is no repository-list operation. `ensureRepo` is the only repository
 creation operation and must not reset timestamps, events, artifacts, or lease

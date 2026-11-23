@@ -161,3 +161,24 @@ export type { DispatchPlacementFact } from '../events/repository'
 
 export { readDispatchPlacement } from './reduced-reads'
 export * from './event-reads'
+export {
+  BUILD_PAGE_DEFAULT_LIMIT,
+  BUILD_PAGE_MAX_LIMIT,
+  BuildFeedUnsupportedError,
+  BuildFeedValidationError,
+  CHANGE_POSITION_PATTERN,
+  compareChangePositions,
+  decodeBuildPageCursor,
+  encodeBuildPageCursor,
+  MAX_CHANGE_POSITION,
+  parseBuildPageLimitParam,
+  parseChangePosition,
+  resolveBuildPageLimit,
+} from './build-feed'
+export type {
+  BuildPage,
+  BuildPageCursor,
+  BuildPageOptions,
+  ChangedBuild,
+  ChangedBuilds,
+} from './build-feed'

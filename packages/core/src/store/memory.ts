@@ -25,6 +25,16 @@ import {
   type ReducerValue,
 } from './reducer-values'
 import { validateTickFinish } from './repo-tick'
+import {
+  decodeBuildPageCursor,
+  encodeBuildPageCursor,
+  parseChangePosition,
+  resolveBuildPageLimit,
+  type BuildPage,
+  type BuildPageOptions,
+  type ChangedBuild,
+  type ChangedBuilds,
+} from './build-feed'
 import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from './types'
 /**
  * The in-memory BuildStore — the reference adapter. Its behavior *is* the
@@ -179,6 +189,54 @@ interface BuildState {
   events: AbEvent[]
   /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
   artifacts: Map<string, ArtifactMeta[]>
+}
+
+/** One live node per build in a repository's latest-position index. */
+interface FeedNode {
+  slug: string
+  position: bigint
+  prev: FeedNode | null
+  next: FeedNode | null
+}
+
+/** A repository's changed-builds index and creation order. The list is
+ * ascending by position because every new position is the repository head;
+ * a build's change unlinks its node and appends it at the tail in O(1). */
+interface RepoFeed {
+  nodes: Map<string, FeedNode>
+  head: FeedNode | null
+  tail: FeedNode | null
+  /** Slugs sorted by `(createdAt, slug)`, kept by binary insertion. */
+  creationOrder: string[]
+}
+
+/** First index in `order` whose `(createdAt, slug)` key is not below the key. */
+function creationIndex(
+  order: string[],
+  builds: Map<string, BuildState>,
+  at: string,
+  slug: string,
+): number {
+  let low = 0
+  let high = order.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    const record = builds.get(order[middle]!)!.record
+    if (record.createdAt < at || (record.createdAt === at && record.slug < slug)) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+/** The repository's feed, created on its first build write. Module-level so
+ * the read-budget harness's per-method call vectors stay unchanged. */
+function repoFeed(feeds: Map<string, RepoFeed>, repo: string): RepoFeed {
+  let feed = feeds.get(repo)
+  if (!feed) {
+    feed = { nodes: new Map(), head: null, tail: null, creationOrder: [] }
+    feeds.set(repo, feed)
+  }
+  return feed
 }
 
 interface StreamState {
@@ -351,7 +409,9 @@ export class MemoryBuildStore implements BuildStore {
       )
     }
     this.builds.set(input.slug, state)
-    this.advanceRepo(input.repo)
+    const order = repoFeed(this.feeds, input.repo).creationOrder
+    order.splice(creationIndex(order, this.builds, ts, input.slug), 0, input.slug)
+    this.advanceRepo(input.repo, input.slug)
     return this.snapshot(state)
   }
 
@@ -361,13 +421,69 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   private readonly repoPositions = new Map<string, bigint>()
+  /** Per-repository changed-builds index (see `RepoFeed`). */
+  private readonly feeds = new Map<string, RepoFeed>()
+  /** Feed and page entries visited by reads; only the read-budget harness
+   * reads it, to prove a read's cost is proportional to its answer. */
+  private readonly feedReads = { examined: 0 }
 
-  private advanceRepo(repo: string): void {
-    this.repoPositions.set(repo, (this.repoPositions.get(repo) ?? 0n) + 1n)
+  /** Advance the repository position; a build write also moves that build's
+   * latest position to the new head, in the same synchronous step. */
+  private advanceRepo(repo: string, slug?: string): void {
+    const position = (this.repoPositions.get(repo) ?? 0n) + 1n
+    this.repoPositions.set(repo, position)
+    if (slug === undefined) return
+    const feed = repoFeed(this.feeds, repo)
+    const existing = feed.nodes.get(slug)
+    if (existing) {
+      if (existing.prev) existing.prev.next = existing.next
+      else feed.head = existing.next
+      if (existing.next) existing.next.prev = existing.prev
+      else feed.tail = existing.prev
+    }
+    const node: FeedNode = { slug, position, prev: feed.tail, next: null }
+    if (feed.tail) feed.tail.next = node
+    else feed.head = node
+    feed.tail = node
+    feed.nodes.set(slug, node)
   }
 
   async getRepoChangePosition(repo: string): Promise<string> {
     return (this.repoPositions.get(repo) ?? 0n).toString()
+  }
+
+  async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+    const since = parseChangePosition(position)
+    const head = (this.repoPositions.get(repo) ?? 0n).toString()
+    const builds: ChangedBuild[] = []
+    for (let node = this.feeds.get(repo)?.tail ?? null; node; node = node.prev) {
+      this.feedReads.examined++
+      if (node.position <= since) break
+      builds.push({ slug: node.slug, position: node.position.toString() })
+    }
+    return { position: head, builds: builds.reverse() }
+  }
+
+  async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
+    const limit = resolveBuildPageLimit(opts.limit)
+    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
+    const order = this.feeds.get(repo)?.creationOrder ?? []
+    // Index descent: the first slug at or after the cursor key; the page is
+    // the slugs before it, newest first.
+    let end = cursor ? creationIndex(order, this.builds, cursor.at, cursor.slug) : order.length
+    const builds: BuildRecord[] = []
+    let next: string | null = null
+    while (end > 0) {
+      this.feedReads.examined++
+      const state = this.builds.get(order[--end]!)!
+      if (builds.length === limit) {
+        const last = builds.at(-1)!
+        next = encodeBuildPageCursor({ at: last.createdAt, slug: last.slug })
+        break
+      }
+      builds.push(this.snapshot(state))
+    }
+    return { builds, next }
   }
 
   async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
@@ -420,7 +536,7 @@ export class MemoryBuildStore implements BuildStore {
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
     }
-    this.advanceRepo(state.record.repo)
+    this.advanceRepo(state.record.repo, slug)
     state.record.updatedAt = envelope.ts
     return envelope
   }
@@ -457,7 +573,7 @@ export class MemoryBuildStore implements BuildStore {
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
     }
-    this.advanceRepo(state.record.repo)
+    this.advanceRepo(state.record.repo, slug)
     state.record.updatedAt = envelope.ts
     return envelope
   }
@@ -536,7 +652,7 @@ export class MemoryBuildStore implements BuildStore {
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
     }
-    this.advanceRepo(state.record.repo)
+    this.advanceRepo(state.record.repo, slug)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
@@ -618,7 +734,7 @@ export class MemoryBuildStore implements BuildStore {
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
     }
-    this.advanceRepo(state.record.repo)
+    this.advanceRepo(state.record.repo, slug)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
