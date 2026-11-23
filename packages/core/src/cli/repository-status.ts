@@ -39,7 +39,8 @@ import {
 } from '../ports/forge-telemetry'
 import { configSchema, hooksSchema } from '../config/schema'
 import { readHookProgress } from '../processes/hooks'
-import type { BuildStore } from '../store/types'
+import type { BuildStore, RepositoryArtifact } from '../store/types'
+import type { LocalOverrideRecord } from '../config/local'
 import { readBuildFacts } from '../store/reduced-reads'
 import { forgeReadinessWarnings, reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
@@ -185,6 +186,10 @@ export interface RepositoryStatus extends DispatchSettings {
   upgradeStatus: RepositoryUpgradeStatus
   rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
+  /** Settings the held dispatcher's effective configuration took from its
+   * checkout's local override file (`.autobuild/local.toml`). Absent when the
+   * held dispatcher runs without local overrides. */
+  localOverrides?: LocalOverrideRecord
   /** Configured hooks of the latest dispatcher run and their delivery
    * progress; set only by `ab repository status`. */
   hooks?: HookStatus[]
@@ -559,6 +564,11 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     ...(status.warningLines ?? []),
     ...(status.hooks ?? []).map(renderHookStatus),
     `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatRepositoryDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
+    ...(status.localOverrides
+      ? [
+          `dispatcher local overrides (${status.localOverrides.file}): ${status.localOverrides.settings.join(', ')}`,
+        ]
+      : []),
     ...(status.dispatcher.expiredHolder
       ? [
           `expired dispatcher: ${formatRepositoryDispatcherIdentity(status.dispatcher.expiredHolder)}`,
@@ -659,53 +669,77 @@ export function renderHookStatus(hook: HookStatus): string {
   }${hook.failing ? ` — failing since ${hook.failing.since}: ${hook.failing.error}` : ''}`
 }
 
-/** Capacity is optional when no held dispatcher has a retrievable configuration. */
-export async function readRepositoryCapacity(
+/** The held dispatcher's effective-config artifact: one artifact read when a
+ * dispatcher holds the repository and recorded its configuration, else none. */
+export async function readHeldEffectiveConfig(
   store: BuildStore,
   repo: string,
   facts: RepositoryReadFacts,
   dispatcher: DispatcherLiveness,
-  now: Date,
-): Promise<DispatchCapacity | undefined> {
+): Promise<RepositoryArtifact | undefined> {
   if (
     dispatcher.state === 'held' &&
     facts.status?.effectiveConfig &&
     facts.status.run === dispatcher.holder?.run
   ) {
     const ref = facts.status.effectiveConfig
-    const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
-    if (artifact) {
-      const config = configSchema.parse(
-        normalizeEffectiveConfigArtifact(JSON.parse(new TextDecoder().decode(artifact.content))),
-      )
-      const builds: CapacityBuild[] = []
-      const records = await store.listBuildsForRepo(repo)
-      const digests = await store.getRepoBuildDigests(repo)
-      for (const record of records) {
-        if (digests.get(record.slug)?.terminal) continue
-        const build = (await readBuildFacts(store, record.slug)).value
-        builds.push({
-          record,
-          state: build.state,
-          workspace: build.workspace !== null,
-          provisioning: build.provisionMarker !== undefined,
-          restackDue: landingRestackDue(build.state, build.log),
-        })
-      }
-      return dispatchCapacity(
-        builds,
-        config.capacity,
-        now,
-        migrationIdentity(facts.ticketMigrations, config.tickets.source),
-        {
-          urgentClaims: urgentClaimDemand(facts),
-          startRequests: startClaimDemand(facts),
-          openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
-        },
-      )
-    }
+    return (await store.getRepoArtifact(repo, ref.kind, ref.rev)) ?? undefined
   }
   return undefined
+}
+
+/** The local-override record an effective-config artifact's metadata carries;
+ * anything malformed reads as none. */
+export function localOverridesFromArtifact(
+  artifact: Pick<RepositoryArtifact, 'meta'> | undefined,
+): LocalOverrideRecord | undefined {
+  const raw = artifact?.meta.metadata.localOverrides
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const { file, settings } = raw as { file?: unknown; settings?: unknown }
+  if (typeof file !== 'string') return undefined
+  if (!Array.isArray(settings) || !settings.every((entry) => typeof entry === 'string'))
+    return undefined
+  return { file, settings: [...settings] }
+}
+
+/** Capacity is optional when no held dispatcher has a retrievable configuration
+ * (`artifact` comes from `readHeldEffectiveConfig`). */
+export async function readRepositoryCapacity(
+  store: BuildStore,
+  repo: string,
+  facts: RepositoryReadFacts,
+  artifact: RepositoryArtifact | undefined,
+  now: Date,
+): Promise<DispatchCapacity | undefined> {
+  if (!artifact) return undefined
+  const config = configSchema.parse(
+    normalizeEffectiveConfigArtifact(JSON.parse(new TextDecoder().decode(artifact.content))),
+  )
+  const builds: CapacityBuild[] = []
+  const records = await store.listBuildsForRepo(repo)
+  const digests = await store.getRepoBuildDigests(repo)
+  for (const record of records) {
+    if (digests.get(record.slug)?.terminal) continue
+    const build = (await readBuildFacts(store, record.slug)).value
+    builds.push({
+      record,
+      state: build.state,
+      workspace: build.workspace !== null,
+      provisioning: build.provisionMarker !== undefined,
+      restackDue: landingRestackDue(build.state, build.log),
+    })
+  }
+  return dispatchCapacity(
+    builds,
+    config.capacity,
+    now,
+    migrationIdentity(facts.ticketMigrations, config.tickets.source),
+    {
+      urgentClaims: urgentClaimDemand(facts),
+      startRequests: startClaimDemand(facts),
+      openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
+    },
+  )
 }
 
 /**
@@ -729,8 +763,11 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
         }))
         .filter((row) => row.heartbeatAgeMs < OPERATOR_PRESENCE_TTL_MS),
     }
-    const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, observedAt)
+    const held = await readHeldEffectiveConfig(store, repo, facts, dispatcher)
+    const capacity = await readRepositoryCapacity(store, repo, facts, held, observedAt)
     if (capacity) status.capacity = capacity
+    const localOverrides = localOverridesFromArtifact(held)
+    if (localOverrides) status.localOverrides = localOverrides
     status.hooks = await readRepositoryHooks(store, repo, facts)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))

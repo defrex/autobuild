@@ -1,10 +1,11 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { parseConfig } from './load'
+import { localConfigPath } from './local'
 import {
   BUILD_OWNED_CONFIG_PATHS,
   CONFIG_RELOAD_CLASSIFICATION,
@@ -160,6 +161,76 @@ model = "claude-opus-5-5"
       expect(live.current().revision).toBe(1)
       expect(live.current().config.capacity).toBe(4)
       expect(published).toEqual([restored])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('refreshFromDisk layers the local override file and follows its edits', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-live-local-'))
+    const source = join(dir, 'autobuild.toml')
+    const localSource = localConfigPath(dir)
+    const published: Array<{ content: string; settings?: string[] }> = []
+    try {
+      await writeFile(source, base)
+      await mkdir(join(dir, '.autobuild'), { recursive: true })
+      const live = new LiveConfig(
+        source,
+        parseConfig(base),
+        base,
+        runtimes,
+        async ({ content, localOverrides }) => {
+          published.push({
+            content,
+            ...(localOverrides ? { settings: localOverrides.settings } : {}),
+          })
+        },
+        [],
+        undefined,
+        { localSource },
+      )
+      expect(await live.refreshFromDisk()).toEqual({ kind: 'unchanged' })
+
+      await writeFile(localSource, 'capacity = 3\n')
+      expect(await live.refreshFromDisk()).toMatchObject({
+        kind: 'adopted',
+        snapshot: {
+          revision: 1,
+          config: { capacity: 3 },
+          localOverrides: { file: localSource, settings: ['capacity'] },
+        },
+      })
+
+      await writeFile(localSource, 'capacity = 3\n[verify]\nsteps = []\n')
+      const rejected = await live.refreshFromDisk()
+      expect(rejected).toMatchObject({ kind: 'rejected', notify: true })
+      expect(rejected.kind === 'rejected' && rejected.error).toStartWith(
+        `${localSource}: verify can only be set in autobuild.toml`,
+      )
+      expect(await live.refreshFromDisk()).toMatchObject({ kind: 'rejected', notify: false })
+      expect(live.current().config.capacity).toBe(3)
+
+      await writeFile(localSource, 'capacity = 0\n')
+      const invalid = await live.refreshFromDisk()
+      expect(invalid.kind === 'rejected' && invalid.error).toStartWith(
+        `${localSource}: invalid config\n  capacity:`,
+      )
+
+      await rm(localSource)
+      await mkdir(localSource)
+      const unreadable = await live.refreshFromDisk()
+      expect(unreadable.kind === 'rejected' && unreadable.error).toContain(
+        `${localSource} could not be read during live reload`,
+      )
+      expect(live.current().revision).toBe(1)
+
+      await rm(localSource, { recursive: true })
+      expect(await live.refreshFromDisk()).toMatchObject({
+        kind: 'adopted',
+        snapshot: { revision: 2, config: { capacity: 1 } },
+      })
+      expect(live.current().localOverrides).toBeUndefined()
+      expect(published).toEqual([{ content: base, settings: ['capacity'] }, { content: base }])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
