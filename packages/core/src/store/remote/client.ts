@@ -1111,7 +1111,16 @@ export class RemoteBuildStore implements BuildStore {
       decodeBuildPageCursor(opts.cursor)
       query.set('cursor', opts.cursor)
     }
-    return this.buildFeedRequest('buildPage', repo, 'build-page', query, buildPageSchema)
+    const page = await this.buildFeedRequest(
+      'buildPage',
+      repo,
+      'build-page',
+      query,
+      buildPageSchema,
+    )
+    // Rebuilt field by field: a consumer compiling without strictNullChecks
+    // infers zod's `.nullable()` as optional, which `BuildPage` rejects.
+    return { builds: page.builds, next: page.next ?? null }
   }
 
   /** One request to an additive feed route. A server on this release line

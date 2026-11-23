@@ -999,9 +999,13 @@ if (testUrl)
           { slug: 'feed-b', position: '5' },
         ])
         expect(await sql`SELECT * FROM ab_schema_migrations`).toEqual(marker)
-        const triggers = (
-          await sql`SELECT tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY tgname`
-        ).map((row: { tgname: string }) => row.tgname)
+        const triggers =
+          // The test database is a schema in a shared database: scope to it.
+          (
+            await sql`SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE NOT t.tgisinternal AND c.relnamespace = current_schema()::regnamespace
+            ORDER BY t.tgname`
+          ).map((row: { tgname: string }) => row.tgname)
         expect(triggers).not.toContain('builds_repo_change')
         expect(triggers).not.toContain('events_repo_change')
 
