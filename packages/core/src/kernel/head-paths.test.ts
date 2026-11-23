@@ -166,7 +166,7 @@ describe('mechanical tree', () => {
     expect(path).not.toStartWith('/repo')
     expect(argv.slice(2)).toEqual([
       add,
-      `git -c core.hooksPath=/dev/null cherry-pick --no-commit -m 1 ${item.change}`,
+      `git -c core.hooksPath=/dev/null -c rerere.enabled=false cherry-pick --no-commit -m 1 ${item.change}`,
       'git diff --name-only --diff-filter=U -z',
       'git add -A',
       'git write-tree',

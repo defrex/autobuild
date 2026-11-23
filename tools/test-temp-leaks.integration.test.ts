@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { checkoutRoot, inspectionRoot, runInspected, suiteCommands } from './test-temp-leaks'
 
 const inline = (script: string) => [process.execPath, '-e', script]
@@ -326,4 +326,86 @@ test('a failing command reports a digest of early failures that later noise woul
   expect(reports[0]).toContain('- Expected  - 1\n+ Received  + 1')
   expect(reports[0]).toContain('at <anonymous> (early.test.ts:3:9)')
   expect(reports[0]).not.toContain('later noise')
+})
+
+/** A host whose HOME, XDG and GIT_CONFIG_GLOBAL git config are all hostile. */
+async function hostileGitHost(fixture: string): Promise<Record<string, string | undefined>> {
+  const home = join(fixture, 'home')
+  const xdg = join(fixture, 'xdg')
+  const hostile = join(fixture, 'global')
+  await mkdir(home, { recursive: true })
+  await mkdir(join(xdg, 'git'), { recursive: true })
+  await writeFile(
+    join(home, '.gitconfig'),
+    '[rerere]\n\tenabled = true\n[user]\n\temail = host@example.invalid\n',
+  )
+  await writeFile(join(xdg, 'git', 'config'), '[rerere]\n\tautoupdate = true\n')
+  await writeFile(hostile, '[commit]\n\tgpgsign = true\n')
+  return {
+    HOME: home,
+    XDG_CONFIG_HOME: xdg,
+    GIT_CONFIG_GLOBAL: hostile,
+    GIT_CONFIG_NOSYSTEM: undefined,
+  }
+}
+
+const GIT_CONFIG_GET = `
+  const get = (key, env) => {
+    const result = Bun.spawnSync(['git', 'config', '--get', key], { cwd: tmpdir(), env, stdout: 'pipe' });
+    return { code: result.exitCode, value: result.stdout.toString().trim() };
+  };`
+
+test('children read only the runner-owned git config, never the host global, XDG or system config', async () => {
+  const fixture = await inspectionRoot()
+  try {
+    const record = join(fixture, 'git-global')
+    const code = await runInspected(
+      [
+        inline(`
+      import {tmpdir} from 'node:os';
+      import {writeFileSync} from 'node:fs';
+      ${GIT_CONFIG_GET}
+      writeFileSync(${JSON.stringify(record)}, process.env.GIT_CONFIG_GLOBAL ?? '');
+      if (get('rerere.enabled').code !== 1) process.exit(10);
+      if (get('rerere.autoupdate').code !== 1) process.exit(11);
+      if (get('commit.gpgsign').code !== 1) process.exit(12);
+      if (get('user.email').value !== 'test@example.com') process.exit(13);
+      if (process.env.GIT_CONFIG_NOSYSTEM !== '1') process.exit(14);
+    `),
+      ],
+      { env: await hostileGitHost(fixture) },
+    )
+    expect(code).toBe(0)
+    const global = await readFile(record, 'utf8')
+    expect(global).not.toBe('')
+    await expect(stat(dirname(global))).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('a hand-picked env forwarding HOME keeps the isolation only through inheritedGitConfigIsolation', async () => {
+  const fixture = await inspectionRoot()
+  try {
+    const helper = join(checkoutRoot, 'packages/core/src/testing/git-config-isolation.ts')
+    const code = await runInspected(
+      [
+        inline(`
+      import {tmpdir} from 'node:os';
+      import {inheritedGitConfigIsolation} from ${JSON.stringify(helper)};
+      ${GIT_CONFIG_GET}
+      const narrowed = { PATH: process.env.PATH, HOME: process.env.HOME };
+      // Without the helper the boundary drops isolation: the host HOME leaks.
+      if (get('rerere.enabled', narrowed).value !== 'true') process.exit(20);
+      const isolated = { PATH: process.env.PATH, HOME: process.env.HOME, ...inheritedGitConfigIsolation() };
+      if (get('rerere.enabled', isolated).code !== 1) process.exit(21);
+      if (get('user.email', isolated).value !== 'test@example.com') process.exit(22);
+    `),
+      ],
+      { env: await hostileGitHost(fixture) },
+    )
+    expect(code).toBe(0)
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
 })

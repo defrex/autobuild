@@ -184,7 +184,8 @@ function unsupportedMergeTree(result: { exitCode: number; stderr: string }): boo
  * The tree of the purely mechanical replay of `change` onto `onto`, conflict
  * markers included. `git merge-tree --write-tree --merge-base` computes it
  * without touching any worktree; older Git rebuilds the identical three-way
- * merge in a temporary detached worktree, leaving the caller's untouched.
+ * merge in a temporary detached worktree, leaving the caller's untouched,
+ * and ignores any resolutions rerere recorded whatever the operator's config.
  */
 export async function mechanicalTree(
   exec: Exec,
@@ -227,6 +228,8 @@ async function worktreeReplayTree(
     const picked = await run(exec, path, [
       '-c',
       'core.hooksPath=/dev/null',
+      '-c',
+      'rerere.enabled=false',
       'cherry-pick',
       '--no-commit',
       ...(input.mainline === undefined ? [] : ['-m', String(input.mainline)]),
