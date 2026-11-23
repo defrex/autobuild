@@ -83,5 +83,5 @@
     "packages/hosted-store-service/.next/types/**/*.ts",
     "packages/hosted-store-service/.next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "packages/core/src/web/assets"]
 }
