@@ -5,6 +5,7 @@ import { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
 import { manualClock } from '../testing/fixed'
 import { readForgeHealth } from '../store/reduced-reads'
 import { guardForge, ForgeCooldown } from './guarded-forge'
+import { forgeRequestExhausted, guardedForgeRequest } from '../ports/forge-request-context'
 
 test('classified limits persist across wrappers, gate subsequent calls, and recover only on success', async () => {
   const now = manualClock()
@@ -426,4 +427,79 @@ test('in-flight limits: equal or earlier resets write nothing, a later one exten
   const fresh = (await degradations(store)).at(-1)!
   expect(fresh.continued).toBeUndefined()
   expect(fresh.firstFailureAt).toBe(now().toISOString())
+})
+
+test('remembered exhaustion probes only after its exact evidence is recorded and cleared, reading nothing', async () => {
+  const { clearForgeDegradation } = await import('../operator/control')
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const raw = new FakeForge()
+  const resetAt = new Date(+now() + 600_000).toISOString()
+  let evidence: { quota: string; seq: number } | undefined = { quota: 'core', seq: 1 }
+  const decisions: string[] = []
+  // An adapter that remembers exhaustion: it asks the gate, then either
+  // throws the synthesized limit or sends (here: answers) the probe.
+  raw.getPrState = () =>
+    guardedForgeRequest(async () => {
+      if (evidence !== undefined) {
+        const failure = new ForgeFailure('exhausted', { kind: 'rate-limited', resetAt })
+        const decision = await forgeRequestExhausted(failure, evidence)
+        decisions.push(decision)
+        if (decision === 'defer') throw failure
+      }
+      return { state: 'open' as const, mergeable: null }
+    })
+  let reads = 0
+  const getRepo = store.getRepo.bind(store)
+  store.getRepo = (repo) => {
+    reads++
+    return getRepo(repo)
+  }
+  const forge = guardForge(raw, { store, repo: 'r', name: 'github', now })
+  const clear = () =>
+    clearForgeDegradation({ store, repo: 'r', user: 'Ada', forge: 'github', reason: 'override' })
+
+  // Unguarded forges keep pure pre-emption.
+  await expect(raw.getPrState('/r', 1)).rejects.toThrow('exhausted')
+  expect(decisions).toEqual(['defer'])
+
+  // A failed append raises no mark: the evidence was never recorded.
+  const append = store.appendRepo.bind(store)
+  store.appendRepo = async () => {
+    throw new Error('store down')
+  }
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('store down')
+  store.appendRepo = append
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('exhausted')
+  expect(decisions).toEqual(['defer', 'defer', 'defer'])
+  expect((await readForgeHealth(store, 'r'))?.resetAt).toBe(resetAt)
+
+  // Not cleared: the guard's own cooldown holds the request.
+  await expect(forge.getPrState('/r', 1)).rejects.toBeInstanceOf(ForgeCooldown)
+  // Recorded, then cleared: the same evidence may go out as a probe, and the
+  // decision adds no store read beyond the request's own admission.
+  await clear()
+  reads = 0
+  await forge.getPrState('/r', 1)
+  expect(decisions.at(-1)).toBe('probe')
+  const probeReads = reads
+  evidence = undefined
+  reads = 0
+  await forge.getPrState('/r', 1)
+  expect(probeReads).toBe(reads)
+
+  // Newer evidence is not covered by the old clear.
+  evidence = { quota: 'core', seq: 2 }
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('exhausted')
+  expect(decisions.at(-1)).toBe('defer')
+  // Once recorded and cleared it is; another quota's unrecorded evidence is
+  // not, even with an older sequence number.
+  await clear()
+  evidence = { quota: 'graphql', seq: 1 }
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('exhausted')
+  expect(decisions.at(-1)).toBe('defer')
+  await clear()
+  evidence = { quota: 'core', seq: 2 }
+  await forge.getPrState('/r', 1)
+  expect(decisions.at(-1)).toBe('probe')
 })
