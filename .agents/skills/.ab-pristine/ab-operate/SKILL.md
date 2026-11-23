@@ -522,7 +522,8 @@ that does the job, and say what you are doing before you do it:
   from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
   the default) or `{issue, intent: "refs"}` when the work only partly
   addresses it. `priority: "urgent"` dispatches it before normal ready work
-  and normal waiting builds.
+  and normal waiting builds. Its `labels` are unioned with the repository's
+  `[tickets].createLabels`, and harvest proposals carry them too.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
   blocker relations. `issueLinks` on update replaces the whole set;
   `priority` (`urgent` or `normal`) expedites a ticket instead of moving other

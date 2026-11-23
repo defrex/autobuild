@@ -7,6 +7,7 @@ import { updateTicketTarget } from '../kernel/node-parent'
 import { normalizeIssueLinks, type IssueLinkInput } from '../ports/tickets/issue-links'
 import { urgentFirst } from '../ports/tickets/priority'
 import { creationAssignees } from '../ports/tickets/assignees'
+import { creationLabels } from '../ports/tickets/labels'
 import type { IssueLink } from '../ports/types'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -308,6 +309,7 @@ export async function mutateOperatorTicket(opts: {
             ...operation,
             kind: operation.ticketKind,
             assignees: creationAssignees(context.tickets, operation.assignees),
+            labels: creationLabels(context.tickets, operation.labels),
           }),
         )
       : operation.kind === 'update'

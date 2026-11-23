@@ -539,6 +539,46 @@ describe('github creation keys', () => {
     expect(github.issueCount()).toBe(1)
   })
 
+  test('ticket labels dropped on create are added once by the retry', async () => {
+    const { github, source } = setup()
+    const key = { idempotencyKey: 'k-labels', idempotencyKeyReservedAt: new Date().toISOString() }
+    const draft = { title: 't', body: 'b', labels: ['autobuild:proposal', 'autobuild'] }
+    github.dropLabels = true
+    await expect(source.create(draft, { state: 'triage', ...key })).rejects.toThrow('push access')
+    expect(github.issue(1001)!.labels).toEqual([])
+    github.dropLabels = false
+    const adopted = await source.create(draft, { state: 'triage', ...key })
+    await source.create(draft, { state: 'triage', ...key })
+    expect(adopted.ref.id).toBe('1001')
+    expect([...github.issue(1001)!.labels].sort()).toEqual(['autobuild', 'autobuild:proposal'])
+    expect(github.label('autobuild')).toBeDefined()
+    expect(github.issueCount()).toBe(1)
+  })
+
+  test('a retry of a completed create adds a missing requested label and keeps a person’s', async () => {
+    const { github, source } = setup()
+    const key = { idempotencyKey: 'k-more', idempotencyKeyReservedAt: new Date().toISOString() }
+    const first = await source.create(
+      { title: 't', body: 'b', labels: ['bug'] },
+      { state: 'ready', ...key },
+    )
+    const id = first.ref.id
+    await source.update(id, { labels: ['bug', 'person-added'] })
+    const retry = await source.create(
+      { title: 't', body: 'b', labels: ['bug', 'autobuild'] },
+      { state: 'ready', ...key },
+    )
+    expect(retry.ref.id).toBe(id)
+    expect([...github.issue(Number(id))!.labels].sort()).toEqual([
+      'autobuild',
+      'autobuild:ready',
+      'bug',
+      'person-added',
+    ])
+    expect(retry.labels.sort()).toEqual(['autobuild', 'bug', 'person-added'])
+    expect(github.issueCount()).toBe(1)
+  })
+
   test('a recovery never undoes a person’s reopen', async () => {
     const { github, source } = setup()
     const blocker = await created(source, 'ready')
