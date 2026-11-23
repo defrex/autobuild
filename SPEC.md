@@ -189,12 +189,16 @@ environment-only.
 
 Forge readiness is an optional read-only port capability, inspected on the host
 by init validation and once at dispatch startup after repository lease acquisition.
-It reports squash/rebase merge methods and kernel build/node/archive publication
-permissions as hard requirements, and protected-target linear history and root
-freshness as recommendations. Results are pass, fail, or unknown; incomplete
+It reports squash/rebase merge methods and kernel build/node publication
+permissions as hard requirements, and archive-ref publication, protected-target
+linear history and root freshness as recommendations. Archive refs are optional
+forge-side backup of displaced leaf history: where the forge refuses them, leaf
+restacks and reconciles keep a BuildStore copy or warn and proceed (§15.7);
+node restack and landing still publish archive refs. Results are pass, fail, or unknown; incomplete
 inspection never proves permission. Local Git passes trivially; legacy plugins
 report unknown. Known hard failures fail init validation and produce one durable
-`dispatcher.forge-readiness-failed` repository fact per run/check. They do not
+`dispatcher.forge-readiness-failed` repository fact per run/check; historical
+facts naming `archive-refs` still decode. They do not
 add a dispatch admission gate. Repository attention watches (`ab watch`), dashboard
 warnings, and operator queries expose all failures and remediation for the run;
 `ab wait` remains build-only. No setting is changed and no probe ref is pushed.
@@ -1966,7 +1970,7 @@ the exact validated SHA and confirms forge readback before recording that head a
 A no-op step has no push. Agents only ever commit locally. Consequences: forge
 credentials **never enter the sandbox** (load-bearing once builds run on
 remote sandboxes), ordinary implementation history is extended and reconcile
-uses exact expected-head guarded rewrites with archived evidence, and the
+uses exact expected-head guarded rewrites with retained evidence, and the
 push-at-boundary rule from [D3] is enforced by construction rather than
 convention. The same rule bounds an external operator's small fixes: an operator
 sandbox publishes work only through the `sandbox.publish` tool, whose push and
@@ -4483,9 +4487,10 @@ rejection is `EventValidationError`.
    `Autobuild-Build: <slug>` identifies the build's change across such rewrites
    (RFC 0001 §5). Branch presence is determined by exact parsed trailer values
    in reachable history, not recorded SHA ancestry. Kernel-owned single-change
-   replay, durable rewrite facts and immutable forge archive refs preserve
-   historical SHAs (§15.7); the original no-rebase rationale does not prohibit
-   this archived replay standard.
+   replay, durable rewrite facts and best-effort retained history (immutable
+   forge archive refs, else BuildStore copies) preserve historical SHAs
+   (§15.7); the original no-rebase rationale does not prohibit this retained
+   replay standard.
 5. **Append-only; corrections are new events.**
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
@@ -4522,7 +4527,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}` |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}`, kernel or dispatcher decisive `history.retained {operation: restack \| reconcile, id, base, store, target, unretained}` (leaf restacks and reconciles, §15.7) |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Propose (§5, §13.1.1) | Kernel `propose.started {round, request}`; agent `propose.completed {round, request, proposals, artifact}` (the deposited proposal ids and the `attempts` artifact) |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, advisory dispatcher `pr.checks-failed {pr, head, buildHead, checks, total, digest}` and `pr.checks-cleared {pr, head, cause}` (forge CI on finished leaves, §15.7), `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
@@ -5339,8 +5344,8 @@ operator inspects the PR, re-runs CI on the forge, or reopens the build.
 
 This reverses the original rebase ban [D1, D3]. Replaying many WIP commits caused
 repeated conflict loops; replaying one net change resolves the conflict once.
-Rewrites used to sever event-recorded SHAs; immutable archives and durable
-rewrite facts retain them. Ordinary per-WIP-commit rebase remains inappropriate.
+Rewrites used to sever event-recorded SHAs; retained history and durable
+rewrite facts keep them. Ordinary per-WIP-commit rebase remains inappropriate.
 Existing historical merge reconciliations retain their original replay/display
 semantics and supply the promoted contribution base for a later restack. Resumed
 builds use current engine routing at newly reached replay and merge boundaries;
@@ -5349,17 +5354,54 @@ merge standard. Execution configuration remains pinned, while merge policy
 is live dispatcher configuration. Operators requiring old execution behavior
 should drain work before upgrading rather than run mixed-version writers.
 
-Before branch replacement the kernel publishes Git tips named by retained
-history and rewrite facts, plus both heads and the temporary change, under immutable non-branch refs
-`refs/autobuild/archive/<slug>/<sha>`. Archives must be fetchable by exact ref;
-namespace or permission failures stop publication without a branch/tag fallback. Remote
+Before a leaf branch replacement (automatic restack, reconcile, or remote
+publication settlement) the kernel retains every displaced Git tip named by
+retained history and rewrite facts, plus both heads and the temporary change.
+Leaf retention is best effort, per commit, in this order:
+
+1. **Forge archive ref.** An immutable non-branch ref
+   `refs/autobuild/archive/<slug>/<sha>`, fetchable by exact ref and confirmed by
+   exact readback. A forge-archived commit writes no store copy.
+2. **BuildStore copy.** Where the forge refuses the ref, artifact
+   `history-objects-<sha>` holds a thin pack of only the objects `<sha>` reaches
+   that the transaction's frozen target base does not, chunked like
+   `replay-objects-<sha>`. A commit already an ancestor of that base needs no
+   copy and is classified `target`.
+3. **Nothing.** Where the copy also fails, the rewrite proceeds. The build
+   records one build-scoped `observation.recorded` followup with fixed id
+   `history-unretained` naming the unretained commits; later attempts in the
+   same build never repeat it.
+
+The decisive `history.retained {operation: restack | reconcile, id, base, store,
+target, unretained}` records commits kept as store copies over exclusion base
+`base`, kept by the target, or kept nowhere; forge-archived commits stay on the
+rewrite fact's `archives`. Older runtimes treat it as an unknown decisive fact
+and defer. Retention is never a branch or tag. An immutable ref that already
+names a different commit is an `ArchiveConflictError`: never retried, never a
+fallback. Classified transient forge failures still retry rather than fall back.
+Node restack, node landing, integration landing and node verify heads still
+require archive refs, and a refusal stops them.
+
+Readers (restack and reconcile preparation, regenerated-restack adoption,
+candidate recovery) restore a missing commit in the same order: the local
+repository; the forge archive ref (exact `ls-remote` and exact fetch, where
+transient transport failures throw and retry); store copies
+(`reconcile-change-<sha>`, `replay-objects-<sha>`, `history-objects-<sha>`);
+then a fetch of the published build and target branches. A commit retained
+nowhere redoes the work: an unpublished transaction is re-prepared from a fresh
+snapshot of the published branch under id `<id>-redo`, and a candidate that
+already has a publication request is retired through
+`publication.candidate-retired` and replays under its replacement identity.
+
+Remote
 archives also publish commits present only on the remote: GitHub uses create-only
 Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
 pushes for local objects. When an environment refuses a non-branch Git push of an
 archive ref (a refusal, not a transient failure), GitHub creates the identical archive
 ref through the same create-only REST call and holds it to the same exact readback; this
 is a transport for the same ref, never a branch or tag, never overwrites an archive, and
-cannot publish a commit that exists only locally, which fails naming both refusals.
+cannot publish a commit that exists only locally, which fails naming both refusals
+(a refusal that leaf retention absorbs into its BuildStore copy).
 Vercel Sandbox workspaces push archives through the guest Git transport for candidate
 recovery, preservation and rewrites; after a refusal the dispatcher makes the same REST
 call with host-held credentials, and the guest's exact readback still decides. Exact remote readback confirms publication, then a non-shallow
@@ -5369,7 +5411,7 @@ boundary, leaves an already-shallow repository's existing boundaries unchanged, 
 verifies the commits locally before returning.
 Publication requests and loss records alone are not retained Git history: their
 unpublished objects may have died with a released sandbox. A separately published
-or reviewed tip remains an archive requirement even when an earlier request named
+or reviewed tip remains a retention requirement even when an earlier request named
 that same SHA.
 Restack and reconcile publication reject tracked modifications with the existing
 clean-worktree error. Nonignored untracked files do not block publication and
@@ -5414,7 +5456,8 @@ Automatic leaf transactions use `restack.*`, independently of reconcile attempt
 numbers. Preparation freezes the trigger, verify-cycle boundary, absorbed target
 observation, old base/head, target base, single-change commit, workspace/local
 branch tips and canonical message. Publication intent precedes guarded replacement;
-`restack.rewritten` retains archives and proven writes even if readback observes a
+`restack.rewritten` retains confirmed forge archive refs (its `archives`; store and
+target retention is on `history.retained`) and proven writes even if readback observes a
 later writer. Completion requires confirmed publication. Clean transactions start
 no agent and do not fabricate `reconcile.completed`. A conflicted replay is adopted
 by `reconcile.started {restackId}` without another collapse or target selection,
@@ -5443,7 +5486,7 @@ conflicted generated files with their commands (`generated`) and a failure's
 from the checkout's `autobuild.toml`. Repositories that declare nothing are unaffected.
 Resolver completion links back to the automatic transaction. Retained commit bytes
 and replay object packs recover disposable-workspace objects before publication.
-Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
+Replay retention (`replay-objects-<sha>`) and leaf history retention (`history-objects-<sha>`) store thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay and history artifacts are read only when the requested commit is missing locally, never by idle polling.
 
 
 `reconcile.prepared` records transaction identity, attempt, branch, old head,
@@ -5452,14 +5495,15 @@ Before that fact is appended, the exact temporary commit bytes are deposited as 
 SHA-keyed BuildStore artifact. A replacement sandbox restores and verifies the
 same object from those bytes, retaining the original transaction and frozen base
 without requiring prepare-time remote write credentials. Retained trees and
-parents supply the rest of its object graph; trusted publication still archives
-the temporary commit before replacing the branch.
+parents supply the rest of its object graph; trusted publication still retains
+the temporary commit, best effort, before replacing the branch.
 `reconcile.replayed` records whether replay conflicted. Notes and the resolved
 head are deposited with `reconcile.publish-intended` before publication.
 `ab done` records a publication request; local kernels wait for the resolver
 session to end and remote kernels wait for guest teardown before replacement;
 `reconcile.rewritten` records old/new heads, old/new change SHAs, frozen base,
-conflict outcome and archive refs after confirmed publication. A successful CAS
+conflict outcome and confirmed forge archive refs (store and target retention is on
+`history.retained`) after confirmed publication. A successful CAS
 that is overtaken before readback still records its receipt, with `observedHead`
 naming the later head (or null for deletion). That observed head informs recovery;
 it does not complete reconcile or promote the verification base. Recovery may
@@ -5467,7 +5511,9 @@ consume a durable confirmed write receipt; candidate ancestry alone never proves
 an unconfirmed write. New completion is
 `{headSha, rewriteId, artifact}`; historical `{mergeCommit, artifact}` remains
 valid. Remote requests carry identical transaction inputs and use the provider's
-trusted rewrite/archive capability only after execution teardown. Contention is
+trusted rewrite/archive capability only after execution teardown; the provider
+hands each archive to the kernel's `retain` callback over its trusted Git
+transport, and the callback owns the fallback. Contention is
 recorded durably and uses the existing runner-failure bound, without spending
 unchanged-base no-progress budget before completion. Classified transient publication
 failures instead use the independent durable publication retry budget described
@@ -6283,7 +6329,7 @@ or installs releases in the foreground or background.
 2. **[OPEN] Retention/archival policy** — the pilot's archival gap, now a store
    config concern rather than a repo problem. Needs a default (e.g. prune
    blobs for merged builds after N months, keep events). Immutable reconcile
-   archive refs are retained indefinitely for now; their retention policy is
+   archive refs and `history-objects-<sha>` copies are retained indefinitely; their retention policy is
    part of this open thread.
 3. **[OPEN] Global capacity** — per-repo capacity is the top-level `capacity`
    scalar (§16.1); whether a cross-repo global cap is needed, and where it
@@ -6481,14 +6527,18 @@ polls read no receipts or event rows.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate is archived under its exact archive ref,
-with the refused-push fallback where supported, before guarded publication continues.
-A failed archive, including a failed fallback, defers to a later attempt and neither
-proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
+store copies first. Replay copies are read in either format (the chunked manifest
+or a legacy base64 pack); when a thin pack's base is missing, recovery fetches the
+published target first and applies the pack with `git index-pack --fix-thin`. An
+available candidate is retained best effort, in the leaf order above, before
+guarded publication continues; a refused archive does not block it, and a remote
+provider's `recoverCandidate` reports the candidate available even when archiving
+is refused. A commit retained nowhere redoes the work from the published branch,
+as above. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
-retired candidate is excluded from archive requirements unless independently
+retired candidate is excluded from retention requirements unless independently
 required by proven history. This reconstruction consumes no infrastructure
 attempt and no additional conflict occurrence; it needs no operator guidance.
 A bare retry also clears an existing infrastructure-limit escalation through

@@ -407,6 +407,8 @@ export const EXCLUDED: Record<string, string> = {
     'Pure one-event Git tip extraction used by the persisted buildReadFacts fold; not a current-state replay.',
   continuePreparation:
     'Async Git/store effects resuming one durable replay transaction; not an event-only projection.',
+  reprepareFromPublished:
+    'Async Git/store effects re-preparing a replay from a fresh published-branch snapshot; reads the transaction history only to locate its intent and rewrite, not an event-only projection.',
   shouldPublishTick:
     'Publication decision over a new report and actual start time plus the bounded recorded journal; no event-only reduction can decide whether an unrecorded tick has effects.',
   projectDispatcherLiveness:
