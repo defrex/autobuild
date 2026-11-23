@@ -180,8 +180,10 @@ export {
 } from '../kernel/issue-keywords'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export {
+  ArchiveConflictError,
   ForgeFailure,
   ForgeRejection,
+  isArchiveConflict,
   isForgeFailure,
   isForgeRejection,
 } from '../ports/forge-failure'

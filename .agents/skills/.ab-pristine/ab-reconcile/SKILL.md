@@ -81,7 +81,7 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    both sides, and the checks run. Never commit notes or any other `.ab/` path.
    Legacy tracked scratch may be inherited unchanged from either input; do not
    author scratch changes as part of resolution.
-5. Run `ab done --notes <notesPath>`. The kernel validates, archives recorded
+5. Run `ab done --notes <notesPath>`. The kernel validates, retains recorded
    evidence, and publishes with an exact expected-head lease. Exact forge
    readback confirms publication; local refs are caches. Candidate ancestry alone
    cannot establish an unconfirmed write or contribution boundary. If the branch

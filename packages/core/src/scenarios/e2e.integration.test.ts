@@ -310,6 +310,43 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(reduced.outcome).toBe('merged')
 }, 30_000)
 
+test('a forge that refuses archive refs still restacks at verify entry and reaches the PR', async () => {
+  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
+  const refused: string[] = []
+  h.forgeAdapter.rewrite!.archive = async (input) => {
+    refused.push(input.sha)
+    throw new Error(
+      `archive publication rejected for ${input.ref} at ${input.sha}: git push refused (HTTP 403)`,
+    )
+  }
+  await h.dispatcher.tick()
+  const state = await h.runLatest()
+  expect(h.cliErrors).toEqual([])
+  expect(state.status).toBe('running')
+  expect(state.prState).toBe('open')
+  const events = await h.events(SLUG)
+  expect(ofType(events, 'escalation.raised')).toEqual([])
+  expect(ofType(events, 'phase.failed')).toEqual([])
+  const head = ofType(events, 'restack.completed')[0]!.payload.headSha
+  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.remote)).toBe(head)
+  expect(ofType(events, 'restack.rewritten')[0]!.payload.archives).toEqual([])
+  expect(ofType(events, 'verify.started')[0]!.seq).toBeGreaterThan(
+    ofType(events, 'restack.completed')[0]!.seq,
+  )
+  // Every commit the rewrite would have archived is retrievable from the store.
+  const retained = ofType(events, 'history.retained')
+  const kept = new Set(
+    retained.flatMap((event) => [...event.payload.store, ...event.payload.target]),
+  )
+  expect(refused.length).toBeGreaterThan(0)
+  for (const sha of refused) expect(kept.has(sha)).toBe(true)
+  for (const sha of retained.flatMap((event) => event.payload.store))
+    expect(await h.store.getArtifact(SLUG, `history-objects-${sha}`)).not.toBeNull()
+  expect(
+    ofType(events, 'observation.recorded').some((e) => e.payload.id === 'history-unretained'),
+  ).toBe(false)
+})
+
 test('dispatch recovery is durable in SQLite and discard returns a file ticket to Ready for a fresh build', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-dispatch-recovery-e2e-'))
   const store = openLocalStore(join(root, 'store'))

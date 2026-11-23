@@ -1352,12 +1352,15 @@ export async function parkedSweepReadBudget(opts: {
     if (args[1] === kind) metrics.meta++
     return meta(...args)
   }
+  // Store-retained history is read only by recovery, never by idle work.
+  let retainedHistoryReads = 0
   store.getArtifact = async (...args) => {
     const result = await get(...args)
     if (args[1] === kind) {
       metrics.bodies++
       metrics.bytes += result?.content.byteLength ?? 0
     }
+    if (/^(?:history-objects-|replay-v1-)/.test(args[1])) retainedHistoryReads++
     return result
   }
   const reset = () => {
@@ -1566,6 +1569,53 @@ export async function parkedSweepReadBudget(opts: {
       if (idleRequests.length) expect(requests).toEqual(idleRequests[0]!)
       idleRequests.push(requests)
     }
+    // A parked build that holds store-retained history costs the same: its
+    // `history.retained` fact folds into the saved value once, and idle
+    // ticks never read the retained copies.
+    const retainedSha = (length === 100 ? 'e' : 'f').repeat(40)
+    const digest = '0'.repeat(64)
+    await store.putArtifact(slugs[0]!, {
+      kind: `replay-v1-${digest}-0`,
+      content: new Uint8Array([1, 2, 3]),
+    })
+    await store.putArtifact(slugs[0]!, {
+      kind: `history-objects-${retainedSha}`,
+      content: JSON.stringify({
+        version: 1,
+        head: retainedSha,
+        base: transaction.targetBase,
+        digest,
+        bytes: 3,
+        chunkBytes: 1024 * 1024,
+        chunks: 1,
+      }),
+    })
+    await store.append(slugs[0]!, {
+      actor: KERNEL,
+      type: 'history.retained',
+      payload: {
+        operation: 'restack',
+        id: `retained-${length}`,
+        base: transaction.targetBase,
+        store: [retainedSha],
+        target: [transaction.oldBase],
+        unretained: [],
+      },
+    })
+    opts.advance()
+    await idle.tick({ acceptNewWork: true })
+    for (const _ of [0, 1]) {
+      opts.advance()
+      reset()
+      retainedHistoryReads = 0
+      const requests = await countStoreRequests(store, () =>
+        idle.tick({ acceptNewWork: true }).then(() => undefined),
+      )
+      expect(requests).toEqual(idleRequests[0]!)
+      expect(metrics.historicalRows).toBe(0)
+      expect({ meta: metrics.meta, bodies: metrics.bodies }).toEqual(baseline)
+      expect(retainedHistoryReads).toBe(0)
+    }
     const refusedEvents = Reflect.get(store, 'builds').get(refusedSlug)
       .events as import('../events/catalog').AbEvent[]
     while (refusedEvents.length < length)
@@ -1595,16 +1645,16 @@ export async function parkedSweepReadBudget(opts: {
           exec: async () => {
             throw new Error('a remote workspace candidate is never archived from the host')
           },
+          // A provider absorbs the refused archive push and REST fallback and
+          // reports the candidate available; settlement retains it later.
           probeCandidate: async () => {
-            if (++probes <= 2)
-              throw new Error(
-                'archive publication rejected: git push refused (non-branch); GitHub REST ref creation failed (403)',
-              )
+            probes++
             return true
           },
         }).catch(() => 'deferred')
       })
-      expect(outcome).toBe(attempt < 2 ? 'deferred' : 'available')
+      expect(outcome).toBe('available')
+      expect(probes).toBe(attempt + 1)
       expect(requests.append ?? 0).toBe(0)
       expect(requests.appendIfCurrent ?? 0).toBe(0)
       if (refusedAttempts.length) expect(requests).toEqual(refusedAttempts[0]!)

@@ -62,10 +62,13 @@ import { withBuildTrailer } from '../kernel/build-identity'
 import {
   prepareRestack,
   recoverLostCandidate,
+  redoRestack,
+  retireCandidate,
   publishRestack,
   retainReplay,
   requireRewrite,
 } from '../kernel/reconcile-restack'
+import { RetainedHistoryUnavailable } from '../kernel/history-retention'
 import { reconcileHead, reconcileRewriteHead } from '../kernel/reconcile-head'
 import {
   readBuildFacts,
@@ -2307,14 +2310,26 @@ export class BuildRunner {
     }
     // A replacement workspace may still be checked out at the old branch tip.
     // Restore the frozen resolved intent before the guarded branch update.
-    await prepareRestack(publicationDeps, {
-      attempt: intent.payload.attempt,
-      branch: intent.payload.branch,
-      oldBase: intent.payload.oldBase,
-      targetBase: intent.payload.targetBase,
-      id: intent.payload.id,
-      restackId: intent.payload.restackId,
-    })
+    try {
+      await prepareRestack(publicationDeps, {
+        attempt: intent.payload.attempt,
+        branch: intent.payload.branch,
+        oldBase: intent.payload.oldBase,
+        targetBase: intent.payload.targetBase,
+        id: intent.payload.id,
+        restackId: intent.payload.restackId,
+      })
+    } catch (error) {
+      if (!(error instanceof RetainedHistoryUnavailable)) throw error
+      // The resolved candidate is retained nowhere: retire it, and the
+      // reconcile replays from the published branch under its replacement id.
+      const current = await readBuildFacts(store, slug)
+      const latest = current.value.publication.latestUncompletedRequest()
+      if (latest?.seq !== request.seq)
+        throw new Error('publication changed during candidate recovery; retry')
+      await retireCandidate(this.deps, current, latest)
+      return
+    }
     const result = await retryPublicationEffect(
       retryDeps,
       'reconcile',
@@ -2478,7 +2493,15 @@ export class BuildRunner {
         }
         const regeneration = facts.log.restack.regeneration
         if (regeneration?.outcome !== 'resolved' || regeneration.head === undefined) return
-        await adoptRegeneratedRestack(deps, transaction, regeneration.head)
+        try {
+          await adoptRegeneratedRestack(deps, transaction, regeneration.head)
+        } catch (error) {
+          if (!(error instanceof RetainedHistoryUnavailable)) throw error
+          // The regenerated head is retained nowhere: replay again from the
+          // published branch; the next step continues the new transaction.
+          await redoRestack(deps, transaction)
+          return
+        }
       }
       const regenerated =
         facts.log.restack.regeneration?.outcome === 'resolved'
