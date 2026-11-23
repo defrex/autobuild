@@ -1,9 +1,10 @@
 import type { Forge } from '../ports/types'
-import { isForgeFailure, type ForgeFailureDetails } from '../ports/forge-failure'
+import { isForgeFailure, type ForgeFailure, type ForgeFailureDetails } from '../ports/forge-failure'
 import {
   withForgeRequestGate,
   forgeRequestGateActive,
   ForgeRequestDeferred,
+  type ForgeExhaustionEvidence,
 } from '../ports/forge-request-context'
 import type { BuildStore } from '../store/types'
 import { readForgeHealth } from '../store/reduced-reads'
@@ -36,6 +37,14 @@ type GuardDeps = {
 }
 const guarded = new WeakMap<Forge, { raw: Forge; deps: GuardDeps }>()
 
+/** Per raw forge and `repo\0name\0quota`: the highest adapter evidence `seq`
+ * this process has durably recorded as repository degradation (or found
+ * already covered by it). Survives re-wraps; never shared across processes,
+ * exactly like the adapter's own memory of the evidence. */
+const recordedEvidence = new WeakMap<Forge, Map<string, number>>()
+/** The evidence a deferred, synthesized limit carries to `recordLimit`. */
+const pendingEvidence = new WeakMap<object, ForgeExhaustionEvidence>()
+
 function scopeKey(scope: ForgeGuardScope | undefined): string {
   return scope === undefined || scope === 'repository' ? 'repository' : `process:${scope.process}`
 }
@@ -67,6 +76,19 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
    * the latest reset it has already reported (one fact per episode). */
   let local: { resetAt: string } | undefined
   let reported: string | undefined
+  const evidenceKey = (quota: string) => `${deps.repo}\0${deps.name}\0${quota}`
+  const recordedSeq = (quota: string): number =>
+    recordedEvidence.get(forge)?.get(evidenceKey(quota)) ?? 0
+  const markRecorded = (evidence: ForgeExhaustionEvidence | undefined): void => {
+    if (evidence === undefined || evidence.seq <= recordedSeq(evidence.quota)) return
+    let marks = recordedEvidence.get(forge)
+    if (marks === undefined) {
+      marks = new Map()
+      recordedEvidence.set(forge, marks)
+    }
+    marks.set(evidenceKey(evidence.quota), evidence.seq)
+  }
+  /** Admits a request and returns the degradation it last read, if any. */
   const before = async () => {
     while (local) {
       if (Date.parse(local.resetAt) <= now().getTime()) {
@@ -82,6 +104,7 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
       await pause(active.resetAt)
       active = await health()
     }
+    return active
   }
   /** Serializes this guard's post-failure bookkeeping (never the request), so
    * concurrent limited requests cannot both see "no active episode". */
@@ -131,7 +154,11 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
     // One episode per cooldown: a limit inside an unexpired degradation only
     // extends it, durably but marked `continued`, so it never wakes a watch.
     const ongoing = active !== undefined && Date.parse(active.resetAt) > now().getTime()
-    if (ongoing && Date.parse(details.resetAt) <= Date.parse(active.resetAt)) return
+    const evidence = pendingEvidence.get(error)
+    if (ongoing && Date.parse(details.resetAt) <= Date.parse(active.resetAt)) {
+      markRecorded(evidence)
+      return
+    }
     // Runner/phase credentials cannot administer repositories; their repo
     // already exists. Only the dispatcher may create it.
     if (!deps.wait) await deps.store.ensureRepo(deps.repo)
@@ -146,6 +173,8 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
         ...(ongoing ? { continued: true as const } : {}),
       },
     })
+    // Only once durable: a failed append authorizes no later override.
+    markRecorded(evidence)
   }
   function wrap(target: object): object {
     return new Proxy(
@@ -171,10 +200,33 @@ export function guardForge(forge: Forge, deps: GuardDeps): Forge {
             await before()
             let requested = false
             let requestFailed = false
+            let admittedHealth: Awaited<ReturnType<typeof before>>
             const gate = {
               before: async () => {
-                await before()
+                admittedHealth = await before()
                 requested = true
+              },
+              /** Remembered adapter exhaustion goes out as a probe only after an
+               * explicit clear of this exact evidence: the repository recorded
+               * it (`seq` covered by the durable mark) and this request was
+               * admitted with no unexpired degradation, which before the
+               * evidence's reset only a clear explains. Reuses this request's
+               * `before()` read; reads nothing. */
+              exhausted: async (
+                failure: ForgeFailure,
+                evidence: ForgeExhaustionEvidence,
+              ): Promise<'defer' | 'probe'> => {
+                if (
+                  scope === 'repository' &&
+                  failure.details.kind === 'rate-limited' &&
+                  !failure.details.unauthenticated &&
+                  evidence.seq <= recordedSeq(evidence.quota) &&
+                  (admittedHealth === undefined ||
+                    Date.parse(admittedHealth.resetAt) <= now().getTime())
+                )
+                  return 'probe'
+                pendingEvidence.set(failure, evidence)
+                return 'defer'
               },
               failed: async (error: unknown) => {
                 requestFailed ||= isForgeFailure(error)
