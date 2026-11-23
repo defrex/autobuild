@@ -113,7 +113,7 @@ a:hover {
   background: var(--ink);
   color: var(--ground);
 }
-[data-variant="primary"]:hover {
+[data-variant="primary"]:not([data-disabled], [data-pending]):hover {
   background: var(--teal);
   border-color: var(--teal);
 }
@@ -121,7 +121,7 @@ a:hover {
   border-color: transparent;
   color: var(--slack);
 }
-[data-variant="ghost"]:hover {
+[data-variant="ghost"]:not([data-disabled], [data-pending]):hover {
   text-decoration: underline;
   color: var(--ink);
 }
@@ -136,9 +136,11 @@ a:hover {
   background: transparent;
   cursor: not-allowed;
 }
+/* Pending keeps the variant's own inks, so its text holds contrast; only
+   the cursor and a slight fade say the action is under way. */
 :where([data-slot="button"])[data-pending] {
   cursor: progress;
-  color: var(--slack);
+  opacity: 0.8;
 }
 [data-ansi="word-action"] {
   color: inherit;
@@ -927,7 +929,8 @@ a:hover {
     background-color var(--motion-feedback) var(--ease-out),
     border-color var(--motion-feedback) var(--ease-out),
     text-decoration-color var(--motion-feedback) var(--ease-out),
-    outline-color var(--motion-feedback) var(--ease-out);
+    outline-color var(--motion-feedback) var(--ease-out),
+    opacity var(--motion-feedback) var(--ease-out);
 }
 [data-ansi="steps"] li,
 [data-ansi="sign-off"],
