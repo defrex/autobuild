@@ -353,17 +353,23 @@ a:hover {
   font-weight: 400;
 }
 
+/* Spacing lives on the region, never on its children, so padding reads the
+   same above the first line and below the last. */
 [data-ansi="sign-off"] {
+  display: grid;
+  gap: var(--space-sm);
   max-width: 88ch;
   padding: var(--space-md);
   border: var(--stroke-control) solid var(--amber);
+}
+[data-ansi="sign-off"] > * {
+  margin: 0;
 }
 [data-ansi="sign-off"][data-kind="escalation"] {
   border-color: var(--red);
   background: var(--red-wash);
 }
 [data-ansi="sign-off"] [data-ansi="question"] {
-  margin: 0 0 var(--space-sm);
   font-weight: 600;
   color: var(--amber);
 }
