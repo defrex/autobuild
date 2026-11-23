@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { FakeRefreshScheduler } from '../testing/refresh-scheduler'
 import { WebModelHub } from './hub'
-import type { WebFrame, WebFrameSource } from './protocol'
+import { type WebFrame, type WebFrameSource, WebReadFencedError } from './protocol'
 
 class CountingSource implements WebFrameSource {
   reads = 0
@@ -118,5 +118,85 @@ test('live frames ask for the fast cadence', async () => {
   const reads = source.reads
   await time.advance(5_000)
   expect(source.reads - reads).toBeGreaterThanOrEqual(9)
+  hub.close()
+})
+
+/** A source whose reads stay pending until the test settles them. */
+class DeferredSource implements WebFrameSource {
+  active = 0
+  peak = 0
+  started = 0
+  admitted: (() => boolean)[] = []
+  private pending: ((frame: WebFrame) => void)[] = []
+  read(admitted?: () => boolean) {
+    this.started++
+    this.active++
+    this.peak = Math.max(this.peak, this.active)
+    if (admitted) this.admitted.push(admitted)
+    return new Promise<{ frame: WebFrame; live: boolean }>((resolve) => {
+      this.pending.push((frame) => {
+        this.active--
+        resolve({ frame, live: false })
+      })
+    })
+  }
+  settle(frame: WebFrame) {
+    this.pending.shift()?.(frame)
+  }
+}
+
+test('a reconnect during a pending read joins it instead of starting another', async () => {
+  const source = new DeferredSource()
+  const time = new FakeRefreshScheduler()
+  const hub = new WebModelHub({ source, networkReads: true, scheduler: time })
+  const off = hub.subscribe(() => {})
+  await time.settle()
+  expect(source.started).toBe(1)
+  off()
+  // The pending read is now fenced: nobody wants its frame.
+  expect(source.admitted[0]!()).toBe(false)
+  const received: string[] = []
+  hub.subscribe((json) => received.push(json))
+  await time.settle()
+  expect(source.started).toBe(1)
+  expect(source.peak).toBe(1)
+  // The reconnected tab admits the shared read again.
+  expect(source.admitted[0]!()).toBe(true)
+  // Repeated reloads while the read is pending still share it.
+  for (let i = 0; i < 5; i++) hub.subscribe(() => {})()
+  await time.settle()
+  expect(source.started).toBe(1)
+  source.settle({ notice: 'joined' })
+  await hub.join()
+  expect(received).toEqual([JSON.stringify({ notice: 'joined' })])
+  expect(source.peak).toBe(1)
+  hub.close()
+})
+
+test('a fenced read publishes nothing and reports no failure', async () => {
+  const errors: unknown[] = []
+  const time = new FakeRefreshScheduler()
+  let reject!: (error: unknown) => void
+  const source: WebFrameSource = {
+    read: () =>
+      new Promise((_, fail) => {
+        reject = fail
+      }),
+  }
+  const hub = new WebModelHub({
+    source,
+    networkReads: false,
+    scheduler: time,
+    onError: (error) => errors.push(error),
+  })
+  const off = hub.subscribe(() => {})
+  await time.settle()
+  off()
+  reject(new WebReadFencedError())
+  await hub.join()
+  expect(hub.current).toBeUndefined()
+  expect(errors).toEqual([])
+  await time.advance(60_000)
+  expect(time.tasks.size).toBe(0)
   hub.close()
 })

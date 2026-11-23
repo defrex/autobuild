@@ -5,6 +5,7 @@ import { buildDashboardFromProjected } from '../cli/dashboard/model'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { readRepositoryFacts } from '../store/reduced-reads'
 import { MemoryBuildStore } from '../store/memory'
+import { WebReadFencedError } from './protocol'
 import { readOnlyStore } from './read-only'
 import { RepositoryFrameSource } from './repository-source'
 
@@ -149,4 +150,30 @@ test('a failed read retries at the old position', async () => {
   await expect(source.read()).rejects.toThrow('store unavailable')
   fail = false
   expect((await source.read()).frame.notice).toBe(NO_DISPATCHER_RUN_LINE)
+})
+
+test('a read whose subscribers left stops before its next store stage', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(REPO)
+  const { proxy, calls } = recording(store)
+  const source = new RepositoryFrameSource(readOnlyStore(proxy), REPO)
+  let admitted = true
+  const gated = new Proxy(proxy, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver)
+      if (key !== 'getRepoChangePosition') return value
+      return async (...args: unknown[]) => {
+        const position = await Reflect.apply(value, target, args)
+        admitted = false // the last tab leaves while the position read is out
+        return position
+      }
+    },
+  })
+  const fencedSource = new RepositoryFrameSource(readOnlyStore(gated), REPO)
+  await expect(fencedSource.read(() => admitted)).rejects.toBeInstanceOf(WebReadFencedError)
+  expect(calls.map((call) => call.name)).toEqual(['getRepoChangePosition'])
+  // Not admitted at all: no store read happens.
+  calls.length = 0
+  await expect(source.read(() => false)).rejects.toBeInstanceOf(WebReadFencedError)
+  expect(calls).toEqual([])
 })

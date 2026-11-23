@@ -2,7 +2,7 @@ import { NO_DISPATCHER_RUN_LINE } from '../cli/dashboard/configuration'
 import { dispatchWarningLines, projectRepositoryHeader } from '../cli/dashboard/header'
 import { readRepositoryFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
-import type { WebFrame, WebFrameSource } from './protocol'
+import { type WebFrame, type WebFrameSource, WebReadFencedError } from './protocol'
 
 /** The only store reads the repository frame may make. Build-scope reads are
  * deliberately absent: their cost grows with build count. */
@@ -26,10 +26,13 @@ export class RepositoryFrameSource implements WebFrameSource {
     private readonly repo: string,
   ) {}
 
-  async read(): Promise<{ frame: WebFrame; live: boolean }> {
-    const position = await this.reader.getRepoChangePosition(this.repo)
+  async read(admitted: () => boolean = () => true): Promise<{ frame: WebFrame; live: boolean }> {
+    // Every store stage checks admission first, so a read whose last
+    // subscriber left stops at the next stage instead of reading on.
+    const reader = fenced(this.reader, admitted)
+    const position = await reader.getRepoChangePosition(this.repo)
     if (this.cached !== undefined && position === this.position) return this.cached
-    const facts = (await readRepositoryFacts(this.reader, this.repo)).value
+    const facts = (await readRepositoryFacts(reader, this.repo)).value
     const status = facts.status
     const { header } = projectRepositoryHeader(
       {
@@ -51,5 +54,25 @@ export class RepositoryFrameSource implements WebFrameSource {
     this.cached = { frame, live }
     this.position = position
     return this.cached
+  }
+}
+
+function fenced(reader: RepositoryFrameReader, admitted: () => boolean): RepositoryFrameReader {
+  const gate = () => {
+    if (!admitted()) throw new WebReadFencedError()
+  }
+  return {
+    getRepoChangePosition: async (...args) => {
+      gate()
+      return reader.getRepoChangePosition(...args)
+    },
+    getRepo: async (...args) => {
+      gate()
+      return reader.getRepo(...args)
+    },
+    getReducerValue: (async (...args: Parameters<RepositoryFrameReader['getReducerValue']>) => {
+      gate()
+      return reader.getReducerValue(...args)
+    }) as RepositoryFrameReader['getReducerValue'],
   }
 }

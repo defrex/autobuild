@@ -1,7 +1,7 @@
 /**
  * The `ab web` wire protocol: what the server pushes and what the page reads.
- * Types and constants only, so the browser client imports it as types without
- * pulling server code into its bundle.
+ * Types, constants and one error class, so the browser client imports it as
+ * types without pulling server code into its bundle.
  */
 import type { DashboardRepositoryHeader } from '../cli/dashboard/header'
 
@@ -18,9 +18,22 @@ export interface WebFrame {
   notice?: string
 }
 
-/** Produces frames for the shared refresh loop. `live` asks for the fast cadence. */
+/**
+ * Produces frames for the shared refresh loop. `live` asks for the fast
+ * cadence. `admitted` reports whether anyone still wants the frame: a source
+ * checks it before each further store read and, once it is false, stops with
+ * `WebReadFencedError` instead of reading on for nobody.
+ */
 export interface WebFrameSource {
-  read(): Promise<{ frame: WebFrame; live: boolean } | undefined>
+  read(admitted?: () => boolean): Promise<{ frame: WebFrame; live: boolean } | undefined>
+}
+
+/** A frame read abandoned because its last subscriber left; not a failure. */
+export class WebReadFencedError extends Error {
+  constructor() {
+    super('ab web read abandoned: no subscriber')
+    this.name = 'WebReadFencedError'
+  }
 }
 
 /** Server-sent event names on `/events`. */
