@@ -95,10 +95,19 @@ export function activeHours(view: OptimizationClockView, now: Date): number {
   return Math.max(0, (view.activeMs + live) / HOUR_MS)
 }
 
-/** Whether a stopped node still has pre-stop attempt facts to account: its
- * value may rise once more, when the dispatcher settles it. */
-export function clockSettling(view: Pick<OptimizationClockView, 'stoppedAt' | 'settled'>): boolean {
-  return view.stoppedAt !== undefined && !view.settled
+/** Whether a stopped node's active hours may still change once, when the
+ * dispatcher's settlement accounts attempt runs from before the stop: it has
+ * attempts in flight, tracked builds or an open attempt run. A node with none
+ * (a completed legacy node) is final already. */
+export function clockSettling(state: Pick<OptimizationState, 'clock' | 'inFlight'>): boolean {
+  const { clock } = state
+  return (
+    clock.stoppedAt !== undefined &&
+    !clock.settled &&
+    (state.inFlight.length > 0 ||
+      Object.keys(clock.builds).length > 0 ||
+      Object.keys(clock.open).some((key) => key !== ''))
+  )
 }
 
 /** The budget's hours: active hours, never wall-clock time since opening. */
