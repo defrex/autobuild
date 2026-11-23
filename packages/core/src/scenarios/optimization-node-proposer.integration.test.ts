@@ -102,13 +102,15 @@ async function openNode(
     capacity?: number
     leaf?: boolean
     propose?: SkillHandler
+    /** Extra `[tickets]` lines. */
+    tickets?: string
   } = {},
 ): Promise<{ h: E2eHarness; node: BuildRecord }> {
   const h = await makeHarness({
     localGitForge: true,
     configToml: CONFIG_TOML.replace('capacity = 2', `capacity = ${opts.capacity ?? 4}`).replace(
       'readyState = "Ready"',
-      'readyState = "Ready"\nrejectedState = "Rejected"',
+      `readyState = "Ready"\nrejectedState = "Rejected"${opts.tickets ? `\n${opts.tickets}` : ''}`,
     ),
     handlers: { ...happyHandlers(), propose: opts.propose ?? proposer(['cache', 'index']) },
     tickets: [
@@ -207,6 +209,30 @@ test('the proposer is requested, deposits, and its attempts are filed ready and 
     h.clock.advance(60_000)
     await h.dispatcher.tick()
     expect(ofType(await h.events(node.slug), 'optimization.proposal-requested')).toHaveLength(1)
+  } finally {
+    await h.cleanup()
+  }
+}, 60_000)
+
+test('filed attempts carry the ready labels and any configured creation labels', async (makeHarness) => {
+  const { h, node } = await openNode(makeHarness, {
+    tickets: 'createLabels = ["attempt", "autobuild"]',
+  })
+  try {
+    await measure(h, node.slug)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const filed = ofType(await h.events(node.slug), 'optimization.attempts-proposed')
+    expect(filed).toHaveLength(1)
+    const created = new Set(filed[0]!.payload.proposals.map((entry) => entry.ticket.id))
+    const tickets = (await h.tickets.listAll()).tickets.filter((ticket) =>
+      created.has(ticket.ref.id),
+    )
+    expect(tickets).toHaveLength(2)
+    for (const ticket of tickets) expect(ticket.labels).toEqual(['autobuild', 'attempt'])
   } finally {
     await h.cleanup()
   }

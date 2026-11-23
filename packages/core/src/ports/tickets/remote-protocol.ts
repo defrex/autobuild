@@ -51,6 +51,15 @@ export const TICKET_DEPENDENCY_STATE_CAPABILITY = '1'
 export const TICKET_POLICY_ROLES_HEADER = 'x-autobuild-ticket-policy-roles'
 export const TICKET_POLICY_ROLES_CAPABILITY = '1'
 
+/** Explicit opt-in for `createLabels` in project ticket policy, independent of
+ * the roles header: released clients up to this field's release publish and
+ * decode policy strictly without it. With the header a publish is complete (an
+ * absent `createLabels` removes it); without it, a saved value is kept and
+ * reads omit it. Servers echo it on every policy response so a client can tell
+ * an older server's strict refusal from an ordinary validation failure. */
+export const TICKET_POLICY_CREATE_LABELS_HEADER = 'x-autobuild-ticket-policy-create-labels'
+export const TICKET_POLICY_CREATE_LABELS_CAPABILITY = '1'
+
 /** Services that answer `list-targeting` echo it on every ticket response,
  * failures included. A client treats an ok response without it, or a 404/400
  * refusal of `list-targeting` without it, as a service predating the operation,
@@ -295,6 +304,18 @@ export const hostedTicketPolicySchema = z.strictObject({
       readyLabels: z.array(z.string().min(1)).optional(),
       backlogState: policyStateSchema.optional(),
       rejectedState: policyStateSchema.optional(),
+      /** `[tickets].createLabels`, so the service's own operator create applies
+       * them. Present only when nonempty. */
+      createLabels: z
+        .array(
+          z
+            .string()
+            .refine(
+              (s) => s.trim().length > 0 && s === s.trim(),
+              'createLabels entries must be nonblank label names with no surrounding whitespace',
+            ),
+        )
+        .optional(),
     })
     .superRefine((tickets, ctx) => {
       for (const issue of policyRoleOverlaps(tickets))
@@ -313,12 +334,24 @@ const POLICY_ROLE_KEYS = ['backlogState', 'rejectedState'] as const
  * publish as the complete policy. `retain-roles` (a client predating the roles)
  * fills each absent role from the saved policy; when a retained role would then
  * collide with a lifecycle name that publish just set, the saved policy is kept
- * unchanged and `kept` names the collisions, so a mapping is never erased. */
+ * unchanged and `kept` names the collisions, so a mapping is never erased.
+ * `retainCreateLabels` (a client predating `createLabels`) independently keeps
+ * a saved `createLabels` the publish omits. */
 export function publishedTicketPolicy(
   previous: HostedTicketPolicy | null | undefined,
-  incoming: HostedTicketPolicy,
+  published: HostedTicketPolicy,
   mode: 'replace' | 'retain-roles',
+  opts: { retainCreateLabels?: boolean } = {},
 ): { policy: HostedTicketPolicy; kept?: string[] } {
+  const incoming =
+    opts.retainCreateLabels === true &&
+    published.tickets.createLabels === undefined &&
+    previous?.tickets.createLabels !== undefined
+      ? {
+          ...published,
+          tickets: { ...published.tickets, createLabels: previous.tickets.createLabels },
+        }
+      : published
   if (mode === 'replace' || !previous) return { policy: incoming }
   const retained = Object.fromEntries(
     POLICY_ROLE_KEYS.flatMap((key) =>
@@ -345,14 +378,23 @@ export function publishedTicketPolicy(
   return { policy: hostedTicketPolicySchema.parse(merged) }
 }
 
-/** Policy as a reader sees it: clients predating the roles decode strictly. */
+/** Policy as a reader sees it: clients predating the roles or `createLabels`
+ * decode strictly, so each omits what its reader cannot decode. */
 export function projectTicketPolicy(
   policy: HostedTicketPolicy,
   rolesAware: boolean,
+  createLabelsAware: boolean,
 ): HostedTicketPolicy {
-  if (rolesAware) return policy
-  const { backlogState: _backlog, rejectedState: _rejected, ...tickets } = policy.tickets
-  return { ...policy, tickets }
+  let tickets = policy.tickets
+  if (!createLabelsAware) {
+    const { createLabels: _createLabels, ...rest } = tickets
+    tickets = rest
+  }
+  if (!rolesAware) {
+    const { backlogState: _backlog, rejectedState: _rejected, ...rest } = tickets
+    tickets = rest
+  }
+  return tickets === policy.tickets ? policy : { ...policy, tickets }
 }
 
 export const ticketGrantSchema = z.strictObject({

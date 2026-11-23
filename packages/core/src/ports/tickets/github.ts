@@ -1370,7 +1370,7 @@ export class GitHubTicketSource implements TicketSource {
     const write = writeForState(state, this.lifecycle, [...labels, ...links.map(linkLabel)])
     if (key !== undefined && reservedAt !== undefined) {
       const adopted = await this.findByCreationKey(key, reservedAt)
-      if (adopted !== undefined) return this.adopt(adopted, blockedBy, assignees)
+      if (adopted !== undefined) return this.adopt(adopted, blockedBy, assignees, labels)
     }
     // A closing create state opens the issue without a state label and
     // closes it as a follow-up.
@@ -1462,20 +1462,32 @@ export class GitHubTicketSource implements TicketSource {
     return read.issue
   }
 
-  /** A retry found the issue its key opened. Missing requested assignees are
-   * added first. A pending marker finishes the first attempt's recorded
+  /** A retry found the issue its key opened. Missing requested assignees and
+   * ticket labels are added first, keeping everything the issue holds. A
+   * pending marker finishes the first attempt's recorded
    * intent; a plain one reconciles only missing blockers from this retry, as
    * Linear does. */
   private async adopt(
     found: GitHubIssue,
     retryBlockers: string[],
     assignees: string[],
+    labels: string[],
   ): Promise<Ticket> {
     let issue = found
     if (missingAssignees(issue, assignees).length > 0) {
       const held = assigneeLogins(issue)
       issue = await this.patchIssue('create', issue.number, {
         assignees: [...held, ...missingAssignees(issue, assignees)],
+      })
+    }
+    const heldLabels = labelNames(issue)
+    const missingLabels = labels.filter(
+      (name) => !heldLabels.some((label) => label.toLowerCase() === name.toLowerCase()),
+    )
+    if (missingLabels.length > 0) {
+      await this.ensureLabels('create', missingLabels)
+      issue = await this.patchIssue('create', issue.number, {
+        labels: [...heldLabels, ...missingLabels],
       })
     }
     const marker = splitCreationMarker(issue.body).marker!
