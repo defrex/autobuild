@@ -332,6 +332,34 @@ test('ticket scan cadence reloads and belongs to the deployment configuration', 
   expect(live.current().config.ticketScanIntervalSeconds).toBe(23)
 })
 
+describe('live createLabels', () => {
+  const github = base.replace('source = "file"\nreadyState = "ready"', 'source = "github"')
+
+  test('a createLabels change is hot, and a refused name keeps the previous snapshot', async () => {
+    expect(CONFIG_RELOAD_CLASSIFICATION.tickets.createLabels).toBe('hot')
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+    )
+    const labelled = github.replace(
+      'source = "github"',
+      'source = "github"\ncreateLabels = ["autobuild"]',
+    )
+    expect(restartRequiredChanges(parseConfig(github), parseConfig(labelled))).toEqual([])
+    expect((await live.refresh(labelled)).kind).toBe('adopted')
+    expect(live.current().config.tickets.createLabels).toEqual(['autobuild'])
+    const accepted = live.current()
+    const refused = await live.refresh(labelled.replace('["autobuild"]', '["autobuild", "node"]'))
+    expect(refused.kind).toBe('rejected')
+    if (refused.kind === 'rejected') expect(refused.error).toContain('node kind label')
+    expect(live.current()).toBe(accepted)
+    expect(live.current().config.tickets.createLabels).toEqual(['autobuild'])
+  })
+})
+
 describe('live merge policy', () => {
   test('rejects malformed replacement rules and retains the last accepted policy', async () => {
     const initial = `${base}\n[[merge]]\nmode = "consent"\n`

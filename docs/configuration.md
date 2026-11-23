@@ -393,7 +393,7 @@ These fields hot-reload:
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
-| `tickets.createAssignee` | Next ticket create, including the next harvest filing. |
+| `tickets.createAssignee`, `tickets.createLabels` | Next ticket create, including the next harvest filing. |
 | `tickets.backlogState`, `tickets.rejectedState` | Next role move, ready-ticket scan, or node completeness observation. |
 
 Adapter selectors and factory inputs are constructed once and require a
@@ -3308,6 +3308,19 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 **Description:** Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to one user unless the create names its own assignees.
 
 **Constraints:** [tickets].createAssignee must be a nonblank value with no surrounding whitespace; Allowed for github ("me" or a GitHub username) and plugin sources that declare assignees. Refused for file, hosted and linear.
+
+#### `tickets.createLabels`
+
+**TOML key:** `tickets.createLabels`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Add these labels to every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals, optimization attempts), unioned with any labels the create names.
+
+**Constraints:** Omission or [] adds none. Refused on github for `autobuild:<state>` and `autobuild-link:` labels and `node`, and on linear for `node`. On hosted, the ticket service must support createLabels in the published ticket policy. Ordinary labels: a name also in readyLabels, or covered by the github/linear default ["autobuild"], makes every Autobuild-filed ticket pass the label gate. `ab ticket import` never applies them.; Each item: [tickets].createLabels entries must be nonblank label names with no surrounding whitespace
 
 #### `tickets.teamKey`
 

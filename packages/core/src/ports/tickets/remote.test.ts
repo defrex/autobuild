@@ -197,6 +197,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-issue-links': '1',
         'x-autobuild-ticket-priority': '1',
         'x-autobuild-ticket-dependency-state': '1',
+        'x-autobuild-ticket-policy-create-labels': '1',
         'x-autobuild-ticket-policy-roles': '1',
         'x-autobuild-ticket-targeting': '1',
         'x-autobuild-ticket-paging': '1',
@@ -562,8 +563,82 @@ test('publishedTicketPolicy replaces, retains, and keeps the saved policy on a c
 
 test('projectTicketPolicy hides the roles from readers predating them', () => {
   const saved = policy({ backlogState: 'icebox', rejectedState: 'rejected' })
-  expect(projectTicketPolicy(saved, true)).toEqual(saved)
-  expect(projectTicketPolicy(saved, false)).toEqual(policy())
+  expect(projectTicketPolicy(saved, true, true)).toEqual(saved)
+  expect(projectTicketPolicy(saved, false, true)).toEqual(policy())
+})
+
+test('policy createLabels: schema, publish, retention and projection', () => {
+  expect(
+    hostedTicketPolicySchema.parse(policy({ createLabels: ['autobuild'] })).tickets.createLabels,
+  ).toEqual(['autobuild'])
+  for (const bad of ['', ' autobuild', 'autobuild '])
+    expect(hostedTicketPolicySchema.safeParse(policy({ createLabels: [bad] })).success).toBe(false)
+
+  const base = { source: 'hosted', teamKey: 'AUT' }
+  expect(hostedTicketPolicy(ticketsSchema.parse({ ...base, createLabels: [] }))).toEqual(policy())
+  expect(hostedTicketPolicy(ticketsSchema.parse({ ...base, createLabels: ['autobuild'] }))).toEqual(
+    policy({ createLabels: ['autobuild'] }),
+  )
+
+  const saved = policy({ createLabels: ['autobuild'], backlogState: 'icebox' })
+  // A publisher predating createLabels keeps the saved value; one that knows
+  // the field replaces it, so omitting it is a deliberate removal.
+  expect(
+    publishedTicketPolicy(saved, policy({ backlogState: 'icebox' }), 'replace', {
+      retainCreateLabels: true,
+    }).policy,
+  ).toEqual(saved)
+  expect(
+    publishedTicketPolicy(saved, policy({ backlogState: 'icebox' }), 'replace').policy,
+  ).toEqual(policy({ backlogState: 'icebox' }))
+  expect(
+    publishedTicketPolicy(saved, policy({ createLabels: ['team'] }), 'retain-roles', {
+      retainCreateLabels: true,
+    }).policy,
+  ).toEqual(policy({ createLabels: ['team'], backlogState: 'icebox' }))
+  // A roles-unaware publisher is createLabels-unaware too: both are retained.
+  expect(
+    publishedTicketPolicy(saved, policy(), 'retain-roles', { retainCreateLabels: true }).policy,
+  ).toEqual(saved)
+  expect(
+    publishedTicketPolicy(null, policy(), 'replace', { retainCreateLabels: true }).policy,
+  ).toEqual(policy())
+
+  expect(projectTicketPolicy(saved, true, true)).toEqual(saved)
+  expect(projectTicketPolicy(saved, true, false)).toEqual(policy({ backlogState: 'icebox' }))
+  expect(projectTicketPolicy(saved, false, false)).toEqual(policy())
+})
+
+test('a service predating createLabels is named only when the policy carries them', async () => {
+  const refusal = {
+    status: 400,
+    body: wireError('invalid ticket policy envelope', 'validation'),
+    headers: { 'x-autobuild-ticket-policy-roles': '1' },
+  }
+  const labelled = policy({ createLabels: ['autobuild'] })
+  const old = makeSource([refusal])
+  expect((await rejectionOf(old.source.synchronizePolicy(labelled))).message).toBe(
+    'ticket service predates createLabels in ticket policy; upgrade the service or unset [tickets].createLabels',
+  )
+  expect(old.calls[0]!.headers['x-autobuild-ticket-policy-create-labels']).toBe('1')
+  expect(old.calls[0]!.body.input).toEqual(labelled)
+  const plain = makeSource([refusal])
+  expect((await rejectionOf(plain.source.synchronizePolicy(policy()))).message).toBe(
+    'invalid ticket policy envelope',
+  )
+  const current = makeSource([
+    {
+      ...refusal,
+      body: wireError('invalid ticket policy envelope: bad', 'validation'),
+      headers: {
+        'x-autobuild-ticket-policy-roles': '1',
+        'x-autobuild-ticket-policy-create-labels': '1',
+      },
+    },
+  ])
+  expect((await rejectionOf(current.source.synchronizePolicy(labelled))).message).toBe(
+    'invalid ticket policy envelope: bad',
+  )
 })
 
 test('hostedTicketPolicy publishes the roles only when configured', () => {
