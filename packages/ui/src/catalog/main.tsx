@@ -2,11 +2,18 @@ import '../ansi.css'
 import './catalog.css'
 import { type ReactNode, StrictMode, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Gantt, type GanttAxis, SegmentLegend } from '../charts/gantt'
-import { type DurationMode, StepDurations } from '../charts/step-durations'
+import {
+  Gantt,
+  type GanttAxis,
+  GanttSkeleton,
+  SegmentLegend,
+  SegmentPopover,
+} from '../charts/gantt'
+import { type DurationMode, StepDurations, StepDurationsSkeleton } from '../charts/step-durations'
 import {
   BuildRow,
   type BuildRowModel,
+  BuildRowSkeleton,
   DispatcherStrip,
   Masthead,
   PageNav,
@@ -21,7 +28,8 @@ import {
   type ThemeChoice,
   ThemeMenu,
 } from '../components/display'
-import { color, phaseHue, space, type } from '../tokens'
+import { Reserve } from '../components/motion'
+import { chartHue, color, space, type } from '../tokens'
 import { fixtureBuilds, fixtureStepStats, NOW } from './fixtures'
 
 function Section({
@@ -102,12 +110,12 @@ function Tokens() {
                 </li>
               ))}
             </ul>
-            <h4>Chart phase hues</h4>
+            <h4>Chart hues</h4>
             <ul data-catalog="swatches">
-              {Object.entries(phaseHue[g]).map(([name, hex]) => (
+              {Object.entries(chartHue[g]).map(([name, hex]) => (
                 <li key={name}>
                   <span data-catalog="chip" style={{ background: hex }} />
-                  <span data-ansi="machine">phase-{name}</span>
+                  <span data-ansi="machine">chart-{name}</span>
                   <span data-ansi="machine" data-catalog="hex">
                     {hex}
                   </span>
@@ -164,6 +172,23 @@ function Tokens() {
   )
 }
 
+function HostField() {
+  const [error, setError] = useState(true)
+  return (
+    <div data-catalog="stack">
+      <TextField
+        label="Host"
+        defaultValue="0.0.0.0"
+        description="The address the server listens on."
+        {...(error ? { error: 'Widening the bind exposes builds to the network.' } : {})}
+      />
+      <Button variant="ghost" onClick={() => setError((e) => !e)}>
+        {error ? 'Clear the error' : 'Show the error'}
+      </Button>
+    </div>
+  )
+}
+
 function Controls() {
   const [mode, setMode] = useState<'per-run' | 'total'>('per-run')
   return (
@@ -195,11 +220,7 @@ function Controls() {
             placeholder="any free port"
             description="Leave empty to let the OS choose."
           />
-          <TextField
-            label="Host"
-            defaultValue="0.0.0.0"
-            error="Widening the bind exposes builds to the network."
-          />
+          <HostField />
         </div>
       </Specimen>
       <Specimen label="Choice">
@@ -262,6 +283,31 @@ function Display() {
           </SignOff>
           <SignOff kind="consent" question="Merge #1042 when checks pass?" />
           <SignOff kind="wait" question="Waiting on #1038 and #1040 to merge." />
+        </div>
+      </Specimen>
+      <Specimen label="Chart popover">
+        <div data-catalog="popover-stage">
+          <SegmentPopover
+            presence="present"
+            now={NOW}
+            detail={{
+              x: 150,
+              y: 104,
+              build: {
+                slug: 'build-044',
+                ticket: '#1044',
+                title: 'Show waits on the build page',
+                outcome: 'merged',
+                segments: [],
+              },
+              segment: {
+                category: 'code-review',
+                start: NOW - 3_600_000,
+                end: NOW - 3_253_000,
+                round: 2,
+              },
+            }}
+          />
         </div>
       </Specimen>
       <Specimen label="Loading">
@@ -355,6 +401,95 @@ function Composites() {
   )
 }
 
+const cycle: Pick<BuildRowModel, 'status' | 'tone' | 'steps' | 'attention'>[] = [
+  {
+    status: 'RUNNING',
+    tone: 'live',
+    steps: [
+      { name: 'plan', state: 'done', elapsedMs: 412_000 },
+      { name: 'implement', state: 'current', elapsedMs: 1_302_000 },
+      { name: 'code-review', state: 'pending' },
+      { name: 'verify', state: 'pending' },
+    ],
+  },
+  {
+    status: 'BLOCKED',
+    tone: 'alert',
+    steps: [
+      { name: 'plan', state: 'done', elapsedMs: 412_000 },
+      { name: 'implement', state: 'retrying', elapsedMs: 1_840_000 },
+      { name: 'code-review', state: 'pending' },
+      { name: 'verify', state: 'pending' },
+    ],
+    attention: <SignOff kind="escalation" question="Keep the old flag name as an alias?" />,
+  },
+  {
+    status: 'MERGED',
+    tone: 'ok',
+    steps: [
+      { name: 'plan', state: 'done', elapsedMs: 412_000 },
+      { name: 'implement', state: 'done', elapsedMs: 2_210_000 },
+      { name: 'code-review', state: 'done', elapsedMs: 540_000 },
+      { name: 'verify', state: 'done', elapsedMs: 760_000 },
+    ],
+  },
+]
+
+function States() {
+  const [ready, setReady] = useState(false)
+  const [step, setStep] = useState(0)
+  const few = useMemo(() => fixtureBuilds(6, 3), [])
+  const stats = useMemo(() => fixtureStepStats(fixtureBuilds(40, 5)), [])
+  useEffect(() => {
+    const t = setTimeout(() => setReady(true), 1200)
+    return () => clearTimeout(t)
+  }, [])
+  const current = cycle[step % cycle.length] ?? cycle[0]
+  return (
+    <>
+      <div data-catalog="toolbar" data-catalog-row="">
+        <Button variant="secondary" onClick={() => setReady((r) => !r)}>
+          {ready ? 'Show loading' : 'Show loaded'}
+        </Button>
+        <Button variant="secondary" onClick={() => setStep((n) => n + 1)}>
+          Advance the build
+        </Button>
+      </div>
+      <Grounds stacked>
+        <Reserve
+          ready={ready}
+          placeholder={
+            <>
+              <BuildRowSkeleton />
+              <BuildRowSkeleton />
+            </>
+          }
+        >
+          <BuildRow
+            build={{
+              ticket: '#1072',
+              title: 'Rename the integration node kind',
+              slug: 'rename-node-kind',
+              ...(current as (typeof cycle)[number]),
+            }}
+          />
+          <BuildRow build={rows[2] as BuildRowModel} />
+        </Reserve>
+      </Grounds>
+      <Grounds stacked>
+        <Reserve ready={ready} placeholder={<GanttSkeleton rows={few.length} />}>
+          <Gantt builds={few} now={NOW} axis="clock" label="Builds" />
+        </Reserve>
+      </Grounds>
+      <Grounds stacked>
+        <Reserve ready={ready} placeholder={<StepDurationsSkeleton rows={stats.length} />}>
+          <StepDurations steps={stats} mode="per-run" caption="Time per run, last 7 days" />
+        </Reserve>
+      </Grounds>
+    </>
+  )
+}
+
 function Charts() {
   const few = useMemo(() => fixtureBuilds(8), [])
   const many = useMemo(() => fixtureBuilds(80, 11), [])
@@ -436,7 +571,7 @@ function Catalog() {
         <ThemeMenu value={theme} onValueChange={setTheme} />
       </header>
       <nav data-catalog="toc" aria-label="Catalog sections">
-        {['tokens', 'controls', 'display', 'composites', 'charts'].map((id) => (
+        {['tokens', 'controls', 'display', 'composites', 'states', 'charts'].map((id) => (
           <a key={id} href={`#${id}`}>
             {id}
           </a>
@@ -445,7 +580,7 @@ function Catalog() {
       <Section
         id="tokens"
         title="Tokens"
-        intro="Two first-class grounds. State inks carry meaning; phase hues appear only inside charts, beside a legend."
+        intro="Two first-class grounds. State inks carry meaning; chart hues carry identity and appear only inside charts, beside a legend."
       >
         <Tokens />
       </Section>
@@ -471,6 +606,13 @@ function Catalog() {
         <Composites />
       </Section>
       <Section
+        id="states"
+        title="States"
+        intro="Nothing moves when data arrives or a state changes. Loading reserves the exact space with a skeleton and crossfades; state changes transition in place."
+      >
+        <States />
+      </Section>
+      <Section
         id="charts"
         title="Charts"
         intro="Where the time goes. Work phases use the chart hues, review rounds are hatched, and waits use the state inks they already mean."
@@ -479,6 +621,31 @@ function Catalog() {
       </Section>
     </main>
   )
+}
+
+/* ?cls=1 sums layout shifts that no input caused and reports the total in
+   the title, so the No Layout Shift rule is measured, not eyeballed. */
+if (new URLSearchParams(location.search).has('cls')) {
+  let total = 0
+  const sources: string[] = []
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries() as (PerformanceEntry & {
+      value: number
+      hadRecentInput: boolean
+      sources?: { node?: Node | null }[]
+    })[]) {
+      if (entry.hadRecentInput) continue
+      total += entry.value
+      for (const src of entry.sources ?? []) {
+        const el = src.node instanceof Element ? src.node : src.node?.parentElement
+        if (el)
+          sources.push(
+            `${el.getAttribute('data-ansi') ?? el.getAttribute('data-catalog') ?? el.tagName}[${(el.textContent ?? '').slice(0, 18)}]@${Math.round((src as { previousRect?: DOMRectReadOnly }).previousRect?.y ?? 0)}->${Math.round((src as { currentRect?: DOMRectReadOnly }).currentRect?.y ?? 0)} h${Math.round((src as { previousRect?: DOMRectReadOnly }).previousRect?.height ?? 0)}->${Math.round((src as { currentRect?: DOMRectReadOnly }).currentRect?.height ?? 0)} x${Math.round((src as { previousRect?: DOMRectReadOnly }).previousRect?.x ?? 0)}->${Math.round((src as { currentRect?: DOMRectReadOnly }).currentRect?.x ?? 0)} @${Math.round(entry.startTime)}`,
+          )
+      }
+    }
+    document.title = `CLS ${total.toFixed(4)} ${[...new Set(sources)].slice(0, 8).join(',')}`
+  }).observe({ type: 'layout-shift', buffered: true })
 }
 
 const root = document.getElementById('root')

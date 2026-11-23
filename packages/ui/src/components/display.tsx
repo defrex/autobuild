@@ -18,13 +18,14 @@ import {
 } from '@ui-sdk/react/menu'
 import type { ReactNode } from 'react'
 import { formatDuration } from '../charts/model'
+import { withTransition } from './motion'
 
 /** A lifecycle word. Color carries state; the word carries it too. */
 export type StateTone = 'live' | 'ok' | 'held' | 'alert' | 'pending'
 
 export function StateWord({ tone, children }: { tone: StateTone; children: ReactNode }) {
   return (
-    <span data-ansi="state-word" data-tone={tone}>
+    <span data-ansi="state-word" data-tone={tone} key={String(children)}>
       {children}
     </span>
   )
@@ -82,9 +83,20 @@ export function SignOff({
   )
 }
 
-export function Placeholder({ width, lines = 1 }: { width: string; lines?: number }) {
+/** One or more skeleton lines. Each occupies a full line box of the text it
+ * stands in for (sans by default, mono for machine values), so swapping in
+ * the real text changes nothing around it. */
+export function Placeholder({
+  width,
+  lines = 1,
+  mono = false,
+}: {
+  width: string
+  lines?: number
+  mono?: boolean
+}) {
   return (
-    <span data-ansi="placeholder" aria-hidden="true">
+    <span data-ansi="placeholder" data-mono={mono ? '' : undefined} aria-hidden="true">
       {Array.from({ length: lines }, (_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: identical, static placeholder lines
         <span key={i} style={{ width }} />
@@ -135,7 +147,10 @@ export function ThemeMenu({
     <Menu>
       <MenuTrigger data-variant="ghost">Theme</MenuTrigger>
       <MenuContent>
-        <MenuRadioGroup value={value} onValueChange={(v) => onValueChange(v as ThemeChoice)}>
+        <MenuRadioGroup
+          value={value}
+          onValueChange={(v) => withTransition(() => onValueChange(v as ThemeChoice))}
+        >
           <MenuGroupLabel>Theme</MenuGroupLabel>
           {(['system', 'light', 'dark'] as const).map((choice) => (
             <MenuRadioItem key={choice} value={choice}>

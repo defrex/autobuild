@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { type Step, StateWord, type StateTone, StepList } from './display'
+import { Placeholder, type Step, type StateTone, StateWord, StepList } from './display'
 
 export function Masthead({ repository, aside }: { repository: string; aside?: ReactNode }) {
   return (
@@ -121,7 +121,9 @@ export function BuildRow({ build }: { build: BuildRowModel }) {
           <a data-ansi="row-title" href={`#build/${build.slug}`}>
             {build.title}
           </a>
-          <StateWord tone={build.tone}>{build.status}</StateWord>
+          <span data-ansi="state-slot">
+            <StateWord tone={build.tone}>{build.status}</StateWord>
+          </span>
         </div>
         <p data-ansi="row-meta">
           <span data-ansi="machine">{build.slug}</span>
@@ -131,5 +133,26 @@ export function BuildRow({ build }: { build: BuildRowModel }) {
         {build.attention}
       </div>
     </article>
+  )
+}
+
+/** A build row's exact geometry with no facts in it: identity column, title
+ * and status line, meta line, steps line. Each bar sits in a full line box,
+ * so the loaded row occupies the same space. */
+export function BuildRowSkeleton() {
+  return (
+    <div data-ansi="build-row" data-skeleton="">
+      <Placeholder width="5ch" mono />
+      <div data-ansi="row-body">
+        <div data-ansi="row-head">
+          <Placeholder width="min(38ch, 70%)" />
+          <span data-ansi="state-slot">
+            <Placeholder width="7ch" mono />
+          </span>
+        </div>
+        <Placeholder width="24ch" mono />
+        <Placeholder width="min(52ch, 90%)" mono />
+      </div>
+    </div>
   )
 }

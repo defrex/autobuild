@@ -70,7 +70,7 @@ components:
 
 ANSI keeps the terminal’s functional color and precise machine values while giving people readable titles and plain-language help. The visual register is calm, direct and practical: glance, find the state that needs attention, act on one row, leave.
 
-Both grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app, not the terminal dashboard or marketing website.
+Both grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app and the dispatcher web UI, not the terminal dashboard or marketing website. Its tokens are typed source in `packages/ui/src/tokens.ts`, and the catalog built by `bun run ui:catalog` shows every token, component and chart on both grounds.
 
 **Key Characteristics:**
 - Two calm grounds with state-specific inks.
@@ -94,6 +94,8 @@ Ground is the page; ink carries primary reading; slack carries secondary text an
 
 **The Color Is State Rule.** Green marks done or running, amber marks provisional progress, retries, held work and consent, teal marks the current step and live interaction, blue identifies tickets and links, red marks blocked or failed, and slack marks pending. Status and step words carry meaning alongside color.
 
+**The Chart Hue Rule.** Chart marks never use the state inks. Charts have their own non-semantic hues: four work families (plan, implement, verify, land) and two neutrals for waiting (wait, and a strong wait for an escalation). Texture separates categories within a family: review rounds and reconcile are hatched, held waits cross-hatched, awaiting merge outlined. Every chart carries a legend, so no category rests on color alone. The work hues are validated as a categorical palette on both grounds for color-vision deficiency, normal-vision separation and 3:1 contrast.
+
 Every state ink meets 4.5:1 on its matching ground. Ink, slack and red also meet 4.5:1 on well and red wash. These tested pairs are not permission to combine arbitrary colors and surfaces: light amber fails on the well and belongs only on ground. Primary controls use ground text on ink, or on teal for hover, in both palettes. Structural rules need not carry text contrast.
 
 System is the default theme. The account menu offers System, Light and Dark. Browser storage key `autobuild.theme` persists the choice; a synchronous head bootstrap sets `data-theme` before paint. System removes that override and CSS follows live `prefers-color-scheme`. Invalid preferences fall back to System; storage failure leaves the UI usable. Native controls follow the matching `color-scheme`.
@@ -116,11 +118,21 @@ At phone width the row identity stacks, content loses its desktop indent, and st
 
 **The Title First Rule.** The readable ticket title is the primary row text; use the slug when no title exists. Keep identity, status, slug and steps visible without opening detail.
 
-**The Flowing Document Rule.** The browser document owns scrolling. Masthead, tabs, controls, rows and pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. Long lists load their next page as the reader nears the end. The account and project menus are the small anchored overlay exceptions, full-width on phones, and the confirmation dialog is the one modal.
+**The Flowing Document Rule.** The browser document owns scrolling. Masthead, tabs, controls, rows and pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. Long lists load their next page as the reader nears the end. The account and project menus and a chart's detail popover are the small anchored overlay exceptions, full-width on phones, and the confirmation dialog is the one modal.
 
 ## Elevation & Depth
 
-There are no shadows or gradients. Ground, inset well and red wash convey function, not elevation. The account and project menus use an opaque ground and a thin slack-gray outline. The only translucent layer is the confirmation dialog's backdrop, ground at 72%, which keeps the page legible behind the decision. Loading uses static neutral placeholders shaped like the content they stand in for (identity column, title, status, meta line, steps or excerpt, buttons, prose), with a hidden polite announcement and never fabricated zero facts; tab counts hold their place with a placeholder. No decorative state animation is part of the system.
+There are no shadows or gradients. Ground, inset well and red wash convey function, not elevation. The account and project menus use an opaque ground and a thin slack-gray outline. The only translucent layer is the confirmation dialog's backdrop, ground at 72%, which keeps the page legible behind the decision. Loading uses static neutral placeholders shaped like the content they stand in for (identity column, title, status, meta line, steps or excerpt, buttons, prose), with a hidden polite announcement and never fabricated zero facts; tab counts hold their place with a placeholder. Motion is functional, never decorative; see Motion and State.
+
+## Motion and State
+
+Every surface built on this system holds three rules. They are requirements, checked on every component in the catalog, not preferences.
+
+**The Stable Layout Rule.** Nothing moves unless the person moved it. Data arriving, a timer ticking, a state changing, a font loading or a message appearing never shifts content that is already on screen. Space for anything that can appear is reserved from the first render: a field's message slot is sized to its longest message, a status word sits in a fixed-width slot, numbers use tabular figures, fonts ship inside the bundle as Latin subsets so text never reflows, overlays float above the page, and a chart's columns stay the same when its measure changes. Lists keep their order when their numbers change. The catalog measures cumulative layout shift with `?cls=1`; the target is zero.
+
+**The Deliberate Transition Rule.** No state changes without a transition, so motion always reads as intended. Feedback on a control takes 120ms, a routine state change 200ms, an overlay or a layout change 320ms, all on one decelerating curve, and exits run at 70% of their entry. A new status word fades in where the old one stood; a sign-off region fades up into its reserved place; bars scale and markers slide when a chart's measure changes; menus, popovers and the confirmation dialog fade and settle; a theme switch crossfades. Reduced motion keeps every fade and color change and drops the travel.
+
+**The Reserved Space Rule.** When something must load, its placeholder takes the loaded content's exact geometry before any data exists: skeleton lines fill the same line boxes as the text they stand for, and placeholder and content share one grid cell and crossfade. A loaded view never grows into place.
 
 ## Shapes
 

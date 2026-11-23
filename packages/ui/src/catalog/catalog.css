@@ -157,3 +157,11 @@
     padding: var(--space-md);
   }
 }
+[data-catalog-row] {
+  display: flex;
+  gap: var(--space-sm);
+}
+[data-catalog="popover-stage"] {
+  position: relative;
+  height: 112px;
+}

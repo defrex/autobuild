@@ -28,11 +28,23 @@ export function TextField({
   ...input
 }: ComponentProps<typeof Input> & { label: string; description?: ReactNode; error?: ReactNode }) {
   return (
-    <Field data-ansi="field" invalid={error !== undefined}>
+    <Field data-ansi="field" invalid={error !== undefined ? true : undefined}>
       <FieldLabel>{label}</FieldLabel>
       <Input {...input} />
-      {description !== undefined && <FieldDescription>{description}</FieldDescription>}
-      {error !== undefined && <FieldError>{error}</FieldError>}
+      <div data-ansi="field-messages">
+        <FieldDescription data-shown={error === undefined ? '' : undefined}>
+          {description ?? ' '}
+        </FieldDescription>
+        <FieldError
+          match={error !== undefined ? true : undefined}
+          data-shown={error !== undefined ? '' : undefined}
+        >
+          {error ?? ' '}
+        </FieldError>
+        <span data-ansi="field-sizer" aria-hidden="true">
+          {error ?? description ?? ' '}
+        </span>
+      </div>
     </Field>
   )
 }

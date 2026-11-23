@@ -1,10 +1,11 @@
 import {
   backdropOpacity,
+  chartHue,
   color,
   font,
   type Ground,
   layout,
-  phaseHue,
+  motion,
   space,
   stroke,
   type,
@@ -16,7 +17,7 @@ function groundVars(ground: Ground): string[] {
   return [
     `color-scheme: ${ground};`,
     ...Object.entries(color[ground]).map(([k, v]) => `--${kebab(k)}: ${v};`),
-    ...Object.entries(phaseHue[ground]).map(([k, v]) => `--phase-${k}: ${v};`),
+    ...Object.entries(chartHue[ground]).map(([k, v]) => `--chart-${kebab(k)}: ${v};`),
   ]
 }
 
@@ -44,6 +45,12 @@ export function tokensCss(): string {
     `--stroke-tab: ${stroke.tabBar};`,
     `--stroke-focus: ${stroke.focus};`,
     `--backdrop-opacity: ${backdropOpacity};`,
+    `--motion-feedback: ${motion.feedback};`,
+    `--motion-state: ${motion.state};`,
+    `--motion-layout: ${motion.layout};`,
+    `--motion-exit-scale: ${motion.exitScale};`,
+    `--motion-travel: ${motion.travel};`,
+    `--ease-out: ${motion.ease};`,
   ]
   return [
     '/* Generated from packages/ui/src/tokens.ts. Do not edit. */',
@@ -55,6 +62,8 @@ export function tokensCss(): string {
     '/* A region pinned to one ground, for side-by-side review. */',
     block('[data-ground="light"]', groundVars('light')),
     block('[data-ground="dark"]', groundVars('dark')),
+    '/* Reduced motion keeps fades and drops travel. */',
+    `@media (prefers-reduced-motion: reduce) {\n${block(':root', ['--motion-travel: 0px;'], '  ')}\n}`,
   ]
     .join('\n\n')
     .concat('\n')

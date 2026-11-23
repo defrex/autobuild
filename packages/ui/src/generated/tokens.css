@@ -23,6 +23,12 @@
   --stroke-tab: 2px;
   --stroke-focus: 2px;
   --backdrop-opacity: 0.72;
+  --motion-feedback: 120ms;
+  --motion-state: 200ms;
+  --motion-layout: 320ms;
+  --motion-exit-scale: 0.7;
+  --motion-travel: 4px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   color-scheme: light;
   --ground: #fbfbfc;
   --ink: #1a1d24;
@@ -36,10 +42,12 @@
   --red: #d32b33;
   --red-wash: #fef2f1;
   --select: #c9d5f7;
-  --phase-plan: #6a4fd8;
-  --phase-implement: #c43d8c;
-  --phase-verify: #5a7f1a;
-  --phase-land: #2f7fb0;
+  --chart-plan: #6a4fd8;
+  --chart-implement: #c43d8c;
+  --chart-verify: #5a7f1a;
+  --chart-land: #2f7fb0;
+  --chart-wait: #8a8f99;
+  --chart-wait-strong: #3a3d45;
 }
 
 @media (min-width: 1280px) {
@@ -63,10 +71,12 @@
     --red: #f07777;
     --red-wash: #2a1719;
     --select: #2c3a66;
-    --phase-plan: #8f7bea;
-    --phase-implement: #d9689f;
-    --phase-verify: #7f9f36;
-    --phase-land: #4b93c8;
+    --chart-plan: #8f7bea;
+    --chart-implement: #d9689f;
+    --chart-verify: #7f9f36;
+    --chart-land: #4b93c8;
+    --chart-wait: #6b717d;
+    --chart-wait-strong: #c4c8d0;
   }
 }
 
@@ -84,10 +94,12 @@
   --red: #f07777;
   --red-wash: #2a1719;
   --select: #2c3a66;
-  --phase-plan: #8f7bea;
-  --phase-implement: #d9689f;
-  --phase-verify: #7f9f36;
-  --phase-land: #4b93c8;
+  --chart-plan: #8f7bea;
+  --chart-implement: #d9689f;
+  --chart-verify: #7f9f36;
+  --chart-land: #4b93c8;
+  --chart-wait: #6b717d;
+  --chart-wait-strong: #c4c8d0;
 }
 
 :root[data-theme="light"] {
@@ -104,10 +116,12 @@
   --red: #d32b33;
   --red-wash: #fef2f1;
   --select: #c9d5f7;
-  --phase-plan: #6a4fd8;
-  --phase-implement: #c43d8c;
-  --phase-verify: #5a7f1a;
-  --phase-land: #2f7fb0;
+  --chart-plan: #6a4fd8;
+  --chart-implement: #c43d8c;
+  --chart-verify: #5a7f1a;
+  --chart-land: #2f7fb0;
+  --chart-wait: #8a8f99;
+  --chart-wait-strong: #3a3d45;
 }
 
 /* A region pinned to one ground, for side-by-side review. */
@@ -126,10 +140,12 @@
   --red: #d32b33;
   --red-wash: #fef2f1;
   --select: #c9d5f7;
-  --phase-plan: #6a4fd8;
-  --phase-implement: #c43d8c;
-  --phase-verify: #5a7f1a;
-  --phase-land: #2f7fb0;
+  --chart-plan: #6a4fd8;
+  --chart-implement: #c43d8c;
+  --chart-verify: #5a7f1a;
+  --chart-land: #2f7fb0;
+  --chart-wait: #8a8f99;
+  --chart-wait-strong: #3a3d45;
 }
 
 [data-ground="dark"] {
@@ -146,8 +162,18 @@
   --red: #f07777;
   --red-wash: #2a1719;
   --select: #2c3a66;
-  --phase-plan: #8f7bea;
-  --phase-implement: #d9689f;
-  --phase-verify: #7f9f36;
-  --phase-land: #4b93c8;
+  --chart-plan: #8f7bea;
+  --chart-implement: #d9689f;
+  --chart-verify: #7f9f36;
+  --chart-land: #4b93c8;
+  --chart-wait: #6b717d;
+  --chart-wait-strong: #c4c8d0;
+}
+
+/* Reduced motion keeps fades and drops travel. */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-travel: 0px;
+  }
 }

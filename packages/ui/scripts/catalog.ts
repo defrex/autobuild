@@ -30,6 +30,12 @@ if (!result.success) {
   process.exit(1)
 }
 
+// Fonts load before first layout: a late face reflows text and shifts the page.
+const preloads = (await readdir(join(out, 'assets')).catch(() => []))
+  .filter((n) => /\.(ttf|woff2?)$/.test(n))
+  .map((n) => `<link rel="preload" href="./assets/${n}" as="font" crossorigin>\n`)
+  .join('')
+
 await writeFile(
   join(out, 'index.html'),
   `<!doctype html>
@@ -38,7 +44,7 @@ await writeFile(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Autobuild ANSI catalog</title>
-<link rel="stylesheet" href="./main.css">
+${preloads}<link rel="stylesheet" href="./main.css">
 </head>
 <body><div id="root"></div><script src="./main.js"></script></body>
 </html>

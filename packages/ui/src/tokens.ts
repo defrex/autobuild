@@ -41,21 +41,40 @@ export const color = {
 export type ColorRole = keyof (typeof color)['light']
 
 /**
- * Chart-only phase hues. They identify a family of pipeline work inside a
- * chart that also carries a legend and labels; they never signal state.
- * Validated as an adjacent-order categorical palette on both grounds
- * (dataviz validate_palette: CVD ΔE ≥ 11.5, normal-vision ΔE ≥ 16.4, ≥ 3:1).
+ * The Chart Hue rule: charts never use the state inks. Hue means work, in
+ * four families; neutral means waiting, in two weights. Texture separates
+ * the categories inside a family, so identity never rests on hue alone.
+ * The work hues validate as an adjacent-order categorical palette on both
+ * grounds (dataviz validate_palette: CVD ΔE ≥ 11.5, normal-vision ΔE ≥ 16.4,
+ * every mark ≥ 3:1 on its ground).
  */
-export const phaseHue = {
-  light: { plan: '#6a4fd8', implement: '#c43d8c', verify: '#5a7f1a', land: '#2f7fb0' },
-  dark: { plan: '#8f7bea', implement: '#d9689f', verify: '#7f9f36', land: '#4b93c8' },
+export const chartHue = {
+  light: {
+    plan: '#6a4fd8',
+    implement: '#c43d8c',
+    verify: '#5a7f1a',
+    land: '#2f7fb0',
+    wait: '#8a8f99',
+    waitStrong: '#3a3d45',
+  },
+  dark: {
+    plan: '#8f7bea',
+    implement: '#d9689f',
+    verify: '#7f9f36',
+    land: '#4b93c8',
+    wait: '#6b717d',
+    waitStrong: '#c4c8d0',
+  },
 } as const satisfies Record<Ground, Record<string, string>>
 
-export type PhaseFamily = keyof (typeof phaseHue)['light']
+export type ChartFamily = keyof (typeof chartHue)['light']
 
-/** How each timeline segment category is drawn. Waits reuse state inks
- * because they are states: pending is slack, held is amber, a human blocker
- * is red. Review rounds share their authoring family's hue, hatched. */
+export type SegmentFill = 'solid' | 'hatch' | 'cross' | 'outline'
+
+/** How each timeline segment category is drawn. Review rounds share their
+ * authoring family's hue, hatched. Waits are neutral: queued hatched, held
+ * cross-hatched, awaiting merge outlined, and an escalation, the one wait a
+ * human ends, in the strong neutral. */
 export const segmentStyle = {
   plan: { family: 'plan', fill: 'solid' },
   'plan-review': { family: 'plan', fill: 'hatch' },
@@ -64,15 +83,23 @@ export const segmentStyle = {
   verify: { family: 'verify', fill: 'solid' },
   finalize: { family: 'land', fill: 'solid' },
   reconcile: { family: 'land', fill: 'hatch' },
-  queued: { state: 'slack', fill: 'hatch' },
-  'ticket-wait': { state: 'amber', fill: 'hatch' },
-  paused: { state: 'amber', fill: 'hatch' },
-  'awaiting-merge': { state: 'amber', fill: 'outline' },
-  escalated: { state: 'red', fill: 'hatch' },
-} as const satisfies Record<
-  string,
-  { family: PhaseFamily; fill: 'solid' | 'hatch' } | { state: ColorRole; fill: 'hatch' | 'outline' }
->
+  queued: { family: 'wait', fill: 'hatch' },
+  'ticket-wait': { family: 'wait', fill: 'cross' },
+  paused: { family: 'wait', fill: 'cross' },
+  'awaiting-merge': { family: 'wait', fill: 'outline' },
+  escalated: { family: 'waitStrong', fill: 'hatch' },
+} as const satisfies Record<string, { family: ChartFamily; fill: SegmentFill }>
+
+/** The Deliberate Transition rule's timings. Exits run faster than entries;
+ * reduced motion keeps the fades and drops the travel. */
+export const motion = {
+  feedback: '120ms',
+  state: '200ms',
+  layout: '320ms',
+  exitScale: 0.7,
+  travel: '4px',
+  ease: 'cubic-bezier(0.16, 1, 0.3, 1)',
+} as const
 
 export type SegmentCategory = keyof typeof segmentStyle
 

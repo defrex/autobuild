@@ -4,18 +4,24 @@
 
 @font-face {
   font-family: "Atkinson Hyperlegible Next";
-  src: url("../fonts/AtkinsonHyperlegibleNext.ttf") format("truetype");
+  src: url("../fonts/AtkinsonHyperlegibleNext.latin.woff2") format("woff2");
   font-weight: 200 800;
-  font-display: swap;
+  font-display: block;
 }
 @font-face {
   font-family: "JetBrains Mono";
-  src: url("../fonts/JetBrainsMono.ttf") format("truetype");
+  src: url("../fonts/JetBrainsMono.latin.woff2") format("woff2");
   font-weight: 100 800;
-  font-display: swap;
+  font-display: block;
 }
 
 @layer ui-sdk {
+  /* A field keeps its error's space: an inactive error is invisible, not gone. */
+  [data-ansi="field-messages"] > [data-slot="field-error"][hidden] {
+    /* biome-ignore lint/complexity/noImportantStyles: must outrank ui-sdk's own important hide */
+    display: block !important;
+    visibility: hidden;
+  }
   :where([data-slot][hidden]:not([hidden="until-found"])) {
     /* biome-ignore lint/complexity/noImportantStyles: ui-sdk's documented rule for closed parts */
     display: none !important;
@@ -26,6 +32,7 @@
 
 :root,
 [data-ground] {
+  --skeleton: color-mix(in srgb, var(--rule) 70%, var(--well));
   background: var(--ground);
   color: var(--ink);
   font-family: var(--sans);
@@ -63,6 +70,12 @@ a:hover {
   font-size: var(--fs-machine);
   font-variant-numeric: tabular-nums;
   font-variant-ligatures: no-contextual;
+}
+/* Numbers that tick never jitter. */
+[data-ansi="count"],
+[data-ansi="elapsed"],
+[data-ansi="dispatcher-strip"] dd {
+  font-variant-numeric: tabular-nums;
 }
 [data-ansi="visually-hidden"] {
   position: absolute;
@@ -162,6 +175,23 @@ a:hover {
 }
 [data-slot="input"]::placeholder {
   color: var(--slack);
+}
+[data-ansi="field-messages"] {
+  display: grid;
+}
+[data-ansi="field-messages"] > * {
+  grid-area: 1 / 1;
+  margin: 0;
+  opacity: 0;
+  transition: opacity var(--motion-state) var(--ease-out);
+}
+[data-ansi="field-messages"] > [data-shown] {
+  opacity: 1;
+}
+/* The longer message sizes the slot from the first render, whatever the
+   error part does after mount. */
+[data-ansi="field-messages"] > [data-ansi="field-sizer"] {
+  visibility: hidden;
 }
 [data-slot="field-description"] {
   color: var(--slack);
@@ -339,14 +369,20 @@ a:hover {
   color: var(--red);
 }
 
+/* A skeleton line fills the same line box as the text it stands in for. */
 [data-ansi="placeholder"] {
   display: inline-grid;
-  gap: 6px;
+  max-width: 100%;
+}
+[data-ansi="placeholder"][data-mono] {
+  font-family: var(--mono);
+  font-size: var(--fs-machine);
 }
 [data-ansi="placeholder"] > span {
   display: block;
-  height: 0.9em;
-  background: color-mix(in srgb, var(--rule) 70%, var(--well));
+  height: 1lh;
+  max-width: 100%;
+  background: linear-gradient(var(--skeleton), var(--skeleton)) center / 100% 0.8em no-repeat;
 }
 
 /* ── Masthead, navigation, dispatcher strip ──────────── */
@@ -462,6 +498,11 @@ a:hover {
 [data-ansi="row-title"]:hover {
   text-decoration: underline;
 }
+[data-ansi="state-slot"] {
+  min-width: 9ch;
+  text-align: end;
+  margin-inline-start: auto;
+}
 [data-ansi="row-head"] [data-ansi="state-word"] {
   margin-inline-start: auto;
 }
@@ -475,48 +516,48 @@ a:hover {
   }
 }
 
-/* ── Segment fills (charts) ──────────────────────────── */
+/* ── Chart fills ─────────────────────────────────────── */
+/* The Chart Hue rule: chart marks never use the state inks. */
 
 [data-category] {
-  --c: var(--slack);
+  --c: var(--chart-wait);
 }
 [data-category="plan"],
 [data-category="plan-review"] {
-  --c: var(--phase-plan);
+  --c: var(--chart-plan);
 }
 [data-category="implement"],
 [data-category="code-review"] {
-  --c: var(--phase-implement);
+  --c: var(--chart-implement);
 }
 [data-category="verify"] {
-  --c: var(--phase-verify);
+  --c: var(--chart-verify);
 }
 [data-category="finalize"],
 [data-category="reconcile"] {
-  --c: var(--phase-land);
-}
-[data-category="queued"] {
-  --c: var(--slack);
-}
-[data-category="ticket-wait"],
-[data-category="paused"],
-[data-category="awaiting-merge"] {
-  --c: var(--amber);
+  --c: var(--chart-land);
 }
 [data-category="escalated"] {
-  --c: var(--red);
+  --c: var(--chart-wait-strong);
 }
-[data-fill="solid"]:not([data-ansi="segment-bar"]) {
-  background: var(--c);
-}
-/* Texture, not a decorative gradient: review rounds and waits are hatched so
-   identity never rests on hue alone. */
-[data-fill="hatch"]:not([data-ansi="segment-bar"]) {
-  background: repeating-linear-gradient(135deg, var(--c) 0 2px, transparent 2px 5px);
-  box-shadow: inset 0 0 0 1px var(--c);
-}
-[data-fill="outline"]:not([data-ansi="segment-bar"]) {
-  box-shadow: inset 0 0 0 1.5px var(--c);
+/* Texture, not decoration: it carries identity where hue cannot. */
+:where([data-ansi="segment"], [data-ansi="bar-mark"], [data-ansi="swatch"], [data-ansi="bar"]) {
+  &[data-fill="solid"] {
+    background: var(--c);
+  }
+  &[data-fill="hatch"] {
+    background: repeating-linear-gradient(135deg, var(--c) 0 2px, transparent 2px 5px);
+    box-shadow: inset 0 0 0 1px var(--c);
+  }
+  &[data-fill="cross"] {
+    background:
+      repeating-linear-gradient(135deg, var(--c) 0 1.5px, transparent 1.5px 5px),
+      repeating-linear-gradient(45deg, var(--c) 0 1.5px, transparent 1.5px 5px);
+    box-shadow: inset 0 0 0 1px var(--c);
+  }
+  &[data-fill="outline"] {
+    box-shadow: inset 0 0 0 1.5px var(--c);
+  }
 }
 
 /* ── Gantt ───────────────────────────────────────────── */
@@ -611,32 +652,99 @@ a:hover {
   inset-inline-start: calc(var(--seg-start) + 1px);
   width: max(2px, calc(var(--seg-size) - 2px));
 }
-[data-ansi="segment-bar"]::before {
-  content: "";
+[data-ansi="bar-mark"] {
   position: absolute;
   inset-block: 9px;
   inset-inline-start: var(--waterfall-start);
   width: max(2px, var(--waterfall-size));
-  background: inherit;
-  box-shadow: inherit;
 }
-[data-ansi="segment-bar"][data-fill="solid"]::before {
-  background: var(--c);
-}
-[data-ansi="segment-bar"][data-fill="hatch"]::before {
-  background: repeating-linear-gradient(135deg, var(--c) 0 2px, transparent 2px 5px);
-  box-shadow: inset 0 0 0 1px var(--c);
-}
-[data-ansi="segment-bar"][data-fill="outline"]::before {
-  box-shadow: inset 0 0 0 1.5px var(--c);
+[data-ansi="segment"],
+[data-ansi="bar-mark"] {
+  transition:
+    width 1s linear,
+    inset-inline-start var(--motion-state) var(--ease-out);
 }
 [data-open] {
-  outline: 1.5px dashed var(--teal);
+  outline: 1.5px dashed var(--ink);
   outline-offset: 1px;
 }
-[data-ansi="readout"] {
-  min-height: 1.5em;
-  margin: var(--space-sm) 0;
+
+/* Expanded segment rows arrive and leave with a fade; nothing above moves. */
+[data-ansi="gantt"] [data-slot="waterfall-row"][data-level="2"] {
+  transition:
+    opacity var(--motion-state) var(--ease-out),
+    translate var(--motion-state) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    translate: 0 calc(-1 * var(--motion-travel));
+  }
+}
+[data-ansi="gantt"] [data-slot="waterfall-row"][data-exiting] {
+  opacity: 0;
+  translate: 0 calc(-1 * var(--motion-travel));
+  transition-duration: calc(var(--motion-state) * var(--motion-exit-scale));
+}
+
+/* ── Chart popover ───────────────────────────────────── */
+
+[data-ansi="gantt"] {
+  position: relative;
+}
+[data-ansi="chart-popover"] {
+  position: absolute;
+  z-index: 2;
+  left: var(--x);
+  top: var(--y);
+  width: max-content;
+  max-width: 18rem;
+  translate: -50% calc(-100% - 8px);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--ground);
+  color: var(--ink);
+  border: var(--stroke-control) solid var(--slack);
+  pointer-events: none;
+  transition:
+    opacity var(--motion-feedback) var(--ease-out),
+    translate var(--motion-feedback) var(--ease-out),
+    left var(--motion-feedback) var(--ease-out),
+    top var(--motion-feedback) var(--ease-out);
+}
+[data-ansi="chart-popover"][data-presence="entering"],
+[data-ansi="chart-popover"][data-presence="exiting"] {
+  opacity: 0;
+  translate: -50% calc(-100% - 8px + var(--motion-travel));
+}
+[data-ansi="chart-popover"] p {
+  margin: 0;
+}
+[data-ansi="popover-head"] {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  font-weight: 700;
+}
+[data-ansi-tone="slack"] {
+  color: var(--slack);
+}
+
+/* ── Gantt skeleton ──────────────────────────────────── */
+
+[data-ansi="gantt-skeleton-grid"] > div {
+  display: grid;
+  grid-template-columns: minmax(12rem, 20rem) 1fr;
+  align-items: center;
+  min-height: 28px;
+  border-bottom: var(--stroke-rule) solid color-mix(in srgb, var(--rule) 60%, transparent);
+}
+[data-ansi="gantt-skeleton-grid"] > [data-ansi="gantt-skeleton-head"] {
+  min-height: 24px;
+}
+[data-ansi="gantt-skeleton-bar"] {
+  display: block;
+  height: 14px;
+  width: 30%;
+  margin-inline-start: 35%;
+  background: var(--skeleton);
 }
 
 /* ── Legend ──────────────────────────────────────────── */
@@ -705,7 +813,7 @@ a:hover {
   font-weight: 400;
 }
 [data-ansi="bar-head"] {
-  width: 55%;
+  width: 40%;
 }
 [data-ansi="bar-cell"] {
   min-width: 16rem;
@@ -719,13 +827,38 @@ a:hover {
   position: absolute;
   inset-block: 4px;
   inset-inline-start: 0;
-  width: max(2px, var(--bar));
+  width: 100%;
+  transform-origin: left center;
+  scale: max(0.004, var(--fraction)) 1;
+  transition: scale var(--motion-layout) var(--ease-out);
 }
 [data-ansi="track"] [data-marker] {
   position: absolute;
-  inset-inline-start: var(--at);
+  inset-inline-start: calc(var(--fraction) * 100%);
   width: 2px;
   background: var(--ink);
+  transition:
+    inset-inline-start var(--motion-layout) var(--ease-out),
+    opacity var(--motion-state) var(--ease-out);
+}
+[data-mode="total"] [data-ansi="track"] [data-marker] {
+  opacity: 0;
+}
+[data-ansi="step-durations"] [data-measure] {
+  transition: color var(--motion-state) var(--ease-out);
+}
+[data-mode="per-run"] td[data-measure="total"],
+[data-mode="total"] td[data-measure="per-run"] {
+  color: var(--slack);
+}
+[data-ansi="marker-key"] {
+  font-weight: 400;
+  transition: opacity var(--motion-state) var(--ease-out);
+  font-family: var(--mono);
+  font-size: var(--fs-machine);
+}
+[data-mode="total"] [data-ansi="marker-key"] {
+  opacity: 0;
 }
 [data-marker="p50"] {
   inset-block: 4px;
@@ -736,11 +869,6 @@ a:hover {
 [data-ansi="track"] [data-marker="p99"] {
   inset-block: 0;
   background: repeating-linear-gradient(var(--ink) 0 2px, transparent 2px 4px);
-}
-[data-ansi="marker-key"] {
-  font-weight: 400;
-  font-family: var(--mono);
-  font-size: var(--fs-machine);
 }
 [data-ansi="marker-key"] [data-marker] {
   display: inline-block;
@@ -773,4 +901,106 @@ a:hover {
 [data-ansi="row-body"] > * {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* ── Motion: the Deliberate Transition rule ──────────── */
+/* Every state change transitions. Feedback is fast, state changes are
+   routine, overlays and layout take longest; exits are shorter than
+   entries. Reduced motion keeps fades and colour changes, drops travel. */
+
+:where(
+  [data-slot="button"],
+  [data-slot="menu-trigger"],
+  [data-slot="alert-dialog-trigger"],
+  [data-slot="alert-dialog-close"],
+  [data-slot="segmented-control-item"],
+  [data-slot="input"],
+  [data-slot="menu-item"],
+  [data-slot="menu-radio-item"],
+  [data-ansi="word-action"],
+  [data-ansi="page-nav"] a,
+  [data-ansi="row-title"],
+  a
+) {
+  transition:
+    color var(--motion-feedback) var(--ease-out),
+    background-color var(--motion-feedback) var(--ease-out),
+    border-color var(--motion-feedback) var(--ease-out),
+    text-decoration-color var(--motion-feedback) var(--ease-out),
+    outline-color var(--motion-feedback) var(--ease-out);
+}
+[data-ansi="steps"] li,
+[data-ansi="sign-off"],
+[data-ansi="build-row"] {
+  transition:
+    color var(--motion-state) var(--ease-out),
+    background-color var(--motion-state) var(--ease-out),
+    border-color var(--motion-state) var(--ease-out);
+}
+/* A state word that changes is a new element: it fades in where the old one
+   stood, inside a slot that keeps its width. */
+[data-ansi="state-word"] {
+  transition: opacity var(--motion-state) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
+[data-ansi="sign-off"] {
+  transition:
+    opacity var(--motion-state) var(--ease-out),
+    translate var(--motion-state) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    translate: 0 var(--motion-travel);
+  }
+}
+
+/* Overlays: menus, the confirmation dialog and its backdrop. */
+:where([data-slot="menu-content"], [data-slot="alert-dialog-content"]) {
+  transition:
+    opacity var(--motion-state) var(--ease-out),
+    translate var(--motion-state) var(--ease-out),
+    scale var(--motion-state) var(--ease-out);
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+    translate: 0 calc(-1 * var(--motion-travel));
+  }
+  &[data-ending-style] {
+    transition-duration: calc(var(--motion-state) * var(--motion-exit-scale));
+  }
+}
+[data-slot="alert-dialog-backdrop"] {
+  transition: opacity var(--motion-layout) var(--ease-out);
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+  }
+}
+
+/* Reserved space: placeholder and content share a cell and crossfade. */
+[data-ansi="reserve"] {
+  display: grid;
+}
+[data-ansi="reserve"] > :where([data-ansi="reserve-placeholder"], [data-ansi="reserve-content"]) {
+  grid-area: 1 / 1;
+  min-width: 0;
+  transition: opacity var(--motion-layout) var(--ease-out);
+}
+[data-ansi="reserve-content"] {
+  opacity: 0;
+}
+[data-ansi="reserve"][data-ready] > [data-ansi="reserve-content"] {
+  opacity: 1;
+}
+[data-ansi="reserve"][data-ready] > [data-ansi="reserve-placeholder"] {
+  opacity: 0;
+  transition-duration: calc(var(--motion-layout) * var(--motion-exit-scale));
+}
+
+/* Theme switches crossfade through a view transition. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--motion-layout);
+  animation-timing-function: var(--ease-out);
 }

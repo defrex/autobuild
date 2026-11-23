@@ -352,7 +352,23 @@
       }
     },
     "shadows": [],
-    "motion": [],
+    "motion": [
+      {
+        "name": "feedback",
+        "duration": "120ms",
+        "easing": "cubic-bezier(0.16, 1, 0.3, 1)"
+      },
+      {
+        "name": "state",
+        "duration": "200ms",
+        "easing": "cubic-bezier(0.16, 1, 0.3, 1)"
+      },
+      {
+        "name": "layout",
+        "duration": "320ms",
+        "easing": "cubic-bezier(0.16, 1, 0.3, 1)"
+      }
+    ],
     "breakpoints": [
       {
         "name": "phone",
@@ -471,6 +487,11 @@
         "section": "colors"
       },
       {
+        "name": "The Chart Hue Rule",
+        "body": "Chart marks never use the state inks. Charts have their own non-semantic hues: four work families (plan, implement, verify, land) and two neutrals for waiting. Texture separates categories within a family, and every chart carries a legend.",
+        "section": "colors"
+      },
+      {
         "name": "The Semantic Type Rule",
         "body": "Use Atkinson Hyperlegible Next for titles, captions, questions and explanatory prose. Use JetBrains Mono for ticket ids, slugs, steps, durations, repository identities, codes and other machine values.",
         "section": "typography"
@@ -487,7 +508,7 @@
       },
       {
         "name": "The Flowing Document Rule",
-        "body": "The browser document owns scrolling. Masthead, tabs, controls, rows and pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. Long lists load their next page as the reader nears the end. The account and project menus are the small anchored overlay exceptions, full-width on phones, and the confirmation dialog is the one modal.",
+        "body": "The browser document owns scrolling. Masthead, tabs, controls, rows and pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. Long lists load their next page as the reader nears the end. The account and project menus and a chart's detail popover are the small anchored overlay exceptions, full-width on phones, and the confirmation dialog is the one modal.",
         "section": "layout"
       },
       {
@@ -499,6 +520,21 @@
         "name": "The Sign-off Rule",
         "body": "Reserve a bordered sign-off region for a human decision. Escalation uses red question and border on red wash with plain explanatory copy; merge consent uses amber on the plain ground, never on the well.",
         "section": "components"
+      },
+      {
+        "name": "The Stable Layout Rule",
+        "body": "Nothing moves unless the person moved it. Space for anything that can appear is reserved from the first render; fonts ship inside the bundle; overlays float; lists keep their order. Cumulative layout shift target is zero.",
+        "section": "motion"
+      },
+      {
+        "name": "The Deliberate Transition Rule",
+        "body": "No state changes without a transition: 120ms feedback, 200ms state, 320ms overlay or layout, one decelerating curve, exits at 70%. Reduced motion keeps fades and drops travel.",
+        "section": "motion"
+      },
+      {
+        "name": "The Reserved Space Rule",
+        "body": "A placeholder takes the loaded content's exact geometry before data exists; placeholder and content share one grid cell and crossfade.",
+        "section": "motion"
       }
     ],
     "dos": [

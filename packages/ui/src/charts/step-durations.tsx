@@ -1,12 +1,36 @@
 import type { CSSProperties } from 'react'
-import { segmentStyle } from '../tokens'
+import { Placeholder } from '../components/display'
+import { type SegmentCategory, segmentStyle } from '../tokens'
 import { formatDuration, type StepStats } from './model'
 
 export type DurationMode = 'per-run' | 'total'
 
-/** One bar per step. Per-run: bar is the mean, ticks mark P50, P90 and P99.
- * Total: bar is the summed time in the window. It is a table, so the numbers
- * are the accessible view and the bars are decoration beside them. */
+const pipelineOrder: SegmentCategory[] = [
+  'queued',
+  'plan',
+  'plan-review',
+  'implement',
+  'code-review',
+  'verify',
+  'reconcile',
+  'finalize',
+  'awaiting-merge',
+  'ticket-wait',
+  'paused',
+  'escalated',
+]
+
+/** Steps in pipeline order, so rows never reorder when the measure or the
+ * window changes. Verify steps keep their configured order by name. */
+export function orderSteps(steps: readonly StepStats[]): StepStats[] {
+  const rank = (s: StepStats) => pipelineOrder.indexOf(s.category)
+  return [...steps].sort((a, b) => rank(a) - rank(b) || a.step.localeCompare(b.step))
+}
+
+/** One bar per step. Per-run: the bar is the mean, ticks mark P50, P90 and
+ * P99. Total: the bar is the summed time in the window. The columns stay the
+ * same in both modes, so switching moves bars, never the table. It is a
+ * table, so the numbers are the accessible view and the bars sit beside them. */
 export function StepDurations({
   steps,
   mode,
@@ -16,10 +40,9 @@ export function StepDurations({
   mode: DurationMode
   caption: string
 }) {
-  const measure = (s: StepStats) => (mode === 'total' ? s.total : s.mean)
-  const sorted = [...steps].sort((a, b) => measure(b) - measure(a))
+  const ordered = orderSteps(steps)
   const scale = Math.max(1, ...steps.map((s) => (mode === 'total' ? s.total : s.p99)))
-  const pct = (ms: number) => `${(ms / scale) * 100}%`
+  const fraction = (ms: number) => String(ms / scale)
   const grand = steps.reduce((sum, s) => sum + s.total, 0)
 
   return (
@@ -30,32 +53,34 @@ export function StepDurations({
           <th scope="col">Step</th>
           <th scope="col" data-ansi="bar-head">
             <span data-ansi="visually-hidden">Distribution</span>
-            {mode === 'per-run' && (
-              <span data-ansi="marker-key" aria-hidden="true">
-                <span data-marker="p50" /> P50 <span data-marker="p90" /> P90{' '}
-                <span data-marker="p99" /> P99
-              </span>
-            )}
+            <span data-ansi="marker-key" aria-hidden="true">
+              <span data-marker="p50" /> P50 <span data-marker="p90" /> P90{' '}
+              <span data-marker="p99" /> P99
+            </span>
           </th>
-          {mode === 'per-run' ? (
-            <>
-              <th scope="col">Mean</th>
-              <th scope="col">P50</th>
-              <th scope="col">P90</th>
-              <th scope="col">P99</th>
-              <th scope="col">Runs</th>
-            </>
-          ) : (
-            <>
-              <th scope="col">Total</th>
-              <th scope="col">Share</th>
-              <th scope="col">Runs</th>
-            </>
-          )}
+          <th scope="col" data-measure="per-run">
+            Mean
+          </th>
+          <th scope="col" data-measure="per-run">
+            P50
+          </th>
+          <th scope="col" data-measure="per-run">
+            P90
+          </th>
+          <th scope="col" data-measure="per-run">
+            P99
+          </th>
+          <th scope="col" data-measure="total">
+            Total
+          </th>
+          <th scope="col" data-measure="total">
+            Share
+          </th>
+          <th scope="col">Runs</th>
         </tr>
       </thead>
       <tbody>
-        {sorted.map((s) => (
+        {ordered.map((s) => (
           <tr key={s.step}>
             <th scope="row" data-ansi="machine">
               {s.step}
@@ -66,29 +91,83 @@ export function StepDurations({
                   data-ansi="bar"
                   data-category={s.category}
                   data-fill={segmentStyle[s.category].fill}
-                  style={{ '--bar': pct(measure(s)) } as CSSProperties}
+                  style={
+                    { '--fraction': fraction(mode === 'total' ? s.total : s.mean) } as CSSProperties
+                  }
                 />
-                {mode === 'per-run' &&
-                  (['p50', 'p90', 'p99'] as const).map((p) => (
-                    <span key={p} data-marker={p} style={{ '--at': pct(s[p]) } as CSSProperties} />
-                  ))}
+                {(['p50', 'p90', 'p99'] as const).map((p) => (
+                  <span
+                    key={p}
+                    data-marker={p}
+                    style={{ '--fraction': fraction(s[p]) } as CSSProperties}
+                  />
+                ))}
               </span>
             </td>
-            {mode === 'per-run' ? (
-              <>
-                <td data-ansi="num">{formatDuration(s.mean)}</td>
-                <td data-ansi="num">{formatDuration(s.p50)}</td>
-                <td data-ansi="num">{formatDuration(s.p90)}</td>
-                <td data-ansi="num">{formatDuration(s.p99)}</td>
-                <td data-ansi="num">{s.count}</td>
-              </>
-            ) : (
-              <>
-                <td data-ansi="num">{formatDuration(s.total)}</td>
-                <td data-ansi="num">{grand ? `${Math.round((s.total / grand) * 100)}%` : '–'}</td>
-                <td data-ansi="num">{s.count}</td>
-              </>
-            )}
+            <td data-ansi="num" data-measure="per-run">
+              {formatDuration(s.mean)}
+            </td>
+            <td data-ansi="num" data-measure="per-run">
+              {formatDuration(s.p50)}
+            </td>
+            <td data-ansi="num" data-measure="per-run">
+              {formatDuration(s.p90)}
+            </td>
+            <td data-ansi="num" data-measure="per-run">
+              {formatDuration(s.p99)}
+            </td>
+            <td data-ansi="num" data-measure="total">
+              {formatDuration(s.total)}
+            </td>
+            <td data-ansi="num" data-measure="total">
+              {grand ? `${Math.round((s.total / grand) * 100)}%` : '–'}
+            </td>
+            <td data-ansi="num">{s.count}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** The table's geometry for a known number of steps. */
+export function StepDurationsSkeleton({ rows }: { rows: number }) {
+  const cells = ['mean', 'p50', 'p90', 'p99', 'total', 'share', 'runs']
+  return (
+    <table data-ansi="step-durations" data-skeleton="">
+      <caption>
+        <Placeholder width="26ch" />
+      </caption>
+      <thead>
+        <tr>
+          <th>
+            <Placeholder width="4ch" />
+          </th>
+          <th data-ansi="bar-head">
+            <Placeholder width="16ch" mono />
+          </th>
+          {cells.map((c) => (
+            <th key={c}>
+              <Placeholder width="5ch" />
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: rows }, (_, r) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
+          <tr key={r}>
+            <th>
+              <Placeholder width="14ch" mono />
+            </th>
+            <td data-ansi="bar-cell">
+              <span data-ansi="track" />
+            </td>
+            {cells.map((c) => (
+              <td key={c} data-ansi="num">
+                <Placeholder width="7ch" mono />
+              </td>
+            ))}
           </tr>
         ))}
       </tbody>
