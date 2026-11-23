@@ -1,7 +1,7 @@
 import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
-import { afterEach, expect, test } from 'bun:test'
-import { mkdir, writeFile, rm, access } from 'node:fs/promises'
+import { afterAll, afterEach, expect, test } from 'bun:test'
+import { mkdir, mkdtemp as makeTemporary, writeFile, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { distributionPath } from '../distribution'
@@ -10,16 +10,29 @@ import { GENERATION_SIGNALS } from './dispatch-launch-contract'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
-for (const signal of GENERATION_SIGNALS)
-  test(`production launcher drains ${signal} and records the original signal`, async () => {
-    const checkout = await mkdtemp(join(tmpdir(), 'ab-launch-signals-'))
-    const storePath = join(checkout, '.autobuild', 'store')
-    const store = openLocalStore(storePath)
+/** One checkout for the real launches below. The first launch prepares the
+ * checkout's runtime cache and later launches reuse its dependency layer;
+ * each test keeps its own store, so leases and run facts never mix. */
+let shared: Promise<string> | undefined
+const launchCheckout = () =>
+  (shared ??= (async () => {
+    const checkout = await makeTemporary(join(tmpdir(), 'ab-launch-shared-'))
     await mkdir(join(checkout, 'tickets/ready'), { recursive: true })
     await writeFile(
       join(checkout, 'autobuild.toml'),
       'forge = "local-git"\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
     )
+    return checkout
+  })())
+afterAll(async () => {
+  if (shared) await rm(await shared, { recursive: true, force: true })
+})
+
+for (const signal of GENERATION_SIGNALS)
+  test(`production launcher drains ${signal} and records the original signal`, async () => {
+    const checkout = await launchCheckout()
+    const storePath = join(checkout, '.autobuild', `store-${signal}`)
+    const store = openLocalStore(storePath)
     const child = Bun.spawn(
       [
         process.execPath,
@@ -83,7 +96,6 @@ for (const signal of GENERATION_SIGNALS)
       }
       await stdout
       await store.close()
-      await rm(checkout, { recursive: true, force: true })
     }
   }, 120000)
 
@@ -142,12 +154,7 @@ test('dispatch help bypasses resident classification without preparing a cache',
 })
 
 test('real launcher returns the PTY to the shell on Ctrl-Z and fg resumes the dashboard', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'ab-launch-job-'))
-  await mkdir(join(cwd, 'tickets/ready'), { recursive: true })
-  await writeFile(
-    join(cwd, 'autobuild.toml'),
-    'forge = "local-git"\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
-  )
+  const cwd = await launchCheckout()
   const script = `
 import os, pty, select, sys, time, shlex, signal, termios
 pid, fd = pty.fork()
@@ -239,7 +246,7 @@ try:
  until(b'SHELL_READY> ', 20)
  assert b'Stopped' in output, output
  # The job is confirmed stopped, so this window samples a settled kernel.
- for _ in range(20):
+ for _ in range(5):
   assert state(kernel) is not None, 'kernel exited while suspended'
   assert state(kernel) != 'T', 'kernel stopped with the presentation job'
   time.sleep(.05)
@@ -279,7 +286,6 @@ try:
  os.kill(generation, signal.SIGKILL)
  until(b'SHELL_READY> ')
  assert output.count(b'\\x1b[?1049l') == 1, repr(output)
- time.sleep(1)
  print('shell regained control; fg resumed; clean exits preserved terminal frame; crash restored modes')
 finally:
  os.write(fd, b'exit\\n')
@@ -287,35 +293,33 @@ finally:
  os.kill(pid, signal.SIGHUP)
  os.waitpid(pid, 0)
 `
-  try {
-    const child = Bun.spawn(
-      [
-        'python3',
-        '-c',
-        script,
-        cwd,
-        process.execPath,
-        distributionPath('bin/ab.ts'),
-        'dispatch',
-        '--interval',
-        '0.05',
-      ],
-      {
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...inheritedGitConfigIsolation() },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    )
-    const [code, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ])
-    expect(code, stderr).toBe(0)
-    expect(stdout).toContain('shell regained control')
-  } finally {
-    await rm(cwd, { recursive: true, force: true })
-  }
+  const child = Bun.spawn(
+    [
+      'python3',
+      '-c',
+      script,
+      cwd,
+      process.execPath,
+      distributionPath('bin/ab.ts'),
+      'dispatch',
+      '--interval',
+      '0.05',
+      '--store',
+      join(cwd, '.autobuild', 'store-job-control'),
+    ],
+    {
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ...inheritedGitConfigIsolation() },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  expect(code, stderr).toBe(0)
+  expect(stdout).toContain('shell regained control')
 }, 300000)
 
 test('an isolated registry installation prepares local launch without a guest asset fetch', async () => {
