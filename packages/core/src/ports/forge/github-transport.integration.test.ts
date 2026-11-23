@@ -342,6 +342,30 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 
+  test('a successful anonymous response, 304 included, names why it was anonymous', async () => {
+    let status = 200
+    const stub = stubFetch(() =>
+      status === 304
+        ? new Response(null, { status: 304 })
+        : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+    try {
+      const anonymous = createGitHubFetchTransport({ token: undefined })
+      expect((await anonymous('GET', 'user')).unauthenticated).toBe(
+        'no GitHub credential was available',
+      )
+      const authenticated = createGitHubFetchTransport({ token: 'gho_x' })
+      expect(await authenticated('GET', 'user')).not.toHaveProperty('unauthenticated')
+      status = 304
+      expect((await anonymous('GET', 'user')).unauthenticated).toBe(
+        'no GitHub credential was available',
+      )
+      expect(await authenticated('GET', 'user')).not.toHaveProperty('unauthenticated')
+    } finally {
+      stub.restore()
+    }
+  })
+
   test('retries a source whose probe rejected instead of caching the failure', async () => {
     const stub = stubFetch(() => new Response('', { status: 204 }))
     let attempts = 0
