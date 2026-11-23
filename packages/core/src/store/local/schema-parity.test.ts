@@ -36,6 +36,7 @@ import {
   reducerSnapshots,
   repoStreams,
   repoChangePositions,
+  buildChangePositions,
   sessionArtifacts,
   sessionEvents,
   sessions,
@@ -43,7 +44,11 @@ import {
   streams,
   ticketAssets,
 } from './schema'
-import { BOOTSTRAP_DDL } from './store'
+import { BOOTSTRAP_DDL, BUILD_CHANGE_DDL } from './store'
+
+/** Everything an opened store creates: the bootstrap DDL, then the build
+ * change positions `ensureBuildChangePositions` installs. */
+const STORE_DDL = [...BOOTSTRAP_DDL, BUILD_CHANGE_DDL] as const
 
 const tables: Record<string, SQLiteTable> = {
   builds,
@@ -53,6 +58,7 @@ const tables: Record<string, SQLiteTable> = {
   scan_cadence: scanCadence,
   repo_streams: repoStreams,
   repo_change_positions: repoChangePositions,
+  build_change_positions: buildChangePositions,
   repo_events: repoEvents,
   repo_artifacts: repoArtifacts,
   ticket_assets: ticketAssets,
@@ -273,7 +279,7 @@ describe('schema/DDL parity (real tree)', () => {
   // Guard so a new table can't silently fall out of both parity checks: every
   // table the DDL creates must be present in the test's table map.
   test('every table the DDL creates is covered by the parity check', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       const ddlTables = (
         db
@@ -289,7 +295,7 @@ describe('schema/DDL parity (real tree)', () => {
   })
 
   test('declared columns match the bootstrap DDL exactly', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       for (const [tableName, table] of Object.entries(tables)) {
         const declared = declaredColumns(table)
@@ -322,7 +328,7 @@ describe('schema/DDL parity (real tree)', () => {
   })
 
   test('declared indexes match the bootstrap DDL exactly (columns, unique, partial)', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       for (const [tableName, table] of Object.entries(tables)) {
         expect(
@@ -337,7 +343,7 @@ describe('schema/DDL parity (real tree)', () => {
   })
 
   test('rewrite receipt lookup uses the bounded expression index', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       const plan = db
         .query(`EXPLAIN QUERY PLAN SELECT payload FROM events
@@ -363,7 +369,7 @@ describe('schema/DDL parity (real tree)', () => {
   })
 
   test('the digest-scan index exists on both sides with matching attributes', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       const declared = declaredIndexes(events).find((ix) => ix.name === 'events_type_build_seq')
       expect(declared).toEqual({
@@ -391,7 +397,7 @@ describe('schema/DDL parity (real tree)', () => {
   // explained failure that forces the decision to extend the parity surface
   // or re-pin.
   test('no UNIQUE-constraint autoindex exists in the bootstrap DDL (tripwire)', () => {
-    const db = memoryDb(BOOTSTRAP_DDL)
+    const db = memoryDb(STORE_DDL)
     try {
       const offenders: string[] = []
       for (const tableName of Object.keys(tables)) {
