@@ -13087,7 +13087,7 @@ test('startup journal failures fail dispatch instead of claiming forge notices w
   }
 })
 test('multiple watch ticks and refreshes inspect and publish each hard requirement only once', async () => {
-  const { readinessChecks } = await import('../ports/forge/readiness')
+  const { hardReadinessKeys, readinessChecks } = await import('../ports/forge/readiness')
   const fx = await makeFixture([], {})
   try {
     fx.forge.readiness = readinessChecks('fail', 'Disabled')
@@ -13115,7 +13115,7 @@ test('multiple watch ticks and refreshes inspect and publish each hard requireme
       (await fx.store.getRepoEvents(fx.origin)).filter(
         (event) => event.type === 'dispatcher.forge-readiness-failed',
       ),
-    ).toHaveLength(5)
+    ).toHaveLength(hardReadinessKeys.length)
   } finally {
     await fx.cleanup()
   }
