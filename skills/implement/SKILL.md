@@ -61,9 +61,28 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    code review and hands any failure back to you, so running them here only
    doubles their cost on every build. To confirm a fix for a failure a verify
    report names, rerun just the failing tests.
-4. Write the manifest's `notesPath` (normally `$AB_CONTEXT_DIR/implement-notes.md`) — what
+4. Slim the committed tests before finishing. Write as many tests as you need
+   to check your work while you build, but every test you commit runs on every
+   later build's verify cycle, forever. Before `ab done`, cut the tests this
+   build adds or changes down to the set that would catch a regression in this
+   change's behavior. Delete or merge the rest:
+   - tests that duplicate coverage another test already gives;
+   - scaffolding that pinned an intermediate step of the build;
+   - assertions on implementation details (private helpers, call order,
+     internal shapes) rather than observable behavior;
+   - slow tests where a faster one at a narrower seam would fail on the same
+     regression.
+
+   Prefer fewer, faster tests at the narrowest seam that still fails when the
+   behavior breaks, and a unit test over an integration test when both would
+   catch the regression. Keep every test the spec or plan names as a lasting
+   regression test unless you record why it was dropped. Touch only tests in
+   this build's own diff; low-value tests elsewhere in the suite are out of
+   scope, so record them with `ab observe --kind refactor`.
+5. Write the manifest's `notesPath` (normally `$AB_CONTEXT_DIR/implement-notes.md`) — what
    you did, where you deviated from the plan and why, what the reviewer should
-   look at hardest — then run `ab done --notes <notesPath>`. The notes bytes
+   look at hardest, and which tests you slimmed (what you deleted or merged and
+   why) — then run `ab done --notes <notesPath>`. The notes bytes
    reach the store only through this flag; the file is never committed.
 
    `ab done` requires a **clean worktree** (everything committed) and the
@@ -124,8 +143,8 @@ first: it says why the number matters and what must not change while it moves.
 ## Ground rules for this phase
 
 - **The spec bounds your work.** When you spot something outside its scope —
-  a neighbouring bug, a refactor that would pay off later, tests missing
-  elsewhere — log it instead of fixing it:
+  a neighbouring bug, a refactor that would pay off later, tests missing or
+  low-value elsewhere — log it instead of fixing it:
 
   ```
   ab observe --kind latent-bug --files src/auth.ts "…"
