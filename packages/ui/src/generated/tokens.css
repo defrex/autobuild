@@ -1,0 +1,153 @@
+/* Generated from packages/ui/src/tokens.ts. Do not edit. */
+
+:root {
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --fs: 15px;
+  --lh: 1.5;
+  --fs-machine: 0.93em;
+  --fs-detail-heading: 1.05em;
+  --fs-page-heading: 1.6em;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-xxl: 64px;
+  --frame: 1180px;
+  --measure: 72ch;
+  --idcol: 6.5rem;
+  --gutter: 16px;
+  --stroke-rule: 1px;
+  --stroke-control: 1.5px;
+  --stroke-tab: 2px;
+  --stroke-focus: 2px;
+  --backdrop-opacity: 0.72;
+  color-scheme: light;
+  --ground: #fbfbfc;
+  --ink: #1a1d24;
+  --slack: #5f6571;
+  --rule: #dfe2e8;
+  --well: #f5f6f8;
+  --blue: #2557e6;
+  --green: #10862f;
+  --amber: #b35c00;
+  --teal: #007f8a;
+  --red: #d32b33;
+  --red-wash: #fef2f1;
+  --select: #c9d5f7;
+  --phase-plan: #6a4fd8;
+  --phase-implement: #c43d8c;
+  --phase-verify: #5a7f1a;
+  --phase-land: #2f7fb0;
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --fs: 16px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --ground: #101219;
+    --ink: #dcdfe5;
+    --slack: #858b97;
+    --rule: #262a35;
+    --well: #181b24;
+    --blue: #86a3f2;
+    --green: #8fcf6e;
+    --amber: #e8aa52;
+    --teal: #52c3c3;
+    --red: #f07777;
+    --red-wash: #2a1719;
+    --select: #2c3a66;
+    --phase-plan: #8f7bea;
+    --phase-implement: #d9689f;
+    --phase-verify: #7f9f36;
+    --phase-land: #4b93c8;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #101219;
+  --ink: #dcdfe5;
+  --slack: #858b97;
+  --rule: #262a35;
+  --well: #181b24;
+  --blue: #86a3f2;
+  --green: #8fcf6e;
+  --amber: #e8aa52;
+  --teal: #52c3c3;
+  --red: #f07777;
+  --red-wash: #2a1719;
+  --select: #2c3a66;
+  --phase-plan: #8f7bea;
+  --phase-implement: #d9689f;
+  --phase-verify: #7f9f36;
+  --phase-land: #4b93c8;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ground: #fbfbfc;
+  --ink: #1a1d24;
+  --slack: #5f6571;
+  --rule: #dfe2e8;
+  --well: #f5f6f8;
+  --blue: #2557e6;
+  --green: #10862f;
+  --amber: #b35c00;
+  --teal: #007f8a;
+  --red: #d32b33;
+  --red-wash: #fef2f1;
+  --select: #c9d5f7;
+  --phase-plan: #6a4fd8;
+  --phase-implement: #c43d8c;
+  --phase-verify: #5a7f1a;
+  --phase-land: #2f7fb0;
+}
+
+/* A region pinned to one ground, for side-by-side review. */
+
+[data-ground="light"] {
+  color-scheme: light;
+  --ground: #fbfbfc;
+  --ink: #1a1d24;
+  --slack: #5f6571;
+  --rule: #dfe2e8;
+  --well: #f5f6f8;
+  --blue: #2557e6;
+  --green: #10862f;
+  --amber: #b35c00;
+  --teal: #007f8a;
+  --red: #d32b33;
+  --red-wash: #fef2f1;
+  --select: #c9d5f7;
+  --phase-plan: #6a4fd8;
+  --phase-implement: #c43d8c;
+  --phase-verify: #5a7f1a;
+  --phase-land: #2f7fb0;
+}
+
+[data-ground="dark"] {
+  color-scheme: dark;
+  --ground: #101219;
+  --ink: #dcdfe5;
+  --slack: #858b97;
+  --rule: #262a35;
+  --well: #181b24;
+  --blue: #86a3f2;
+  --green: #8fcf6e;
+  --amber: #e8aa52;
+  --teal: #52c3c3;
+  --red: #f07777;
+  --red-wash: #2a1719;
+  --select: #2c3a66;
+  --phase-plan: #8f7bea;
+  --phase-implement: #d9689f;
+  --phase-verify: #7f9f36;
+  --phase-land: #4b93c8;
+}

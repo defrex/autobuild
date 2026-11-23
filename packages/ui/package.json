@@ -1,0 +1,24 @@
+{
+  "name": "@defrex/autobuild-ui",
+  "version": "1.9.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "tokens": "bun scripts/tokens.ts",
+    "catalog": "bun scripts/catalog.ts"
+  },
+  "dependencies": {
+    "@ui-sdk/core": "0.1.0-beta.16",
+    "@ui-sdk/react": "0.1.0-beta.16",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3"
+  }
+}
