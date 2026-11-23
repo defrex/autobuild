@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): when to use one, a run end to end, grooming the objective, the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, the proposer phase, and the landing gate and attempt settlement, stopping and completion.
+- [Optimization nodes](references/optimization-nodes.md): when to use one, a run end to end, grooming the objective, the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, the proposer phase, attempt priority, and the landing gate and attempt settlement, active hours, stopping and completion.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
