@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { checkClientPages, type ClientPageResult } from './client-load'
+import { appLoadScratch, checkClientPages, type ClientPageResult } from './client-load'
 import { FIXTURE_REPO, FIXTURE_TICKET_ID } from './client-pages/fixtures'
 import { chromiumBinary, fullDocumentScreenshot } from './full-document'
 import { fontFaceCss } from './web-dashboard-capture'
@@ -11,8 +11,10 @@ import { fontFaceCss } from './web-dashboard-capture'
 // `bun run check:app-load` (the path-gated app-load verify step), which sets
 // AB_APP_LOAD_BROWSER_TEST=1; the unconditional integration suite never
 // launches a browser for them. With the flag set, a missing browser fails.
+// Like the check itself, each proof keeps its bundles and Chromium profiles in
+// the temporary root (`appLoadScratch`): verify:build packs the checkout
+// concurrently and must not walk a live profile (#1043).
 const enabled = process.env.AB_APP_LOAD_BROWSER_TEST === '1'
-const REPO_ROOT = resolve(import.meta.dir, '../../..')
 
 function requireChromium(): string {
   const chromium = chromiumBinary()
@@ -20,13 +22,8 @@ function requireChromium(): string {
   return chromium
 }
 
-async function scratch(prefix: string): Promise<string> {
-  await mkdir(join(REPO_ROOT, '.ab'), { recursive: true })
-  return mkdtemp(join(REPO_ROOT, '.ab', prefix))
-}
-
 /**
- * Fixture client modules live outside any package, so they import React by
+ * Fixture client modules live in the temporary root, outside any package, so they import React by
  * its resolved path (the same file the harness bundles) and avoid JSX, whose
  * automatic runtime would resolve `react/jsx-runtime` from their directory.
  */
@@ -127,7 +124,7 @@ test.skipIf(!enabled)(
   'a page that throws while loading fails with the browser error, and a clean page passes',
   async () => {
     const chromium = requireChromium()
-    const root = await scratch('app-load-test-')
+    const root = await appLoadScratch('app-load-test-')
     try {
       const appDir = join(root, 'app')
       const harnessDir = join(root, 'harness')
@@ -207,7 +204,7 @@ test.skipIf(!enabled)(
   'every real app page mounts in Chromium without a browser error',
   async () => {
     const chromium = requireChromium()
-    const root = await scratch('app-load-real-')
+    const root = await appLoadScratch('app-load-real-')
     try {
       const results = await checkClientPages({ chromium, outDir: root })
       expect(results.length).toBeGreaterThan(0)
@@ -230,7 +227,7 @@ test.skipIf(!enabled)(
   'real polling pages settle under CPU contention',
   async () => {
     const chromium = requireChromium()
-    const root = await scratch('app-load-contention-')
+    const root = await appLoadScratch('app-load-contention-')
     try {
       const results = await checkClientPages({
         chromium,
@@ -251,7 +248,7 @@ test.skipIf(!enabled)(
   'the shared browser lifetime still captures a plain document',
   async () => {
     const chromium = requireChromium()
-    const root = await scratch('app-load-screenshot-')
+    const root = await appLoadScratch('app-load-screenshot-')
     try {
       const html = join(root, 'plain.html')
       await writeFile(
