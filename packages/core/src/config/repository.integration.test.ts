@@ -58,6 +58,16 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
       'tools/dashboard-capture.ts',
       'tools/capture-parity.ts',
       '.agents/skills/verify-ui-tui/SKILL.md',
+      'tools/account-credentials-capture.ts',
+      'tools/verify-stages-capture.ts',
+      'tools/rollback-capture.ts',
+      'tools/handoff-capture.ts',
+      'tools/parked-slot-wait-capture.ts',
+      'tools/optimization-node-capture.ts',
+      'tools/ticket-wait-capture.ts',
+      'tools/harvest-suspension-capture.ts',
+      'tools/native-session-capture.ts',
+      'tools/judge-session-capture.ts',
     ],
   })
   expect(config.verify.stepConfigs['ui-app']).toEqual({
