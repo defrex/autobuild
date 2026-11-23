@@ -134,10 +134,16 @@ steps. Strict validation when depositing a new plan is unchanged.
   paragraphs. Name the alternatives you rejected and why, briefly.
 - **Steps** — ordered, concrete, each naming the files it touches and what
   changes. An implementer should be able to execute steps top to bottom.
-- **Testing** — what gets unit-tested and at which seams; what the verify
-  steps will exercise. Prefer unit and integration tests at seams. Add end-to-end
-  or browser-automation tests only when the repository already maintains such a
-  suite or the spec explicitly asks for one.
+- **Testing** — two lists, kept apart. *Lasting regression tests*: each test
+  the change will commit, the behavior it guards, and the seam it runs at.
+  Choose the narrowest, fastest seam that still fails when that behavior
+  breaks, and prefer a unit test over an integration test when both would
+  catch it. *Implementation-time checks*: probes, focused runs and scaffolding
+  tests the implementer uses while building but does not commit. Then say what
+  the verify steps will exercise. Prefer unit and integration tests at seams.
+  Add end-to-end or browser-automation tests only when the repository already
+  maintains such a suite or the spec explicitly asks for one. Plan no removal
+  of tests outside this change; record slimming candidates with `ab observe`.
 - **Risks** — the parts most likely to go wrong, and how the implementer
   will know.
 
