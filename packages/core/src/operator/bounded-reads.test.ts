@@ -106,6 +106,7 @@ async function seed(
   store: MemoryBuildStore,
   invocations: number,
   final: 'tick-failed' | 'operator-warning',
+  metadata?: Record<string, unknown>,
 ): Promise<void> {
   await store.ensureRepo(REPO)
   const artifact = await store.putRepoArtifact(REPO, {
@@ -115,6 +116,7 @@ async function seed(
       verify: { steps: [] },
       finalize: { steps: [] },
     }),
+    ...(metadata ? { metadata } : {}),
   })
   for (let index = 0; index < invocations; index += 1) {
     for (const write of noopInvocation(`noop_${index}`, index % 2 === 0)) {
@@ -172,11 +174,22 @@ async function seed(
 }
 
 /** A store wrapper that counts the journal rows each bounded read returns. */
-function countingStore(store: BuildStore): { store: BuildStore; journalRows: () => number } {
+function countingStore(store: BuildStore): {
+  store: BuildStore
+  journalRows: () => number
+  artifactReads: () => number
+} {
   let rows = 0
+  let artifactReads = 0
   const target = store as unknown as Record<string, unknown>
   const proxy = new Proxy(target, {
     get(t, prop) {
+      if (prop === 'getRepoArtifact') {
+        return async (...args: unknown[]) => {
+          artifactReads += 1
+          return (t.getRepoArtifact as (...a: unknown[]) => Promise<unknown>).call(t, ...args)
+        }
+      }
       if (prop === 'getRepoStateEvents') {
         return async (repo: string) => {
           const events = await (
@@ -207,7 +220,11 @@ function countingStore(store: BuildStore): { store: BuildStore; journalRows: () 
       return typeof value === 'function' ? value.bind(t) : value
     },
   })
-  return { store: proxy as unknown as BuildStore, journalRows: () => rows }
+  return {
+    store: proxy as unknown as BuildStore,
+    journalRows: () => rows,
+    artifactReads: () => artifactReads,
+  }
 }
 
 /** The same store with the bounded read bypassed: every reader sees the full
@@ -266,6 +283,31 @@ describe('bounded repository reads (AUT-489)', () => {
     // far past the 1,000 the acceptance criteria require).
     expect(measured[0]!.rows).toBe(measured[1]!.rows)
     expect(measured[0]!.rows).toBe(0)
+  })
+
+  test("the held dispatcher's local overrides cost no read beyond the capacity read", async () => {
+    const localOverrides = { file: '/repo/.autobuild/local.toml', settings: ['capacity'] }
+    const measured: { journalRows: number; artifactReads: number; status: unknown }[] = []
+    for (const metadata of [undefined, { run: 'failed_1', localOverrides }]) {
+      const store = new MemoryBuildStore({ clock })
+      await seed(store, 1_000, 'operator-warning', metadata)
+      expect(await store.claimRepoLease(REPO, 'failed_1', 60_000)).toBe(true)
+      const counting = countingStore(store)
+      const status = await getRepositoryStatus(counting.store, REPO, clock())
+      expect(status.dispatcher.state).toBe('held')
+      expect(status.capacity?.configured).toBe(2)
+      measured.push({
+        journalRows: counting.journalRows(),
+        artifactReads: counting.artifactReads(),
+        status,
+      })
+    }
+    const [plain, local] = measured
+    expect(plain!.status).not.toHaveProperty('localOverrides')
+    expect((local!.status as { localOverrides?: unknown }).localOverrides).toEqual(localOverrides)
+    expect(local!.artifactReads).toBe(plain!.artifactReads)
+    expect(local!.artifactReads).toBe(1)
+    expect(local!.journalRows).toBe(plain!.journalRows)
   })
 
   test('a failed or warning-raising latest invocation stays visible through the bounded read', async () => {
