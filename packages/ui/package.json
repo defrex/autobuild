@@ -9,7 +9,8 @@
   },
   "scripts": {
     "tokens": "bun scripts/tokens.ts",
-    "catalog": "bun scripts/catalog.ts"
+    "catalog": "bun scripts/catalog.ts",
+    "web": "bun scripts/web.ts"
   },
   "dependencies": {
     "@ui-sdk/core": "0.1.0-beta.16",

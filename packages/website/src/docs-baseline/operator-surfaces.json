@@ -4,7 +4,7 @@
   "title": "Operator surfaces",
   "group": "reference",
   "description": "Watch and act through the terminal, CLI, local stdio MCP, or Operator API with your operator agent.",
-  "textHash": "392187dabfc494295720a0228147ef9797827b2b01f9c47a092a50c36d4747f8",
+  "textHash": "4d0fb74ea2b20e4478b09808aa61145788dd14e4e2e1592ee8233137400929a4",
   "headings": [
     "Responsibility",
     "Shipped arrangements",
@@ -14,6 +14,7 @@
     "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
     "bun ab dispatch\nbun ab builds\nbun ab build status example-build --json",
     "[store]\nurl = \"https://builds.example.com\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab web",
     "bun ab mcp"
   ]
 }

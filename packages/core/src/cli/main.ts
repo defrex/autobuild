@@ -73,6 +73,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'build',
   'watch',
   'wait',
+  'web',
   'mcp',
   'repository',
   'restack',
@@ -1156,6 +1157,38 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+      })
+      return 0
+    }
+
+    // The read-only web UI: store-only like `ab watch`, it appends nothing,
+    // takes no lease and registers no presence. Serves until SIGINT.
+    case 'web': {
+      const { abWeb, parseWebPort, WEB_USAGE } = await import('./web')
+      const parsed = parseArgs(
+        rest,
+        { port: 'value', host: 'value', json: 'boolean', store: 'value' },
+        WEB_USAGE,
+      )
+      if (parsed.positionals.length > 0) throw new Error(WEB_USAGE)
+      const port = parseWebPort(stringFlag(parsed, 'port'))
+      const host = stringFlag(parsed, 'host')
+      const storeRef = stringFlag(parsed, 'store')
+      if (deps.exec === undefined) {
+        throw new Error("'ab web' needs an exec seam — this is a wiring bug in the ab binary")
+      }
+      await abWeb({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        stderr,
+        port,
+        ...(host !== undefined ? { host } : {}),
+        json: parsed.flags.has('json'),
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       })
       return 0
