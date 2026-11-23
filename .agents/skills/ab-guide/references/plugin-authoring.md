@@ -611,6 +611,11 @@ and request-free like `readyAssigneeRefusal`, and
 what `prepareReadyAssignee` resolved, so a dispatcher never resolves it in a
 tick.
 
+Callers likewise union `[tickets].createLabels` into `labels`, so a draft's
+labels are always exact. Every source already stores labels, so there is no
+capability to declare; refuse any names your source reserves at `create`, as
+for any other label.
+
 ## Optional ticket paging capability
 
 Native paging is an optional API 1.9 ticket-source capability:

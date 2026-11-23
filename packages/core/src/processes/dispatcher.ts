@@ -153,6 +153,7 @@ import {
 } from '../kernel/ticket-wait'
 import { changeBlockers } from '../ports/tickets/operations'
 import { creationAssignees } from '../ports/tickets/assignees'
+import { creationLabels } from '../ports/tickets/labels'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import { landingPolicyIdentity } from '../kernel/landing-policy-identity'
 import {
@@ -4662,10 +4663,12 @@ export class Dispatcher {
       await escalate(`Cannot file proposal ${proposal.id}: the node build has no ticket to target.`)
       return
     }
-    // Attempts are dispatchable at creation: they carry every ready gate. The
-    // source applies the ready assignee itself, also to an adopted ticket.
+    // Attempts are dispatchable at creation: they carry every ready gate, plus
+    // any configured creation labels. The source applies the ready assignee
+    // itself, also to an adopted ticket.
     const ready = readyCriteria(this.deps.config)
     const assignees = creationAssignees(this.deps.config.tickets)
+    const labels = creationLabels(this.deps.config.tickets, ready.labels) ?? []
     const filed: EventPayload<'optimization.attempts-proposed'>['proposals'] = []
     for (const entry of document.proposals) {
       const ticket = await tickets.create(
@@ -4674,7 +4677,7 @@ export class Dispatcher {
           target: node!.id,
           title: entry.title,
           body: entry.body,
-          ...(ready.labels.length > 0 ? { labels: ready.labels } : {}),
+          ...(labels.length > 0 ? { labels } : {}),
           ...(assignees !== undefined ? { assignees } : {}),
         },
         {
