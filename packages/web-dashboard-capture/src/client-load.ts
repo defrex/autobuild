@@ -19,8 +19,9 @@
  * passes. A new page fails the check until it has one.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
 import { parseConfig } from '../../core/src/config/load'
@@ -407,9 +408,66 @@ export async function bundleClientPages(
   return bundled
 }
 
+function contains(parent: string, path: string): boolean {
+  const rel = relative(parent, path)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+export interface AppLoadScratchOptions {
+  /** Defaults to the OS temporary root (`TMPDIR`). */
+  tempRoot?: string
+  /** Defaults to this checkout. */
+  checkoutRoot?: string
+}
+
+/**
+ * A fresh directory for app-load's bundles, pages and Chromium profiles,
+ * outside the checkout.
+ *
+ * `verify:build` runs concurrently with `verify:app-load` and its
+ * `bun pm pack --dry-run` opens every directory under the root package,
+ * gitignored `.ab/` included. A Chromium profile in the worktree adds and
+ * removes files under that walk and failed it with ENOENT (#1043), so the
+ * scratch lives in the temporary root and a temporary root inside the
+ * checkout is refused rather than silently reintroducing the race.
+ */
+export async function appLoadScratch(
+  prefix: string,
+  options: AppLoadScratchOptions = {},
+): Promise<string> {
+  const tempRoot = await realpath(options.tempRoot ?? tmpdir())
+  const checkout = await realpath(options.checkoutRoot ?? REPO_ROOT)
+  if (contains(checkout, tempRoot))
+    throw new Error(
+      `app-load: temporary root ${tempRoot} is inside the checkout ${checkout}; bun pm pack --dry-run (verify:build) walks every directory there, so browser profiles must live outside it. Point TMPDIR outside the worktree.`,
+    )
+  return mkdtemp(join(tempRoot, prefix))
+}
+
+/**
+ * Run `run` over a fresh `appLoadScratch` directory and remove it once `run`
+ * settles, on success and on failure.
+ */
+export async function withAppLoadScratch<T>(
+  prefix: string,
+  run: (dir: string) => Promise<T>,
+  options: AppLoadScratchOptions = {},
+): Promise<T> {
+  const dir = await appLoadScratch(prefix, options)
+  try {
+    return await run(dir)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 export interface CheckClientPagesOptions {
   chromium: string
-  /** Bundles, HTML and browser profiles; the caller owns its lifetime. */
+  /**
+   * Bundles, HTML and browser profiles; the caller owns its lifetime. Callers
+   * in the verify stage beside `build` keep it outside the checkout (see
+   * `appLoadScratch`).
+   */
   outDir: string
   appDir?: string
   harnessDir?: string
@@ -520,22 +578,49 @@ export function formatClientFailure(result: ClientPageResult, prefix = 'app-load
   return `${prefix}: page ${result.route} failed to load in Chromium (${result.component}; client modules: ${result.clientModules.join(', ')}): ${result.errors.join('; ')}`
 }
 
+export interface RunAppLoadOptions extends AppLoadScratchOptions {
+  chromium: string
+  /** Mounts the pages into `outDir`; defaults to every app page. */
+  check?: (outDir: string) => Promise<ClientPageResult[]>
+  log?: (line: string) => void
+  error?: (line: string) => void
+}
+
+/**
+ * `bun run check:app-load`'s standalone check: mount every app page from a
+ * fresh `appLoadScratch` directory and return the exit code.
+ *
+ * The scratch is removed only after `check` settles. `checkClientPages` loads
+ * one page at a time and each browser lifetime kills Chromium and awaits its
+ * exit before the next, so no browser is still writing a profile when the
+ * directory goes. Cleanup covers success, failing pages and thrown errors.
+ * There is deliberately no signal handler: exiting from one would skip that
+ * teardown and remove a profile under a live browser. A process killed by a
+ * signal leaves at most one `ab-app-load-*` directory in the temporary root.
+ */
+export async function runAppLoad(options: RunAppLoadOptions): Promise<number> {
+  const log = options.log ?? ((line: string) => console.log(line))
+  const error = options.error ?? ((line: string) => console.error(line))
+  const check =
+    options.check ?? ((outDir: string) => checkClientPages({ chromium: options.chromium, outDir }))
+  try {
+    const results = await withAppLoadScratch('ab-app-load-', check, options)
+    for (const result of results)
+      if (result.errors.length === 0) log(`ok ${result.route} (${result.component})`)
+      else error(formatClientFailure(result))
+    return results.some((result) => result.errors.length > 0) ? 1 : 0
+  } catch (thrown) {
+    const message = thrown instanceof Error ? thrown.message : String(thrown)
+    error(message.startsWith('app-load: ') ? message : `app-load: ${message}`)
+    return 1
+  }
+}
+
 if (import.meta.main) {
   const chromium = chromiumBinary()
   if (!chromium) {
     console.error('app-load: no Chromium binary found. Install chromium or set CHROMIUM_BIN.')
     process.exit(1)
   }
-  const outDir = join(REPO_ROOT, '.ab', 'app-load')
-  await rm(outDir, { recursive: true, force: true })
-  try {
-    const results = await checkClientPages({ chromium, outDir })
-    for (const result of results)
-      if (result.errors.length === 0) console.log(`ok ${result.route} (${result.component})`)
-      else console.error(formatClientFailure(result))
-    if (results.some((result) => result.errors.length > 0)) process.exitCode = 1
-  } catch (error) {
-    console.error(`app-load: ${error instanceof Error ? error.message : String(error)}`)
-    process.exitCode = 1
-  }
+  process.exitCode = await runAppLoad({ chromium })
 }
