@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+## v1.10.0 — 2026-11-23
+
+This release introduces optimization nodes, which let Autobuild pursue measurable objectives using paired, pinned measurement harnesses, durable pairwise judge panels, a proposer phase and objective progress shown on the dashboard and in status. Dispatcher intake gains open-PR backpressure, honors urgent priority, and lets operators start a single ticket while intake is paused, alongside a new built-in Antigravity runtime backed by the agy CLI. Settled leaf builds can now be reopened with feedback on their existing PRs, failing forge CI on finished leaves is flagged for attention, and GitHub rate limits are handled by exposing quota and pausing polling safely. Startup is faster because commands and runtimes load only when first used, and many reliability fixes keep work and history intact when Git refuses archive ref pushes.
+
+- [#1067](https://github.com/defrex/autobuild/pull/1067) — Apply configured creation labels to tickets Autobuild files
+- [#1066](https://github.com/defrex/autobuild/pull/1066) — Preserve workspace and node history when archive refs are refused
+- [#1062](https://github.com/defrex/autobuild/pull/1062) — Keep leaf rewrites moving when archive refs are refused
+- [#1061](https://github.com/defrex/autobuild/pull/1061) — Enter GitHub cooldown on successful exhausted responses
+- [#1060](https://github.com/defrex/autobuild/pull/1060) — Refuse removed reducer revisions and lowered versions
+- [#1059](https://github.com/defrex/autobuild/pull/1059) — Isolate app-load Chromium scratch from package verification
+- [#1058](https://github.com/defrex/autobuild/pull/1058) — Make panel PATH fixtures independent of the runner environment
+- [#1057](https://github.com/defrex/autobuild/pull/1057) — Run terminal visual verification when capture helpers change
+- [#1052](https://github.com/defrex/autobuild/pull/1052) — Isolate Git fixtures and support Arch dynamic loader output
+- [#1029](https://github.com/defrex/autobuild/pull/1029) — Allow operators to start one ticket while intake is paused
+- [#1028](https://github.com/defrex/autobuild/pull/1028) — Add built-in Antigravity runtime backed by the agy CLI
+- [#1027](https://github.com/defrex/autobuild/pull/1027) — Allow interactive operators to fast-forward main safely
+- [#1026](https://github.com/defrex/autobuild/pull/1026) — Add open-PR backpressure to dispatcher intake
+- [#1025](https://github.com/defrex/autobuild/pull/1025) — Use active builds for operator startup and timeout reconciliation
+- [#1024](https://github.com/defrex/autobuild/pull/1024) — Honor urgent priority across parked work and new claims
+- [#1023](https://github.com/defrex/autobuild/pull/1023) — Reopen settled leaf builds with feedback on their existing PRs
+- [#1022](https://github.com/defrex/autobuild/pull/1022) — Surface failing forge CI as attention on finished leaves
+- [#1021](https://github.com/defrex/autobuild/pull/1021) — Expose GitHub quota and pause polling safely on rate limits
+- [#1020](https://github.com/defrex/autobuild/pull/1020) — Defer dispatcher and provider runtime loading until first use
+- [#1018](https://github.com/defrex/autobuild/pull/1018) — Add optional hold reasons across status surfaces
+- [#1017](https://github.com/defrex/autobuild/pull/1017) — Stop node verification after landing and skip empty ranges
+- [#1016](https://github.com/defrex/autobuild/pull/1016) — Load command implementations only when their command executes
+- [#1015](https://github.com/defrex/autobuild/pull/1015) — Allow verified hand-pushed commits when landing nodes
+- [#1014](https://github.com/defrex/autobuild/pull/1014) — Let optimization attempts read objectives in scoped sessions
+- [#1003](https://github.com/defrex/autobuild/pull/1003) — Give command verify steps the verify base
+- [#1002](https://github.com/defrex/autobuild/pull/1002) — Resolve generated-file restack conflicts by regeneration
+- [#1001](https://github.com/defrex/autobuild/pull/1001) — Combine independent reducer changes without version conflicts
+- [#1000](https://github.com/defrex/autobuild/pull/1000) — Pin buildReadFacts at its computed version of 114
+- [#999](https://github.com/defrex/autobuild/pull/999) — Correct optimization settlement documentation
+- [#998](https://github.com/defrex/autobuild/pull/998) — Stop the measurement test from starting a real-clock heartbeat
+- [#997](https://github.com/defrex/autobuild/pull/997) — Resume teardown-abandoned provisioning within dispatcher budgets
+- [#996](https://github.com/defrex/autobuild/pull/996) — Recover integration nodes from flagged stale workspaces
+- [#994](https://github.com/defrex/autobuild/pull/994) — Prove optimization nodes end to end and publish adopter guidance
+- [#993](https://github.com/defrex/autobuild/pull/993) — Classify clean dispatcher Ctrl-C exits as operator stops
+- [#992](https://github.com/defrex/autobuild/pull/992) — Prevent app-load settling from starving on busy hosts
+- [#991](https://github.com/defrex/autobuild/pull/991) — Make the launcher Ctrl-Z PTY test wait for job-control states
+- [#990](https://github.com/defrex/autobuild/pull/990) — Skip landing measurements whose baseline is already superseded
+- [#989](https://github.com/defrex/autobuild/pull/989) — Isolate judge storage and make preference writes atomic
+- [#988](https://github.com/defrex/autobuild/pull/988) — Add judge session evidence decoding and dashboard attribution; retain isolated primary-only judge execution pending reviewed alternate support
+- [#987](https://github.com/defrex/autobuild/pull/987) — Measure panel noise and progress for optimization nodes
+- [#986](https://github.com/defrex/autobuild/pull/986) — Accept optimization attempts using judge-panel win rates
+- [#985](https://github.com/defrex/autobuild/pull/985) — Settle unmeasured merges and clean up settled attempt branches
+- [#984](https://github.com/defrex/autobuild/pull/984) — Capture optimization objective progress in terminal verification
+- [#983](https://github.com/defrex/autobuild/pull/983) — Preserve CLI watch delivery across discovery and cursor resume
+- [#982](https://github.com/defrex/autobuild/pull/982) — Record the checked-out commit as the workspace contribution base
+- [#981](https://github.com/defrex/autobuild/pull/981) — Reverify waiting builds after a clean resume restack
+- [#980](https://github.com/defrex/autobuild/pull/980) — Make context manifests accurately advertise ticket waits
+- [#979](https://github.com/defrex/autobuild/pull/979) — Keep wait-only escalations from waking attention monitors
+- [#978](https://github.com/defrex/autobuild/pull/978) — Preserve candidate recovery when Git refuses archive ref pushes
+- [#977](https://github.com/defrex/autobuild/pull/977) — Keep prospective node landing policy consistent after path misses
+- [#976](https://github.com/defrex/autobuild/pull/976) — Diagnose deprecated and unconsumed profile role entries
+- [#975](https://github.com/defrex/autobuild/pull/975) — Preserve janitor backoff for inert leaf resume commands
+- [#974](https://github.com/defrex/autobuild/pull/974) — Project stream seeds onto released client contracts
+- [#973](https://github.com/defrex/autobuild/pull/973) — Give the remote hosted ticket client native paging
+- [#972](https://github.com/defrex/autobuild/pull/972) — Add the optimization node proposer phase
+- [#971](https://github.com/defrex/autobuild/pull/971) — Delegate node runner credentials by build slug in Vercel Sandbox
+- [#970](https://github.com/defrex/autobuild/pull/970) — Add durable pairwise judge panels for panel objectives
+- [#968](https://github.com/defrex/autobuild/pull/968) — Gate optimization-node landing on fresh measurements
+- [#967](https://github.com/defrex/autobuild/pull/967) — Measure optimization objectives with paired, pinned harnesses
+- [#966](https://github.com/defrex/autobuild/pull/966) — Show optimization objective progress across dashboard and status
+- [#965](https://github.com/defrex/autobuild/pull/965) — Stop optimization nodes and gate their completion
+- [#964](https://github.com/defrex/autobuild/pull/964) — Give optimization attempts context, harness protection, and declining
+- [#962](https://github.com/defrex/autobuild/pull/962) — Define optimization node objectives and their event contract
+
 ## v1.9.0 — 2026-11-18
 
 This release makes landing gated pull requests more resilient: it uses GitHub's REST API for landing reads and can still land PRs when GitHub GraphQL is unavailable. It also falls back to REST when git refuses to push archive refs. Configured event hooks can now be delivered to local commands and to signed HTTPS webhooks. Web app problems are easier to catch, because browser errors now go to the runtime logs and verify fails if the app crashes while loading.
