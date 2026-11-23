@@ -2274,8 +2274,9 @@ succeeds.
 A rate limit the dispatcher classifies on its own authenticated request
 records repository degradation with `resetAt`.
 The built-in GitHub forge also treats a successful response, 304 included,
-that reports `x-ratelimit-remaining: 0` with a future reset within the hour as
-that quota's limit. The response keeps its result, and the process's next
+that reports `x-ratelimit-remaining: 0` with a future reset at most 65 minutes
+away (one hour plus five minutes of clock skew) as that quota's limit.
+The response keeps its result, and the process's next
 request for the same quota (`core`, `graphql`, …) fails as that rate limit
 without being sent, so cooldown follows the rules here without an avoidable
 refusal. Other quotas are unaffected. A missing, malformed, past or
