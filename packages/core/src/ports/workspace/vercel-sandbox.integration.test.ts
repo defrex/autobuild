@@ -4547,12 +4547,12 @@ describe('refused guest archive pushes', () => {
       (command) => command.cmd === 'git' && (command.args as string[])[0] === 'push',
     )
 
-  test('recovery without a fallback still surfaces the refused archive push', async () => {
+  test('recovery without a fallback reports the candidate available after a refused archive push', async () => {
     const { h, workspace } = await fenced()
-    scriptGuestRemote(h, { refuseArchive: true })
-    await expect(recover(h, workspace.ref)).rejects.toThrow(
-      `archive publication rejected for ${archiveRef} at ${SHA}: Error: ! [remote rejected]`,
-    )
+    const refs = scriptGuestRemote(h, { refuseArchive: true })
+    // Archive refs are best effort: the settlement rewrite retains it.
+    expect(await recover(h, workspace.ref)).toBe(true)
+    expect(refs.has(archiveRef)).toBe(false)
   })
 
   test('recovery publishes through git without calling the fallback', async () => {
@@ -4589,7 +4589,7 @@ describe('refused guest archive pushes', () => {
     )
   })
 
-  test('a failed fallback rejects without recovering, keeps snapshots, and a retry succeeds', async () => {
+  test('a failed fallback still reports recovery, keeps snapshots, and a retry archives', async () => {
     const refs = new Map<string, string>()
     let fail = true
     const { h, workspace } = await fenced({
@@ -4602,9 +4602,7 @@ describe('refused guest archive pushes', () => {
     const snapshots = h.sandbox.snapshots.map((snapshot) => snapshot.id)
     const stops = h.sandbox.stops
     const policies = h.sandbox.policies.length
-    const error = await recover(h, workspace.ref).catch((error: unknown) => error)
-    expect(String(error)).toContain('git push refused (')
-    expect(String(error)).toContain('GitHub REST ref creation failed')
+    expect(await recover(h, workspace.ref)).toBe(true)
     expect(refs.has(archiveRef)).toBe(false)
     expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('receive')
     expect(h.sandbox.policies.length).toBeGreaterThan(policies)
@@ -4619,12 +4617,11 @@ describe('refused guest archive pushes', () => {
     expect(refs.get(archiveRef)).toBe(SHA)
   })
 
-  test('an acknowledged fallback the readback cannot confirm never reports recovery', async () => {
+  test('an acknowledged fallback the readback cannot confirm is no archive, but recovery proceeds', async () => {
     const { h, workspace } = await fenced({ refusedArchive: async () => {} })
-    scriptGuestRemote(h, { refuseArchive: true })
-    await expect(recover(h, workspace.ref)).rejects.toThrow(
-      'exact readback did not confirm publication',
-    )
+    const refs = scriptGuestRemote(h, { refuseArchive: true })
+    expect(await recover(h, workspace.ref)).toBe(true)
+    expect(refs.has(archiveRef)).toBe(false)
   })
 
   test('preservation archives through the fallback after a refused push', async () => {
@@ -4679,6 +4676,49 @@ describe('refused guest archive pushes', () => {
       }),
     ).toEqual({ kind: 'published' })
     expect(calls).toEqual([[archive, old]])
+    expect(refs.get('refs/heads/ab/remote-build')).toBe(SHA)
+  })
+
+  test('a supplied retain callback replaces the strict archive and the rewrite proceeds', async () => {
+    const old = 'c'.repeat(40)
+    const archive = `refs/autobuild/archive/remote-build/${old}`
+    const refs = new Map<string, string>([['refs/heads/ab/remote-build', old]])
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    scriptGuestRemote(h, { refuseArchive: true, refs, head: old })
+    const retained: { ref: string; sha: string; workspacePath: string; refused: boolean }[] = []
+    expect(
+      await h.provider.publication.rewrite!({
+        ref: workspace.ref,
+        sha: SHA,
+        branch: workspace.branch,
+        expected: old,
+        archives: [{ ref: archive, sha: old }],
+        retain: async (input) => {
+          // The trusted transport is handed over; the callback owns refusals.
+          const refused = await input
+            .archive({ workspacePath: input.workspacePath, ref: input.ref, sha: input.sha })
+            .then(
+              () => false,
+              () => true,
+            )
+          retained.push({
+            ref: input.ref,
+            sha: input.sha,
+            workspacePath: input.workspacePath,
+            refused,
+          })
+        },
+      }),
+    ).toEqual({ kind: 'published' })
+    expect(retained).toEqual([
+      { ref: archive, sha: old, workspacePath: expect.any(String), refused: true },
+    ])
+    expect(refs.has(archive)).toBe(false)
     expect(refs.get('refs/heads/ab/remote-build')).toBe(SHA)
   })
 })

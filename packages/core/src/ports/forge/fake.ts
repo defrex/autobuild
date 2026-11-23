@@ -6,7 +6,7 @@ import {
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
 import { ForgeMergeQueueRejection, type BuildLandingOptions } from '../types'
-import { ForgeRejection } from '../forge-failure'
+import { ArchiveConflictError, ForgeRejection } from '../forge-failure'
 import { findSummaryMarker } from './summary-marker'
 /**
  * FakeForge (SPEC §3.2): in-memory Forge for seam tests. Gate existence and
@@ -179,6 +179,9 @@ export class FakeForge implements Forge {
   /** Test knob: the next readbacks disagree with the composed body. */
   failIssueLinkReadback = false
   readonly archives = new Map<string, string>()
+  /** Test knob: archive refs are refused, like a forge proxy that allows
+   * branch pushes but no other refs. Nothing is recorded. */
+  refuseArchives = false
   readonly rewrites: { branch: string; expected: string; sha: string }[] = []
   rewrite: import('../types').ForgeRewrite = {
     snapshot: async ({ branch }) => {
@@ -188,7 +191,10 @@ export class FakeForge implements Forge {
     },
     archive: async ({ ref, sha }) => {
       const prior = this.archives.get(ref)
-      if (prior !== undefined && prior !== sha) throw new Error(`immutable archive ${ref} differs`)
+      if (prior !== undefined && prior !== sha)
+        throw new ArchiveConflictError(`immutable archive ${ref} differs`)
+      if (this.refuseArchives)
+        throw new Error(`fake: archive publication rejected for ${ref} at ${sha}`)
       this.archives.set(ref, sha)
     },
     replace: async ({ branch, expected, sha }) => {

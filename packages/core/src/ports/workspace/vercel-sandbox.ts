@@ -4,6 +4,7 @@ import {
 } from '../../accounts/availability'
 import { WorkspaceCleanupRequired } from '../types'
 import { inspectGitCandidate, preserveGitCommits, restoreGitCommits } from './commit-preservation'
+import { isArchiveRefusal } from '../../kernel/history-retention'
 import { accountPolicy, accountGuestEnvironment } from './account-policy'
 import { HOSTED_ACCOUNT_READINESS_ENV } from '../../accounts/hosted-readiness'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
@@ -1448,11 +1449,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
               archiveRef,
             })
             if (available)
-              await this.archiveTransport(exec).archive({
-                workspacePath: VERCEL_WORKSPACE_PATH,
-                ref: archiveRef,
-                sha: input.sha,
-              })
+              try {
+                await this.archiveTransport(exec).archive({
+                  workspacePath: VERCEL_WORKSPACE_PATH,
+                  ref: archiveRef,
+                  sha: input.sha,
+                })
+              } catch (error) {
+                // Archive refs are best effort: the settlement rewrite retains
+                // the candidate through its `retain` fallback.
+                if (!isArchiveRefusal(error)) throw error
+              }
             return available
           })
         }),
@@ -3173,6 +3180,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     expected?: string
     localExpected?: string
     archives?: { ref: string; sha: string }[]
+    retain?: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]['retain']
   }): Promise<void | import('../types').RewriteResult> {
     if (this.active.has(input.ref) || this.uncertain.has(input.ref)) {
       throw new Error('publication is forbidden until sandbox execution teardown is confirmed')
@@ -3241,7 +3249,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         { signal: this.operationSignal() },
       )
       if (input.expected !== undefined) {
-        const capability = this.archiveTransport(async (cmd) => {
+        const trustedExec: Exec = async (cmd) => {
           const result = await sandbox.runCommand({
             cmd: cmd[0]!,
             args: cmd.slice(1),
@@ -3256,9 +3264,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             stdout: await result.stdout!(),
             stderr: await result.stderr!(),
           }
-        })
+        }
+        const capability = this.archiveTransport(trustedExec)
         for (const archive of input.archives ?? [])
-          await capability.archive({ workspacePath: VERCEL_WORKSPACE_PATH, ...archive })
+          if (input.retain)
+            await input.retain({
+              exec: trustedExec,
+              workspacePath: VERCEL_WORKSPACE_PATH,
+              archive: capability.archive,
+              ...archive,
+            })
+          else await capability.archive({ workspacePath: VERCEL_WORKSPACE_PATH, ...archive })
         return await capability.replace({
           workspacePath: VERCEL_WORKSPACE_PATH,
           branch: input.branch,

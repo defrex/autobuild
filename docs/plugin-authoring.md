@@ -73,6 +73,14 @@ Reconcile requires the optional grouped `Forge.rewrite` capability:
    expansion or a depth limit) restores missing commits and their missing ancestry,
    writes no shallow boundary, leaves an already-shallow repository's existing
    boundaries unchanged, and verifies the commits locally before returning.
+
+   Failure classes from `archive`:
+
+   | Failure | Throw | Kernel response |
+   |---|---|---|
+   | Refusal (namespace, permission, policy) | a plain `Error` | Leaf: BuildStore copy or warning, rewrite proceeds. Node: stops. |
+   | Immutable ref already names a different SHA | `ArchiveConflictError` (SDK, with `isArchiveConflict`) | Never retried, never a fallback |
+   | Transient transport or rate limit | `ForgeFailure` / `ForgeRequestDeferred` | Retried |
 3. Replace the explicit branch, leased on an explicit expected remote head.
 
 - Return `lease-mismatch` separately from transport, auth and policy failures.
@@ -81,6 +89,7 @@ Reconcile requires the optional grouped `Forge.rewrite` capability:
 - Never overwrite unknown work or fall back to merging, ordinary pushes, archive branches or tags.
 - Older forge plugins still load; reconcile refuses them actionably.
 - Remote workspace providers also need trusted `WorkspacePublication.rewrite` after guest teardown; ordinary `publish` can't publish a restack.
+- `WorkspacePublication.rewrite` input may carry `retain({ exec, workspacePath, archive, ref, sha })`. When present, call it once per `archives` entry instead of `archive`, passing your trusted Git transport; it owns the leaf fallback and does not throw for a refusal. A provider that ignores it archives strictly.
 
 ### Destination observation and ancestry
 
@@ -117,7 +126,10 @@ intervening forward gap still requires immutable ancestry proof.
 
 Remote providers expose trusted `WorkspacePublication.preserve` and
 `recoverCandidate`; local providers may supply `WorkspaceProvider.preservation`
-without changing the remote-publication discriminator. Missing capabilities fail
+without changing the remote-publication discriminator. `recoverCandidate` may
+receive `replayBase` and `targetBranch`: fetch the published target before
+applying a thin replay pack whose base is missing, and return true for an
+available leaf candidate even when archiving it is refused. Missing capabilities fail
 safely at destructive boundaries. `WorkspaceRecovery.fence(handle)` reports
 confirmed, absent, or unknown without deleting an environment or its snapshots.
 Only dispatcher-authorized reap follows the durable fence and preservation/loss

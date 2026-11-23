@@ -839,6 +839,13 @@ test('forge readiness notices only accept hard check keys and dispatcher authors
       payload: { ...notice.payload, check: 'linear-history' },
     }),
   ).toThrow()
+  // Recorded while archive refs were a hard requirement; still decodes.
+  expect(() =>
+    validateRepositoryEventWrite({
+      ...notice,
+      payload: { ...notice.payload, check: 'archive-refs' },
+    }),
+  ).not.toThrow()
   expect(() => validateRepositoryEventWrite({ ...notice, actor: humanActor('user') })).toThrow()
 })
 

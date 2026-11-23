@@ -147,14 +147,37 @@ a path-bearing `observation.recorded` followup, deduplicated by operation,
 transaction, candidate SHA and exact path list on recovery. The phase-terminal
 D5 clean-worktree rule for `ab done` remains unchanged.
 
-Before replacement the kernel publishes retained tips, displaced heads and the
-temporary change under immutable exact archive refs. Remote archives also publish
+Before a leaf replacement (automatic restack, reconcile or remote publication
+settlement) the kernel keeps the tips named by history and rewrite facts, the
+displaced heads and the temporary change, best effort, per commit:
+
+| Order | Where | Recorded by |
+|---|---|---|
+| 1 | Immutable archive ref `refs/autobuild/archive/<slug>/<sha>`, exact readback | `archives` on `restack.rewritten` / `reconcile.rewritten` |
+| 2 | Forge refused: BuildStore `history-objects-<sha>`, a thin pack of objects the frozen target base does not reach (chunked like replay copies); an ancestor of that base needs no copy (`target`) | `history.retained` `store` / `target` |
+| 3 | Copy failed too: nothing; the rewrite proceeds with one build-scoped `history-unretained` followup observation | `history.retained` `unretained` |
+
+- `history.retained {operation, id, base, store, target, unretained}` is decisive;
+  older runtimes defer on it.
+- Retention never uses a branch or tag. An archive ref naming a different commit
+  is an `ArchiveConflictError`: never retried, never a fallback. Transient forge
+  failures retry.
+- Readers (preparation, regenerated-restack adoption, candidate recovery)
+  restore in the same order: local repository, archive ref, store copies
+  (`reconcile-change-<sha>`, `replay-objects-<sha>`, `history-objects-<sha>`),
+  then the published build and target branches.
+- A commit retained nowhere redoes the work: an unpublished transaction
+  re-prepares from the published branch as `<id>-redo`; a requested candidate is
+  retired through `publication.candidate-retired`.
+- Node restack and node landing still require archive refs; a refusal stops them.
+
+Remote archives also publish
 commits present only on the remote: GitHub uses create-only Git-reference REST creation
 when the workspace lacks the commit, retaining guarded Git pushes for local objects.
 When the environment refuses a non-branch Git push of an archive ref, as Claude Code on
 the web's GitHub proxy does, GitHub creates the identical archive ref through the same
 REST call; a commit that exists only in the local workspace cannot use this fallback and
-fails with an error naming both refusals. Vercel Sandbox workspaces get the same fallback:
+fails naming both refusals, which leaf retention absorbs into its BuildStore copy. Vercel Sandbox workspaces get the same fallback:
 the guest pushes first, the dispatcher creates the ref with host-held credentials after a
 refusal, and the guest's exact readback confirms it.
 Exact remote readback confirms publication, then a non-shallow fetch of only that exact
@@ -162,7 +185,7 @@ archive ref (without tags, configured refmap expansion or a depth limit) restore
 missing commits and their missing ancestry, writes no shallow boundary, leaves an
 already-shallow repository's existing boundaries unchanged, and verifies the commits
 locally before returning. `restack.*` facts record
-preparation, replay, intent, archived replacement, contention and completion.
+preparation, replay, intent, retained replacement, contention and completion.
 Unpublished request/loss records alone cannot preserve objects from a released
 sandbox. The forge is authoritative for publication: after a push or on recovery,
 its branch head must equal the intended SHA before completion. Local refs are
@@ -177,7 +200,7 @@ against the current destination. Remote guests park for trusted
 publication after teardown. Historical merge reconciliations keep their original
 interpretation and supply a promoted contribution base for later replay.
 
-Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
+Replay retention (`replay-objects-<sha>`) and leaf history retention (`history-objects-<sha>`) store thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay and history artifacts are read only when the requested commit is missing locally, never by idle polling.
 
 ## Node contributions and recovery
 
@@ -270,14 +293,15 @@ retry eligibility and recheck authorization after repository forge cooldown.
 
 A historical `publication.lost` does not prove that every copy of its candidate
 is gone. Recovery checks the exact branch and private archive refs and retained
-replay objects first. An available candidate is archived under its exact archive ref,
-with the refused-push fallback where supported, before guarded publication continues.
-A failed archive, including a failed fallback, defers to a later attempt and neither
-proves loss nor reports recovery. A genuinely missing reconcile or automatic restack candidate records
+store copies first. Replay copies are read in either format (chunked manifest or
+legacy base64 pack); a thin pack whose base is missing fetches the published target
+first and applies with `git index-pack --fix-thin`. An available candidate is
+retained best effort before guarded publication continues; a refused archive does
+not block it. A genuinely missing reconcile or automatic restack candidate records
 `publication.candidate-retired`, abandons its obsolete request, and replays the
 producing operation with a fresh transaction identity. Its frozen target,
 reconcile occurrence or automatic trigger, cycle, and message survive. The
-retired candidate is excluded from archive requirements unless independently
+retired candidate is excluded from retention requirements unless independently
 required by proven history. This reconstruction consumes no infrastructure
 attempt and no additional conflict occurrence; it needs no operator guidance.
 A bare retry also clears an existing infrastructure-limit escalation through
