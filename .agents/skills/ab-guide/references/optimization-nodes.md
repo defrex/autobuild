@@ -619,7 +619,7 @@ blinded order.
 | `attempt.settled` | node | attempt (proposal, ticket, build, branch?), outcome, measurement (revision, baseline, candidate, delta), policy?, mergedSha?, note, head (accepted only) |
 | `attempt.merged-unmeasured` | node | proposal, ticket, build, merged head (sha?), reason, measuredCandidate? |
 | `optimization.stopped` | node | cause, mode |
-| `optimization.activity-recorded` | node | attempt execution facts (build, n, instance, started or ended, at), accounted counts, released builds?, watermark, settles? (dispatcher) |
+| `optimization.activity-recorded` | node | attempt execution facts (build, n, instance, started or ended, at), accounted counts, released builds?, watermark, starts?, settles? (dispatcher) |
 | `execution.accounted` | attempt | count: execution facts the node has accounted (dispatcher, advisory) |
 | `attempt.ticket-rejected` | node | proposal, ticket, rejected state the ticket moved to |
 | `attempt.branch-deleted` | node | proposal, build, branch |
@@ -1010,16 +1010,18 @@ cleanup's own branch deletion.
   `optimization.activity-recorded` batches: on each tick the dispatcher reads
   an attempt build's `executionIntervals` value only when the build's digest
   shows new execution facts, records them on the node, then acknowledges them
-  on the build with `execution.accounted`. An idle tick reads nothing.
+  on the build with `execution.accounted`. An idle tick reads nothing. The
+  first pass over a node starts its clock with a `starts` batch, so an
+  attempt that settles before the dispatcher saw it run is still charged.
 - **At a stop.** `optimization.stopped` closes every interval at the stop
   time, so the value never grows afterwards. The next tick records one
   settling batch with every attempt run from before the stop the node had not
-  yet accounted. Until then surfaces show `settling`, because that batch may
+  yet accounted; a large one is chunked, and only its last chunk settles. Until then surfaces show `settling`, because that batch may
   change the value once.
 - **Nodes opened before active hours.** Their own past proposer and
   measurement runs count. Attempts still in flight are charged their whole
   run history once the dispatcher first sees them; attempts that settled
-  before the upgrade are not charged. A completed node reports its own runs,
+  before the clock's starting batch are not charged. A completed node reports its own runs,
   clipped at its stop.
 
 ## Stopping and completion

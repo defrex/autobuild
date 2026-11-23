@@ -791,6 +791,9 @@ const optimizationPayloadSchemas = {
       accounted: z.record(z.string().min(1), z.number().int().nonnegative()),
       released: z.array(z.string().min(1)).optional(),
       watermark: z.iso.datetime(),
+      /** The dispatcher's first batch for this node: its clock tracks the
+       * builds of attempts that settle from here on. */
+      starts: z.literal(true).optional(),
       settles: z.literal(true).optional(),
     })
     .refine(
@@ -806,8 +809,9 @@ const optimizationPayloadSchemas = {
         batch.facts.length > 0 ||
         Object.keys(batch.accounted).length > 0 ||
         (batch.released?.length ?? 0) > 0 ||
+        batch.starts === true ||
         batch.settles === true,
-      'an activity batch records facts, accounted counts, releases or a settlement',
+      'an activity batch records facts, accounted counts, releases, a start or a settlement',
     ),
   /** A settled, non-accepted attempt's ticket was moved to the rejected role
    * (SPEC §13). Removes the node digest's pending rejection. */

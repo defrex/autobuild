@@ -251,14 +251,95 @@ describe('the node clock fold', () => {
     expect(hours(digest(builder), 10_000)).toBe(2)
   })
 
-  test('a stopped clock ignores a batch that does not settle', () => {
+  test('after a stop, a batch that does not settle adds only pre-stop runs and freezes nothing', () => {
     const builder = measured().propose('r1', ['a'])
     builder.wait(60).stop('operator', 'drain')
     batch(builder, 70, [
       ['attempt-a', 1, 'started', 'i', 0],
       ['attempt-a', 2, 'ended', 'i', 30],
+      ['attempt-a', 3, 'started', 'k', 65],
     ])
-    expect(hours(digest(builder), 70)).toBe(0)
+    const state = digest(builder)
+    expect(hours(state, 70)).toBe(0.5)
+    expect(state.clock.settled).toBeUndefined()
+    expect(state.clock.watermark).toBe(iso(60))
+  })
+
+  test('a settlement chunked over several events accounts every chunk, across a retry', () => {
+    // 101 one-minute runs before the stop: 202 facts, more than one event holds.
+    const runs = 101
+    const facts = Array.from({ length: runs * 2 }, (_, index) => ({
+      build: 'attempt-a',
+      n: index + 1,
+      instance: `i${Math.floor(index / 2)}`,
+      kind: index % 2 === 0 ? ('started' as const) : ('ended' as const),
+      at: iso(Math.floor(index / 2) * 2 + (index % 2)),
+    }))
+    const stopAt = runs * 2 + 10
+    const settled = (retry: boolean) => {
+      const builder = measured().propose('r1', ['a'])
+      builder.wait(stopAt).stop('operator', 'abort')
+      const chunks = chunkActivityBatch(
+        optimizationActivityBatch(
+          digest(builder).clock,
+          [
+            {
+              build: 'attempt-a',
+              inFlightNewest: false,
+              digestCount: facts.length,
+              value: {
+                count: facts.length,
+                acknowledged: 0,
+                facts: facts.map(({ build: _b, ...fact }) => fact),
+              },
+            },
+          ],
+          iso(0),
+        )!,
+      )
+      expect(chunks.map((chunk) => [chunk.facts.length, chunk.settles])).toEqual([
+        [ACTIVITY_FACTS_PER_EVENT, undefined],
+        [2, true],
+      ])
+      builder.push({
+        actor: DISPATCHER,
+        type: 'optimization.activity-recorded',
+        payload: chunks[0]!,
+      })
+      if (retry) {
+        // The second chunk lost its race; the next pass starts from what the
+        // first chunk accounted.
+        const rest = optimizationActivityBatch(
+          digest(builder).clock,
+          [
+            {
+              build: 'attempt-a',
+              inFlightNewest: false,
+              digestCount: facts.length,
+              value: {
+                count: facts.length,
+                acknowledged: 0,
+                facts: facts.map(({ build: _b, ...fact }) => fact),
+              },
+            },
+          ],
+          iso(0),
+        )!
+        expect(rest.facts.map((fact) => fact.n)).toEqual([201, 202])
+        builder.push({ actor: DISPATCHER, type: 'optimization.activity-recorded', payload: rest })
+      } else
+        builder.push({
+          actor: DISPATCHER,
+          type: 'optimization.activity-recorded',
+          payload: chunks[1]!,
+        })
+      return digest(builder)
+    }
+    for (const retry of [false, true]) {
+      const state = settled(retry)
+      expect(state.clock.settled).toBe(true)
+      expect(hours(state, 10_000)).toBe(runs / 60)
+    }
   })
 
   test('a legacy log reports its own node runs, clipped at its stop', () => {
@@ -302,8 +383,10 @@ const value = (
   facts: facts.map(([n, kind, instance, minute]) => ({ n, kind, instance, at: iso(minute) })),
 })
 
+/** A clock the dispatcher has started. */
 const clock = (overrides: Partial<OptimizationClock> = {}): OptimizationClock => ({
   activeMs: 0,
+  watermark: iso(0),
   spans: [],
   open: {},
   builds: {},
@@ -311,6 +394,15 @@ const clock = (overrides: Partial<OptimizationClock> = {}): OptimizationClock =>
 })
 
 describe('the activity batch decision', () => {
+  test('the first batch starts the clock, even with nothing to account', () => {
+    expect(optimizationActivityBatch(clock({ watermark: undefined }), [], iso(0))).toEqual({
+      facts: [],
+      accounted: {},
+      watermark: iso(0),
+      starts: true,
+    })
+  })
+
   test('nothing changed: nothing to record', () => {
     expect(
       optimizationActivityBatch(

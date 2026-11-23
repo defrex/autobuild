@@ -53,4 +53,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'optimization/fold/px86golc8e': '#1069 active-hours clock and execution fact counts',
   'build/fold/qt6bkt4ezw': '#1069 active-hours clock and execution fact counts',
   'buildDigest/fold/2lfn4ripe4': '#1069 active-hours clock and execution fact counts',
+  'optimization/fold/n2q2dksb1t': '#1069 settlement chunks and the dispatcher-started clock',
+  'build/fold/xfau4h85gn': '#1069 settlement chunks and the dispatcher-started clock',
+  'buildDigest/fold/r14f4ydbcd': '#1069 settlement chunks and the dispatcher-started clock',
 }

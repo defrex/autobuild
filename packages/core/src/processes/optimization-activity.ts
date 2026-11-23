@@ -62,7 +62,9 @@ export async function recordOptimizationActivity(
     if (entry !== undefined) newest.add(entry.record.slug)
   }
   const relevant = [...new Set([...Object.keys(clock.builds), ...newest])].sort()
-  if (relevant.length === 0 && !settling) return false
+  // A clock the dispatcher has not started gets its first batch even with
+  // nothing to account, so every later settlement is tracked.
+  if (relevant.length === 0 && !settling && clock.watermark !== undefined) return false
   const listing = new Map(builds.map((entry) => [entry.record.slug, entry.digest]))
   const inputs: ActivityBuildInput[] = []
   for (const build of relevant) {

@@ -21487,6 +21487,30 @@ describe('optimization active hours and attempt priority', () => {
       expect(await hours(h)).toBe(1.5)
     })
 
+    test("a fresh node's first attempt that settles before any observation is charged", async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      // The first pass starts the node's clock before it can file an attempt.
+      await tickAt(h, '08:01')
+      const started = (await h.store.getEvents(NODE)).filter(
+        (event) => event.type === 'optimization.activity-recorded',
+      )
+      expect(started.map((event) => event.payload)).toEqual([
+        { facts: [], accounted: {}, watermark: day('08:00'), starts: true },
+      ])
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00', '10:40')
+      // Declined while no dispatcher observed it.
+      h.clock.set(day('10:41'))
+      await settle(h, 'a')
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({ 'attempt-a': 0 })
+      await tickAt(h, '13:00')
+      expect(await hours(h)).toBeCloseTo(40 / 60, 10)
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({})
+    })
+
     test('the hours budget stops the node on active hours only', async () => {
       const h = harness()
       h.clock.set(day('00:00'))

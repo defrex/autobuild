@@ -151,11 +151,12 @@ export class ExecutionFactsMissingError extends Error {
 
 /**
  * The attempt execution facts a node's clock has not yet accounted, as one
- * batch payload, or undefined when there is nothing to record. A live clock
- * takes each build's facts above its accounted count up to the digest's
+ * batch payload, or undefined when there is nothing to record. A running
+ * clock takes each build's facts above its accounted count up to the digest's
  * count; a stopped, unsettled clock takes every unaccounted fact up to the
- * stop and settles. Releases fully accounted builds that no in-flight
- * attempt runs on any more.
+ * stop and settles. A clock with no batch yet gets one that starts it, so
+ * every later settlement is tracked. Releases fully accounted builds that no
+ * in-flight attempt runs on any more.
  */
 export function optimizationActivityBatch(
   clock: OptimizationClock,
@@ -164,6 +165,8 @@ export function optimizationActivityBatch(
 ): ActivityBatch | undefined {
   if (clock.settled) return undefined
   const settling = clock.stoppedAt !== undefined
+  // The first batch starts the clock: settlements after it are tracked.
+  const starting = !settling && clock.watermark === undefined
   const facts: ActivityBatch['facts'] = []
   const accounted: Record<string, number> = {}
   const released: string[] = []
@@ -201,6 +204,7 @@ export function optimizationActivityBatch(
   facts.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.n - b.n))
   if (
     !settling &&
+    !starting &&
     facts.length === 0 &&
     Object.keys(accounted).length === 0 &&
     released.length === 0
@@ -214,6 +218,7 @@ export function optimizationActivityBatch(
     accounted,
     ...(released.length > 0 ? { released: released.sort() } : {}),
     watermark,
+    ...(starting ? { starts: true as const } : {}),
     ...(settling ? { settles: true as const } : {}),
   }
 }

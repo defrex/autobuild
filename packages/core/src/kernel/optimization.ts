@@ -284,9 +284,8 @@ function recordActivity(
   batch: EventPayload<'optimization.activity-recorded'>,
 ) {
   if (clock.settled) return
-  // A stopped clock takes only its settlement; the dispatcher writes nothing
-  // else for a stopped node.
-  if (clock.stoppedAt !== undefined && !batch.settles) return
+  // After a stop a batch adds only pre-stop facts; a settlement chunked over
+  // several events freezes the clock with its last, `settles`, chunk.
   const stop = clock.stoppedAt
   for (const fact of batch.facts) {
     if (stop !== undefined && fact.at > stop) continue
@@ -299,8 +298,8 @@ function recordActivity(
     clock.builds[build] = Math.max(clock.builds[build] ?? 0, count)
   for (const build of batch.released ?? [])
     if (clock.open[build] === undefined) delete clock.builds[build]
-  if (stop === undefined) {
-    compactClock(clock, batch.watermark)
+  if (stop === undefined || !batch.settles) {
+    compactClock(clock, stop !== undefined && stop < batch.watermark ? stop : batch.watermark)
     return
   }
   for (const interval of Object.values(clock.open)) addSpan(clock, interval.start, stop)
@@ -432,8 +431,9 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
       case 'attempt.settled': {
         const { attempt, outcome, measurement } = event.payload
         // A build the dispatcher has not accounted is still read once it
-        // settles. Only a live clock tracks: settlements before its first
-        // batch, a legacy node's history, are not charged.
+        // settles. Only a started clock tracks: the dispatcher starts every
+        // node's clock on its first pass, before the node can file an
+        // attempt, so only a legacy node's history is not charged.
         if (
           !clock.settled &&
           clock.watermark !== undefined &&
