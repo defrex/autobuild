@@ -1080,6 +1080,51 @@ test('trusted restack publication carries archives and an explicit lease, then s
   })
 })
 
+test('a provider retain callback settles past refused archives and records forge refs only', async () => {
+  const h = await seedRestackPublication()
+  const accepted = `refs/autobuild/archive/${SLUG}/${h.transaction.oldHead}`
+  h.deps.publication!.rewrite = async (input) => {
+    expect(input.retain).toBeDefined()
+    // The trusted transport: the object is present, nothing else succeeds,
+    // so a refused commit can be neither target-reachable nor copied.
+    const exec = async (cmd: string[]) => ({
+      exitCode: cmd[1] === 'cat-file' ? 0 : 1,
+      stdout: '',
+      stderr: 'unavailable',
+    })
+    for (const archive of input.archives)
+      await input.retain!({
+        exec,
+        workspacePath: '/sandbox',
+        archive: async ({ ref }) => {
+          if (ref !== accepted) throw new Error(`archive publication rejected for ${ref}`)
+        },
+        ...archive,
+      })
+    return { kind: 'published' }
+  }
+  await settlePendingPublication(h.deps, SLUG)
+  const events = await h.store.getEvents(SLUG)
+  const rewritten = events.find((e) => e.type === 'reconcile.rewritten')
+  expect(rewritten?.type === 'reconcile.rewritten' && rewritten.payload.archives).toEqual([
+    { ref: accepted, sha: h.transaction.oldHead },
+  ])
+  const retained = events.filter((e) => e.type === 'history.retained')
+  expect(retained).toHaveLength(1)
+  expect(retained[0]!.payload).toMatchObject({
+    operation: 'reconcile',
+    id: h.transaction.id,
+    store: [],
+    target: [],
+  })
+  expect(retained[0]!.payload.unretained).toContain(SHA)
+  const warnings = events.filter(
+    (e) => e.type === 'observation.recorded' && e.payload.id === 'history-unretained',
+  )
+  expect(warnings).toHaveLength(1)
+  expect(events.some((e) => e.type === 'reconcile.completed')).toBe(true)
+})
+
 test('remote lease mismatch durably returns to replay without completion or plain push', async () => {
   const h = await seedRestackPublication()
   h.deps.publication!.rewrite = async () => ({ kind: 'lease-mismatch', actual: 'e'.repeat(40) })
