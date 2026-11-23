@@ -160,7 +160,12 @@ accumulator shape or fold changes, `bun tools/reducer-revision.ts <shape|fold>
 union (`.gitattributes`), so two branches that revise the same reducer combine
 without a conflict into a version higher than either, and versions only grow.
 Never delete a ledger line, even to revert: a lower version would be reduced
-again on every read. `kernel/reducer-registry.ts` lists every reducer, and its
+again on every read. The registry integration test's revision guard enforces
+this against the verify base (`AB_VERIFY_BASE`): it fails a change that drops a
+base ledger line, or under which any identity both commits construct derives a
+lower version than the base's own code did, through the ledger, a frozen legacy
+base or a part. A deregistered identity keeps its lines and is not compared.
+`kernel/reducer-registry.ts` lists every reducer, and its
 integration test checks the derivation and fails when an accumulator shape
 changes without a revision. It also holds the identity records under
 `kernel/__snapshots__/reducer-identity-records/`: per reducer identity and
@@ -177,7 +182,7 @@ there: against the verify base (`AB_VERIFY_BASE`), a reducer whose change adds
 no revision must fold every corpus as the base's records, or failing those the
 base's own code, did. The clause is skipped, with a notice, in two cases: when
 no base is supplied, and when the supplied base predates the revision ledger.
-Either way the identity-record checks above stay in force. Current-state consumers use the typed persisted
+The revision guard skips, with its own notice, in the same two cases. Either way the identity-record checks above stay in force. Current-state consumers use the typed persisted
 read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
 reference projections for tests and explicit historical output.
 
