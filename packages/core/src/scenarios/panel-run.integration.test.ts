@@ -8,7 +8,7 @@
 // Load the reducer registry first: build-runner's import cycle otherwise reaches
 // a reducer before it is initialized when this file runs alone.
 import '../kernel/reducer-registry'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import {
   chmod,
@@ -55,6 +55,55 @@ import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 
 const directory = temporaryDirectories(afterEach)
 const SLUG = 'attempt-panel'
+
+/**
+ * The judge launch PATH is a named fixture case, never the invoking shell's.
+ * The fake runner and the production adapters read `process.env.PATH` at
+ * launch, so each case sets it through `useLaunchPath` and the file-level
+ * `afterEach` restores it. Entries under the distribution root but outside
+ * the fixture repository are permitted to reach a judge; entries at or under
+ * the fixture repository's workspace, Git directory or store are not.
+ */
+const unique = (entries: readonly string[]): string[] => [...new Set(entries)]
+const gitBinary = Bun.which('git')
+if (gitBinary === null) throw new Error('the panel fixture needs git on the invoking PATH')
+/** Only the tool directories the fixture needs; the invoking PATH only locates them. */
+const TOOL_PATH = unique([dirname(process.execPath), dirname(gitBinary), '/usr/bin', '/bin'])
+/** Existing distribution-root directories outside any fixture repository. */
+const EXISTING_DISTRIBUTION_ENTRIES = [
+  join(distributionRoot(), 'bin'),
+  join(distributionRoot(), 'node_modules/.bin'),
+].filter((dir) => existsSync(dir))
+/** The runner's distribution-root entries: the reported source-checkout
+ * `arg0-linux` spelling (observation `obs_5dda55a8`), the agent bin the judge
+ * launch replaces, and the existing distribution directories. */
+const DISTRIBUTION_ENTRIES = [
+  join(distributionRoot(), '.ab/codex-chatgpt/tmp/arg0-linux'),
+  AGENT_BIN_DIR,
+  ...EXISTING_DISTRIBUTION_ENTRIES,
+]
+const LAUNCH_CASES = {
+  minimal: TOOL_PATH,
+  runner: unique([...DISTRIBUTION_ENTRIES, ...TOOL_PATH]),
+} as const satisfies Record<string, readonly string[]>
+const invokingPath = process.env.PATH
+
+function useLaunchPath(entries: readonly string[]): void {
+  process.env.PATH = entries.join(':')
+}
+
+afterEach(() => {
+  if (invokingPath === undefined) delete process.env.PATH
+  else process.env.PATH = invokingPath
+})
+
+/** The entries at or under a protected fixture location. */
+function protectedEntries(entries: readonly string[], repo: Repo): string[] {
+  const locations = [repo.workspace, repo.commonDir, repo.store]
+  return entries.filter((entry) =>
+    locations.some((location) => entry === location || entry.startsWith(`${location}/`)),
+  )
+}
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const env: Record<string, string | undefined> = { ...process.env }
@@ -301,507 +350,547 @@ const before3Preferred = (events: AbEvent[]) =>
   events.some((event) => event.type === 'panel.preferred' && event.payload.judge === 3)
 const HARNESS = ['evals/rubric.md', 'evals/fixture.txt', 'evals/stamp.txt', 'evals/run.sh']
 
-describe('a judge panel run', () => {
-  test('runs blind, pinned judges concurrently and records each judgment', async () => {
-    const repo = await repository()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    const shas = [repo.pin, repo.baseline, repo.candidate]
-    const observed: Observed[] = []
-    let started = 0
-    let release!: () => void
-    const allStarted = new Promise<void>((done) => {
-      release = done
-    })
-    const preferences = ['A', 'B', 'tie'] as const
-    const agent = judges(async (ctx, judge, cli) => {
-      const root = ctx.opts.workspacePath
-      started += 1
-      if (started === 3) release()
-      await allStarted
+for (const [launch, entries] of Object.entries(LAUNCH_CASES))
+  describe(`a judge panel run (${launch} launch PATH)`, () => {
+    beforeEach(() => useLaunchPath(entries))
 
-      // Nothing under the root links back to the repository.
-      const paths = await walk(root)
-      for (const path of paths) {
-        expect(path.endsWith('/.git')).toBe(false)
-        expect(path.endsWith('alternates')).toBe(false)
-        const stat = await lstat(path)
-        if (stat.isSymbolicLink())
-          expect(resolve(dirname(path), await readlink(path)).startsWith(`${root}/`)).toBe(true)
-        else if (stat.isFile()) {
-          const text = await readFile(path, 'utf8')
-          for (const forbidden of [repo.workspace, repo.commonDir, ...shas])
-            expect(text).not.toContain(forbidden)
-        }
-      }
-      for (let dir = root; dir !== '/'; dir = dirname(dir))
-        expect(existsSync(join(dir, '.git'))).toBe(false)
-      expect((await readdir(tmp)).some((name) => name.startsWith('autobuild-panel-'))).toBe(false)
-      for (const install of [
-        '.agents/skills/ab-judge/SKILL.md',
-        '.claude/skills/ab-judge/SKILL.md',
-      ])
-        expect((await readFile(join(root, install))).toString('hex')).toBe(
-          (await blob(repo.workspace, `${repo.pin}:.agents/skills/ab-judge/SKILL.md`)).toString(
-            'hex',
-          ),
-        )
-
-      // Both variants carry the pin's exact harness bytes and modes.
-      for (const label of ['A', 'B']) {
-        for (const path of HARNESS)
-          expect((await readFile(join(root, label, path))).toString('hex')).toBe(
-            (await blob(repo.workspace, `${repo.pin}:${path}`)).toString('hex'),
-          )
-        expect(((await lstat(join(root, label, 'evals/run.sh'))).mode & 0o111) !== 0).toBe(true)
-        expect(await readlink(join(root, label, 'evals/link'))).toBe('fixture.txt')
-        expect(existsSync(join(root, label, 'evals/extra.md'))).toBe(false)
-      }
-
-      // The judge's environment names no protected location: not the
-      // workspace, its Git directory, the store or the distribution.
-      const env = JSON.stringify(ctx.opts.env)
-      for (const forbidden of [repo.workspace, repo.commonDir, repo.store, ...shas])
-        expect(env).not.toContain(forbidden)
-      expect(ctx.opts.env.AB_BUILD).toBeUndefined()
-      expect(ctx.opts.env.AB_PHASE).toBeUndefined()
-      expect(ctx.opts.env.AB_STORE).toBeUndefined()
-      expect(ctx.opts.env.AB_TOKEN).toBeUndefined()
-      const path = ctx.opts.env.PATH!.split(':')
-      expect(path[0]).toMatch(/\/autobuild-judge-bin-[0-9a-f]{16}$/)
-      // The distribution's own agent bin is replaced, and no entry reaches a
-      // protected location. Entries under a distribution outside the build's
-      // repository, such as `bun run`'s `node_modules/.bin`, may pass.
-      expect(path).not.toContain(AGENT_BIN_DIR)
-      for (const forbidden of [repo.workspace, repo.commonDir, repo.store])
-        expect(path.some((entry) => entry.startsWith(forbidden))).toBe(false)
-
-      // `ab` is the scratch launcher: its content names nothing protected,
-      // and its process runs as `bun <launcher> judge …`. A `bun` shim after
-      // the launcher directory records the interpreter's argv.
-      const shim = await directory(join(tmpdir(), 'ab-panel-shim-'))
-      const argvLog = join(shim, `argv-${judge}`)
-      const realBun = Bun.which('bun')!
-      await writeFile(
-        join(shim, 'bun'),
-        `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\nexec '${realBun}' "$@"\n`,
-      )
-      await chmod(join(shim, 'bun'), 0o755)
-      const located = await judgeShell(ctx, 'command -v ab')
-      expect(located.stdout.trim()).toBe(`${path[0]}/ab`)
-      const launcher = await readFile(located.stdout.trim(), 'utf8')
-      for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
-        expect(launcher).not.toContain(forbidden)
-      const refused = await judgeShell(ctx, 'ab status')
-      expect(refused.code).toBe(2)
-      expect(refused.stderr).toContain("a judge session may run only 'ab judge context'")
-
-      expect(await cli(['judge', 'context'])).toBe(0)
-      const contextDir = join(root, '.ab/judge')
-      const context = (
-        await Promise.all(
-          ['context.json', 'purpose.md', 'rubric.md'].map((name) =>
-            readFile(join(contextDir, name), 'utf8'),
-          ),
-        )
-      ).join('\n')
-      observed.push({
-        judge,
-        aDoc: await readFile(join(root, 'A/doc.md'), 'utf8'),
-        bDoc: await readFile(join(root, 'B/doc.md'), 'utf8'),
-        context,
+    test('runs blind, pinned judges concurrently and records each judgment', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      const shas = [repo.pin, repo.baseline, repo.candidate]
+      const observed: Observed[] = []
+      let started = 0
+      let release!: () => void
+      const allStarted = new Promise<void>((done) => {
+        release = done
       })
-      const prefer = await judgeShell(
-        ctx,
-        `ab judge prefer ${preferences[judge - 1]!} --reason "judge ${judge}: the rubric's clarity criterion decides it"`,
-        [path[0], shim, ...path.slice(1)].join(':'),
-      )
-      expect(prefer.stderr).toBe('')
-      expect(prefer.code).toBe(0)
-      const argv = (await readFile(argvLog, 'utf8')).trim().split('\n')
-      expect(argv.slice(0, 3)).toEqual([`${path[0]}/ab`, 'judge', 'prefer'])
-      for (const part of argv)
-        for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
-          expect(part).not.toContain(forbidden)
-    })
-    const random = [0.1, 0.9, 0.4]
-    const result: PanelResult = await runnerFor(
-      store,
-      repo,
-      agent,
-      tmp,
-      () => random.shift()!,
-    ).runPanel(request(repo, 3))
+      const preferences = ['A', 'B', 'tie'] as const
+      const agent = judges(async (ctx, judge, cli) => {
+        const root = ctx.opts.workspacePath
+        started += 1
+        if (started === 3) release()
+        await allStarted
 
-    expect(result.kind).toBe('judged')
-    expect(observed).toHaveLength(3)
-    const events = panelEvents(await store.getEvents(SLUG))
-    expect(JSON.stringify(events[0]!.payload)).not.toMatch(/first/)
-    const orders = new Map<number, PanelOrder>()
-    for (const event of events)
-      if (event.type === 'panel.judge-started') orders.set(event.payload.judge, event.payload.order)
-    for (const seen of observed) {
-      const sides = labelSides(orders.get(seen.judge)!)
-      expect(seen.aDoc).toBe(`${sides.A} prose\n`)
-      expect(seen.bDoc).toBe(`${sides.B} prose\n`)
-      for (const forbidden of [...shas, 'candidate', 'baseline', 'first'])
-        expect(seen.context).not.toContain(forbidden)
-    }
-    const judged = events
-      .flatMap((event) => (event.type === 'panel.judged' ? [event.payload] : []))
-      .sort((a, b) => a.judge - b.judge)
-    expect(judged.map((j) => [j.judge, j.order, j.preference])).toEqual([
-      [1, 'candidate-first', 'A'],
-      [2, 'baseline-first', 'B'],
-      [3, 'candidate-first', 'tie'],
-    ])
-    expect(judged.every((j) => j.reason.includes('clarity criterion'))).toBe(true)
-    // A for the candidate, B for the candidate, a tie: (1 + 1 + 0.5) / 3.
-    expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 3)
-    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
-  })
-
-  test('a TMPDIR inside the repository fails the run before any session', async () => {
-    const repo = await repository()
-    const store = await seeded()
-    const inside = join(repo.workspace, '.scratch')
-    await mkdir(inside)
-    const agent = judges(() => {
-      throw new Error('no judge may start')
-    })
-    const result = await runnerFor(store, repo, agent, inside, () => 0.1).runPanel(request(repo, 2))
-    expect(result).toMatchObject({ kind: 'failed' })
-    expect((result as { reason: string }).reason).toContain(
-      'the judge scratch base is inside the repository',
-    )
-    expect(agent.sessions.size).toBe(0)
-    expect((await readdir(inside)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
-  })
-
-  test("a linked worktree with TMPDIR inside the main repository's Git directory writes nothing there", async () => {
-    const repo = await repository()
-    const worktree = join(await directory(join(tmpdir(), 'ab-panel-wt-')), 'wt')
-    await git(repo.workspace, 'worktree', 'add', '-q', '--detach', worktree, repo.candidate)
-    const linked = { ...repo, workspace: await realpath(worktree) }
-    const store = await seeded()
-    const inside = join(repo.commonDir, 'scratch')
-    await mkdir(inside)
-    const agent = judges(() => {
-      throw new Error('no judge may start')
-    })
-    const result = await runnerFor(store, linked, agent, inside, () => 0.1).runPanel(
-      request(linked, 1),
-    )
-    expect(result).toMatchObject({ kind: 'failed' })
-    const reason = (result as { reason: string }).reason
-    expect(reason).toContain('the judge scratch base is inside the repository')
-    expect(reason).not.toContain(inside)
-    expect(agent.sessions.size).toBe(0)
-    // No material (and so no alternates path) was written under `.git`.
-    expect(await readdir(inside)).toEqual([])
-    expect(
-      panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
-    ).toBe(false)
-  })
-
-  test('a runtime executable found only inside the repository fails before any session', async () => {
-    const repo = await repository()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    const bin = join(repo.workspace, 'node_modules', '.bin')
-    await mkdir(bin, { recursive: true })
-    await writeFile(join(bin, 'fake-judge-runtime'), '#!/bin/sh\nexit 0\n')
-    await chmod(join(bin, 'fake-judge-runtime'), 0o755)
-    const agent = judges(() => {
-      throw new Error('no judge may start')
-    }, 'fake-judge-runtime')
-    const previous = process.env.PATH
-    process.env.PATH = `${bin}:${previous ?? ''}`
-    let result: PanelResult
-    try {
-      result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel(request(repo, 1))
-    } finally {
-      process.env.PATH = previous
-    }
-    expect(result).toEqual({
-      kind: 'failed',
-      reason:
-        "the judge's fake-judge-runtime executable was not found outside the repository; install it outside any repository",
-    })
-    expect(agent.sessions.size).toBe(0)
-    expect(
-      panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
-    ).toBe(false)
-    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
-  })
-
-  test('a committed symlink out of the judge root fails the run before any session', async () => {
-    const repo = await repository()
-    await symlink(repo.workspace, join(repo.workspace, 'source'))
-    await git(repo.workspace, 'add', 'source')
-    await git(repo.workspace, 'commit', '-q', '-m', 'link the checkout')
-    const candidate = (await git(repo.workspace, 'rev-parse', 'HEAD')).trim()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    const agent = judges(() => {
-      throw new Error('no judge may start')
-    })
-    const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel({
-      ...request(repo, 2),
-      candidate,
-    })
-    expect(result).toMatchObject({ kind: 'failed' })
-    // Only the candidate carries the link; the safe relative `evals/link` passes.
-    const reason = (result as { reason: string }).reason
-    expect(reason).toMatch(/resolve outside its judge root: [AB]\/source$/)
-    expect(reason).not.toContain('evals/link')
-    expect(agent.sessions.size).toBe(0)
-    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
-  })
-
-  test('a crash after a saved preference commits it at reclaim without rerunning that judge', async () => {
-    const repo = await repository()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    // The first runner dies right after judge 3's real `ab judge prefer`
-    // saves its outbox: every later write and command of that runner fails,
-    // as a dead process's would, so judge 3's preference exists only in its
-    // root.
-    let crashed = false
-    let endedCount = 0
-    let twoJudged!: () => void
-    const firstTwo = new Promise<void>((done) => {
-      twoJudged = done
-    })
-    let fourthStarted!: () => void
-    const fourth = new Promise<void>((done) => {
-      fourthStarted = done
-    })
-    const scoped = store.scopeBuild(SLUG)
-    const dying = new Proxy(scoped, {
-      get(target, member, receiver) {
-        const method = Reflect.get(target, member, receiver)
-        if (typeof method !== 'function' || !String(member).startsWith('append')) return method
-        return async (...args: unknown[]) => {
-          if (crashed) throw new Error('process crashed')
-          const out = await method.apply(target, args)
-          const written = out as { type?: string; event?: { type?: string } } | null
-          if ((written?.event?.type ?? written?.type) === 'panel.judge-ended') {
-            endedCount += 1
-            if (endedCount === 2) twoJudged()
+        // Nothing under the root links back to the repository.
+        const paths = await walk(root)
+        for (const path of paths) {
+          expect(path.endsWith('/.git')).toBe(false)
+          expect(path.endsWith('alternates')).toBe(false)
+          const stat = await lstat(path)
+          if (stat.isSymbolicLink())
+            expect(resolve(dirname(path), await readlink(path)).startsWith(`${root}/`)).toBe(true)
+          else if (stat.isFile()) {
+            const text = await readFile(path, 'utf8')
+            for (const forbidden of [repo.workspace, repo.commonDir, ...shas])
+              expect(text).not.toContain(forbidden)
           }
-          return out
         }
-      },
-    })
-    const dyingStore = { ...store, scopeBuild: () => dying } as unknown as MemoryBuildStore
-    Object.setPrototypeOf(dyingStore, Object.getPrototypeOf(store))
-    const first = judges(async (_ctx, judge, cli) => {
-      if (judge === 4) {
-        fourthStarted()
-        await new Promise(() => undefined)
-      }
-      if (judge === 3) {
-        await fourth
-        await firstTwo
-        expect(await cli(['judge', 'prefer', 'B', '--reason', 'B is clearer'])).toBe(0)
-        crashed = true
-        return
-      }
-      expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
-    })
-    const random = [0.1, 0.9, 0.9, 0.1]
-    await expect(
-      runnerFor(
-        dyingStore,
+        for (let dir = root; dir !== '/'; dir = dirname(dir))
+          expect(existsSync(join(dir, '.git'))).toBe(false)
+        expect((await readdir(tmp)).some((name) => name.startsWith('autobuild-panel-'))).toBe(false)
+        for (const install of [
+          '.agents/skills/ab-judge/SKILL.md',
+          '.claude/skills/ab-judge/SKILL.md',
+        ])
+          expect((await readFile(join(root, install))).toString('hex')).toBe(
+            (await blob(repo.workspace, `${repo.pin}:.agents/skills/ab-judge/SKILL.md`)).toString(
+              'hex',
+            ),
+          )
+
+        // Both variants carry the pin's exact harness bytes and modes.
+        for (const label of ['A', 'B']) {
+          for (const path of HARNESS)
+            expect((await readFile(join(root, label, path))).toString('hex')).toBe(
+              (await blob(repo.workspace, `${repo.pin}:${path}`)).toString('hex'),
+            )
+          expect(((await lstat(join(root, label, 'evals/run.sh'))).mode & 0o111) !== 0).toBe(true)
+          expect(await readlink(join(root, label, 'evals/link'))).toBe('fixture.txt')
+          expect(existsSync(join(root, label, 'evals/extra.md'))).toBe(false)
+        }
+
+        // The judge's environment names no protected location: not the
+        // workspace, its Git directory, the store or the distribution.
+        const env = JSON.stringify(ctx.opts.env)
+        for (const forbidden of [repo.workspace, repo.commonDir, repo.store, ...shas])
+          expect(env).not.toContain(forbidden)
+        expect(ctx.opts.env.AB_BUILD).toBeUndefined()
+        expect(ctx.opts.env.AB_PHASE).toBeUndefined()
+        expect(ctx.opts.env.AB_STORE).toBeUndefined()
+        expect(ctx.opts.env.AB_TOKEN).toBeUndefined()
+        const path = ctx.opts.env.PATH!.split(':')
+        expect(path[0]).toMatch(/\/autobuild-judge-bin-[0-9a-f]{16}$/)
+        // The distribution's own agent bin is replaced, and no entry reaches a
+        // protected location.
+        expect(path).not.toContain(AGENT_BIN_DIR)
+        expect(protectedEntries(path, repo)).toEqual([])
+        if (launch === 'runner') {
+          // The reported condition: a distribution-root entry outside the
+          // protected fixture repository reaches the judge, and is not a leak.
+          expect(EXISTING_DISTRIBUTION_ENTRIES.length).toBeGreaterThan(0)
+          expect(path).toEqual(expect.arrayContaining(EXISTING_DISTRIBUTION_ENTRIES))
+          expect(path.some((entry) => entry.startsWith(`${distributionRoot()}/`))).toBe(true)
+        } else {
+          // The judge sees the launcher and the declared entries only.
+          expect(path.slice(1)).toEqual(TOOL_PATH)
+        }
+
+        // `ab` is the scratch launcher: its content names nothing protected,
+        // and its process runs as `bun <launcher> judge …`. A `bun` shim after
+        // the launcher directory records the interpreter's argv.
+        const shim = await directory(join(tmpdir(), 'ab-panel-shim-'))
+        const argvLog = join(shim, `argv-${judge}`)
+        const realBun = process.execPath
+        await writeFile(
+          join(shim, 'bun'),
+          `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\nexec '${realBun}' "$@"\n`,
+        )
+        await chmod(join(shim, 'bun'), 0o755)
+        const located = await judgeShell(ctx, 'command -v ab')
+        expect(located.stdout.trim()).toBe(`${path[0]}/ab`)
+        const launcher = await readFile(located.stdout.trim(), 'utf8')
+        for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
+          expect(launcher).not.toContain(forbidden)
+        const refused = await judgeShell(ctx, 'ab status')
+        expect(refused.code).toBe(2)
+        expect(refused.stderr).toContain("a judge session may run only 'ab judge context'")
+
+        expect(await cli(['judge', 'context'])).toBe(0)
+        const contextDir = join(root, '.ab/judge')
+        const context = (
+          await Promise.all(
+            ['context.json', 'purpose.md', 'rubric.md'].map((name) =>
+              readFile(join(contextDir, name), 'utf8'),
+            ),
+          )
+        ).join('\n')
+        observed.push({
+          judge,
+          aDoc: await readFile(join(root, 'A/doc.md'), 'utf8'),
+          bDoc: await readFile(join(root, 'B/doc.md'), 'utf8'),
+          context,
+        })
+        const prefer = await judgeShell(
+          ctx,
+          `ab judge prefer ${preferences[judge - 1]!} --reason "judge ${judge}: the rubric's clarity criterion decides it"`,
+          [path[0], shim, ...path.slice(1)].join(':'),
+        )
+        expect(prefer.stderr).toBe('')
+        expect(prefer.code).toBe(0)
+        const argv = (await readFile(argvLog, 'utf8')).trim().split('\n')
+        expect(argv.slice(0, 3)).toEqual([`${path[0]}/ab`, 'judge', 'prefer'])
+        for (const part of argv)
+          for (const forbidden of [repo.workspace, repo.commonDir, repo.store, distributionRoot()])
+            expect(part).not.toContain(forbidden)
+      })
+      const random = [0.1, 0.9, 0.4]
+      const result: PanelResult = await runnerFor(
+        store,
         repo,
-        first,
+        agent,
         tmp,
         () => random.shift()!,
+      ).runPanel(request(repo, 3))
+
+      expect(result.kind).toBe('judged')
+      expect(observed).toHaveLength(3)
+      const events = panelEvents(await store.getEvents(SLUG))
+      expect(JSON.stringify(events[0]!.payload)).not.toMatch(/first/)
+      const orders = new Map<number, PanelOrder>()
+      for (const event of events)
+        if (event.type === 'panel.judge-started')
+          orders.set(event.payload.judge, event.payload.order)
+      for (const seen of observed) {
+        const sides = labelSides(orders.get(seen.judge)!)
+        expect(seen.aDoc).toBe(`${sides.A} prose\n`)
+        expect(seen.bDoc).toBe(`${sides.B} prose\n`)
+        for (const forbidden of [...shas, 'candidate', 'baseline', 'first'])
+          expect(seen.context).not.toContain(forbidden)
+      }
+      const judged = events
+        .flatMap((event) => (event.type === 'panel.judged' ? [event.payload] : []))
+        .sort((a, b) => a.judge - b.judge)
+      expect(judged.map((j) => [j.judge, j.order, j.preference])).toEqual([
+        [1, 'candidate-first', 'A'],
+        [2, 'baseline-first', 'B'],
+        [3, 'candidate-first', 'tie'],
+      ])
+      expect(judged.every((j) => j.reason.includes('clarity criterion'))).toBe(true)
+      // A for the candidate, B for the candidate, a tie: (1 + 1 + 0.5) / 3.
+      expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 3)
+      expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+
+    test('a launch PATH naming protected fixture locations reaches no judge', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      await mkdir(join(repo.workspace, 'node_modules/.bin'), { recursive: true })
+      const injected = [
+        join(repo.workspace, 'node_modules/.bin'),
+        join(repo.commonDir, 'hooks'),
+        repo.store,
+      ]
+      const launchPath = [...injected, ...entries]
+      useLaunchPath(launchPath)
+      // The detector still flags a real leak in the launch PATH.
+      expect(protectedEntries(launchPath, repo)).toEqual(injected)
+      let ran = 0
+      const agent = judges(async (ctx, _judge, cli) => {
+        ran += 1
+        const path = ctx.opts.env.PATH!.split(':')
+        expect(protectedEntries(path, repo)).toEqual([])
+        const env = JSON.stringify(ctx.opts.env)
+        for (const forbidden of [repo.workspace, repo.commonDir, repo.store])
+          expect(env).not.toContain(forbidden)
+        if (launch === 'runner')
+          expect(path).toEqual(expect.arrayContaining(EXISTING_DISTRIBUTION_ENTRIES))
+        expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
+      })
+      const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel(request(repo, 1))
+      expect(result.kind).toBe('judged')
+      expect(ran).toBe(1)
+      expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+
+    test('a TMPDIR inside the repository fails the run before any session', async () => {
+      const repo = await repository()
+      const store = await seeded()
+      const inside = join(repo.workspace, '.scratch')
+      await mkdir(inside)
+      const agent = judges(() => {
+        throw new Error('no judge may start')
+      })
+      const result = await runnerFor(store, repo, agent, inside, () => 0.1).runPanel(
+        request(repo, 2),
+      )
+      expect(result).toMatchObject({ kind: 'failed' })
+      expect((result as { reason: string }).reason).toContain(
+        'the judge scratch base is inside the repository',
+      )
+      expect(agent.sessions.size).toBe(0)
+      expect((await readdir(inside)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+
+    test("a linked worktree with TMPDIR inside the main repository's Git directory writes nothing there", async () => {
+      const repo = await repository()
+      const worktree = join(await directory(join(tmpdir(), 'ab-panel-wt-')), 'wt')
+      await git(repo.workspace, 'worktree', 'add', '-q', '--detach', worktree, repo.candidate)
+      const linked = { ...repo, workspace: await realpath(worktree) }
+      const store = await seeded()
+      const inside = join(repo.commonDir, 'scratch')
+      await mkdir(inside)
+      const agent = judges(() => {
+        throw new Error('no judge may start')
+      })
+      const result = await runnerFor(store, linked, agent, inside, () => 0.1).runPanel(
+        request(linked, 1),
+      )
+      expect(result).toMatchObject({ kind: 'failed' })
+      const reason = (result as { reason: string }).reason
+      expect(reason).toContain('the judge scratch base is inside the repository')
+      expect(reason).not.toContain(inside)
+      expect(agent.sessions.size).toBe(0)
+      // No material (and so no alternates path) was written under `.git`.
+      expect(await readdir(inside)).toEqual([])
+      expect(
+        panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
+      ).toBe(false)
+    })
+
+    test('a runtime executable found only inside the repository fails before any session', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      const bin = join(repo.workspace, 'node_modules', '.bin')
+      await mkdir(bin, { recursive: true })
+      await writeFile(join(bin, 'fake-judge-runtime'), '#!/bin/sh\nexit 0\n')
+      await chmod(join(bin, 'fake-judge-runtime'), 0o755)
+      const agent = judges(() => {
+        throw new Error('no judge may start')
+      }, 'fake-judge-runtime')
+      useLaunchPath([bin, ...entries])
+      const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel(request(repo, 1))
+      expect(result).toEqual({
+        kind: 'failed',
+        reason:
+          "the judge's fake-judge-runtime executable was not found outside the repository; install it outside any repository",
+      })
+      expect(agent.sessions.size).toBe(0)
+      expect(
+        panelEvents(await store.getEvents(SLUG)).some((e) => e.type === 'panel.judge-started'),
+      ).toBe(false)
+      expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+
+    test('a committed symlink out of the judge root fails the run before any session', async () => {
+      const repo = await repository()
+      await symlink(repo.workspace, join(repo.workspace, 'source'))
+      await git(repo.workspace, 'add', 'source')
+      await git(repo.workspace, 'commit', '-q', '-m', 'link the checkout')
+      const candidate = (await git(repo.workspace, 'rev-parse', 'HEAD')).trim()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      const agent = judges(() => {
+        throw new Error('no judge may start')
+      })
+      const result = await runnerFor(store, repo, agent, tmp, () => 0.1).runPanel({
+        ...request(repo, 2),
+        candidate,
+      })
+      expect(result).toMatchObject({ kind: 'failed' })
+      // Only the candidate carries the link; the safe relative `evals/link` passes.
+      const reason = (result as { reason: string }).reason
+      expect(reason).toMatch(/resolve outside its judge root: [AB]\/source$/)
+      expect(reason).not.toContain('evals/link')
+      expect(agent.sessions.size).toBe(0)
+      expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+
+    test('a crash after a saved preference commits it at reclaim without rerunning that judge', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      // The first runner dies right after judge 3's real `ab judge prefer`
+      // saves its outbox: every later write and command of that runner fails,
+      // as a dead process's would, so judge 3's preference exists only in its
+      // root.
+      let crashed = false
+      let endedCount = 0
+      let twoJudged!: () => void
+      const firstTwo = new Promise<void>((done) => {
+        twoJudged = done
+      })
+      let fourthStarted!: () => void
+      const fourth = new Promise<void>((done) => {
+        fourthStarted = done
+      })
+      const scoped = store.scopeBuild(SLUG)
+      const dying = new Proxy(scoped, {
+        get(target, member, receiver) {
+          const method = Reflect.get(target, member, receiver)
+          if (typeof method !== 'function' || !String(member).startsWith('append')) return method
+          return async (...args: unknown[]) => {
+            if (crashed) throw new Error('process crashed')
+            const out = await method.apply(target, args)
+            const written = out as { type?: string; event?: { type?: string } } | null
+            if ((written?.event?.type ?? written?.type) === 'panel.judge-ended') {
+              endedCount += 1
+              if (endedCount === 2) twoJudged()
+            }
+            return out
+          }
+        },
+      })
+      const dyingStore = { ...store, scopeBuild: () => dying } as unknown as MemoryBuildStore
+      Object.setPrototypeOf(dyingStore, Object.getPrototypeOf(store))
+      const first = judges(async (_ctx, judge, cli) => {
+        if (judge === 4) {
+          fourthStarted()
+          await new Promise(() => undefined)
+        }
+        if (judge === 3) {
+          await fourth
+          await firstTwo
+          expect(await cli(['judge', 'prefer', 'B', '--reason', 'B is clearer'])).toBe(0)
+          crashed = true
+          return
+        }
+        expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
+      })
+      const random = [0.1, 0.9, 0.9, 0.1]
+      await expect(
+        runnerFor(
+          dyingStore,
+          repo,
+          first,
+          tmp,
+          () => random.shift()!,
+          1,
+          () => !crashed,
+        ).runPanel(request(repo, 4)),
+      ).rejects.toThrow('process crashed')
+      expect(before3Preferred(await store.getEvents(SLUG))).toBe(false)
+
+      const before = panelEvents(await store.getEvents(SLUG))
+      const judgedBefore = before
+        .flatMap((event) => (event.type === 'panel.judged' ? [event.payload] : []))
+        .sort((a, b) => a.judge - b.judge)
+      expect(judgedBefore.map((j) => j.judge)).toEqual([1, 2])
+      const third = before.find(
+        (event) => event.type === 'panel.judge-started' && event.payload.judge === 3,
+      ) as AbEvent & { type: 'panel.judge-started' }
+
+      const second = judges(async (_ctx, judge, cli) => {
+        expect(judge).toBe(4)
+        expect(await cli(['judge', 'prefer', 'tie', '--reason', 'equally clear'])).toBe(0)
+      })
+      const result = await runnerFor(store, repo, second, tmp, () => 0.1, 2).runPanel(
+        request(repo, 4),
+      )
+      expect(second.sessions.size).toBe(1)
+      expect(result.kind).toBe('judged')
+      const after = panelEvents(await store.getEvents(SLUG)).slice(before.length)
+      const judgedAfter = after.flatMap((event) =>
+        event.type === 'panel.judged' ? [event.payload] : [],
+      )
+      expect(judgedAfter.map((j) => j.judge).sort()).toEqual([3, 4])
+      expect(judgedAfter.find((j) => j.judge === 3)).toMatchObject({
+        session: third.payload.session,
+        order: third.payload.order,
+        preference: 'B',
+      })
+      // The saved preference was committed as the judge, before its reclaim.
+      const preferred3 = after.findIndex(
+        (event) => event.type === 'panel.preferred' && event.payload.judge === 3,
+      )
+      const reclaimed3 = after.findIndex(
+        (event) =>
+          event.type === 'panel.judge-ended' &&
+          event.payload.session === third.payload.session &&
+          event.payload.outcome === 'reclaimed',
+      )
+      expect(after[preferred3]?.actor).toEqual({
+        kind: 'agent',
+        role: 'judge',
+        session: third.payload.session,
+      })
+      expect(preferred3).toBeLessThan(reclaimed3)
+      const recorded = (result as { judgments: Array<{ judge: number; preference: string }> })
+        .judgments
+      expect(recorded.slice(0, 2)).toEqual(judgedBefore)
+      // 1: candidate-first A → 1; 2: baseline-first A → 0; 3: baseline-first B → 1;
+      // 4: tie → 0.5.
+      expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 4)
+      expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
+    })
+  })
+
+const JUDGE_ALTERNATE =
+  '\n[roles.judge]\nruntime = "scripted"\nalternates = [{ runtime = "backup" }]\n'
+const streamOpener: RuntimeRegistration['openSessionStream'] = async (sink, info) =>
+  sink.open(`session:${info.session}`)
+
+for (const [launch, entries] of Object.entries(LAUNCH_CASES))
+  describe(`judge provider alternates and session streams (${launch} launch PATH)`, () => {
+    beforeEach(() => useLaunchPath(entries))
+
+    test('a failed primary falls back to a streaming alternate; every judge session streams', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      const primary = new ScriptedAgentRunner({
+        script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
+      })
+      const backup = judges(async (_ctx, _judge, cli) => {
+        expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
+      })
+      // Each stream is closed by the time its session's end lands.
+      const openAtEnd: string[] = []
+      const checkClosed = async (target: BuildStore, session: string) => {
+        const started = (await target.getEvents(SLUG)).find(
+          (event) => event.type === 'panel.judge-started' && event.payload.session === session,
+        ) as (AbEvent & { type: 'panel.judge-started' }) | undefined
+        const stream = started?.payload.stream
+        if (stream === undefined || (await target.getStream(stream))?.status !== 'closed')
+          openAtEnd.push(session)
+      }
+      const result = await runnerFor(
+        store,
+        repo,
+        primary,
+        tmp,
+        () => 0.1,
         1,
-        () => !crashed,
-      ).runPanel(request(repo, 4)),
-    ).rejects.toThrow('process crashed')
-    expect(before3Preferred(await store.getEvents(SLUG))).toBe(false)
-
-    const before = panelEvents(await store.getEvents(SLUG))
-    const judgedBefore = before
-      .flatMap((event) => (event.type === 'panel.judged' ? [event.payload] : []))
-      .sort((a, b) => a.judge - b.judge)
-    expect(judgedBefore.map((j) => j.judge)).toEqual([1, 2])
-    const third = before.find(
-      (event) => event.type === 'panel.judge-started' && event.payload.judge === 3,
-    ) as AbEvent & { type: 'panel.judge-started' }
-
-    const second = judges(async (_ctx, judge, cli) => {
-      expect(judge).toBe(4)
-      expect(await cli(['judge', 'prefer', 'tie', '--reason', 'equally clear'])).toBe(0)
-    })
-    const result = await runnerFor(store, repo, second, tmp, () => 0.1, 2).runPanel(
-      request(repo, 4),
-    )
-    expect(second.sessions.size).toBe(1)
-    expect(result.kind).toBe('judged')
-    const after = panelEvents(await store.getEvents(SLUG)).slice(before.length)
-    const judgedAfter = after.flatMap((event) =>
-      event.type === 'panel.judged' ? [event.payload] : [],
-    )
-    expect(judgedAfter.map((j) => j.judge).sort()).toEqual([3, 4])
-    expect(judgedAfter.find((j) => j.judge === 3)).toMatchObject({
-      session: third.payload.session,
-      order: third.payload.order,
-      preference: 'B',
-    })
-    // The saved preference was committed as the judge, before its reclaim.
-    const preferred3 = after.findIndex(
-      (event) => event.type === 'panel.preferred' && event.payload.judge === 3,
-    )
-    const reclaimed3 = after.findIndex(
-      (event) =>
-        event.type === 'panel.judge-ended' &&
-        event.payload.session === third.payload.session &&
-        event.payload.outcome === 'reclaimed',
-    )
-    expect(after[preferred3]?.actor).toEqual({
-      kind: 'agent',
-      role: 'judge',
-      session: third.payload.session,
-    })
-    expect(preferred3).toBeLessThan(reclaimed3)
-    const recorded = (result as { judgments: Array<{ judge: number; preference: string }> })
-      .judgments
-    expect(recorded.slice(0, 2)).toEqual(judgedBefore)
-    // 1: candidate-first A → 1; 2: baseline-first A → 0; 3: baseline-first B → 1;
-    // 4: tie → 0.5.
-    expect((result as { winRate: number }).winRate).toBeCloseTo(2.5 / 4)
-    expect((await readdir(tmp)).filter((name) => name.startsWith('autobuild-'))).toEqual([])
-  })
-})
-
-describe('judge provider alternates and session streams', () => {
-  const JUDGE_ALTERNATE =
-    '\n[roles.judge]\nruntime = "scripted"\nalternates = [{ runtime = "backup" }]\n'
-  const streamOpener: RuntimeRegistration['openSessionStream'] = async (sink, info) =>
-    sink.open(`session:${info.session}`)
-
-  test('a failed primary falls back to a streaming alternate; every judge session streams', async () => {
-    const repo = await repository()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    const primary = new ScriptedAgentRunner({
-      script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
-    })
-    const backup = judges(async (_ctx, _judge, cli) => {
-      expect(await cli(['judge', 'prefer', 'A', '--reason', 'A is clearer'])).toBe(0)
-    })
-    // Each stream is closed by the time its session's end lands.
-    const openAtEnd: string[] = []
-    const checkClosed = async (target: BuildStore, session: string) => {
-      const started = (await target.getEvents(SLUG)).find(
-        (event) => event.type === 'panel.judge-started' && event.payload.session === session,
-      ) as (AbEvent & { type: 'panel.judge-started' }) | undefined
-      const stream = started?.payload.stream
-      if (stream === undefined || (await target.getStream(stream))?.status !== 'closed')
-        openAtEnd.push(session)
-    }
-    const result = await runnerFor(
-      store,
-      repo,
-      primary,
-      tmp,
-      () => 0.1,
-      1,
-      () => true,
-      {
-        roles: JUDGE_ALTERNATE,
-        streams: true,
-        runtimes: {
-          backup: { runner: backup, servesModels: [''], openSessionStream: streamOpener },
+        () => true,
+        {
+          roles: JUDGE_ALTERNATE,
+          streams: true,
+          runtimes: {
+            backup: { runner: backup, servesModels: [''], openSessionStream: streamOpener },
+          },
+          wrapStore: (scoped) =>
+            new Proxy(scoped, {
+              get(target, property, receiver) {
+                const member = Reflect.get(target, property, receiver)
+                if (property === 'append')
+                  return async (slug: string, write: Parameters<BuildStore['append']>[1]) => {
+                    if (write.type === 'panel.judge-ended')
+                      await checkClosed(target, (write.payload as { session: string }).session)
+                    return target.append(slug, write)
+                  }
+                // A judge's transcript deposit carries its end.
+                if (property === 'appendWithArtifacts')
+                  return async (...args: Parameters<BuildStore['appendWithArtifacts']>) => {
+                    const session = args[1][0]?.metadata?.session
+                    if (typeof session === 'string') await checkClosed(target, session)
+                    return target.appendWithArtifacts(...args)
+                  }
+                return member
+              },
+            }),
         },
-        wrapStore: (scoped) =>
-          new Proxy(scoped, {
-            get(target, property, receiver) {
-              const member = Reflect.get(target, property, receiver)
-              if (property === 'append')
-                return async (slug: string, write: Parameters<BuildStore['append']>[1]) => {
-                  if (write.type === 'panel.judge-ended')
-                    await checkClosed(target, (write.payload as { session: string }).session)
-                  return target.append(slug, write)
-                }
-              // A judge's transcript deposit carries its end.
-              if (property === 'appendWithArtifacts')
-                return async (...args: Parameters<BuildStore['appendWithArtifacts']>) => {
-                  const session = args[1][0]?.metadata?.session
-                  if (typeof session === 'string') await checkClosed(target, session)
-                  return target.appendWithArtifacts(...args)
-                }
-              return member
-            },
-          }),
-      },
-    ).runPanel(request(repo, 2))
-    expect(result.kind).toBe('judged')
-    expect(openAtEnd).toEqual([])
+      ).runPanel(request(repo, 2))
+      expect(result.kind).toBe('judged')
+      expect(openAtEnd).toEqual([])
 
-    const events = panelEvents(await store.getEvents(SLUG))
-    const starts = events.flatMap((event) =>
-      event.type === 'panel.judge-started' ? [event.payload] : [],
-    )
-    expect(starts).toHaveLength(4)
-    expect(starts.every((start) => start.stream !== undefined)).toBe(true)
-    for (const judge of [1, 2]) {
-      const [failed, alternate] = starts.filter((start) => start.judge === judge)
-      expect(failed!.runner).toBe('scripted')
-      expect(alternate).toMatchObject({
-        runner: 'backup',
-        order: failed!.order,
-        substitution: { failed: { session: failed!.session, index: 0 }, selectedIndex: 1 },
-      })
-      expect((await store.getStream(failed!.stream!))?.outcome).toBe('aborted')
-      expect((await store.getStream(alternate!.stream!))?.outcome).toBe('completed')
-    }
+      const events = panelEvents(await store.getEvents(SLUG))
+      const starts = events.flatMap((event) =>
+        event.type === 'panel.judge-started' ? [event.payload] : [],
+      )
+      expect(starts).toHaveLength(4)
+      expect(starts.every((start) => start.stream !== undefined)).toBe(true)
+      for (const judge of [1, 2]) {
+        const [failed, alternate] = starts.filter((start) => start.judge === judge)
+        expect(failed!.runner).toBe('scripted')
+        expect(alternate).toMatchObject({
+          runner: 'backup',
+          order: failed!.order,
+          substitution: { failed: { session: failed!.session, index: 0 }, selectedIndex: 1 },
+        })
+        expect((await store.getStream(failed!.stream!))?.outcome).toBe('aborted')
+        expect((await store.getStream(alternate!.stream!))?.outcome).toBe('completed')
+      }
 
-    const streams = await store.listStreams({ kind: 'build', build: SLUG })
-    expect(streams).toHaveLength(4)
-    for (const start of starts) {
-      const artifact = await store.getArtifact(SLUG, `stream:${start.stream}`)
-      const document = JSON.parse(new TextDecoder().decode(artifact!.content))
-      const parts = document.flatMap((message: { parts: unknown[] }) => message.parts)
-      expect(parts[0]).toMatchObject({
-        type: 'data-ab-session',
-        data: {
-          session: start.session,
-          role: 'judge',
-          runner: start.runner,
-          phase: `judge:panel-1:${start.judge}`,
-        },
-      })
-      // Nothing streamed names the blinded order, a side or the root.
-      const streamed = JSON.stringify(parts)
-      for (const forbidden of ['candidate', 'baseline', tmp, repo.workspace])
-        expect(streamed).not.toContain(forbidden)
-    }
-  })
-
-  test('an alternate whose executable is found only inside the repository is never started', async () => {
-    const repo = await repository()
-    const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
-    const store = await seeded()
-    const bin = join(repo.workspace, 'node_modules', '.bin')
-    await mkdir(bin, { recursive: true })
-    await writeFile(join(bin, 'fake-backup-runtime'), '#!/bin/sh\nexit 0\n')
-    await chmod(join(bin, 'fake-backup-runtime'), 0o755)
-    const primary = new ScriptedAgentRunner({
-      script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
+      const streams = await store.listStreams({ kind: 'build', build: SLUG })
+      expect(streams).toHaveLength(4)
+      for (const start of starts) {
+        const artifact = await store.getArtifact(SLUG, `stream:${start.stream}`)
+        const document = JSON.parse(new TextDecoder().decode(artifact!.content))
+        const parts = document.flatMap((message: { parts: unknown[] }) => message.parts)
+        expect(parts[0]).toMatchObject({
+          type: 'data-ab-session',
+          data: {
+            session: start.session,
+            role: 'judge',
+            runner: start.runner,
+            phase: `judge:panel-1:${start.judge}`,
+          },
+        })
+        // Nothing streamed names the blinded order, a side or the root.
+        const streamed = JSON.stringify(parts)
+        for (const forbidden of ['candidate', 'baseline', tmp, repo.workspace])
+          expect(streamed).not.toContain(forbidden)
+      }
     })
-    const backup = judges(() => {
-      throw new Error('no alternate may start')
-    }, 'fake-backup-runtime')
-    const previous = process.env.PATH
-    process.env.PATH = `${bin}:${previous ?? ''}`
-    let result: PanelResult
-    try {
-      result = await runnerFor(
+
+    test('an alternate whose executable is found only inside the repository is never started', async () => {
+      const repo = await repository()
+      const tmp = await directory(join(tmpdir(), 'ab-panel-tmp-'))
+      const store = await seeded()
+      const bin = join(repo.workspace, 'node_modules', '.bin')
+      await mkdir(bin, { recursive: true })
+      await writeFile(join(bin, 'fake-backup-runtime'), '#!/bin/sh\nexit 0\n')
+      await chmod(join(bin, 'fake-backup-runtime'), 0o755)
+      const primary = new ScriptedAgentRunner({
+        script: () => failedTurnResult('provider overloaded', false, '', 'availability'),
+      })
+      const backup = judges(() => {
+        throw new Error('no alternate may start')
+      }, 'fake-backup-runtime')
+      useLaunchPath([bin, ...entries])
+      const result = await runnerFor(
         store,
         repo,
         primary,
@@ -814,28 +903,25 @@ describe('judge provider alternates and session streams', () => {
           runtimes: { backup: { runner: backup, servesModels: [''] } },
         },
       ).runPanel(request(repo, 1))
-    } finally {
-      process.env.PATH = previous
-    }
-    expect(result).toEqual({
-      kind: 'failed',
-      reason: 'judge 1 failed 2 times; last outcome failed',
+      expect(result).toEqual({
+        kind: 'failed',
+        reason: 'judge 1 failed 2 times; last outcome failed',
+      })
+      expect(backup.sessions.size).toBe(0)
+      const events = panelEvents(await store.getEvents(SLUG))
+      expect(
+        events.flatMap((event) =>
+          event.type === 'panel.judge-started' ? [event.payload.runner] : [],
+        ),
+      ).toEqual(['scripted', 'scripted'])
+      const ended = events.find((event) => event.type === 'panel.judge-ended')!
+      const error = (ended.payload as { error: string }).error
+      expect(error).toContain(
+        "alternate 1 (backup) refused: the judge's fake-backup-runtime executable was not found outside the repository",
+      )
+      expect(error).not.toContain(repo.workspace)
     })
-    expect(backup.sessions.size).toBe(0)
-    const events = panelEvents(await store.getEvents(SLUG))
-    expect(
-      events.flatMap((event) =>
-        event.type === 'panel.judge-started' ? [event.payload.runner] : [],
-      ),
-    ).toEqual(['scripted', 'scripted'])
-    const ended = events.find((event) => event.type === 'panel.judge-ended')!
-    const error = (ended.payload as { error: string }).error
-    expect(error).toContain(
-      "alternate 1 (backup) refused: the judge's fake-backup-runtime executable was not found outside the repository",
-    )
-    expect(error).not.toContain(repo.workspace)
   })
-})
 
 describe('symlinked spellings of a protected location', () => {
   test('inherited values reaching the checkout through a symlinked checkout or ancestor, embedded or multiline, are dropped', async () => {
