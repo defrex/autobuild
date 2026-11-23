@@ -350,3 +350,66 @@ test('the first abort origin survives later requests and persisted accumulator r
     expect(buildReadFactsReducer.finish(resumed).latestAbort).toEqual(requests[0]!)
   }
 })
+
+test('store-kept preservation receipts and node retention fold like their forge-only peers', () => {
+  const event = (seq: number, type: string, payload: unknown) =>
+    ({
+      seq,
+      type,
+      payload,
+      ts: '2026-01-01T00:00:00Z',
+      actor: KERNEL,
+    }) as import('../events/catalog').AbEvent
+  const forge = event(1, 'workspace.commits-preserved', {
+    workspace: 1,
+    execution: 0,
+    ref: 'old',
+    branch: 'ab/build',
+    phase: 'implement',
+    round: 1,
+    heads: [
+      {
+        sha: 'a'.repeat(40),
+        remoteRef: 'refs/autobuild/archive/build/a',
+        role: 'branch',
+        commits: ['a'.repeat(40)],
+      },
+    ],
+  })
+  const store = event(2, 'workspace.commits-retained', {
+    workspace: 1,
+    execution: 1,
+    ref: 'old',
+    branch: 'ab/build',
+    phase: 'implement',
+    round: 1,
+    heads: [
+      { sha: 'b'.repeat(40), role: 'branch', commits: ['b'.repeat(40)], storeBase: 'c'.repeat(40) },
+    ],
+  })
+  let acc = buildReadFactsReducer.advance(buildReadFactsReducer.initial(), [forge, store])
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toEqual(store as never)
+  acc = buildReadFactsReducer.advance(acc, [
+    event(3, 'history.retained', {
+      operation: 'restack',
+      id: 'leaf',
+      base: 'c'.repeat(40),
+      store: ['d'.repeat(40)],
+      target: [],
+      unretained: [],
+    }),
+    event(4, 'node.history-retained', {
+      operation: 'landing',
+      id: 'node',
+      base: 'c'.repeat(40),
+      store: ['d'.repeat(40), 'e'.repeat(40)],
+      target: ['f'.repeat(40)],
+      unretained: ['0'.repeat(40)],
+    }),
+  ])
+  expect(buildReadFactsReducer.finish(acc).retainedHistory).toEqual({
+    store: ['d'.repeat(40), 'e'.repeat(40)],
+    target: ['f'.repeat(40)],
+    unretained: ['0'.repeat(40)],
+  })
+})
