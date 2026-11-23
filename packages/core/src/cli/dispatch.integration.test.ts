@@ -4071,6 +4071,79 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 30_000)
 
+  test('layers .autobuild/local.toml, rejects committed-only local keys and reloads local edits', async () => {
+    const scanClock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, scanClock)
+    const stop = new AbortController()
+    const localPath = join(fx.checkout, '.autobuild', 'local.toml')
+    let sleeps = 0
+    try {
+      await mkdir(join(fx.checkout, '.autobuild'), { recursive: true })
+      await writeFile(localPath, 'capacity = 3\n')
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          scanClock.advance(60_000)
+          sleeps += 1
+          if (sleeps === 1) await writeFile(localPath, 'capacity = 3\n[verify]\nsteps = []\n')
+          else if (sleeps === 2)
+            await writeFile(localPath, 'capacity = 3\nticketScanIntervalSeconds = 30\n')
+          else stop.abort()
+        },
+        wire: () => fx.wire(),
+      })
+
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const started = events.find((event) => event.type === 'dispatcher.run-started')!
+      const startup = await fx.store.getRepoArtifact(
+        fx.origin,
+        started.payload.effectiveConfig.kind,
+        started.payload.effectiveConfig.rev,
+      )
+      expect(JSON.parse(new TextDecoder().decode(startup?.content)).capacity).toBe(3)
+      expect(startup?.meta.metadata.localOverrides).toEqual({
+        file: localPath,
+        settings: ['capacity'],
+      })
+
+      const rejected = events.filter((event) => event.type === 'dispatcher.config-rejected')
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0]?.payload.error).toStartWith(
+        `${localPath}: verify can only be set in autobuild.toml`,
+      )
+
+      const reloads = events.filter((event) => event.type === 'dispatcher.config-reloaded')
+      expect(reloads).toHaveLength(1)
+      const reloaded = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.effectiveConfig!.kind,
+        reloads[0]!.payload.effectiveConfig!.rev,
+      )
+      const effective = JSON.parse(new TextDecoder().decode(reloaded?.content))
+      expect(effective.ticketScanIntervalSeconds).toBe(30)
+      expect(effective.verify.steps).toEqual(['unit'])
+      expect(reloaded?.meta.metadata.localOverrides).toEqual({
+        file: localPath,
+        settings: ['capacity', 'ticketScanIntervalSeconds'],
+      })
+      const committed = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.artifact.kind,
+        reloads[0]!.payload.artifact.rev,
+      )
+      expect(new TextDecoder().decode(committed?.content)).toBe(DISPATCH_CONFIG_TOML)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('rejects an invalid save, then adopts and durably records a mixed hot/restart save', async () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()

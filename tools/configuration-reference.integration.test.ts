@@ -59,7 +59,14 @@ test('schema additions, removals, defaults and constraints cause check failure t
     documentSchema(schema, { description: 'Test description.' })
   const original = doc(z.strictObject({ name: doc(z.string().min(1).default('old')) }))
   const regionFor = (schema: z.ZodType) => ({
-    fixture: renderFields(schemaFields(schema, 'fixture', () => 'test')),
+    fixture: renderFields(
+      schemaFields(
+        schema,
+        'fixture',
+        () => 'test',
+        () => 'test',
+      ),
+    ),
   })
   try {
     const committed = rewriteConfigurationReference(document, regionFor(original))
@@ -108,7 +115,14 @@ test('both modes reject missing descriptions with the full TOML path and no writ
       ),
     ]) {
       const generate = () => ({
-        fixture: renderFields(schemaFields(schema, 'fixture', () => 'test')),
+        fixture: renderFields(
+          schemaFields(
+            schema,
+            'fixture',
+            () => 'test',
+            () => 'test',
+          ),
+        ),
       })
       for (const mode of ['--write', '--check'] as const) {
         await expect(updateConfigurationReference(path, mode, generate)).rejects.toThrow(

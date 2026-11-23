@@ -5,6 +5,7 @@ import { documentFields, documentSchema } from './reference-metadata'
 import {
   configurationReference,
   DOCUMENTATION_RELOAD_FALLBACK,
+  localOverrideBehavior,
   reloadBehavior,
   renderFields,
   schemaFields,
@@ -15,7 +16,13 @@ import { BUILTIN_WORKSPACE_PROVIDER_CONFIG, configRootSchema } from './schema'
 
 const doc = <T extends z.ZodType>(schema: T) =>
   documentSchema(schema, { description: 'Fixture description.' })
-const fields = (schema: z.ZodType) => schemaFields(schema, 'fixture', () => 'fixture reload')
+const fields = (schema: z.ZodType) =>
+  schemaFields(
+    schema,
+    'fixture',
+    () => 'fixture reload',
+    () => 'fixture local override',
+  )
 
 describe('configuration reference input adapter', () => {
   test('obsolete field descriptions name the field and regeneration command', () => {
@@ -264,6 +271,22 @@ describe('real configuration reference', () => {
       'Dispatcher restart required',
     )
     expect(reloadBehavior('roles.<name>.runtime')).toContain('Hot:')
+  })
+
+  test('local-override labels follow the root key classification', () => {
+    expect(localOverrideBehavior('capacity')).toBe('Allowed in .autobuild/local.toml.')
+    expect(localOverrideBehavior('roles.<name>.model')).toBe('Allowed in .autobuild/local.toml.')
+    expect(localOverrideBehavior('hooks.<name>.url')).toBe('Allowed in .autobuild/local.toml.')
+    expect(localOverrideBehavior('verify.<step>.command')).toBe(
+      'Committed only: set in autobuild.toml.',
+    )
+    expect(localOverrideBehavior('merge[].mode')).toBe('Committed only: set in autobuild.toml.')
+    expect(localOverrideBehavior('tickets.readyState')).toBe(
+      'Committed only: set in autobuild.toml.',
+    )
+    expect(() => localOverrideBehavior('future')).toThrow('missing local-override classification')
+    for (const field of Object.values(configurationReference()).flat())
+      expect(field.localOverride).toBe(localOverrideBehavior(field.path))
   })
 })
 

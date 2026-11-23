@@ -1,4 +1,4 @@
-import { parseConfig } from './load'
+import { LOCAL_CONFIG_RELATIVE_PATH, parseLayeredConfig, type LocalOverrideRecord } from './local'
 import type { Config, TicketsConfig } from './schema'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -151,6 +151,35 @@ export interface ConfigSnapshot {
   readonly resolver: RuntimeResolver
   /** Process-local revision. Zero is the startup file. */
   readonly revision: number
+  /** Settings this snapshot took from the checkout's local override file. */
+  readonly localOverrides?: LocalOverrideRecord
+}
+
+/** One dispatcher configuration candidate: the committed `autobuild.toml`
+ * text and, in checkout mode, the local override file's text when present. */
+export interface ConfigContent {
+  committed: string
+  local?: string
+}
+
+export interface LiveConfigOptions {
+  /** Absolute path of the checkout's local override file. Unset in origin
+   * mode, which never reads a checkout. */
+  localSource?: string
+  /** What the startup snapshot took from the local file. */
+  startupLocalOverrides?: LocalOverrideRecord
+}
+
+function normalizeContent(content: string | ConfigContent): ConfigContent {
+  return typeof content === 'string' ? { committed: content } : content
+}
+
+/** Comparison key of a candidate. Without a local layer it is exactly the
+ * committed text, as it was before the layer existed. */
+function contentKey(content: ConfigContent): string {
+  return content.local === undefined
+    ? content.committed
+    : JSON.stringify([content.committed, content.local])
 }
 
 export type ConfigReloadOutcome =
@@ -177,7 +206,10 @@ export type ConfigReloadOutcome =
     }
 
 export type ConfigReloadPublisher = (input: {
+  /** The committed `autobuild.toml` text of the candidate. */
   content: string
+  /** Settings the candidate takes from the local override file, if any. */
+  localOverrides?: LocalOverrideRecord
   /** Fully composed snapshot that will become current after publication. */
   effectiveConfig: Config
   restartRequired: readonly RestartRequiredConfigPath[]
@@ -185,7 +217,9 @@ export type ConfigReloadPublisher = (input: {
 }) => Promise<void>
 
 /**
- * Process-local owner of the dispatcher's effective config. A candidate is
+ * Process-local owner of the dispatcher's effective config: `autobuild.toml`
+ * layered with the checkout's `.autobuild/local.toml`, read together as one
+ * candidate. A candidate is
  * published only after parsing, eager route validation, and durable journal
  * publication all succeed. Callers capture `current()` once per boundary.
  *
@@ -200,11 +234,12 @@ export class LiveConfig {
   private rejectedContent: string | undefined
   private acceptedDeprecations: readonly string[]
   private noticedCandidate: string | undefined
+  private readonly localSource: string | undefined
 
   constructor(
     private readonly source: string,
     private readonly startup: Config,
-    startupContent: string,
+    startupContent: string | ConfigContent,
     private readonly runtimes: RuntimeRegistry,
     private readonly publish: ConfigReloadPublisher,
     startupDeprecations: readonly string[] = [],
@@ -212,8 +247,10 @@ export class LiveConfig {
      * running process (for example the ticket source's capabilities); a
      * throw rejects the reload and keeps the previous snapshot. */
     private readonly validate?: (config: Config) => void,
+    options: LiveConfigOptions = {},
   ) {
-    this.acceptedContent = startupContent
+    this.localSource = options.localSource
+    this.acceptedContent = contentKey(normalizeContent(startupContent))
     this.acceptedDeprecations = startupDeprecations
     this.snapshot = {
       config: startup,
@@ -225,6 +262,7 @@ export class LiveConfig {
         startup.profiles,
       ),
       revision: 0,
+      ...(options.startupLocalOverrides ? { localOverrides: options.startupLocalOverrides } : {}),
     }
   }
 
@@ -238,7 +276,33 @@ export class LiveConfig {
   }
 
   async refreshFromDisk(): Promise<ConfigReloadOutcome> {
-    return this.refreshFrom(() => Bun.file(this.source).text())
+    const localSource = this.localSource
+    if (localSource === undefined) return this.refreshFrom(() => Bun.file(this.source).text())
+    let local: string | undefined
+    try {
+      local = await Bun.file(localSource).text()
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        const message =
+          `${localSource} could not be read during live reload: ${
+            error instanceof Error ? error.message : String(error)
+          }; the last valid configuration snapshot remains active — ` +
+          `fix or remove ${LOCAL_CONFIG_RELATIVE_PATH} to resume live reload`
+        return this.rejectRead(message)
+      }
+    }
+    return this.refreshFrom(async () => {
+      const committed = await Bun.file(this.source).text()
+      return local === undefined ? committed : { committed, local }
+    })
+  }
+
+  private rejectRead(message: string): ConfigReloadOutcome {
+    const rejectedRead = `\0${message}`
+    const notify = this.rejectedContent !== rejectedRead
+    this.rejectedContent = rejectedRead
+    return { kind: 'rejected', error: message, notify }
   }
 
   /** Reload from any content source — the startup file (refreshFromDisk) or,
@@ -246,8 +310,8 @@ export class LiveConfig {
    * through the forge. Read failures take the same rejected-read path: the
    * last valid snapshot remains active and the error is reported once per
    * distinct failure. */
-  async refreshFrom(read: () => Promise<string>): Promise<ConfigReloadOutcome> {
-    let content: string
+  async refreshFrom(read: () => Promise<string | ConfigContent>): Promise<ConfigReloadOutcome> {
+    let content: string | ConfigContent
     try {
       content = await read()
     } catch (error) {
@@ -261,15 +325,14 @@ export class LiveConfig {
       const message =
         `${this.source} ${detail}; the last valid configuration snapshot remains active — ` +
         'restore a valid autobuild.toml to resume live reload'
-      const rejectedRead = `\0${message}`
-      const notify = this.rejectedContent !== rejectedRead
-      this.rejectedContent = rejectedRead
-      return { kind: 'rejected', error: message, notify }
+      return this.rejectRead(message)
     }
     return this.refresh(content)
   }
 
-  async refresh(content: string): Promise<ConfigReloadOutcome> {
+  async refresh(candidateContent: string | ConfigContent): Promise<ConfigReloadOutcome> {
+    const layers = normalizeContent(candidateContent)
+    const content = contentKey(layers)
     if (content === this.acceptedContent) {
       this.rejectedContent = undefined
       this.noticedCandidate = undefined
@@ -277,9 +340,23 @@ export class LiveConfig {
     }
 
     let candidate: Config
+    let localOverrides: LocalOverrideRecord | undefined
     const deprecations: string[] = []
     try {
-      candidate = parseConfig(content, this.source, (line) => deprecations.push(line))
+      ;({ config: candidate, localOverrides } = parseLayeredConfig(
+        {
+          committed: { text: layers.committed, source: this.source },
+          ...(layers.local === undefined
+            ? {}
+            : {
+                local: {
+                  text: layers.local,
+                  source: this.localSource ?? LOCAL_CONFIG_RELATIVE_PATH,
+                },
+              }),
+        },
+        (line) => deprecations.push(line),
+      ))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const notify = this.rejectedContent !== content
@@ -317,7 +394,13 @@ export class LiveConfig {
     const restartRequired = restartRequiredChanges(this.startup, candidate)
     const effectiveChanged = !same(this.snapshot.config, config)
     try {
-      await this.publish({ content, effectiveConfig: config, restartRequired, effectiveChanged })
+      await this.publish({
+        content: layers.committed,
+        ...(localOverrides ? { localOverrides } : {}),
+        effectiveConfig: config,
+        restartRequired,
+        effectiveChanged,
+      })
     } catch (error) {
       return {
         kind: 'publication-failed',
@@ -334,6 +417,7 @@ export class LiveConfig {
       config,
       resolver,
       revision: this.snapshot.revision + 1,
+      ...(localOverrides ? { localOverrides } : {}),
     }
     return {
       kind: 'adopted',
