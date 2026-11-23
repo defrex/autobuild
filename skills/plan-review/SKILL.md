@@ -43,8 +43,15 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
      no estimate. The ceiling is a limit, not a target; ordinary large plans
      and plans near but comfortably under it proceed. When fulfilling the
      spec clearly will not fit, escalate with a proposed split as below.
-   - **Testing** — does the testing section cover the seams the change
-     touches?
+   - **Testing** — does the testing section keep lasting regression tests
+     apart from implementation-time checks, and do the lasting tests cover
+     the seams the change touches? Judge each planned committed test on its
+     regression value: one that duplicates existing coverage, asserts
+     implementation details instead of behavior, exists only to scaffold the
+     build, or is slow where a faster test at a narrower seam would catch the
+     same regression is a finding. Do not demand tests the spec does not
+     warrant. Removing tests outside the change is out of scope: an
+     observation, not a finding.
    - **Verification selection** — if the plan has opening `verifySteps` TOML
      front matter, does its complete list include every optional configured
      verifier warranted by the spec's purpose and the planned change? Treat an
