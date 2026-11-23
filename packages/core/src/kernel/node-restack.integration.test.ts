@@ -943,3 +943,174 @@ test('unavailable nested presence waits durably, survives re-parenting, and prog
   const inventory = await nodeInventory(deps, await git('rev-parse', 'ab-node/destination'), parent)
   expect(inventory.builds).toContain('source')
 })
+
+/** A node restack against a bare origin whose archive refs are refused. */
+async function refusingNode(storeFails = false) {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { gitRewrite } = await import('../ports/forge/git-rewrite')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { sampleBuildInput } = await import('../store/contract')
+  const { deps, git, commit, base } = await fixture()
+  await git('checkout', '-b', 'ab-node/a')
+  await commit('one', 'one')
+  await commit('foreign')
+  const oldHead = await git('rev-parse', 'HEAD')
+  await git('checkout', 'main')
+  const parent = await commit('parent')
+  const origin = `${deps.workspacePath}-origin.git`
+  roots.push(origin)
+  await git('init', '--bare', origin)
+  await git('remote', 'add', 'origin', origin)
+  await git('push', 'origin', 'main', 'ab-node/a')
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('a'))
+  await store.append('a', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.append('a', {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['one'] },
+  })
+  if (storeFails) {
+    const put = store.putArtifact.bind(store)
+    store.putArtifact = async (slug, input) => {
+      if (input.kind.startsWith('history-objects-')) throw new Error('store write refused')
+      return put(slug, input)
+    }
+  }
+  await store.claimNodeWriter('a', 'holder', 60_000)
+  const forge = new FakeForge()
+  const transport = gitRewrite(deps.exec, false)
+  const refused: string[] = []
+  forge.rewrite = {
+    ...transport,
+    archive: async ({ ref, sha }) => {
+      refused.push(sha)
+      throw new Error(`archive publication rejected for ${ref} at ${sha}: hook declined`)
+    },
+  }
+  const tx = { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true }
+  return { deps, git, commit, base, oldHead, parent, origin, store, forge, tx, refused }
+}
+
+test('a node restack on a forge refusing archive refs completes and records where history is kept', async () => {
+  const { runNodeTransaction } = await import('./node-restack-transaction')
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const w = await refusingNode()
+  expect(
+    await runNodeTransaction(w.tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'first' }),
+  ).toBe('completed')
+  const events = await w.store.getEvents('a')
+  const retained = events.filter((e) => e.type === 'node.history-retained')
+  expect(retained.map((e) => e.payload)).toEqual([
+    {
+      operation: 'restack',
+      id: 'first',
+      base: w.parent,
+      store: [w.oldHead],
+      target: [w.base, w.parent],
+      unretained: [],
+    },
+  ])
+  expect(await w.store.getArtifact('a', `history-objects-${w.oldHead}`)).not.toBeNull()
+  expect(events.some((e) => e.type === 'observation.recorded')).toBe(false)
+  expect(w.refused).toContain(w.oldHead)
+  const node = (await readBuildFacts(w.store, 'a')).value.state.nodeRestack!
+  expect(node.contributionBase).toBe(w.parent)
+  expect(await w.git('rev-parse', 'refs/remotes/origin/ab-node/a').catch(() => '')).not.toBe(
+    w.oldHead,
+  )
+})
+
+test('a node restack whose history is kept nowhere warns once and proceeds', async () => {
+  const { runNodeTransaction } = await import('./node-restack-transaction')
+  const w = await refusingNode(true)
+  expect(
+    await runNodeTransaction(w.tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'first' }),
+  ).toBe('completed')
+  const events = await w.store.getEvents('a')
+  const warnings = events.filter(
+    (e) => e.type === 'observation.recorded' && e.payload.id === 'history-unretained',
+  )
+  expect(warnings).toHaveLength(1)
+  const retained = events.find((e) => e.type === 'node.history-retained')
+  expect(retained?.type === 'node.history-retained' && retained.payload.unretained).toEqual([
+    w.oldHead,
+  ])
+})
+
+for (const variant of ['published parent', 'parent moved away'] as const)
+  test(`node restack recovery restores reserved inputs before reading them (${variant})`, async () => {
+    const { runNodeTransaction } = await import('./node-restack-transaction')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const w = await refusingNode()
+    const append = w.store.appendIfCurrent.bind(w.store)
+    let crashed = false
+    w.store.appendIfCurrent = async (...args) => {
+      if (!crashed && args[2].type === 'node.item-prepared') {
+        crashed = true
+        throw new Error('simulated crash')
+      }
+      return append(...args)
+    }
+    await expect(
+      runNodeTransaction(w.tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'frozen' }),
+    ).rejects.toThrow('simulated crash')
+    let moved: string | undefined
+    if (variant === 'parent moved away') {
+      // The published parent is force-moved off the reserved parent's history.
+      await w.git('checkout', '-q', '--detach', w.base)
+      moved = await w.commit('replacement-parent')
+      await w.git('push', '-f', 'origin', `${moved}:refs/heads/main`)
+      w.forge.seedCommit(w.base, [])
+      w.forge.seedCommit(w.parent, [w.base])
+      w.forge.seedCommit(moved, [w.base])
+    }
+    // The workspace is lost: a fresh clone of the node branch alone lacks the
+    // reserved parent.
+    const fresh = `${w.deps.workspacePath}-fresh`
+    roots.push(fresh)
+    await w.git(
+      'clone',
+      '-q',
+      '--single-branch',
+      '--branch',
+      'ab-node/a',
+      `file://${w.origin}`,
+      fresh,
+    )
+    for (const [key, value] of [
+      ['user.name', 'Test'],
+      ['user.email', 'test@example.test'],
+    ])
+      await w.git('-C', fresh, 'config', key!, value!)
+    expect(
+      (await w.deps.exec(['git', 'cat-file', '-e', `${w.parent}^{commit}`], { cwd: fresh }))
+        .exitCode,
+    ).not.toBe(0)
+    const tx = { ...w.tx, workspacePath: fresh }
+    const outcome = await runNodeTransaction(tx, {
+      branch: 'ab-node/a',
+      parentBranch: 'main',
+      id: 'retry',
+    })
+    const events = await w.store.getEvents('a')
+    const settled = events.filter((e) => e.type === 'node.writer-settled')
+    if (variant === 'published parent') {
+      expect(outcome).toBe('completed')
+      expect(settled.map((e) => e.payload)).toEqual([{ id: 'frozen', outcome: 'completed' }])
+      expect((await readBuildFacts(w.store, 'a')).value.state.nodeRestack?.contributionBase).toBe(
+        w.parent,
+      )
+      return
+    }
+    // Retained nowhere and never published: abandon and redo from the
+    // published branches, without a Git error escaping.
+    expect(settled[0]?.payload).toEqual({ id: 'frozen', outcome: 'abandoned' })
+    const reserved = events.filter((e) => e.type === 'node.writer-reserved')
+    const abandonedAt = settled[0]!.seq
+    const later = reserved.filter((e) => e.seq > abandonedAt)
+    for (const event of later)
+      expect(event.type === 'node.writer-reserved' && event.payload.parent).toBe(moved)
+    expect(['completed', 'idle']).toContain(outcome)
+  })
