@@ -19,6 +19,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `connect` — Connect to a hosted service with browser approval.
 - `disconnect` — Revoke and remove the saved credential.
 - `secrets` — List metadata, set or remove write-only project secrets. Project members and super users can also use the web Settings tab; renewing refreshing ChatGPT credentials stays in `ab accounts login <account> --project`.
+- `web` — Serve a read-only web UI of this repository's builds on loopback. See [Operator surfaces](operator-surfaces.md).
 
 ## For your operator agent
 
