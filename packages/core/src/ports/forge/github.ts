@@ -8,6 +8,7 @@ import {
 } from '../forge-failure'
 import {
   forgeRequestContext,
+  forgeRequestExhausted,
   guardedForgeRequest,
   ForgeRequestDeferred,
 } from '../forge-request-context'
@@ -73,8 +74,11 @@ import {
   createGitHubFetchTransport,
   isGitHubGraphQLUnavailable,
   githubCredentialRequirement,
+  githubQuotaExhaustedFailure,
   githubRateLimitSnapshot,
+  githubRequestResource,
   githubTokenSource,
+  GitHubQuotaExhaustion,
   restPlanLimitation,
   type GitHubRequest,
   type GitHubTokenSource,
@@ -775,6 +779,10 @@ export class GitHubForge implements Forge {
   readonly prAttachments: PrAttachmentHosting
 
   private readonly transport: GitHubRequest
+  /** Quotas a successful response reported exhausted. The adapter, not the
+   * guard, remembers them: only it knows which quota a request consumes, so
+   * an exhausted `graphql` quota never holds back `core` work. */
+  private readonly quotaExhaustion = new GitHubQuotaExhaustion()
   /** Subprocess seam for workspace pushes and trusted kernel Git operations;
    * every API operation goes through the HTTP transport. */
   private readonly exec: Exec
@@ -998,6 +1006,24 @@ export class GitHubForge implements Forge {
       })
     this.transport = async (...args) =>
       guardedForgeRequest(async () => {
+        // A request for a quota a successful response already reported
+        // exhausted fails as the refusal it would have met, without being
+        // sent, so the guard's cooldown starts without an avoidable
+        // rejection. Thrown before the observers below: a skipped call is
+        // not a provider request.
+        const resource = githubRequestResource(args[0], args[1])
+        const exhausted = this.quotaExhaustion.admit(resource, this.now())
+        if (resource !== undefined && exhausted !== undefined) {
+          const failure = githubQuotaExhaustedFailure(resource, exhausted)
+          // Only an explicit override of evidence the kernel recorded lets
+          // the request through as a probe; its answer decides what follows.
+          if (
+            (await forgeRequestExhausted(failure, { quota: resource, seq: exhausted.seq })) !==
+            'probe'
+          )
+            throw failure
+          this.quotaExhaustion.release(resource, exhausted.seq)
+        }
         const context = forgeRequestContext()
         let outcome: 'restPrimary' | 'restNotModified' | 'graphql' | undefined
         // Captured opportunistically from every answer, 304s and limited
@@ -1008,6 +1034,8 @@ export class GitHubForge implements Forge {
           const response = await transport(...args)
           outcome ??= response.status === 304 ? 'restNotModified' : 'restPrimary'
           rateLimit = githubRateLimitSnapshot(response.headers ?? {})
+          // Refusals are classified below as before; only successes add evidence.
+          this.quotaExhaustion.observe(rateLimit, response.unauthenticated, this.now())
           return response
         } catch (error) {
           if (error instanceof GitHubApiError) {
