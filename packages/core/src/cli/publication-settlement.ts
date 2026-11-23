@@ -14,12 +14,7 @@ import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { completeFinalizePr } from './terminals'
 import { finalizePrRejectionGate, raiseFinalizePrRejection } from '../kernel/finalize-pr-rejection'
 import { isForgeRejection } from '../ports/forge-failure'
-import {
-  recordRetention,
-  restoreCommit,
-  retainCommit,
-  type RetentionOutcome,
-} from '../kernel/history-retention'
+import { recordRetention, retainCommit, type RetentionOutcome } from '../kernel/history-retention'
 
 /** Best-effort history retention through a provider's trusted transport. The
  * rewrite fact records confirmed forge archives only; a provider that ignores
@@ -45,7 +40,6 @@ function settlementRetention(
       branch: transaction.branch,
       ...(targetBranch === undefined ? {} : { targetBranch }),
     }
-    await restoreCommit(ctx, input.sha)
     outcomes.push(await retainCommit(ctx, input.sha))
   }
   return {

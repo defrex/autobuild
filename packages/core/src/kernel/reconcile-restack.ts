@@ -293,9 +293,8 @@ export async function retainTips(
   const ctx = retention(deps, facts, transaction, capability.archive)
   const outcomes: RetentionOutcome[] = []
   for (const sha of new Set([...facts.gitTips, ...extra])) {
-    // Restore what can be restored first; the forge capability may still
-    // archive a remote-only object, and anything else is recorded unretained.
-    await restoreCommit(ctx, sha)
+    // The forge capability may archive a remote-only object; after a refusal
+    // retainCommit restores what it can and records anything else unretained.
     outcomes.push(await retainCommit(ctx, sha))
   }
   await recordRetention(
@@ -484,6 +483,13 @@ async function reprepareFromPublished(
   id: string,
   contended: boolean,
 ): Promise<ReconcileTransaction> {
+  // An earlier redo already prepared this id: continue it, never write another.
+  if (
+    !contended &&
+    deps.automatic !== undefined &&
+    events.some((e) => e.type === 'reconcile.prepared' && e.payload.id === id)
+  )
+    return prepareRestack(deps, { ...input, id })
   const observed = await requireRewrite(deps.forge).snapshot({
     workspacePath: deps.workspacePath,
     branch: input.branch,

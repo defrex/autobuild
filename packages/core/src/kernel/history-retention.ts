@@ -104,6 +104,9 @@ export async function retainCommit(ctx: RetentionContext, sha: string): Promise<
     if (!isArchiveRefusal(error)) throw error
     refusal = error
   }
+  // The forge path above is unchanged; only a refusal restores a missing
+  // object from the other sources before classifying it.
+  await restoreCommit(ctx, sha)
   if ((await git(ctx, ['merge-base', '--is-ancestor', sha, ctx.exclude])).exitCode === 0)
     return { sha, in: 'target' }
   try {

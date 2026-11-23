@@ -1,6 +1,6 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, expect, test } from 'bun:test'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
@@ -8,7 +8,8 @@ import { bunExec, GitHubForge } from '../ports/forge/github'
 import { LocalGitForge } from '../ports/forge/local-git'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import {
-  archiveTips,
+  recoverLostCandidate,
+  retainTips,
   prepareRestack,
   publishRestack,
   validateRestack,
@@ -17,7 +18,7 @@ import {
 import { gitRewrite } from '../ports/forge/git-rewrite'
 import { FakeForge } from '../ports/forge/fake'
 import { humanActor } from '../events/envelope'
-import { buildTrailers } from './build-identity'
+import { buildTrailers, withBuildTrailer } from './build-identity'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -252,7 +253,7 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
       expect(finalEvents.findLast((e) => e.type === 'build.land-requested')?.seq).toBe(consent.seq)
       expect(finalEvents.filter((e) => e.type === 'build.hold-requested')).toEqual([])
       expect(native.isAutoMergeEnabled(1)).toBe(false)
-      const archives = await archiveTips(deps)
+      const archives = await retainTips(deps, transaction)
       expect(archives.some((entry) => entry.sha === oldHead)).toBe(true)
       for (const sha of unavailable) expect(archives.some((entry) => entry.sha === sha)).toBe(false)
       // A failed post-reconcile verifier can return to implement. Ordinary
@@ -382,7 +383,7 @@ test('a branch race preserves external bytes while upstream B2 cannot move the f
     })
     expect(await git(['diff', '--name-only', b1, next.changeSha])).toBe('external-work\nfeature')
     await git(['gc', '--prune=now'])
-    const archives = await archiveTips(deps)
+    const archives = await retainTips(deps, next)
     for (const entry of archives) expect(await git(['cat-file', '-t', entry.ref])).toBe('commit')
   } finally {
     await rm(cwd, { recursive: true, force: true })
@@ -901,7 +902,7 @@ for (const automatic of [false, true]) {
       },
     )
     const store = await seedStore()
-    const archives = await archiveTips(
+    const archives = await retainTips(
       {
         store,
         slug: BUILD,
@@ -919,6 +920,7 @@ for (const automatic of [false, true]) {
             }
           : {}),
       },
+      { id: 'probe', branch: 'ab/probe', targetBase: head },
       [base],
     )
     const ref = archives.find((entry) => entry.sha === base)!.ref
@@ -956,5 +958,227 @@ for (const automatic of [false, true]) {
       }),
     ).toEqual({ kind: 'published' })
     expect(await git(['rev-parse', 'refs/heads/ab/probe'], remote)).toBe(next)
+  })
+}
+
+/** A bare origin whose branch pushes succeed. When refusing, every
+ * `refs/autobuild/archive/` push is rejected, like a proxy that allows only
+ * branch refs; no REST fallback is supplied either. */
+async function refusingWorld(refuse = true) {
+  const root = await mkdtemp(join(tmpdir(), 'ab-retention-'))
+  const origin = join(root, 'origin.git')
+  const seed = join(root, 'seed')
+  const git = async (args: string[], cwd = seed) => {
+    const result = await bunExec(['git', ...args], { cwd })
+    if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
+    return result.stdout.trim()
+  }
+  await git(['init', '--bare', '-q', origin], root)
+  if (refuse) {
+    const hook = join(origin, 'hooks', 'update')
+    await writeFile(
+      hook,
+      '#!/bin/sh\ncase "$1" in refs/autobuild/archive/*) echo "pushes of anything other than a branch are not allowed" >&2; exit 1;; esac\nexit 0\n',
+    )
+    await chmod(hook, 0o755)
+  }
+  await git(['init', '-q', '-b', 'main', seed], root)
+  await git(['config', 'user.name', 'Test'])
+  await git(['config', 'user.email', 'test@example.invalid'])
+  await git(['config', 'commit.gpgsign', 'false'])
+  const commit = async (name: string) => {
+    await writeFile(join(seed, name), `${name}\n`)
+    await git(['add', name])
+    await git(['commit', '-qm', name])
+    return git(['rev-parse', 'HEAD'])
+  }
+  const base = await commit('base')
+  await git(['remote', 'add', 'origin', origin])
+  await git(['push', '-q', 'origin', 'main'])
+  await git(['checkout', '-qb', BRANCH])
+  const oldHead = await commit('feature')
+  await git(['push', '-q', 'origin', BRANCH])
+  let target = base
+  const forgeFor = () =>
+    Object.assign(new FakeForge(), { name: 'github', rewrite: gitRewrite(bunExec, false) })
+  return {
+    root,
+    origin,
+    seed,
+    base,
+    oldHead,
+    git,
+    get target() {
+      return target
+    },
+    /** Advance the published target, leaving the seed on the build branch. */
+    async advance() {
+      await git(['checkout', '-q', 'main'])
+      target = await commit('upstream')
+      await git(['push', '-q', 'origin', 'main'])
+      await git(['checkout', '-q', BRANCH])
+      return target
+    },
+    async clone() {
+      const path = join(root, `host-${Math.random().toString(36).slice(2)}`)
+      await git(['clone', '-q', '--branch', BRANCH, `file://${origin}`, path], root)
+      await git(['config', 'user.name', 'Test'], path)
+      await git(['config', 'user.email', 'test@example.invalid'], path)
+      await git(['config', 'commit.gpgsign', 'false'], path)
+      return path
+    },
+    deps(store: Awaited<ReturnType<typeof seedStore>>, workspacePath: string) {
+      return { store, slug: BUILD, workspacePath, exec: bunExec, forge: forgeFor() }
+    },
+  }
+}
+
+const automaticRestack = {
+  trigger: 'verify-entry' as const,
+  cycle: 1,
+  observation: 1,
+  message: withBuildTrailer('Build change\n', BUILD, { includesSubject: true }),
+}
+
+test('a forge that refuses archive refs still restacks and publishes, retaining history in the store', async () => {
+  const w = await refusingWorld()
+  const target = await w.advance()
+  const store = await seedStore()
+  const deps = { ...w.deps(store, w.seed), automatic: automaticRestack }
+  const prepared = await prepareRestack(deps, {
+    attempt: 1,
+    branch: BRANCH,
+    oldBase: w.base,
+    targetBase: target,
+    id: 'restack-1',
+  })
+  const headSha = await w.git(['rev-parse', 'HEAD'])
+  expect(
+    await publishRestack(deps, {
+      ...prepared,
+      headSha,
+      conflicted: false,
+      artifact: { kind: 'restack', rev: 0 },
+    }),
+  ).toEqual({ kind: 'published' })
+  expect(await w.git(['rev-parse', `refs/heads/${BRANCH}`], w.origin)).toBe(headSha)
+  expect(await w.git(['for-each-ref', 'refs/autobuild/archive/'], w.origin)).toBe('')
+  const events = await store.getEvents(BUILD)
+  const rewritten = events.find((e) => e.type === 'restack.rewritten')
+  expect(rewritten?.type === 'restack.rewritten' && rewritten.payload.archives).toEqual([])
+  const kept = { store: new Set<string>(), target: new Set<string>() }
+  for (const event of events)
+    if (event.type === 'history.retained') {
+      expect(event.payload.unretained).toEqual([])
+      for (const sha of event.payload.store) kept.store.add(sha)
+      for (const sha of event.payload.target) kept.target.add(sha)
+    }
+  for (const sha of [w.oldHead, prepared.changeSha, headSha]) {
+    expect(kept.store.has(sha)).toBe(true)
+    expect(await store.getArtifact(BUILD, `history-objects-${sha}`)).not.toBeNull()
+  }
+  expect(kept.target.has(w.base) && kept.target.has(target)).toBe(true)
+  expect(events.some((e) => e.type === 'observation.recorded')).toBe(false)
+})
+
+test('a prepared restack whose change is retained nowhere is redone from the published branch', async () => {
+  const w = await refusingWorld()
+  const target = await w.advance()
+  const store = await seedStore()
+  const input = {
+    attempt: 1,
+    branch: BRANCH,
+    oldBase: w.base,
+    targetBase: target,
+    id: 'restack-1',
+  }
+  const first = await prepareRestack(
+    { ...w.deps(store, w.seed), automatic: automaticRestack },
+    input,
+  )
+  // Another host whose store copy of the change was lost too.
+  const host = await w.clone()
+  const getArtifact = store.getArtifact.bind(store)
+  store.getArtifact = async (slug, kind, rev) =>
+    kind.endsWith(first.changeSha) ? null : getArtifact(slug, kind, rev)
+  const deps = { ...w.deps(store, host), automatic: automaticRestack }
+  const redo = await prepareRestack(deps, input)
+  expect(redo.id).toBe('restack-1-redo')
+  expect(redo.oldHead).toBe(w.oldHead)
+  expect(await w.git(['show', '-s', '--format=%P', 'HEAD'], host)).toBe(target)
+  // The runner retries with the active id, which continues the redo.
+  expect((await prepareRestack(deps, { ...input, id: 'restack-1-redo' })).id).toBe('restack-1-redo')
+  expect(
+    (await store.getEvents(BUILD))
+      .filter((e) => e.type === 'restack.prepared')
+      .map((e) => e.type === 'restack.prepared' && e.payload.id),
+  ).toEqual(['restack-1', 'restack-1-redo'])
+})
+
+for (const variant of ['manifest', 'cross-host', 'base-gone'] as const) {
+  test(`lost reconcile candidate recovery from a retained replay copy: ${variant}`, async () => {
+    const w = await refusingWorld()
+    // The replacement checkout predates the target advance in the cross-host cases.
+    const early = variant === 'manifest' ? undefined : await w.clone()
+    const target = await w.advance()
+    const store = await seedStore()
+    await store.putArtifact(BUILD, { kind: 'pr-description', content: 'Build change\n\nBody\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: target },
+    })
+    const prepared = await prepareRestack(w.deps(store, w.seed), {
+      attempt: 1,
+      branch: BRANCH,
+      oldBase: w.base,
+      targetBase: target,
+      id: 'rewrite-1',
+    })
+    const candidate = await w.git(['rev-parse', 'HEAD'])
+    await retainReplay(w.deps(store, w.seed), candidate, target)
+    const artifact = { kind: 'reconcile-notes', rev: 0 }
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.publish-intended',
+      payload: { ...prepared, headSha: candidate, conflicted: false, artifact },
+    })
+    const request = await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'reconcile',
+        rewrite: { ...prepared, conflicted: false },
+        branch: BRANCH,
+        sha: candidate,
+        artifact,
+      },
+    })
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'publication.lost',
+      payload: {
+        request: request.seq,
+        operation: 'reconcile',
+        branch: BRANCH,
+        sha: candidate,
+        reason: 'workspace released with the publication uncompleted',
+      },
+    })
+    if (variant === 'base-gone') await w.git(['update-ref', 'refs/heads/main', w.base], w.origin)
+    const host = early ?? (await w.clone())
+    expect((await bunExec(['git', 'cat-file', '-e', candidate], { cwd: host })).exitCode).not.toBe(
+      0,
+    )
+    const outcome = await recoverLostCandidate(w.deps(store, host))
+    const events = await store.getEvents(BUILD)
+    if (variant === 'base-gone') {
+      expect(outcome).toBe('retired')
+      expect(events.some((e) => e.type === 'publication.candidate-retired')).toBe(true)
+      return
+    }
+    expect(outcome).toBe('available')
+    expect(await w.git(['cat-file', '-t', candidate], host)).toBe('commit')
+    expect(events.some((e) => e.type === 'publication.candidate-retired')).toBe(false)
   })
 }
