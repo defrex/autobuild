@@ -227,3 +227,25 @@ test('another host restores retained history from the forge ref, the store copy 
   expect(await restoreCommit(refusing.context(empty, fromBranch), refusing.head)).toBe(true)
   expect(await restoreCommit(refusing.context(empty, fromBranch), refusing.unpublished)).toBe(false)
 })
+
+test('a store-only prepared change is restored and archived on an accepting forge', async () => {
+  const w = await world(false)
+  const store = await seedStore()
+  // A prepared reconcile change that never reached the forge: its tree and
+  // parent are published, the commit itself survives only in the store.
+  const change = await git(
+    ['commit-tree', `${w.head}^{tree}`, '-p', w.base, '-m', 'prepared change'],
+    w.seed,
+  )
+  await store.putArtifact(BUILD, {
+    kind: `reconcile-change-${change}`,
+    content: await git(['cat-file', 'commit', change], w.seed).then((text) => `${text}\n`),
+  })
+  const host = await w.clone(BRANCH)
+  await git(['fetch', '-q', 'origin', 'main'], host)
+  expect((await bunExec(['git', 'cat-file', '-e', change], { cwd: host })).exitCode).not.toBe(0)
+  const outcome = await retainCommit(w.context(store, host), change)
+  expect(outcome).toEqual({ sha: change, in: 'forge', ref: archiveRef(BUILD, change) })
+  expect(await git(['rev-parse', archiveRef(BUILD, change)], w.origin)).toBe(change)
+  expect(await store.getArtifact(BUILD, `history-objects-${change}`)).toBeNull()
+})

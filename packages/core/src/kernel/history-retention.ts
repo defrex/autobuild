@@ -96,17 +96,27 @@ async function remote(ctx: RetentionContext, args: string[]) {
 
 export async function retainCommit(ctx: RetentionContext, sha: string): Promise<RetentionOutcome> {
   const ref = archiveRef(ctx.slug, sha)
-  let refusal: unknown
-  try {
-    await ctx.archive({ workspacePath: ctx.workspacePath, ref, sha })
-    return { sha, in: 'forge', ref }
-  } catch (error) {
-    if (!isArchiveRefusal(error)) throw error
-    refusal = error
+  const archive = async () => {
+    try {
+      await ctx.archive({ workspacePath: ctx.workspacePath, ref, sha })
+      return undefined
+    } catch (error) {
+      if (!isArchiveRefusal(error)) throw error
+      return error ?? new Error('archive refused')
+    }
   }
-  // The forge path above is unchanged; only a refusal restores a missing
-  // object from the other sources before classifying it.
-  await restoreCommit(ctx, sha)
+  const missing = !(await present(ctx, sha))
+  // The forge path is unchanged: a present object, or a remote-only one the
+  // forge can archive itself, is archived first.
+  let refusal = await archive()
+  if (refusal === undefined) return { sha, in: 'forge', ref }
+  // An object the forge could not see may be retained elsewhere (for example a
+  // prepared change kept only as reconcile-change-<sha>). Restore it, and give
+  // an accepting forge its archive ref before falling back to a store copy.
+  if ((await restoreCommit(ctx, sha)) && missing) {
+    refusal = await archive()
+    if (refusal === undefined) return { sha, in: 'forge', ref }
+  }
   if ((await git(ctx, ['merge-base', '--is-ancestor', sha, ctx.exclude])).exitCode === 0)
     return { sha, in: 'target' }
   try {
