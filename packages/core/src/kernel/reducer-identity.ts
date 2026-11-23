@@ -19,6 +19,9 @@ import { REDUCER_REVISIONS } from './reducer-revisions'
  * fold-only change made after two branches' revisions combine and before the
  * combined record is regenerated; the base-relative clause closes that state
  * by comparing against the verify base (`AB_VERIFY_BASE`) when one is given.
+ * Against the same base, the revision guard (`checkRevisionsSinceBase`)
+ * enforces revert-by-revision: no base ledger key may disappear, and no
+ * identity constructed at both commits may derive a lower version.
  * It must stay free of IO and `node:` imports because the dashboard client
  * bundle reads it.
  */
@@ -101,6 +104,9 @@ export const REGENERATE_COMMAND =
   'AB_UPDATE_REDUCER_SHAPES=1 bun test packages/core/src/kernel/reducer-registry.integration.test.ts'
 export const UNREGENERATED_COMBINATION_PREFIX = 'reducer identity: unregenerated combination'
 export const BASE_RELATIVE_SKIPPED_PREFIX = 'reducer identity: base-relative clause skipped'
+export const REVISION_GUARD_SKIPPED_PREFIX = 'reducer identity: revision guard skipped'
+/** The revision ledger, relative to the repository root. */
+export const LEDGER_PATH = 'packages/core/src/kernel/reducer-revisions.ts'
 
 export type Ledger = Readonly<Record<string, string>>
 export interface Revision {
@@ -174,14 +180,16 @@ export function deriveReducerVersion(input: {
   parts?: readonly string[]
   ledger?: Ledger
   graph?: IdentityGraph
+  /** The frozen bases; defaults to `LEGACY_REDUCER_VERSIONS`. */
+  legacy?: Readonly<Record<string, number>>
 }): number {
   const ledger = input.ledger ?? REDUCER_REVISIONS
   const graph = input.graph ?? PARTS
+  const legacy = input.legacy ?? LEGACY_REDUCER_VERSIONS
   const own =
-    (LEGACY_REDUCER_VERSIONS[input.identity] ?? 1) +
-    (revisionsByIdentity(ledger).get(input.identity)?.length ?? 0)
+    (legacy[input.identity] ?? 1) + (revisionsByIdentity(ledger).get(input.identity)?.length ?? 0)
   return (input.parts ?? graph.get(input.identity) ?? []).reduce(
-    (sum, part) => sum + deriveReducerVersion({ identity: part, ledger, graph }),
+    (sum, part) => sum + deriveReducerVersion({ identity: part, ledger, graph, legacy }),
     own,
   )
 }
@@ -267,6 +275,8 @@ export type IdentityViolationKind =
   | 'missing-archive'
   | 'unrecorded-corpus'
   | 'missing-record'
+  | 'removed-revision'
+  | 'lowered-version'
 
 export interface IdentityViolation {
   name: string
@@ -501,6 +511,57 @@ export function formatUnregeneratedCombination(entry: UnregeneratedCombination):
 /** The notice the registry test prints when it cannot compare against a base. */
 export function formatBaseRelativeSkipped(reason: string): string {
   return `${BASE_RELATIVE_SKIPPED_PREFIX}: ${reason}. Changes since the verify base are checked only against the identity records.`
+}
+
+/** The notice the registry test prints when the revision guard cannot compare
+ * against a base. */
+export function formatRevisionGuardSkipped(reason: string): string {
+  return `${REVISION_GUARD_SKIPPED_PREFIX}: ${reason}. Removed ledger revisions and lowered reducer versions are not checked against a base.`
+}
+
+/** How to repair a change the revision guard refuses. */
+export function revisionGuardRemedy(base: string): string {
+  return `restore the missing lines of ${LEDGER_PATH}, and any frozen LEGACY_REDUCER_VERSIONS entry, exactly as the verify base holds them (git show ${base.slice(0, 12)}:${LEDGER_PATH}), then record the reverted or changed behaviour as a new revision with bun tools/reducer-revision.ts <shape|fold> <identity> --reason "…" and regenerate with ${REGENERATE_COMMAND}; a revert adds a revision and never takes one away, because saved values at the higher version would otherwise be reduced again on every read`
+}
+
+/** Revert-by-revision against the verify base: every base ledger key must
+ * survive at the head, and every identity constructed at both commits must
+ * derive at least its base version. Identities only one side constructs (a
+ * deregistered or a new reducer) are not compared. */
+export function checkRevisionsSinceBase(input: {
+  base: string
+  /** Keys parsed from the base ledger. */
+  baseLedger: ReadonlySet<string>
+  /** Keys of the head ledger. */
+  headLedger: ReadonlySet<string>
+  /** Identity → version derived by the base's own code. */
+  baseVersions: ReadonlyMap<string, number>
+  /** Identity → version derived at the head. */
+  headVersions: ReadonlyMap<string, number>
+}): IdentityViolation[] {
+  const base12 = input.base.slice(0, 12)
+  const remedy = revisionGuardRemedy(input.base)
+  const violations: IdentityViolation[] = []
+  for (const key of [...input.baseLedger].sort(byString)) {
+    if (input.headLedger.has(key)) continue
+    const identity = REVISION_KEY.exec(key)?.[1] ?? key
+    violations.push({
+      name: identity,
+      kind: 'removed-revision',
+      message: `reducer revision ${key} (identity ${identity}) is in the verify base ${base12} ledger but missing at HEAD; ${remedy}`,
+    })
+  }
+  for (const identity of [...input.baseVersions.keys()].sort(byString)) {
+    const baseVersion = input.baseVersions.get(identity)!
+    const head = input.headVersions.get(identity)
+    if (head === undefined || head >= baseVersion) continue
+    violations.push({
+      name: identity,
+      kind: 'lowered-version',
+      message: `reducer identity ${identity} derives version ${head} at HEAD, below version ${baseVersion} at the verify base ${base12}; reducer versions only rise. To fix it, ${remedy}`,
+    })
+  }
+  return violations
 }
 
 /** The entries whose every revision already exists in the base's ledger: the
