@@ -3,14 +3,18 @@
  *
  * Branch-owned worktree config and supplied immutable text are parsed as
  * one-shot inputs: `parseConfig(text)` is the primary API, while
- * `loadConfig(path)` is a disk convenience for scoped CLI and local tooling.
- * The running dispatcher has a separate live-reload context: `LiveConfig`
- * reads the main checkout, retains its last valid snapshot across rejected
- * candidates, and lets each action capture the current snapshot at its boundary.
+ * `loadConfig(path)` reads a checkout for scoped CLI and local tooling, layering
+ * the checkout's uncommitted `.autobuild/local.toml` over `autobuild.toml`
+ * (see `./local`). The running dispatcher has a separate live-reload context:
+ * `LiveConfig` reads the main checkout's two files as one candidate, retains its
+ * last valid snapshot across rejected candidates, and lets each action capture
+ * the current snapshot at its boundary.
  */
+import { dirname } from 'node:path'
 import { parse as parseToml, TomlError } from 'smol-toml'
 import type { z } from 'zod'
 import { expandIssues } from '../zod-issues'
+import { parseLayeredConfig, readLocalConfig } from './local'
 import { configSchema, TOP_LEVEL_SCALARS, TOP_LEVEL_TABLES, type Config } from './schema'
 
 /**
@@ -84,23 +88,15 @@ function duplicateHookName(text: string, error: TomlError): string | undefined {
   return name.startsWith('"') || name.startsWith("'") ? name.slice(1, -1) : name
 }
 
-/**
- * Parse and validate autobuild.toml text. Deprecated spellings are reported
- * through `warn` after validation succeeds; invalid text throws first. The
- * `console.error` default suits explicit one-shot reads (scoped CLI commands,
- * `ab init`, `ab upgrade`). Recurring or internal callers — the dispatcher and
- * pipeline-source resolution — pass their own sink, a collector or a no-op, so
- * a deprecation is reported once per startup or changed file instead of per
- * phase launch.
- */
-export function parseConfig(
+/** Parse TOML text into a raw table, naming `source` in every syntax error.
+ * No schema validation happens here: layered readers merge raw tables first
+ * (see `./local`) so defaults and cross-validation see the merged input. */
+export function parseConfigTable(
   tomlText: string,
   source = 'autobuild.toml',
-  warn: (message: string) => void = console.error,
-): Config {
-  let table: unknown
+): Record<string, unknown> {
   try {
-    table = parseToml(tomlText)
+    return parseToml(tomlText) as Record<string, unknown>
   } catch (error) {
     if (error instanceof TomlError) {
       const hook = duplicateHookName(tomlText, error)
@@ -112,7 +108,15 @@ export function parseConfig(
     }
     throw error
   }
+}
 
+/** Validate a raw configuration table; every error names `source`. Deprecated
+ * spellings are reported through `warn` after validation succeeds. */
+export function validateConfigTable(
+  table: Record<string, unknown>,
+  source = 'autobuild.toml',
+  warn: (message: string) => void = console.error,
+): Config {
   if (table && typeof table === 'object' && 'orchestrator' in table) {
     const orchestrator = table.orchestrator
     if (orchestrator && typeof orchestrator === 'object') {
@@ -140,7 +144,36 @@ export function parseConfig(
   return result.data
 }
 
-export async function loadConfig(path: string): Promise<Config> {
+/**
+ * Parse and validate autobuild.toml text. Deprecated spellings are reported
+ * through `warn` after validation succeeds; invalid text throws first. The
+ * `console.error` default suits explicit one-shot reads (scoped CLI commands,
+ * `ab init`, `ab upgrade`). Recurring or internal callers — the dispatcher and
+ * pipeline-source resolution — pass their own sink, a collector or a no-op, so
+ * a deprecation is reported once per startup or changed file instead of per
+ * phase launch.
+ *
+ * This reads committed text only. Readers of a checkout use `loadConfig`,
+ * which layers the checkout's `.autobuild/local.toml` over it.
+ */
+export function parseConfig(
+  tomlText: string,
+  source = 'autobuild.toml',
+  warn: (message: string) => void = console.error,
+): Config {
+  return validateConfigTable(parseConfigTable(tomlText, source), source, warn)
+}
+
+/**
+ * Read a checkout's configuration: `path` (its `autobuild.toml`) layered with
+ * the sibling `.autobuild/local.toml` when that file exists. Without a local
+ * file the result is exactly `parseConfig` of `path`.
+ */
+export async function loadConfig(
+  path: string,
+  warn: (message: string) => void = console.error,
+): Promise<Config> {
   const text = await Bun.file(path).text()
-  return parseConfig(text, path)
+  const local = await readLocalConfig(dirname(path))
+  return parseLayeredConfig({ committed: { text, source: path }, local }, warn).config
 }
