@@ -163,6 +163,79 @@ test('the ui-website step covers site source, design references and evidence too
   }
 })
 
+// Every tools/ module the terminal capture entry point reaches through relative
+// imports, entry point excluded.
+async function terminalCaptureHelpers(): Promise<string[]> {
+  const entry = 'tools/dashboard-capture.ts'
+  const visited = new Set<string>([entry])
+  const queue = [entry]
+  const specifier = /(?:from|import\()\s*['"]\.\/([^'"]+)['"]/g
+  while (queue.length > 0) {
+    const file = queue.shift()!
+    const source = await readFile(join(REPO_ROOT, file), 'utf8')
+    for (const match of source.matchAll(specifier)) {
+      const name = match[1]!
+      const path = `tools/${name.endsWith('.ts') ? name : `${name}.ts`}`
+      if (visited.has(path)) continue
+      visited.add(path)
+      queue.push(path)
+    }
+  }
+  visited.delete(entry)
+  return [...visited].sort()
+}
+
+test('the ui-tui step covers the terminal dashboard, capture entry point and every capture helper', async () => {
+  const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
+  const step = config.verify.stepConfigs['ui-tui']
+  if (!step || !('paths' in step) || !step.paths) throw new Error('ui-tui step has no paths')
+  const rule = { kind: 'paths' as const, step: 'ui-tui', paths: step.paths }
+
+  // A helper-only change alters captured frames, so it selects ui-tui alone.
+  const helpers = await terminalCaptureHelpers()
+  expect(helpers).toEqual(
+    expect.arrayContaining([
+      'tools/rollback-capture.ts',
+      'tools/parked-slot-wait-capture.ts',
+      'tools/optimization-node-capture.ts',
+    ]),
+  )
+  for (const helper of helpers) {
+    const applies = evaluateVerifyApplicability(rule, [helper]).applies
+    expect({ helper, applies }).toEqual({ helper, applies: true })
+  }
+
+  for (const path of [
+    'packages/core/src/cli/dashboard/render.ts',
+    'packages/core/src/cli/dispatch.ts',
+    'tools/dashboard-capture.ts',
+    'tools/capture-parity.ts',
+    '.agents/skills/verify-ui-tui/SKILL.md',
+  ]) {
+    const applies = evaluateVerifyApplicability(rule, [path]).applies
+    expect({ path, applies }).toEqual({ path, applies: true })
+  }
+  for (const path of [
+    'autobuild.toml',
+    'tools/website-capture.ts',
+    'tools/website-capture-png.ts',
+    'tools/git-tracked.ts',
+    'tools/check.ts',
+    'packages/core/src/kernel/engine.ts',
+    'packages/hosted-store-service/app/page.tsx',
+    'docs/verification.md',
+  ]) {
+    const applies = evaluateVerifyApplicability(rule, [path]).applies
+    expect({ path, applies }).toEqual({ path, applies: false })
+  }
+
+  // A renamed or removed helper cannot leave a dead literal selector behind.
+  for (const path of step.paths) {
+    if (!path.startsWith('tools/') || /[*?]/.test(path)) continue
+    await access(join(REPO_ROOT, path))
+  }
+})
+
 test('verify-ui-website is an unprefixed repo-local skill with a Claude symlink', async () => {
   const link = join(REPO_ROOT, '.claude/skills/verify-ui-website')
   expect(await realpath(link)).toBe(

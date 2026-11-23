@@ -101,10 +101,30 @@ paths = ["packages/hosted-store-service/app/**", "packages/hosted-store-service/
 
 # Visual evidence for dashboard-touching builds. The kernel decides
 # applicability from the build-owned diff; the skill never inspects Git or skips.
+# Every overlay helper the capture entry point imports changes the frames, so
+# each is listed; the ui-tui coverage test in
+# tools/local-consumer-config.integration.test.ts fails when one is missing. A
+# tools/*-capture.ts glob would also match the website capture, so it is not used.
 [verify.ui-tui]
 kind = "agent"
 skill = "verify-ui-tui"
-paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.ts", "tools/dashboard-capture.ts", "tools/capture-parity.ts", ".agents/skills/verify-ui-tui/SKILL.md"]
+paths = [
+  "packages/core/src/cli/dashboard/**",
+  "packages/core/src/cli/dispatch.ts",
+  "tools/dashboard-capture.ts",
+  "tools/capture-parity.ts",
+  ".agents/skills/verify-ui-tui/SKILL.md",
+  "tools/account-credentials-capture.ts",
+  "tools/verify-stages-capture.ts",
+  "tools/rollback-capture.ts",
+  "tools/handoff-capture.ts",
+  "tools/parked-slot-wait-capture.ts",
+  "tools/optimization-node-capture.ts",
+  "tools/ticket-wait-capture.ts",
+  "tools/harvest-suspension-capture.ts",
+  "tools/native-session-capture.ts",
+  "tools/judge-session-capture.ts",
+]
 
 # Visual evidence for the operator web app in the hosted store service
 # package. Same shape as the terminal step: the kernel decides applicability
