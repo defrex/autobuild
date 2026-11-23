@@ -1,7 +1,8 @@
 # RFC 0007 — Dispatcher web UI, build analytics and derived reducers
 
 **Status:** proposed, 2026-11-23, and revised the same day with the
-maintainer's first rulings (§14). Not decided design. `SPEC.md` describes the
+maintainer's first rulings and the outcome of the design round (§14,
+§16 stage 2). Not decided design. `SPEC.md` describes the
 running system until a ticket that builds a section of this RFC amends it.
 Open questions are marked `[OPEN]` and collected in §15.
 
@@ -145,9 +146,11 @@ There is no access control, so v1 limits exposure:
 - **Host header check.** Requests whose `Host` is not the bound address,
   `localhost` or `127.0.0.1` are refused, unless `--host` widened the bind.
   This blocks DNS rebinding against a loopback server, at almost no cost.
-- **Self-contained page.** `Content-Security-Policy: default-src 'self'`. The
-  page makes no third-party requests, so it works offline and in sandboxes with
-  restricted egress. Fonts ship in the bundle.
+- **Self-contained page.** `Content-Security-Policy: default-src 'self'`, with
+  a per-response nonce for styles: UI SDK injects a small stylesheet at
+  runtime, and it reads the nonce from a `<meta property="csp-nonce">` tag.
+  The page makes no third-party requests, so it works offline and in
+  sandboxes with restricted egress. Fonts ship inside the stylesheet.
 - **No transcripts and no credentials.** The pages show what the terminal
   dashboard shows. Ticket bodies and escalation text appear, so the bind
   warning matters.
@@ -180,20 +183,26 @@ The first goal is to show where time goes.
 - One row per build, newest first, paged (25 rows to a page).
 - The x-axis is wall-clock time across the selected window. Rows can switch to
   a relative axis, where every build starts at zero, so durations line up.
-- Each segment is colored by category. Agent phases get strong colors and
-  waits get muted ones. The palette is a design-system decision (§11).
+- Each segment is colored by category under the Chart Hue rule (§11.6): four
+  work hues, neutral waits, and texture within a family.
 - Phases that repeat, such as plan and review rounds or implement and
   code-review rounds, appear as repeated segments. Retry loops are visible
   without extra work.
 - Segments that overlap, such as verify steps running in parallel, are stacked
   in thin sub-lanes inside the row.
 - A live build's open segment grows with the clock.
-- Hovering or focusing a segment shows its category, start, duration and round.
-  Clicking a row opens the build page.
+- Hovering a segment, or focusing a segment's bar in an expanded build, shows
+  a floating popover with its category, round, build, start, end and
+  duration. Clicking a row opens the build page.
+- The chart is built on UI SDK's `Waterfall`, a tree grid on a time axis:
+  each build expands into one row per segment, with keyboard navigation and
+  screen-reader labels per bar.
 
 ### 7.2 Step-duration chart
 
-- One bar per step, sorted by the measure shown.
+- One bar per step, in pipeline order with waits last. Rows never reorder,
+  and the columns stay the same in both modes, so switching modes moves
+  bars, not the table.
 - **Per-run mode** (default): the bar's length is the mean duration of one
   occurrence. Markers show P50, P90 and P99, and the count is labeled.
 - **Total mode**: the bar's length is the total time spent in the step across
@@ -500,11 +509,13 @@ How the chosen option works:
   source tree and in every source-mode runtime with no build step. A freshness
   check fails verify when the committed bundle is stale, like the docs
   baseline does.
-- **Dependencies:** React 19, `@ui-sdk/core` and `@ui-sdk/react` become root
-  `devDependencies`. The package's `dependencies` list does not change, and a
-  test asserts it.
-- **Size budget:** a test fails when the gzipped bundle exceeds a budget,
-  proposed at 250 KB and settled in the design round.
+- **Dependencies:** React 19, `@ui-sdk/core` and `@ui-sdk/react` are
+  dependencies of the private `packages/ui` workspace only. The published
+  package's `dependencies` list does not change, and the existing
+  published-dependencies check proves it.
+- **Size budget:** a test fails when the gzipped bundle exceeds 250 KB. The
+  catalog measured about 150 KB of JS and 83 KB of CSS, most of the CSS
+  being the two Latin WOFF2 font subsets (`packages/ui/fonts/`).
 - **UI SDK risk:** UI SDK is in beta (0.1.0-beta, Apache-2.0, React 19 or
   later), and its APIs may change before general availability. Pinning an
   exact version inside a prebuilt bundle contains that: an upgrade is a
@@ -531,10 +542,10 @@ than relying on a prose document that each surface interprets on its own.
   grounds, the type ramp, spacing, rules, motion, and the segment palette
   (§7.4). Agent phases and waits must read as two families, and every color
   must hold contrast on both grounds, which a test checks.
-- **CSS custom properties are generated** from the token source. So are the
-  token front matter of `DESIGN.md` and its `.impeccable/design.json`
-  sidecar. A freshness check fails when any of them is stale, so the documents
-  can't drift from the code.
+- **CSS custom properties are generated** from the token source into
+  `packages/ui/src/generated/tokens.css`, and a test fails when they are
+  stale. Generating the token front matter of `DESIGN.md` and its
+  `.impeccable/design.json` sidecar the same way is still to do (ticket 3).
 - **`DESIGN.md` keeps the prose rules**: what each component is for, the do's
   and don'ts, and the named rules. Token values in it are generated, never
   hand-written. It stays the single design authority, now backed by code.
@@ -579,10 +590,37 @@ against the catalog page. It is never built in an unattended build. The round
 ends when the maintainer signs off on the catalog. Then the integration
 tickets are filed (§16).
 
+The round took place on 2026-11-23 and the maintainer signed off on the
+catalog the same day (§16, stage 2).
+
 Moving the hosted web app's `globals.css` onto the generated tokens is out of
 scope (§17). Until it moves, the hosted app is a second consumer of
 `DESIGN.md`'s prose, and the generated front matter tells it which values to
 match.
+
+### 11.6 Rules adopted in the design round
+
+`DESIGN.md` records these as named rules; every component in `packages/ui`
+follows them and every view built on it must too.
+
+- **The Chart Hue rule.** Charts never use the state inks. Four
+  non-semantic work hues (plan, implement, verify, land) and two neutrals for
+  waiting (a strong neutral marks an escalation). Texture separates the
+  categories inside a family: review rounds and reconcile hatched, held waits
+  cross-hatched, awaiting merge outlined. Validated for color-vision
+  deficiency, normal-vision separation and 3:1 contrast on both grounds.
+- **The Stable Layout rule.** Nothing moves unless the person moved it.
+  Space for anything that can appear is reserved from the first render,
+  fonts ship inside the bundle, overlays float, lists keep their order. The
+  catalog's `?cls=1` probe measures cumulative layout shift; the target is
+  zero.
+- **The Deliberate Transition rule.** No state changes without a
+  transition: 120 ms feedback, 200 ms state, 320 ms overlay or layout, one
+  decelerating curve, exits at 70%. Reduced motion keeps fades and drops
+  travel.
+- **The Reserved Space rule.** A placeholder takes the loaded content's
+  exact geometry before data exists; the `Reserve` primitive puts
+  placeholder and content in one grid cell and crossfades them.
 
 ## 12. Dispatcher ownership and operator guidance
 
@@ -633,8 +671,7 @@ The agent offers to save the answer, so it asks once. The preference is
 per person, never committed repository configuration, because two people on
 one repository can prefer different answers. It lives in **local
 configuration**: a per-person, uncommitted override layer over
-`autobuild.toml`, which is general work tracked as its own ticket outside
-this RFC (`[OPEN]` Q5). The setting is `[operator] dispatcher = "human" |
+`autobuild.toml`, built by its own ticket outside this RFC (#1068). The setting is `[operator] dispatcher = "human" |
 "agent"`, read and written through `ab`, so every harness sees the same
 answer. In ephemeral environments where local files don't persist, the agent
 asks again, or the human records the preference in their harness's own
@@ -694,28 +731,37 @@ From the maintainer, 2026-11-23:
 11. Dispatcher ownership is a personal preference. The operator skill gets
     lighter: it never starts a second dispatcher, and when none is running it
     offers to run one and to save the preference.
+12. The preference lives in allowlisted local configuration overrides, a
+    general feature filed as #1068.
+13. Design round, 2026-11-23: the design system keeps the Autobuild ANSI
+    name; charts use non-semantic hues; segment detail is a floating popover;
+    the duration chart keeps pipeline order; and the Stable Layout,
+    Deliberate Transition and Reserved Space rules are requirements of the
+    system (§11.6).
 
 ## 15. Open questions
 
 | # | Question | Proposed answer |
 |---|---|---|
-| Q1 | Token source format. | `packages/ui/src/tokens.ts`, generating CSS and `DESIGN.md` front matter. |
+| Q1 | Token source format. | Decided: `packages/ui/src/tokens.ts`, generating CSS (§11.2). |
 | Q2 | The changed-builds feed. | Per-build change position and `listBuildsChangedSince` (§8.4). |
 | Q3 | Consumer rollups against remote stores. | Client-computed, stored in a consumer snapshot namespace under a lease (§8.7). |
 | Q4 | Node and optimization-attempt builds in analytics. | Excluded from the duration chart by default; shown in the Gantt behind a filter. |
-| Q5 | Local configuration, which holds the dispatcher-ownership preference. | A separate ticket for a general per-person override layer; ticket 7 is blocked on it (§12.3). |
+| Q5 | Local configuration, which holds the dispatcher-ownership preference. | Decided: allowlisted local overrides, #1068; ticket 7 is blocked on it (§12.3). |
 | Q6 | Rollup retention. | 400 days of daily histograms. |
 | Q7 | A single "dispatcher running" field in repository status. | Yes, computed from the §12.2 conditions. |
+| Q8 | Optimistic updates. The maintainer prefers optimistic UI over loaders where it fits; `PRODUCT.md` says controls are never optimistically rendered. | Optimistic for view-only state (filters, window, expansion, theme); acknowledged for anything that appends an event. Moot for the read-only v1; must be settled before write actions (§17). |
 
 ## 16. Delivery plan
 
 **Stage 1: this RFC.** Accept it, rule on §15, or defer items to the design
 round.
 
-**Stage 2: Autobuild ANSI, interactively.** Scaffold `packages/ui`: typed
-tokens with their generators, the primitives, the chart components with
-fixtures, and the catalog build. Iterate with the maintainer on the catalog
-until sign-off. This lands by hand on a branch, not through builds.
+**Stage 2: Autobuild ANSI, interactively. Done 2026-11-23.** `packages/ui`
+holds the typed tokens and generated CSS, the primitives, composites,
+skeletons, motion primitives, the Gantt and step-duration charts with
+fixtures, and the catalog (`bun run ui:catalog`). `DESIGN.md` records the
+rules in §11.6. Landed by hand on main.
 
 **Stage 3: integration, as one node ticket with these children.**
 
@@ -726,14 +772,14 @@ until sign-off. This lands by hand on a branch, not through builds.
    `stepDurations`, read-budget harness extensions, and the `SPEC.md`
    sections on derived reducers and segments. Blocked on 1.
 3. **Web server core.** `packages/core/src/web/`: `Bun.serve`, the loopback
-   bind, the Host check, CSP, the server-sent event stream, the committed
-   bundle with its freshness and size checks, the dependency-list test, and
-   `ab web`.
+   bind, the Host check, CSP with the style nonce, the server-sent event
+   stream, the committed bundle with its freshness and size checks, the
+   generated `DESIGN.md` token front matter, and `ab web`.
 4. **In-process mode.** `ab dispatch --web`, sharing the dispatcher's refresh
    loop. Blocked on 3.
 5. **Overview and build views,** on the shared projection. Blocked on 3.
 6. **Analytics views.** Gantt and step-duration, with window and filters.
-   Blocked on 2 and 3.
+   Blocked on 2 and 5.
 7. **Dispatcher ownership and guidance.** The repository-status field (Q7),
    the preference setting (Q5), the `ab-operate` rewrite, `ab-guide`, and docs
    (§12). Blocked on 4 and on the local-configuration ticket.
