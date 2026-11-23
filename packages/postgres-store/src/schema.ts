@@ -1717,7 +1717,7 @@ export async function migratePostgres(
       await tx.unsafe(SCAN_CADENCE_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
       await tx.unsafe(STREAM_SEED_SCHEMA_DDL)
-      await tx.unsafe(REPO_CHANGE_DDL)
+      await ensureBuildChangePositions(tx as SQL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
@@ -2171,7 +2171,38 @@ async function ensureTicketStateCounts(tx: SQL): Promise<void> {
       SELECT repo, state, count(*) FROM ab_tickets GROUP BY repo, state`
 }
 
-/** Additive invalidation plumbing; independent of the core lockstep marker. */
+/** Applies `REPO_CHANGE_DDL`, backfilling build positions only when
+ * `build_change_positions` is new: each repository with builds advances by
+ * one and every existing build is recorded at that new head, so the feed
+ * over-reports pre-migration builds once and never under-reports. The
+ * migration holds its transaction-scoped advisory lock, and `CREATE TRIGGER`
+ * blocks build writes until commit, so none lands between the triggers and the
+ * backfill. Later migrations cost one `to_regclass` lookup. */
+async function ensureBuildChangePositions(tx: SQL): Promise<void> {
+  const [row] = (await tx`SELECT to_regclass('build_change_positions') IS NULL AS fresh`) as {
+    fresh: boolean
+  }[]
+  await tx.unsafe(REPO_CHANGE_DDL)
+  if (!row?.fresh) return
+  await tx`INSERT INTO repo_change_positions (repo, position)
+    SELECT DISTINCT repo, 1 FROM builds
+    ON CONFLICT (repo) DO UPDATE SET position = repo_change_positions.position + 1`
+  await tx`INSERT INTO build_change_positions (slug, repo, position)
+    SELECT b.slug, b.repo, p.position FROM builds b JOIN repo_change_positions p ON p.repo = b.repo
+    ON CONFLICT (slug) DO UPDATE SET position = EXCLUDED.position`
+}
+
+/**
+ * Additive change-position plumbing; independent of the core lockstep marker.
+ * Repository positions are ordered: every write below advances
+ * `repo_change_positions` under its row lock, so positions are assigned in
+ * commit order. Build creation and build events also record the new position
+ * as the build's latest in `build_change_positions`, in the same trigger and
+ * transaction, which the changed-builds feed range-scans. `ab_build_changed`
+ * stays defined for an older release's triggers; if an older migrate recreates
+ * `builds_repo_change` or `events_repo_change`, a write only advances the
+ * counter twice, which keeps positions strictly ordered.
+ */
 export const REPO_CHANGE_DDL = `
 CREATE TABLE IF NOT EXISTS repo_change_positions (repo text PRIMARY KEY, position bigint NOT NULL);
 CREATE INDEX IF NOT EXISTS builds_repo_created_slug ON builds(repo, created_at, slug);
@@ -2189,11 +2220,41 @@ BEGIN
  RETURN NEW;
 END $$;
 DROP TRIGGER IF EXISTS builds_repo_change ON builds;
-CREATE TRIGGER builds_repo_change AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_repo_changed();
 DROP TRIGGER IF EXISTS repo_events_repo_change ON repo_events;
 CREATE TRIGGER repo_events_repo_change AFTER INSERT ON repo_events FOR EACH ROW EXECUTE FUNCTION ab_repo_changed();
 DROP TRIGGER IF EXISTS events_repo_change ON events;
-CREATE TRIGGER events_repo_change AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_changed();
+CREATE TABLE IF NOT EXISTS build_change_positions (
+  slug text PRIMARY KEY REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text NOT NULL,
+  position bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS build_change_positions_repo_position ON build_change_positions(repo, position);
+CREATE OR REPLACE FUNCTION ab_build_created_recorded() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p bigint;
+BEGIN
+ INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = repo_change_positions.position + 1
+ RETURNING position INTO p;
+ INSERT INTO build_change_positions(slug, repo, position) VALUES (NEW.slug, NEW.repo, p)
+ ON CONFLICT(slug) DO UPDATE SET position = GREATEST(build_change_positions.position, EXCLUDED.position);
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION ab_build_event_recorded() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE r text; p bigint;
+BEGIN
+ SELECT repo INTO r FROM builds WHERE slug = NEW.build;
+ IF r IS NULL THEN RETURN NEW; END IF;
+ INSERT INTO repo_change_positions(repo, position) VALUES (r, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = repo_change_positions.position + 1
+ RETURNING position INTO p;
+ INSERT INTO build_change_positions(slug, repo, position) VALUES (NEW.build, r, p)
+ ON CONFLICT(slug) DO UPDATE SET position = GREATEST(build_change_positions.position, EXCLUDED.position);
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS builds_change_recorded ON builds;
+CREATE TRIGGER builds_change_recorded AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_build_created_recorded();
+DROP TRIGGER IF EXISTS events_change_recorded ON events;
+CREATE TRIGGER events_change_recorded AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_event_recorded();
 DROP TRIGGER IF EXISTS repo_holder_change ON repo_streams;
 CREATE TRIGGER repo_holder_change AFTER UPDATE OF lease_holder ON repo_streams
 FOR EACH ROW WHEN (OLD.lease_holder IS DISTINCT FROM NEW.lease_holder) EXECUTE FUNCTION ab_repo_changed();

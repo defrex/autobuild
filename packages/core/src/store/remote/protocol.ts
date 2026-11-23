@@ -162,6 +162,24 @@ export const repoChangePositionSchema = z.object({
   position: z.string().regex(/^(0|[1-9][0-9]*)$/),
 })
 
+/** `GET repos/:repo/changed-builds?since=P`: builds whose latest change
+ * position is after `P`, ascending, with the head read in the same snapshot. */
+export const changedBuildsSchema = z.object({
+  position: z.string().regex(/^(0|[1-9][0-9]*)$/),
+  builds: z.array(
+    z.object({
+      slug: z.string(),
+      position: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    }),
+  ),
+})
+
+/** `GET repos/:repo/build-page?limit=N[&cursor=C]`: one page, newest first. */
+export const buildPageSchema = z.object({
+  builds: buildRecordListSchema,
+  next: z.string().nullable(),
+})
+
 export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })
 
 /** `GET builds|repos/:id/snapshots/:reducer?version=N`: the snapshot or `null`. */
