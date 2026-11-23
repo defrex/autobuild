@@ -30,6 +30,8 @@ export interface GitHubResponse {
   json?: unknown
   /** Raw response bytes when the body was not JSON. */
   bytes?: Uint8Array
+  /** Why a successful request went out without a credential, when it did. */
+  unauthenticated?: string
 }
 
 /**
@@ -223,7 +225,11 @@ export function createGitHubFetchTransport(opts: {
     // always carries an empty body — return it before the non-2xx throw so
     // callers can treat revalidation success as success, not an error.
     if (response.status === 304) {
-      return { status: 304, headers: headerMap }
+      return {
+        status: 304,
+        headers: headerMap,
+        ...(missReason !== undefined ? { unauthenticated: missReason } : {}),
+      }
     }
     const contentType = headerMap['content-type'] ?? ''
     let text = ''
@@ -270,6 +276,7 @@ export function createGitHubFetchTransport(opts: {
       headers: headerMap,
       ...(json !== undefined ? { json } : {}),
       ...(bytes !== undefined ? { bytes } : {}),
+      ...(missReason !== undefined ? { unauthenticated: missReason } : {}),
     }
   }
 }
@@ -420,6 +427,131 @@ export function githubRateLimitSnapshot(
   const named = headers['x-ratelimit-resource']?.trim()
   const resource = named !== undefined && named !== '' && named.length <= 64 ? named : 'core'
   return { resource, limit, remaining, resetAt: resetAt.toISOString() }
+}
+
+/** How far ahead an exhausted response's reset may lie and still count as
+ * evidence: GitHub's primary window is one hour, plus five minutes of skew.
+ * A later reset is treated as malformed. */
+export const GITHUB_QUOTA_EXHAUSTION_MAX_AHEAD_MS = 65 * 60_000
+
+/** The quota a request will consume, predicted before it is sent:
+ * `graphql`, `search`, or `core` for any other API-relative path. An
+ * absolute URL (release-asset upload host) is unpredictable: `undefined`. */
+export function githubRequestResource(_method: string, path: string): string | undefined {
+  if (path === 'graphql') return 'graphql'
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) return undefined
+  const relative = path.replace(/^\/+/, '')
+  if (relative === 'search' || relative.startsWith('search/')) return 'search'
+  return 'core'
+}
+
+/** One remembered exhausted quota, as {@link GitHubQuotaExhaustion.admit}
+ * answers it. `seq` identifies the evidence: every valid exhausted
+ * observation gets a new one. */
+export interface GitHubQuotaExhausted {
+  resetAt: string
+  unauthenticated?: string
+  seq: number
+}
+
+type ExhaustionEntry = { resetMs: number; unauthenticated?: string; seq: number }
+type CredentialClass = 'authenticated' | 'unauthenticated'
+
+/**
+ * Quotas that a successful response reported exhausted (`remaining: 0` with
+ * a plausible future reset), keyed by resource and credential class. Pure
+ * and in memory; one per adapter instance.
+ *
+ * Evidence rules: an absent or malformed snapshot, a reset already past, or
+ * one beyond {@link GITHUB_QUOTA_EXHAUSTION_MAX_AHEAD_MS} records nothing.
+ * An exhausted response keeps the later of the two resets, so a stale or
+ * reordered one can only keep or lengthen a cooldown. No response ever
+ * clears or shortens an entry: only the reset passing ends it, or a
+ * guard-authorized {@link release}. The resulting state does not depend on
+ * the order responses arrive in.
+ */
+export class GitHubQuotaExhaustion {
+  private readonly entries = new Map<string, Map<CredentialClass, ExhaustionEntry>>()
+  private evidence = 0
+
+  observe(
+    snapshot: ForgeRateLimitObservation | undefined,
+    unauthenticated: string | undefined,
+    nowMs: number,
+  ): void {
+    if (snapshot === undefined || snapshot.remaining !== 0) return
+    const resetMs = Date.parse(snapshot.resetAt)
+    if (!Number.isFinite(resetMs) || resetMs <= nowMs) return
+    if (resetMs > nowMs + GITHUB_QUOTA_EXHAUSTION_MAX_AHEAD_MS) return
+    const credential: CredentialClass =
+      unauthenticated !== undefined ? 'unauthenticated' : 'authenticated'
+    let byClass = this.entries.get(snapshot.resource)
+    if (byClass === undefined) {
+      byClass = new Map()
+      this.entries.set(snapshot.resource, byClass)
+    }
+    const previous = byClass.get(credential)
+    const seq = ++this.evidence
+    const latest =
+      previous === undefined || previous.resetMs <= nowMs
+        ? resetMs
+        : Math.max(previous.resetMs, resetMs)
+    byClass.set(credential, {
+      resetMs: latest,
+      seq,
+      ...(unauthenticated !== undefined ? { unauthenticated } : {}),
+    })
+  }
+
+  /** The unexpired exhaustion that governs a request for `resource`, if any.
+   * Expired entries are dropped here, so expiry needs no timer. The request's
+   * credential class is not known yet, so either class blocks; authenticated
+   * evidence wins, because it speaks for the credential's own quota. */
+  admit(resource: string | undefined, nowMs: number): GitHubQuotaExhausted | undefined {
+    if (resource === undefined) return undefined
+    const byClass = this.entries.get(resource)
+    if (byClass === undefined) return undefined
+    for (const [credential, entry] of byClass)
+      if (entry.resetMs <= nowMs) byClass.delete(credential)
+    if (byClass.size === 0) this.entries.delete(resource)
+    const entry = byClass.get('authenticated') ?? byClass.get('unauthenticated')
+    if (entry === undefined) return undefined
+    return {
+      resetAt: new Date(entry.resetMs).toISOString(),
+      seq: entry.seq,
+      ...(entry.unauthenticated !== undefined ? { unauthenticated: entry.unauthenticated } : {}),
+    }
+  }
+
+  /** Forget the authenticated entry for `resource`, only while it still
+   * carries the evidence `seq` an explicit override authorized. Newer
+   * evidence that arrived meanwhile stays. No response path calls this. */
+  release(resource: string, seq: number): void {
+    const byClass = this.entries.get(resource)
+    if (byClass?.get('authenticated')?.seq !== seq) return
+    byClass.delete('authenticated')
+    if (byClass.size === 0) this.entries.delete(resource)
+  }
+}
+
+/** The failure a request for an exhausted quota fails with instead of being
+ * sent: the rate limit a refusal would have produced. */
+export function githubQuotaExhaustedFailure(
+  resource: string,
+  entry: Pick<GitHubQuotaExhausted, 'resetAt' | 'unauthenticated'>,
+): ForgeFailure {
+  const anonymous =
+    entry.unauthenticated !== undefined
+      ? ` (request was unauthenticated: ${entry.unauthenticated})`
+      : ''
+  return new ForgeFailure(
+    `GitHub ${resource} rate limit exhausted until ${entry.resetAt}; a previous response reported 0 remaining, so this request was not sent${anonymous}`,
+    {
+      kind: 'rate-limited',
+      resetAt: entry.resetAt,
+      ...(entry.unauthenticated !== undefined ? { unauthenticated: entry.unauthenticated } : {}),
+    },
+  )
 }
 
 /** Documented primary and secondary limits; permission failures are ordinary errors. */
