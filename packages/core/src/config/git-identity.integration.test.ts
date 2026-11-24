@@ -83,49 +83,30 @@ describe('git identity for finalize commits', () => {
     })
   })
 
-  test('a from-scratch environment without identity fails git commit', async () => {
-    const env = await scratchEnv()
-    const cwd = await makeRepo(env)
-    const commit = await git(cwd, ['commit', '-m', 'test', '--', 'CHANGELOG.md'], env)
-    expect(commit.exitCode).not.toBe(0)
-    expect(commit.stderr).toMatch(/please tell me who you are|identify/i)
-  })
-
-  test('the skill both-keys guard repairs an email-only partial identity', async () => {
-    const env = await scratchEnv()
-    const cwd = await makeRepo(env)
-    await git(cwd, ['config', 'user.email', 'someone@example.com'], env)
-
-    // The skill's guard: skip the fallback only when BOTH keys resolve.
-    const name = await git(cwd, ['config', 'user.name'], env)
-    const email = await git(cwd, ['config', 'user.email'], env)
-    if (name.stdout.trim() === '' || email.stdout.trim() === '') {
-      const identity = await provisionedIdentity()
-      await git(cwd, ['config', 'user.name', identity.name], env)
-      await git(cwd, ['config', 'user.email', identity.email], env)
-    }
-
-    const resolved = await git(cwd, ['config', 'user.name'], env)
-    expect(resolved.stdout.trim()).toBe(await provisionedIdentity().then(({ name }) => name))
-    const commit = await git(cwd, ['commit', '-m', 'test', '--', 'CHANGELOG.md'], env)
-    expect(commit.exitCode).toBe(0)
-  })
-
-  test('the provisioned identity makes the commit succeed with a clean tree', async () => {
-    const env = await scratchEnv()
-    const cwd = await makeRepo(env)
+  test('absent and email-only identities are repaired before a clean bot commit', async () => {
     const identity = await provisionedIdentity()
-    await git(cwd, ['config', 'user.name', identity.name], env)
-    await git(cwd, ['config', 'user.email', identity.email], env)
-
-    const commit = await git(cwd, ['commit', '-m', 'test', '--', 'CHANGELOG.md'], env)
-    expect(commit.exitCode).toBe(0)
-
-    const log = await git(cwd, ['log', '-1', '--format=%an|%ae|%cn|%ce'], env)
-    expect(log.stdout.trim()).toBe(
-      `${identity.name}|${identity.email}|${identity.name}|${identity.email}`,
-    )
-    const status = await git(cwd, ['status', '--porcelain'], env)
-    expect(status.stdout).toBe('')
+    for (const partial of [false, true]) {
+      const env = await scratchEnv()
+      const cwd = await makeRepo(env)
+      if (partial) await git(cwd, ['config', 'user.email', 'someone@example.com'], env)
+      else {
+        const failed = await git(cwd, ['commit', '-m', 'test', '--', 'CHANGELOG.md'], env)
+        expect(failed.exitCode).not.toBe(0)
+        expect(failed.stderr).toMatch(/please tell me who you are|identify/i)
+      }
+      // Exercise the both-keys guard with the identity extracted from the skill.
+      const name = await git(cwd, ['config', 'user.name'], env)
+      const email = await git(cwd, ['config', 'user.email'], env)
+      if (name.stdout.trim() === '' || email.stdout.trim() === '') {
+        await git(cwd, ['config', 'user.name', identity.name], env)
+        await git(cwd, ['config', 'user.email', identity.email], env)
+      }
+      expect((await git(cwd, ['config', 'user.name'], env)).stdout.trim()).toBe(identity.name)
+      expect((await git(cwd, ['commit', '-m', 'test', '--', 'CHANGELOG.md'], env)).exitCode).toBe(0)
+      expect((await git(cwd, ['log', '-1', '--format=%an|%ae|%cn|%ce'], env)).stdout.trim()).toBe(
+        `${identity.name}|${identity.email}|${identity.name}|${identity.email}`,
+      )
+      expect((await git(cwd, ['status', '--porcelain'], env)).stdout).toBe('')
+    }
   })
 })
