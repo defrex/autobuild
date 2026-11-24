@@ -1095,12 +1095,13 @@ describe('buildContext — hygiene (§8.3)', () => {
     await writeFile(join(workspace, '.ab/plan', 'history', 'old.json'), '[]\n')
     await writeFile(join(workspace, 'src.txt'), 'workspace file\n')
 
-    await buildContext({
+    const manifest = await buildContext({
       store,
       env: makeEnv({ phase: 'plan', round: 1 }),
       workspacePath: workspace,
     })
 
+    expect(JSON.parse(await abFile('context.json'))).toEqual(JSON.parse(JSON.stringify(manifest)))
     expect(existsSync(join(workspace, '.ab/plan', 'stale.txt'))).toBe(false)
     expect(existsSync(join(workspace, '.ab/plan', 'history'))).toBe(false)
     expect(await readFile(join(workspace, 'src.txt'), 'utf8')).toBe('workspace file\n')
@@ -1131,15 +1132,6 @@ describe('buildContext — hygiene (§8.3)', () => {
       workspacePath: workspace,
     })
     expect(await abFile('.gitignore')).toBe('*\n')
-  })
-
-  test('context.json on disk is exactly the returned manifest', async () => {
-    const manifest = await buildContext({
-      store,
-      env: makeEnv({ phase: 'plan', round: 1 }),
-      workspacePath: workspace,
-    })
-    expect(JSON.parse(await abFile('context.json'))).toEqual(JSON.parse(JSON.stringify(manifest)))
   })
 })
 
