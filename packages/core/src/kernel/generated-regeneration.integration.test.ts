@@ -100,24 +100,12 @@ test('resolves a generated conflict and keeps the clean staged edit in the repla
   expect(await replay.git(['status', '--porcelain'])).toBe('')
 })
 
-test('a failing command returns failed with its output and leaves the recorded conflict', async () => {
-  const replay = await conflictedReplay()
-  await replay.write('scratch.txt', 'kept\n')
-  const result = await replay.run(`echo broken >&2; exit 3`)
-  expect(result).toEqual({
-    outcome: 'failed',
-    reason: '`echo broken >&2; exit 3` exited 3: broken',
-  })
-  await expectRestoredFailure(replay)
-})
-
 test('partial and undeclared output from a failing command is removed, scratch survives', async () => {
   const replay = await conflictedReplay()
   await replay.write('scratch.txt', 'kept\n')
-  const result = await replay.run(
-    `printf partial > gen.txt; mkdir -p out/deep && printf x > out/deep/new.txt; printf y > junk.txt; exit 1`,
-  )
-  expect(result.outcome).toBe('failed')
+  const command = `printf partial > gen.txt; mkdir -p out/deep && printf x > out/deep/new.txt; printf y > junk.txt; echo broken >&2; exit 3`
+  const result = await replay.run(command)
+  expect(result).toEqual({ outcome: 'failed', reason: `\`${command}\` exited 3: broken` })
   expect(existsSync(join(replay.cwd, 'junk.txt'))).toBe(false)
   expect(existsSync(join(replay.cwd, 'out'))).toBe(false)
   await expectRestoredFailure(replay)
