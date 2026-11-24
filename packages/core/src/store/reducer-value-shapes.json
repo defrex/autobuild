@@ -248,21 +248,25 @@
       "acc": "2130",
       "value": "2130"
     },
+    "buildTimeline": {
+      "acc": "2332",
+      "value": "2340"
+    },
     "autoMergeDefault": {
       "acc": "883",
       "value": "883"
     },
     "pinnedAssets": {
-      "acc": "2332",
-      "value": "2334"
+      "acc": "2341",
+      "value": "2343"
     },
     "forgeHealthValue": {
       "acc": "870",
-      "value": "2335"
+      "value": "2344"
     },
     "dispatchPlacement": {
-      "acc": "2336",
-      "value": "2338"
+      "acc": "2345",
+      "value": "2347"
     }
   },
   "schemas": {
@@ -34894,26 +34898,163 @@
     "2332": {
       "kind": "object",
       "props": {
-        "pins": {
+        "kind": {
           "type": "2333",
+          "optional": false
+        },
+        "outcome": {
+          "type": "1046",
+          "optional": true
+        },
+        "createdAt": {
+          "type": "4",
+          "optional": true
+        },
+        "queuedClosed": {
+          "type": "6",
+          "optional": false
+        },
+        "openEscalations": {
+          "type": "8",
+          "optional": false
+        },
+        "waitEscalation": {
+          "type": "4",
+          "optional": true
+        },
+        "open": {
+          "type": "2334",
+          "optional": false
+        },
+        "closed": {
+          "type": "2339",
           "optional": false
         }
       }
     },
     "2333": {
-      "kind": "array",
-      "items": "1088"
+      "kind": "union",
+      "items": ["931", "932"]
     },
     "2334": {
       "kind": "object",
+      "props": {},
+      "index": "2335"
+    },
+    "2335": {
+      "kind": "object",
       "props": {
-        "pins": {
-          "type": "2333",
+        "category": {
+          "type": "2",
+          "optional": false
+        },
+        "start": {
+          "type": "2",
+          "optional": false
+        },
+        "end": {
+          "type": "4",
+          "optional": true
+        },
+        "durationMs": {
+          "type": "14",
+          "optional": false
+        },
+        "opened": {
+          "type": "2336",
+          "optional": false
+        },
+        "closed": {
+          "type": "2337",
+          "optional": true
+        },
+        "round": {
+          "type": "81",
+          "optional": true
+        },
+        "attempt": {
+          "type": "81",
+          "optional": true
+        },
+        "state": {
+          "type": "2338",
+          "optional": false
+        },
+        "merged": {
+          "type": "81",
+          "optional": true
+        }
+      }
+    },
+    "2336": {
+      "kind": "object",
+      "props": {
+        "type": {
+          "type": "2",
+          "optional": false
+        },
+        "seq": {
+          "type": "14",
           "optional": false
         }
       }
     },
-    "2335": {
+    "2337": {
+      "kind": "union",
+      "items": ["5", "2336"]
+    },
+    "2338": {
+      "kind": "union",
+      "items": ["776", "827", "828"]
+    },
+    "2339": {
+      "kind": "array",
+      "items": "2335"
+    },
+    "2340": {
+      "kind": "object",
+      "props": {
+        "kind": {
+          "type": "2333",
+          "optional": false
+        },
+        "outcome": {
+          "type": "1046",
+          "optional": true
+        },
+        "createdAt": {
+          "type": "4",
+          "optional": true
+        },
+        "segments": {
+          "type": "2339",
+          "optional": false
+        }
+      }
+    },
+    "2341": {
+      "kind": "object",
+      "props": {
+        "pins": {
+          "type": "2342",
+          "optional": false
+        }
+      }
+    },
+    "2342": {
+      "kind": "array",
+      "items": "1088"
+    },
+    "2343": {
+      "kind": "object",
+      "props": {
+        "pins": {
+          "type": "2342",
+          "optional": false
+        }
+      }
+    },
+    "2344": {
       "kind": "object",
       "props": {
         "value": {
@@ -34922,28 +35063,28 @@
         }
       }
     },
-    "2336": {
+    "2345": {
       "kind": "object",
       "props": {
         "placement": {
-          "type": "2337",
+          "type": "2346",
           "optional": false
         }
       }
     },
-    "2337": {
+    "2346": {
       "kind": "union",
       "items": ["62", "780", "781"]
     },
-    "2338": {
+    "2347": {
       "kind": "union",
-      "items": ["2339", "2341"]
+      "items": ["2348", "2350"]
     },
-    "2339": {
+    "2348": {
       "kind": "object",
       "props": {
         "status": {
-          "type": "2340",
+          "type": "2349",
           "optional": false
         },
         "placement": {
@@ -34952,11 +35093,11 @@
         }
       }
     },
-    "2340": {
+    "2349": {
       "kind": "literal",
       "value": "known"
     },
-    "2341": {
+    "2350": {
       "kind": "object",
       "props": {
         "status": {
@@ -34964,20 +35105,20 @@
           "optional": false
         },
         "reason": {
-          "type": "2342",
+          "type": "2351",
           "optional": false
         }
       }
     },
-    "2342": {
+    "2351": {
       "kind": "union",
-      "items": ["2343", "2344"]
+      "items": ["2352", "2353"]
     },
-    "2343": {
+    "2352": {
       "kind": "literal",
       "value": "unrecorded"
     },
-    "2344": {
+    "2353": {
       "kind": "literal",
       "value": "unsupported-capability"
     }
