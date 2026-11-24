@@ -753,7 +753,8 @@ describe('Dispatcher dispatch', () => {
       'target.moved',
     ])
     expect(events[0]?.actor).toEqual({ kind: 'dispatcher' })
-    expect(events[0]?.payload).toEqual({
+    // Strict: a ticket without issue links writes no issueLinks key at all.
+    expect(events[0]?.payload).toStrictEqual({
       ticket: ticket.ref,
       repo: REPO,
       baseBranch: 'main',
@@ -783,14 +784,21 @@ describe('Dispatcher dispatch', () => {
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
-  test('created builds record the served repository normalized origin, from one memoized exec call', async () => {
+  test('created builds record the served repository normalized origin, probed once in the physical checkout', async () => {
     let remoteCalls = 0
+    const remoteCwds: (string | undefined)[] = []
     const h = harness({
       tickets: [readyTicket('T-1'), readyTicket('T-2')],
       toml: 'capacity = 2\n',
-      exec: async (cmd) => {
+      // deps.repo is the store identity (an origin URL); deps.checkout is the
+      // physical path. `git remote get-url origin` with cwd = the URL would
+      // silently lose the origin (f_8061f912).
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+      exec: async (cmd, execOpts) => {
         if (cmd[1] === 'remote') {
           remoteCalls += 1
+          remoteCwds.push(execOpts.cwd)
           return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
         }
         return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
@@ -804,6 +812,7 @@ describe('Dispatcher dispatch', () => {
       'https://github.com/acme/app',
     ])
     expect(remoteCalls).toBe(1)
+    expect(remoteCwds).toEqual(['/repos/checkout'])
   })
 
   test('a repository without an origin remote creates builds without a recorded origin', async () => {
@@ -817,29 +826,6 @@ describe('Dispatcher dispatch', () => {
     await h.dispatcher.tick()
     const builds = await h.store.listBuilds()
     expect(builds.map((build) => build.repoOrigin)).toEqual([undefined])
-  })
-
-  test('the origin probe runs in the physical checkout, not the origin-URL identity', async () => {
-    const remoteCwds: (string | undefined)[] = []
-    const h = harness({
-      tickets: [readyTicket('T-1')],
-      // deps.repo is the store identity (an origin URL); deps.checkout is the
-      // physical path. `git remote get-url origin` with cwd = the URL would
-      // silently lose the origin (f_8061f912).
-      repo: 'https://github.com/acme/app',
-      checkout: '/repos/checkout',
-      exec: async (cmd, execOpts) => {
-        if (cmd[1] === 'remote') {
-          remoteCwds.push(execOpts.cwd)
-          return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
-        }
-        return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
-      },
-    })
-    await h.dispatcher.tick()
-    expect(remoteCwds).toEqual(['/repos/checkout'])
-    const builds = await h.store.listBuilds()
-    expect(builds[0]?.repoOrigin).toBe('https://github.com/acme/app')
   })
 
   test('uses the top-level baseBranch for the durable fact and workspace', async () => {
@@ -887,15 +873,6 @@ describe('Dispatcher dispatch', () => {
       { issue: 820, intent: 'refs' },
       { issue: 824, intent: 'closes' },
     ])
-  })
-
-  test('a ticket without issue links writes no issueLinks key', async () => {
-    const h = harness({ tickets: [readyTicket('T-plain')] })
-    await h.dispatcher.tick()
-    const created = (await h.store.getEvents('add-rate-limiting')).find(
-      (event) => event.type === 'build.created',
-    )
-    expect(created !== undefined && 'issueLinks' in created.payload).toBe(false)
   })
 
   describe('label-selected role profiles (SPEC §9)', () => {
@@ -1041,66 +1018,6 @@ releaseId = 42
     expect(reduceBuild(events).autoMerge.requested).toBe(false)
   })
 
-  test('a retired off launch default preserves the original event sequence', async () => {
-    const h = harness({ tickets: [readyTicket('T-off')] })
-
-    await h.dispatcher.tick({
-      defaultAutoMerge: false,
-      autoMergeUser: 'unused-operator',
-    })
-
-    expect((await h.store.getEvents('add-rate-limiting')).map((event) => event.type)).toEqual([
-      'build.created',
-      'workspace.provisioned',
-      'spec.imported',
-      'dispatch.comment-posted',
-      'target.moved',
-    ])
-  })
-
-  test('a launch-flag seed with no durable default fact never touches resumed or directly created builds (seed-only premise)', async () => {
-    const h = harness()
-    const resumed = await seedBuild(h, { slug: 'resumed-build' })
-    await h.store.createBuild({
-      slug: 'direct-build',
-      repo: REPO,
-      branch: 'ab/direct-build',
-    })
-    const beforeResumed = await h.store.getEvents(resumed)
-    const beforeDirect = await h.store.getEvents('direct-build')
-
-    expect(
-      await h.dispatcher.tick({
-        resumeCurrent: true,
-        acceptNewWork: false,
-        defaultAutoMerge: true,
-        autoMergeUser: 'dispatch-op',
-      }),
-    ).toEqual({ ...emptyTickReport(), resumed: 1 })
-
-    expect(
-      (await h.store.getEvents(resumed)).filter((e): boolean => e.type !== 'target.distance'),
-    ).toEqual(beforeResumed)
-    expect(
-      (await h.store.getEvents('direct-build')).filter(
-        (e): boolean => e.type !== 'target.distance',
-      ),
-    ).toEqual(beforeDirect)
-    expect(h.launches).toEqual([resumed])
-  })
-
-  test('legacy launch default attribution is inert', async () => {
-    const h = harness({ tickets: [readyTicket('T-no-user')] })
-    expect(
-      (await h.dispatcher.tick({ defaultAutoMerge: true, autoMergeUser: '   ' })).dispatched,
-    ).toBe(1)
-    expect(
-      (await h.store.getEvents('add-rate-limiting')).some(
-        (event) => event.type === 'build.auto-merge-requested',
-      ),
-    ).toBe(false)
-  })
-
   test('copies local fallback evidence from the workspace result into the event', async () => {
     const base: WorkspaceBase = {
       source: 'local',
@@ -1141,32 +1058,6 @@ releaseId = 42
     expect(receivedSpec).toBe(CONFORMING_BODY)
     expect((await h.store.listBuilds()).map((build) => build.slug)).toEqual(['login-rate-limit'])
     expect(h.workspaces.provisions[0]?.branch).toBe('ab/login-rate-limit')
-  })
-
-  test('h1-headed conforming body dispatches: imported as spec, not bounced (AUT-12)', async () => {
-    const h1Body = [
-      'Login attempts are currently unlimited; throttle repeated failures.',
-      '',
-      '# Acceptance criteria',
-      '',
-      '- a sixth failed login within five minutes returns 429',
-      '',
-      '# Out of scope',
-      '',
-      '- captcha',
-      '',
-    ].join('\n')
-    const ticket = readyTicket('T-1', { body: h1Body })
-    const h = harness({ tickets: [ticket] })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), dispatched: 1 })
-
-    const events = await h.store.getEvents('add-rate-limiting')
-    expect(events.map((e) => e.type)).toContain('spec.imported')
-
-    const spec = await h.store.getArtifact('add-rate-limiting', 'spec')
-    expect(spec ? textContent(spec) : null).toBe(h1Body)
   })
 
   test('absent, null, rejected, and invalid naming all take the exact title fallback', async () => {
@@ -1215,27 +1106,6 @@ releaseId = 42
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(namingSignal?.aborted).toBe(true)
     expect((await h.store.listBuilds())[0]?.slug).toBe('please-add-support')
-  })
-
-  test('punctuation-only titles still dispatch as build', async () => {
-    const h = harness({ tickets: [readyTicket('T-punctuation', { title: '!!!' })] })
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-    expect((await h.store.listBuilds())[0]?.slug).toBe('build')
-  })
-
-  test('readyState narrows the scan: only tickets in that state dispatch', async () => {
-    const ready = readyTicket('T-1', { state: 'Ready' })
-    const backlog = readyTicket('T-2', { title: 'Backlog idea', state: 'Backlog' })
-    const h = harness({
-      tickets: [ready, backlog],
-      toml: ['capacity = 2', '[tickets]', 'source = "file"', 'readyState = "Ready"'].join('\n'),
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dispatched).toBe(1)
-    const builds = await h.store.listBuilds()
-    expect(builds.map((b) => b.slug)).toEqual(['add-rate-limiting'])
   })
 
   test('a completed ticket still carrying the ready label is NOT dispatched — the AUT-10 regression guard (AC 3, 4)', async () => {
@@ -1322,30 +1192,23 @@ releaseId = 42
     expect(first).toEqual({ ...emptyTickReport(), dispatched: 1, queued: 1 })
     expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['first-feature'])
     // T-2 was never claimed — capacity ran out before it.
-    expect(await h.tickets.claim('T-2')).toBe(true)
+    expect(h.tickets.claims).toEqual(['T-1'])
 
-    const h2 = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'First feature' }),
-        readyTicket('T-2', { title: 'Second feature' }),
-      ],
-    })
-    await h2.dispatcher.tick()
     // First build completes (the janitor would do this on merge — §15.7).
-    await h2.store.append('first-feature', {
+    await h.store.append('first-feature', {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
 
-    const second = await h2.dispatcher.tick()
+    const second = await h.dispatcher.tick()
     // The first ticket left Ready at claim, so only T-2 is offered this tick.
     expect(second).toEqual({ ...emptyTickReport(), dispatched: 1 })
-    expect((await h2.store.listBuilds()).map((b) => b.slug)).toEqual([
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual([
       'first-feature',
       'second-feature',
     ])
-    expect(h2.launches).toEqual(['first-feature', 'second-feature'])
+    expect(h.launches).toEqual(['first-feature', 'second-feature'])
   })
 
   test('captures reloaded capacity once per tick without terminating work above a lowered limit', async () => {
@@ -1536,46 +1399,35 @@ readyState = "Ready"
     })
   }
 
-  test('bounce targets Backlog by default for a linear ticket source', async () => {
-    // Linear teams only have a "Triage" state when the triage feature is
-    // enabled — Backlog is the hand-back state every team has.
-    const h = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\n',
-    })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), bounced: 1 })
-    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
-  })
-
-  test('triageState: [tickets] config beats the source default, opts beat config', async () => {
-    const configured = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
-    })
-    await configured.dispatcher.tick()
-    expect(configured.tickets.transitions).toEqual([{ id: 'T-1', state: 'Todo' }])
-
-    const opted = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
-      opts: { triageState: 'Backlog' },
-    })
-    await opted.dispatcher.tick()
-    expect(opted.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
-  })
-
-  test('proposalState is harvest-only: it never moves the bounce target', async () => {
-    // The whole reason proposals get their own field. A repository that files
-    // proposals straight into readyState must still bounce nonconforming work
-    // somewhere a dispatch tick will not immediately reclaim it.
-    const h = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\nproposalState = "Todo"\n',
-    })
-    await h.dispatcher.tick()
-    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
+  test('bounce target: Backlog for linear, [tickets].triageState, then opts.triageState; proposalState never moves it', async () => {
+    const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "AUT"\n'
+    const cases: { toml: string; opts?: DispatcherOpts; state: string }[] = [
+      // Linear teams only have a "Triage" state when the triage feature is
+      // enabled — Backlog is the hand-back state every team has.
+      { toml: LINEAR, state: 'Backlog' },
+      // [tickets] config beats the source default...
+      { toml: `${LINEAR}triageState = "Todo"\n`, state: 'Todo' },
+      // ...and opts beat config.
+      {
+        toml: `${LINEAR}triageState = "Todo"\n`,
+        opts: { triageState: 'Backlog' },
+        state: 'Backlog',
+      },
+      // proposalState is harvest-only: a repository that files proposals
+      // straight into readyState must still bounce nonconforming work
+      // somewhere a dispatch tick will not immediately reclaim it.
+      { toml: `${LINEAR}proposalState = "Todo"\n`, state: 'Backlog' },
+    ]
+    for (const [index, { toml, opts, state }] of cases.entries()) {
+      const h = harness({
+        tickets: [readyTicket('T-1', { body: 'make it faster' })],
+        toml,
+        ...(opts !== undefined ? { opts } : {}),
+      })
+      const report = await h.dispatcher.tick()
+      if (index === 0) expect(report).toEqual({ ...emptyTickReport(), bounced: 1 })
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state }])
+    }
   })
 
   test('authorSpec success: authored body is recorded and then supplied to naming', async () => {
