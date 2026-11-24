@@ -1146,8 +1146,8 @@ test.skipIf(!chromiumBinary())(
     }
     const built = { ...(await buildFiles()) }
     const readiness = `<script>
-Object.defineProperty(document.fonts, 'ready', {value: new Promise(resolve=>setTimeout(resolve,350))});
-HTMLImageElement.prototype.decode = () => new Promise(resolve=>setTimeout(resolve,300));
+Object.defineProperty(document.fonts, 'ready', {value: new Promise(resolve=>setTimeout(() => {document.querySelector('h1').textContent='Ready fonts'; resolve()},900))});
+HTMLImageElement.prototype.decode = () => new Promise(resolve=>setTimeout(() => {document.querySelector('footer span').textContent='Decoded image'; resolve()},300));
 window.__websiteCapture = {'readiness-figure': {duration:100, ready:Promise.resolve(), seek: async (timeMs) => ({timeMs,complete:timeMs===100})}};
 </script><div data-capture-figure="readiness-figure" data-capture-animated>Readiness figure</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3C/svg%3E" style="position:absolute" />`
     const files = {
@@ -1159,6 +1159,16 @@ window.__websiteCapture = {'readiness-figure': {duration:100, ready:Promise.reso
     const inventory = await Bun.file(join(outputDir, 'inventory.json')).json()
     expect(inventory[0].probe.readiness.elapsedMs).toBeGreaterThanOrEqual(300)
     expect(inventory[0].probe.readiness.fonts).toBe('loaded')
+    expect(
+      inventory[0].probe.paintRegions.some(
+        (region: { label: string }) => region.label === 'h1: Ready fonts',
+      ),
+    ).toBe(true)
+    expect(
+      inventory[0].probe.paintRegions.some(
+        (region: { label: string }) => region.label === 'footer: Decoded image',
+      ),
+    ).toBe(true)
     expect(inventory[0].probe.reducedMotion).toBe(false)
     expect(inventory[0].probe.figures).toContainEqual({
       id: 'readiness-figure',
