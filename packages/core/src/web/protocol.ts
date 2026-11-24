@@ -4,6 +4,26 @@
  * types without pulling server code into its bundle.
  */
 import type { DashboardRepositoryHeader } from '../cli/dashboard/header'
+import type {
+  AttentionItem,
+  DashboardOverview,
+  DashboardRowText,
+  DispatcherModeText,
+  FinishedRowText,
+  HarvestRowText,
+} from '../cli/dashboard/row-text'
+
+/**
+ * Row and overview terms are aliases of the shared dashboard projection, never
+ * restatements, so the web cannot drift into its own wording. Step timing
+ * travels raw; the page formats elapsed time with `cli/dashboard/vocabulary`.
+ */
+export type WebBuildRow = DashboardRowText
+export type WebHarvestRow = HarvestRowText
+export type WebFinishedRow = FinishedRowText
+export type WebAttentionItem = AttentionItem
+export type WebDispatcherMode = DispatcherModeText
+export type WebOverview = DashboardOverview
 
 /**
  * One model frame, pushed whole over the `/events` stream as JSON. Later
@@ -14,6 +34,10 @@ import type { DashboardRepositoryHeader } from '../cli/dashboard/header'
 export interface WebFrame {
   /** The repository-scope dashboard header, the same terms the terminal shows. */
   repository?: DashboardRepositoryHeader
+  /** The overview page: dispatcher mode, header terms, attention list, active,
+   * queued and finished rows, all from the shared projection the terminal
+   * renders. */
+  overview?: WebOverview
   /** A one-line notice standing in for content that cannot be shown yet. */
   notice?: string
 }

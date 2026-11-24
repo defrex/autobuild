@@ -1388,6 +1388,14 @@ acknowledges it only after complete admitted reads, and reuses unchanged snapsho
 for up to ten seconds. Scoped discovery uses `listBuildsForRepo`; unchanged focused
 frames make one counter request. Session feeds remain independent.
 
+Both dashboard frontends render one vocabulary. `cli/dashboard/vocabulary.ts`
+holds the browser-safe terms: status words and tones, step marks, and the
+clock-dependent step timers. Its only value import is `cells.ts`.
+`cli/dashboard/row-text.ts` projects the model into plain-data row, harvest,
+header, dispatcher-mode, attention-list, finished-row and overview text. The
+terminal renderer paints those values, and `web/protocol.ts` aliases the same
+types for the web frame, so a term changes in one place.
+
 The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
 increment `repo_change_positions` transactionally through triggers on build,
 build-event, repository-event insertion and null-safe repository lease holder
