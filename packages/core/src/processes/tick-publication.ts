@@ -27,6 +27,8 @@ function reportRequiresPublication(
   if (previous.payload.triage !== standing.triage) return true
   for (const key of standingCounters)
     if (report[key] !== (previous.payload.counters[key] ?? 0)) return true
+  // Reported once per occurrence, never standing: any one is activity.
+  if (report.agentContextDiagnostics.length > 0) return true
   for (const key of diagnostics) {
     const before = previous.payload[key] ?? []
     if (report[key].length !== before.length || report[key].some((value, i) => value !== before[i]))

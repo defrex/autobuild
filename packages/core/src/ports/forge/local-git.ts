@@ -8,10 +8,23 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import type { AutoMergeResult, ClosePrResult, Forge, PrRef, PrState } from '../types'
+import type {
+  AutoMergeResult,
+  ClosePrResult,
+  Forge,
+  ForgeTreeEntry,
+  PrRef,
+  PrState,
+} from '../types'
+import { matchesGitBlobOid } from './git-blob'
 import { bunExec, type Exec } from './github'
 
 const objectId = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+const treeEntry = z.object({
+  mode: z.enum(['100644', '100755', '040000', '120000', '160000']),
+  type: z.enum(['blob', 'tree', 'commit']),
+  oid: objectId,
+})
 const pendingLanding = z.strictObject({
   baseSha: objectId,
   headSha: objectId,
@@ -146,6 +159,53 @@ export class LocalGitForge implements Forge {
     }
     const result = await this.command(['show', `${ref ?? 'HEAD'}:${path}`], this.repoRoot)
     return result.stdout
+  }
+
+  /** Complete recursive tree of `commit`; git has no listing limit. */
+  async readTree(commit: string): Promise<ForgeTreeEntry[]> {
+    if (this.repoRoot === undefined) {
+      throw new Error('local-git forge has no repository root for tree reads')
+    }
+    const result = await this.command(
+      ['ls-tree', '-r', '-t', '-l', '-z', '--full-tree', '--end-of-options', commit],
+      this.repoRoot,
+    )
+    const entries: ForgeTreeEntry[] = []
+    for (const record of result.stdout.split('\0')) {
+      if (record === '') continue
+      const tab = record.indexOf('\t')
+      const [mode, type, oid, size] = record.slice(0, tab).trim().split(/\s+/)
+      const parsed = treeEntry.safeParse({ mode, type, oid })
+      if (tab < 0 || !parsed.success)
+        throw new Error(`local-git: unexpected ls-tree line ${record}`)
+      entries.push({
+        path: record.slice(tab + 1),
+        ...parsed.data,
+        ...(size !== undefined && size !== '-' ? { size: Number(size) } : {}),
+      })
+    }
+    return entries
+  }
+
+  /** Exact bytes of blob `oid`, verified against the id. */
+  async readBlob(oid: string): Promise<Uint8Array> {
+    if (this.repoRoot === undefined) {
+      throw new Error('local-git forge has no repository root for blob reads')
+    }
+    if (!objectId.safeParse(oid).success) throw new Error(`local-git: invalid blob id ${oid}`)
+    const text = await this.command(['cat-file', 'blob', oid], this.repoRoot)
+    const direct = new Uint8Array(Buffer.from(text.stdout))
+    if (matchesGitBlobOid(oid, direct)) return direct
+    // Exec decodes stdout as text (BOM stripped, invalid UTF-8 replaced), so
+    // read anything else as hex.
+    const hex = await this.exec(
+      ['sh', '-c', 'git cat-file blob "$1" | od -An -v -tx1', 'sh', oid],
+      { cwd: this.repoRoot },
+    )
+    if (hex.exitCode !== 0) throw new Error(`local-git: cannot read blob ${oid}: ${hex.stderr}`)
+    const bytes = new Uint8Array(Buffer.from(hex.stdout.replace(/\s+/g, ''), 'hex'))
+    if (!matchesGitBlobOid(oid, bytes)) throw new Error(`local-git: blob ${oid} read back corrupt`)
+    return bytes
   }
 
   private async command(args: string[], cwd: string, allowFailure = false) {

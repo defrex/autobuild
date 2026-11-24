@@ -92,6 +92,7 @@ test('stop never force-kills a draining kernel, whatever the store says about it
     ticketDiagnostics,
     creationDiagnostics,
     dependencyDiagnostics,
+    agentContextDiagnostics,
     ...counters
   } = emptyTickReport()
   const tickStarted = async (store: BuildStore) => {

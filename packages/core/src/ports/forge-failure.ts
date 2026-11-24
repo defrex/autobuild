@@ -82,6 +82,18 @@ export function isArchiveConflict(error: unknown): error is ArchiveConflictError
   )
 }
 
+/** A forge cannot list one directory of a commit's tree completely (GitHub:
+ * a single directory with more than 100,000 direct entries). `readTree`
+ * throws this rather than ever returning a partial listing. */
+export class ForgeTreeUnlistable extends Error {
+  readonly directory: string
+  constructor(directory: string) {
+    super(`forge cannot list directory ${directory === '' ? '/' : directory} completely`)
+    this.name = 'ForgeTreeUnlistable'
+    this.directory = directory
+  }
+}
+
 export interface ForgeRejectionDetails {
   /** Human-readable forge name, e.g. `GitHub`. */
   forge: string
