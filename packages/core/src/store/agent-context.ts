@@ -34,14 +34,16 @@ const MIB = 1024 * 1024
 
 /** Encoded bound: gzip-encoded record bytes, below the hosted artifact ceiling. */
 export const AGENT_CONTEXT_MAX_BYTES = 2.25 * MIB
-/** Raw input bound: captured blob bytes, which bounds every reader's decode. */
+/** Raw bound: the record's uncompressed JSON bytes. It is both the
+ * producer's limit and every reader's decode ceiling, so a record that was
+ * published is always readable. Captured blob bytes never exceed it either
+ * (each is stored at least as long as it is), which bounds the continuation. */
 export const AGENT_CONTEXT_MAX_RAW_BYTES = 32 * MIB
 /** Continuation packing size: serialized part bytes per slot (a storage
  * packing size, never a limit on the record). */
 export const AGENT_CONTEXT_CACHE_SLOT_PAYLOAD = 1.75 * MIB
-/** Decoded-size ceiling for any record a reader accepts. */
-export const AGENT_CONTEXT_MAX_DECODED_BYTES =
-  Math.ceil((AGENT_CONTEXT_MAX_RAW_BYTES * 4) / 3) + MIB
+/** Decoded-size ceiling for any record a reader accepts: the raw bound. */
+export const AGENT_CONTEXT_MAX_DECODED_BYTES = AGENT_CONTEXT_MAX_RAW_BYTES
 /** Per-part envelope cost counted against a slot's payload (oid, offset,
  * JSON punctuation), so a slot of many tiny parts still stays in bounds. */
 export const AGENT_CONTEXT_CACHE_PART_OVERHEAD = 128
@@ -177,15 +179,23 @@ export type AgentContextCacheSlot = z.infer<typeof agentContextCacheSlotSchema>
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 const encoder = new TextEncoder()
 
-/** `text` when the bytes are exact UTF-8 (BOM kept), otherwise `base64`. */
+/** `text` when the bytes are exact UTF-8 (BOM kept) and JSON escaping does
+ * not make them longer than base64 would; otherwise `base64`. Content then
+ * never takes more than 4/3 of its bytes in the record (control-heavy or
+ * NUL-filled text would otherwise escape to six bytes per byte). */
 export function contentFields(bytes: Uint8Array): { text: string } | { base64: string } {
+  const base64 = Buffer.from(bytes).toString('base64')
   try {
     const text = utf8.decode(bytes)
-    if (Buffer.from(encoder.encode(text)).equals(Buffer.from(bytes))) return { text }
+    if (
+      Buffer.from(encoder.encode(text)).equals(Buffer.from(bytes)) &&
+      Buffer.byteLength(JSON.stringify(text)) <= base64.length + 2
+    )
+      return { text }
   } catch {
     // Not UTF-8: fall through.
   }
-  return { base64: Buffer.from(bytes).toString('base64') }
+  return { base64 }
 }
 
 /** The exact bytes a captured entry holds. */
@@ -217,14 +227,19 @@ export function agentContextDigest(record: AgentContextRecord): string {
 export interface EncodedAgentContext {
   content: Uint8Array
   digest: string
+  /** Captured blob bytes. */
   rawBytes: number
+  /** Uncompressed JSON bytes: what a reader decodes, held to the raw bound. */
+  jsonBytes: number
 }
 
 export function encodeAgentContext(record: AgentContextRecord): EncodedAgentContext {
+  const json = JSON.stringify(record)
   return {
-    content: new Uint8Array(gzipSync(JSON.stringify(record))),
+    content: new Uint8Array(gzipSync(json)),
     digest: agentContextDigest(record),
     rawBytes: agentContextRawBytes(record),
+    jsonBytes: Buffer.byteLength(json),
   }
 }
 

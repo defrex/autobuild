@@ -2161,7 +2161,8 @@ Two bounds apply, and each has a typed tick-report diagnostic that `ab
 dispatch` prints:
 
 - `oversize`: the encoded record exceeds 2.25 MiB.
-- `raw-oversize`: the captured files exceed 32 MiB before encoding.
+- `raw-oversize`: the record exceeds 32 MiB uncompressed, which is also every
+  reader's decode ceiling, so a published record is always readable.
 
 Both name the bound and the largest contributors. They, and `tree-unlistable`
 (the forge cannot list one directory completely), keep the last good revision

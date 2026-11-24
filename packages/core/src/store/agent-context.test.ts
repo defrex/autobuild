@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib'
 import { gitBlobOid, matchesGitBlobOid } from '../ports/forge/git-blob'
 import {
   AGENT_CONTEXT_CACHE_PART_OVERHEAD,
+  contentFields,
   decodeAgentContext,
   decodeAgentContextPointer,
   encodeAgentContext,
@@ -36,6 +37,13 @@ describe('record codec', () => {
     expect(decodeAgentContext(a.content)).toEqual(record('a'.repeat(40)))
     expect(a.rawBytes).toBe(4)
     expect(encodeAgentContext(record('b'.repeat(40))).digest).toBe(a.digest)
+  })
+
+  test('content escaping past base64 length is stored as base64, never as text', () => {
+    expect(contentFields(new TextEncoder().encode('# plain\n'))).toEqual({ text: '# plain\n' })
+    expect(contentFields(new Uint8Array(30))).toEqual({
+      base64: Buffer.alloc(30).toString('base64'),
+    })
   })
 
   test('malformed records and pointers are rejected', () => {

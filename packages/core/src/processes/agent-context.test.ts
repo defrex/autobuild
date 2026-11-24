@@ -186,6 +186,29 @@ describe('capture', () => {
     expect((await w.capture({ maxRawBytes: 4000 }).run({ baseBranch: 'main' }))[0]?.kind).toBe(
       'raw-oversize',
     )
+
+    // Under the bound in file bytes, over it as the record's JSON.
+    w.at(4, { ...SKILLS, '.agents/skills/release/quotes.md': '"'.repeat(3600) })
+    expect((await w.capture({ maxRawBytes: 4000 }).run({ baseBranch: 'main' }))[0]).toMatchObject({
+      kind: 'raw-oversize',
+      rawBound: 4000,
+      commit: head(4),
+    })
+    expect((await w.record())?.commit).toBe(head(1))
+  })
+
+  test('every published record is readable: escape-heavy content is stored as base64', async () => {
+    const w = await world()
+    w.at(1, { ...SKILLS, '.agents/skills/release/padding.bin': new Uint8Array(8 * 1024 * 1024) })
+    expect(await w.capture().run({ baseBranch: 'main' })).toEqual([])
+    const stored = await readAgentContext(w.store, REPO)
+    expect(stored?.record.commit).toBe(head(1))
+    const padding = stored?.record.skills
+      .find((skill) => skill.name === 'release')
+      ?.files.find((file) => file.path === 'padding.bin')
+    expect(padding?.bytes).toBe(8 * 1024 * 1024)
+    expect(padding?.text).toBeUndefined()
+    expect(padding?.base64?.length).toBe(Math.ceil((8 * 1024 * 1024) / 3) * 4)
   })
 
   test('an unlistable tree, a forge failure and a missing capability are typed and contained', async () => {

@@ -3026,13 +3026,14 @@ content for one commit.
 - **Cost.** Each process reads the base head at most once a minute, always on
   its first tick. An unchanged head then costs one pointer read per process.
   Nothing else is read, and no repository event is read or written. A failed
-  capture is retried after five minutes, or as soon as the head moves. A head change reads the tree; only a changed input fingerprint reads
-  the latest record and the blobs it lacks. Readers take the latest revision
-  only.
+  capture is retried after five minutes, or as soon as the head moves. A head
+  change reads the tree; only a changed input fingerprint reads the latest
+  record and the blobs it lacks. Readers take the latest revision only.
 - **Bounds.** The encoded record may not exceed 2.25 MiB (`oversize`), and the
-  captured files may not exceed 32 MiB before encoding (`raw-oversize`). Both
-  diagnostics name the bound and the largest contributors, keep the last good
-  revision, and appear in the tick report once per base head.
+  record may not exceed 32 MiB uncompressed (`raw-oversize`), the same ceiling
+  every reader decodes to. Both diagnostics name the bound and the largest
+  contributors, keep the last good revision, and appear in the tick report
+  once per base head.
 
 Serving the record to connected agents is a separate concern from capturing it.
 

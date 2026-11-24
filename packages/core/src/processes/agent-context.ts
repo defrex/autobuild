@@ -304,8 +304,10 @@ export class AgentContextCapture {
       const record = pass.record
       if (record !== undefined) {
         const encoded = encodeAgentContext(record)
-        if (encoded.rawBytes > this.bounds.maxRawBytes)
-          return rawOversize(encoded.rawBytes, pass.contributors, pass.dependencies)
+        // The reader's decode ceiling is this same bound: never publish a
+        // record it would refuse.
+        if (encoded.jsonBytes > this.bounds.maxRawBytes)
+          return rawOversize(encoded.jsonBytes, pass.contributors, pass.dependencies)
         const key = contextKey(entries, pass.dependencies)
         const bytes = encoded.content.byteLength
         if (bytes > this.bounds.maxBytes) {
