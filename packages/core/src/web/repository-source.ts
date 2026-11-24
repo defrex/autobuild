@@ -1,6 +1,6 @@
 import { NO_DISPATCHER_RUN_LINE } from '../cli/dashboard/configuration'
 import { dispatchWarningLines, projectRepositoryHeader } from '../cli/dashboard/header'
-import { readRepositoryFacts } from '../store/reduced-reads'
+import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 import { type WebFrame, type WebFrameSource, WebReadFencedError } from './protocol'
 
@@ -33,28 +33,39 @@ export class RepositoryFrameSource implements WebFrameSource {
     const position = await reader.getRepoChangePosition(this.repo)
     if (this.cached !== undefined && position === this.position) return this.cached
     const facts = (await readRepositoryFacts(reader, this.repo)).value
-    const status = facts.status
-    const { header } = projectRepositoryHeader(
-      {
-        repo: this.repo,
-        queued: status?.queued ?? 0,
-        ...(status?.triage !== undefined ? { triage: status.triage } : {}),
-        ...(status?.availableUpgrade !== undefined
-          ? { availableUpgrade: status.availableUpgrade }
-          : {}),
-        warningLines: status ? dispatchWarningLines(status) : [],
-      },
-      facts,
-      facts.upgrades,
-    )
-    const notice = facts.config.run === undefined ? NO_DISPATCHER_RUN_LINE : status?.notice
-    const frame: WebFrame = { repository: header, ...(notice !== undefined ? { notice } : {}) }
-    const live = status?.health === 'starting' || status?.health === 'running'
+    const projected = projectRepositoryFrame(this.repo, facts)
     // Cache only after every read succeeded, so a failure retries at the old position.
-    this.cached = { frame, live }
+    this.cached = projected
     this.position = position
     return this.cached
   }
+}
+
+/** The repository frame for `facts`, the repository value a store read
+ * returned. Pure: `ab web` and `ab dispatch --web` show the same frame for
+ * the same facts. `live` asks for the fast cadence. */
+export function projectRepositoryFrame(
+  repo: string,
+  facts: RepositoryReadFacts,
+): { frame: WebFrame; live: boolean } {
+  const status = facts.status
+  const { header } = projectRepositoryHeader(
+    {
+      repo,
+      queued: status?.queued ?? 0,
+      ...(status?.triage !== undefined ? { triage: status.triage } : {}),
+      ...(status?.availableUpgrade !== undefined
+        ? { availableUpgrade: status.availableUpgrade }
+        : {}),
+      warningLines: status ? dispatchWarningLines(status) : [],
+    },
+    facts,
+    facts.upgrades,
+  )
+  const notice = facts.config.run === undefined ? NO_DISPATCHER_RUN_LINE : status?.notice
+  const frame: WebFrame = { repository: header, ...(notice !== undefined ? { notice } : {}) }
+  const live = status?.health === 'starting' || status?.health === 'running'
+  return { frame, live }
 }
 
 function fenced(reader: RepositoryFrameReader, admitted: () => boolean): RepositoryFrameReader {
