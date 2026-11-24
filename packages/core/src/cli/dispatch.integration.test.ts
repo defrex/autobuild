@@ -1,4 +1,3 @@
-import { parseDispatchArgs } from './dispatch-args'
 import { LocalGitForge } from '../ports/forge/local-git'
 import {
   temporaryDirectories as ownTempDirectories,
@@ -367,49 +366,48 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
 }
 
 describe('abDispatch guards', () => {
-  test('missing autobuild.toml is an actionable error', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
-    try {
-      await expect(
-        abDispatch({
-          targetRepo: tmp,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-        }),
-      ).rejects.toThrow(/autobuild\.toml: not found/)
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
-
-  test('a config with no [tickets] table fails at tickets.readyState before wiring', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
-    try {
-      await writeFile(join(tmp, 'autobuild.toml'), 'baseBranch = "main"\ncapacity = 1\n')
-      let wired = false
-
-      await expect(
-        abDispatch({
-          targetRepo: tmp,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-          wire: () => {
-            wired = true
-            throw new Error('wire must not run for invalid config')
-          },
-        }),
-      ).rejects.toThrow('tickets.readyState')
-      expect(wired).toBe(false)
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
+  for (const [name, toml, expected] of [
+    ['missing autobuild.toml is an actionable error', undefined, /autobuild\.toml: not found/],
+    [
+      'a config with no [tickets] table fails at tickets.readyState',
+      'baseBranch = "main"\ncapacity = 1\n',
+      'tickets.readyState',
+    ],
+    [
+      'plugin bootstrap failures',
+      'plugins = ["missing-dispatch-plugin"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      /missing-dispatch-plugin.*could not be resolved/,
+    ],
+    [
+      'unknown forge selection fails with available names',
+      'forge = "missing"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      'unknown forge adapter "missing"; available forges: github, local-git',
+    ],
+  ] as const)
+    test(`startup refuses before wiring: ${name}`, async () => {
+      const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
+      try {
+        if (toml !== undefined) await writeFile(join(tmp, 'autobuild.toml'), toml)
+        let wired = false
+        await expect(
+          abDispatch({
+            targetRepo: tmp,
+            env: {},
+            exec: spawnExec,
+            stdout: () => {},
+            stderr: () => {},
+            once: true,
+            wire: () => {
+              wired = true
+              throw new Error('wire must not run before startup validation')
+            },
+          }),
+        ).rejects.toThrow(expected)
+        expect(wired).toBe(false)
+      } finally {
+        await rm(tmp, { recursive: true, force: true })
+      }
+    })
 
   test('vercel publication credentials fail before production wiring can list or claim tickets', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-vercel-auth-'))
@@ -964,7 +962,6 @@ describe('abDispatch guards', () => {
         return events
       }
       await once()
-      const _quietRows = (await readState(fx.origin)).length
       rows = 0
       await once()
       expect(rows).toBe(0)
@@ -978,7 +975,6 @@ describe('abDispatch guards', () => {
         type: 'dispatcher.intake-set',
         payload: { enabled: false },
       })
-      const _withForeignRows = (await readState(fx.origin)).length
       rows = 0
       await once()
       expect(rows).toBe(0)
@@ -991,45 +987,7 @@ describe('abDispatch guards', () => {
     const clock = manualClock()
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
     const slug = 'deadline-drain'
-    const branch = `ab/${slug}`
-    await fx.store.createBuild({ slug, repo: fx.origin, branch })
-    await fx.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-deadline', title: 'deadline drain' },
-        repo: fx.origin,
-        baseBranch: 'main',
-      },
-    })
-    await fx.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'workspace.provisioned',
-      payload: {
-        provider: 'git-worktree',
-        ref: 'ws-g0',
-        path: '/deadline/workspace',
-        branch,
-        base: { source: 'remote', sha: 'a'.repeat(40) },
-      },
-    })
-    await fx.store.appendWithArtifacts(
-      slug,
-      [{ kind: 'spec', content: '# Spec' }],
-      (deposited) => ({
-        actor: DISPATCHER,
-        type: 'spec.imported',
-        payload: {
-          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          ticket: { source: 'fake', id: 'T-deadline', title: 'deadline drain' },
-        },
-      }),
-    )
-    await fx.store.append(slug, {
-      actor: KERNEL,
-      type: 'plan.started',
-      payload: { round: 1 },
-    })
+    await seedDrainBuild(fx, slug)
 
     const completion = deferred()
     let stopCalls = 0
@@ -1210,65 +1168,6 @@ describe('abDispatch guards', () => {
     }
   }, 10_000)
 
-  test('drain race, deadline fires: firing the injected expiry handle ends the drain, teardown stops the runner', async () => {
-    const clock = manualClock()
-    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
-    const timers = new ManualTimers()
-    await seedDrainBuild(fx, 'drain-expiry')
-
-    const completion = deferred()
-    let stopCalls = 0
-    const execution: BuildExecution = {
-      async start(input) {
-        return {
-          supervision: 'local-parent',
-          identity: { provider: 'fake', workspaceRef: input.workspaceRef },
-          // Resolves only via stop(): firing the injected expiry handle is
-          // what ends the drain — no real-time sleep drives this test.
-          completion: completion.promise.then(() => ({ exitCode: 0 })),
-          async stop() {
-            stopCalls += 1
-            completion.resolve()
-            return { outcome: 'confirmed' }
-          },
-          async detach() {},
-        }
-      },
-    }
-    try {
-      const dispatch = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: () => {},
-        once: true,
-        plain: true,
-        deadlineAt: clock().getTime() + 60_000,
-        timers,
-        wire: () => ({ ...fx.wire(), buildExecution: execution }),
-      })
-      await pumpUntil(() => timers.pending.size === 1, 'the expiry timer')
-      // The deadline fires: resolve the expiry timer manually.
-      timers.fireAll()
-      await dispatch
-
-      // Established timeout outcome unchanged: teardown stopped and reaped
-      // the local-parent execution exactly as with real timers.
-      expect(stopCalls).toBe(1)
-      const events = await fx.store.getEvents('drain-expiry')
-      const ended = events.filter((event) => event.type === 'execution.ended')
-      expect(ended).toHaveLength(1)
-      expect(ended[0]).toMatchObject({ payload: { outcome: 'stopped' } })
-      expect((await fx.store.getBuild('drain-expiry'))?.lease).toBeUndefined()
-      // The fired handle was consumed; nothing remains pending.
-      expect(timers.pending.size).toBe(0)
-    } finally {
-      completion.resolve()
-      await fx.cleanup()
-    }
-  }, 10_000)
-
   test('origin mode accepts loopback http store origins and still rejects other http origins', async () => {
     const transportCalls: string[] = []
     const transport = (async (method: string, path: string) => {
@@ -1318,34 +1217,6 @@ describe('abDispatch guards', () => {
     ).rejects.toThrow(/origin-mode dispatch requires an HTTPS BuildStore/)
     expect(transportCalls).toEqual([])
   }, 10_000)
-
-  test('plugin bootstrap failures happen before production wiring or a dispatch tick', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-'))
-    try {
-      await writeFile(
-        join(tmp, 'autobuild.toml'),
-        'plugins = ["missing-dispatch-plugin"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
-      )
-      let wired = false
-      await expect(
-        abDispatch({
-          targetRepo: tmp,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-          wire: () => {
-            wired = true
-            throw new Error('wire must not run before plugin bootstrap')
-          },
-        }),
-      ).rejects.toThrow(/missing-dispatch-plugin.*could not be resolved/)
-      expect(wired).toBe(false)
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
 
   test('loads, materializes, resolves, and runs a configured plugin runtime', async () => {
     const toml =
@@ -1466,34 +1337,6 @@ describe('abDispatch guards', () => {
         once: true,
       })
       expect(errors).toContain('plugin ticket source selected')
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
-
-  test('unknown forge selection fails with available names before injectable wiring', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-forge-'))
-    try {
-      await writeFile(
-        join(tmp, 'autobuild.toml'),
-        'forge = "missing"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
-      )
-      let wired = false
-      await expect(
-        abDispatch({
-          targetRepo: tmp,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-          wire: () => {
-            wired = true
-            throw new Error('wire must not run for an unknown forge')
-          },
-        }),
-      ).rejects.toThrow('unknown forge adapter "missing"; available forges: github, local-git')
-      expect(wired).toBe(false)
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }
@@ -1986,36 +1829,6 @@ triageState = "Triage"
     }
   }, 30_000)
 
-  test('retired launch default does not seed builds or write repository policy', async () => {
-    const fx = await makeFixture(readyTicket('T-policy'), happyHandlers())
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: () => {},
-        once: true,
-        defaultAutoMerge: true,
-        wire: fx.wire,
-      })
-      const [record] = await fx.store.listBuilds()
-      expect(record).toBeDefined()
-      expect(
-        (await fx.store.getEvents(record!.slug)).some(
-          (event) => event.type === 'build.auto-merge-requested',
-        ),
-      ).toBe(false)
-      expect(
-        (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) => event.type === 'dispatcher.auto-merge-default-set',
-        ),
-      ).toBe(false)
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('explicit intake off persists across restart while janitor continues, and explicit on replaces it', async () => {
     const fx = await makeFixture(
       readyTicket('T-existing', { title: 'Existing work' }),
@@ -2173,54 +1986,24 @@ args = ["--naming-style", "concise"]
    * this test, the diagnostics could vanish from output while the counter
    * incremented, and every other test would still pass.
    */
-  test('prints dependency diagnostics as lines AND still prints numeric counts', async () => {
+  test('prints dependency, creation-withheld and invalid-ticket diagnostics while keeping numeric counts', async () => {
+    const creationKey = crypto.randomUUID()
     const fx = await makeFixture(
       [
         readyTicket('T-blocked', { title: 'Blocked work', blockedBy: ['T-9'] }),
         readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+        readyTicket('T-creating', { title: 'Generated work', creationKey }),
+        // Last, so capacity 1 proves every gate is per ticket, not a per-tick abort.
         readyTicket('T-free', { title: 'Unrelated work' }),
       ],
       happyHandlers(),
     )
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-      })
-
-      expect(out).toContain('ticket T-blocked blocked by T-9 (not complete)')
-      const tick = out.find((line) => line.startsWith('tick: '))
-      expect(tick).toContain('dependencyBlocked=1')
-      // The counts line survives the array field rather than throwing or
-      // rendering `dependencyDiagnostics=[object Object]`.
-      expect(tick).not.toContain('dependencyDiagnostics')
-      // The blocked ticket built nothing, while the unrelated eligible ticket
-      // in the same ready list dispatched — the gate is per-ticket, not a
-      // per-tick abort. (T-9 never appears: `readyState = "Ready"` gates the
-      // scan, so an In-Progress ticket is not a candidate in the first place —
-      // see readyCriteria.)
-      const builds = await fx.store.listBuilds()
-      expect(builds.map((b) => b.ticket?.id)).toEqual(['T-free'])
-    } finally {
-      await fx.cleanup()
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    const diagnostic = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [diagnostic] }
     }
-  }, 30_000)
-
-  test('prints creation-withheld diagnostics and persists a distinct standing reason', async () => {
-    const creationKey = crypto.randomUUID()
-    const fx = await makeFixture(
-      [
-        readyTicket('T-creating', { title: 'Generated work', creationKey }),
-        readyTicket('T-free', { title: 'Independent work' }),
-      ],
-      happyHandlers(),
-    )
     const out: string[] = []
     try {
       await fx.store.ensureRepo(fx.origin)
@@ -2252,46 +2035,29 @@ args = ["--naming-style", "concise"]
         wire: fx.wire,
       })
 
+      expect(out).toContain('ticket T-blocked blocked by T-9 (not complete)')
       expect(out).toContainEqual(
         expect.stringContaining(
           'ticket T-creating: creation withheld — Harvest run h_creating, proposal cluster-creating',
         ),
       )
-      const tick = out.find((line) => line.startsWith('tick: '))
-      expect(tick).toContain('creationWithheld=1')
-      expect(tick).not.toContain('creationDiagnostics')
-      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-free'])
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('prints invalid-ticket diagnostics to stderr and keeps numeric counts on stdout', async () => {
-    const fx = await makeFixture(readyTicket('T-valid'), happyHandlers())
-    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
-    const diagnostic = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
-    fx.tickets.listReady = async (criteria) => {
-      const listing = await originalListReady(criteria)
-      return { ...listing, diagnostics: [diagnostic] }
-    }
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-      })
-
+      // Invalid-ticket diagnostics go to stderr, and nothing else does.
       expect(fx.err).toEqual([diagnostic])
       const tick = out.find((line) => line.startsWith('tick: '))
       expect(tick).toContain('dispatched=1')
+      expect(tick).toContain('dependencyBlocked=1')
+      expect(tick).toContain('creationWithheld=1')
       expect(tick).toContain('invalidTickets=1')
+      // The counts line survives the array fields rather than throwing or
+      // rendering `dependencyDiagnostics=[object Object]`.
+      expect(tick).not.toContain('dependencyDiagnostics')
+      expect(tick).not.toContain('creationDiagnostics')
       expect(tick).not.toContain('ticketDiagnostics')
-      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-valid'])
+      // The gated tickets built nothing, while the unrelated eligible ticket
+      // in the same ready list dispatched. (T-9 never appears: `readyState =
+      // "Ready"` gates the scan, so an In-Progress ticket is not a candidate in
+      // the first place — see readyCriteria.)
+      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-free'])
     } finally {
       await fx.cleanup()
     }
@@ -3092,114 +2858,7 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
-  test(`--once returns without draining an environment execution — the guest stays running and a later pass settles it`, async () => {
-    const clock = manualClock()
-    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
-    const slug = 'remote-once-return'
-    const branch = `ab/${slug}`
-    await fx.store.createBuild({ slug, repo: fx.origin, branch })
-    await fx.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
-        repo: fx.origin,
-        baseBranch: 'main',
-      },
-    })
-    await fx.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'workspace.provisioned',
-      payload: {
-        provider: 'remote-test',
-        ref: 'sandbox-g0',
-        path: '/remote/workspace',
-        branch,
-        base: { source: 'remote', sha: 'a'.repeat(40) },
-      },
-    })
-    await fx.store.appendWithArtifacts(
-      slug,
-      [{ kind: 'spec', content: '# Spec' }],
-      (deposited) => ({
-        actor: DISPATCHER,
-        type: 'spec.imported',
-        payload: {
-          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
-        },
-      }),
-    )
-    await fx.store.append(slug, {
-      actor: KERNEL,
-      type: 'plan.started',
-      payload: { round: 1 },
-    })
-
-    const completion = deferred()
-    const execution: BuildExecution = {
-      async start(input) {
-        return {
-          supervision: 'environment',
-          identity: {
-            provider: 'remote-test',
-            workspaceRef: input.workspaceRef,
-            environmentId: 'sandbox-g0',
-            sessionId: 'session-g0',
-          },
-          completion: completion.promise.then(() => ({ exitCode: 0 })),
-          async stop() {
-            return { outcome: 'confirmed' }
-          },
-          async detach() {},
-        }
-      },
-    }
-    let generation = 0
-    const remote: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      provision: async (opts) => {
-        generation += 1
-        return {
-          provider: 'remote-test',
-          ref: `sandbox-g${generation}`,
-          path: '/remote/workspace',
-          branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? 'a'.repeat(40) },
-        }
-      },
-      release: async () => {},
-    }
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: () => {},
-        once: true,
-        wire: () => ({ ...fx.wire(), workspaces: remote, buildExecution: execution }),
-      })
-      const record = await fx.store.getBuild(slug)
-      const events = await fx.store.getEvents(slug)
-      expect(record?.lease).toBeDefined()
-      expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
-      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
-    } finally {
-      completion.resolve()
-      await fx.cleanup()
-    }
-  }, 10_000)
-
-  test('--once awaits a remote provisioning continuation instead of abandoning it at teardown', async () => {
+  test('--once awaits a remote provisioning continuation, then returns without draining the environment guest, lease retained', async () => {
     const fx = await makeFixture(readyTicket('T-once-provision'), happyHandlers())
     const completion = deferred()
     let slug: string | undefined
@@ -3269,7 +2928,9 @@ describe('abDispatch watch build-runner coordination', () => {
       // Nothing was abandoned at teardown: the continuation ran to its launch.
       expect(events.some((event) => event.type === 'dispatch.failed')).toBe(false)
       // The guest keeps running past the invocation, lease retained for it.
+      expect((await fx.store.getBuild(slug!))?.lease).toBeDefined()
       expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
     } finally {
       completion.resolve()
       await fx.cleanup()
@@ -5296,10 +4957,11 @@ function tallestFrame(term: { frames: string[] }): number {
 }
 
 describe('abDispatch interactive upgrade notice', () => {
-  test('checks at startup, retains the dedicated notice across polls, and stays silent', async () => {
+  test('checks at startup and on the cadence, retains the dedicated notice across polls, and stays silent', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
     const stop = new AbortController()
+    const scheduler = new ManualUpgradeScheduler()
     let probes = 0
     try {
       await abDispatch({
@@ -5315,6 +4977,11 @@ describe('abDispatch interactive upgrade notice', () => {
         signal: stop.signal,
         intervalMs: 1,
         sleep: async () => {
+          // The startup check finds nothing; the next cadence finds the
+          // release without a restart.
+          await waitFor(() => probes === 1)
+          expect(latestDashboardFrame(term)).not.toContain('run ab upgrade')
+          scheduler.cadence()
           await waitFor(() => latestDashboardFrame(term).includes('run ab upgrade'))
           await new Promise((resolve) => setTimeout(resolve, 20))
           stop.abort()
@@ -5322,13 +4989,14 @@ describe('abDispatch interactive upgrade notice', () => {
         wire: fx.wire,
         terminal: term,
         kernelRunId: 'upgrade-run',
+        upgradeNoticeScheduler: scheduler,
         availableReleaseProbe: async () => {
           probes += 1
-          return '9.1.0'
+          return probes === 1 ? undefined : '9.1.0'
         },
       })
 
-      expect(probes).toBe(1)
+      expect(probes).toBe(2)
       expect(
         (await fx.store.getRepoEvents(fx.origin)).some(
           (event) =>
@@ -5340,45 +5008,6 @@ describe('abDispatch interactive upgrade notice', () => {
       const frame = latestDashboardFrame(term)
       expect(frame).toContain('Autobuild v9.1.0 is available — run ab upgrade')
       expect(frame).toContain('no active builds')
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('an initially absent release appears after the four-hour cadence without restart', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal()
-    const stop = new AbortController()
-    const scheduler = new ManualUpgradeScheduler()
-    let probes = 0
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        signal: stop.signal,
-        intervalMs: 1,
-        sleep: async () => {
-          await waitFor(() => probes === 1)
-          expect(latestDashboardFrame(term)).not.toContain('run ab upgrade')
-          scheduler.cadence()
-          await waitFor(() => latestDashboardFrame(term).includes('v9.2.0'))
-          stop.abort()
-        },
-        wire: fx.wire,
-        terminal: term,
-        upgradeNoticeScheduler: scheduler,
-        availableReleaseProbe: async () => {
-          probes += 1
-          return probes === 1 ? undefined : '9.2.0'
-        },
-      })
-
-      expect(probes).toBe(2)
-      expect(latestDashboardFrame(term)).toContain('run ab upgrade')
-      expect(fx.err).toEqual([])
     } finally {
       await fx.cleanup()
     }
@@ -5496,71 +5125,75 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).toMatch(/\[[x> ]\]/)
       // The cursor is always restored, however the pass ends.
       expect(painted).toContain('\x1b[?25h')
+      // Startup stays in-frame: routine notices never reach stdout or stderr,
+      // and the line-oriented banners are not painted either.
+      expect(out).toEqual([])
+      expect(fx.err).toEqual([])
+      const plainPainted = stripAnsi(painted)
+      expect(plainPainted).toContain(`build ${slug} parked`)
+      expect(plainPainted).not.toContain('tick:')
+      expect(plainPainted).not.toContain(`one pass over ${fx.checkout}`)
+      expect(plainPainted).not.toContain('Ctrl-C to stop')
     } finally {
       await fx.cleanup()
     }
   }, 30_000)
 
-  for (const response of ['accept', 'partial', 'device-attributes'] as const) {
-    test(`negotiates keyboard mode around the alternate screen: ${response}`, async () => {
-      const fx = await makeFixture([], happyHandlers())
-      const base = fakeTerminal()
-      let hooks: TerminalInputHooks | undefined
-      let cleanup = 0
-      const input: TerminalInput = {
-        start: (_handler, nextHooks) => {
-          hooks = nextHooks
-          // The query is unlocked by the real input seam, not dashboard paint.
-          expect(base.all()).not.toContain('\x1b[?u')
-          hooks?.onListening?.()
-          hooks?.onKeyboardFlags?.(0)
-          return () => {
-            cleanup += 1
-          }
-        },
-      }
-      const write = (chunk: string): void => {
-        base.write(chunk)
-        if (chunk === '\x1b[?u\x1b[c') {
-          queueMicrotask(() => {
-            if (response === 'accept') hooks?.onKeyboardFlags?.(29)
-            else if (response === 'partial') hooks?.onKeyboardFlags?.(25)
-            else hooks?.onDeviceAttributes?.()
-          })
+  // Reply variants (partial, device attributes) are protocol cases in keyboard.test.ts.
+  test('negotiates keyboard mode around the alternate screen', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const base = fakeTerminal()
+    let hooks: TerminalInputHooks | undefined
+    let cleanup = 0
+    const input: TerminalInput = {
+      start: (_handler, nextHooks) => {
+        hooks = nextHooks
+        // The query is unlocked by the real input seam, not dashboard paint.
+        expect(base.all()).not.toContain('\x1b[?u')
+        hooks?.onListening?.()
+        hooks?.onKeyboardFlags?.(0)
+        return () => {
+          cleanup += 1
         }
+      },
+    }
+    const write = (chunk: string): void => {
+      base.write(chunk)
+      if (chunk === '\x1b[?u\x1b[c') {
+        queueMicrotask(() => hooks?.onKeyboardFlags?.(29))
       }
-      const terminal: TerminalOut & { frames: string[]; all: () => string } = {
-        ...base,
-        write,
-        modes: createTerminalModeController(write),
-      }
-      try {
-        await abDispatch({
-          targetRepo: fx.checkout,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: (line) => fx.err.push(line),
-          once: true,
-          wire: fx.wire,
-          terminal,
-          input,
-        })
+    }
+    const terminal: TerminalOut & { frames: string[]; all: () => string } = {
+      ...base,
+      write,
+      modes: createTerminalModeController(write),
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal,
+        input,
+      })
 
-        const writes = base.frames
-        expect(cleanup).toBe(1)
-        expect(writes.filter((chunk) => chunk === '\x1b[?u')).toHaveLength(1)
-        expect(writes.filter((chunk) => chunk === '\x1b[>29u')).toHaveLength(1)
-        expect(writes.filter((chunk) => chunk === '\x1b[?u\x1b[c')).toHaveLength(1)
-        expect(writes.filter((chunk) => chunk === '\x1b[<1u')).toHaveLength(1)
-        expect(writes.indexOf('\x1b[?u')).toBeLessThan(writes.indexOf('\x1b[?1049h'))
-        expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u'))
-        expect(writes.indexOf('\x1b[<1u')).toBeLessThan(writes.indexOf('\x1b[?1049l'))
-      } finally {
-        await fx.cleanup()
-      }
-    }, 30_000)
-  }
+      const writes = base.frames
+      expect(cleanup).toBe(1)
+      expect(writes.filter((chunk) => chunk === '\x1b[?u')).toHaveLength(1)
+      expect(writes.filter((chunk) => chunk === '\x1b[>29u')).toHaveLength(1)
+      expect(writes.filter((chunk) => chunk === '\x1b[?u\x1b[c')).toHaveLength(1)
+      expect(writes.filter((chunk) => chunk === '\x1b[<1u')).toHaveLength(1)
+      expect(writes.indexOf('\x1b[?u')).toBeLessThan(writes.indexOf('\x1b[?1049h'))
+      expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u'))
+      expect(writes.indexOf('\x1b[<1u')).toBeLessThan(writes.indexOf('\x1b[?1049l'))
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
 
   test('shows configured capacity and an unknown triage count for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
@@ -5672,37 +5305,6 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('dashboard startup stays in-frame while routine notices are suppressed', async () => {
-    const fx = await makeFixture(readyTicket('T-frame'), happyHandlers())
-    const term = fakeTerminal()
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-        terminal: term,
-      })
-
-      const slug = (await fx.store.listBuilds())[0]!.slug
-      const painted = stripAnsi(term.all())
-      expect(out).toEqual([])
-      expect(fx.err).toEqual([])
-      expect(painted).toContain('Autobuild')
-      expect(painted).toContain(slug)
-      expect(painted).toContain(`build ${slug} parked`)
-      expect(painted).not.toContain('tick:')
-      expect(painted).not.toContain(`one pass over ${fx.checkout}`)
-      expect(painted).not.toContain('Ctrl-C to stop')
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('shutdown joins an older poll before reading and copying the final frame', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
@@ -5801,184 +5403,113 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('signal shutdown restores input and the terminal when both poll and final reads fail', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    await fx.store.ensureRepo(fx.origin)
-    await fx.store.appendRepo(fx.origin, {
-      actor: KERNEL,
-      type: 'harvest.paused',
-      payload: {},
-    })
-    const term = fakeTerminal()
-    // The next idle poll is 5 s away on test time, not wall time.
-    const time = new FakeRefreshScheduler()
-    const pollGate = deferred()
-    const pollStarted = deferred()
-    const sleepStarted = deferred()
-    const releaseSleep = deferred()
-    const teardownStarted = deferred()
-    const stop = new AbortController()
-    let gateNextPoll = false
-    let tearingDown = false
-    let finalReads = 0
-    const input = fakeInput([], () => {
-      tearingDown = true
-      teardownStarted.resolve()
-    })
-    const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
-    fx.store.listBuildsForRepo = async (repo) => {
-      if (gateNextPoll) {
-        gateNextPoll = false
-        pollStarted.resolve()
-        await pollGate.promise
-        throw new Error('poll read failed during shutdown')
-      }
-      if (tearingDown) {
-        finalReads += 1
-        throw new Error('final read failed during shutdown')
-      }
-      return originalListBuilds(repo)
-    }
-
-    let run: Promise<void> | undefined
-    try {
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 1,
-        signal: stop.signal,
-        sleep: async () => {
-          sleepStarted.resolve()
-          await releaseSleep.promise
-        },
-        wire: fx.wire,
-        terminal: term,
-        input,
-        refreshScheduler: time,
+  for (const exit of ['signal', 'exception'] as const)
+    test(`${exit} shutdown restores input and the terminal when the final read fails`, async () => {
+      const fx = await makeFixture([], happyHandlers())
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.paused',
+        payload: {},
       })
-
-      await sleepStarted.promise
-      await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
-      gateNextPoll = true
-      await time.advance(5_001)
-      await pollStarted.promise
-
-      stop.abort()
-      releaseSleep.resolve()
-      await teardownStarted.promise
-      pollGate.resolve()
-      await run
-      run = undefined
-
-      expect(finalReads).toBe(1)
-      expect(input.cleanups).toBe(1)
-      expect(stripAnsi(term.all())).toContain(
-        'dashboard render failed: poll read failed during shutdown',
-      )
-      expect(term.all()).toContain('\x1b[?1049l')
-      expect(term.all()).toContain('\x1b[?25h')
-      expect(fx.err).toEqual([])
-    } finally {
-      stop.abort()
-      releaseSleep.resolve()
-      pollGate.resolve()
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('exceptional watch exit keeps its original error when the final read fails', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    await fx.store.ensureRepo(fx.origin)
-    await fx.store.appendRepo(fx.origin, {
-      actor: KERNEL,
-      type: 'harvest.paused',
-      payload: {},
-    })
-    const term = fakeTerminal()
-    // The next idle poll is 5 s away on test time, not wall time.
-    const time = new FakeRefreshScheduler()
-    const pollGate = deferred()
-    const pollStarted = deferred()
-    const sleepStarted = deferred()
-    const sleepGate = deferred()
-    const teardownStarted = deferred()
-    const dispatchError = new Error('watch sleep failed')
-    let gateNextPoll = false
-    let tearingDown = false
-    let finalReads = 0
-    const input = fakeInput([], () => {
-      tearingDown = true
-      teardownStarted.resolve()
-    })
-    const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
-    fx.store.listBuildsForRepo = async (repo) => {
-      if (gateNextPoll) {
-        gateNextPoll = false
-        const staleSnapshot = await originalListBuilds(repo)
-        pollStarted.resolve()
-        await pollGate.promise
-        return staleSnapshot
-      }
-      if (tearingDown) {
-        finalReads += 1
-        throw new Error('exceptional-exit final read failed')
-      }
-      return originalListBuilds(repo)
-    }
-
-    let run: Promise<void> | undefined
-    try {
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 1,
-        sleep: async () => {
-          sleepStarted.resolve()
-          await sleepGate.promise
-        },
-        wire: fx.wire,
-        terminal: term,
-        input,
-        refreshScheduler: time,
+      const term = fakeTerminal()
+      // The next idle poll is 5 s away on test time, not wall time.
+      const time = new FakeRefreshScheduler()
+      const pollGate = deferred()
+      const pollStarted = deferred()
+      const sleepStarted = deferred()
+      const sleepGate = deferred()
+      const teardownStarted = deferred()
+      const stop = new AbortController()
+      const dispatchError = new Error('watch sleep failed')
+      let gateNextPoll = false
+      let tearingDown = false
+      let finalReads = 0
+      const input = fakeInput([], () => {
+        tearingDown = true
+        teardownStarted.resolve()
       })
-      const outcome = run.then(
-        () => undefined,
-        (error: unknown) => error,
-      )
+      const originalListBuilds = fx.store.listBuildsForRepo.bind(fx.store)
+      fx.store.listBuildsForRepo = async (repo) => {
+        if (gateNextPoll) {
+          gateNextPoll = false
+          // The signal row's in-flight poll fails; the exception row's poll
+          // returns a stale snapshot after teardown has begun.
+          const staleSnapshot = exit === 'exception' ? await originalListBuilds(repo) : []
+          pollStarted.resolve()
+          await pollGate.promise
+          if (exit === 'signal') throw new Error('poll read failed during shutdown')
+          return staleSnapshot
+        }
+        if (tearingDown) {
+          finalReads += 1
+          throw new Error('final read failed during shutdown')
+        }
+        return originalListBuilds(repo)
+      }
 
-      await sleepStarted.promise
-      await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
-      gateNextPoll = true
-      await time.advance(5_001)
-      await pollStarted.promise
+      let run: Promise<void> | undefined
+      try {
+        run = abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          intervalMs: 1,
+          ...(exit === 'signal' ? { signal: stop.signal } : {}),
+          sleep: async () => {
+            sleepStarted.resolve()
+            await sleepGate.promise
+          },
+          wire: fx.wire,
+          terminal: term,
+          input,
+          refreshScheduler: time,
+        })
+        const outcome = run.then(
+          () => undefined,
+          (error: unknown) => error,
+        )
 
-      sleepGate.reject(dispatchError)
-      await teardownStarted.promise
-      pollGate.resolve()
-      const error = await outcome
-      run = undefined
+        await sleepStarted.promise
+        await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
+        gateNextPoll = true
+        await time.advance(5_001)
+        await pollStarted.promise
 
-      expect(error).toBe(dispatchError)
-      expect(finalReads).toBe(1)
-      expect(input.cleanups).toBe(1)
-      expect(latestDashboardFrame(term)).toContain('Autobuild')
-      expect(term.all()).toContain('\x1b[?1049l')
-      expect(term.all()).toContain('\x1b[?25h')
-      expect(fx.err).toEqual([])
-    } finally {
-      pollGate.resolve()
-      sleepGate.resolve()
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
+        if (exit === 'signal') {
+          stop.abort()
+          sleepGate.resolve()
+        } else sleepGate.reject(dispatchError)
+        await teardownStarted.promise
+        pollGate.resolve()
+        const error = await outcome
+        run = undefined
+
+        if (exit === 'signal') {
+          expect(error).toBeUndefined()
+          expect(stripAnsi(term.all())).toContain(
+            'dashboard render failed: poll read failed during shutdown',
+          )
+        } else {
+          // The original error wins over the failed final read.
+          expect(error).toBe(dispatchError)
+          expect(latestDashboardFrame(term)).toContain('Autobuild')
+        }
+        expect(finalReads).toBe(1)
+        expect(input.cleanups).toBe(1)
+        expect(term.all()).toContain('\x1b[?1049l')
+        expect(term.all()).toContain('\x1b[?25h')
+        expect(fx.err).toEqual([])
+      } finally {
+        stop.abort()
+        sleepGate.resolve()
+        pollGate.resolve()
+        await run?.catch(() => {})
+        await fx.cleanup()
+      }
+    }, 30_000)
 
   test('the frame is STRICTLY shorter than the terminal — rows are wired through', async () => {
     // f_d2e4b3ee + f_c9449563. Two bugs, one assertion:
@@ -6021,76 +5552,18 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('plain: true with an interactive terminal emits no escapes at all', async () => {
-    const fx = await makeFixture(readyTicket('T-plain'), happyHandlers())
-    const term = fakeTerminal()
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        plain: true,
-        wire: fx.wire,
-        terminal: term,
-      })
-      expect(term.all()).toBe('')
-      expect(out.join('\n')).not.toContain('\x1b')
-      // Plain still reports everything it reports today.
-      const slug = (await fx.store.listBuilds())[0]!.slug
-      expect(out.some((line) => line.includes(`build ${slug} parked`))).toBe(true)
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('the global row accepts an early i before the first projection, even with no body rows', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal()
-    const input = fakeInput(['intake'])
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      expect(out).toEqual([])
-      expect(fx.err).toEqual([])
-      const painted = stripAnsi(term.all())
-      expect(painted).toContain('> Autobuild')
-      expect(painted).toContain('intake OFF')
-      expect(painted).not.toContain('dispatcher intake OFF')
-      expect(painted).toContain('no active builds')
-      expect(
-        (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
-        ),
-      ).toBe(true)
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('startup Up/Down clamp on global, so a following i still toggles intake', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
+    // Delivered synchronously in input.start, before the first projection.
     const input = fakeInput(['up', 'down', 'intake'])
+    const out: string[] = []
     try {
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
-        stdout: () => {},
+        stdout: (line) => out.push(line),
         stderr: (line) => fx.err.push(line),
         once: true,
         wire: fx.wire,
@@ -6102,6 +5575,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).toContain('intake OFF')
       expect(painted).not.toContain('dispatcher intake OFF')
       expect(painted).not.toContain('no active row is selected')
+      expect(painted).toContain('no active builds')
+      expect(out).toEqual([])
       expect(
         (await fx.store.getRepoEvents(fx.origin)).some(
           (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
@@ -6113,29 +5588,36 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('a non-interactive terminal (a pipe or redirect) preserves exact plain output', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal(false)
-    const out: string[] = []
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-        terminal: term,
-      })
-      expect(term.all()).toBe('')
-      expect(out).toEqual([`ab dispatch — one pass over ${fx.checkout} (capacity 1)`, 'tick: idle'])
-      expect(out.join('\n')).not.toContain('\x1b')
-      expect(fx.err).toEqual([])
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
+  for (const mode of ['non-interactive terminal', 'plain: true on an interactive terminal'])
+    test(`a ${mode} preserves exact plain output with no escapes at all`, async () => {
+      const fx = await makeFixture([], happyHandlers())
+      // The interactive terminal row stays escape-free only because of `plain`.
+      const plain = mode !== 'non-interactive terminal'
+      const term = fakeTerminal(/* interactive */ plain)
+      const out: string[] = []
+      try {
+        await abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: (line) => out.push(line),
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          ...(plain ? { plain: true } : {}),
+          wire: fx.wire,
+          terminal: term,
+        })
+        expect(term.all()).toBe('')
+        expect(out).toEqual([
+          `ab dispatch — one pass over ${fx.checkout} (capacity 1)`,
+          'tick: idle',
+        ])
+        expect(out.join('\n')).not.toContain('\x1b')
+        expect(fx.err).toEqual([])
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
 
   test('watch: routine diagnostics and counts stay hidden', async () => {
     const fx = await makeFixture(
@@ -6183,87 +5665,6 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).not.toContain(diagnostic)
       expect(painted).not.toContain('tick: invalidTickets=1 dependencyBlocked=1')
     } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('watch tracks unclaimed observations across recording, claiming and settlement', async () => {
-    const config = DISPATCH_CONFIG_TOML.replace(
-      'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 0',
-    )
-    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
-    const term = fakeTerminal()
-    const stop = new AbortController()
-    const source = 'successive-observations'
-    let ticks = 0
-    const record = () =>
-      fx.store.append(source, {
-        actor: agentActor('implement', 'successive-session'),
-        type: 'observation.recorded',
-        // Deliberately reuse the payload id: identity is build plus sequence.
-        payload: { id: 'reused-id', kind: 'followup', summary: 'new observation' },
-      })
-    try {
-      await fx.store.createBuild({ slug: source, repo: fx.origin })
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.paused',
-        payload: {},
-      })
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        signal: stop.signal,
-        terminal: term,
-        wire: fx.wire,
-        sleep: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0))
-          const expected = [0, 1, 0, 0, 1][ticks]!
-          // Harvest facts carry the pressure; the header no longer shows it.
-          expect(await sampleUnclaimedObservationCount(fx.store, fx.origin)).toBe(expected)
-          await waitFor(() => latestDashboardFrame(term).includes('triage – | queue 0'))
-          expect(latestDashboardFrame(term)).not.toMatch(/observations \d+\/\d+/)
-          ticks++
-          if (ticks === 1) await record()
-          if (ticks === 2)
-            await fx.store.appendRepo(fx.origin, {
-              actor: KERNEL,
-              type: 'harvest.started',
-              payload: {
-                run: 'successive-claim',
-                observations: [{ build: source, seq: 1 }],
-                scan: { kind: 'harvest-scan', rev: 0 },
-              },
-            })
-          if (ticks === 3)
-            await fx.store.appendRepo(fx.origin, {
-              actor: KERNEL,
-              type: 'harvest.completed',
-              payload: {
-                run: 'successive-claim',
-                dispositions: [
-                  {
-                    occurrence: { build: source, seq: 1 },
-                    action: 'suppressed',
-                    proposalKey: 'successive-proposal',
-                  },
-                ],
-                report: { kind: 'harvest-report', rev: 1 },
-              },
-            })
-          if (ticks === 4) await record()
-          if (ticks === 5) stop.abort()
-        },
-      })
-      expect(ticks).toBe(5)
-      expect(fx.err).toEqual([])
-    } finally {
-      stop.abort()
       await fx.cleanup()
     }
   }, 30_000)
@@ -6376,9 +5777,23 @@ describe('abDispatch --once with an interactive terminal', () => {
   }, 30_000)
 
   test('only interactive dispatchers sample the triage count or publish it', async () => {
-    const run = async (opts: { kernelRunId?: string; frontendStatus?: boolean }) => {
+    const run = async (
+      opts: { kernelRunId?: string; frontendStatus?: boolean },
+      source: 'counting' | 'without-counts' = 'counting',
+    ) => {
       const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
-      const probe = countingTriageStates(fx.tickets, fx.store)
+      const probe =
+        source === 'counting'
+          ? countingTriageStates(fx.tickets, fx.store)
+          : { counts: 0, lists: 0, inTick: 0 }
+      // A source without bounded counts offers only a full state listing.
+      if (source === 'without-counts')
+        Object.assign(fx.tickets, {
+          listStates: async () => {
+            probe.lists += 1
+            return [{ name: 'triage', tickets: 9 }]
+          },
+        })
       const stop = new AbortController()
       let sleeps = 0
       try {
@@ -6405,6 +5820,7 @@ describe('abDispatch --once with an interactive terminal', () => {
           lists: probe.lists,
           inTick: probe.inTick,
           payloads: completed.map((event) => event.payload),
+          err: [...fx.err],
         }
       } finally {
         stop.abort()
@@ -6424,62 +5840,18 @@ describe('abDispatch --once with an interactive terminal', () => {
     const frontend = await run({ kernelRunId: 'triage-frontend-kernel', frontendStatus: true })
     expect(frontend.counts).toBe(1)
     expect(frontend.payloads.at(-1)).toMatchObject({ triage: 3 })
-    for (const result of [plain, hosted, frontend]) {
+    // A source without bounded counts is never listed, so the frontend's
+    // kernel child publishes no triage at all.
+    const countless = await run(
+      { kernelRunId: 'triage-unsupported-kernel', frontendStatus: true },
+      'without-counts',
+    )
+    expect(countless.payloads.length).toBeGreaterThan(0)
+    for (const payload of countless.payloads) expect(payload).not.toHaveProperty('triage')
+    for (const result of [plain, hosted, frontend, countless]) {
       expect(result.lists).toBe(0)
       expect(result.inTick).toBe(0)
-    }
-  }, 30_000)
-
-  test('a source without bounded counts is never listed and its triage stays unknown', async () => {
-    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
-    let listings = 0
-    Object.assign(fx.tickets, {
-      listStates: async () => {
-        listings += 1
-        return [{ name: 'triage', tickets: 9 }]
-      },
-    })
-    const term = fakeTerminal()
-    const stop = new AbortController()
-    try {
-      // The interactive dashboard samples outside ticks.
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 1,
-        signal: stop.signal,
-        sleep: async () => {
-          await waitFor(() => latestDashboardFrame(term).includes('triage – | queue 0'))
-          stop.abort()
-        },
-        wire: fx.wire,
-        terminal: term,
-      })
-      // The interactive frontend's kernel child publishes no triage.
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-        kernelRunId: 'triage-unsupported-kernel',
-        frontendStatus: true,
-      })
-      expect(listings).toBe(0)
-      const completed = (await fx.store.getRepoEvents(fx.origin)).filter(
-        (event) => event.type === 'dispatcher.tick-completed',
-      )
-      expect(completed.length).toBeGreaterThan(0)
-      for (const event of completed) expect(event.payload).not.toHaveProperty('triage')
-      expect(fx.err).toEqual([])
-    } finally {
-      stop.abort()
-      await fx.cleanup()
+      expect(result.err).toEqual([])
     }
   }, 30_000)
 
@@ -7037,71 +6409,6 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('a fresh dispatcher reads the durable harvest gate and h changes only after acknowledgement', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal(true, { columns: 180 })
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: humanActor('prior-operator'),
-        type: 'harvest.pause-requested',
-        payload: {},
-      })
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.paused',
-        payload: {},
-      })
-      const before = (await fx.store.getRepoEvents(fx.origin)).length
-
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'current-operator' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() => latestDashboardFrame(term).includes('harvest OFF'))
-      expect(latestDashboardFrame(term)).not.toMatch(/^ {3}Harvest/m)
-
-      input.press('harvest-gate')
-      await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin))
-          .slice(before)
-          .some((event) => event.type === 'harvest.resume-requested'),
-      )
-      expect(latestDashboardFrame(term)).toContain('harvest OFF')
-      expect(stripAnsi(term.all())).not.toContain('harvest gate: resume requested')
-      const request = (await fx.store.getRepoEvents(fx.origin)).at(-1)
-      expect(request?.actor).toEqual({
-        kind: 'human',
-        user: 'current-operator',
-      })
-
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.resumed',
-        payload: {},
-      })
-      await waitFor(() => latestDashboardFrame(term).includes('harvest ON'))
-
-      input.press('interrupt')
-      await run
-      run = undefined
-      expect(fx.err).toEqual([])
-    } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('legacy repository defaults never seed an in-flight build', async () => {
     const fx = await makeFixture(
       readyTicket('T-existing', { title: 'Existing work' }),
@@ -7129,112 +6436,6 @@ describe('abDispatch interactive keyboard controls', () => {
         ),
       ).toBe(false)
     } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('Harvest p resumes an ordinary failed run and never emits a pause', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal()
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
-          run: 'harvest_failed',
-          observations: [{ build: 'observed-build', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
-        },
-      })
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.failed',
-        payload: {
-          run: 'harvest_failed',
-          step: 'synthesize',
-          round: 1,
-          attempt: 1,
-          error: 'provider unavailable',
-          willRetry: false,
-        },
-      })
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
-          run: 'harvest_later_completed',
-          observations: [{ build: 'later-build', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 1 },
-        },
-      })
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.completed',
-        payload: {
-          run: 'harvest_later_completed',
-          dispositions: [
-            {
-              occurrence: { build: 'later-build', seq: 1 },
-              action: 'suppressed',
-              proposalKey: 'later-completed',
-            },
-          ],
-          report: { kind: 'harvest-report', rev: 1 },
-        },
-      })
-      expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
-      const before = (await fx.store.getRepoEvents(fx.origin)).length
-
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'failure-op' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() => /Harvest.*FAILED/.test(latestDashboardFrame(term)))
-      input.press('down')
-      await waitFor(() => /^ > .*Harvest.*FAILED/m.test(latestDashboardFrame(term)))
-      input.press('pause')
-      await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin))
-          .slice(before)
-          .some((event) => event.type === 'harvest.resume-requested'),
-      )
-      const added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      // The loop journals its run boundary first (run identity is synthesized
-      // for plain dispatchers), then yields the repository lease to the
-      // standing holder; the yield is its only durable tick record.
-      expect(added.map((event) => event.type)).toEqual([
-        'dispatcher.run-started',
-        'dispatcher.runtime-recorded',
-        'dispatcher.tick-yielded',
-        'harvest.resume-requested',
-      ])
-      expect(added[3]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
-      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
-
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.resumed',
-        payload: {},
-      })
-      await waitFor(() => /Harvest.*RUNNING/.test(latestDashboardFrame(term)))
-
-      input.press('interrupt')
-      await run
-      run = undefined
-      expect(fx.err).toEqual([])
-    } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
@@ -7441,9 +6642,12 @@ describe('abDispatch interactive keyboard controls', () => {
         const latest = [...term.frames]
           .reverse()
           .find((frame) => stripAnsi(frame).includes('Autobuild'))
+        // The acknowledged row disappears entirely and the selection that sat
+        // on it reconciles to the global row.
         return (
           latest !== undefined &&
           !/Harvest.*ESCALATED/.test(stripAnsi(latest)) &&
+          !/^ {3}Harvest/m.test(stripAnsi(latest)) &&
           /^ > Autobuild/m.test(stripAnsi(latest))
         )
       })
@@ -7541,6 +6745,7 @@ describe('abDispatch interactive keyboard controls', () => {
           .some((event) => event.type === 'harvest.resume-requested'),
       )
       expect(latestDashboardFrame(term)).toContain('harvest OFF')
+      expect(stripAnsi(term.all())).not.toContain('harvest gate: resume requested')
       const request = (await fx.store.getRepoEvents(fx.origin)).at(-1)
       expect(request?.actor).toEqual({ kind: 'human', user: 'attention-op' })
 
@@ -7554,74 +6759,6 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           frame.includes('harvest ON') &&
           !/Harvest.*ESCALATED/.test(frame) &&
-          /^ > Autobuild/m.test(frame)
-        )
-      })
-
-      input.press('interrupt')
-      await run
-      run = undefined
-      expect(fx.err).toEqual([])
-    } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('completion removes a selected Harvest row and reconciles selection to global', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal()
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
-          run: 'harvest_completing',
-          observations: [{ build: 'observed-build', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
-        },
-      })
-      expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
-
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() => /Harvest.*RUNNING/.test(latestDashboardFrame(term)))
-      input.press('down')
-      await waitFor(() => /^ > .*Harvest/m.test(latestDashboardFrame(term)))
-
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.completed',
-        payload: {
-          run: 'harvest_completing',
-          dispositions: [
-            {
-              occurrence: { build: 'observed-build', seq: 1 },
-              action: 'suppressed',
-              proposalKey: 'suppressed:observed-build:1',
-            },
-          ],
-          report: { kind: 'harvest-report', rev: 0 },
-        },
-      })
-      await waitFor(() => {
-        const frame = latestDashboardFrame(term)
-        return (
-          !/^ > .*Harvest/m.test(frame) &&
-          !/^ {3}Harvest/m.test(frame) &&
           /^ > Autobuild/m.test(frame)
         )
       })
@@ -7884,6 +7021,12 @@ describe('abDispatch interactive keyboard controls', () => {
         ['dispatcher.pause-set', { enabled: true }],
         ['dispatcher.intake-set', { enabled: false }],
       ])
+      // The repository facts carry the dashboard operator, like the build ones.
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .filter((event) => settingWritesFilter(event.type))
+          .every((event) => event.actor.kind === 'human' && event.actor.user === 'bulk-op'),
+      ).toBe(true)
 
       // No live runner in this fixture, so the kernel's acknowledgement — the
       // thing that actually settles a pause — is written explicitly.
@@ -7957,53 +7100,6 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('global p with nothing pausable still stops intake and says so', async () => {
-    const fx = await makeFixture([], happyHandlers())
-    const term = fakeTerminal()
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: { USER: 'quiet-op' },
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
-
-      input.press('pause')
-      await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
-      expect(latestDashboardFrame(term)).not.toContain(
-        'pause all: no pausable builds; queued builds held; intake OFF',
-      )
-      // With nothing pausable, the repository facts are the whole action.
-      expect(await settingWrites(fx.store, fx.origin)).toEqual([
-        ['dispatcher.pause-set', { enabled: true }],
-        ['dispatcher.intake-set', { enabled: false }],
-      ])
-      const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
-        settingWritesFilter(event.type),
-      )
-      expect(
-        settings.every((event) => event.actor.kind === 'human' && event.actor.user === 'quiet-op'),
-      ).toBe(true)
-
-      input.press('interrupt')
-      await run
-      run = undefined
-      expect(fx.err).toEqual([])
-    } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('Enter is a read-only no-op on the Dispatcher and Harvest rows', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
@@ -8064,63 +7160,6 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('up')
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(before)
-
-      input.press('interrupt')
-      await run
-      run = undefined
-      expect(fx.err).toEqual([])
-    } finally {
-      input.press('interrupt')
-      await run?.catch(() => {})
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('terminalizing a drilled-in build returns to the active-build list', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-terminal-detail', { title: 'Terminal detail' }),
-      happyHandlers(),
-    )
-    const term = fakeTerminal(true, { columns: 160, rows: 60 })
-    const input = fakeInput()
-    let run: Promise<void> | undefined
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-      })
-      run = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() => latestDashboardFrame(term).includes('terminal-detail'))
-      input.press('down')
-      input.press('enter')
-      await waitFor(() => latestPaintedFrame(term).includes('Build  terminal-detail'))
-
-      await fx.store.append('terminal-detail', {
-        actor: DISPATCHER,
-        type: 'build.completed',
-        payload: { outcome: 'merged' },
-      })
-      await waitFor(
-        () =>
-          /^ > Autobuild/m.test(latestPaintedFrame(term)) &&
-          !latestPaintedFrame(term).includes('Build  terminal-detail'),
-      )
-      expect(latestPaintedFrame(term)).toContain('no active builds')
 
       input.press('interrupt')
       await run
@@ -8983,6 +8022,19 @@ describe('abDispatch interactive keyboard controls', () => {
         controlHistory(before).length,
       )
 
+      // Escape cancels the prompt: no event, the blocker stays visible, and the
+      // draft is discarded (the answer below never contains it).
+      input.text('do not submit this')
+      input.press('escape')
+      await waitFor(() => !latestPaintedFrame(term).includes('Resume '))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(controlHistory(await fx.store.getEvents('guidance-work'))).toEqual(
+        controlHistory(before),
+      )
+      expect(stripAnsi(term.all())).toContain('Should finalize use the manual merge path?')
+      input.press('resume')
+      await waitFor(() => latestPaintedFrame(term).includes('Resume '))
+
       // m/p/d are feedback characters while the modal is active, never global
       // actions. Backspace edits by code point before Enter submits.
       input.text('Use pmdX')
@@ -8998,6 +8050,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await run
 
       const added = (await fx.store.getEvents('guidance-work')).slice(before.length)
+      expect(added.filter((event) => event.type === 'escalation.answered')).toHaveLength(1)
       const answer = added.find((event) => event.type === 'escalation.answered')
       expect(answer?.actor).toEqual({ kind: 'human', user: 'dashboard-op' })
       expect(answer?.payload).toEqual({
@@ -9089,6 +8142,12 @@ describe('abDispatch interactive keyboard controls', () => {
       input.text('> ')
       input.press('end')
       await waitFor(() => stripAnsi(term.all()).includes('> second line'))
+      // Up belongs to the composer while the prompt is open: it moves the
+      // caret to the first line (clamped to its end), never the selected row.
+      input.press('up')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(stripAnsi(term.all())).toMatch(/^ > .*multiline-work/m)
+      input.text('X')
       input.press('enter')
 
       await waitFor(async () =>
@@ -9106,10 +8165,13 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(answers).toHaveLength(1)
       expect(answers[0]?.payload).toEqual({
         id: 'esc_multiline',
-        answer: 'first line\n> second line',
+        answer: 'first lineX\n> second line',
         resolution: 'guidance',
       })
       expect(answers[0]?.actor).toEqual({ kind: 'human', user: 'dashboard-op' })
+      // The selection never left the build row, so no other build's controls
+      // were ever addressed.
+      expect(stripAnsi(term.all())).not.toMatch(/^ > Autobuild/m)
     } finally {
       await fx.cleanup()
     }
@@ -9155,52 +8217,6 @@ describe('abDispatch interactive keyboard controls', () => {
         answer: pasted,
         resolution: 'guidance',
       })
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('Up and Down move the caret while the prompt is open and never move the selected row', async () => {
-    const fx = await makeFixture(readyTicket('T-caret', { title: 'Caret work' }), happyHandlers())
-    try {
-      const { term, input, run, before } = await promptOpen(
-        fx,
-        'caret-work',
-        'Should the finalize step keep native auto-merge?',
-        'esc_caret',
-      )
-
-      input.text('one')
-      input.press('newline')
-      input.text('two')
-      input.press('up')
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      // The row selection is exactly where it was; Up belongs to the composer
-      // while the prompt is open.
-      const painted = stripAnsi(term.all())
-      expect(painted).toMatch(/^ > .*caret-work/m)
-      input.text('X')
-      input.press('enter')
-
-      await waitFor(async () =>
-        (await fx.store.getEvents('caret-work')).some(
-          (event) => event.type === 'escalation.answered',
-        ),
-      )
-      input.press('interrupt')
-      await run
-
-      const answer = (await fx.store.getEvents('caret-work'))
-        .slice(before.length)
-        .find((event) => event.type === 'escalation.answered')
-      expect(answer?.payload).toEqual({
-        id: 'esc_caret',
-        answer: 'oneX\ntwo',
-        resolution: 'guidance',
-      })
-      // The selection never left the build row, so no other build's controls
-      // were ever addressed.
-      expect(stripAnsi(term.all())).not.toMatch(/^ > Autobuild/m)
     } finally {
       await fx.cleanup()
     }
@@ -9342,68 +8358,6 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(events.some((event) => event.type === 'escalation.raised')).toBe(false)
       expect(fx.forge.isAutoMergeEnabled(1)).toBe(false)
       expect(reduceBuild(events).landing?.command?.kind).toBe('hold')
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('Escape cancels blocked resume with no event and leaves the blocker visible', async () => {
-    const fx = await makeFixture(readyTicket('T-cancel', { title: 'Cancel work' }), happyHandlers())
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-      })
-      await fx.store.append('cancel-work', {
-        actor: agentActor('finalize', 's_blocked'),
-        type: 'escalation.raised',
-        payload: {
-          id: 'esc_cancel',
-          phase: 'finalize',
-          source: 'agent',
-          question: 'Cancellation must leave this blocker untouched',
-        },
-      })
-      const before = await fx.store.getEvents('cancel-work')
-      const term = fakeTerminal()
-      const input = fakeInput()
-      const run = abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        intervalMs: 60_000,
-        wire: fx.wire,
-        terminal: term,
-        input,
-      })
-      await waitFor(() =>
-        stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'),
-      )
-      input.press('down')
-      await waitFor(() => /^ > .*cancel-work/m.test(stripAnsi(term.all())))
-      input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
-      input.text('do not submit this')
-      input.press('escape')
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      expect(controlHistory(await fx.store.getEvents('cancel-work'))).toEqual(
-        controlHistory(before),
-      )
-      expect(stripAnsi(term.all())).toContain('Cancellation must leave this blocker untouched')
-      input.press('interrupt')
-      await run
-      expect(
-        (await fx.store.getEvents('cancel-work')).some(
-          (event) => event.type === 'escalation.answered',
-        ),
-      ).toBe(false)
     } finally {
       await fx.cleanup()
     }
@@ -9581,6 +8535,13 @@ describe('abDispatch interactive keyboard controls', () => {
         payload: { outcome: 'abandoned' },
       })
       await waitFor(() => !latestPaintedFrame(term).includes(`Abort ${slug}`))
+      // Terminalization also leaves the drilled-in detail for the active list.
+      await waitFor(
+        () =>
+          /^ > Autobuild/m.test(latestPaintedFrame(term)) &&
+          !latestPaintedFrame(term).includes(`Build  ${slug}`),
+      )
+      expect(latestPaintedFrame(term)).toContain('no active builds')
       input.press('enter')
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(
@@ -9589,6 +8550,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('interrupt')
       await run
       run = undefined
+      expect(fx.err).toEqual([])
     } finally {
       input.press('interrupt')
       await run?.catch(() => {})
@@ -10348,30 +9310,6 @@ runtime = "claude"
     }
   }, 30_000)
 
-  test('deprecated extensions warn at startup without blocking dispatch', async () => {
-    const toml = DISPATCH_CONFIG_TOML.replace(
-      '[policy]',
-      '[roles.plan]\nextensions = ["legacy"]\n\n[policy]',
-    )
-    const fx = await makeFixture([], happyHandlers(), toml)
-    try {
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: fx.wire,
-      })
-      expect(fx.err).toEqual([
-        'autobuild.toml: [roles.plan] declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.',
-      ])
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   test('line-oriented mode writes every notice to stderr, in full, and leaves stdout clean', async () => {
     const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
     const out: string[] = []
@@ -10398,41 +9336,6 @@ runtime = "claude"
     }
   }, 30_000)
 
-  for (const size of [
-    { columns: 120, rows: 40 },
-    { columns: 80, rows: 24 },
-  ]) {
-    test(`the painted frame carries every detail at ${size.columns}x${size.rows}`, async () => {
-      const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
-      const term = fakeTerminal(true, size)
-      try {
-        await abDispatch({
-          targetRepo: fx.checkout,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: (line) => fx.err.push(line),
-          once: true,
-          wire: fx.wire,
-          terminal: term,
-        })
-
-        // The whole frame, because details legitimately land on continuation
-        // rows — that is what wrapping means.
-        const frame = latestDashboardFrame(term)
-        for (const detail of DETAILS) expect(frame).toContain(detail)
-        // Uncapped: no notice is dropped by count. (`~` is deliberately NOT
-        // asserted absent — packLines truncating an over-wide single token is
-        // an inherited invariant this change does not own.)
-        expect(frame).not.toMatch(/\+\d+ more/)
-        // The interactive frame is the only surface: stderr stays silent.
-        expect(fx.err).toEqual([])
-      } finally {
-        await fx.cleanup()
-      }
-    }, 30_000)
-  }
-
   test('routine ticket diagnostics do not enter the sticky config warning region', async () => {
     const fx = await makeFixture(readyTicket('T-sticky'), happyHandlers(), BROKEN_ROLES_TOML)
     const originalListReady = fx.tickets.listReady.bind(fx.tickets)
@@ -10454,8 +9357,14 @@ runtime = "claude"
         terminal: term,
       })
 
+      // The whole frame, because details legitimately land on continuation
+      // rows — that is what wrapping means.
       const frame = latestDashboardFrame(term)
       for (const detail of DETAILS) expect(frame).toContain(detail)
+      // Uncapped: no notice is dropped by count. (`~` is deliberately NOT
+      // asserted absent — packLines truncating an over-wide single token is
+      // an inherited invariant this change does not own.)
+      expect(frame).not.toMatch(/\+\d+ more/)
       expect(frame).not.toContain('invalid frontmatter')
     } finally {
       await fx.cleanup()
@@ -10565,30 +9474,6 @@ describe('abDispatch hosted harvest execution', () => {
     })
   }
 
-  test('below-threshold unclaimed pressure never provisions', async () => {
-    const fake = fakeHarvestExecution('git-worktree')
-    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
-    const out: string[] = []
-    try {
-      await seedObservation(fx, 'gate-source', 'obs-below')
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: hostedWire(fx, fake),
-      })
-      expect(fake.starts).toEqual([])
-      const events = await fx.store.getRepoEvents(fx.origin)
-      expect(events.some((event) => event.type === 'harvest.execution.started')).toBe(false)
-      expect(fx.err).toEqual([])
-    } finally {
-      await fx.cleanup()
-    }
-  })
-
   test('at threshold it provisions, journals execution identity, and releases with snapshot proof', async () => {
     const fake = fakeHarvestExecution('git-worktree')
     const fx = await makeFixture(
@@ -10649,15 +9534,34 @@ describe('abDispatch hosted harvest execution', () => {
     }
   })
 
-  test('an open run below threshold bypasses the pressure gate to resume', async () => {
+  test('below-threshold pressure never provisions, but an open run bypasses the gate to resume', async () => {
     const fake = fakeHarvestExecution('git-worktree')
     const fx = await makeFixture(
       [],
       happyHandlers(),
       DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 5'),
     )
+    const once = () =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
     try {
       await seedObservation(fx, 'resume-source', 'obs-open-run')
+      // Below-threshold unclaimed pressure (1 < 5) and no open run: nothing provisions.
+      await once()
+      expect(fake.starts).toEqual([])
+      expect(
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'harvest.execution.started',
+        ),
+      ).toBe(false)
+      expect(fx.err).toEqual([])
       const scan = await scanUnclaimedObservations(fx.store, fx.origin)
       const packet = await makeHarvestScanPacket({
         store: fx.store,
@@ -10680,16 +9584,8 @@ describe('abDispatch hosted harvest execution', () => {
           },
         }),
       )
-      await abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        wire: hostedWire(fx, fake),
-      })
-      // Below-threshold unclaimed pressure (1 < 5), but the open run forces
+      await once()
+      // Still below-threshold unclaimed pressure, but the open run forces
       // provisioning so the guest can resume it under the repository lease.
       expect(fake.starts).toHaveLength(1)
       expect(fx.err).toEqual([])
@@ -11644,35 +10540,6 @@ describe('remote summary handoff classification', () => {
         run.requests.map((event) => event.seq).sort(),
       )
       expect(run.fx.forge.comments.length).toBeLessThanOrEqual(1)
-    } finally {
-      await run.fx.cleanup()
-    }
-  }, 30_000)
-
-  test('a clean exit with no outstanding request stays parked with its warning', async () => {
-    const slug = 'handoff-none'
-    const run = await runRemoteSummaryExit({ slug, guest: async () => {} })
-    try {
-      expect(run.handoffs).toHaveLength(0)
-      expect(run.parked).toHaveLength(1)
-      expect(run.stdout.join('\n')).toContain(`build ${slug} parked (`)
-    } finally {
-      await run.fx.cleanup()
-    }
-  }, 30_000)
-
-  test('an older request inside cooldown does not make an unrelated exit a handoff', async () => {
-    const slug = 'handoff-cooldown-old'
-    const run = await runRemoteSummaryExit({
-      slug,
-      preexisting: 'cooldown',
-      holdPrelaunch: true,
-      guest: async () => {},
-    })
-    try {
-      expect(run.handoffs).toHaveLength(0)
-      expect(run.parked).toHaveLength(1)
-      expect(run.stdout.join('\n')).toContain(`build ${slug} parked (`)
     } finally {
       await run.fx.cleanup()
     }
@@ -14235,31 +13102,6 @@ credentialEnv = "CLAUDE_TOKEN"
   }
 })
 
-test('viewer argument contract rejects startup mutations and checkout-less operation', () => {
-  for (const flags of [
-    ['--viewer', '--intake'],
-    ['--viewer', '--no-intake'],
-    ['--viewer', '--repository', 'https://example/repo'],
-    ['--dispatched-by', 'host'],
-    ['--viewer', '--dispatched-by', '  '],
-    ['--viewer', '--auto-merge'],
-  ])
-    expect(() => parseDispatchArgs(flags, {})).toThrow()
-  expect(
-    parseDispatchArgs(
-      ['--viewer', '--once', '--plain', '--interval', '2', '--dispatched-by', 'host'],
-      { AB_REPOSITORY: 'elsewhere' },
-    ),
-  ).toMatchObject({
-    viewer: true,
-    once: true,
-    plain: true,
-    intervalMs: 2000,
-    dispatchedBy: 'host',
-    repository: undefined,
-  })
-})
-
 test('viewer routing bypasses injected execution wiring and missing execution configuration', async () => {
   const targetRepo = await mkdtemp(join(tmpdir(), 'ab-viewer-direct-'))
   const lines: string[] = []
@@ -14556,67 +13398,13 @@ command = "true"
     }
   }, 30_000)
 
-  test('--once baselines a new hook, then a later pass drains what landed', async () => {
-    const fx = await makeFixture([], happyHandlers(), HOOKED)
-    const delivered: string[] = []
-    const once = () =>
-      abDispatch({
-        targetRepo: fx.checkout,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: (line) => fx.err.push(line),
-        once: true,
-        invokeHook: async (_hook, line) => {
-          delivered.push(JSON.parse(line).id)
-          return { ok: true }
-        },
-        wire: fx.wire,
-      })
-    try {
-      await fx.store.ensureRepo(fx.origin)
-      await handBack(fx, 'before')
-      await once()
-      expect(delivered).toEqual([])
-      expect(await readHookProgress(fx.store, fx.origin, 'notify')).toBeDefined()
-      await handBack(fx, 'after')
-      await once()
-      const after = (await fx.store.getRepoEvents(fx.origin)).find(
-        (event) => event.type === 'ticket.handed-back' && event.payload.attempt === 'after',
-      )!
-      expect(delivered).toEqual([`repo:${after.seq}`])
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
-  test('a dispatcher that cannot run local commands rejects a command hook by name', async () => {
-    const fx = await makeFixture([], happyHandlers(), HOOKED)
-    try {
-      await expect(
-        abDispatch({
-          targetRepo: fx.checkout,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-          localCommands: false,
-          wire: fx.wire,
-        }),
-      ).rejects.toThrow('[hooks.notify] is a command hook')
-    } finally {
-      await fx.cleanup()
-    }
-  }, 30_000)
-
   const URL_HOOKED = `${DISPATCH_CONFIG_TOML}
 [hooks.relay]
 url = "https://hooks.example/autobuild"
 secretEnv = "HOOK_SECRET"
 `
 
-  test('a hosted one-pass dispatch delivers url hooks', async () => {
+  test('--once on a hosted dispatcher baselines a new url hook, then a later pass drains what landed with its record', async () => {
     const fx = await makeFixture([], happyHandlers(), URL_HOOKED)
     const delivered: { hook: string; id: string; record: string | undefined }[] = []
     const once = () =>
@@ -14636,7 +13424,9 @@ secretEnv = "HOOK_SECRET"
       })
     try {
       await fx.store.ensureRepo(fx.origin)
+      await handBack(fx, 'before')
       await once()
+      expect(delivered).toEqual([])
       expect(await readHookProgress(fx.store, fx.origin, 'relay')).toBeDefined()
       await handBack(fx, 'after')
       await once()
@@ -14651,22 +13441,24 @@ secretEnv = "HOOK_SECRET"
     }
   }, 30_000)
 
-  test('a url hook whose signing secret is unset or blank is rejected at startup by name', async () => {
-    const fx = await makeFixture([], happyHandlers(), URL_HOOKED)
+  test('a dispatcher that cannot run local commands rejects a command hook, and a url hook without its secret, by name', async () => {
+    const fx = await makeFixture([], happyHandlers(), HOOKED)
+    const dispatch = (env: Record<string, string | undefined>) =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env,
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        localCommands: false,
+        wire: fx.wire,
+      })
     try {
+      await expect(dispatch({})).rejects.toThrow('[hooks.notify] is a command hook')
+      await writeFile(join(fx.checkout, 'autobuild.toml'), URL_HOOKED)
       for (const env of [{}, { HOOK_SECRET: '' }, { HOOK_SECRET: ' ' }])
-        await expect(
-          abDispatch({
-            targetRepo: fx.checkout,
-            env,
-            exec: spawnExec,
-            stdout: () => {},
-            stderr: () => {},
-            once: true,
-            localCommands: false,
-            wire: fx.wire,
-          }),
-        ).rejects.toThrow(
+        await expect(dispatch(env)).rejects.toThrow(
           '[hooks.relay].secretEnv names HOOK_SECRET, which is unset or empty in the dispatcher environment',
         )
     } finally {

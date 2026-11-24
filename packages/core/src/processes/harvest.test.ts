@@ -569,6 +569,35 @@ describe('terminal observation sample (AUT-524)', () => {
       (await scanUnclaimedObservations(store, '/repo')).observations.length,
     )
   })
+
+  test('a reused payload id is a new observation after an earlier claim settles', async () => {
+    const store = new MemoryBuildStore()
+    const record = () => observation(store, 'source', 'reused-id')
+    // Identity is build plus sequence, so the payload id repeats on purpose.
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(0)
+    await record()
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(1)
+    await claim(store, 'h_claim', [{ build: 'source', seq: 1 }])
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(0)
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_claim',
+        dispositions: [
+          {
+            occurrence: { build: 'source', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'reused-proposal',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
+      },
+    })
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(0)
+    await record()
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(1)
+  })
 })
 
 describe('harvest deterministic scan and ledger', () => {
