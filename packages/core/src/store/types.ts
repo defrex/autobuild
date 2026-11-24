@@ -170,6 +170,11 @@ export interface BuildDigest {
   /** The latest `execution.started` has no later `execution.ended` with the
    * same `instance` (the `openExecution` rule). Absent otherwise. */
   executionOpen?: true
+  /** Every `execution.started` and `execution.ended` the build recorded:
+   * what an optimization node's activity pass compares with the facts its
+   * clock has accounted. Always present from current stores; absent only
+   * from an older service's answer. */
+  executionFacts?: number
   /** An optimization node has a settled, non-accepted attempt whose ticket
    * has not moved to the rejected role yet: a post-terminal duty that keeps
    * a completed node polled, like `reclaimPending`. Absent otherwise. */

@@ -413,7 +413,9 @@ The dispatcher claims urgent ready tickets before normal ones, each in source
 order, and ahead of normal builds waiting for a slot to re-verify, reconcile or
 resume. To expedite a ticket, such as a fix for a stuck build, mark it urgent
 with `--priority urgent` on create or update; never move other ready tickets
-out of ready to make room. A claimed ticket's priority becomes its build's.
+out of ready to make room. A claimed ticket's priority becomes its build's,
+except that an optimization node's attempts claim at the node's current
+priority; a claimed attempt keeps its own.
 To expedite a build that already exists — a waiting reconcile or re-verify
 that now blocks other work — run `ab priority <slug> urgent` (MCP:
 `builds.control` with action `priority` and `priority: "urgent"`); `normal`
@@ -872,7 +874,9 @@ when to stop, and landing the result.
 
 - **Read progress** with `ab objective <node>` (`--json` for the structured
   view): starting, current and best values, attempts filed, accepted, rejected,
-  merged unmeasured and running, the plateau counter, elapsed hours, stop
+  merged unmeasured and running, the plateau counter, active hours (time its
+  attempts, proposer or measurements actually ran; `settling` right after a
+  stop), stop
   eligibility, and, once stopped, the cause, mode and what still blocks
   completion. It also lists every `unmeasured merge` and every `branch cleanup
   pending`, each of which holds a concurrency slot; `ab build status <node>`
@@ -891,10 +895,14 @@ when to stop, and landing the result.
   shown error names why the forge refused, and the ticket moves to rejected
   once the branch is gone.
 - **Revise when to stop** with `ab objective <node> --threshold n`, or
-  `--max-attempts n`, `--max-hours n`, `--plateau n` or `--stop-mode abort|drain`.
+  `--max-attempts n`, `--max-hours n` (active hours), `--plateau n` or
+  `--stop-mode abort|drain`.
   The dispatcher applies the change on its next tick, with no replanning and
   running attempts untouched. Lowering the threshold to the current value, or a
   budget to what is already spent, stops the node on that tick.
+- **Speed up its attempts** with `ab priority <node> urgent`: attempts claimed
+  afterwards take the urgent tier. No slot is reserved and nothing running is
+  preempted; attempts already claimed keep their priority.
 - **Stop it** with `ab objective <node> --stop` to take the progress so far.
   Without a flag the objective's stop mode applies, `abort` unless the objective
   says otherwise. `--stop --abort` cancels queued attempts and aborts running

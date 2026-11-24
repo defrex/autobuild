@@ -49,6 +49,15 @@ export function urgentFirst<T extends Pick<Ticket, 'priority'>>(tickets: readonl
   return [...urgent, ...normal]
 }
 
+/** Stable partition by a caller's tier: urgent first, then the rest, each in
+ * input order. */
+export function urgentFirstBy<T>(tickets: readonly T[], tier: (ticket: T) => TicketPriority): T[] {
+  const urgent: T[] = []
+  const normal: T[] = []
+  for (const ticket of tickets) (tier(ticket) === 'urgent' ? urgent : normal).push(ticket)
+  return [...urgent, ...normal]
+}
+
 export function parsePriorityFlag(value: string, flag = '--priority'): TicketPriority {
   const result = ticketPrioritySchema.safeParse(value.trim())
   if (!result.success) throw new Error(`${flag}: expected urgent or normal, got "${value}"`)

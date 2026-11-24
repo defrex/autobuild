@@ -56,6 +56,15 @@ function digestRows(events: readonly import('../events/catalog').AbEvent[]) {
 const START = Date.parse('2026-11-17T00:00:00Z')
 const at = (hours: number) => new Date(START + hours * 3_600_000)
 
+/** `hours` of one attempt run on the node's clock, ending at the builder's
+ * clock after it advances by `hours`. */
+function ran(builder: OptimizationLogBuilder, hours: number, build = 'attempt-run') {
+  return builder.wait(hours * 60).activity([
+    [build, 1, 'started', 'run', hours * 60],
+    [build, 2, 'ended', 'run', 0],
+  ])
+}
+
 function digest(builder: OptimizationLogBuilder): OptimizationState {
   const state = optimizationReducer.reduce(builder.events)
   if (state === null) throw new Error('no objective accepted')
@@ -219,15 +228,15 @@ describe('optimization digest', () => {
 })
 
 describe('optimization selectors', () => {
-  test('elapsed hours run from the first acceptance', () => {
-    const state = digest(
-      new OptimizationLogBuilder()
-        .accept(commandObjective(), 1)
-        .wait(90)
-        .accept(commandObjective(), 2),
-    )
-    expect(optimizationElapsedHours(state, at(3))).toBe(3)
-    expect(optimizationElapsedHours(state, at(-1))).toBe(0)
+  test('budget hours are active hours, never time since opening', () => {
+    const builder = new OptimizationLogBuilder()
+      .accept(commandObjective(), 1)
+      .wait(90)
+      .accept(commandObjective(), 2)
+    expect(optimizationElapsedHours(digest(builder), at(3))).toBe(0)
+    ran(builder, 2)
+    expect(optimizationElapsedHours(digest(builder), at(3.5))).toBe(2)
+    expect(optimizationElapsedHours(digest(builder), at(10))).toBe(2)
   })
 
   test('threshold eligibility follows the direction', () => {
@@ -293,18 +302,19 @@ describe('optimization selectors', () => {
 
   test('budget eligibility names its cause', () => {
     const objective = commandObjective({ budget: { maxAttempts: 2, maxHours: 5 } })
-    const builder = new OptimizationLogBuilder().accept(objective, 1).propose('r', ['a'])
-    expect(optimizationStopEligibility(digest(builder), at(1))).toEqual({
+    const builder = ran(new OptimizationLogBuilder().accept(objective, 1), 4).propose('r', ['a'])
+    expect(optimizationStopEligibility(digest(builder), at(4))).toEqual({
       threshold: false,
       plateau: false,
       budget: false,
     })
+    ran(builder, 1, 'attempt-more')
     expect(optimizationStopEligibility(digest(builder), at(5))).toMatchObject({
       budget: true,
       budgetCause: 'hours',
     })
     builder.propose('r2', ['b'])
-    expect(optimizationStopEligibility(digest(builder), at(1))).toMatchObject({
+    expect(optimizationStopEligibility(digest(builder), at(5))).toMatchObject({
       budget: true,
       budgetCause: 'attempts',
     })
@@ -666,9 +676,15 @@ describe('optimization stopping', () => {
     ).toBe('threshold')
   })
 
-  test('the hours budget fires from the clock alone', () => {
-    const state = digest(
+  test('the hours budget fires from the clock alone while a run is open', () => {
+    const idle = digest(
       new OptimizationLogBuilder().accept(commandObjective({ budget: { maxHours: 2 } }), 1),
+    )
+    expect(optimizationStopCause(idle, at(72))).toBeUndefined()
+    const state = digest(
+      new OptimizationLogBuilder()
+        .accept(commandObjective({ budget: { maxHours: 2 } }), 1)
+        .activity([['attempt-run', 1, 'started', 'run', 0]]),
     )
     expect(optimizationStopCause(state, at(1.9))).toBeUndefined()
     expect(optimizationStopCause(state, at(2))).toBe('budget')
@@ -938,7 +954,8 @@ describe('proposer state', () => {
   test('room is the free slots capped by the attempts budget, and 0 once a budget is spent', () => {
     const state = digest(openedNode())
     expect(proposerRoom(state, at(1))).toBe(4)
-    expect(proposerRoom(state, at(25))).toBe(0)
+    expect(proposerRoom(state, at(25))).toBe(4)
+    expect(proposerRoom(digest(ran(openedNode(), 25)), at(25))).toBe(0)
     const tight = digest(openedNode(commandObjective({ budget: { maxAttempts: 2 } })))
     expect(proposerRoom(tight, at(1))).toBe(2)
     const running = digest(openedNode().propose('r1', ['a', 'b', 'c']))
@@ -968,7 +985,7 @@ describe('proposer state', () => {
     )
     refused(openedNode().request('r1', 4))
     refused(openedNode(commandObjective({ budget: { maxAttempts: 2 } })).propose('r1', ['a', 'b']))
-    refused(openedNode(), at(25))
+    refused(ran(openedNode(), 25), at(25))
     refused(openedNode().propose('r1', ['a', 'b', 'c', 'd']))
     refused(openedNode().propose('r1', [], 'none').propose('r2', [], 'none'))
     refused(openedNode().push({ actor: KERNEL, type: 'build.paused', payload: {} }))
@@ -1004,7 +1021,10 @@ describe('proposer state', () => {
     expect(proposalEligible(fits, now)).toBe(true)
     expect(proposeAdmissible(fits, now)).toBe(true)
     expect(proposalWithdrawalDue(fits, now)).toBeUndefined()
-    expect(proposalWithdrawalDue(fits, at(25))).toBe('budget')
+    expect(proposalWithdrawalDue(fits, at(25))).toBeUndefined()
+    expect(proposalWithdrawalDue(digest(ran(openedNode().request('r1', 4), 25)), at(25))).toBe(
+      'budget',
+    )
     const stopped = digest(openedNode().request('r1', 4).stop('operator', 'abort'))
     expect(proposalWithdrawalDue(stopped, now)).toBe('stopped')
     const budget = digest(openedNode().request('r1', 4).revise({ maxAttempts: 1 }, 2))
@@ -1081,7 +1101,8 @@ describe('proposer digest signal', () => {
     const signal = (builder: OptimizationLogBuilder) =>
       reduceBuildDigest(digestRows(builder.events)).optimization || undefined
     expect(signalDue(signal(openedNode())!, now)).toBe('request')
-    expect(signalDue(signal(openedNode())!, at(25))).toBeUndefined()
+    expect(signalDue(signal(openedNode())!, at(25))).toBe('request')
+    expect(signalDue(signal(ran(openedNode(), 25))!, at(25))).toBeUndefined()
     expect(signalDue(signal(openedNode())!, now, true)).toBeUndefined()
     expect(signalDue(signal(openedNode().request('r1', 4))!, now)).toBeUndefined()
     expect(signalDue(signal(openedNode().request('r1', 4).deposit('r1', 1, ['a']))!, now)).toBe(
