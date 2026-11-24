@@ -48,6 +48,12 @@ import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { TicketOperationError } from '../ports/tickets/operations'
 import { controlTicketStart } from './ticket-start'
+import {
+  attachOperatorTicketAsset,
+  getOperatorTicketAsset,
+  removeOperatorTicketAsset,
+} from './ticket-assets'
+import { TICKET_ASSET_MAX_BYTES, TicketAssetValidationError } from '../store/ticket-assets'
 import { OPERATOR_NOTES_REPO_KIND } from '../store/retention'
 import {
   clearForgeDegradation,
@@ -253,6 +259,74 @@ const buildListInput = z.strictObject({
 const buildDetailInput = z.strictObject({ repo: repoField, slug: slugField })
 
 const ticketDetailInput = z.strictObject({ repo: repoField, id: ticketIdField })
+
+// Strict standard base64: Buffer.from would silently drop anything else.
+const contentBase64Field = z
+  .string()
+  .max(Math.ceil(TICKET_ASSET_MAX_BYTES / 3) * 4)
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, {
+    message: 'contentBase64 must be padded standard base64',
+  })
+  .describe('The file’s exact bytes, standard padded base64 ("" for an empty file).')
+const assetKindField = z
+  .string()
+  .min(1)
+  .describe('Asset kind, a label such as "design" or "reference".')
+const assetNameField = z
+  .string()
+  .min(1)
+  .describe('Asset name, unique per kind on the ticket (e.g. "checkout-canvas").')
+const ticketAssetAttachInput = z.strictObject({
+  repo: repoField,
+  id: ticketIdField,
+  kind: assetKindField,
+  name: assetNameField,
+  layout: z
+    .enum(['file', 'tree'])
+    .describe(
+      '"file": exactly one file entry, a single-file asset. "tree": any number of entries, a folder (an empty tree is allowed).',
+    ),
+  entries: z
+    .array(
+      z.discriminatedUnion('type', [
+        z.strictObject({
+          type: z.literal('file'),
+          path: z
+            .string()
+            .describe('Relative "/"-separated path inside the asset (e.g. "img/a.png").'),
+          contentBase64: contentBase64Field,
+        }),
+        z.strictObject({
+          type: z.literal('dir'),
+          path: z
+            .string()
+            .describe('Relative "/"-separated path of an explicit, possibly empty, directory.'),
+        }),
+      ]),
+    )
+    .describe('The asset’s files and explicit directories.'),
+})
+const ticketAssetGetInput = z.strictObject({
+  repo: repoField,
+  id: ticketIdField,
+  kind: assetKindField,
+  name: assetNameField,
+  rev: z
+    .number()
+    .int()
+    .min(0)
+    .safe()
+    .optional()
+    .describe(
+      'Exact revision to read. Omit for the latest; a removed asset is readable only by revision.',
+    ),
+})
+const ticketAssetRemoveInput = z.strictObject({
+  repo: repoField,
+  id: ticketIdField,
+  kind: assetKindField,
+  name: assetNameField,
+})
 
 const objectiveReviseInput = z
   .strictObject({
@@ -1117,9 +1191,9 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.get',
-    'Show one ticket with its hosted comments, blockers and any related build.',
+    'Show one ticket with its hosted comments, blockers, any related build and its current assets.',
     ticketDetailInput,
-    '{ticket, blockers, build}: the ticket (including hosted ticket.comments when available), its dependency states, and the most relevant build for it (null when none).',
+    '{ticket, blockers, build, assets}: the ticket (including hosted ticket.comments when available), its dependency states, the most relevant build for it (null when none), and its current assets as `ab ticket show --json` lists them, each {kind, name, revision, size, layout, fileCount}.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketDetailInput>
       return getOperatorTicket({
@@ -1263,6 +1337,46 @@ export const TOOLS: readonly ToolEntry[] = [
         ...(input.cancel === true ? { cancel: true } : {}),
         ...(input.priority !== undefined ? { priority: input.priority } : {}),
       })
+    },
+  ),
+  defineTool(
+    'tickets.asset.attach',
+    'Attach one asset to a ticket by kind and name, like `ab ticket attach`: a single file (layout "file") or a folder (layout "tree"), with every file’s bytes as base64. Each attach stores a new revision; earlier revisions stay retrievable with tickets.asset.get rev. The CLI’s naming, path and layout rules apply, and so does the store’s size limit (25 MiB of file bytes by default, lower on stores with a request ceiling; a remote MCP transport may bound requests lower still). Leaves a note on the ticket. A build freezes its assets at the claim, so a running build keeps the ones it has.',
+    ticketAssetAttachInput,
+    '{asset, replaced, activeBuilds, noteError?}: the stored revision’s metadata (as `ab ticket attach --json` prints it), whether it replaced a current asset of that kind and name, the active builds for the ticket that keep their frozen assets, and noteError when the asset was stored but the note failed (do not retry: that stores another revision).',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof ticketAssetAttachInput>
+      attributed(ctx)
+      return attachOperatorTicketAsset({ store: ctx.store, backend: ticketsOf(ctx), ...input })
+    },
+  ),
+  defineTool(
+    'tickets.asset.get',
+    'Read one ticket asset, like `ab ticket asset get`: the latest revision, or an exact one by rev. Each file entry carries its exact bytes as base64.',
+    ticketAssetGetInput,
+    '{asset, entries}: the revision’s metadata and its entries in manifest order, each {type: "file", path, size, contentBase64} or {type: "dir", path}. Decode contentBase64 to recover the exact bytes.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof ticketAssetGetInput>
+      return getOperatorTicketAsset({
+        store: ctx.store,
+        backend: ticketsOf(ctx),
+        repo: input.repo,
+        id: input.id,
+        kind: input.kind,
+        name: input.name,
+        ...(input.rev !== undefined ? { rev: input.rev } : {}),
+      })
+    },
+  ),
+  defineTool(
+    'tickets.asset.remove',
+    'Destructive: remove one asset from the ticket’s current assets, like `ab ticket asset rm`. Its revisions stay retrievable with tickets.asset.get rev. Leaves a note on the ticket; running builds keep the assets they froze at the claim.',
+    ticketAssetRemoveInput,
+    '{removed, activeBuilds, noteError?}: the metadata of the revision that was current, the active builds for the ticket, and noteError when the asset was removed but the note failed.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof ticketAssetRemoveInput>
+      attributed(ctx)
+      return removeOperatorTicketAsset({ store: ctx.store, backend: ticketsOf(ctx), ...input })
     },
   ),
   defineTool(
@@ -1444,6 +1558,12 @@ function mapDomainError(error: unknown): RegistryError {
       kind: 'refusal',
       error: error.message,
       code: 'assignees-unsupported',
+    })
+  if (error instanceof TicketAssetValidationError)
+    return new RegistryError('domain', error.message, {
+      kind: 'validation',
+      error: error.message,
+      code: 'ticket-asset-invalid',
     })
   if (error instanceof TicketOperationError) {
     return new RegistryError('domain', error.message, {
