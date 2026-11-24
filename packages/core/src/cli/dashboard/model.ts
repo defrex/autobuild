@@ -265,6 +265,8 @@ export interface DashboardBuild {
     targetId?: string
     status: BuildState['status']
     title?: string
+    /** The ticket's address in its tracker, when the source records one. */
+    url?: string
     phase?: string
     createdAt?: string
   }
@@ -737,6 +739,7 @@ export function projectBuildFromFacts(
         targetId: state.target?.ticket.id,
         status: state.status,
         title: record.ticket?.title,
+        url: record.ticket?.url,
         phase:
           state.currentPhase?.phase ??
           buildVocabulary(state).integration ??
@@ -785,6 +788,7 @@ export function projectBuildFromFacts(
         targetId: state.target?.ticket.id,
         status: state.status,
         title: record.ticket?.title,
+        url: record.ticket?.url,
         phase:
           state.currentPhase?.phase ??
           buildVocabulary(state).integration ??
@@ -1155,6 +1159,7 @@ export function projectBuildFromFacts(
       targetId: state.target?.ticket.id,
       status: state.status,
       title: record.ticket?.title,
+      url: record.ticket?.url,
       phase:
         state.currentPhase?.phase ??
         buildVocabulary(state).integration ??

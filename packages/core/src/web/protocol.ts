@@ -66,6 +66,21 @@ export const WEB_EVENTS = { model: 'model' } as const
 /** `<meta name>` carrying the repository label into the page. */
 export const REPOSITORY_META = 'ab-repository'
 
+/**
+ * `<meta name>` carrying the hub's current frame, serialized, into the page.
+ * It is a layout hint: the page renders it masked as its loading skeleton so
+ * the skeleton has the loaded page's geometry. It is never shown as live data;
+ * the facts come from the `/events` stream.
+ */
+export const FRAME_META = 'ab-frame'
+
+/**
+ * How long a page request waits for the hub's first frame when it holds none.
+ * A safety bound for a hung first read, not an expected wait: the hub delivers
+ * a frame, data or a failure notice, for every read that finishes.
+ */
+export const PAGE_FRAME_WAIT_MS = 10_000
+
 /** Browser storage key for the theme choice (`light` or `dark`; absent is system). */
 export const THEME_STORAGE_KEY = 'ab-theme'
 

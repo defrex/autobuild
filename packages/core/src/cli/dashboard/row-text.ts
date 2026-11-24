@@ -60,6 +60,11 @@ export interface RowProgress {
 export interface DashboardRowText {
   slug: string
   ticketId?: string
+  /** The ticket's title. Ticket identity: the terminal row does not show it,
+   * and the web titles the row with it (Title First), falling back to the slug. */
+  title?: string
+  /** The ticket's address in its tracker. Ticket identity, as `title` is. */
+  ticketUrl?: string
   kind: 'work' | 'integration'
   status: StatusText
   /** The label of the step currently running. */
@@ -302,6 +307,12 @@ export function projectRowText(
   return {
     slug: build.slug,
     ...(build.ticketId !== undefined ? { ticketId: build.ticketId } : {}),
+    ...(build.collectionIdentity?.title !== undefined
+      ? { title: build.collectionIdentity.title }
+      : {}),
+    ...(build.collectionIdentity?.url !== undefined
+      ? { ticketUrl: build.collectionIdentity.url }
+      : {}),
     kind: build.kind === 'integration' ? 'integration' : 'work',
     status,
     ...(phase !== undefined ? { phase } : {}),

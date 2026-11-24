@@ -17,12 +17,15 @@ const manifest: WebAssetManifest = {
   fonts: ['sans.woff2'],
 }
 
-function setup(overrides: Partial<WebHandlerOptions> = {}) {
+function setup(
+  overrides: Partial<WebHandlerOptions> = {},
+  read: WebFrameSource['read'] = async () => ({ frame: { notice: 'hello' }, live: false }),
+) {
   const source = { reads: 0 }
   const frameSource: WebFrameSource = {
-    read: async () => {
+    read: (admitted) => {
       source.reads++
-      return { frame: { notice: 'hello' }, live: false }
+      return read(admitted)
     },
   }
   const hub = new WebModelHub({
@@ -35,6 +38,8 @@ function setup(overrides: Partial<WebHandlerOptions> = {}) {
   const ticks = new Map<number, () => void>()
   const assetReads: string[] = []
   const timeouts: number[] = []
+  // The page's first-frame bound, fired only by a test.
+  const pageTimers = new Map<number, () => void>()
   const handler = createWebHandler({
     hub,
     repositoryLabel: 'github.com/acme/<app>',
@@ -55,6 +60,19 @@ function setup(overrides: Partial<WebHandlerOptions> = {}) {
         timers.delete(handle as number)
       },
     },
+    pageWait: {
+      ms: 10_000,
+      timer: {
+        set: (callback) => {
+          const id = ++nextTimer
+          pageTimers.set(id, callback)
+          return id
+        },
+        clear: (handle) => {
+          pageTimers.delete(handle as number)
+        },
+      },
+    },
     ...overrides,
   })
   const server = { timeout: (_: Request, seconds: number) => void timeouts.push(seconds) }
@@ -63,7 +81,7 @@ function setup(overrides: Partial<WebHandlerOptions> = {}) {
     if (init.host !== null) headers.set('host', init.host ?? '127.0.0.1:4173')
     return handler(new Request(`http://127.0.0.1:4173${path}`, { ...init, headers }), server)
   }
-  return { hub, source, timers, ticks, assetReads, timeouts, request }
+  return { hub, source, timers, ticks, assetReads, timeouts, pageTimers, request }
 }
 
 test('host names parse with ports, brackets and case', () => {
@@ -157,9 +175,12 @@ test('HEAD /events sends the stream headers and never joins the loop', async () 
 })
 
 test('HEAD on the page and an asset builds headers only', async () => {
-  const { request, assetReads } = setup()
+  const { request, assetReads, hub, source } = setup()
   const page = await request('/', { method: 'HEAD' })
   expect(page.body).toBeNull()
+  await hub.join()
+  expect(hub.subscribers).toBe(0)
+  expect(source.reads).toBe(0)
   expect(page.headers.get('content-security-policy')).toContain("default-src 'self'")
   const asset = await request('/assets/app.css', { method: 'HEAD' })
   expect(asset.body).toBeNull()
@@ -202,4 +223,95 @@ test('an aborted request unsubscribes, and an already aborted one never subscrib
   expect(late.body).not.toBeNull()
   expect(hub.subscribers).toBe(0)
   expect(timers.size).toBe(0)
+})
+
+const unescapeHtml = (text: string) =>
+  text
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&amp;', '&')
+
+const frameMeta = (html: string) => {
+  const match = /<meta name="ab-frame" content="([^"]*)">/.exec(html)
+  return match === null ? undefined : unescapeHtml(match[1]!)
+}
+
+/** A source whose one read resolves or rejects only when the test says so. */
+function gatedRead() {
+  let settle: { resolve: (notice: string) => void; reject: (error: Error) => void } | undefined
+  const read: WebFrameSource['read'] = () =>
+    new Promise((resolve, reject) => {
+      settle = {
+        resolve: (notice) => resolve({ frame: { notice }, live: false }),
+        reject,
+      }
+    })
+  return { read, settle: () => settle! }
+}
+
+test('a page embeds the held frame as an escaped hint without reading', async () => {
+  const { request, hub, source } = setup({}, async () => ({
+    frame: { notice: `quote " angle <b> amp & tick '` },
+    live: false,
+  }))
+  const off = hub.subscribe(() => {})
+  await hub.join()
+  off()
+  expect(source.reads).toBe(1)
+  const html = await (await request('/')).text()
+  expect(frameMeta(html)).toBe(hub.current!)
+  expect(JSON.parse(frameMeta(html)!).notice).toBe(`quote " angle <b> amp & tick '`)
+  expect(source.reads).toBe(1)
+  expect(hub.subscribers).toBe(0)
+})
+
+test('a page with no held frame waits for the first read, however slow, and embeds it', async () => {
+  const gate = gatedRead()
+  const { request, hub, source, pageTimers } = setup({}, gate.read)
+  const pending = request('/builds/x')
+  await Promise.resolve()
+  expect(source.reads).toBe(1)
+  expect(hub.subscribers).toBe(1)
+  expect(pageTimers.size).toBe(1)
+  gate.settle().resolve('late')
+  const html = await (await pending).text()
+  expect(JSON.parse(frameMeta(html)!)).toEqual({ notice: 'late' })
+  expect(source.reads).toBe(1)
+  expect(hub.subscribers).toBe(0)
+  expect(pageTimers.size).toBe(0)
+})
+
+test('a failing first read gives the page the notice frame as its hint', async () => {
+  const gate = gatedRead()
+  const { request, hub } = setup({}, gate.read)
+  const pending = request('/')
+  await Promise.resolve()
+  gate.settle().reject(new Error('store down'))
+  const html = await (await pending).text()
+  expect(JSON.parse(frameMeta(html)!).notice).toContain('store down')
+  expect(hub.subscribers).toBe(0)
+})
+
+test('the bound renders the page without a hint, and an abort stops the wait', async () => {
+  const gate = gatedRead()
+  const { request, hub, pageTimers } = setup({}, gate.read)
+  const bounded = request('/')
+  await Promise.resolve()
+  for (const fire of pageTimers.values()) fire()
+  const html = await (await bounded).text()
+  expect(frameMeta(html)).toBeUndefined()
+  expect(hub.subscribers).toBe(0)
+  const controller = new AbortController()
+  const aborted = request('/', { signal: controller.signal })
+  await Promise.resolve()
+  expect(hub.subscribers).toBe(1)
+  controller.abort()
+  expect(frameMeta(await (await aborted).text())).toBeUndefined()
+  expect(hub.subscribers).toBe(0)
+  expect(pageTimers.size).toBe(0)
+  gate.settle().resolve('after')
+  await hub.join()
+  expect(hub.subscribers).toBe(0)
 })

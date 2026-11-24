@@ -78,6 +78,7 @@ bun ab web
 - A fresh process starts the overview from the build roster. It reads each live build plus each aborted build among the roster's 10 newest finished builds, to show aborts still cleaning up. An older abort still cleaning up appears at its next change. Startup never scans history.
 - A build change reads that build only, plus one roster read when a build starts, finishes or aborts. It never lists builds or reads event history.
 - A remote store server too old to serve the roster or the changed-builds feed fails the read with a typed error instead of falling back.
+- Pages: the overview (`/`) shows the dispatcher's mode, capacity, what needs attention, and active, queued and recently finished builds. Each row links to its build page (`/builds/<slug>`). An active or queued build's page shows its ticket, phase, steps and attention; a recently finished build's page shows only its outcome, kind and completion time, because the roster keeps no finished tickets. Build pages cover the builds the overview lists, not older history. Both pages update live and offer no actions.
 
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
