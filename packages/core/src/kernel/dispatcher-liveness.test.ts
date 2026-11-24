@@ -3,6 +3,7 @@ import { DISPATCHER } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
 import { projectDispatcherLiveness } from './dispatcher-liveness'
+import { getRepositoryStatus } from '../operator/query'
 import { readDispatcherLiveness } from '../cli/dispatcher-liveness'
 
 async function start(store: MemoryBuildStore, repo: string, run: string) {
@@ -32,6 +33,7 @@ test('lease health is independent of progress and heartbeat is attributable only
   await start(store, repo, 'B')
   await store.claimRepoLease(repo, 'B', 1000)
   let result = await readDispatcherLiveness(store, repo, clock())
+  expect((await getRepositoryStatus(store, repo, clock())).dispatcherRunning).toBe(true)
   expect(result.dispatcher.state).toBe('held')
   expect(result.dispatcher.holder?.heartbeatAt).toBeNull()
   await store.heartbeatRepo(repo, 'B')
@@ -49,6 +51,7 @@ test('lease health is independent of progress and heartbeat is attributable only
   expect(result.dispatcher.latestRun?.heartbeatAt).toBeNull()
   clock.advance(Date.parse((await store.getRepo(repo))!.lease!.expiresAt) - clock().getTime())
   result = await readDispatcherLiveness(store, repo, clock())
+  expect((await getRepositoryStatus(store, repo, clock())).dispatcherRunning).toBe(true)
   expect(result.dispatcher.state).toBe('lost')
   expect(result.dispatcher.expiredHolder?.run).toBe('B')
   await store.appendRepo(repo, {
@@ -57,6 +60,7 @@ test('lease health is independent of progress and heartbeat is attributable only
     payload: { run: 'B', outcome: 'normal', signal: 'SIGTERM' },
   })
   expect((await readDispatcherLiveness(store, repo, clock())).dispatcher.state).toBe('stopped')
+  expect((await getRepositoryStatus(store, repo, clock())).dispatcherRunning).toBe(false)
 })
 
 test('missing start or legacy metadata never invents heartbeat or identity', () => {
