@@ -6,7 +6,7 @@
  * implement; every session bracket opens exactly one stream, closes with the
  * right outcome, and finalizes into a `stream:<id>` artifact whose
  * `UIMessage[]` document contains the session, prompt, text, and tool
- * content. A second scenario runs the same transport with streaming disabled
+ * content. The same scenario then runs the transport with streaming disabled
  * and asserts the engine's decisions are identical — same event sequence
  * (stripping the `stream` field), same final state — so streams stay
  * presentation, never routing.
@@ -280,7 +280,7 @@ function makeClaudeRegistry(observed: { streamingArgs: string[] }) {
   })
 }
 
-test('one stream per session bracket with finalized artifacts through plan and implement', async () => {
+test('session streams finalize one artifact per bracket and never change engine decisions', async () => {
   const observed = { streamingArgs: [] as string[] }
   const h = await track(
     makeHarness({
@@ -349,22 +349,8 @@ test('one stream per session bracket with finalized artifacts through plan and i
     })
     expect(types).toContain('step-start')
   }
-})
 
-test('engine decisions are identical with streaming disabled (presentation, never routing)', async () => {
-  const streamedObserved = { streamingArgs: [] as string[] }
-  const streamed = await track(
-    makeHarness({
-      handlers: happyHandlers(),
-      tickets: [readyTicket('T-1')],
-      createRuntimeRegistry: makeClaudeRegistry(streamedObserved),
-      configToml: CLAUDE_CONFIG_TOML,
-    }),
-  )
-  await streamed.dispatcher.tick()
-  const streamedState = await streamed.runLatest()
-  const streamedEvents = stripStreamFields(await streamed.events(SLUG), streamed.tmp)
-
+  // The same transport with streaming disabled makes identical engine decisions.
   const plainObserved = { streamingArgs: [] as string[] }
   const plain = await track(
     makeHarness({
@@ -379,15 +365,13 @@ test('engine decisions are identical with streaming disabled (presentation, neve
   const plainState = await plain.runLatest()
   const plainEvents = stripStreamFields(await plain.events(SLUG), plain.tmp)
 
-  // Same transport, same harness output: only the streaming flag differed.
   // Native identity observation also requires incremental transport without UI streaming.
   expect(plainObserved.streamingArgs.length).toBeGreaterThan(0)
   expect(plainObserved.streamingArgs).not.toContain('--include-partial-messages')
-  expect(streamedObserved.streamingArgs).toContain('--include-partial-messages')
-  expect(plainEvents).toEqual(streamedEvents)
-  expect(plainState.status).toBe(streamedState.status)
-  expect(plainState.prState).toBe(streamedState.prState)
-  expect(plainState.pr).toEqual(streamedState.pr)
+  expect(plainEvents).toEqual(stripStreamFields(events, h.tmp))
+  expect(plainState.status).toBe(state.status)
+  expect(plainState.prState).toBe(state.prState)
+  expect(plainState.pr).toEqual(state.pr)
   // The unstreamed run produced no streams at all.
   expect(await plain.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
 })

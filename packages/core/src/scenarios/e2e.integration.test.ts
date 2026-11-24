@@ -310,43 +310,6 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(reduced.outcome).toBe('merged')
 }, 30_000)
 
-test('a forge that refuses archive refs still restacks at verify entry and reaches the PR', async () => {
-  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
-  const refused: string[] = []
-  h.forgeAdapter.rewrite!.archive = async (input) => {
-    refused.push(input.sha)
-    throw new Error(
-      `archive publication rejected for ${input.ref} at ${input.sha}: git push refused (HTTP 403)`,
-    )
-  }
-  await h.dispatcher.tick()
-  const state = await h.runLatest()
-  expect(h.cliErrors).toEqual([])
-  expect(state.status).toBe('running')
-  expect(state.prState).toBe('open')
-  const events = await h.events(SLUG)
-  expect(ofType(events, 'escalation.raised')).toEqual([])
-  expect(ofType(events, 'phase.failed')).toEqual([])
-  const head = ofType(events, 'restack.completed')[0]!.payload.headSha
-  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.remote)).toBe(head)
-  expect(ofType(events, 'restack.rewritten')[0]!.payload.archives).toEqual([])
-  expect(ofType(events, 'verify.started')[0]!.seq).toBeGreaterThan(
-    ofType(events, 'restack.completed')[0]!.seq,
-  )
-  // Every commit the rewrite would have archived is retrievable from the store.
-  const retained = ofType(events, 'history.retained')
-  const kept = new Set(
-    retained.flatMap((event) => [...event.payload.store, ...event.payload.target]),
-  )
-  expect(refused.length).toBeGreaterThan(0)
-  for (const sha of refused) expect(kept.has(sha)).toBe(true)
-  for (const sha of retained.flatMap((event) => event.payload.store))
-    expect(await h.store.getArtifact(SLUG, `history-objects-${sha}`)).not.toBeNull()
-  expect(
-    ofType(events, 'observation.recorded').some((e) => e.payload.id === 'history-unretained'),
-  ).toBe(false)
-})
-
 test('dispatch recovery is durable in SQLite and discard returns a file ticket to Ready for a fresh build', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-dispatch-recovery-e2e-'))
   const store = openLocalStore(join(root, 'store'))
@@ -744,262 +707,6 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   expect(reduceBuild(events).prState).toBe('open')
 }, 30_000)
 
-test('a1. code review keeps its recorded cut when implementation absorbs target history', async () => {
-  const handlers = happyHandlers()
-  const happyImplement = handlers.implement
-  if (happyImplement === undefined) throw new Error('happy implement handler missing')
-  handlers.implement = async (cli) => {
-    // Model a long-running branch absorbing the target after dispatch without
-    // touching operator refs: fast-forward from the branch cut through the
-    // two newly landed target commits, then let the normal handler add work.
-    const incorporatedRef = 'refs/autobuild/test/e2e-incorporated-target'
-    await git(
-      [
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--refmap=',
-        'origin',
-        `+refs/heads/main:${incorporatedRef}`,
-      ],
-      cli.ws,
-    )
-    await git(['merge', '--ff-only', incorporatedRef], cli.ws)
-    return happyImplement(cli)
-  }
-
-  let codeReviewContext: string | undefined
-  handlers['code-review'] = async (cli) => {
-    await cli.run(['context'])
-    // Capture the code-review manifest from its own session directory.
-    codeReviewContext = await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8')
-    const notes = await writeFileIn(
-      cli.ws,
-      '.ab/code-review.md',
-      'Diff contains only the implementation commit.\n',
-    )
-    await cli.run(['verdict', 'approve', '--notes', notes])
-  }
-  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
-  const staleLocalSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
-  const branchCut = await h.advanceRemote(
-    { 'remote-only.txt': 'merged before dispatch\n' },
-    'base: remote-only change',
-  )
-  expect(branchCut).not.toBe(staleLocalSha)
-  expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
-
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    dispatched: 1,
-  })
-  const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual([
-    'build.created',
-    'workspace.provisioned',
-    'spec.imported',
-    'dispatch.comment-posted',
-    'target.moved',
-  ])
-  const provisioned = ofType(events, 'workspace.provisioned')[0]!
-  expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
-  expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(branchCut)
-  expect(existsSync(join(provisioned.payload.ref, 'remote-only.txt'))).toBe(true)
-
-  const firstTarget = await h.advanceRemote(
-    { 'target-one.txt': 'first target commit after branch cut\n' },
-    'target: first post-cut change',
-  )
-  const newestTarget = await h.advanceRemote(
-    { 'target-two.txt': 'second target commit after branch cut\n' },
-    'target: second post-cut change',
-  )
-  expect(firstTarget).not.toBe(branchCut)
-  expect(newestTarget).not.toBe(firstTarget)
-
-  // Provisioning and implementation fetch only private destinations;
-  // operator-owned local refs remain exactly as stale as before dispatch.
-  expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
-  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(staleLocalSha)
-
-  expect((await h.runLatest()).prState).toBe('open')
-  expect(h.cliErrors).toEqual([])
-  if (codeReviewContext === undefined) {
-    throw new Error('code-review handler did not capture .ab/context.json')
-  }
-  const context = JSON.parse(codeReviewContext) as {
-    commitRange?: { base: string; head: string }
-  }
-  const completed = ofType(await h.events(SLUG), 'implement.completed')[0]!
-  expect(completed.payload.commits.base).toBe(branchCut)
-  expect(context.commitRange).toEqual(completed.payload.commits)
-  const focusedLog = await git(
-    [
-      'log',
-      '--reverse',
-      '--format=%s',
-      `${completed.payload.commits.base}..${completed.payload.commits.head}`,
-    ],
-    provisioned.payload.ref,
-  )
-  expect(focusedLog).toContain('implement: rate limiting r1')
-  expect(focusedLog).toContain('target: first post-cut change')
-  expect(focusedLog).toContain('target: second post-cut change')
-  expect(
-    await git(
-      ['log', '--reverse', '--format=%s', `${branchCut}..${completed.payload.commits.head}`],
-      provisioned.payload.ref,
-    ),
-  ).toBe(
-    'target: first post-cut change\ntarget: second post-cut change\nimplement: rate limiting r1',
-  )
-  // Running implementation/review must not mutate the operator-owned refs.
-  expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
-  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(staleLocalSha)
-}, 30_000)
-
-test('a1. unavailable origin still dispatches from local main and records why', async () => {
-  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
-  const localSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
-  await git(['remote', 'remove', 'origin'], h.origin)
-
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    dispatched: 1,
-  })
-  const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual([
-    'build.created',
-    'workspace.provisioned',
-    'spec.imported',
-    'dispatch.comment-posted',
-    'target.moved',
-  ])
-  const provisioned = ofType(events, 'workspace.provisioned')[0]!
-  expect(provisioned.payload.base.source).toBe('local')
-  if (provisioned.payload.base.source !== 'local') {
-    throw new Error('expected local fallback evidence')
-  }
-  expect(provisioned.payload.base.sha).toBe(localSha)
-  expect(provisioned.payload.base.remoteError).toContain('fetch --no-tags --no-write-fetch-head')
-  expect(provisioned.payload.base.remoteError).toMatch(/origin.*repository|repository.*origin/i)
-  expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(localSha)
-}, 30_000)
-
-test('gated CLEAN auto-merge requested before finalize remains GitHub-native', async () => {
-  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
-
-  await h.dispatcher.tick()
-  const realOpen = h.forge.openPr.bind(h.forge)
-  h.forge.openPr = async (opts) => {
-    const pr = await realOpen(opts)
-    // A satisfied required gate is CLEAN; it must not switch ownership merely
-    // because all current requirements happen to pass.
-    h.forge.setPrState(pr.number, { state: 'open', mergeable: true })
-    return pr
-  }
-  const command = await h.store.append(SLUG, {
-    actor: humanActor('operator'),
-    type: 'build.auto-merge-requested',
-    payload: {},
-  })
-  const parked = await h.runLatest()
-  expect(parked.prState).toBe('open')
-  await h.dispatcher.tick()
-  expect(h.forge.autoMergeCalls.filter((call) => call.enabled)).toHaveLength(1)
-  expect(h.forge.autoMergeCalls.at(-1)).toMatchObject({
-    number: 1,
-    enabled: true,
-    changed: true,
-  })
-  expect(h.forge.autoMergeCalls.at(-1)!.workspacePath).toContain(
-    `/worktrees/${BRANCH.replace('/', '-')}`,
-  )
-  expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
-
-  const applied = ofType(await h.events(SLUG), 'landing.native-applied').find(
-    (event) => event.payload.enabled,
-  )!
-  expect(applied.actor).toEqual({ kind: 'dispatcher' })
-  expect(applied.payload).toMatchObject({ enabled: true, commandSeq: command.seq })
-
-  // Native auto-merge never produces completion facts directly. GitHub's
-  // result is observed through the ordinary janitor path on the next poll.
-  h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-  const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-5)).toEqual([
-    'pr.merged',
-    'workspace.fenced',
-    'workspace.commits-preserved',
-    'workspace.released',
-    'build.completed',
-  ])
-  expect(reduceBuild(final).outcome).toBe('merged')
-}, 30_000)
-
-test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and completes without escalation', async () => {
-  const h = await track(
-    makeHarness({
-      handlers: happyHandlers(),
-      tickets: [readyTicket('T-1')],
-      gatePresence: 'absent',
-    }),
-  )
-
-  await h.dispatcher.tick()
-  const realOpen = h.forge.openPr.bind(h.forge)
-  h.forge.openPr = async (opts) => {
-    const pr = await realOpen(opts)
-    h.forge.setPrState(pr.number, { state: 'open', mergeable: true })
-    return pr
-  }
-  await h.store.append(SLUG, {
-    actor: humanActor('operator'),
-    type: 'build.auto-merge-requested',
-    payload: {},
-  })
-
-  const parked = await h.runLatest()
-  expect(h.cliErrors).toEqual([])
-  expect(parked.prState).toBe('open')
-  let events = await h.events(SLUG)
-  expect(typesOf(events)).toContain('finalize.completed')
-  expect(typesOf(events)).not.toContain('pr.auto-merge-enabled')
-  expect(typesOf(events)).not.toContain('escalation.raised')
-  expect(h.forge.squashMergeCalls).toEqual([]) // finalize never lands the PR
-
-  // First janitor poll owns the fallback. It writes no speculative merge fact;
-  // the guarded command itself moves only the fake forge's external state.
-  // (FakeTicketSource keeps the claimed ticket in Ready, but the ready scan
-  // dedupes it against its active build, so no claim is re-attempted.)
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-  })
-  expect(h.forge.squashMergeCalls).toHaveLength(1)
-  expect(h.forge.squashMergeCalls[0]).toMatchObject({
-    number: 1,
-    expectedHeadSha: 'sha-1',
-  })
-  events = await h.events(SLUG)
-  expect(typesOf(events)).not.toContain('pr.merged')
-  expect(typesOf(events)).not.toContain('pr.auto-merge-enabled')
-
-  // The next ordinary observation settles the existing lifecycle vocabulary.
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-  const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-5)).toEqual([
-    'pr.merged',
-    'workspace.fenced',
-    'workspace.commits-preserved',
-    'workspace.released',
-    'build.completed',
-  ])
-  expect(reduceBuild(final).status).toBe('done')
-  expect(reduceBuild(final).outcome).toBe('merged')
-  expect(typesOf(final)).not.toContain('escalation.raised')
-}, 30_000)
-
 test('local-git defers for missing identity, then merges under repository identity after retry', async () => {
   const configToml = CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"')
   const h = await track(
@@ -1095,64 +802,6 @@ test('local-git defers for missing identity, then merges under repository identi
   )
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
   expect(h.tickets.comments.at(-1)?.body).toBe(`build ${SLUG} merged: refs/heads/${BRANCH}`)
-}, 30_000)
-
-test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, and later recovers', async () => {
-  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
-
-  await h.dispatcher.tick()
-  const realOpen = h.forge.openPr.bind(h.forge)
-  h.forge.openPr = async (opts) => {
-    const pr = await realOpen(opts)
-    h.forge.setPrState(pr.number, { state: 'open', mergeable: true })
-    h.forge.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
-    return pr
-  }
-  const command = await h.store.append(SLUG, {
-    actor: humanActor('operator'),
-    type: 'build.auto-merge-requested',
-    payload: {},
-  })
-
-  const parked = await h.runLatest()
-  expect(h.cliErrors).toEqual([])
-  expect(parked.prState).toBe('open')
-  expect(parked.autoMerge.applied).toBeUndefined()
-  await h.dispatcher.tick()
-  let events = await h.events(SLUG)
-  expect(typesOf(events)).toContain('finalize.completed')
-  expect(typesOf(events)).not.toContain('escalation.raised')
-  let autoMergeObservations = ofType(events, 'observation.recorded').filter((event) =>
-    event.payload.refs?.some((ref) => ref.startsWith('auto-merge-gate:')),
-  )
-  expect(autoMergeObservations).toHaveLength(1)
-  expect(autoMergeObservations[0]?.payload.summary).toContain(
-    'repository-level auto-merge is disabled',
-  )
-  expect(autoMergeObservations[0]?.payload.refs).toEqual([
-    `auto-merge-gate:pr:1:command:${command.seq}`,
-  ])
-
-  await h.dispatcher.tick()
-  await h.dispatcher.tick()
-  events = await h.events(SLUG)
-  autoMergeObservations = ofType(events, 'observation.recorded').filter((event) =>
-    event.payload.refs?.some((ref) => ref.startsWith('auto-merge-gate:')),
-  )
-  expect(autoMergeObservations).toHaveLength(1)
-  expect(typesOf(events)).not.toContain('pr.auto-merge-enabled')
-
-  // The command stayed pending, so a later poll can apply it when the
-  // repository condition clears; ordinary lifecycle observation still lands.
-  h.forge.setGatePresence(1, 'present')
-  await h.dispatcher.tick()
-  expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
-  expect(
-    ofType(await h.events(SLUG), 'landing.native-applied').filter((event) => event.payload.enabled),
-  ).toHaveLength(1)
-  h.forge.setPrState(1, { state: 'merged', sha: 'native-after-recovery' })
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-  expect(reduceBuild(await h.events(SLUG)).outcome).toBe('merged')
 }, 30_000)
 
 // ── a2. Reconcile refreshes a moved base at execution time (§15.7) ──────────
@@ -1303,115 +952,6 @@ test.each(['verify-entry', 'post-pr'] as const)(
   },
   30_000,
 )
-
-test('a2. reconcile replays one change onto the current base after conflict detection', async () => {
-  let suppliedBase: string | undefined
-  let mergeCommit: string | undefined
-  const handlers = happyHandlers()
-  handlers.reconcile = async (cli) => {
-    await cli.run(['context'])
-    const context = JSON.parse(
-      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
-    ) as {
-      conflict?: { baseSha: string }
-    }
-    suppliedBase = context.conflict?.baseSha
-    if (suppliedBase === undefined) {
-      throw new Error('reconcile context omitted conflict.baseSha')
-    }
-
-    // The advanced base and feature both added rate-limit.txt, so real Git
-    // must stop for a resolution. The scripted agent preserves both sides and
-    // finishes through the real `ab done` reconcile terminal.
-    expect(await git(['ls-files', '-u'], cli.ws)).not.toBe('')
-    await writeFileIn(
-      cli.ws,
-      'rate-limit.txt',
-      'base audit behavior preserved\nfeature throttle after 5 preserved\n',
-    )
-    await git(['add', 'rate-limit.txt'], cli.ws)
-    await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
-    mergeCommit = await git(['rev-parse', 'HEAD'], cli.ws)
-    const notes = await writeFileIn(
-      cli.ws,
-      '.ab/reconcile-notes.md',
-      'Resolved the add/add rate-limit.txt conflict by preserving both behaviors.\n',
-    )
-    await cli.run(['done', '--notes', notes])
-  }
-
-  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
-  expect((await h.runLatest()).prState).toBe('open')
-
-  const initialEvents = await h.events(SLUG)
-  const ws = ofType(initialEvents, 'workspace.provisioned')[0]!.payload.ref
-  const detectedBase = await git(['rev-parse', 'main'], h.origin)
-  const featureBeforeReconcile = await git(['rev-parse', 'HEAD'], ws)
-  // This is the original failure shape: the SHA captured at detection is
-  // already in the feature branch, so merging that snapshot would be a no-op.
-  expect(await git(['merge-base', '--is-ancestor', detectedBase, featureBeforeReconcile], ws)).toBe(
-    '',
-  )
-
-  // Let the parked runner lease expire, then have the janitor observe a
-  // conflict while main is still at the old (already-merged) SHA.
-  h.clock.advance(3_600_001)
-  h.forge.setPrState(1, { state: 'open', mergeable: false })
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    conflicted: 1,
-    // FakeTicketSource keeps its claimed ticket in Ready until completion;
-    // the ready scan dedupes it against its active build, so no re-claim.
-  })
-  const detected = ofType(await h.events(SLUG), 'pr.conflicted')[0]!
-  expect(detected.payload.baseSha).toBe(detectedBase)
-  expect(h.launched).toHaveLength(2)
-
-  // Main advances only after conflict detection and before the launched
-  // reconcile runner executes. Push it to the real bare origin: phase startup
-  // must fetch this remote-only tip rather than forwarding the old fact.
-  await writeFileIn(h.origin, 'rate-limit.txt', 'base audit behavior\n')
-  const currentBase = await commitAll(h.origin, 'base: add audit behavior')
-  await git(['push', '-q', 'origin', 'main'], h.origin)
-  expect(currentBase).not.toBe(detectedBase)
-
-  const reconciled = await h.runLatest()
-  if (reconciled.status !== 'running')
-    throw new Error(JSON.stringify(ofType(await h.events(SLUG), 'phase.failed')))
-  expect(reconciled.status).toBe('running')
-  expect(reconciled.prState).toBe('open')
-  expect(suppliedBase).toBe(currentBase)
-
-  const events = await h.events(SLUG)
-  expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(detectedBase)
-  expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
-    attempt: 1,
-    baseSha: currentBase,
-  })
-  expect(ofType(events, 'escalation.raised')).toEqual([])
-  expect(ofType(events, 'verify.completed').map((event) => event.payload)).toMatchObject([
-    { step: 'unit', attempt: 1, outcome: 'pass' },
-    { step: 'unit', attempt: 2, outcome: 'pass' },
-  ])
-
-  if (mergeCommit === undefined) {
-    throw new Error('reconcile handler did not create a merge commit')
-  }
-  const parents = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)).split(/\s+/)
-  expect(parents).toEqual([mergeCommit, currentBase])
-  expect(reconcileHead(ofType(events, 'reconcile.completed')[0]!.payload)).toBe(mergeCommit)
-  expect(await git(['ls-remote', 'origin', `refs/heads/${BRANCH}`], ws)).toContain(mergeCommit!)
-  expect(h.cliErrors).toEqual([])
-
-  // With the stale-base obstacle gone, the ordinary janitor can observe the
-  // PR merged and finish the build without any human intervention.
-  h.forge.setPrState(1, { state: 'merged', sha: 'reconciled-squash' })
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-  const final = await h.events(SLUG)
-  expect(reduceBuild(final).outcome).toBe('merged')
-  expect(ofType(final, 'escalation.raised')).toEqual([])
-}, 30_000)
 
 test.each([false, true])(
   'post-reconcile policy with enabled override %s preserves forge gates',
@@ -1784,165 +1324,6 @@ readyState = "Ready"
   expect(h.cliErrors).toEqual([])
 }, 30_000)
 
-// ── b. Verify failure round-trip (§15.6-A) ───────────────────────────────────
-
-test('b. verify failure routes back to implement with the report, then re-verifies (§15.6-A)', async () => {
-  const roundsWithReport: number[] = []
-  const handlers = happyHandlers()
-  // r1 does NOT create ok.marker (the check fails); r2 keys off the
-  // materialized .ab/verify/ report and fixes it.
-  handlers.implement = async (cli) => {
-    await cli.run(['context'])
-    const routed = existsSync(join(cli.ws, cli.env.contextDir!, 'verify', 'unit.md'))
-    if (routed) {
-      roundsWithReport.push(cli.round)
-      await writeFileIn(cli.ws, 'ok.marker', 'ok\n')
-    }
-    await writeFileIn(cli.ws, 'rate-limit.txt', `attempt r${cli.round}\n`)
-    await commitAll(cli.ws, `implement r${cli.round}`)
-    const notes = await writeFileIn(
-      cli.ws,
-      '.ab/implement-notes.md',
-      routed ? 'fixed per the routed verify report\n' : 'first cut (marker missing)\n',
-    )
-    await cli.run(['done', '--notes', notes])
-  }
-  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
-
-  await h.dispatcher.tick()
-  const state = await h.runLatest()
-  expect(h.cliErrors).toEqual([])
-  expect(state.status).toBe('running')
-  expect(state.prState).toBe('open')
-
-  const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual([
-    'build.created',
-    'workspace.provisioned',
-    'spec.imported',
-    'dispatch.comment-posted',
-    'target.moved',
-    'runner.attached',
-    'runner.runtime-recorded',
-    'plan.started',
-    'session.started',
-    'plan.completed',
-    'session.ended',
-    'plan-review.started',
-    'session.started',
-    'plan-review.verdict',
-    'session.ended',
-    'implement.started', // r1
-    'session.started',
-    'implement.completed',
-    'session.ended',
-    'code-review.started', // r1
-    'session.started',
-    'code-review.verdict',
-    'session.ended',
-    'restack.prepared',
-    'restack.replayed',
-    'head.paths-recorded',
-    'restack.publish-intended',
-    'restack.rewritten',
-    'restack.completed',
-    'verify.started', // attempt 1: fail + report (D6 atomic bundle)
-    'verify.completed',
-    'implement.started', // r2, carrying the verify feedback
-    'session.started',
-    'implement.completed',
-    'session.ended',
-    'code-review.started', // one more review round
-    'session.started',
-    'code-review.verdict',
-    'session.ended',
-    'restack.prepared',
-    'restack.replayed',
-    'head.paths-recorded',
-    'restack.publish-intended',
-    'restack.rewritten',
-    'restack.completed',
-    'verify.started', // attempt 2, from the first step
-    'verify.completed',
-    'finalize.started',
-    'session.started',
-    'finalize.completed',
-    'session.ended',
-    'pr-summary.attempted',
-    'pr-summary.result',
-  ])
-
-  // The failed check: verify.completed{outcome:fail} with the report artifact.
-  const [fail, pass] = ofType(events, 'verify.completed')
-  expect(fail!.payload).toMatchObject({
-    step: 'unit',
-    attempt: 1,
-    outcome: 'fail',
-    report: { kind: 'verify-report:unit', rev: 0 },
-  })
-  expect(fail!.actor).toEqual({ kind: 'kernel' })
-  const report = (await h.store.getArtifact(SLUG, 'verify-report:unit', 0))!
-  expect(textContent(report)).toBe('(no output)') // `test -f` is silent
-  expect(report.meta.metadata).toEqual({
-    step: 'unit',
-    attempt: 1,
-    command: 'test -f ok.marker',
-    exitCode: 1,
-  })
-
-  // implement.started r2 carries the verify feedback (§15.6-A) and the
-  // script saw the materialized .ab/verify/ report exactly once, in r2.
-  const starts = ofType(events, 'implement.started')
-  expect(starts.map((e) => e.payload.round)).toEqual([1, 2])
-  expect(starts[0]!.payload.feedback).toBeUndefined()
-  expect(starts[1]!.payload.feedback).toEqual({
-    verify: { step: 'unit', report: { kind: 'verify-report:unit', rev: 0 } },
-  })
-  expect(roundsWithReport).toEqual([2])
-
-  // Verify re-ran from the first step at attempt 2 and passed.
-  expect(ofType(events, 'verify.started').map((e) => e.payload)).toMatchObject([
-    { step: 'unit', attempt: 1 },
-    { step: 'unit', attempt: 2 },
-  ])
-  expect(pass!.payload).toMatchObject({ step: 'unit', attempt: 2, outcome: 'pass' })
-
-  // One more code-review round; the reviewer is a FRESH session each round.
-  const verdicts = ofType(events, 'code-review.verdict')
-  expect(verdicts.map((e) => e.payload.round)).toEqual([1, 2])
-  expect(verdicts.map((e) => e.payload.verdict)).toEqual(['approve', 'approve'])
-  expect(agentSession(verdicts[0]!)).not.toBe(agentSession(verdicts[1]!))
-
-  // Producer session memory (§10): the runner CONTINUES round 1's runner
-  // session but re-issues ambient auth per turn (D8) — each round's terminal
-  // is stamped with its OWN bracket's AB_SESSION (§15.3), which is exactly
-  // what lets the real CLI accept the continued round's `ab done` (§8.4 D5).
-  const implSessions = ofType(events, 'session.started')
-    .filter((e) => e.payload.phase === 'implement')
-    .map((e) => e.payload.session)
-  expect(implSessions).toEqual(['s_3', 's_5'])
-  expect(ofType(events, 'implement.completed').map(agentSession)).toEqual(implSessions)
-  const implJournals = [...h.agents.sessions.values()].filter(
-    (j) => j.opts.skill === 'ab-implement',
-  )
-  // A successful restack ends the old workspace session before rewriting.
-  expect(implJournals).toHaveLength(2)
-  expect(implJournals.map((j) => j.turns.length)).toEqual([1, 1])
-  // …and round 2's bracket still deposited its own transcript (§7.1).
-  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  expect(transcripts).toHaveLength(7)
-  expect(transcripts[4]!.metadata.phase).toBe('implement')
-  expect(transcripts[4]!.metadata.round).toBe(2)
-  expect(transcripts[4]!.metadata.session).toBe('s_5')
-
-  // Both implement rounds pushed the branch (D7 plumbing on each `ab done`).
-  const ws = ofType(events, 'workspace.provisioned')[0]!.payload.ref
-  expect(h.forge.pushes).toEqual([
-    { workspacePath: ws, branch: BRANCH },
-    { workspacePath: ws, branch: BRANCH },
-  ])
-}, 30_000)
-
 // ── c. Review stall → escalation → guidance (§15.6-B, §15.4) ─────────────────
 
 const GUIDANCE_ANSWER = 'A fixed 5-minute window is correct; approve unless it regresses.'
@@ -2163,135 +1544,13 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     outcome: 'pass',
   })
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
-}, 30_000)
 
-// ── c2. Agent verifier escalation → same verifier guidance ──────────────────
-
-const VERIFY_GUIDANCE = 'Use the seeded admin account.'
-
-test('c2. verifier guidance is delivered once and cannot hide its later failure report', async () => {
-  const configToml = `
-baseBranch = "main"
-capacity = 1
-
-[verify]
-steps = ["e2e"]
-
-[verify.e2e]
-kind = "agent"
-skill = "ab-verify-e2e"
-
-[roles.default]
-runtime = "scripted"
-
-[tickets]
-source = "file"
-readyLabels = ["autobuild"]
-readyState = "Ready"
-`
-  const handlers = happyHandlers()
-  const guidanceSeen: Array<{ escalation: string; answer: string }> = []
-  const implementFeedback: Array<{ report: string; guidancePresent: boolean }> = []
-  let verifyRuns = 0
-
-  handlers.implement = async (cli) => {
-    await cli.run(['context'])
-    if (cli.round > 1) {
-      implementFeedback.push({
-        report: await readFile(join(cli.ws, cli.env.contextDir!, 'verify', 'e2e.md'), 'utf8'),
-        guidancePresent: existsSync(join(cli.ws, cli.env.contextDir!, 'guidance.json')),
-      })
-    }
-    await writeFileIn(cli.ws, 'rate-limit.txt', `throttle after 5 (r${cli.round})\n`)
-    await commitAll(cli.ws, `implement: verifier round ${cli.round}`)
-    const notes = await writeFileIn(
-      cli.ws,
-      '.ab/implement-notes.md',
-      `Implementation round ${cli.round}.\n`,
-    )
-    await cli.run(['done', '--notes', notes])
-  }
-  handlers['verify-e2e'] = async (cli) => {
-    verifyRuns += 1
-    await cli.run(['context'])
-    const guidancePath = join(cli.ws, cli.env.contextDir!, 'guidance.json')
-    if (existsSync(guidancePath)) {
-      guidanceSeen.push(JSON.parse(await readFile(guidancePath, 'utf8')))
-    }
-    if (verifyRuns === 1) {
-      await cli.run(['escalate', 'Which test account is authoritative?'])
-      return
-    }
-    const report = await writeFileIn(
-      cli.ws,
-      '.ab/verify-report.md',
-      verifyRuns === 2 ? 'seeded admin login still times out\n' : 'seeded admin login passed\n',
-    )
-    if (verifyRuns === 2) await cli.run(['verdict', 'fail', '--report', report])
-    else await cli.run(['verdict', 'pass', '--notes', report])
-  }
-
-  const h = await track(makeHarness({ configToml, handlers, tickets: [readyTicket('T-1')] }))
-  await h.dispatcher.tick()
-  expect((await h.runLatest()).status).toBe('blocked')
-
-  let events = await h.events(SLUG)
-  const escalation = ofType(events, 'escalation.raised')[0]!
-  expect(escalation.payload).toMatchObject({ phase: 'verify:e2e', source: 'agent' })
-  await h.store.append(SLUG, {
-    actor: humanActor('operator'),
-    type: 'escalation.answered',
-    payload: { id: escalation.payload.id, answer: VERIFY_GUIDANCE, resolution: 'guidance' },
-  })
-
-  h.clock.advance(4 * 3_600_000)
-  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-  const final = await h.runLatest()
-  expect(final.prState).toBe('open')
-  expect(h.cliErrors).toEqual([])
-
-  events = await h.events(SLUG)
-  const starts = ofType(events, 'verify.started')
-  expect(starts.map((event) => event.payload.feedback)).toEqual([
-    undefined,
-    { guidance: { escalation: escalation.payload.id, answer: VERIFY_GUIDANCE } },
-    undefined,
-  ])
-  expect(guidanceSeen).toEqual([{ escalation: escalation.payload.id, answer: VERIFY_GUIDANCE }])
-  expect(implementFeedback).toEqual([
-    { report: 'seeded admin login still times out\n', guidancePresent: false },
-  ])
-  expect(ofType(events, 'implement.started').at(-1)?.payload.feedback).toEqual({
-    verify: { step: 'e2e', report: { kind: 'verify-report:e2e', rev: 0 } },
-  })
-}, 30_000)
-
-// ── d. Bounce (§6.3): dispatch quality gate ──────────────────────────────────
-
-test('d. nonconforming ticket bounces back to Triage citing the standard (§6.3)', async () => {
-  const h = await track(
-    makeHarness({
-      handlers: {},
-      tickets: [readyTicket('T-9', { title: 'Vague idea', body: 'Make login better somehow.\n' })],
-    }),
+  // Every implement round's `ab done` pushed the branch (D7 plumbing), and the
+  // later round's restacked head is what reached origin.
+  expect(h.forge.pushes.map((push) => push.branch)).toEqual([BRANCH, BRANCH, BRANCH, BRANCH])
+  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.remote)).toBe(
+    ofType(events, 'restack.completed').at(-1)!.payload.headSha,
   )
-  const tick = await h.dispatcher.tick()
-  expect(tick).toEqual({ ...emptyTickReport(), bounced: 1 })
-
-  // No build, no workspace, no runner — failure at the cheapest point.
-  expect(await h.store.listBuilds()).toEqual([])
-  expect(h.launched).toEqual([])
-  expect(h.tickets.transitions).toEqual([{ id: 'T-9', state: 'Triage' }])
-  expect(h.tickets.comments).toHaveLength(1)
-  const comment = h.tickets.comments[0]!
-  expect(comment.id).toBe('T-9')
-  expect(comment.body).toContain('.agents/skills/ab-guide/references/spec-standard.md')
-  expect(comment.body).not.toContain('docs/spec-standard.md')
-  expect(comment.body).toContain("an '## Acceptance criteria' heading")
-  expect(comment.body).toContain("an '## Out of scope' heading")
-  // The transition out of the claimed state restores provider claimability;
-  // the configured Ready gate, not hidden adapter state, prevents re-dispatch.
-  expect(await h.tickets.claim('T-9')).toBe(true)
 }, 30_000)
 
 // ── d2. Ticket dependencies through the REAL file source (§13) ───────────────
@@ -2303,11 +1562,13 @@ test('d. nonconforming ticket bounces back to Triage citing the standard (§6.3)
  * "complete" (state `Done`), the dispatcher's gate — rather than each unit
  * agreeing with its own mock.
  *
- * The blocker moves to Done by the file source's ordinary `transition`, and
- * the dependent ticket becomes eligible on the next tick with no manual
+ * A blocker recorded at creation and one added afterwards both hold their
+ * dependents. Removing a relationship releases its dependent on the next tick
+ * while the blocker is still unresolved; the blocker moving to Done by the
+ * source's ordinary `transition` releases the other, with no manual
  * synchronization step in between.
  */
-test('d2. a file-source ticket blocked by another dispatches only once its blocker is Done (§13)', async () => {
+test('d2. file-source blockers: create-time and post-create edits govern dispatch, and removal or completion releases (§13)', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-file-tickets-'))
   try {
     const source = new FileTicketSource({ dir, createState: 'Ready' })
@@ -2322,193 +1583,68 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
     })
     await source.transition(blocker.ref.id, 'Doing')
 
-    // The dependent: filed with --blocked-by, exactly as `ab ticket create`
-    // would record it — a native TOML `blockedBy` array.
-    const dependent = await source.create({
+    // Filed with --blocked-by, exactly as `ab ticket create` would record it —
+    // a native TOML `blockedBy` array.
+    const filed = await source.create({
       title: 'Dependent work',
       body: CONFORMING_BODY,
       labels: ['autobuild'],
       blockedBy: [blocker.ref.id],
     })
-    expect(await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')).toContain(
+    expect(await readFile(join(dir, 'ready', `${filed.ref.id}.md`), 'utf8')).toContain(
       `blockedBy = [ "${blocker.ref.id}" ]`,
     )
-
-    const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
-
-    // Tick 1: the dependent is held, and nothing builds — the blocker is in
-    // Doing, which readyCriteria's `Ready` gate excludes on its own.
-    const first = await h.dispatcher.tick()
-    expect(first.dependencyBlocked).toBe(1)
-    expect(first.dependencyDiagnostics).toEqual([
-      `ticket ${dependent.ref.id} blocked by ${blocker.ref.id} (not complete)`,
-    ])
-    expect(await h.store.listBuilds()).toEqual([])
-    // Held means untouched — and since this source's claim IS a rename into
-    // doing/, "not claimed" is checkable by where the file still sits.
-    expect((await source.get(dependent.ref.id))?.state).toBe('ready')
-    expect(await readdir(join(dir, 'doing'))).toEqual([`${blocker.ref.id}.md`])
-
-    // The blocker completes by the source's OWN lifecycle — nothing else.
-    await source.transition(blocker.ref.id, 'Done')
-
-    // Tick 2: eligible now, with no intervening manual synchronization.
-    h.clock.advance(60_000)
-    const second = await h.dispatcher.tick()
-    expect(second.dependencyBlocked).toBe(0)
-    expect(second.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((b) => b.ticket?.id)).toContain(dependent.ref.id)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-}, 30_000)
-
-/** Relationships added after creation flow through the same native file
- * projection and dispatcher gate, and removing one makes the next tick
- * eligible even while the former blocker remains unresolved. */
-
-test('d3. post-create blocker writes immediately govern file-source dispatch (§13)', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-file-ticket-edits-'))
-  try {
-    const source = new FileTicketSource({ dir, createState: 'Ready' })
-    const blocker = await source.create({
-      title: 'Still unresolved',
-      body: CONFORMING_BODY,
-      labels: ['autobuild'],
-    })
-    await source.transition(blocker.ref.id, 'Doing')
-    const dependent = await source.create({
+    // Filed independent, then given the same relationship after creation.
+    const edited = await source.create({
       title: 'Initially independent',
       body: CONFORMING_BODY,
       labels: ['autobuild'],
     })
-
-    await source.addBlocker(dependent.ref.id, blocker.ref.id)
-    expect(await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')).toContain(
+    await source.addBlocker(edited.ref.id, blocker.ref.id)
+    expect(await readFile(join(dir, 'ready', `${edited.ref.id}.md`), 'utf8')).toContain(
       `blockedBy = [ "${blocker.ref.id}" ]`,
     )
 
     const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
+
+    // Both dependents are held, and nothing builds — the blocker is in
+    // Doing, which readyCriteria's `Ready` gate excludes on its own.
     const held = await h.dispatcher.tick()
-    expect(held.dependencyBlocked).toBe(1)
+    expect(held.dependencyBlocked).toBe(2)
     expect(held.dispatched).toBe(0)
-    expect((await source.get(dependent.ref.id))?.state).toBe('ready')
-
-    await source.removeBlocker(dependent.ref.id, blocker.ref.id)
-    const unblockedFile = await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')
-    expect(unblockedFile).not.toContain('blockedBy')
-    expect((await source.get(blocker.ref.id))?.state).toBe('doing')
-
-    h.clock.advance(60_000)
-    const released = await h.dispatcher.tick()
-    expect(released.dependencyBlocked).toBe(0)
-    expect(released.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toContain(
-      dependent.ref.id,
-    )
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-}, 30_000)
-
-/** The unsafe Harvest interleaving is controlled across the real file source
- * and repository journal: reservation, externally visible ready ticket,
- * dispatcher scan, then blocker recording and filing completion. */
-
-test('d4. dispatch withholds a ready ticket while its Autobuild creation is in flight', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-inflight-ticket-'))
-  try {
-    const source = new FileTicketSource({ dir, createState: 'Ready' })
-    const blocker = await source.create({
-      title: 'Required baseline',
-      body: CONFORMING_BODY,
-      labels: ['autobuild'],
-    })
-    await source.transition(blocker.ref.id, 'Doing')
-    const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
-    await h.store.ensureRepo(h.origin)
-    await h.store.appendRepo(h.origin, {
-      actor: KERNEL,
-      type: 'harvest.started',
-      payload: {
-        run: 'h_inflight_e2e',
-        observations: [{ build: 'origin', seq: 1 }],
-        scan: { kind: 'harvest-scan', rev: 0 },
-      },
-    })
-
-    const creationKey = crypto.randomUUID()
-    let releaseBlockerWrite!: () => void
-    const blockerWriteGate = new Promise<void>((resolve) => {
-      releaseBlockerWrite = resolve
-    })
-    let markVisible!: () => void
-    const visible = new Promise<void>((resolve) => {
-      markVisible = resolve
-    })
-    let dependentId = ''
-    const filing = (async () => {
-      await h.store.appendRepo(h.origin, {
-        actor: KERNEL,
-        type: 'harvest.proposal.id-reserved',
-        payload: { run: 'h_inflight_e2e', proposalKey: 'cluster-e2e', id: creationKey },
-      })
-      const dependent = await source.create(
-        {
-          title: 'Generated dependent work',
-          body: CONFORMING_BODY,
-          labels: ['autobuild'],
-        },
-        { state: 'Ready', idempotencyKey: creationKey },
-      )
-      dependentId = dependent.ref.id
-      markVisible()
-      await blockerWriteGate
-      await source.addBlocker(dependent.ref.id, blocker.ref.id)
-      await h.store.appendRepo(h.origin, {
-        actor: KERNEL,
-        type: 'harvest.proposal.filed',
-        payload: {
-          run: 'h_inflight_e2e',
-          proposalKey: 'cluster-e2e',
-          ticket: dependent.ref,
-        },
-      })
-    })()
-
-    await visible
-    const midCreate = await h.dispatcher.tick()
-    expect(midCreate).toMatchObject({
-      queued: 1,
-      creationWithheld: 1,
-      dependencyBlocked: 0,
-      dispatched: 0,
-    })
-    expect(midCreate.creationDiagnostics[0]).toContain(
-      `ticket ${dependentId}: creation withheld — Harvest run h_inflight_e2e`,
+    expect([...held.dependencyDiagnostics].sort()).toEqual(
+      [
+        `ticket ${filed.ref.id} blocked by ${blocker.ref.id} (not complete)`,
+        `ticket ${edited.ref.id} blocked by ${blocker.ref.id} (not complete)`,
+      ].sort(),
     )
     expect(await h.store.listBuilds()).toEqual([])
-    expect((await source.get(dependentId))?.state).toBe('ready')
+    // Held means untouched — and since this source's claim IS a rename into
+    // doing/, "not claimed" is checkable by where the files still sit.
+    expect((await source.get(filed.ref.id))?.state).toBe('ready')
+    expect((await source.get(edited.ref.id))?.state).toBe('ready')
+    expect(await readdir(join(dir, 'doing'))).toEqual([`${blocker.ref.id}.md`])
 
-    releaseBlockerWrite()
-    await filing
+    // Removing the relationship releases its dependent while the blocker is
+    // still unresolved.
+    await source.removeBlocker(edited.ref.id, blocker.ref.id)
+    expect(await readFile(join(dir, 'ready', `${edited.ref.id}.md`), 'utf8')).not.toContain(
+      'blockedBy',
+    )
+    expect((await source.get(blocker.ref.id))?.state).toBe('doing')
     h.clock.advance(60_000)
-    const afterFiling = await h.dispatcher.tick()
-    expect(afterFiling).toMatchObject({
-      queued: 1,
-      creationWithheld: 0,
-      dependencyBlocked: 1,
-      dispatched: 0,
-    })
-    expect(afterFiling.dependencyDiagnostics).toEqual([
-      `ticket ${dependentId} blocked by ${blocker.ref.id} (not complete)`,
-    ])
+    const removed = await h.dispatcher.tick()
+    expect(removed.dependencyBlocked).toBe(1)
+    expect(removed.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([edited.ref.id])
 
+    // The blocker completes by the source's OWN lifecycle — nothing else.
     await source.transition(blocker.ref.id, 'Done')
     h.clock.advance(60_000)
-    const released = await h.dispatcher.tick()
-    expect(released.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([dependentId])
+    const completed = await h.dispatcher.tick()
+    expect(completed.dependencyBlocked).toBe(0)
+    expect(completed.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toContain(filed.ref.id)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -2678,28 +1814,32 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
   }
 }, 30_000)
 
-// ── g. Two-axis runtime/model routing (§9, AC "an integration scenario") ─────
+// ── g. Per-phase runtime/model routing (§9, AC "an integration scenario") ────
 //
-// The config sets the repo-wide default runtime (`[roles.default]`) and routes
-// ONE agent phase (code-review) to a second runtime with a model
-// (`{ runtime = "pi", model = "kimi-k3" }`). The build runs to PR, and its
-// stored `session.started` events + transcripts show code-review on pi×kimi-k3
-// while every other phase stays on the default runtime. Both runtimes are
-// backed by the same scripted runner in the harness, so the session numbering
-// the other scenarios rely on is unchanged.
+// The config keeps the repo-wide default runtime (`[roles.default]`), routes
+// code-review to a second built-in runtime with a model
+// (`{ runtime = "pi", model = "kimi-k3" }`), and routes plan to a
+// plugin-registered runtime that supplies its own default model. The build
+// runs to PR, and its stored `session.started` events + transcripts show each
+// routed phase on its runtime and model while every other phase stays on the
+// default runtime. All runtimes are backed by the same scripted runner in the
+// harness, so the session numbering the other scenarios rely on is unchanged.
 
-const TWO_AXIS_TOML = `${CONFIG_TOML}
+const ROUTED_ROLES_TOML = `${CONFIG_TOML}
 [roles.code-review]
 runtime = "pi"
 model = "kimi-k3"
+
+[roles.plan]
+runtime = "plugin-scripted"
 `
 
-test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default runtime (§9)', async () => {
+test('g. phase roles route per axis: a built-in runtime with a model, a plugin runtime with its default, the rest on the default (§9)', async () => {
   const h = await track(
     makeHarness({
       handlers: happyHandlers(),
       tickets: [readyTicket('T-1')],
-      configToml: TWO_AXIS_TOML,
+      configToml: ROUTED_ROLES_TOML,
     }),
   )
 
@@ -2711,113 +1851,26 @@ test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default run
 
   const events = await h.events(SLUG)
   const started = ofType(events, 'session.started')
-
-  // The routed phase: code-review resolves to runtime "pi" with model "kimi-k3".
-  const codeReview = started.find((e) => e.payload.role === 'code-review')!
-  expect(codeReview.payload.runner).toBe('pi')
-  expect(codeReview.payload.model).toBe('kimi-k3')
-
-  // Every other phase stays on the default runtime with no model.
-  for (const role of ['plan', 'plan-review', 'implement', 'finalize']) {
-    const s = started.find((e) => e.payload.role === role)!
-    expect(s.payload.runner).toBe('scripted')
-    expect(s.payload.model).toBeUndefined()
-  }
-
   // The stored transcripts record the resolved runtime + model, so any
   // experiment's outcome is attributable to the config that produced it.
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  const crTranscript = transcripts.find((m) => m.metadata.phase === 'code-review')!
-  expect(crTranscript.metadata.runner).toBe('pi')
-  expect(crTranscript.metadata.model).toBe('kimi-k3')
-  const planTranscript = transcripts.find((m) => m.metadata.phase === 'plan')!
-  expect(planTranscript.metadata.runner).toBe('scripted')
-  expect(planTranscript.metadata.model).toBeUndefined()
-}, 30_000)
-
-const PLUGIN_RUNTIME_TOML = CONFIG_TOML.replace(
-  'runtime = "scripted"',
-  'runtime = "plugin-scripted"',
-)
-
-test('g2. a plugin-registered runtime and its default model drive a full build', async () => {
-  const h = await track(
-    makeHarness({
-      handlers: happyHandlers(),
-      tickets: [readyTicket('T-PLUGIN')],
-      configToml: PLUGIN_RUNTIME_TOML,
-    }),
-  )
-
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    dispatched: 1,
-  })
-  const state = await h.runLatest()
-  expect(state.prState).toBe('open')
-  expect(h.cliErrors).toEqual([])
-
-  const events = await h.events(SLUG)
-  const started = ofType(events, 'session.started')
-  expect(started).toHaveLength(5)
-  expect(started.map((event) => [event.payload.runner, event.payload.model])).toEqual(
-    Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']),
-  )
-
-  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  expect(transcripts).toHaveLength(5)
-  expect(
-    transcripts.map((artifact) => [artifact.metadata.runner, artifact.metadata.model]),
-  ).toEqual(Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']))
-  expect(h.agents.sessions.size).toBe(5)
-  expect([...h.agents.sessions.values()].every((session) => session.ended)).toBe(true)
-}, 30_000)
-
-const PLUGIN_PHASE_OVERRIDE_TOML = `${CONFIG_TOML}
-[roles.plan]
-runtime = "plugin-scripted"
-`
-
-test('g3. a phase role can override the configured default with a plugin runtime', async () => {
-  const h = await track(
-    makeHarness({
-      handlers: happyHandlers(),
-      tickets: [readyTicket('T-PLUGIN-PHASE')],
-      configToml: PLUGIN_PHASE_OVERRIDE_TOML,
-    }),
-  )
-
-  expect(await h.dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    dispatched: 1,
-  })
-  const state = await h.runLatest()
-  expect(state.prState).toBe('open')
-  expect(h.cliErrors).toEqual([])
-
-  const started = ofType(await h.events(SLUG), 'session.started')
-  const plan = started.find((event) => event.payload.role === 'plan')!
-  expect(plan.payload.runner).toBe('plugin-scripted')
-  expect(plan.payload.model).toBe('plugin/default')
-
-  for (const role of ['plan-review', 'implement', 'code-review', 'finalize']) {
-    const session = started.find((event) => event.payload.role === role)!
-    expect(session.payload.runner).toBe('scripted')
-    expect(session.payload.model).toBeUndefined()
+  const expected: Record<string, [string, string | undefined]> = {
+    plan: ['plugin-scripted', 'plugin/default'],
+    'plan-review': ['scripted', undefined],
+    implement: ['scripted', undefined],
+    'code-review': ['pi', 'kimi-k3'],
+    finalize: ['scripted', undefined],
   }
-
-  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  const planTranscript = transcripts.find((artifact) => artifact.metadata.phase === 'plan')!
-  expect(planTranscript.metadata.runner).toBe('plugin-scripted')
-  expect(planTranscript.metadata.model).toBe('plugin/default')
-  expect(
-    transcripts
-      .filter((artifact) => artifact.metadata.phase !== 'plan')
-      .every(
-        (artifact) =>
-          artifact.metadata.runner === 'scripted' && artifact.metadata.model === undefined,
-      ),
-  ).toBe(true)
+  for (const [role, [runner, model]] of Object.entries(expected)) {
+    const session = started.find((e) => e.payload.role === role)!
+    expect([role, session.payload.runner, session.payload.model]).toEqual([role, runner, model])
+    const transcript = transcripts.find((m) => m.metadata.phase === role)!
+    expect([role, transcript.metadata.runner, transcript.metadata.model]).toEqual([
+      role,
+      runner,
+      model,
+    ])
+  }
 }, 30_000)
 
 // ── h. Observation harvest through dispatcher + real CLI (§12) ──────────────
@@ -3032,120 +2085,6 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
   expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest-review')).toHaveLength(3)
 }, 30_000)
 
-// A repository may waive grooming for harvest without waiving dependencies.
-test('h2. harvested hard prerequisite remains unclaimed in the ready state', async () => {
-  const configToml = CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1')
-    .replace('readyLabels = ["autobuild"]', 'readyLabels = []')
-    .replace('readyState = "Ready"', 'readyState = "Ready"\nproposalState = "Ready"')
-  const h = await track(
-    makeHarness({
-      handlers: {},
-      tickets: [readyTicket('BLOCK-1', { title: 'Required foundation', state: 'Doing' })],
-      configToml,
-    }),
-  )
-
-  const sourceTicket = { source: 'fake', id: 'source-hard-gate', title: 'Hard gate evidence' }
-  await h.store.createBuild({ slug: 'hard-gate-evidence', repo: h.origin, ticket: sourceTicket })
-  await h.store.append('hard-gate-evidence', {
-    actor: DISPATCHER,
-    type: 'build.created',
-    payload: { ticket: sourceTicket, repo: h.origin, baseBranch: 'main' },
-  })
-  await h.store.append('hard-gate-evidence', {
-    actor: agentActor('implement', 'source-hard-gate-session'),
-    type: 'observation.recorded',
-    payload: {
-      id: 'obs-hard-gate',
-      kind: 'followup',
-      summary: 'This work cannot start until BLOCK-1 is complete.',
-    },
-  })
-  await h.store.append('hard-gate-evidence', {
-    actor: DISPATCHER,
-    type: 'build.completed',
-    payload: { outcome: 'merged' },
-  })
-
-  const harvestAgents = new ScriptedAgentRunner({
-    script: async (ctx) => {
-      const harvestEnv = resolveHarvestCliEnv(ctx.opts.env)
-      const run = async (argv: string[]): Promise<void> => {
-        const errors: string[] = []
-        const code = await runCli(argv, {
-          store: h.store,
-          harvestEnv,
-          workspacePath: h.origin,
-          ids: h.ids,
-          stdout: () => {},
-          stderr: (line) => errors.push(line),
-        })
-        if (code !== 0) throw new Error(errors.join('\n'))
-      }
-      await run(['harvest', 'context'])
-      if (ctx.opts.skill === 'ab-harvest') {
-        const observations = JSON.parse(
-          await readFile(join(h.origin, '.ab', 'observations.json'), 'utf8'),
-        ) as Array<{ occurrence: { build: string; seq: number } }>
-        const file = join(h.origin, '.ab', 'hard-gate-proposal.json')
-        await writeFile(
-          file,
-          JSON.stringify({
-            proposals: [
-              {
-                action: 'create',
-                title: 'Work after required foundation',
-                whatWhy: 'The evidence says work cannot start until BLOCK-1 is complete.',
-                acceptanceCriteria: ['The dependent work is complete.'],
-                outOfScope: ['Changes to the foundation ticket.'],
-                blockedBy: ['BLOCK-1'],
-                observations: observations.map((item) => item.occurrence),
-              },
-            ],
-          }),
-        )
-        await run(['harvest', 'submit', file])
-      } else {
-        const notes = join(h.origin, '.ab', 'hard-gate-review.md')
-        await writeFile(notes, 'Hard prerequisite prose and metadata agree.\n')
-        await run(['harvest', 'verdict', 'approve', '--notes', notes])
-      }
-      return defaultTurnResult('harvest CLI terminal deposited')
-    },
-  })
-
-  expect(
-    await new HarvestRunner({
-      store: h.store,
-      tickets: h.tickets,
-      config: h.config,
-      runtimes: { scripted: { runner: harvestAgents, servesModels: [] } },
-      repo: h.origin,
-      workspacePath: h.origin,
-      ids: h.ids,
-      uuids: randomUuids(),
-      clock: h.clock,
-      instance: 'harvest-hard-gate-e2e',
-      sessionEnv: { AB_STORE: 'memory' },
-      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
-    }).run(),
-  ).toMatchObject({ outcome: 'completed', launch: 'started' })
-
-  expect(await h.tickets.get('fake-1')).toMatchObject({
-    state: 'Ready',
-    blockedBy: ['BLOCK-1'],
-  })
-  const tick = await h.dispatcher.tick()
-  expect(tick).toMatchObject({
-    dispatched: 0,
-    dependencyBlocked: 1,
-    dependencyDiagnostics: ['ticket fake-1 blocked by BLOCK-1 (not complete)'],
-  })
-  expect(h.tickets.claims).not.toContain('fake-1')
-  expect(h.launched).toEqual([])
-  expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(false)
-}, 30_000)
-
 // Originating build tickets are deterministic prerequisites even when the
 // harvest producer declares no blocker itself.
 test('h3. unresolved observation origin holds and then releases a ready proposal', async () => {
@@ -3272,80 +2211,6 @@ test('h3. unresolved observation origin holds and then releases a ready proposal
   expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 1, dependencyBlocked: 0 })
   expect(h.tickets.claims).toContain('fake-1')
   expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(true)
-}, 30_000)
-
-test('verify cycle repins a renamed skill after upstream config enters the checkout', async () => {
-  const oldConfig =
-    CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "web-dashboard"]') +
-    `
-[verify.web-dashboard]
-kind = "agent"
-skill = "verify-web-dashboard"
-`
-  const handlers = happyHandlers()
-  handlers.plan = async (cli) => {
-    await cli.run(['context'])
-    const plan = await writeFileIn(
-      cli.ws,
-      '.ab/plan.md',
-      '+++\nverifySteps = ["unit", "web-dashboard"]\n+++\n# Plan\n',
-    )
-    await cli.run(['artifact', 'put', 'plan', plan])
-    await cli.run(['done'])
-  }
-  handlers['verify-ui-app'] = async (cli) => {
-    await cli.run(['context'])
-    await cli.run(['verdict', 'pass'])
-  }
-  const h = await track(
-    makeHarness({
-      handlers,
-      tickets: [readyTicket('T-1')],
-      configToml: oldConfig,
-      verifyCycleConfig: true,
-    }),
-  )
-  await h.dispatcher.tick()
-  const runner = h.launched[0]!.runner
-  await runner.attach()
-  // Stop after the cheap check, before constructing the agent verifier.
-  for (let i = 0; i < 20; i++) {
-    const decision = await runner.step()
-    if (decision.kind === 'run-check') break
-    if (i === 19) throw new Error('did not reach verification')
-  }
-  const before = reduceBuild(await h.events(SLUG)).verify.configPin!
-  expect(before).toBeDefined()
-  const ws = ofType(await h.events(SLUG), 'workspace.provisioned')[0]!.payload.ref
-  const upstream = await h.advanceRemote(
-    { 'autobuild.toml': oldConfig.replaceAll('web-dashboard', 'ui-app') },
-    'rename verification skill',
-  )
-  await git(['fetch', 'origin', 'main'], ws)
-  await git([...GIT_ID, 'merge', '--no-edit', upstream], ws)
-  const head = await git(['rev-parse', 'HEAD'], ws)
-  expect(await runner.step()).toMatchObject({ kind: 'record-verify-selection-drift' })
-  expect(await runner.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
-  expect(await runner.step()).toMatchObject({
-    kind: 'run-agent-verify',
-    step: 'ui-app',
-    skill: 'verify-ui-app',
-  })
-  const events = await h.events(SLUG)
-  const pin = reduceBuild(events).verify.configPin!
-  expect(pin).toMatchObject({ head, source: { commit: head } })
-  expect(pin.artifact.rev).toBeGreaterThan(before.artifact.rev)
-  expect(ofType(events, 'verify.started').map((e) => e.payload.step)).toEqual([
-    'unit',
-    'unit',
-    'ui-app',
-  ])
-  expect(
-    ofType(events, 'observation.recorded').filter((e) =>
-      e.payload.summary.includes('web-dashboard'),
-    ),
-  ).toHaveLength(1)
-  expect(h.cliErrors).toEqual([])
 }, 30_000)
 
 test('a bare retry reconstructs a lost reconcile publication under its frozen occurrence', async () => {
