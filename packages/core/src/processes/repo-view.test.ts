@@ -311,3 +311,36 @@ test('served facts reuse this epoch’s retained read until a write or refresh',
   view.retainBuildFacts(false)
   expect(view.retainedBuildFacts('build')).toBeUndefined()
 })
+
+test('onRepositoryFacts observes each successful journal read, never a failed one, and cannot fail it', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  const seen: unknown[] = []
+  let throwing = false
+  const view = new RepoViewStore(store, {
+    repo: 'repo',
+    onRepositoryFacts: (facts) => {
+      seen.push(facts)
+      if (throwing) throw new Error('sink failed')
+    },
+  })
+  await view.startJournal()
+  expect(seen).toEqual([view.repositoryFacts()])
+  await store.appendRepo('repo', {
+    actor: humanActor('operator'),
+    type: 'dispatcher.intake-set',
+    payload: { enabled: false },
+  })
+  throwing = true
+  await view.refreshJournal()
+  expect(seen).toHaveLength(2)
+  expect(seen[1]).toEqual(view.repositoryFacts())
+  expect(view.repositoryFacts().settings.intake).toBe(false)
+  const read = store.getRepo.bind(store)
+  store.getRepo = async () => {
+    throw new Error('store down')
+  }
+  await expect(view.refreshJournal()).rejects.toThrow('store down')
+  expect(seen).toHaveLength(2)
+  store.getRepo = read
+})
