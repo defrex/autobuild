@@ -2178,7 +2178,9 @@ async function ensureTicketStateCounts(tx: SQL): Promise<void> {
  * and because the set is maintained by database triggers inside the
  * appending statement's transaction, their writes keep it exact too. A build
  * insert adds the build, `build.completed` removes it, and `build.aborted` or
- * `build.reopened` re-derive it. */
+ * `build.reopened` re-derive it. The event-type filter lives inside the
+ * function, not in a trigger WHEN clause, so the trigger never pins the
+ * `events.type` column definition. */
 export const OPEN_BUILDS_DDL = `
 CREATE TABLE IF NOT EXISTS open_builds (
   slug text PRIMARY KEY REFERENCES builds(slug) ON DELETE CASCADE,
@@ -2194,7 +2196,7 @@ CREATE OR REPLACE FUNCTION ab_open_build_terminal() RETURNS trigger LANGUAGE plp
 BEGIN
  IF NEW.type = 'build.completed' THEN
   DELETE FROM open_builds WHERE slug = NEW.build;
- ELSE
+ ELSIF NEW.type IN ('build.aborted', 'build.reopened') THEN
   INSERT INTO open_builds(slug, repo)
   SELECT b.slug, b.repo FROM builds b WHERE b.slug = NEW.build AND NOT EXISTS (
    SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = NEW.build
@@ -2209,8 +2211,7 @@ CREATE TRIGGER builds_open_insert AFTER INSERT ON builds
 FOR EACH ROW EXECUTE FUNCTION ab_open_build_inserted();
 DROP TRIGGER IF EXISTS events_open_terminal ON events;
 CREATE TRIGGER events_open_terminal AFTER INSERT ON events
-FOR EACH ROW WHEN (NEW.type IN ('build.completed', 'build.aborted', 'build.reopened'))
-EXECUTE FUNCTION ab_open_build_terminal();
+FOR EACH ROW EXECUTE FUNCTION ab_open_build_terminal();
 `
 
 /** The one-off backfill of an existing database's open builds. It runs only
