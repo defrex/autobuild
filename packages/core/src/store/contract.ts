@@ -2006,7 +2006,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const acc = buildRosterRollup.initial()
           for (const slug of slugs) {
             const entry = buildRosterEntryReducer.reduce(await store.getEvents(slug))
-            buildRosterRollup.add(acc, buildRosterRollup.contribute(entry, {}, now, slug))
+            const contribution = buildRosterRollup.contribute(entry, {}, now, slug)
+            if (contribution) buildRosterRollup.add(acc, contribution)
           }
           return buildRosterRollup.finish(acc, {}, now, await store.getRepoChangePosition(repo))
         }

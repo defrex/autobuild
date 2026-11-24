@@ -534,7 +534,7 @@ client version window are unchanged.
 
 | Scope | Reducers with no arguments |
 | --- | --- |
-| Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `buildTimeline`, `pinnedAssets`, `buildDelegation` |
+| Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `buildTimeline`, `buildRosterEntry`, `pinnedAssets`, `buildDelegation` |
 | Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `hostedHarvestAuthority`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
 
 | Reducer | Scope | Required arguments |
@@ -601,7 +601,8 @@ repository's builds. The body is a named-value request of at most
   feed or build values.
 - Rollups have no released projection catalog. A client requires the server's
   `version` to equal its own; a different version, an absent route (`404` or
-  `405` from an older server), an invalid envelope or a value outside the
+  `405` from an older server), `400 validation` for a rollup the server does
+  not know (an older server), an invalid envelope or a value outside the
   rollup's schema raises `ReducerValueIncompatibilityError`.
 - Unknown rollup names, invalid arguments and extra fields are
   `400 validation`. An unknown repository answers the empty value and creates
@@ -610,6 +611,7 @@ repository's builds. The body is a named-value request of at most
 | Rollup | Key arguments | Read-time arguments | Value |
 | --- | --- | --- | --- |
 | `stepDurations` | `outcome`: `merged` (default) or `all`; `kind`: `leaf` (default), `node` or `all` | `window`: `24h`, `7d` (default), `30d` or `all` | `{"position": string, "window": string, "steps": [{"step", "count", "meanMs", "p50Ms", "p90Ms", "p99Ms", "totalMs"}]}`, steps in pipeline order with waits last |
+| `buildRoster` | none | none | `{"position": string, "live": [{"slug", "kind", "createdAt"?}], "finished": [{"slug", "kind", "outcome", "completedAt"}]}`: every live build, oldest first; up to 10 of the newest finished builds, newest first, with `outcome` `merged`, `closed` or `aborted` |
 
 ### Reducer snapshots
 
