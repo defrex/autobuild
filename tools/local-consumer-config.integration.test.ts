@@ -72,6 +72,7 @@ test('this repository pipeline runs on its GitHub issues', async () => {
     'ui-tui',
     'ui-app',
     'ui-website',
+    'ui-web',
     'docs',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
@@ -84,7 +85,7 @@ test('this repository pipeline runs on its GitHub issues', async () => {
     ['lint', 'types'],
     ['unit', 'build', 'integration', 'app-load'],
     ['ui-tui'],
-    ['ui-app', 'ui-website', 'docs'],
+    ['ui-app', 'ui-website', 'ui-web', 'docs'],
   ])
   // Integration holds every IO test, including those that check skills, docs
   // and configuration, so it applies to every build exactly as unit does.
@@ -118,6 +119,10 @@ test('this repository pipeline runs on its GitHub issues', async () => {
       'tools/website-capture*',
       '.agents/skills/verify-ui-website/SKILL.md',
     ],
+  })
+  expect(config.verify.stepConfigs['ui-web']).toMatchObject({
+    kind: 'agent',
+    skill: 'verify-ui-web',
   })
   expect(config.finalize.steps).toEqual(['changelog'])
   expect(config.finalize.stepConfigs.changelog).toEqual({
@@ -161,6 +166,44 @@ test('the ui-website step covers site source, design references and evidence too
   for (const path of ['autobuild.toml']) {
     expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
   }
+})
+
+test('the ui-web step runs only for packages/ui and the web server', async () => {
+  const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
+  const step = config.verify.stepConfigs['ui-web']
+  if (!step || !('paths' in step) || !step.paths) throw new Error('ui-web step has no paths')
+  expect(step.paths).toEqual(['packages/ui/**', 'packages/core/src/web/**'])
+  const rule = { kind: 'paths' as const, step: 'ui-web', paths: step.paths }
+  for (const path of [
+    'packages/ui/src/app/shell.tsx',
+    'packages/ui/src/catalog/main.tsx',
+    'packages/ui/src/ansi.css',
+    'packages/core/src/web/http.ts',
+    'packages/core/src/web/assets/app.js',
+  ]) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
+  }
+  const skipped = [
+    'tools/ui-web-capture.ts',
+    'tools/ui-web-capture.test.ts',
+    '.agents/skills/verify-ui-web/SKILL.md',
+    'tools/website-capture-png.ts',
+    'packages/web-dashboard-capture/src/full-document.ts',
+    'autobuild.toml',
+    'DESIGN.md',
+    'packages/core/src/kernel/engine.ts',
+    'packages/core/src/cli/dashboard/render.ts',
+    'packages/hosted-store-service/app/page.tsx',
+    'packages/website/src/page.ts',
+    'docs/verification.md',
+    'tools/website-capture.ts',
+  ]
+  for (const path of skipped) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
+  }
+  expect(
+    evaluateVerifyApplicability(rule, [...skipped, 'packages/ui/src/app/shell.tsx']).applies,
+  ).toBe(true)
 })
 
 // Every tools/ module the terminal capture entry point reaches through relative
@@ -243,6 +286,13 @@ test('verify-ui-website is an unprefixed repo-local skill with a Claude symlink'
   )
   const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
   expect(skill).toMatch(/^name: verify-ui-website$/m)
+})
+
+test('verify-ui-web is an unprefixed repo-local skill with a Claude symlink', async () => {
+  const link = join(REPO_ROOT, '.claude/skills/verify-ui-web')
+  expect(await realpath(link)).toBe(await realpath(join(REPO_ROOT, '.agents/skills/verify-ui-web')))
+  const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
+  expect(skill).toMatch(/^name: verify-ui-web$/m)
 })
 
 test('docs gate covers product surfaces and excludes repository configuration', async () => {
