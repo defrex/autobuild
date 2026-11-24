@@ -94,8 +94,12 @@ export async function runInspected(
   const scratch = await inspectionRoot()
   const report = options.report ?? console.error
   let git: Awaited<ReturnType<typeof isolatedGitConfig>> | undefined
+  let stateHome: string | undefined
   try {
     git = await isolatedGitConfig(scratch)
+    // Build worktrees default to the per-user state home; a runner-owned one
+    // beside scratch (never inside it) keeps suites out of the real home.
+    stateHome = await mkdtemp(join(dirname(scratch), 'ab-test-state-'))
     for (const command of commands) {
       const before = new Set(await readdir(scratch))
       const child = Bun.spawn([...command], {
@@ -107,6 +111,7 @@ export async function runInspected(
           TMP: scratch,
           TEMP: scratch,
           ...git.env,
+          XDG_STATE_HOME: stateHome,
         },
         stdin: 'inherit',
         stdout: 'pipe',
@@ -144,6 +149,7 @@ export async function runInspected(
   } finally {
     await rm(scratch, { recursive: true, force: true })
     if (git) await rm(git.directory, { recursive: true, force: true })
+    if (stateHome) await rm(stateHome, { recursive: true, force: true })
   }
 }
 
