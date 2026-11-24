@@ -80,6 +80,33 @@ State is reduced from those events; a snapshot is only a cache.
 Agents report through the typed `ab` CLI (`ab done`, `ab verdict`), not their output; code validates the deposit, applies the gates and records the transition.
 
 
+## Repository agent context
+
+Every dispatcher, in checkout or origin mode, keeps a record of the repository's agent context in the store. It reads the committed tree at the base-branch head through the forge, never the working copy, so both modes record identical content for the same commit.
+
+| Captured | Selection |
+| --- | --- |
+| Skills | Every directory under `.agents/skills/` or `.claude/skills/` holding a `SKILL.md`, with all its files: shipped, customized and repository-local skills alike. Symlinked or byte-identical copies appear once with every install path; dot-directories such as `.ab-pristine` are skipped. |
+| Instructions | Every `AGENTS.md` and `CLAUDE.md`, root and nested. The two collapse into one entry per directory when identical. |
+| Imports | Files the instructions import by `@path`, followed transitively, stored as separate entries. Paths outside the repository are listed as omitted. |
+
+- **Revisions.** The record is a repository artifact, `agent-context`. A new revision is written only when the captured content changes, not on every base-branch commit. It is retention-managed like the dispatcher's run and config artifacts: the newest 200 revisions survive (`AB_ARTIFACT_RETENTION_MAX_REVISIONS` overrides the bound).
+- **Pacing.** Each dispatcher process checks the base head on its first tick, then at most once a minute. An unchanged head reads no tree, blob, record or event. A capture cut short by an invocation deadline keeps the bytes it fetched and resumes on the next invocation.
+- **Bounds.** A record over 2.25 MiB encoded (`oversize`) or 32 MiB uncompressed (`raw-oversize`) is not written. The last good revision stays, and the diagnostic names the largest contributors.
+- **Scope.** The dispatcher captures only. It adds no MCP tool or other retrieval surface for connected agents.
+
+`ab dispatch` prints each diagnostic once:
+
+| Diagnostic | Meaning | Next attempt |
+| --- | --- | --- |
+| `oversize`, `raw-oversize` | Bound exceeded; last good revision kept | When the base head moves |
+| `tree-unlistable` | The forge cannot list a directory completely; last good revision kept | When the base head moves |
+| `capture-failed` | Unexpected read or write failure | After five minutes, or when the base head moves |
+| `unavailable` | The forge cannot read trees or blobs | None; dispatching continues |
+
+A repository with no base branch yet has nothing to capture and reports nothing.
+
+
 ## Resume the work, not the chat
 
 A restart loses nothing. The dispatcher continues each build from its recorded phase, completed boundaries, artifacts and feedback, even in a replacement sandbox. Authority boundaries hold:

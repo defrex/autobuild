@@ -3,9 +3,11 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   classifyGitNetworkFailure,
   ForgeFailure,
+  ForgeTreeUnlistable,
   isForgeFailure,
   type ForgeRequestObserver,
 } from '../forge-failure'
+import { matchesGitBlobOid } from './git-blob'
 import {
   forgeRequestContext,
   forgeRequestExhausted,
@@ -26,6 +28,7 @@ import {
   ForgeRejection,
   NoCommitsBetweenBranchesError,
   type BuildLandingOptions,
+  type ForgeTreeEntry,
 } from '../types'
 import { findSummaryMarker } from './summary-marker'
 import {
@@ -326,6 +329,21 @@ const nodeComparison = z.object({
 const restBranchHead = z
   .object({ commit: z.object({ sha: z.string().min(1) }).passthrough() })
   .passthrough()
+
+const gitCommitTree = z.object({ tree: z.object({ sha: z.string().min(1) }) })
+const gitTreeListing = z.object({
+  truncated: z.boolean(),
+  tree: z.array(
+    z.object({
+      path: z.string().min(1),
+      mode: z.enum(['100644', '100755', '040000', '120000', '160000']),
+      type: z.enum(['blob', 'tree', 'commit']),
+      sha: z.string().min(1),
+      size: z.number().int().nonnegative().optional(),
+    }),
+  ),
+})
+const gitBlobContent = z.object({ content: z.string(), encoding: z.literal('base64') })
 
 const restRulesetRules = z.array(
   z
@@ -2732,6 +2750,70 @@ export class GitHubForge implements Forge {
       if (error instanceof GitHubApiError && error.status === 404) return false
       throw error
     }
+  }
+
+  /** Complete recursive tree of `commit` (Git Trees API). A truncated
+   * recursive listing is completed one subtree at a time, as GitHub
+   * documents; only a directory with too many direct entries to list at all
+   * throws `ForgeTreeUnlistable`. */
+  async readTree(commit: string): Promise<ForgeTreeEntry[]> {
+    const { owner, name } = await this.requireCoordinates()
+    const base = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git`
+    const listing = (sha: string, recursive: boolean) =>
+      this.getJson(
+        gitTreeListing,
+        `${base}/trees/${encodeURIComponent(sha)}`,
+        'git tree',
+        recursive ? { query: { recursive: '1' } } : undefined,
+      )
+    const entries = (
+      prefix: string,
+      tree: z.infer<typeof gitTreeListing>['tree'],
+    ): ForgeTreeEntry[] =>
+      tree.map((entry) => ({
+        path: prefix === '' ? entry.path : `${prefix}/${entry.path}`,
+        mode: entry.mode,
+        type: entry.type,
+        oid: entry.sha,
+        ...(entry.size !== undefined ? { size: entry.size } : {}),
+      }))
+    const walk = async (prefix: string, sha: string): Promise<ForgeTreeEntry[]> => {
+      const direct = await listing(sha, false)
+      if (direct.truncated) throw new ForgeTreeUnlistable(prefix)
+      const out = entries(prefix, direct.tree)
+      for (const child of out.filter((entry) => entry.type === 'tree')) {
+        const below = await listing(child.oid, true)
+        out.push(
+          ...(below.truncated
+            ? await walk(child.path, child.oid)
+            : entries(child.path, below.tree)),
+        )
+      }
+      return out
+    }
+    const root = (
+      await this.getJson(
+        gitCommitTree,
+        `${base}/commits/${encodeURIComponent(commit)}`,
+        'git commit',
+      )
+    ).tree.sha
+    const recursive = await listing(root, true)
+    return recursive.truncated ? walk('', root) : entries('', recursive.tree)
+  }
+
+  /** Exact bytes of blob `oid` (Git Blobs API), verified against the id. */
+  async readBlob(oid: string): Promise<Uint8Array> {
+    const { owner, name } = await this.requireCoordinates()
+    const blob = await this.getJson(
+      gitBlobContent,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs/${encodeURIComponent(oid)}`,
+      'git blob',
+    )
+    const bytes = new Uint8Array(Buffer.from(blob.content.replace(/\s+/g, ''), 'base64'))
+    if (!matchesGitBlobOid(oid, bytes))
+      throw new Error(`GitHub blob ${oid} returned content that does not match its id`)
+    return bytes
   }
 
   /** Raw file bytes from the repository. Ref omitted → the repository's

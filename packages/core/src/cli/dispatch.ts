@@ -1,3 +1,5 @@
+import { AgentContextCapture } from '../processes/agent-context'
+import { formatAgentContextDiagnostic } from '../store/agent-context'
 import {
   assertCreateAssigneeAccepted,
   assertReadyAssigneeAccepted,
@@ -1164,6 +1166,14 @@ class DispatchLoop {
       // skip foreign-execution settlement for builds this process supervises.
       settlePublication: (slug) => this.settlePendingPublication(slug),
       activeExecutions: () => new Set(this.activeBuildRuns.keys()),
+      // Both modes read the base branch through the forge, so a checkout
+      // dispatcher and an origin-mode one record the same agent context.
+      agentContext: new AgentContextCapture({
+        store: this.repoView,
+        repo: this.repoIdentity,
+        forge: wiring.forge,
+        now: () => wiring.clock().getTime(),
+      }),
       opts: {
         maxHarvestRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
@@ -3276,6 +3286,7 @@ class DispatchLoop {
       ticketDiagnostics: _ticketDiagnostics,
       creationDiagnostics: _creationDiagnostics,
       dependencyDiagnostics: _dependencyDiagnostics,
+      agentContextDiagnostics: _agentContextDiagnostics,
       ...counters
     } = merged
     const completed = {
@@ -4142,10 +4153,13 @@ class DispatchLoop {
       ticketDiagnostics,
       creationDiagnostics,
       dependencyDiagnostics,
+      agentContextDiagnostics,
       queued: _queued,
       ...counts
     } = report
     for (const line of janitorDiagnostics) this.routineDiagnostic(line)
+    for (const diagnostic of agentContextDiagnostics)
+      this.routineDiagnostic(formatAgentContextDiagnostic(diagnostic))
     for (const line of blockedDiagnostics) this.say(line)
     for (const line of ticketDiagnostics) this.routineDiagnostic(line)
     for (const line of creationDiagnostics) this.say(line)
@@ -4162,7 +4176,8 @@ class DispatchLoop {
       blockedDiagnostics.length > 0 ||
       ticketDiagnostics.length > 0 ||
       creationDiagnostics.length > 0 ||
-      dependencyDiagnostics.length > 0
+      dependencyDiagnostics.length > 0 ||
+      agentContextDiagnostics.length > 0
     if (reportedDiagnostic) return true
     // A tick that did something is worth a plain line. Interactive mode
     // suppresses both action counts and the every-10s idle noise.
