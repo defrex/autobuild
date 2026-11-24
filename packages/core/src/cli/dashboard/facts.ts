@@ -92,7 +92,52 @@ function raise(seqs: RoundSeqs, round: number, seq: number): void {
   seqs[key] = current === undefined ? seq : Math.max(current, seq)
 }
 
+/** Where one event bounds a phase interval: `open` for a `*.started`, `close`
+ * for its terminal event (`.completed`/`.verdict`/`.cancelled`), keyed by
+ * phase. Finalize post-steps (`finalize.step-completed`) have no `.started`
+ * and bound nothing. Shared with the build timeline (`timeline.ts`), so both
+ * pair phases from the same events. */
+export type PhaseBoundary = { open: string } | { close: string } | null
+
+export function phaseBoundary(ev: AbEvent): PhaseBoundary {
+  switch (ev.type) {
+    case 'plan.started':
+      return { open: 'plan' }
+    case 'plan.completed':
+      return { close: 'plan' }
+    case 'plan-review.started':
+      return { open: 'plan-review' }
+    case 'plan-review.verdict':
+      return { close: 'plan-review' }
+    case 'implement.started':
+      return { open: 'implement' }
+    case 'implement.completed':
+      return { close: 'implement' }
+    case 'code-review.started':
+      return { open: 'code-review' }
+    case 'code-review.verdict':
+      return { close: 'code-review' }
+    case 'verify.started':
+      return { open: verifyPhase(ev.payload.step) }
+    case 'verify.cancelled':
+    case 'verify.completed':
+      return { close: verifyPhase(ev.payload.step) }
+    case 'finalize.started':
+      return { open: 'finalize' }
+    case 'finalize.completed':
+      return { close: 'finalize' }
+    case 'reconcile.started':
+      return { open: 'reconcile' }
+    case 'reconcile.completed':
+      return { close: 'reconcile' }
+    default:
+      return null
+  }
+}
+
 function foldInterval(intervals: Record<string, PhaseTiming>, ev: AbEvent): void {
+  const boundary = phaseBoundary(ev)
+  if (boundary === null) return
   const ms = Date.parse(ev.ts)
   const get = (key: string): PhaseTiming => {
     let t = intervals[key]
@@ -102,67 +147,18 @@ function foldInterval(intervals: Record<string, PhaseTiming>, ev: AbEvent): void
     }
     return t
   }
-  const open = (key: string): void => {
-    get(key).open = { start: ms, startSeq: ev.seq }
-  }
-  const close = (key: string): void => {
-    const t = get(key)
-    if (t.open === undefined) return
-    t.closed.push({ start: t.open.start, end: ms, startSeq: t.open.startSeq })
-    delete t.open
-  }
   // Each `*.started` opens an interval for its phase key and its terminal event
-  // (`.completed`/`.verdict`) closes it. A second `*.started` while one is still
-  // open REPLACES the open start — a §15.6-C cross-sandbox re-run starts the
-  // phase afresh, so the crashed attempt contributes nothing. Finalize
-  // post-steps (`finalize.step-completed`) have no `.started` and no interval.
-  switch (ev.type) {
-    case 'plan.started':
-      open('plan')
-      break
-    case 'plan.completed':
-      close('plan')
-      break
-    case 'plan-review.started':
-      open('plan-review')
-      break
-    case 'plan-review.verdict':
-      close('plan-review')
-      break
-    case 'implement.started':
-      open('implement')
-      break
-    case 'implement.completed':
-      close('implement')
-      break
-    case 'code-review.started':
-      open('code-review')
-      break
-    case 'code-review.verdict':
-      close('code-review')
-      break
-    case 'verify.started':
-      open(verifyPhase(ev.payload.step))
-      break
-    case 'verify.cancelled':
-    case 'verify.completed':
-      close(verifyPhase(ev.payload.step))
-      break
-    case 'finalize.started':
-      open('finalize')
-      break
-    case 'finalize.completed':
-      close('finalize')
-      break
-    case 'reconcile.started':
-      open('reconcile')
-      break
-    case 'reconcile.completed':
-      close('reconcile')
-      break
-    default:
-      break
+  // closes it. A second `*.started` while one is still open REPLACES the open
+  // start — a §15.6-C cross-sandbox re-run starts the phase afresh, so the
+  // crashed attempt contributes nothing.
+  if ('open' in boundary) {
+    get(boundary.open).open = { start: ms, startSeq: ev.seq }
+    return
   }
+  const t = get(boundary.close)
+  if (t.open === undefined) return
+  t.closed.push({ start: t.open.start, end: ms, startSeq: t.open.startSeq })
+  delete t.open
 }
 
 export const dashboardFactsReducer = defineReducer<DashboardFacts, AbEvent, DashboardFacts>({

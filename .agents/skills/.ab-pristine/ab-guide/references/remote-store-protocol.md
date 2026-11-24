@@ -534,7 +534,7 @@ client version window are unchanged.
 
 | Scope | Reducers with no arguments |
 | --- | --- |
-| Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `pinnedAssets`, `buildDelegation` |
+| Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `buildTimeline`, `pinnedAssets`, `buildDelegation` |
 | Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `hostedHarvestAuthority`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
 
 | Reducer | Scope | Required arguments |
@@ -578,6 +578,38 @@ credentials. Adapter snapshot APIs reject the same names. Ordinary snapshot
 names retain their existing behavior. The value cache key format is versioned;
 checkpoints from the former publicly writable format are ignored and rebuilt
 from the log after upgrading.
+
+### Rollup values
+
+`POST /repos/{repo}/rollup-values` answers a derived reducer: a value across the
+repository's builds. The body is a named-value request of at most
+4 KiB, whose optional `read` record carries read-time arguments:
+
+```json
+{"reducer":"stepDurations","args":{"outcome":"all"},"read":{"window":"30d"}}
+```
+
+- `args` are key arguments: each combination, after defaults, is its own
+  rollup. `read` shapes only the finished value and never creates a key.
+  Named-value requests that carry `read` are `400 validation`.
+- The response is the strict envelope `200 {"version", "cursor", "value"}`.
+  `cursor` is always `0`; `value.position` names the repository change
+  position the answer reflects.
+- The server advances the rollup by the builds changed since its saved
+  position, serialized per key, and answers canonically. The client sends one
+  request and never reconstructs the value from events, the changed-builds
+  feed or build values.
+- Rollups have no released projection catalog. A client requires the server's
+  `version` to equal its own; a different version, an absent route (`404` or
+  `405` from an older server), an invalid envelope or a value outside the
+  rollup's schema raises `ReducerValueIncompatibilityError`.
+- Unknown rollup names, invalid arguments and extra fields are
+  `400 validation`. An unknown repository answers the empty value and creates
+  nothing. The operation is read-only authority, like `reducer-values`.
+
+| Rollup | Key arguments | Read-time arguments | Value |
+| --- | --- | --- | --- |
+| `stepDurations` | `outcome`: `merged` (default) or `all`; `kind`: `leaf` (default), `node` or `all` | `window`: `24h`, `7d` (default), `30d` or `all` | `{"position": string, "window": string, "steps": [{"step", "count", "meanMs", "p50Ms", "p90Ms", "p99Ms", "totalMs"}]}`, steps in pipeline order with waits last |
 
 ### Reducer snapshots
 
@@ -718,11 +750,11 @@ artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
 repository to exist. An unknown repository returns `404 not-found` — with one
 carve-out: the build-record reads of this section (`change-position`,
-`builds`, `changed-builds`, `build-page` and `build-digests`) are keyed to
-build records, not the repository journal record, so they authorize the
-project credential but answer `200` (possibly empty) even for an unknown
-repository, a repository without a journal record, or a repository without
-builds.
+`builds`, `changed-builds`, `build-page`, `build-digests` and
+`rollup-values`) are keyed to build records, not the repository journal
+record, so they authorize the project credential but answer `200` (possibly
+empty) even for an unknown repository, a repository without a journal record,
+or a repository without builds.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
@@ -741,6 +773,7 @@ builds.
 | `listBuildsForRepo` | `GET /repos/{repo}/builds` | none | `200` + `BuildRecord[]` ordered by creation time, then slug |
 | `listBuildsChangedSince` | `GET /repos/{repo}/changed-builds?since={p}` | required `since`, a canonical unsigned decimal no greater than 9223372036854775807; anything else is `400 validation` | `200 {"position": string, "builds": [{"slug": string, "position": string}]}`: the builds whose latest change position is greater than `since`, ascending by position and each once, with the repository head read in the same snapshot. Reads no event rows. An unknown repository answers `{"position": "0", "builds": []}` |
 | `listBuildsPage` | `GET /repos/{repo}/build-page?limit={n}&cursor={c}` | optional `limit`, a decimal integer from 1 to 100 (default 25); optional `cursor`, a `next` value this server issued. A bad limit or a malformed cursor is `400 validation` | `200 {"builds": BuildRecord[], "next": string \| null}`: one page newest first by creation time, slug descending to break ties, with records as `builds` returns them; `next` is `null` on the last page. A page's cost does not depend on the repository's build count |
+| `getReducerValue` (rollup scope) | `POST /repos/{repo}/rollup-values` | a named-value request with optional `read`; see [Rollup values](#rollup-values) | `200 {"version", "cursor": 0, "value"}`: the canonical rollup; an unknown repository answers the empty value |
 | `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |

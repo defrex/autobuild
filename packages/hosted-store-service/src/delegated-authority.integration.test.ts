@@ -1736,6 +1736,15 @@ test('a build runner issues a write-only judge grant bound to one judge session'
       )
     ).status,
   ).toBe(403)
+  expect(
+    (
+      await f.server.fetch(
+        request(`/repos/${encodeURIComponent(A)}/rollup-values`, judge, {
+          reducer: 'stepDurations',
+        }),
+      )
+    ).status,
+  ).toBe(403)
 
   // Every other route family is refused too, read or write: snapshots, session
   // and stream routes, and further credential issuance for any target.

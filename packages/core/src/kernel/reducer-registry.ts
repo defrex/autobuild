@@ -65,6 +65,7 @@ import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openTickReducer } from '../processes/tick-state'
 import { dashboardFactsReducer } from '../cli/dashboard/facts'
+import { buildTimelineReducer } from '../cli/dashboard/timeline'
 import { buildDigestReducer, type DigestEventRow } from '../store/digest'
 import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-state-events'
 import { sessionReducer } from '../store/session-reducer'
@@ -83,6 +84,8 @@ import {
   pendingPrAttachmentReclaimsReducer,
 } from './pr-attachments'
 import { buildReducer } from './reducer'
+import type { AnyRollupDefinition } from './rollup'
+import { stepDurationsRollup } from './step-durations'
 
 export interface RegisteredReducer {
   valueRead: ValueCatalogEntry | { excluded: string }
@@ -200,6 +203,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     reducer: dashboardFactsReducer,
     covers: ['phaseIntervals', 'projectSessions'],
   },
+  buildTimeline: { reducer: buildTimelineReducer, covers: [] },
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },
   forgeHealthValue: { reducer: optionalValue(forgeHealthReducer), covers: [] },
@@ -399,6 +403,14 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
     },
   ]),
 )
+
+/** Derived reducers (SPEC §7.7): repository rollups over a registered build
+ * reducer's saved values, answered for a `{kind: 'rollup', repo}` scope. They
+ * fold no events, so they sit beside `REDUCERS` rather than in it; their
+ * versions still derive from the revision ledger and their build reducer's. */
+export const ROLLUPS: Record<string, AnyRollupDefinition> = {
+  stepDurations: stepDurationsRollup,
+}
 
 /** Event-array functions that are deliberately not reducers, each with the
  * concrete reason. */

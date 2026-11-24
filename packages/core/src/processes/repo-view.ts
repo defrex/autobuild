@@ -376,7 +376,10 @@ export class RepoViewStore implements BuildStore {
   getRepositoryTail: BuildStore['getRepositoryTail']
   getStreamSeed: BuildStore['getStreamSeed']
   getHarvestHistoryPage: BuildStore['getHarvestHistoryPage']
-  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+  getReducerValue(
+    scope: import('../store/snapshots').ReducerValueScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
     return this.backing.getReducerValue(scope, request)
   }
   getReducerSnapshot(

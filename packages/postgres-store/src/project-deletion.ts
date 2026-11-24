@@ -158,6 +158,7 @@ export class PostgresProjectDeletion implements ProjectDeletion {
     await tx`DELETE FROM stream_seed_generations WHERE (scope_kind='repo' AND scope_key=${repo}) OR (scope_kind='build' AND scope_key IN (SELECT slug FROM builds WHERE repo=${repo}))`
     await tx`DELETE FROM reducer_snapshots WHERE
         (scope_kind = 'repo' AND scope_key = ${repo}) OR
+        (scope_kind IN ('rollup', 'rollup-lease') AND scope_key = ${repo}) OR
         (scope_kind = 'build' AND scope_key IN (SELECT slug FROM builds WHERE repo = ${repo})) OR
         (scope_kind = 'session' AND scope_key IN (SELECT id FROM sessions WHERE repo = ${repo}))`
     await tx`DELETE FROM sessions WHERE repo = ${repo}`
