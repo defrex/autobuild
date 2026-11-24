@@ -544,8 +544,9 @@ describe('prompt teardown of held reads', () => {
   })
 })
 
-// Building the 100,000-event fixture and exercising real HTTP can exceed the
-// default five-second limit; the harness asserts read costs independently.
+// Building the 100,000-event and 100,000-build fixtures and exercising real
+// HTTP can exceed the default five-second limit; the harness asserts read
+// costs independently.
 test('hosted frontend read budget stays flat across thousands of journal events', async () => {
   const { dispatchReadBudget } = await import('@defrex/autobuild/testing')
   const backing = new MemoryBuildStore()
@@ -585,4 +586,4 @@ test('hosted frontend read budget stays flat across thousands of journal events'
   } finally {
     server.stop()
   }
-}, 15_000)
+}, 30_000)
