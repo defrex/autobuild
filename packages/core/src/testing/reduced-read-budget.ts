@@ -7761,6 +7761,43 @@ export interface RollupReadCost {
   feedFrom: string[]
 }
 
+/** One measured rollup read on a memory store: its answer and cost. Every
+ * event read it makes is appended to `reads`. */
+async function measureRollupRead(
+  store: import('../store/memory').MemoryBuildStore,
+  scope: { kind: 'rollup'; repo: string },
+  request: ReducerValueRequestLike,
+  reads: { slug: string; seq: number }[],
+): Promise<{ value: unknown; cost: RollupReadCost }> {
+  const feedReads = Reflect.get(store, 'feedReads') as { examined: number }
+  feedReads.examined = 0
+  const feedFrom: string[] = []
+  const feed = store.listBuildsChangedSince.bind(store)
+  Reflect.set(store, 'listBuildsChangedSince', (target: string, since: string) => {
+    feedFrom.push(since)
+    return feed(target, since)
+  })
+  let value: unknown
+  try {
+    const metrics = await measureStoreReads(store, async () => {
+      value = (await store.getReducerValue(scope, request)).value
+    })
+    reads.push(...metrics.read)
+    return {
+      value,
+      cost: {
+        calls: metrics.calls,
+        rows: metrics.rows,
+        repoRows: metrics.repoRows,
+        examined: feedReads.examined,
+        feedFrom,
+      },
+    }
+  } finally {
+    Reflect.deleteProperty(store, 'listBuildsChangedSince')
+  }
+}
+
 /**
  * The `stepDurations` rollup costs what changed (RFC 0007 §9, SPEC §7.7): at
  * 100 and at 10,000 builds, an idle read reads zero event rows and makes no
@@ -7816,35 +7853,8 @@ export async function rollupReadBudget(): Promise<
       })
     }
     const reads: { slug: string; seq: number }[] = []
-    const measure = async (request: ReducerValueRequestLike) => {
-      const feedReads = Reflect.get(store, 'feedReads') as { examined: number }
-      feedReads.examined = 0
-      const feedFrom: string[] = []
-      const feed = store.listBuildsChangedSince.bind(store)
-      Reflect.set(store, 'listBuildsChangedSince', (target: string, since: string) => {
-        feedFrom.push(since)
-        return feed(target, since)
-      })
-      let value: unknown
-      try {
-        const metrics = await measureStoreReads(store, async () => {
-          value = (await store.getReducerValue(scope, request)).value
-        })
-        reads.push(...metrics.read)
-        return {
-          value,
-          cost: {
-            calls: metrics.calls,
-            rows: metrics.rows,
-            repoRows: metrics.repoRows,
-            examined: feedReads.examined,
-            feedFrom,
-          } satisfies RollupReadCost,
-        }
-      } finally {
-        Reflect.deleteProperty(store, 'listBuildsChangedSince')
-      }
-    }
+    const measure = (request: ReducerValueRequestLike) =>
+      measureRollupRead(store, scope, request, reads)
     const request = { reducer: 'stepDurations', read: { window: 'all' } }
     const first = await measure(request)
     const count = (value: unknown) =>
@@ -7921,6 +7931,161 @@ export async function rollupReadBudget(): Promise<
 
 type ReducerValueRequestLike = import('../store/reducer-values').ReducerValueRequest
 
+/**
+ * The `buildRoster` rollup (SPEC §7.7) costs O(live builds + 50) from a fresh
+ * process, not O(all builds): at 100 and at 100,000 builds (5 live, the rest
+ * finished, the newest 50 completions identical at both sizes), an idle read
+ * and a fresh process's read make no feed query and read zero event rows; one
+ * completion and one new build read only their new rows through one feed
+ * query; each build's log is reduced once, ever; and the saved accumulator
+ * holds exactly 50 finished and 5 live entries, byte for byte the same size at
+ * both sizes. Returns each size's measured costs.
+ */
+export async function buildRosterReadBudget(): Promise<
+  Record<
+    number,
+    {
+      first: RollupReadCost
+      idle: RollupReadCost
+      fresh: RollupReadCost
+      oneCompletion: RollupReadCost
+      newBuild: RollupReadCost
+      accBytes: number
+    }
+  >
+> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { KeyedMutex, resolveRollupValue } = await import('../store/rollups')
+  const { manualClock } = await import('./fixed')
+  type Roster = import('../kernel/build-roster').BuildRosterValue
+  type RosterAcc = import('../kernel/build-roster').BuildRosterAcc
+  type Store = import('../store/memory').MemoryBuildStore
+  const repo = 'roster-budget/repo'
+  const scope = { kind: 'rollup', repo } as const
+  const request = { reducer: 'buildRoster' }
+  const end = Date.parse('2026-11-24T00:00:00.000Z')
+  const minute = 60_000
+  // Finished rank 0 is the newest completion, at `end`.
+  const done = (rank: number) => `done-${String(rank).padStart(6, '0')}`
+  const live = (i: number) => `live-${i}`
+  // Seq 1 of every build, as `createBuild` writes it in production.
+  const create = (store: Store, slug: string) =>
+    store.createBuild({
+      slug,
+      repo,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: { source: 'file', id: slug, title: slug }, repo, baseBranch: 'main' },
+      },
+    })
+  const results: Awaited<ReturnType<typeof buildRosterReadBudget>> = {}
+  for (const n of [100, 100_000]) {
+    const clock = manualClock(new Date(end).toISOString())
+    const store = new MemoryBuildStore({ clock })
+    const finished = n - 5
+    for (let rank = finished - 1; rank >= 0; rank--) {
+      clock.set(new Date(end - rank * minute).toISOString())
+      await create(store, done(rank))
+      // Every fourth build aborts; the rest merge.
+      await (rank % 4 === 3
+        ? store.append(done(rank), { actor: KERNEL, type: 'build.aborted', payload: {} })
+        : store.append(done(rank), {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          }))
+    }
+    for (let i = 0; i < 5; i++) {
+      clock.advance(minute)
+      await create(store, live(i))
+    }
+    const reads: { slug: string; seq: number }[] = []
+    const measure = async () => {
+      const { value, cost } = await measureRollupRead(store, scope, request, reads)
+      return { value: value as Roster, cost }
+    }
+    const first = await measure()
+    expect(first.value.live.map((entry) => entry.slug)).toEqual([0, 1, 2, 3, 4].map(live))
+    expect(first.value.finished.map((entry) => entry.slug)).toEqual(
+      Array.from({ length: 10 }, (_, rank) => done(rank)),
+    )
+    const idle = await measure()
+    expect(idle.value).toEqual(first.value)
+
+    // A fresh process carries no in-memory state: only the saved rows.
+    Reflect.set(store, 'rollupLocks', new KeyedMutex())
+    const fresh = await measure()
+    expect(fresh.value).toEqual(first.value)
+
+    clock.advance(minute)
+    await store.append(live(2), {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    const oneCompletion = await measure()
+    expect(oneCompletion.value.finished[0]).toEqual({
+      slug: live(2),
+      kind: 'work',
+      outcome: 'merged',
+      completedAt: clock().toISOString(),
+    })
+    expect(oneCompletion.value.live).toHaveLength(4)
+
+    clock.advance(minute)
+    await create(store, live(5))
+    const newBuild = await measure()
+    expect(newBuild.value.live.map((entry) => entry.slug)).toEqual([0, 1, 3, 4, 5].map(live))
+    expect(newBuild.value.finished).toHaveLength(10)
+
+    // Each build's log is reduced once, ever, across every read above.
+    const firstRows = new Map<string, number>()
+    for (const read of reads)
+      if (read.seq === 1) firstRows.set(read.slug, (firstRows.get(read.slug) ?? 0) + 1)
+    expect(firstRows.size).toBe(n + 1)
+    expect([...firstRows.values()].every((times) => times === 1)).toBe(true)
+
+    expect(first.cost.feedFrom).toEqual(['0'])
+    for (const cost of [idle.cost, fresh.cost]) {
+      expect(cost.rows).toBe(0)
+      expect(cost.repoRows).toBe(0)
+      expect(cost.feedFrom).toEqual([])
+      expect(cost.calls.listBuildsChangedSince ?? 0).toBe(0)
+    }
+    expect(oneCompletion.cost.rows).toBe(1)
+    expect(oneCompletion.cost.feedFrom).toHaveLength(1)
+    expect(newBuild.cost.rows).toBe(1)
+    expect(newBuild.cost.feedFrom).toHaveLength(1)
+
+    // The saved value is bounded by the live builds and the history cap.
+    const { key } = resolveRollupValue(repo, request)
+    const snapshots: Map<string, { state: { acc: RosterAcc } }> = Reflect.get(store, 'snapshots')
+    const row = snapshots.get(`rollup:${repo}\u0000${key}`)!
+    expect(row.state.acc.finished).toHaveLength(50)
+    expect(Object.keys(row.state.acc.live)).toHaveLength(5)
+    results[n] = {
+      first: first.cost,
+      idle: idle.cost,
+      fresh: fresh.cost,
+      oneCompletion: oneCompletion.cost,
+      newBuild: newBuild.cost,
+      accBytes: JSON.stringify(row.state.acc).length,
+    }
+  }
+  const flat = ({ calls, rows, repoRows, examined }: RollupReadCost) => ({
+    calls,
+    rows,
+    repoRows,
+    examined,
+  })
+  const [small, large] = [results[100]!, results[100_000]!]
+  for (const axis of ['idle', 'fresh', 'oneCompletion', 'newBuild'] as const)
+    expect(flat(large[axis])).toEqual(flat(small[axis]))
+  expect(large.accBytes).toBe(small.accBytes)
+  return results
+}
+
 /** Fresh remote clients get the server's canonical rollup in one request each
  * and never make the backing store read event rows after its first
  * computation. Callers instrument the backing store's event rows and count
@@ -7932,9 +8097,15 @@ export async function rollupRemoteReadBudget(opts: {
   reset: () => void
   eventRows: () => number
   requests: () => string[]
+  /** The rollup read; defaults to every build's step durations. */
+  request?: ReducerValueRequestLike
 }): Promise<void> {
   const scope = { kind: 'rollup', repo: opts.repo } as const
-  const request = { reducer: 'stepDurations', args: { outcome: 'all' }, read: { window: 'all' } }
+  const request = opts.request ?? {
+    reducer: 'stepDurations',
+    args: { outcome: 'all' },
+    read: { window: 'all' },
+  }
   const { catalogIdentity: _, ...expected } = await opts.backing.getReducerValue(scope, request)
   opts.reset()
   const before = opts.requests().length

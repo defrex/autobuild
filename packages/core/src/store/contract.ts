@@ -10,6 +10,11 @@ import { resolveReducerValue, type JsonValue } from './reducer-values'
 import { resolveRollupValue } from './rollups'
 import { buildTimelineReducer } from '../cli/dashboard/timeline'
 import { stepDurationsRollup, type StepDurationsValue } from '../kernel/step-durations'
+import {
+  buildRosterEntryReducer,
+  buildRosterRollup,
+  type BuildRosterValue,
+} from '../kernel/build-roster'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
 import { MemoryBuildStore } from './memory'
 import { BuildFeedValidationError, compareChangePositions } from './build-feed'
@@ -1990,6 +1995,100 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(answer.value).toEqual({ position: '0', window: '7d', steps: [] })
           expect(await store.getRepo('rollup/nobody')).toBeNull()
           await expect(store.getReducerValue(scope, { reducer: 'unknownRollup' })).rejects.toThrow()
+        })
+      })
+
+      describe('buildRoster', () => {
+        const roster = { reducer: 'buildRoster' }
+        const read = async (store: BuildStore) =>
+          (await store.getReducerValue(scope, roster)).value as unknown as BuildRosterValue
+        const fold = async (store: BuildStore, slugs: string[], now: Date) => {
+          const acc = buildRosterRollup.initial()
+          for (const slug of slugs) {
+            const entry = buildRosterEntryReducer.reduce(await store.getEvents(slug))
+            buildRosterRollup.add(acc, buildRosterRollup.contribute(entry, {}, now, slug))
+          }
+          return buildRosterRollup.finish(acc, {}, now, await store.getRepoChangePosition(repo))
+        }
+        const finish = (store: BuildStore, slug: string, type: 'merged' | 'aborted') =>
+          type === 'aborted'
+            ? store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+            : store.append(slug, {
+                actor: DISPATCHER,
+                type: 'build.completed',
+                payload: { outcome: 'merged' },
+              })
+
+        test('lists live and finished builds and moves a build when it finishes', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const slugs = ['roster-a', 'roster-b', 'roster-c']
+            for (const slug of slugs) {
+              await store.createBuild({ slug, repo })
+              clock.advance(60_000)
+            }
+            await finish(store, 'roster-a', 'merged')
+            clock.advance(60_000)
+            await finish(store, 'roster-b', 'aborted')
+            const first = await read(store)
+            expect(first).toEqual(await fold(store, slugs, clock()))
+            expect(first.live.map((entry) => entry.slug)).toEqual(['roster-c'])
+            expect(first.finished.map((entry) => [entry.slug, entry.outcome])).toEqual([
+              ['roster-b', 'aborted'],
+              ['roster-a', 'merged'],
+            ])
+            clock.advance(60_000)
+            await finish(store, 'roster-c', 'merged')
+            await store.createBuild({ slug: 'roster-d', repo })
+            const next = await read(store)
+            expect(next.finished[0]).toEqual({
+              slug: 'roster-c',
+              kind: 'work',
+              outcome: 'merged',
+              completedAt: clock().toISOString(),
+            })
+            expect(next.live.map((entry) => entry.slug)).toEqual(['roster-d'])
+            expect(next).toEqual(await fold(store, [...slugs, 'roster-d'], clock()))
+            // Idle: the same answer again.
+            expect(await read(store)).toEqual(next)
+          })
+        })
+
+        test('the latest terminal fact wins', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            await store.createBuild({ slug: 'roster-late', repo })
+            await finish(store, 'roster-late', 'merged')
+            await read(store)
+            clock.advance(60_000)
+            await finish(store, 'roster-late', 'aborted')
+            expect((await read(store)).finished).toEqual([
+              {
+                slug: 'roster-late',
+                kind: 'work',
+                outcome: 'aborted',
+                completedAt: clock().toISOString(),
+              },
+            ])
+          })
+        })
+
+        test('answers the 10 newest finished builds', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const slugs = Array.from(
+              { length: 12 },
+              (_, i) => `roster-${String(i).padStart(2, '0')}`,
+            )
+            for (const slug of slugs) {
+              await store.createBuild({ slug, repo })
+              clock.advance(60_000)
+              await finish(store, slug, 'merged')
+            }
+            const answer = await read(store)
+            expect(answer.live).toEqual([])
+            expect(answer.finished.map((entry) => entry.slug)).toEqual(slugs.slice(2).reverse())
+          })
         })
       })
 
