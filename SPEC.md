@@ -5116,6 +5116,17 @@ however, a runner honors an engine-selected pause or abort acknowledgement befor
 setup-failure gating, even while that escalation is open. This control-only path
 executes no setup, appends no `runner.attached`, and starts no phase or session.
 Resume and all decisions that use the workspace still require successful setup.
+Setup is keyed to the base the runner prepared: when a restack, wait-resume
+advance or completed reconcile moves the build's verify diff base (a node's
+integration cycle parent) inside one runner process, the runner reruns setup
+before the next workspace-using decision (a non-reconcile phase, check, verify
+stage, finalize step or measurement). Every base move counts as a dependency
+change, because the kernel cannot see which files setup reads; agent commits do
+not move the base, and a reconcile replay in progress is not prepared. A
+post-restack failure follows the same path as an attach failure: it appends
+`runner.setup-failed` with the next attempt, counts toward
+`policy.maxSetupAttempts`, ends the runner unattached, and only a later
+successful setup's `runner.attached {resumedFromSeq}` clears it.
 The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
 **D — runner loss and sandbox death:** local git-worktrees first attempt the
@@ -6006,7 +6017,7 @@ automatic = true                # immediate/60-second target checks; false requi
 #releaseId = 123456
 
 [commands]                      # deterministic verbs the kernel may run
-setup = "bun install"           # after provision / sandbox rehydrate (§15.6-C)
+setup = "bun install"           # at attach, and after a restack moves the base (§15.6-C)
 typecheck = "bun run type-check"
 test = "bun run test"
 publish = "bun run publish"
