@@ -68,7 +68,17 @@ import {
   type SessionEventWrite,
 } from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
-import type { ReducerSnapshot, SnapshotScope } from '../snapshots'
+import type { ReducerSnapshot, ReducerValueScope, RollupScope, SnapshotScope } from '../snapshots'
+import {
+  KeyedMutex,
+  ROLLUP_LEASE_MS,
+  ROLLUP_LEASE_WAIT_MS,
+  RollupLeaseLostError,
+  RollupLeaseTimeoutError,
+  readRollupValue,
+  type RollupAdvance,
+  type RollupStorage,
+} from '../rollups'
 import { validateCreatedEvent } from '../new-build'
 import { createSessionScopedStore } from '../session-handle'
 import {
@@ -1662,7 +1672,11 @@ export class SqliteBuildStore implements BuildStore {
     return row?.tail
   }
 
-  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+  async getReducerValue(
+    scope: ReducerValueScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    if (scope.kind === 'rollup') return readRollupValue(scope, request, this.rollupStorage(scope))
     // Reject invalid requests before touching storage.
     resolveReducerValue(scope, request)
     return readReducerValue(scope, request, {
@@ -1741,6 +1755,180 @@ export class SqliteBuildStore implements BuildStore {
         })()
       },
     })
+  }
+
+  /** Same-instance readers queue here before contending on the lease row. */
+  private readonly rollupLocks = new KeyedMutex()
+
+  /** The rollup engine's port over `reducer_snapshots` (SPEC §7.7). The
+   * per-key serialization is a lease row `('rollup-lease', repo, key)` that
+   * every instance and process sharing the database contends on: its scope
+   * kind is neither `build` nor `repo`, so the public snapshot API cannot
+   * address it. A crashed holder's lease expires by the store clock; its
+   * uncommitted work is lost, never half-applied. */
+  private rollupStorage(scope: RollupScope): RollupStorage {
+    const repo = scope.repo
+    const head = () => this.getRepoChangePosition(repo)
+    const read = async (key: string) => {
+      const row = this.sqlite
+        .query<{ version: number; state: string }, [string, string]>(
+          "SELECT version, state FROM reducer_snapshots WHERE scope_kind='rollup' AND scope_key=?1 AND reducer=?2",
+        )
+        .get(repo, key)
+      if (row === null) return null
+      let state: unknown = null
+      try {
+        state = JSON.parse(row.state)
+      } catch {
+        /* malformed row: a miss */
+      }
+      return { version: row.version, state, token: row.state }
+    }
+    const leaseRow = (key: string) =>
+      this.sqlite
+        .query<{ state: string }, [string, string]>(
+          "SELECT state FROM reducer_snapshots WHERE scope_kind='rollup-lease' AND scope_key=?1 AND reducer=?2",
+        )
+        .get(repo, key)
+    const leaseHolder = (state: string | undefined): { holder?: string; expiresAt?: number } => {
+      try {
+        return state === undefined ? {} : JSON.parse(state)
+      } catch {
+        return {}
+      }
+    }
+    const writeLease = (key: string, holder: string, observed: string | null): boolean => {
+      const state = JSON.stringify({ holder, expiresAt: this.clock().getTime() + ROLLUP_LEASE_MS })
+      const now = this.clock().toISOString()
+      if (observed === null)
+        return (
+          this.sqlite
+            .query(
+              `INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+               VALUES ('rollup-lease', ?1, ?2, 1, 0, ?3, ?4) ON CONFLICT DO NOTHING`,
+            )
+            .run(repo, key, state, now).changes > 0
+        )
+      return (
+        this.sqlite
+          .query(
+            "UPDATE reducer_snapshots SET state=?3, updated_at=?4 WHERE scope_kind='rollup-lease' AND scope_key=?1 AND reducer=?2 AND state=?5",
+          )
+          .run(repo, key, state, now, observed).changes > 0
+      )
+    }
+    /** Take the lease when free or expired by the store clock. */
+    const tryAcquire = (key: string, holder: string): boolean =>
+      this.writeTx(() => {
+        const row = leaseRow(key)
+        if (row === null) return writeLease(key, holder, null)
+        const { expiresAt } = leaseHolder(row.state)
+        if (typeof expiresAt === 'number' && expiresAt > this.clock().getTime()) return false
+        return writeLease(key, holder, row.state)
+      })
+    const holds = (key: string, holder: string): string | null => {
+      const row = leaseRow(key)
+      return row !== null && leaseHolder(row.state).holder === holder ? row.state : null
+    }
+    const advanceFor = (holder: string, renew: () => Promise<void>): RollupAdvance => ({
+      head,
+      read,
+      changed: (since) => this.listBuildsChangedSince(repo, since),
+      buildValue: async (slug, request) =>
+        this.snapshotTail({ kind: 'build', slug }) === undefined
+          ? null
+          : this.getReducerValue({ kind: 'build', slug }, request),
+      contributions: async (key, slugs) => {
+        const found = new Map<string, unknown>()
+        for (let i = 0; i < slugs.length; i += 500) {
+          const chunk = slugs.slice(i, i + 500)
+          const rows = this.sqlite
+            .query<{ scope_key: string; state: string }, string[]>(
+              `SELECT scope_key, state FROM reducer_snapshots WHERE scope_kind='build' AND reducer=?1 AND scope_key IN (${chunk.map((_, j) => `?${j + 2}`).join(',')})`,
+            )
+            .all(key, ...chunk)
+          for (const row of rows) {
+            try {
+              found.set(row.scope_key, JSON.parse(row.state))
+            } catch {
+              found.set(row.scope_key, null) // malformed: the engine recomputes
+            }
+          }
+        }
+        return found
+      },
+      commit: async (key, observed, row, contributionKey, writes) =>
+        this.writeTx(() => {
+          if (holds(key, holder) === null) return false
+          const stored = this.sqlite
+            .query<{ state: string }, [string, string]>(
+              "SELECT state FROM reducer_snapshots WHERE scope_kind='rollup' AND scope_key=?1 AND reducer=?2",
+            )
+            .get(repo, key)
+          if ((stored?.state ?? null) !== observed) return false
+          const now = this.clock().toISOString()
+          this.sqlite
+            .query(
+              `INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+               VALUES ('rollup', ?1, ?2, ?3, 0, ?4, ?5)
+               ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+                 version = excluded.version, cursor = 0, state = excluded.state, updated_at = excluded.updated_at`,
+            )
+            .run(repo, key, row.version, JSON.stringify(row.state), now)
+          const upsert = this.sqlite.query(
+            `INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+             VALUES ('build', ?1, ?2, ?3, 0, ?4, ?5)
+             ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+               version = excluded.version, cursor = 0, state = excluded.state, updated_at = excluded.updated_at`,
+          )
+          const remove = this.sqlite.query(
+            "DELETE FROM reducer_snapshots WHERE scope_kind='build' AND scope_key=?1 AND reducer=?2",
+          )
+          for (const [slug, contribution] of writes) {
+            if (contribution === null) remove.run(slug, contributionKey)
+            else upsert.run(slug, contributionKey, row.version, JSON.stringify(contribution), now)
+          }
+          return true
+        }),
+      renew,
+    })
+    return {
+      now: () => this.clock(),
+      buildReadConcurrency: 16,
+      head,
+      read,
+      serialize: (key, run) =>
+        this.rollupLocks.run(key, async () => {
+          const holder = crypto.randomUUID()
+          const started = performance.now()
+          let delay = 25
+          while (!tryAcquire(key, holder)) {
+            if (performance.now() - started > ROLLUP_LEASE_WAIT_MS)
+              throw new RollupLeaseTimeoutError(key)
+            await Bun.sleep(delay)
+            delay = Math.min(250, delay * 2)
+          }
+          try {
+            return await run(
+              advanceFor(holder, async () => {
+                const renewed = this.writeTx(() => {
+                  const observed = holds(key, holder)
+                  return observed !== null && writeLease(key, holder, observed)
+                })
+                if (!renewed) throw new RollupLeaseLostError(key)
+              }),
+            )
+          } finally {
+            this.writeTx(() =>
+              this.sqlite
+                .query(
+                  "DELETE FROM reducer_snapshots WHERE scope_kind='rollup-lease' AND scope_key=?1 AND reducer=?2 AND state=?3",
+                )
+                .run(repo, key, holds(key, holder) ?? ''),
+            )
+          }
+        }),
+    }
   }
 
   async getReducerSnapshot(

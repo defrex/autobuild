@@ -227,7 +227,8 @@ export const stepDurationsRollup: RollupDefinition<
   StepDurationArgs,
   StepDurationRead,
   StepDurationsAcc,
-  DayHistograms
+  DayHistograms,
+  StepDurationsValue
 > = {
   identity: 'stepDurations',
   version: reducerVersion('stepDurations', [buildTimelineReducer]),

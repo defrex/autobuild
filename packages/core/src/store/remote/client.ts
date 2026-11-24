@@ -54,10 +54,13 @@ import { prepareEventWrite as validateEventWrite } from '../../events/catalog'
 import { prepareRepositoryEventWrite as validateRepositoryEventWrite } from '../../events/repository'
 import {
   resolveReducerValue,
+  reducerValueRequestSchema,
   reducerValueSchema,
   type ReducerValueRequest,
   type ReducerValue,
 } from '../reducer-values'
+import { rollupEntry } from '../rollups'
+import type { ReducerValueScope, RollupScope } from '../snapshots'
 /**
  * RemoteBuildStore (SPEC §7.2 adapter 2): the client half of the remote
  * store — a full BuildStore over the wire protocol in protocol.ts. The
@@ -994,7 +997,11 @@ export class RemoteBuildStore implements BuildStore {
     ) as Promise<EventPage<RepositoryEvent>>
   }
 
-  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+  async getReducerValue(
+    scope: ReducerValueScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    if (scope.kind === 'rollup') return this.getRollupValue(scope, request)
     const { reducer } = resolveReducerValue(scope, request)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
     const response = await this.raw('POST', `${root}/reducer-values`, request, undefined, {
@@ -1041,6 +1048,56 @@ export class RemoteBuildStore implements BuildStore {
       version: result.version,
       cursor: result.cursor,
       value: (projected as { value: unknown }).value as ReducerValue['value'],
+      ...(identity === null ? {} : { catalogIdentity: identity }),
+    }
+  }
+
+  /** `POST …/rollup-values` (SPEC §7.7): one request, answered by the
+   * server's canonical rollup. The client never runs the engine and never
+   * falls back to the feed, build values or events. Rollups have no released
+   * projection catalog, so a version other than this client's, an absent
+   * route (an older server) or a value outside the rollup's schema is a typed
+   * `ReducerValueIncompatibilityError`. */
+  private async getRollupValue(
+    scope: RollupScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    const parsed = reducerValueRequestSchema.parse(request)
+    const def = rollupEntry(parsed.reducer)
+    // Reject invalid arguments before the network.
+    def.args.parse(parsed.args ?? {})
+    def.read.parse(parsed.read ?? {})
+    const response = await this.raw('POST', `${this.repoPath(scope.repo)}/rollup-values`, parsed)
+    const fail = (serverVersion: number | undefined, reason: string): never => {
+      throw new ReducerValueIncompatibilityError(
+        parsed.reducer,
+        scope,
+        def.version,
+        serverVersion,
+        reason,
+      )
+    }
+    if (response.status === 404 || response.status === 405)
+      fail(undefined, 'server does not serve rollups')
+    if (!response.ok) throw await this.toError(response)
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+      fail(undefined, 'invalid rollup envelope: expected JSON')
+    }
+    const envelope = reducerValueSchema.safeParse(body)
+    if (!envelope.success) fail(undefined, `invalid rollup envelope: ${envelope.error.message}`)
+    const result = envelope.data!
+    if (result.version !== def.version) fail(result.version, 'rollup version differs')
+    const value = def.valueSchema.safeParse(result.value)
+    if (!value.success) fail(result.version, `invalid rollup value: ${value.error.message}`)
+    const identity = response.headers.get(CATALOG_IDENTITY_HEADER)
+    return {
+      version: result.version,
+      cursor: result.cursor,
+      value: result.value,
       ...(identity === null ? {} : { catalogIdentity: identity }),
     }
   }

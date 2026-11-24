@@ -15,7 +15,13 @@
  */
 import type { z } from 'zod'
 
-export interface RollupDefinition<Args = unknown, Read = unknown, Acc = unknown, C = unknown> {
+export interface RollupDefinition<
+  Args = unknown,
+  Read = unknown,
+  Acc = unknown,
+  C = unknown,
+  Value = unknown,
+> {
   /** The ledger name; revisions go through `bun tools/reducer-revision.ts`. */
   readonly identity: string
   /** Derived from the identity and the build reducer's version, never edited. */
@@ -47,8 +53,8 @@ export interface RollupDefinition<Args = unknown, Read = unknown, Acc = unknown,
   prune(acc: Acc, now: Date): boolean
   /** The answer. Applies retention on its own, so an unpruned accumulator
    * never reports an expired entry. */
-  finish(acc: Acc, read: Read, now: Date, position: string): unknown
+  finish(acc: Acc, read: Read, now: Date, position: string): Value
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: the rollup table is heterogeneous
-export type AnyRollupDefinition = RollupDefinition<any, any, any, any>
+export type AnyRollupDefinition = RollupDefinition<any, any, any, any, any>

@@ -1,5 +1,5 @@
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
-import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+import type { ReducerSnapshot, ReducerValueScope, SnapshotScope } from './snapshots'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -234,7 +234,7 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
       return Promise.reject(new SessionScopeError(scope, 'getRepoHighWater', repo))
     },
     async getReducerValue(
-      target: SnapshotScope,
+      target: ReducerValueScope,
       _request: ReducerValueRequest,
     ): Promise<ReducerValue> {
       return Promise.reject(
