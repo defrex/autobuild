@@ -148,6 +148,10 @@ export class FakeGitHubIssues {
   dropAssignees = false
   /** When false, UI labelling leaves `updated_at` untouched. */
   labelsBumpUpdatedAt = true
+  /** GitHub's `issue_dependencies_summary` lags the edges by seconds; when
+   * true the summary reports zero while the dependency list holds every
+   * edge. */
+  staleDependencySummary = false
   searchLagMs: number
   /** The login `transport`'s credential belongs to; null has no user (an App
    * installation token). */
@@ -1110,9 +1114,9 @@ export class FakeGitHubIssues {
           : `${API}/repos/${issue.parent.split('#')[0]}/issues/${issue.parent.split('#')[1]}`,
       sub_issues_summary: this.subIssueSummary(this.keyOf(issue)),
       issue_dependencies_summary: {
-        blocked_by: issue.blockedBy.length,
+        blocked_by: this.staleDependencySummary ? 0 : issue.blockedBy.length,
         blocking: 0,
-        total_blocked_by: issue.blockedBy.length,
+        total_blocked_by: this.staleDependencySummary ? 0 : issue.blockedBy.length,
         total_blocking: 0,
       },
     }

@@ -98,6 +98,18 @@ test('a merged build closes its issue as completed, with no state label', async 
   expectNoCounts(github)
 }, 30_000)
 
+test('a blocker behind a lagging dependency summary holds the issue until it resolves', async () => {
+  const { h, github, issue } = await githubHarness()
+  const blocker = github.fileIssue({ title: 'Prerequisite' })
+  github.staleDependencySummary = true
+  github.uiAddDependency(issue, blocker)
+  expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 0, dependencyBlocked: 1 })
+  expect(github.issue(issue)?.labels).toEqual(['autobuild', 'autobuild:ready'])
+  github.uiClose(blocker, 'completed')
+  h.clock.advance(60_000)
+  expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 1 })
+})
+
 test('a PR closed without merging leaves the issue open in triage', async () => {
   const { h, github, issue } = await githubHarness()
   await openPr(h, github, issue)

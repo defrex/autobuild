@@ -138,10 +138,13 @@ exported labels and never adds them.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
-Direct Linear and GitHub record blockers after creating the issue, so a ready
-issue can be claimed before `create --blocked-by` returns. Stage dependents in a
-known non-ready state, verify all blockers with `ab ticket show --json`, then use
-`ab ticket move` to publish the intended ready destination. Do not use the local
+Direct Linear records blockers after creating the issue, so a ready issue can be
+claimed before `create --blocked-by` returns. Stage dependents in a known
+non-ready state, verify all blockers with `ab ticket show --json`, then use
+`ab ticket move` to publish the intended ready destination. GitHub stages a
+ready-bound create in triage itself and moves it to ready only after every
+blocker is recorded; still verify with `ab ticket show --json`, since a partial
+failure leaves it in triage. Do not use the local
 file tracker's default state as an assumption about another configured source.
 
 ## Edit content or blockers

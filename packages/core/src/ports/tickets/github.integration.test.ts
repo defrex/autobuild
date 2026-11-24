@@ -796,7 +796,8 @@ describe('github issue links are labels', () => {
       { issue: 9, intent: 'refs' },
       { issue: 1001, intent: 'closes' },
     ])
-    expect(github.requests.map((r) => r.kind)).toEqual(['list-issues'])
+    // The ready listing confirms each ticket's blockers; links cost nothing.
+    expect(github.requests.map((r) => r.kind)).toEqual(['list-issues', 'blocked-by-list'])
     github.resetRequests()
     await source.listAll()
     expect(github.requests.map((r) => r.kind)).toEqual(['list-issues'])
@@ -1741,25 +1742,31 @@ describe('github ready assignee', () => {
     }
     await withMe.source.prepareReadyAssignee()
     withMe.github.resetRequests()
+    // Each listed issue's dependency read follows the issues listed, which
+    // the gate narrows; compare everything else.
+    const listingRequests = (github: FakeGitHubIssues, status?: number) =>
+      github.requests.filter(
+        (r) => r.kind !== 'blocked-by-list' && (status === undefined || r.status === status),
+      ).length
     for (let call = 1; call <= 3; call++) {
       const before = {
-        a: without.github.requests.length,
-        b: withMe.github.requests.length,
+        a: listingRequests(without.github),
+        b: listingRequests(withMe.github),
         aPrimary: without.github.primary,
         bPrimary: withMe.github.primary,
-        aNotModified: without.github.notModified,
-        bNotModified: withMe.github.notModified,
+        aNotModified: listingRequests(without.github, 304),
+        bNotModified: listingRequests(withMe.github, 304),
       }
       await ids(without.source)
       await ids(withMe.source, 'me')
-      expect(withMe.github.requests.length - before.b).toBe(
-        without.github.requests.length - before.a + 1,
+      expect(listingRequests(withMe.github) - before.b).toBe(
+        listingRequests(without.github) - before.a + 1,
       )
       if (call > 1) {
         expect(without.github.primary - before.aPrimary).toBe(0)
         expect(withMe.github.primary - before.bPrimary).toBe(0)
-        expect(withMe.github.notModified - before.bNotModified).toBe(
-          without.github.notModified - before.aNotModified + 1,
+        expect(listingRequests(withMe.github, 304) - before.bNotModified).toBe(
+          listingRequests(without.github, 304) - before.aNotModified + 1,
         )
       }
     }

@@ -326,6 +326,7 @@ import type {
 import {
   isForgeMergeQueueRejection,
   NoCommitsBetweenBranchesError,
+  TicketClaimBlockedError,
   TicketSourceRateLimitError,
 } from '../ports/types'
 import { issueLinksForForge } from '../kernel/issue-keywords'
@@ -8953,7 +8954,21 @@ export class Dispatcher {
       let authoredSession: string | undefined
       let createdSeed: Parameters<Dispatcher['buildCreatedPayload']>[2]
       try {
-        if (!(await tickets.claim(ticket.ref.id))) {
+        let claimed: boolean
+        try {
+          claimed = await tickets.claim(ticket.ref.id, { blockedBy: ticket.blockedBy ?? [] })
+        } catch (error) {
+          if (!(error instanceof TicketClaimBlockedError)) throw error
+          // A blocker recorded after the dependency check (GitHub's summary
+          // lags its edges): still ready, so the next scan sees the blocker.
+          const detail = `ticket ${ticket.ref.id}: blockers ${error.blockers.join(', ')} were recorded after the dependency check; waiting for the next scan`
+          await this.preparationResolved(attempt, 'lost-claim', error.message)
+          report.dependencyBlocked += 1
+          report.dependencyDiagnostics.push(detail)
+          settle(ticket, { outcome: 'blocked', detail })
+          continue
+        }
+        if (!claimed) {
           await this.preparationResolved(attempt, 'lost-claim')
           settle(ticket, {
             outcome: 'claim-refused',
