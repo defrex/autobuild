@@ -193,9 +193,6 @@ describe('createTicketSource — linear', () => {
     await expect(createTicketSource(LINEAR_CONFIG, { LINEAR_API_KEY: '' }, REPO)).rejects.toThrow(
       /LINEAR_API_KEY is not set/,
     )
-  })
-
-  test('the error names the expected value and the config that requires it', async () => {
     await expect(createTicketSource(LINEAR_CONFIG, {}, REPO)).rejects.toThrow(
       /Linear personal API key.*\[tickets\]\.source = "linear"/,
     )
