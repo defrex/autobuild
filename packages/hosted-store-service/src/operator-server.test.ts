@@ -17,6 +17,7 @@ import {
 } from '@defrex/autobuild/remote-store'
 
 import { OperatorApiClient, OperatorApiError } from './operator-client'
+import { operatorToolTable, SandboxUnavailableError } from '@defrex/autobuild/operator'
 import { createOperatorServer, REGISTRY_ERROR_STATUS } from './operator-server'
 import { reduceSession } from './session-reducer'
 
@@ -904,101 +905,137 @@ describe('the generic tools route', () => {
   })
 })
 
-describe('request credential threading and sandboxFor (AUT-584)', () => {
-  function operatorClient(
-    server: { fetch(req: Request): Promise<Response> },
-    user: string,
-  ): OperatorApiClient {
-    return new OperatorApiClient({
-      url: 'http://operator.test',
-      token: mintToken(secret, {
-        version: 1,
-        internalOperator: { user, repo },
-        exp: now.getTime() + 60_000,
-      }),
-      fetchFn: fetchFor(server),
-    })
+describe('the sandbox resolver (#1219)', () => {
+  const enabledRepo = repo
+  const disabledRepo = 'https://github.com/acme/disabled'
+
+  function stubResolver() {
+    const resolutions: { repo: string; oidcToken?: string }[] = []
+    const releases: string[] = []
+    const execs: { identity: string; command: string }[] = []
+    let disposals = 0
+    const backend = {
+      canPublish: true,
+      dispose: async () => {
+        disposals++
+      },
+      release: async (identity: string) => {
+        releases.push(identity)
+      },
+      exec: async (identity: string, input: { command: string }) => {
+        execs.push({ identity, command: input.command })
+        return { exitCode: 0, stdout: 'ok', stderr: '' }
+      },
+    }
+    const resolver = {
+      canPublish: true,
+      resolve: async (repoArg: string, credentials?: { oidcToken?: string }) => {
+        resolutions.push({
+          repo: repoArg,
+          ...(credentials?.oidcToken ? { oidcToken: credentials.oidcToken } : {}),
+        })
+        if (repoArg === disabledRepo)
+          throw new SandboxUnavailableError('orchestrator-disabled', 'orchestrator is disabled')
+        return backend as never
+      },
+    }
+    return { resolver, resolutions, releases, execs, disposals: () => disposals }
   }
 
-  test('sandboxFor wins over the static option and a disabled/unresolvable resolution releases nothing', async () => {
+  function request(
+    repoArg: string,
+    path: string,
+    user: string,
+    body: unknown,
+    oidcToken?: string,
+  ): Request {
+    return new Request(
+      `http://operator.test/operator/v1/repos/${encodeURIComponent(repoArg)}/${path}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${mintToken(secret, {
+            version: 1,
+            internalOperator: { user, repo: repoArg },
+            exp: now.getTime() + 60_000,
+          })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+          ...(oidcToken !== undefined ? { 'x-vercel-oidc-token': oidcToken } : {}),
+        },
+        body: JSON.stringify(body),
+      },
+    )
+  }
+
+  test('tool calls resolve per call with the request credential and refuse with a typed code', async () => {
     const store = new MemoryBuildStore({ clock })
-    let staticDisposals = 0
-    let dynamicDisposals = 0
-    const staticReleases: string[] = []
-    const dynamicReleases: string[] = []
-    const staticBackend = {
-      dispose: async () => {
-        staticDisposals++
-      },
-      release: async (identity: string) => {
-        staticReleases.push(identity)
-      },
-    }
-    const dynamicBackend = {
-      dispose: async () => {
-        dynamicDisposals++
-      },
-      release: async (identity: string) => {
-        dynamicReleases.push(identity)
-      },
-    }
+    const stub = stubResolver()
     const server = createOperatorServer({
-      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      projects: testProjects([enabledRepo, disabledRepo]),
       store,
       secret,
       clock,
-      sandbox: staticBackend as never,
-      sandboxFor: async (repoArg) => {
-        // Service-shaped wiring: disabled config → undefined (contained).
-        if (repoArg === 'https://github.com/acme/disabled') return undefined
-        return dynamicBackend as never
-      },
+      sandboxResolver: stub.resolver,
+    })
+    expect(server.tools).toEqual(operatorToolTable({ canPublish: true }))
+
+    const refused = await server.fetch(
+      request(disabledRepo, 'tools/sandbox.exec', 'Ada', { repo: disabledRepo, command: 'ls' }),
+    )
+    expect(refused.status).toBe(409)
+    expect(await refused.json()).toEqual({
+      kind: 'refusal',
+      error: 'orchestrator is disabled',
+      code: 'sandbox-orchestrator-disabled',
     })
 
-    // The last open session's archive releases through sandboxFor's backend.
-    const ada = operatorClient(server, 'Ada')
-    const first = await ada.createSession(repo, { title: 'one' })
-    const second = await ada.createSession(repo, { title: 'two' })
-    await ada.archiveSession(repo, first.id)
-    expect(dynamicReleases).toEqual([])
-    expect(staticReleases).toEqual([])
-    await ada.archiveSession(repo, second.id)
-    expect(dynamicReleases).toEqual(['Ada'])
-    expect(staticReleases).toEqual([]) // sandboxFor wins
-    expect(dynamicDisposals).toBe(2)
-    // A forbidden archive still releases request-owned local scratch.
-    const bob = operatorClient(server, 'Bob')
-    const third = await ada.createSession(repo, { title: 'three' })
-    await expect(bob.archiveSession(repo, third.id)).rejects.toMatchObject({ status: 403 })
-    expect(dynamicDisposals).toBe(3)
-    expect(staticDisposals).toBe(0)
-    const staticServer = createOperatorServer({
-      projects: testProjects([repo]),
+    const served = await server.fetch(
+      request(
+        enabledRepo,
+        'tools/sandbox.exec',
+        'Ada',
+        { repo: enabledRepo, command: 'ls' },
+        'oidc-canary',
+      ),
+    )
+    expect(served.status).toBe(200)
+    expect(await served.json()).toEqual({ exitCode: 0, stdout: 'ok', stderr: '' })
+    expect(stub.execs).toEqual([{ identity: 'Ada', command: 'ls' }])
+    expect(stub.resolutions).toEqual([
+      { repo: disabledRepo },
+      { repo: enabledRepo, oidcToken: 'oidc-canary' },
+    ])
+  })
+
+  test('the archive releases through the resolver, never disposes, and a refusal releases nothing', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const stub = stubResolver()
+    const server = createOperatorServer({
+      projects: testProjects([enabledRepo, disabledRepo]),
       store,
       secret,
       clock,
-      sandbox: staticBackend as never,
+      sandboxResolver: stub.resolver,
     })
-    await operatorClient(staticServer, 'Ada').archiveSession(repo, third.id)
-    expect(staticDisposals).toBe(0)
-
-    // A disabled repository resolves to undefined: the archive still
-    // succeeds and releases nothing (the dispatcher's idle settlement stops
-    // the environment later).
-    const disabledRepo = 'https://github.com/acme/disabled'
-    const disabled = new OperatorApiClient({
-      url: 'http://operator.test',
-      token: mintToken(secret, {
-        version: 1,
-        internalOperator: { user: 'Ada', repo: disabledRepo },
-        exp: now.getTime() + 60000,
-      }),
-      fetchFn: fetchFor(server),
-    })
-    const solo = await disabled.createSession(disabledRepo, { title: 'x' })
-    await disabled.archiveSession(disabledRepo, solo.id)
-    expect(dynamicReleases).toEqual(['Ada'])
-    expect(staticReleases).toEqual(['Ada'])
+    const archive = async (repoArg: string, oidcToken?: string) => {
+      const created = await server.fetch(
+        request(repoArg, 'sessions', 'Ada', { title: 'one' }, oidcToken),
+      )
+      expect(created.status).toBe(201)
+      const { id } = (await created.json()) as { id: string }
+      const archived = await server.fetch(
+        request(repoArg, `sessions/${id}/archive`, 'Ada', {}, oidcToken),
+      )
+      expect(archived.status).toBe(200)
+    }
+    await archive(enabledRepo, 'oidc-canary')
+    expect(stub.releases).toEqual(['Ada'])
+    expect(stub.resolutions).toEqual([{ repo: enabledRepo, oidcToken: 'oidc-canary' }])
+    await archive(disabledRepo)
+    expect(stub.releases).toEqual(['Ada'])
+    expect(stub.disposals()).toBe(0)
   })
 })
 

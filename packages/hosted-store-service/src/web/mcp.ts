@@ -16,11 +16,18 @@ import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/pro
  * that token, so every durable write is attributed to the person who
  * authorized the client.
  *
- * The binding is fully data-driven: it iterates the registry's closed
- * `entries` table and registers every entry with one generic handler that
- * delegates to `POST /operator/v1/repos/:repo/tools/:tool`. There are no
+ * The binding is fully data-driven: it iterates the hosted service's served
+ * table (`operatorTools`, the same table its operator server dispatches) and
+ * registers every entry with one generic handler that delegates to
+ * `POST /operator/v1/repos/:repo/tools/:tool`. Advertisement therefore equals
+ * dispatch: a filtered tool is neither listed nor served. There are no
  * per-tool branches — when a future ticket adds registry entries, they
  * appear here and execute with no change to this file.
+ *
+ * The delegation is in-process. The inbound request's `x-vercel-oidc-token`
+ * header (the only place a Vercel Function receives its OIDC token) is copied
+ * onto the delegated request so sandbox tools can authenticate the provider;
+ * nothing else is forwarded, and the token never leaves the function.
  *
  * Transport: a stateless `WebStandardStreamableHTTPServerTransport` (fresh
  * transport + `McpServer` per request, JSON responses, no session
@@ -37,19 +44,26 @@ import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/pro
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { OperatorApiClient, OperatorApiError } from '../operator-client'
-import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator'
+import type { ToolEntry } from '@defrex/autobuild/operator'
 import { AUTOBUILD_VERSION, mintToken } from '@defrex/autobuild/remote-store'
 import { normalizeEmail } from './config'
 import type { WebAuth } from './auth'
 import type { WebAuthConfig } from './config'
 
-function asFetch(delegate: (request: Request) => Promise<Response>): typeof fetch {
+const OIDC_HEADER = 'x-vercel-oidc-token'
+
+function asFetch(
+  delegate: (request: Request) => Promise<Response>,
+  inbound: Request,
+): typeof fetch {
   // OperatorApiClient calls fetchFn(url, init) with a string URL; the hosted
   // service's fetch takes a Request.
-  return ((input: string | URL | Request, init?: RequestInit) =>
-    delegate(
-      input instanceof Request ? input : new Request(input, init),
-    )) as unknown as typeof fetch
+  const oidcToken = inbound.headers.get(OIDC_HEADER)?.trim()
+  return ((input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init)
+    if (oidcToken) request.headers.set(OIDC_HEADER, oidcToken)
+    return delegate(request)
+  }) as unknown as typeof fetch
 }
 
 /** Upper bound for a tool-requested bounded wait (`builds.events`), so no
@@ -65,6 +79,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Autobuild runs builds from tickets: a dispatcher claims groomed tickets, an embedded agent implements each build through plan/implement/verify rounds, and every durable action is attributed.',
   'Call `repositories.list` first to discover which repository identities this deployment serves; every tool names its repository explicitly via `repo`.',
   'Mutating tools append durable, human-attributed events under the signed-in operator who authorized this client; destructive controls are annotated.',
+  'Sandbox tools act only in repositories whose effective config enables `[orchestrator]`; a call for another repository is refused with a typed `sandbox-*` code that names the reason.',
   'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`; `repository.events` after a cursor delivers repository attention such as `ticket.handed-back`.',
 ].join(' ')
 
@@ -80,8 +95,9 @@ export interface McpEndpointOptions {
   /** The hosted service's own fetch — the delegation target for tool calls. */
   delegate: (request: Request) => Promise<Response>
   now?: () => Date
-  /** Registry table override for tests; defaults to the core closed table. */
-  entries?: readonly ToolEntry[]
+  /** The operator server's served table, `hostedService().operatorTools`.
+   * Required: advertising any other table lets listing drift from dispatch. */
+  entries: readonly ToolEntry[]
 }
 
 /** The JSON-RPC error body the plugin's `withMcpAuth` returns on 401,
@@ -124,7 +140,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
   const access = options.access ?? humanAccess
   const config = options.config
   const now = options.now ?? (() => new Date())
-  const entries = options.entries ?? TOOLS
+  const entries = options.entries
 
   /** Resolve the bearer token to the signed-in operator: Better Auth's MCP
    * token store finds the oauthAccessToken row (the plugin does not check
@@ -246,7 +262,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
               const client = new OperatorApiClient({
                 url: config.baseURL,
                 token,
-                fetchFn: asFetch(options.delegate),
+                fetchFn: asFetch(options.delegate, request),
               })
               const value = await client.callTool(parsed.repo, entry.name, input)
               return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
