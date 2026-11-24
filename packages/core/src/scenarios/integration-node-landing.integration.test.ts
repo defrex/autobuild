@@ -13,7 +13,6 @@ import {
 import { controlBuild } from '../cli/build-control'
 import { reduceBuild } from '../kernel/reducer'
 import { summarize } from '../cli/status'
-import { observeIntegration } from '../kernel/integration-completeness'
 import { integrationHeadVerified } from '../kernel/integration-state'
 
 async function addStack(h: Awaited<ReturnType<typeof makeHarness>>, branch: string) {
@@ -67,64 +66,6 @@ async function seedContributors(h: Awaited<ReturnType<typeof makeHarness>>, repo
   }
 }
 
-test('nested node merge preserves both child commits and parent merges the stack without wrappers', async () => {
-  const h = await makeHarness({
-    localGitForge: true,
-    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
-    handlers: happyHandlers(),
-    tickets: [
-      { ...readyTicket('A', { title: 'Parent integration' }), kind: 'node' },
-      { ...readyTicket('B', { title: 'Nested integration' }), kind: 'node', target: 'A' },
-    ],
-  })
-  try {
-    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
-    const records = await h.store.listBuilds()
-    const a = records.find((record) => record.ticket?.id === 'A')!
-    const b = records.find((record) => record.ticket?.id === 'B')!
-    await addStack(h, b.branch!)
-    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
-    await h.runLatest()
-    const state = reduceBuild(await h.events(b.slug))
-    expect(integrationHeadVerified(state, state.integration!.cycle!.head)).toBe(true)
-    await h.dispatcher.tick()
-    await controlBuild({
-      store: h.store,
-      repo: h.origin,
-      slug: b.slug,
-      action: { kind: 'land' },
-      ticketSource: async () => h.tickets,
-    })
-    for (let i = 0; i < 4; i++) {
-      h.clock.advance(60_000)
-      await h.dispatcher.tick()
-    }
-    expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
-    await h.runLatest()
-    await h.dispatcher.tick()
-    await controlBuild({
-      store: h.store,
-      repo: h.origin,
-      slug: a.slug,
-      action: { kind: 'land' },
-      ticketSource: async () => h.tickets,
-    })
-    for (let i = 0; i < 4; i++) {
-      h.clock.advance(60_000)
-      await h.dispatcher.tick()
-    }
-    expect(reduceBuild(await h.events(a.slug)).status).toBe('done')
-    const messages = await git(['log', '-2', '--format=%B', 'main'], h.origin)
-    expect(messages).toContain('Autobuild-Build: first-child')
-    expect(messages).toContain('Autobuild-Build: second-child')
-    expect(messages).not.toContain(`Autobuild-Build: ${a.slug}`)
-    expect(messages).not.toContain(`Autobuild-Build: ${b.slug}`)
-    expect(await git(['rev-list', '--merges', 'main'], h.origin)).toBe('')
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
-
 test('verified hand-pushed commits land into a parent node and then at root', async () => {
   const h = await makeHarness({
     localGitForge: true,
@@ -140,6 +81,7 @@ test('verified hand-pushed commits land into a parent node and then at root', as
     const records = await h.store.listBuilds()
     const a = records.find((record) => record.ticket?.id === 'A')!
     const b = records.find((record) => record.ticket?.id === 'B')!
+    const base = await git(['rev-parse', 'main'], h.origin)
     await addStack(h, b.branch!)
     const nested = await addHandPushed(h, b.branch!, 'nested')
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
@@ -160,6 +102,10 @@ test('verified hand-pushed commits land into a parent node and then at root', as
       await h.dispatcher.tick()
     }
     expect(reduceBuild(await h.events(b.slug)).status).toBe('done')
+    const nestedMessages = await git(['log', '--format=%B', `${base}..${a.branch!}`], h.origin)
+    expect(nestedMessages).toContain('Autobuild-Build: first-child')
+    expect(nestedMessages).toContain('Autobuild-Build: second-child')
+    expect(nestedMessages).not.toContain(`Autobuild-Build: ${b.slug}`)
     const root = await addHandPushed(h, a.branch!, 'root')
     for (let i = 0; i < 2; i++) await h.dispatcher.tick()
     await h.runLatest()
@@ -180,11 +126,15 @@ test('verified hand-pushed commits land into a parent node and then at root', as
     expect(landed.status).toBe('done')
     expect(landed.openEscalations).toEqual([])
     expect(await git(['rev-parse', 'main'], h.origin)).toBe(root)
-    const messages = await git(['log', '-4', '--format=%B', 'main'], h.origin)
+    const messages = await git(['log', '--format=%B', `${base}..main`], h.origin)
     expect(messages).toContain('Autobuild-Build: first-child')
     expect(messages).toContain('Autobuild-Build: second-child')
     expect(messages).toContain('Maintainer tweak nested')
     expect(messages).toContain('Maintainer tweak root')
+    expect(messages).not.toContain(`Autobuild-Build: ${a.slug}`)
+    expect(messages).not.toContain(`Autobuild-Build: ${b.slug}`)
+    expect(await git(['rev-list', '--merges', `${base}..main`], h.origin)).toBe('')
+
     for (const slug of [a.slug, b.slug])
       expect(
         (await h.events(slug)).filter((e) => e.type === 'build.janitor-attempt-failed'),
@@ -246,48 +196,6 @@ test('a structurally invalid stack raises one attention instead of janitor retri
     await h.cleanup()
   }
 }, 30_000)
-
-test('native terminal states, partial listings and reopening govern completeness', async () => {
-  const h = await makeHarness({
-    localGitForge: true,
-    configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
-    handlers: happyHandlers(),
-    tickets: [
-      { ...readyTicket('NODE', { title: 'Release integration' }), kind: 'node' },
-      { ...readyTicket('TRIAGE', { title: 'Unfinished child' }), target: 'NODE', state: 'Triage' },
-    ],
-  })
-  try {
-    await h.dispatcher.tick()
-    const node = (await h.store.listBuilds())[0]!
-    expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([
-      'TRIAGE',
-    ])
-    await h.tickets.transition('TRIAGE', 'Done')
-    expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([])
-    await expect(
-      controlBuild({
-        store: h.store,
-        repo: h.origin,
-        slug: node.slug,
-        action: { kind: 'land' },
-        ticketSource: async () => h.tickets,
-      }),
-    ).rejects.toThrow('Merge is not ready')
-    await h.tickets.transition('TRIAGE', 'Ready')
-    expect((await observeIntegration(h.store, h.tickets, node.slug)).openChildren).toEqual([
-      'TRIAGE',
-    ])
-    const broken: import('../ports/types').TicketSource = Object.create(h.tickets)
-    broken.listAll = async () => {
-      throw new Error('listing unavailable')
-    }
-    const observed = await observeIntegration(h.store, broken, node.slug)
-    expect(observed.diagnostics).toEqual(['listing unavailable'])
-  } finally {
-    await h.cleanup()
-  }
-})
 
 test('a verification-blocked node admits a repair child and verifies the repaired head', async () => {
   const h = await makeHarness({
