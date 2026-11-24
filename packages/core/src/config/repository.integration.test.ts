@@ -26,6 +26,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     'ui-tui',
     'ui-app',
     'ui-website',
+    'ui-web',
     'docs',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({
@@ -82,5 +83,10 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
       '.agents/skills/verify-ui-app/SKILL.md',
       'DESIGN.md',
     ],
+  })
+  expect(config.verify.stepConfigs['ui-web']).toEqual({
+    kind: 'agent',
+    skill: 'verify-ui-web',
+    paths: ['packages/ui/**', 'packages/core/src/web/**'],
   })
 })
