@@ -26,11 +26,15 @@ import {
 } from './reducer-values'
 import { validateTickFinish } from './repo-tick'
 import {
+  buildPageOrder,
   decodeBuildPageCursor,
   encodeBuildPageCursor,
   parseChangePosition,
+  requireBuildPageCursorOrder,
+  resolveBuildPageFilters,
   resolveBuildPageLimit,
   type BuildPage,
+  type BuildPageKind,
   type BuildPageOptions,
   type ChangedBuild,
   type ChangedBuilds,
@@ -212,6 +216,11 @@ interface BuildState {
     heartbeatAt?: string
   }
   lease?: Lease
+  /** Listing facts (`listBuildsPage` filters), written with the events that
+   * change them: `node` from `build.created`, `merged` from the latest
+   * `build.completed`, cleared by `build.reopened`. */
+  node: boolean
+  merged: boolean
   latestRewrite?: import('../events/payloads').EventPayload<'node.rewritten'>
   earlierRewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'> | null>
   rewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'>>
@@ -231,21 +240,36 @@ interface FeedNode {
   next: FeedNode | null
 }
 
-/** A repository's changed-builds index and creation order. The list is
+/** A build-listing filter class: every build, one kind, merged builds, or
+ * merged builds of one kind. */
+type ListingClass = 'all' | BuildPageKind | 'merged' | `merged-${BuildPageKind}`
+const LISTING_CLASSES: ListingClass[] = [
+  'all',
+  'leaf',
+  'node',
+  'merged',
+  'merged-leaf',
+  'merged-node',
+]
+type ListingKey = 'createdAt' | 'updatedAt'
+
+/** A repository's changed-builds index and listing orders. The feed list is
  * ascending by position because every new position is the repository head;
  * a build's change unlinks its node and appends it at the tail in O(1). */
 interface RepoFeed {
   nodes: Map<string, FeedNode>
   head: FeedNode | null
   tail: FeedNode | null
-  /** Slugs sorted by `(createdAt, slug)`, kept by binary insertion. */
-  creationOrder: string[]
+  /** Per filter class, slugs sorted by `(createdAt, slug)` and by
+   * `(updatedAt, slug)`, kept by binary insertion. */
+  listing: Record<ListingClass, Record<ListingKey, string[]>>
 }
 
-/** First index in `order` whose `(createdAt, slug)` key is not below the key. */
-function creationIndex(
+/** First index in `order` whose `(key, slug)` is not below `(at, slug)`. */
+function listingIndex(
   order: string[],
   builds: Map<string, BuildState>,
+  key: ListingKey,
   at: string,
   slug: string,
 ): number {
@@ -254,10 +278,98 @@ function creationIndex(
   while (low < high) {
     const middle = (low + high) >>> 1
     const record = builds.get(order[middle]!)!.record
-    if (record.createdAt < at || (record.createdAt === at && record.slug < slug)) low = middle + 1
+    if (record[key] < at || (record[key] === at && record.slug < slug)) low = middle + 1
     else high = middle
   }
   return low
+}
+
+/** The filter classes a build currently belongs to. */
+function classesOf(state: BuildState): ListingClass[] {
+  const kind: BuildPageKind = state.node ? 'node' : 'leaf'
+  return state.merged ? ['all', kind, 'merged', `merged-${kind}`] : ['all', kind]
+}
+
+function insertListing(
+  feed: RepoFeed,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  keys: ListingKey[],
+): void {
+  const { slug } = state.record
+  for (const name of classesOf(state))
+    for (const key of keys) {
+      const order = feed.listing[name][key]
+      order.splice(listingIndex(order, builds, key, state.record[key], slug), 0, slug)
+    }
+}
+
+/** Remove a build at its current keys; call before any key or fact moves. */
+function removeListing(
+  feed: RepoFeed,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  keys: ListingKey[],
+): void {
+  const { slug } = state.record
+  for (const name of classesOf(state))
+    for (const key of keys) {
+      const order = feed.listing[name][key]
+      const index = listingIndex(order, builds, key, state.record[key], slug)
+      if (order[index] === slug) order.splice(index, 1)
+    }
+}
+
+/** The only writer of a build record's `updatedAt`: it moves the build in
+ * every update-ordered listing it belongs to. Module-level, like the helpers
+ * below, so the read-budget harness's per-method call vectors stay unchanged. */
+function touchBuild(
+  feeds: Map<string, RepoFeed>,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  ts: string,
+): void {
+  if (ts === state.record.updatedAt) return
+  const feed = repoFeed(feeds, state.record.repo)
+  removeListing(feed, builds, state, ['updatedAt'])
+  state.record.updatedAt = ts
+  insertListing(feed, builds, state, ['updatedAt'])
+}
+
+/** Record an appended build event in the same synchronous step as its
+ * change position: the stored event, rewrite receipts, the listing facts it
+ * sets and the build's `updatedAt`. */
+function recordBuildEvent(
+  feeds: Map<string, RepoFeed>,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  envelope: AbEvent,
+): void {
+  state.events.push(structuredClone(envelope))
+  if (envelope.type === 'node.rewritten') {
+    const receipt = envelope.payload
+    state.earlierRewrites ??= new Map()
+    state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
+    state.rewrites ??= new Map()
+    state.rewrites.set(receipt.previous, structuredClone(receipt))
+    state.latestRewrite = structuredClone(receipt)
+  }
+  const facts =
+    envelope.type === 'build.created'
+      ? { node: envelope.payload.kind === 'node', merged: state.merged }
+      : envelope.type === 'build.completed'
+        ? { node: state.node, merged: envelope.payload.outcome === 'merged' }
+        : envelope.type === 'build.reopened'
+          ? { node: state.node, merged: false }
+          : undefined
+  if (facts && (facts.node !== state.node || facts.merged !== state.merged)) {
+    const feed = repoFeed(feeds, state.record.repo)
+    removeListing(feed, builds, state, ['createdAt', 'updatedAt'])
+    state.node = facts.node
+    state.merged = facts.merged
+    insertListing(feed, builds, state, ['createdAt', 'updatedAt'])
+  }
+  touchBuild(feeds, builds, state, envelope.ts)
 }
 
 /** The repository's feed, created on its first build write. Module-level so
@@ -265,7 +377,10 @@ function creationIndex(
 function repoFeed(feeds: Map<string, RepoFeed>, repo: string): RepoFeed {
   let feed = feeds.get(repo)
   if (!feed) {
-    feed = { nodes: new Map(), head: null, tail: null, creationOrder: [] }
+    const listing = Object.fromEntries(
+      LISTING_CLASSES.map((name) => [name, { createdAt: [], updatedAt: [] }]),
+    ) as unknown as RepoFeed['listing']
+    feed = { nodes: new Map(), head: null, tail: null, listing }
     feeds.set(repo, feed)
   }
   return feed
@@ -428,6 +543,8 @@ export class MemoryBuildStore implements BuildStore {
         createdAt: ts,
         updatedAt: ts,
       },
+      node: created?.payload.kind === 'node',
+      merged: false,
       events: [],
       artifacts: new Map(),
     }
@@ -447,8 +564,7 @@ export class MemoryBuildStore implements BuildStore {
     this.builds.set(input.slug, state)
     openBuildSet(this.openByRepo, input.repo).add(input.slug)
     if (created !== undefined) trackOpenBuild(this.openByRepo, state, created.type)
-    const order = repoFeed(this.feeds, input.repo).creationOrder
-    order.splice(creationIndex(order, this.builds, ts, input.slug), 0, input.slug)
+    insertListing(repoFeed(this.feeds, input.repo), this.builds, state, ['createdAt', 'updatedAt'])
     this.advanceRepo(input.repo, input.slug)
     return this.snapshot(state)
   }
@@ -516,19 +632,35 @@ export class MemoryBuildStore implements BuildStore {
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
     const limit = resolveBuildPageLimit(opts.limit)
-    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
-    const order = this.feeds.get(repo)?.creationOrder ?? []
+    const filters = resolveBuildPageFilters(opts)
+    const cursor =
+      opts.cursor === undefined
+        ? undefined
+        : requireBuildPageCursorOrder(decodeBuildPageCursor(opts.cursor), filters)
+    const order = buildPageOrder(filters)
+    const key: ListingKey = order === 'updated' ? 'updatedAt' : 'createdAt'
+    const name: ListingClass =
+      filters.kind === undefined
+        ? filters.outcome === undefined
+          ? 'all'
+          : 'merged'
+        : filters.outcome === undefined
+          ? filters.kind
+          : `merged-${filters.kind}`
+    const slugs = this.feeds.get(repo)?.listing[name][key] ?? []
     // Index descent: the first slug at or after the cursor key; the page is
-    // the slugs before it, newest first.
-    let end = cursor ? creationIndex(order, this.builds, cursor.at, cursor.slug) : order.length
+    // the slugs before it, newest first. Under `activeSince` the walk stops at
+    // the first build updated before it.
+    let end = cursor ? listingIndex(slugs, this.builds, key, cursor.at, cursor.slug) : slugs.length
     const builds: BuildRecord[] = []
     let next: string | null = null
     while (end > 0) {
       this.feedReads.examined++
-      const state = this.builds.get(order[--end]!)!
+      const state = this.builds.get(slugs[--end]!)!
+      if (filters.activeSince !== undefined && state.record.updatedAt < filters.activeSince) break
       if (builds.length === limit) {
         const last = builds.at(-1)!
-        next = encodeBuildPageCursor({ at: last.createdAt, slug: last.slug })
+        next = encodeBuildPageCursor({ order, at: last[key], slug: last.slug })
         break
       }
       builds.push(this.snapshot(state))
@@ -576,19 +708,9 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    state.events.push(structuredClone(envelope) as AbEvent)
     trackOpenBuild(this.openByRepo, state, envelope.type)
-    if (envelope.type === 'node.rewritten') {
-      const receipt =
-        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
-      state.earlierRewrites ??= new Map()
-      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
-      state.rewrites ??= new Map()
-      state.rewrites.set(receipt.previous, structuredClone(receipt))
-      state.latestRewrite = structuredClone(receipt)
-    }
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
     this.advanceRepo(state.record.repo, slug)
-    state.record.updatedAt = envelope.ts
     return envelope
   }
 
@@ -614,19 +736,9 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    state.events.push(structuredClone(envelope) as AbEvent)
     trackOpenBuild(this.openByRepo, state, envelope.type)
-    if (envelope.type === 'node.rewritten') {
-      const receipt =
-        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
-      state.earlierRewrites ??= new Map()
-      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
-      state.rewrites ??= new Map()
-      state.rewrites.set(receipt.previous, structuredClone(receipt))
-      state.latestRewrite = structuredClone(receipt)
-    }
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
     this.advanceRepo(state.record.repo, slug)
-    state.record.updatedAt = envelope.ts
     return envelope
   }
 
@@ -694,19 +806,9 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    state.events.push(structuredClone(envelope) as AbEvent)
     trackOpenBuild(this.openByRepo, state, envelope.type)
-    if (envelope.type === 'node.rewritten') {
-      const receipt =
-        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
-      state.earlierRewrites ??= new Map()
-      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
-      state.rewrites ??= new Map()
-      state.rewrites.set(receipt.previous, structuredClone(receipt))
-      state.latestRewrite = structuredClone(receipt)
-    }
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
     this.advanceRepo(state.record.repo, slug)
-    state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
@@ -777,19 +879,9 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    state.events.push(structuredClone(envelope) as AbEvent)
     trackOpenBuild(this.openByRepo, state, envelope.type)
-    if (envelope.type === 'node.rewritten') {
-      const receipt =
-        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
-      state.earlierRewrites ??= new Map()
-      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
-      state.rewrites ??= new Map()
-      state.rewrites.set(receipt.previous, structuredClone(receipt))
-      state.latestRewrite = structuredClone(receipt)
-    }
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
     this.advanceRepo(state.record.repo, slug)
-    state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
@@ -830,7 +922,7 @@ export class MemoryBuildStore implements BuildStore {
     revs.push(meta)
     state.artifacts.set(artifact.kind, revs)
     this.pruneBuildKind(state, artifact.kind)
-    state.record.updatedAt = meta.createdAt
+    touchBuild(this.feeds, this.builds, state, meta.createdAt)
     return structuredClone(meta)
   }
 
@@ -867,7 +959,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     state.nodeWriter = { holder, expiresAt: now + ttlMs, ttlMs }
-    state.record.updatedAt = new Date(now).toISOString()
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -879,7 +971,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     lease.expiresAt = now + lease.ttlMs
-    state.record.updatedAt = new Date(now).toISOString()
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -887,7 +979,7 @@ export class MemoryBuildStore implements BuildStore {
     const state = this.state(slug)
     if (state.nodeWriter?.holder === holder) {
       state.nodeWriter = undefined
-      state.record.updatedAt = this.now()
+      touchBuild(this.feeds, this.builds, state, this.now())
     }
   }
 
@@ -899,7 +991,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     state.lease = { holder, expiresAt: now + ttlMs, ttlMs }
-    state.record.updatedAt = new Date(now).toISOString()
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -912,7 +1004,7 @@ export class MemoryBuildStore implements BuildStore {
     }
     lease.expiresAt = now + lease.ttlMs
     state.record.heartbeatAt = new Date(now).toISOString()
-    state.record.updatedAt = state.record.heartbeatAt
+    touchBuild(this.feeds, this.builds, state, state.record.heartbeatAt)
     return true
   }
 
@@ -920,7 +1012,7 @@ export class MemoryBuildStore implements BuildStore {
     const state = this.state(slug)
     if (state.lease?.holder === holder) {
       state.lease = undefined
-      state.record.updatedAt = this.now()
+      touchBuild(this.feeds, this.builds, state, this.now())
     }
   }
 

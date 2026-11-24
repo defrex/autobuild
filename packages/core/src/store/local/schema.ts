@@ -281,6 +281,40 @@ export const buildChangePositions = sqliteTable(
   (t) => [index('build_change_positions_repo_position').on(t.repo, t.position)],
 )
 
+/** Per-build listing facts behind the paged listing's filters, maintained by
+ * triggers in the writing transaction (`BUILD_LISTING_DDL`): kind from
+ * `build.created`, merged from the latest `build.completed` (cleared by
+ * `build.reopened`), and a mirror of `builds.updated_at`. One index per filter
+ * class and order makes every filtered page one bounded range scan. */
+export const buildListingFacts = sqliteTable(
+  'build_listing_facts',
+  {
+    slug: text('slug').primaryKey(),
+    repo: text('repo').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    node: integer('node').notNull().default(0),
+    merged: integer('merged').notNull().default(0),
+  },
+  (t) => [
+    index('build_listing_kind_created').on(t.repo, t.node, t.createdAt, t.slug),
+    index('build_listing_merged_created')
+      .on(t.repo, t.createdAt, t.slug)
+      .where(sql`${t.merged} = 1`),
+    index('build_listing_merged_kind_created')
+      .on(t.repo, t.node, t.createdAt, t.slug)
+      .where(sql`${t.merged} = 1`),
+    index('build_listing_updated').on(t.repo, t.updatedAt, t.slug),
+    index('build_listing_kind_updated').on(t.repo, t.node, t.updatedAt, t.slug),
+    index('build_listing_merged_updated')
+      .on(t.repo, t.updatedAt, t.slug)
+      .where(sql`${t.merged} = 1`),
+    index('build_listing_merged_kind_updated')
+      .on(t.repo, t.node, t.updatedAt, t.slug)
+      .where(sql`${t.merged} = 1`),
+  ],
+)
+
 export const operatorPresence = sqliteTable(
   'operator_presence',
   {

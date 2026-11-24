@@ -1152,12 +1152,30 @@ cross-build questions at a cost proportional to the answer.
 position is greater than `position`, ascending by position, each once at its
 latest position, together with the repository head read in the same snapshot.
 It reads no event rows, and with nothing changed it does constant work.
-`listBuildsPage(repo, { cursor?, limit? })` returns one page of builds newest
-first by creation (slug descending breaks ties), with records identical to
-`listBuildsForRepo` and an opaque, adapter-issued `next` cursor; its cost does
-not depend on the repository's build count. Limits run from 1 to 100 (default
-25). Malformed positions, cursors and limits reject. Unknown repositories answer
-empty without creating state. Scoped build and session handles reject both
+`listBuildsPage(repo, { cursor?, limit?, kind?, outcome?, activeSince? })`
+returns one page of builds newest first by creation (slug descending breaks
+ties), with records identical to `listBuildsForRepo` and an opaque,
+adapter-issued `next` cursor that continues only a request with the same
+filters. The optional filters are `kind` (`leaf` or `node`), `outcome: merged`
+and `activeSince` (an ISO instant with a zone). Each is answered from per-build
+listing facts written in the same transaction as the write that changes them,
+never from events or reduced values: `node` from `build.created`'s kind (any
+other kind is a leaf), merged from the latest `build.completed` and cleared by
+`build.reopened`, and a mirror of the build's `updatedAt`, which every write
+bumps. A `kind` or `outcome` page is the filtered subsequence of the creation
+order. An `activeSince` page holds builds whose `updatedAt` is at or after it,
+ordered by `updatedAt` then slug, both descending, with an `(updatedAt, slug)`
+cursor. A span never ends later than its build's latest event, so the matches
+are a superset of builds whose span overlaps the window. Because `updatedAt`
+moves, a build written between two page requests can appear twice in one
+traversal or be skipped once; consumers dedupe by slug. Every filter
+combination is one bounded range scan: a page reads at most `limit + 1`
+listing entries whatever the build count or the number of matches. Limits run
+from 1 to 100 (default 25). Malformed positions, cursors, filters and limits
+reject, as does a cursor issued for the other order. Unknown repositories
+answer empty without creating state. A remote server that cannot filter
+fails a filtered request with `BuildFeedUnsupportedError`; the client never
+filters an unfiltered page itself. Scoped build and session handles reject both
 methods. The feed is what derived reducers advance by (§7.7). Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
 conformance suite):
 
@@ -4727,11 +4745,14 @@ and migration reruns preserve counters. The per-build positions live in a
 separate additive table. When it is first created, in the same transaction,
 each repository with builds advances by one and every existing build is
 recorded at that new head, so the feed reports pre-existing builds once and
-never misses one. Later opens and migrations cost one catalog lookup. Hosted
-reads use one GET `/repos/:repo/change-position` returning only
-`{ position: string }`; `/repos/:repo/builds` returns scoped build records;
-`/repos/:repo/changed-builds?since=` and `/repos/:repo/build-page?limit=&cursor=`
-serve the feed and the paged listing. All four routes authorize the repository
+never misses one. The paged listing's per-build facts live in another
+additive, trigger-maintained table, backfilled once from each build's latest
+relevant events when it is first created. Later opens and migrations cost one
+catalog lookup. Hosted reads use one GET `/repos/:repo/change-position`
+returning only `{ position: string }`; `/repos/:repo/builds` returns scoped
+build records; `/repos/:repo/changed-builds?since=` and
+`/repos/:repo/build-page?limit=&cursor=&kind=&outcome=&activeSince=` serve the
+feed and the paged listing. All four routes authorize the repository
 before reading and support repositories with builds but no journal.
 
 Durable operator settings (intake, repository pause, harvest gate) and pending
