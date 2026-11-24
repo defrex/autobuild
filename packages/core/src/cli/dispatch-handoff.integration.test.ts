@@ -373,38 +373,41 @@ test('restored generation validates takeover, deposits once under authority, and
   }
 })
 
-for (const invalid of ['version', 'value'] as const) {
-  test(`upgrade helper reports ${invalid} incompatibility on stderr without projection JSON`, async () => {
-    const { prepareLaunchRuntime } = await import('./dispatch-launcher')
-    const { releasePreparedRuntime } = await import('./dispatch-runtime-use')
-    const { distributionRoot } = await import('../distribution')
-    const { resolveReducerValue } = await import('../store/reducer-values')
-    const checkout = await mkdtemp(join(tmpdir(), 'ab-incompatible-reader-'))
-    const version = resolveReducerValue(
-      { kind: 'repo', repo: 'repo' },
-      { reducer: 'dispatchUpgrade' },
-    ).reducer.version
-    let server: ReturnType<typeof Bun.serve> | undefined
-    let runtime: Awaited<ReturnType<typeof prepareLaunchRuntime>> | undefined
-    let child: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined
-    try {
-      server = Bun.serve({
-        port: 0,
-        fetch(request) {
-          if (new URL(request.url).pathname.endsWith('/reducer-values'))
-            return Response.json({
-              version: version + (invalid === 'version' ? 1 : 0),
-              cursor: 0,
-              value: null,
-            })
+test('upgrade helper reports reducer version and value incompatibility on stderr without projection JSON', async () => {
+  const { prepareLaunchRuntime } = await import('./dispatch-launcher')
+  const { releasePreparedRuntime } = await import('./dispatch-runtime-use')
+  const { distributionRoot } = await import('../distribution')
+  const { resolveReducerValue } = await import('../store/reducer-values')
+  const checkout = await mkdtemp(join(tmpdir(), 'ab-incompatible-reader-'))
+  const version = resolveReducerValue(
+    { kind: 'repo', repo: 'repo' },
+    { reducer: 'dispatchUpgrade' },
+  ).reducer.version
+  // One prepared runtime serves both readers; only the server's reply differs.
+  let invalid: 'version' | 'value' = 'version'
+  let server: ReturnType<typeof Bun.serve> | undefined
+  let runtime: Awaited<ReturnType<typeof prepareLaunchRuntime>> | undefined
+  let child: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined
+  try {
+    server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname.endsWith('/reducer-values'))
           return Response.json({
-            repo: 'repo',
-            createdAt: new Date(0).toISOString(),
-            updatedAt: new Date(0).toISOString(),
+            version: version + (invalid === 'version' ? 1 : 0),
+            cursor: 0,
+            value: null,
           })
-        },
-      })
-      runtime = await prepareLaunchRuntime(distributionRoot(), distributionRoot(), checkout)
+        return Response.json({
+          repo: 'repo',
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        })
+      },
+    })
+    runtime = await prepareLaunchRuntime(distributionRoot(), distributionRoot(), checkout)
+    for (const reply of ['version', 'value'] as const) {
+      invalid = reply
       child = Bun.spawn(
         [process.execPath, join(runtime.root, 'bin/ab-dispatch-generation.ts'), '--read-upgrade'],
         {
@@ -430,27 +433,28 @@ for (const invalid of ['version', 'value'] as const) {
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ])
-      expect(code).not.toBe(0)
-      expect(stdout).toBe('')
-      expect(stderr).toContain('incompatible reducer dispatchUpgrade')
-      expect(stderr).toContain(`client version ${version}`)
-      expect(stderr).toContain(`server version ${version + (invalid === 'version' ? 1 : 0)}`)
-      // A Bun timeout runs afterEach while this body continues, so late runtime
-      // preparation could recreate the checkout; the body removes it last.
-    } finally {
-      try {
-        if (child && child.exitCode === null && child.signalCode === null) {
-          child.kill()
-          await child.exited
-        }
-        server?.stop(true)
-        if (runtime) releasePreparedRuntime(runtime.root)
-      } finally {
-        await rm(checkout, { recursive: true, force: true })
-      }
+      expect(code, reply).not.toBe(0)
+      expect(stdout, reply).toBe('')
+      expect(stderr, reply).toContain('incompatible reducer dispatchUpgrade')
+      expect(stderr, reply).toContain(`client version ${version}`)
+      expect(stderr, reply).toContain(`server version ${version + (reply === 'version' ? 1 : 0)}`)
     }
-  }, 90_000)
-}
+    // A Bun timeout runs afterEach while this body continues, so late runtime
+    // preparation could recreate the checkout; the body removes it last.
+  } finally {
+    try {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill()
+        await child.exited
+      }
+      server?.stop(true)
+      if (runtime) releasePreparedRuntime(runtime.root)
+    } finally {
+      await rm(checkout, { recursive: true, force: true })
+    }
+  }
+}, 90_000)
+
 test('conditional helpers refresh durable facts and revalidate target files without journal reads', async () => {
   const { MemoryBuildStore } = await import('../store/memory')
   const { readUpgradeProjection } = await import('./dispatch-handoff')

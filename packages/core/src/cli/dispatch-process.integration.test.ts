@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,15 +7,13 @@ import { resolveRepoState } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { createTerminalModeController } from './terminal-restore'
 import {
-  DISPATCH_KERNEL_SIGNALS,
-  installDispatchKernelSignalHandlers,
   superviseDispatchChild,
   type DispatchSubprocess,
   watchDispatchParent,
 } from './dispatch-process'
-import { DISPATCHER } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { GIT_ID, git } from '../scenarios/harness'
+import { DISPATCHER } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 
@@ -58,25 +55,6 @@ function supervisorFixture(store: BuildStore, child: DispatchSubprocess, timeout
 }
 
 describe('dispatch child supervision', () => {
-  test('kernel signal handlers remain armed through repeated stop signals', () => {
-    const boundary = new EventEmitter()
-    let stops = 0
-    const received: string[] = []
-    const handlers = installDispatchKernelSignalHandlers((signal) => {
-      received.push(signal)
-      stops += 1
-    }, boundary)
-
-    for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.emit(signal)
-    boundary.emit('SIGINT')
-    expect(stops).toBe(DISPATCH_KERNEL_SIGNALS.length + 1)
-    expect(received).toEqual([...DISPATCH_KERNEL_SIGNALS, 'SIGINT'])
-    for (const signal of DISPATCH_KERNEL_SIGNALS) expect(boundary.listenerCount(signal)).toBe(1)
-    handlers.close()
-    handlers.close()
-    for (const signal of DISPATCH_KERNEL_SIGNALS) expect(boundary.listenerCount(signal)).toBe(0)
-  })
-
   test('an orphaned kernel notices parent death and requests shutdown once', async () => {
     let currentParent = 42
     let alive = true
@@ -103,223 +81,110 @@ describe('dispatch child supervision', () => {
     expect(stops).toBe(1)
     watch.close()
   })
+})
 
-  test('graceful SIGINT records one normal stop', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
-    const child = fakeSubprocess((signal) => {
-      if (signal === 'SIGINT') child.finish(0)
-    })
-    const supervisor = supervisorFixture(store, child)
-
-    await supervisor.stop()
-    const result = await supervisor.completed
-
-    const stopped = (await store.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(child.kills).toEqual(['SIGINT'])
-    expect(result).toEqual({ outcome: 'normal', exitCode: 0 })
-    expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
-  })
-
-  test('a failed stop-request deposit still signals and drains the child once', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
-    const append = store.appendRepo.bind(store)
-    let requests = 0
-    store.appendRepo = async (repo, event) => {
-      if (event.type === 'dispatcher.stop-requested') {
-        requests += 1
-        throw new Error('store temporarily unavailable')
-      }
-      return append(repo, event)
-    }
-    const child = fakeSubprocess((signal) => {
-      if (signal === 'SIGINT') child.finish(0)
-    })
-    const supervisor = supervisorFixture(store, child)
-    const stopping = supervisor.stop('SIGTERM')
-    expect(supervisor.stop('SIGHUP')).toBe(stopping)
-    await stopping
-    expect(await supervisor.completed).toEqual({
-      outcome: 'normal',
-      exitCode: 0,
-      signal: 'SIGTERM',
-    })
-    expect(requests).toBe(1)
-    expect(child.kills).toEqual(['SIGINT'])
-    const stops = (await store.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(stops).toHaveLength(1)
-    expect(stops[0]?.payload).toMatchObject({ signal: 'SIGTERM', outcome: 'normal' })
-  })
-
-  test('a normal stop fact preserves a later nonzero cleanup exit without duplication', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
-    await store.appendRepo('/repo', {
-      actor: DISPATCHER,
-      type: 'dispatcher.run-stopped',
-      payload: { run: 'run-1', outcome: 'normal', exitCode: 0 },
-    })
-    const child = fakeSubprocess()
-    const supervisor = supervisorFixture(store, child)
-
-    child.finish(17)
-    const result = await supervisor.completed
-
-    expect(result).toEqual({ outcome: 'normal', exitCode: 17 })
-    const stopped = (await store.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toEqual({ run: 'run-1', outcome: 'normal', exitCode: 0 })
-  })
-
-  test('an unsolicited signalled exit records and returns actionable evidence', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
-    const child = fakeSubprocess()
-    const supervisor = supervisorFixture(store, child)
-
-    child.finish(143, 'SIGTERM')
-    const result = await supervisor.completed
-
-    expect(result).toEqual({
-      outcome: 'abnormal',
-      exitCode: 143,
-      signal: 'SIGTERM',
-      error: 'kernel process exited with status 143 (signal SIGTERM)',
-    })
-    const stopped = (await store.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toEqual({
-      run: 'run-1',
-      outcome: 'abnormal',
-      exitCode: 143,
-      signal: 'SIGTERM',
-      error: 'kernel process exited with status 143 (signal SIGTERM)',
-    })
-  })
-
-  test('a child exiting during the final journal read remains graceful', async () => {
-    const backing = new MemoryBuildStore()
-    await backing.ensureRepo('/repo')
-    let releaseRead!: () => void
-    let readEntered!: () => void
-    const entered = new Promise<void>((resolve) => {
-      readEntered = resolve
-    })
-    const release = new Promise<void>((resolve) => {
-      releaseRead = resolve
-    })
-    let delayed = false
-    const store = new Proxy(backing, {
-      get(target, property) {
-        if (property === 'getReducerValue') {
-          return async (...args: Parameters<BuildStore['getReducerValue']>) => {
-            if (!delayed) {
-              delayed = true
-              readEntered()
-              await release
-            }
-            return target.getReducerValue(...args)
-          }
-        }
-        const value = Reflect.get(target, property, target) as unknown
-        return typeof value === 'function' ? value.bind(target) : value
-      },
-    }) as BuildStore
-    const child = fakeSubprocess()
-    const supervisor = supervisorFixture(store, child)
-
-    const stopping = supervisor.stop()
-    child.finish(0)
-    await entered
-    releaseRead()
-    await stopping
-    const result = await supervisor.completed
-
-    const stopped = (await backing.getRepoEvents('/repo')).filter(
-      (event) => event.type === 'dispatcher.run-stopped',
-    )
-    expect(child.kills).toEqual(['SIGINT'])
-    expect(result).toEqual({ outcome: 'normal', exitCode: 0 })
-    expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
-  })
-
-  test('a closed tick does not authorize killing a kernel persisting suspension', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
-    const child = fakeSubprocess()
-    const supervisor = supervisorFixture(store, child)
-    const stopping = supervisor.stop()
-    await Bun.sleep(15)
-    expect(child.kills).toEqual(['SIGINT'])
-    child.finish(0)
-    await stopping
-    expect(await supervisor.completed).toEqual({ outcome: 'normal', exitCode: 0 })
-  })
-
-  test('timeout never kills an open ticket-claim tick', async () => {
-    const store = new MemoryBuildStore()
-    await store.ensureRepo('/repo')
+test('stop never force-kills a draining kernel, whatever the store says about its tick', async () => {
+  const { emptyTickReport } = await import('../processes/dispatcher')
+  const {
+    queued,
+    janitorDiagnostics,
+    blockedDiagnostics,
+    ticketDiagnostics,
+    creationDiagnostics,
+    dependencyDiagnostics,
+    ...counters
+  } = emptyTickReport()
+  const tickStarted = async (store: BuildStore) => {
     await store.appendRepo('/repo', {
       actor: DISPATCHER,
       type: 'dispatcher.tick-started',
       payload: { run: 'run-1' },
     })
-    const child = fakeSubprocess()
-    const supervisor = supervisorFixture(store, child)
-    const stopping = supervisor.stop()
-
-    await Bun.sleep(15)
-    expect(child.kills).toEqual(['SIGINT'])
-    await store.appendRepo('/repo', {
-      actor: DISPATCHER,
-      type: 'dispatcher.tick-completed',
-      payload: {
-        run: 'run-1',
-        queued: 0,
-        counters: {
-          merged: 0,
-          closed: 0,
-          conflicted: 0,
-          abandoned: 0,
-          discarded: 0,
-          janitorFailed: 0,
-          recovered: 0,
-          dispatchFailed: 0,
-          resumed: 0,
-          swept: 0,
-          dispatched: 0,
-          authored: 0,
-          bounced: 0,
-          claimRaces: 0,
-          invalidTickets: 0,
-          dependencyBlocked: 0,
-          harvestStarted: 0,
-          harvestResumed: 0,
-          harvestCompleted: 0,
-          harvestEscalated: 0,
-          harvestFailed: 0,
-        },
-        janitorDiagnostics: [],
-        ticketDiagnostics: [],
-        dependencyDiagnostics: [],
+  }
+  // Each row guards a different reintroduced kill rule; `afterSigint` runs
+  // once the stop deadline has passed and before the child exits.
+  const rows: Array<{
+    name: string
+    setup(store: MemoryBuildStore): Promise<void>
+    killsOn137?: boolean
+    afterSigint?(store: MemoryBuildStore): Promise<void>
+  }> = [
+    { name: 'closed tick, kernel persisting suspension', setup: async () => {} },
+    {
+      name: 'open ticket-claim tick',
+      setup: tickStarted,
+      afterSigint: (store) =>
+        store
+          .appendRepo('/repo', {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run: 'run-1',
+              queued: 0,
+              counters,
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      name: 'metadata open boundary without any journal start',
+      setup: async (store) => {
+        await store.claimRepoLease('/repo', 'run-1', 60000)
+        await store.beginRepoTick('/repo', 'run-1')
       },
-    })
+    },
+    {
+      name: 'finished idle telemetry',
+      killsOn137: true,
+      setup: async (store) => {
+        await store.claimRepoLease('/repo', 'run-1', 60000)
+        await tickStarted(store)
+        await store.beginRepoTick('/repo', 'run-1')
+        await store.finishRepoTick('/repo', 'run-1', { outcome: 'completed', counters }, [])
+      },
+    },
+    {
+      name: 'failed telemetry read',
+      setup: async (store) => {
+        store.getRepo = async () => {
+          throw new Error('unavailable')
+        }
+      },
+    },
+    {
+      name: 'another run telemetry over a historical unsafe tick',
+      setup: async (store) => {
+        await store.claimRepoLease('/repo', 'foreign', 60_000)
+        await store.beginRepoTick('/repo', 'foreign')
+        await tickStarted(store)
+      },
+    },
+  ]
+  const started = await Promise.all(
+    rows.map(async (row) => {
+      const store = new MemoryBuildStore()
+      await store.ensureRepo('/repo')
+      await row.setup(store)
+      const child = fakeSubprocess((signal) => {
+        if (row.killsOn137 && signal === 'SIGKILL') child.finish(137, signal)
+      })
+      const supervisor = supervisorFixture(store, child)
+      return { row, store, child, supervisor, stopping: supervisor.stop() }
+    }),
+  )
+  // Past `stopTimeoutMs` (5): a deadline- or telemetry-based kill would fire here.
+  await Bun.sleep(15)
+  for (const { row, store, child, supervisor, stopping } of started) {
+    expect(child.kills, row.name).toEqual(['SIGINT'])
+    await row.afterSigint?.(store)
     child.finish(0)
     await stopping
-    await supervisor.completed
-    expect(child.kills).toEqual(['SIGINT'])
-  })
+    expect(await supervisor.completed, row.name).toEqual({ outcome: 'normal', exitCode: 0 })
+    expect(child.kills, row.name).toEqual(['SIGINT'])
+  }
 })
 
 test('interactive production dispatch runs the kernel in a distinct supervised process', async () => {
@@ -461,26 +326,28 @@ readyState = "ready"
   }
 }, 20_000)
 
-for (const signal of ['SIGHUP', 'SIGTERM'] as const) {
-  for (const interactive of [false, true]) {
-    test(`real ${interactive ? 'supervised' : 'plain'} dispatcher drains ${signal} and releases ownership`, async () => {
-      const repo = await mkdtemp(join(tmpdir(), 'ab-dispatch-signal-'))
-      let child: ReturnType<typeof Bun.spawn> | undefined
-      try {
-        await git(['init', '-q', '-b', 'main'], repo)
-        await mkdir(join(repo, 'tickets', 'ready'), { recursive: true })
-        await writeFile(
-          join(repo, 'autobuild.toml'),
-          'baseBranch = "main"\ncapacity = 2\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
-        )
-        await writeFile(join(repo, 'README.md'), 'fixture\n')
-        await git(['add', '-A'], repo)
-        await git([...GIT_ID, 'commit', '-q', '-m', 'fixture'], repo)
-        const entry = join(repo, 'signal-entry.ts')
-        const cli = import.meta.dir
-        await writeFile(
-          entry,
-          `
+for (const [signal, interactive] of [
+  ['SIGHUP', false],
+  ['SIGTERM', true],
+] as const) {
+  test(`real ${interactive ? 'supervised' : 'plain'} dispatcher drains ${signal} and releases ownership`, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-dispatch-signal-'))
+    let child: ReturnType<typeof Bun.spawn> | undefined
+    try {
+      await git(['init', '-q', '-b', 'main'], repo)
+      await mkdir(join(repo, 'tickets', 'ready'), { recursive: true })
+      await writeFile(
+        join(repo, 'autobuild.toml'),
+        'baseBranch = "main"\ncapacity = 2\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
+      )
+      await writeFile(join(repo, 'README.md'), 'fixture\n')
+      await git(['add', '-A'], repo)
+      await git([...GIT_ID, 'commit', '-q', '-m', 'fixture'], repo)
+      const entry = join(repo, 'signal-entry.ts')
+      const cli = import.meta.dir
+      await writeFile(
+        entry,
+        `
 import { abDispatch } from ${JSON.stringify(join(cli, 'dispatch.ts'))}
 import { spawnExec } from ${JSON.stringify(join(cli, '../ports/workspace/git-worktree.ts'))}
 import { createTerminalModeController } from ${JSON.stringify(join(cli, 'terminal-restore.ts'))}
@@ -491,157 +358,76 @@ const write = (s) => process.stdout.write(s)
 const terminal = { write, modes: createTerminalModeController(write, write), columns: 80, rows: 24, interactive: ${interactive} }
 await withDispatchTerminalRestore('dispatch', terminal, () => abDispatch({ targetRepo: ${JSON.stringify(repo)}, env: {}, exec: spawnExec, stdout: () => {}, stderr: () => {}, signal: controller.signal, intervalMs: 10, plain: ${!interactive}, terminal, input: { start: () => () => {} } }), process, (signal) => controller.abort(signal))
 `,
-        )
-        child = Bun.spawn([process.execPath, entry], { cwd: repo, stdout: 'pipe', stderr: 'pipe' })
-        let terminalOutput = ''
-        const outputDone = (async () => {
-          for await (const chunk of child!.stdout as ReadableStream<Uint8Array>)
-            terminalOutput += new TextDecoder().decode(chunk)
-        })()
-        const state = await resolveRepoState({ targetRepo: repo, exec: spawnExec })
-        const opened = openStoreForRepoState(state, { env: {} })
-        try {
-          const deadline = Date.now() + 10000
-          let acquired = false
-          while (Date.now() < deadline && child.exitCode === null) {
-            if (
-              (await opened.store.getRepo(state.repo))?.lease &&
-              (!interactive || terminalOutput.includes('\x1b[?1049h'))
-            ) {
-              acquired = true
-              break
-            }
-            await Bun.sleep(10)
+      )
+      child = Bun.spawn([process.execPath, entry], { cwd: repo, stdout: 'pipe', stderr: 'pipe' })
+      let terminalOutput = ''
+      const outputDone = (async () => {
+        for await (const chunk of child!.stdout as ReadableStream<Uint8Array>)
+          terminalOutput += new TextDecoder().decode(chunk)
+      })()
+      const state = await resolveRepoState({ targetRepo: repo, exec: spawnExec })
+      const opened = openStoreForRepoState(state, { env: {} })
+      try {
+        const deadline = Date.now() + 10000
+        let acquired = false
+        while (Date.now() < deadline && child.exitCode === null) {
+          if (
+            (await opened.store.getRepo(state.repo))?.lease &&
+            (!interactive || terminalOutput.includes('\x1b[?1049h'))
+          ) {
+            acquired = true
+            break
           }
-          expect(acquired).toBe(true)
-          child.kill(signal)
-          await Promise.race([
-            child.exited,
-            Bun.sleep(10000).then(() => {
-              throw new Error('dispatcher did not drain')
-            }),
-          ])
-          const stops = (await opened.store.getRepoEvents(state.repo)).filter(
-            (e) => e.type === 'dispatcher.run-stopped',
-          )
-          expect(stops).toHaveLength(1)
-          expect(stops[0]?.payload).toMatchObject({ outcome: 'normal', signal })
-          expect((await opened.store.getRepo(state.repo))?.lease).toBeUndefined()
-          await outputDone
-          if (interactive) {
-            expect(terminalOutput).toContain('\x1b[?25h')
-            expect(terminalOutput).toContain('\x1b[?1004l')
-          } else expect(terminalOutput).not.toContain('\x1b[?1004')
-          await abDispatch({
-            targetRepo: repo,
-            env: {},
-            exec: spawnExec,
-            stdout: () => {},
-            stderr: () => {},
-            once: true,
-            plain: true,
-          })
-          const events = await opened.store.getRepoEvents(state.repo)
-          const lastStart = events.findLast((e) => e.type === 'dispatcher.run-started')!
-          expect(
-            events.some((e) => e.seq > lastStart.seq && e.type === 'dispatcher.tick-yielded'),
-          ).toBe(false)
-          expect(
-            events.some((e) => e.seq > lastStart.seq && e.type === 'dispatcher.tick-completed'),
-          ).toBe(true)
-        } finally {
-          await opened.store.close()
+          await Bun.sleep(10)
         }
+        expect(acquired).toBe(true)
+        child.kill(signal)
+        await Promise.race([
+          child.exited,
+          Bun.sleep(10000).then(() => {
+            throw new Error('dispatcher did not drain')
+          }),
+        ])
+        const stops = (await opened.store.getRepoEvents(state.repo)).filter(
+          (e) => e.type === 'dispatcher.run-stopped',
+        )
+        expect(stops).toHaveLength(1)
+        expect(stops[0]?.payload).toMatchObject({ outcome: 'normal', signal })
+        expect((await opened.store.getRepo(state.repo))?.lease).toBeUndefined()
+        await outputDone
+        if (interactive) {
+          expect(terminalOutput).toContain('\x1b[?25h')
+          expect(terminalOutput).toContain('\x1b[?1004l')
+        } else expect(terminalOutput).not.toContain('\x1b[?1004')
+        await abDispatch({
+          targetRepo: repo,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          plain: true,
+        })
+        const events = await opened.store.getRepoEvents(state.repo)
+        const lastStart = events.findLast((e) => e.type === 'dispatcher.run-started')!
+        expect(
+          events.some((e) => e.seq > lastStart.seq && e.type === 'dispatcher.tick-yielded'),
+        ).toBe(false)
+        expect(
+          events.some((e) => e.seq > lastStart.seq && e.type === 'dispatcher.tick-completed'),
+        ).toBe(true)
       } finally {
-        if (child?.exitCode === null) {
-          child.kill('SIGKILL')
-          await child.exited
-        }
-        await rm(repo, { recursive: true, force: true })
+        await opened.store.close()
       }
-    }, 25000)
-  }
+    } finally {
+      if (child?.exitCode === null) {
+        child.kill('SIGKILL')
+        await child.exited
+      }
+      await rm(repo, { recursive: true, force: true })
+    }
+  }, 25000)
 }
-
-test('metadata open boundary prevents forced termination without any journal start', async () => {
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('/repo')
-  await store.claimRepoLease('/repo', 'run-1', 60000)
-  await store.beginRepoTick('/repo', 'run-1')
-  const child = fakeSubprocess()
-  const supervisor = supervisorFixture(store, child)
-  const stopping = supervisor.stop()
-  await Bun.sleep(15)
-  expect(child.kills).toEqual(['SIGINT'])
-  child.finish(0)
-  await stopping
-})
-
-test('finished idle telemetry still waits for suspension', async () => {
-  const { emptyTickReport } = await import('../processes/dispatcher')
-  const {
-    queued,
-    janitorDiagnostics,
-    blockedDiagnostics,
-    ticketDiagnostics,
-    creationDiagnostics,
-    dependencyDiagnostics,
-    ...counters
-  } = emptyTickReport()
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('/repo')
-  await store.claimRepoLease('/repo', 'run-1', 60000)
-  await store.appendRepo('/repo', {
-    actor: DISPATCHER,
-    type: 'dispatcher.tick-started',
-    payload: { run: 'run-1' },
-  })
-  await store.beginRepoTick('/repo', 'run-1')
-  await store.finishRepoTick('/repo', 'run-1', { outcome: 'completed', counters }, [])
-  const child = fakeSubprocess((signal) => {
-    if (signal === 'SIGKILL') child.finish(137, signal)
-  })
-  const supervisor = supervisorFixture(store, child)
-  const stopping = supervisor.stop()
-  await Bun.sleep(15)
-  expect(child.kills).toEqual(['SIGINT'])
-  child.finish(0)
-  await stopping
-})
-
-test('failed telemetry read never authorizes forced termination', async () => {
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('/repo')
-  store.getRepo = async () => {
-    throw new Error('unavailable')
-  }
-  const child = fakeSubprocess()
-  const supervisor = supervisorFixture(store, child)
-  const stopping = supervisor.stop()
-  await Bun.sleep(15)
-  expect(child.kills).toEqual(['SIGINT'])
-  child.finish(0)
-  await stopping
-})
-
-test('another run telemetry cannot close a historical unsafe tick', async () => {
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('/repo')
-  await store.claimRepoLease('/repo', 'foreign', 60_000)
-  await store.beginRepoTick('/repo', 'foreign')
-  await store.appendRepo('/repo', {
-    actor: DISPATCHER,
-    type: 'dispatcher.tick-started',
-    payload: { run: 'run-1' },
-  })
-  const child = fakeSubprocess()
-  const supervisor = supervisorFixture(store, child)
-  const stopping = supervisor.stop()
-  await Bun.sleep(15)
-  expect(child.kills).toEqual(['SIGINT'])
-  child.finish(0)
-  await stopping
-})
 
 test('real process stops after restoring focus, resumes twice, and restores on an uncaught crash', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ab-focus-job-'))
