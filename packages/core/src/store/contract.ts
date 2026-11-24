@@ -2183,18 +2183,176 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
-      test('rejects a malformed cursor or an out-of-range limit', async () => {
+      /** Every page of one filtered request, following `next`. */
+      const walkPages = async (
+        store: BuildStore,
+        repo: string,
+        opts: import('./build-feed').BuildPageOptions,
+      ) => {
+        const walked: import('./types').BuildRecord[] = []
+        let cursor: string | undefined
+        do {
+          const page: import('./types').BuildPage = await store.listBuildsPage(repo, {
+            ...opts,
+            ...(cursor === undefined ? {} : { cursor }),
+          })
+          walked.push(...page.builds)
+          cursor = page.next ?? undefined
+        } while (cursor !== undefined)
+        return walked
+      }
+      const createdEvent = (slug: string, repo: string, kind?: 'work' | 'node') => ({
+        actor: DISPATCHER,
+        type: 'build.created' as const,
+        payload: {
+          ticket: { source: 'file' as const, id: slug },
+          repo,
+          baseBranch: 'main',
+          ...(kind === undefined ? {} : { kind }),
+        },
+      })
+      const complete = (store: BuildStore, slug: string, outcome: 'merged' | 'closed-unmerged') =>
+        store.append(slug, { actor: DISPATCHER, type: 'build.completed', payload: { outcome } })
+      const reopen = (store: BuildStore, slug: string) =>
+        store.append(slug, {
+          actor: humanActor('op'),
+          type: 'build.reopened',
+          payload: { feedback: 'again' },
+        })
+
+      test('filters by kind and merged outcome, each cursor continuing its subsequence', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const repo = 'page/filters'
+          const create = async (slug: string, kind?: 'work' | 'node') => {
+            clock.advance(1)
+            await store.createBuild({
+              slug,
+              repo,
+              ...(kind === undefined ? {} : { created: createdEvent(slug, repo, kind) }),
+            })
+          }
+          await create('f-leaf')
+          await create('f-work', 'work')
+          await create('f-node-a', 'node')
+          await create('f-node-b', 'node')
+          await create('f-merged')
+          await complete(store, 'f-merged', 'merged')
+          await create('f-closed')
+          await complete(store, 'f-closed', 'closed-unmerged')
+          await create('f-reopened')
+          await complete(store, 'f-reopened', 'merged')
+          await reopen(store, 'f-reopened')
+          await create('f-superseded')
+          await complete(store, 'f-superseded', 'merged')
+          await complete(store, 'f-superseded', 'closed-unmerged')
+          await complete(store, 'f-node-b', 'merged')
+          await store.createBuild({
+            slug: 'f-elsewhere',
+            repo: 'page/elsewhere',
+            created: createdEvent('f-elsewhere', 'page/elsewhere', 'node'),
+          })
+          await complete(store, 'f-elsewhere', 'merged')
+
+          const all = (await store.listBuildsForRepo(repo)).reverse()
+          const nodes = new Set(['f-node-a', 'f-node-b'])
+          const merged = new Set(['f-merged', 'f-node-b'])
+          for (const [filters, keep] of [
+            [{ kind: 'node' }, (slug: string) => nodes.has(slug)],
+            [{ kind: 'leaf' }, (slug: string) => !nodes.has(slug)],
+            [{ outcome: 'merged' }, (slug: string) => merged.has(slug)],
+            [{ kind: 'node', outcome: 'merged' }, (slug: string) => slug === 'f-node-b'],
+            [{ kind: 'leaf', outcome: 'merged' }, (slug: string) => slug === 'f-merged'],
+          ] as const) {
+            expect(await walkPages(store, repo, { ...filters, limit: 1 })).toEqual(
+              all.filter((build) => keep(build.slug)),
+            )
+          }
+        })
+      })
+
+      test('activeSince orders by update, includes its instant and intersects other filters', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const repo = 'page/active'
+          for (const slug of ['act-a', 'act-b', 'act-c']) {
+            await store.createBuild({ slug, repo })
+            clock.advance(1)
+          }
+          clock.advance(1000)
+          const since = clock().toISOString()
+          await complete(store, 'act-a', 'merged')
+          clock.advance(1)
+          // A non-event write moves a build in the update order too.
+          expect(await store.claimLease('act-b', 'runner', 60_000)).toBe(true)
+          clock.advance(1)
+          await store.createBuild({ slug: 'act-d', repo })
+          clock.advance(1)
+
+          const slugs = (builds: import('./types').BuildRecord[]) => builds.map((b) => b.slug)
+          expect(slugs(await walkPages(store, repo, { activeSince: since, limit: 1 }))).toEqual([
+            'act-d',
+            'act-b',
+            'act-a',
+          ])
+          // The same instant written with an offset is the same filter.
+          const shifted = new Date(Date.parse(since) + 2 * 3_600_000).toISOString()
+          const offset = `${shifted.slice(0, 19)}${shifted.slice(19, 23)}+02:00`
+          expect(slugs(await walkPages(store, repo, { activeSince: offset, limit: 2 }))).toEqual([
+            'act-d',
+            'act-b',
+            'act-a',
+          ])
+          expect(
+            slugs(await walkPages(store, repo, { activeSince: since, outcome: 'merged' })),
+          ).toEqual(['act-a'])
+          expect(slugs(await walkPages(store, repo, { activeSince: since, kind: 'node' }))).toEqual(
+            [],
+          )
+
+          // A build written mid-traversal jumps ahead of the cursor; the walk
+          // continues from the saved key, so consumers dedupe by slug.
+          const first = await store.listBuildsPage(repo, { activeSince: since, limit: 1 })
+          expect(slugs(first.builds)).toEqual(['act-d'])
+          await reopen(store, 'act-a')
+          const second = await store.listBuildsPage(repo, {
+            activeSince: since,
+            limit: 1,
+            cursor: first.next!,
+          })
+          expect(slugs(second.builds)).toEqual(['act-b'])
+        })
+      })
+
+      test('rejects a malformed cursor, a cursor of the other order, an invalid filter or an out-of-range limit', async () => {
         await withStore(factory, undefined, async (store) => {
+          const repo = 'page/repo'
+          await store.createBuild({ slug: 'reject-a', repo })
+          await store.createBuild({ slug: 'reject-b', repo })
+          const created = (await store.listBuildsPage(repo, { limit: 1 })).next!
+          const updated = (await store.listBuildsPage(repo, { limit: 1, activeSince: CONTRACT_T0 }))
+            .next!
           for (const opts of [
             { limit: 0 },
             { limit: 101 },
             { limit: 1.5 },
             { cursor: 'not a cursor' },
             { cursor: 'e30' },
+            { cursor: created, activeSince: CONTRACT_T0 },
+            { cursor: updated },
+            { cursor: updated, kind: 'node' },
+            { kind: 'work' },
+            { kind: 'all' },
+            { kind: '' },
+            { outcome: 'closed-unmerged' },
+            { activeSince: 'yesterday' },
+            { activeSince: '2026-11-24' },
+            { activeSince: '2026-11-24T00:00:00' },
+            { activeSince: 1 },
           ])
-            await expect(store.listBuildsPage('page/repo', opts)).rejects.toThrow(
-              BuildFeedValidationError,
-            )
+            await expect(
+              store.listBuildsPage(repo, opts as import('./build-feed').BuildPageOptions),
+            ).rejects.toThrow(BuildFeedValidationError)
         })
       })
     })

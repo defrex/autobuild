@@ -8,9 +8,12 @@ import {
   decodeBuildPageCursor,
   encodeBuildPageCursor,
   MAX_CHANGE_POSITION,
+  parseBuildPageFilterParams,
   parseBuildPageLimitParam,
   parseChangePosition,
+  resolveBuildPageFilters,
   resolveBuildPageLimit,
+  sameBuildPageFilters,
 } from './build-feed'
 
 describe('change positions', () => {
@@ -45,9 +48,13 @@ describe('build page arguments', () => {
   })
 
   test('cursors round-trip opaque sort keys and reject malformed input', () => {
+    // A creation-order cursor keeps the exact bytes it had before filters.
+    expect(
+      encodeBuildPageCursor({ order: 'created', at: '2026-11-23T00:00:00.000Z', slug: 'build-a' }),
+    ).toBe('eyJ2IjoxLCJhdCI6IjIwMjYtMTEtMjNUMDA6MDA6MDAuMDAwWiIsInNsdWciOiJidWlsZC1hIn0')
     for (const key of [
-      { at: '2026-11-23T00:00:00.000Z', slug: 'build-a' },
-      { at: '2026-11-23 00:00:00.123456+00', slug: 'ünïcode/slug?&=' },
+      { order: 'created' as const, at: '2026-11-23T00:00:00.000Z', slug: 'build-a' },
+      { order: 'updated' as const, at: '2026-11-23 00:00:00.123456+00', slug: 'ünïcode/slug?&=' },
     ]) {
       const cursor = encodeBuildPageCursor(key)
       expect(cursor).toMatch(/^[A-Za-z0-9_-]+$/)
@@ -62,7 +69,7 @@ describe('build page arguments', () => {
       encode({}),
       encode([]),
       encode(null),
-      encode({ v: 2, at: 'x', slug: 'y' }),
+      encode({ v: 3, at: 'x', slug: 'y' }),
       encode({ v: 1, at: '', slug: 'y' }),
       encode({ v: 1, at: 'x', slug: 1 }),
       encode({ v: 1, at: 'x', slug: 'y', extra: true }),
@@ -70,6 +77,23 @@ describe('build page arguments', () => {
       42,
     ])
       expect(() => decodeBuildPageCursor(invalid)).toThrow(BuildFeedValidationError)
+  })
+
+  test('filters normalize, reject invalid values and compare by value', () => {
+    expect(
+      resolveBuildPageFilters({
+        kind: 'node',
+        outcome: 'merged',
+        activeSince: '2026-11-24T02:00+02:00',
+      }),
+    ).toEqual({ kind: 'node', outcome: 'merged', activeSince: '2026-11-24T00:00:00.000Z' })
+    expect(parseBuildPageFilterParams(new URLSearchParams('limit=5'))).toEqual({})
+    for (const invalid of ['kind=', 'kind=work', 'outcome=abandoned', 'activeSince=nope'])
+      expect(() => parseBuildPageFilterParams(new URLSearchParams(invalid))).toThrow(
+        BuildFeedValidationError,
+      )
+    expect(sameBuildPageFilters({ kind: 'leaf' }, { kind: 'leaf' })).toBe(true)
+    expect(sameBuildPageFilters({ kind: 'leaf' }, {})).toBe(false)
   })
 })
 
