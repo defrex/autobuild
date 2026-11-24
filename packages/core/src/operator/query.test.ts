@@ -1479,3 +1479,16 @@ test('builds.control accepts an abort destination and reason, and refuses them o
     payload: { to: 'ready', reason: 'waiting on T-2' },
   })
 })
+
+test('operator reads of active work cost the same however many builds have settled (#1230)', async () => {
+  const { openBuildListingReadBudget } = await import('../testing/reduced-read-budget')
+  const open = { records: 3, digests: 3 }
+  expect(await openBuildListingReadBudget()).toEqual({
+    active: open,
+    queued: open,
+    landings: open,
+    dashboard: open,
+    status: open,
+    capacity: open,
+  })
+})
