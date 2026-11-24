@@ -1,5 +1,5 @@
 import { countHistoricalRows, type ReducedReadCosts } from '@defrex/autobuild/testing'
-import { resolveReducerValue } from '@defrex/autobuild/store-adapter'
+import { resolveReducerValue, type SnapshotScope } from '@defrex/autobuild/store-adapter'
 import {
   PostgresProjectRegistry,
   openPostgresProjectRegistryFromEnv,
@@ -282,7 +282,7 @@ steps = []
           get(target, prop) {
             if (prop === 'getReducerValue')
               return async (...args: Parameters<BuildStore['getReducerValue']>) => {
-                const [scope, request] = args
+                const [scope, request] = args as [SnapshotScope, (typeof args)[1]]
                 const selected = resolveReducerValue(scope, request)
                 const events =
                   scope.kind === 'build'
