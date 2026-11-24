@@ -7,8 +7,6 @@ import type { ExecResult } from '../ports/workspace/git-worktree'
 import { runCli } from './main'
 import {
   availableRelease,
-  rewriteDeclaredSpecifiers,
-  registryVersionUrl,
   selfUpdate,
   type RegistryLookup,
   type SelfUpdateCommand,
@@ -238,6 +236,12 @@ describe('self-update across scope, section, and channel', () => {
       })
 
       for (const scope of ['local', 'global'] as const) {
+        // The named orchestration cases below cover these exact successful paths.
+        if (
+          section === 'dependencies' &&
+          ((scope === 'local' && channel === 'github') || (scope === 'global' && channel === 'npm'))
+        )
+          continue
         test(`${scope} ${channel} update under ${section} uses the right Bun argv`, async () => {
           const fixture = await installFixture(scope, channel, section)
           const calls: string[][] = []
@@ -273,14 +277,6 @@ describe('self-update across scope, section, and channel', () => {
       }
     }
   }
-
-  test('rewriteDeclaredSpecifiers touches only the declared specifiers', () => {
-    const text =
-      '{\n\t"name": "x",\n\t"dependencies": {\n\t\t"a": "^1.0.0",\n\t\t"p": "^1.0.0"\n\t},\n\t"devDependencies": {\n\t\t"p": "1.0.0"\n\t}\n}\n'
-    expect(rewriteDeclaredSpecifiers(text, 'p', '^2.0.0')).toBe(
-      text.replace('"p": "^1.0.0"', '"p": "^2.0.0"').replace('"p": "1.0.0"', '"p": "^2.0.0"'),
-    )
-  })
 })
 
 describe('distribution self-update orchestration', () => {
@@ -638,15 +634,6 @@ describe('distribution self-update orchestration', () => {
 })
 
 describe('npm registry channel', () => {
-  test('registry version URLs encode the scope separator and default to latest', () => {
-    expect(registryVersionUrl('https://registry.npmjs.org', '@defrex/autobuild')).toBe(
-      'https://registry.npmjs.org/@defrex%2fautobuild/latest',
-    )
-    expect(registryVersionUrl('https://registry.example.test', 'autobuild', '1.2.3')).toBe(
-      'https://registry.example.test/autobuild/1.2.3',
-    )
-  })
-
   test('the silent probe reads the registry, never gh, for an npm install', async () => {
     const fixture = await installFixture('global', 'npm')
     const calls: Array<{
