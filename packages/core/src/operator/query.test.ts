@@ -292,6 +292,7 @@ describe('operator query wiring', () => {
     const counting = countingStore(raw)
     expect(await getRepositoryStatus(counting.store, REPO)).toEqual({
       repo: REPO,
+      dispatcherRunning: false,
       intake: true,
       paused: false,
       defaultAutoMerge: false,
