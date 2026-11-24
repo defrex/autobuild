@@ -66,10 +66,14 @@ import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
 import {
   type ReducerSnapshot,
+  type ReducerValueScope,
+  type RollupScope,
   type SnapshotScope,
+  rollupScopeKey,
   snapshotScopeKey,
   snapshotSupersedes,
 } from './snapshots'
+import { KeyedMutex, readRollupValue, type RollupAdvance, type RollupStorage } from './rollups'
 import { validateCreatedEvent } from './new-build'
 import { createSessionScopedStore } from './session-handle'
 import { projectRepositoryStateEvents } from './repo-state-events'
@@ -1213,12 +1217,84 @@ export class MemoryBuildStore implements BuildStore {
     return events === undefined ? undefined : (events.at(-1)?.seq ?? 0)
   }
 
-  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+  /** Per-rollup-key serialization (SPEC §7.7). A memory store is one
+   * in-process instance, so there is no other instance to coordinate with. */
+  private rollupLocks = new KeyedMutex()
+
+  async getReducerValue(
+    scope: ReducerValueScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    if (scope.kind === 'rollup') return readRollupValue(scope, request, this.rollupStorage(scope))
     // Reject invalid requests before touching storage.
     resolveReducerValue(scope, request)
     if (request.reducer === 'buildStreamSeed' || request.reducer === 'repositoryAttention')
       return this.withSeedLock(scope, () => this.readSeedValue(scope, request))
     return this.readValue(scope, request)
+  }
+
+  /** The rollup engine's port over the `snapshots` map: the rollup row under
+   * the rollup scope, absorbed contributions under each build's scope. */
+  private rollupStorage(scope: RollupScope): RollupStorage {
+    const repo = scope.repo
+    const rowKey = (key: string) => `${rollupScopeKey(scope)}\u0000${key}`
+    const head = () => this.getRepoChangePosition(repo)
+    const read = async (key: string) => {
+      const stored = this.snapshots.get(rowKey(key))
+      return stored === undefined
+        ? null
+        : {
+            version: stored.version,
+            state: structuredClone(stored.state),
+            token: JSON.stringify(stored),
+          }
+    }
+    const advance: RollupAdvance = {
+      head,
+      read,
+      changed: (since) => this.listBuildsChangedSince(repo, since),
+      buildValue: async (slug, request) =>
+        this.builds.has(slug) ? this.readValue({ kind: 'build', slug }, request) : null,
+      contributions: async (key, slugs) => {
+        const found = new Map<string, unknown>()
+        for (const slug of slugs) {
+          const stored = this.snapshots.get(
+            `${snapshotScopeKey({ kind: 'build', slug })}\u0000${key}`,
+          )
+          if (stored !== undefined) found.set(slug, structuredClone(stored.state))
+        }
+        return found
+      },
+      // One synchronous block: conditional on the row read, then every write.
+      commit: async (key, observed, row, contributionKey, writes) => {
+        const current = this.snapshots.get(rowKey(key))
+        if ((current === undefined ? null : JSON.stringify(current)) !== observed) return false
+        this.snapshots.set(rowKey(key), {
+          version: row.version,
+          cursor: 0,
+          state: JSON.parse(JSON.stringify(row.state)),
+        })
+        for (const [slug, contribution] of writes) {
+          const cacheKey = `${snapshotScopeKey({ kind: 'build', slug })}\u0000${contributionKey}`
+          if (contribution === null) this.snapshots.delete(cacheKey)
+          else
+            this.snapshots.set(cacheKey, {
+              version: row.version,
+              cursor: 0,
+              state: JSON.parse(JSON.stringify(contribution)),
+            })
+        }
+        return true
+      },
+      renew: async () => {},
+    }
+    return {
+      now: () => this.clock(),
+      buildReadConcurrency: 16,
+      head,
+      read,
+      serialize: (key, run) => this.rollupLocks.run(rowKey(key), () => run(advance)),
+    }
   }
 
   private async readSeedValue(
