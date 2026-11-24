@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { checkoutRoot, suiteCommands, UNIT_IO_GUARD_PRELOAD } from './test-temp-leaks'
 
-async function runUnderUnitGuard(fixture: string): Promise<{ code: number; output: string }> {
+async function runUnderUnitGuard(...fixtures: string[]): Promise<{ code: number; output: string }> {
   const [unit] = await suiteCommands('unit', [])
   const preload = unit?.indexOf(`--preload=${UNIT_IO_GUARD_PRELOAD}`) ?? -1
   expect(preload).toBeGreaterThan(0)
-  const child = Bun.spawn([...(unit ?? []).slice(0, preload + 1), fixture], {
+  const child = Bun.spawn([...(unit ?? []).slice(0, preload + 1), ...fixtures], {
     cwd: checkoutRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -60,5 +60,18 @@ describe('unit IO guard enforcement', () => {
       'Unit tests must not do IO: fs.readFileSync (filesystem) at tools/fixtures/unit-io-skipped.fixture.ts:',
     )
     expect(output).toContain('*.integration.test.ts')
+  }, 30_000)
+
+  test('names the file that armed a timer that fires in a later file', async () => {
+    const { code, output } = await runUnderUnitGuard(
+      './tools/fixtures/unit-io-armed-leak.fixture.ts',
+      './tools/fixtures/unit-io-later-file.fixture.ts',
+    )
+    expect(code).not.toBe(0)
+    expect(output).toContain(
+      'Unit tests must not do IO: setTimeout (real clock) at tools/fixtures/unit-io-armed-leak.fixture.ts:',
+    )
+    expect(output).toContain('armed while tools/fixtures/unit-io-armed-leak.fixture.ts was running')
+    expect(output).toContain('(fail) runs while an earlier file leaks a timer')
   }, 30_000)
 })

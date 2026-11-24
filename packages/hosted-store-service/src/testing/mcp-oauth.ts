@@ -256,9 +256,52 @@ export async function dynamicRegister(
   })
 }
 
+/**
+ * A fetch that routes in-process through `app`. An abort of the request's
+ * signal cancels the server's response body, as a real fetch does. Without
+ * that, closing an SDK client never reaches the server's standalone SSE
+ * stream, and the SDK server's keep-alive interval outlives the test (#1215).
+ */
 export function routerFetch(app: App): typeof fetch {
-  return (async (input: string | URL | Request, init?: RequestInit) =>
-    app(new Request(input, init))) as unknown as typeof fetch
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const response = await app(request)
+    return abortable(response, request.signal)
+  }) as unknown as typeof fetch
+}
+
+function abortable(response: Response, signal: AbortSignal): Response {
+  if (response.body === null) return response
+  const reader = response.body.getReader()
+  let onAbort: (() => void) | undefined
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      onAbort = () => {
+        reader.cancel(signal.reason).catch(() => {})
+        try {
+          controller.error(signal.reason)
+        } catch {}
+      }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read()
+      if (done) {
+        signal.removeEventListener('abort', onAbort!)
+        controller.close()
+      } else controller.enqueue(value)
+    },
+    cancel(reason) {
+      signal.removeEventListener('abort', onAbort!)
+      return reader.cancel(reason)
+    },
+  })
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
 }
 
 /** Drive the full authorization-code + PKCE + consent flow for one session
