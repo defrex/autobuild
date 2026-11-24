@@ -1,13 +1,20 @@
 # Filing tickets with blockers safely
 
 `ab ticket create --blocked-by` validates prerequisite ids and records blocking
-relationships, but a single CLI command is **not an atomic publication guarantee**.
-In particular, direct Linear and GitHub create the issue first and add
-its blocker relationships in separate requests. If the issue is already in the
+relationships, but on most sources a single CLI command is **not an atomic
+publication guarantee**. Direct Linear creates the issue first and adds its
+blocker relationships in separate requests. If the issue is already in the
 ready state, a dispatcher can see it before those relationships exist. A
 successful create response containing every blocker does not prove that no build
 was claimed during the request. Harvest's durable creation reservations protect
 its own filing workflow; ordinary interactive ticket creation has no such hold.
+
+GitHub stages for you. A ready-bound create with blockers opens in triage,
+records every blocker, and only then moves to ready. Claim also re-reads
+blockers fresh, so one `create --blocked-by` never exposes an unblocked ready
+ticket and needs no manual staging. A partial failure leaves the ticket in
+triage, so reading it back still matters. The workflow below is the portable
+procedure for any source whose create order you do not know.
 
 ## Safe interactive workflow
 

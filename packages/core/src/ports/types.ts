@@ -263,6 +263,29 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
+/** A claim refused because the source found an unresolved blocker the
+ * caller's dependency check did not evaluate. Nothing was written; the ticket
+ * stays where it was and a later dependency check sees the blocker. */
+export class TicketClaimBlockedError extends Error {
+  constructor(
+    readonly source: string,
+    readonly id: string,
+    readonly blockers: string[],
+  ) {
+    super(
+      `${source}: ticket ${id} has unresolved blockers recorded after the dependency check: ${blockers.join(', ')}`,
+    )
+    this.name = 'TicketClaimBlockedError'
+  }
+}
+
+/** What the caller of `claim` already checked. */
+export interface TicketClaimOptions {
+  /** Blocker ids the caller's dependency check evaluated. A source that can
+   * confirm blockers at claim refuses an unresolved blocker outside this set. */
+  blockedBy?: readonly string[]
+}
+
 export type TicketAssetStore = {
   /** Native ownership, including tombstones, prevents resurrection from legacy stores. */
   hasTicketAssetHistory?(repo: string, id: string, kind: string, name: string): Promise<boolean>
@@ -378,8 +401,11 @@ export interface TicketSource {
    * Returns false for an unknown, already-claimed/contested, or terminal ticket.
    * Refusing a terminal ticket leaves its state unchanged; claim never reopens
    * completed work. An explicit transition to a nonterminal state permits a
-   * later claim. */
-  claim(id: string): Promise<boolean>
+   * later claim. A source that can confirm blockers re-reads them fresh and
+   * throws `TicketClaimBlockedError`, writing nothing, when it finds an
+   * unresolved blocker outside `opts.blockedBy` (absent means none were
+   * evaluated). Sources without that capability ignore `opts`. */
+  claim(id: string, opts?: TicketClaimOptions): Promise<boolean>
   comment(id: string, body: string): Promise<void>
   transition(id: string, state: string): Promise<void>
   create(draft: TicketDraft, opts?: TicketCreateOptions): Promise<Ticket>
