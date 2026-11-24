@@ -74,12 +74,16 @@ bun ab web
 - `--host <addr>` serves beyond loopback with no access control; `ab web` warns that anyone who can reach the port can read the repository's builds.
 - `--json` prints one line, `{"url":"http://127.0.0.1:<port>/"}`, for agents that open or hand off the page.
 - Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
+- While idle, each poll reads only the repository change position.
+- A fresh process starts the overview from the build roster. It reads each live build plus each aborted build among the roster's 10 newest finished builds, to show aborts still cleaning up. An older abort still cleaning up appears at its next change. Startup never scans history.
+- A build change reads that build only, plus one roster read when a build starts, finishes or aborts. It never lists builds or reads event history.
+- A remote store server too old to serve the roster or the changed-builds feed fails the read with a typed error instead of falling back.
 
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
 - `--port`, `--host` and `--json` work as for `ab web` and require `--web`; `--json` changes only the URL announcement line.
 - A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation: stdout carries only the URL line, and warnings and diagnostics stay on stderr.
-- Adds no store reads: it shows what the dispatcher's own refresh reads. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
+- Adds no store reads: it shows what the dispatcher's own refresh reads, the repository header without the overview. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
 - Binds before the repository lease; a taken port fails dispatch before it claims anything.
 - The URL keeps working across automatic runtime upgrades and is printed once. Ctrl-C closes it. `--once` is refused.
 
