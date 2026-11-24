@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { drainUnitIoViolations, UNIT_IO_GUARD_MESSAGE_HINT } from './unit-io-guard'
+import {
+  drainUnitIoViolations,
+  setUnitIoGuardCurrentFileSource,
+  UNIT_IO_GUARD_MESSAGE_HINT,
+  wrapTimer,
+} from './unit-io-guard'
 
 function expectViolation(name: string): void {
   const drained = drainUnitIoViolations()
@@ -127,5 +132,35 @@ describe('unit IO guard', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 5))
     expectViolation('setTimeout')
+  })
+
+  test('names the file that armed a delayed timer that fires later', () => {
+    let captured: (() => void) | undefined
+    const wrapped = wrapTimer((callback: () => void) => {
+      captured = callback
+      return 0
+    }, 'setTimeout')
+    const arm = (file: string) => {
+      setUnitIoGuardCurrentFileSource(() => file)
+      wrapped(() => undefined, 15_000)
+    }
+    const fire = (file: string) => {
+      setUnitIoGuardCurrentFileSource(() => file)
+      captured!()
+      const drained = drainUnitIoViolations()
+      expect(drained).toHaveLength(1)
+      expect(drained[0]).toContain('Unit tests must not do IO: setTimeout (real clock) at ')
+      return drained[0]!
+    }
+    try {
+      arm('packages/a/armed.test.ts')
+      expect(fire('packages/b/fired.test.ts')).toContain(
+        ', armed while packages/a/armed.test.ts was running. ',
+      )
+      arm('packages/a/armed.test.ts')
+      expect(fire('packages/a/armed.test.ts')).not.toContain('armed while')
+    } finally {
+      setUnitIoGuardCurrentFileSource(undefined)
+    }
   })
 })

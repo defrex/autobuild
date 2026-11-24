@@ -10,6 +10,10 @@
  * StreamableHTTPClientTransport, exactly the machinery Claude web, Claude
  * Code, and Codex bring, so contract drift on either side fails loudly.
  *
+ * After initialization the SDK client opens the standalone GET /mcp SSE
+ * stream. routerFetch propagates the client's abort to that response body, so
+ * the SDK server's keep-alive interval is cleared on close() (#1215).
+ *
  * Access-token expiry needs a real one-second wait, so the refresh case lives
  * in mcp.io.integration.test.ts.
  */
@@ -108,6 +112,43 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
     } finally {
       await mcpClient.close()
     }
+  })
+
+  test('closing the MCP client cancels the standalone SSE stream it opened', async () => {
+    const streams: { cancelled: boolean }[] = []
+    const tracked = async (request: Request): Promise<Response> => {
+      const response = await app(request)
+      if (
+        request.method !== 'GET' ||
+        response.body === null ||
+        !response.headers.get('content-type')?.startsWith('text/event-stream')
+      )
+        return response
+      const stream = { cancelled: false }
+      streams.push(stream)
+      const reader = response.body.getReader()
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const { done, value } = await reader.read()
+          if (done) controller.close()
+          else controller.enqueue(value)
+        },
+        cancel(reason) {
+          stream.cancelled = true
+          return reader.cancel(reason)
+        },
+      })
+      return new Response(body, { status: response.status, headers: response.headers })
+    }
+    const client = await connectClient(tracked, adaTokens!, registered!)
+    await client.listTools()
+    for (let tick = 0; tick < 100 && streams.length === 0; tick++)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    await client.close()
+    for (let tick = 0; tick < 100 && streams.some((s) => !s.cancelled); tick++)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(streams.length).toBeGreaterThan(0)
+    expect(streams.every((s) => s.cancelled)).toBe(true)
   })
 
   test('merge aliases survive authenticated SDK validation and operator API delegation', async () => {

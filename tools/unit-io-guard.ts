@@ -6,7 +6,8 @@
  * (or rejects); a global `afterEach` fails the test when anything was
  * recorded, so IO that product code swallows in `try/catch` still fails.
  * Delayed timers record only when they actually fire, because product code
- * arms deadlines and heartbeats it never waits on.
+ * arms deadlines and heartbeats it never waits on. A delayed timer that fires
+ * while a later file runs also names the file that armed it.
  *
  * Module loading by the test runner (imports, JSON, snapshots) is exempt.
  * `Bun.fetch` is a non-configurable read-only property and cannot be wrapped;
@@ -68,6 +69,27 @@ export function drainUnitIoViolations(): string[] {
   return violations.splice(0)
 }
 
+// Shared through the global for the same reason: a test that imports a second
+// module instance must redirect the file source the preload instance reads.
+const CURRENT_FILE_KEY = Symbol.for('autobuild.unitIoGuard.currentFile')
+
+/**
+ * Overrides how the guard learns which test file is running; `undefined`
+ * restores the default, `Bun.main`, which `bun test` points at the current file.
+ */
+export function setUnitIoGuardCurrentFileSource(
+  source: (() => string | undefined) | undefined,
+): void {
+  if (source) shared[CURRENT_FILE_KEY] = source
+  else delete shared[CURRENT_FILE_KEY]
+}
+
+function currentTestFile(): string | undefined {
+  const source = shared[CURRENT_FILE_KEY] as (() => string | undefined) | undefined
+  const file = source ? source() : Bun.main
+  return file?.startsWith('/') ? relative(root, file) : file
+}
+
 function callSite(stack: string | undefined): string {
   const frames = (stack ?? '').split('\n').slice(1)
   for (const frame of frames) {
@@ -80,12 +102,24 @@ function callSite(stack: string | undefined): string {
   return 'an unknown location'
 }
 
-function message(name: string, category: Category, site: string): string {
-  return `Unit tests must not do IO: ${name} (${category}) at ${site}. ${UNIT_IO_GUARD_MESSAGE_HINT}`
+function message(name: string, category: Category, site: string, armedIn?: string): string {
+  const armed = armedIn ? `, armed while ${armedIn} was running` : ''
+  return `Unit tests must not do IO: ${name} (${category}) at ${site}${armed}. ${UNIT_IO_GUARD_MESSAGE_HINT}`
 }
 
-function record(name: string, category: Category, stack = new Error().stack): Error {
-  const text = message(name, category, callSite(stack))
+/**
+ * Records a violation. `armedIn` is the test file that was running when a
+ * delayed timer was armed; the message names it only when another file is
+ * running now, because that is when the failing test is the wrong one.
+ */
+function record(
+  name: string,
+  category: Category,
+  stack = new Error().stack,
+  armedIn?: string,
+): Error {
+  const elsewhere = armedIn !== undefined && armedIn !== currentTestFile() ? armedIn : undefined
+  const text = message(name, category, callSite(stack), elsewhere)
   violations.push(text)
   return new Error(text)
 }
@@ -219,17 +253,19 @@ function wrapModule(real: Record<string, unknown>, spec: ModuleSpec): Record<str
   return wrapped
 }
 
-function wrapTimer(real: AnyFunction, name: string): AnyFunction {
+/** Wraps a timer so a delayed callback records a violation when it fires. */
+export function wrapTimer(real: AnyFunction, name: string): AnyFunction {
   return (callback: unknown, delay?: unknown, ...args: unknown[]) => {
     if (typeof callback !== 'function' || !(Number(delay) > 0))
       return real(callback, delay, ...args)
     const stack = new Error().stack
+    const armedIn = currentTestFile()
     let fired = false
     return real(
       (...callbackArgs: unknown[]) => {
         if (!fired) {
           fired = true
-          record(name, 'real clock', stack)
+          record(name, 'real clock', stack, armedIn)
         }
         return (callback as AnyFunction)(...callbackArgs)
       },
@@ -422,8 +458,9 @@ function install(): void {
     setTimeout: (delay?: unknown, ...rest: unknown[]) => {
       if (!(Number(delay) > 0)) return timersPromises.setTimeout(delay, ...rest)
       const stack = new Error().stack
+      const armedIn = currentTestFile()
       return timersPromises.setTimeout(delay, ...rest).then((value: unknown) => {
-        record('timers/promises.setTimeout', 'real clock', stack)
+        record('timers/promises.setTimeout', 'real clock', stack, armedIn)
         return value
       })
     },
@@ -431,6 +468,7 @@ function install(): void {
       const iterator = timersPromises.setInterval(delay, ...rest)
       if (!(Number(delay) > 0)) return iterator
       const stack = new Error().stack
+      const armedIn = currentTestFile()
       let ticked = false
       return {
         [Symbol.asyncIterator]() {
@@ -440,7 +478,7 @@ function install(): void {
           const result = await iterator.next()
           if (!ticked && !result.done) {
             ticked = true
-            record('timers/promises.setInterval', 'real clock', stack)
+            record('timers/promises.setInterval', 'real clock', stack, armedIn)
           }
           return result
         },
@@ -454,8 +492,9 @@ function install(): void {
       wait: (delay?: unknown, options?: unknown) => {
         if (!(Number(delay) > 0)) return timersPromises.scheduler.wait(delay, options)
         const stack = new Error().stack
+        const armedIn = currentTestFile()
         return timersPromises.scheduler.wait(delay, options).then((value: unknown) => {
-          record('timers/promises.scheduler.wait', 'real clock', stack)
+          record('timers/promises.scheduler.wait', 'real clock', stack, armedIn)
           return value
         })
       },
@@ -484,9 +523,12 @@ function install(): void {
     const signal = realAbortTimeout(ms)
     if (ms > 0) {
       const stack = new Error().stack
-      signal.addEventListener('abort', () => record('AbortSignal.timeout', 'real clock', stack), {
-        once: true,
-      })
+      const armedIn = currentTestFile()
+      signal.addEventListener(
+        'abort',
+        () => record('AbortSignal.timeout', 'real clock', stack, armedIn),
+        { once: true },
+      )
     }
     return signal
   }
@@ -512,10 +554,11 @@ function install(): void {
       const result = realWaitAsync(array, index, value, timeout)
       if (timeout === 0 || !result.async) return result
       const stack = new Error().stack
+      const armedIn = currentTestFile()
       return {
         ...result,
         value: result.value.then((outcome: string) => {
-          if (outcome === 'timed-out') record('Atomics.waitAsync', 'real clock', stack)
+          if (outcome === 'timed-out') record('Atomics.waitAsync', 'real clock', stack, armedIn)
           return outcome
         }),
       }
