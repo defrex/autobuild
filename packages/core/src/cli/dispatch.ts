@@ -23,6 +23,9 @@ import { recordRuntimeRollback } from './dispatch-handoff'
 import { syncRollbackRetention } from './dispatch-runtime-use'
 import { dirname as runtimeDirname } from 'node:path'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
+import type { DispatchWebArgs } from './dispatch-args'
+import { startDispatchWeb, type DispatchWeb } from './dispatch-web'
+import type { WebServerStarter } from '../web/server'
 import { validateWorkspaceDispatchConfiguration } from './dispatch-readiness'
 import { releasePreparedRuntime } from './dispatch-runtime-use'
 import { authorizeRemoteHandoffs, recoverDispatchDrain } from '../kernel/dispatch-drain-recovery'
@@ -553,6 +556,15 @@ export interface DispatchOpts {
   /** Test seam for configured hook delivery; defaults to running the hook's
    * command or POSTing to its URL (`processes/hook-webhook.ts`). */
   invokeHook?: HookInvoke
+  /** `--web`: serve the read-only web UI from this process. It binds before
+   * the repository lease and adds no store reads: frames come from the
+   * refresh this dispatcher already runs. `start` is a test seam that
+   * replaces the real socket bind. */
+  web?: DispatchWebArgs & { start?: WebServerStarter }
+  /** Private: closes this generation's web server. `abDispatch` sets it; the
+   * loop awaits it before `dispatcher.terminal-released`, so a successor can
+   * bind the same port. */
+  releaseWeb?: () => Promise<void>
 }
 
 /** Reject hooks this dispatcher cannot deliver: command hooks where local
@@ -3945,14 +3957,21 @@ class DispatchLoop {
     this.paint()
   }
 
+  /** Plain/non-TTY `--web`: the web UI is the only presentation, so routine
+   * line-oriented stdout is suppressed. Warnings and diagnostics stay on
+   * stderr. */
+  private get webPresents(): boolean {
+    return !this.dashboard && this.opts.web !== undefined
+  }
+
   private say(line: string): void {
-    if (this.presentationReleased) return
+    if (this.presentationReleased || this.webPresents) return
     if (!this.dashboard && this.opts.silent !== true) this.opts.stdout(line)
   }
 
   /** Routine acknowledgement: line-oriented stdout, dashboard-silent. */
   private announce(line: string): void {
-    if (!this.dashboard) this.opts.stdout(line)
+    if (!this.dashboard && !this.webPresents) this.opts.stdout(line)
   }
 
   private hooks: HookSupervisor | undefined
@@ -4037,11 +4056,14 @@ class DispatchLoop {
     else if (this.opts.silent !== true) this.opts.stderr(line)
   }
 
-  /** Failure-severity dashboard notice whose historical plain sink is stdout. */
+  /** Failure-severity dashboard notice whose historical plain sink is stdout;
+   * under `--web` it moves to stderr so stdout carries only the URL. */
   private failureNotice(line: string): void {
     if (this.presentationReleased) return
     if (this.dashboard) this.setWarning(line)
-    else if (this.opts.silent !== true) this.opts.stdout(line)
+    else if (this.opts.silent === true) return
+    else if (this.webPresents) this.opts.stderr(line)
+    else this.opts.stdout(line)
   }
 
   /** Routine diagnostic whose historical line-oriented sink is stderr. */
@@ -4186,7 +4208,7 @@ class DispatchLoop {
     if (reportedDiagnostic) return true
     // A tick that did something is worth a plain line. Interactive mode
     // suppresses both action counts and the every-10s idle noise.
-    if (!this.dashboard && printIdle) {
+    if (!this.dashboard && !this.webPresents && printIdle) {
       this.opts.stdout('tick: idle')
       return true
     }
@@ -5005,6 +5027,8 @@ class DispatchLoop {
     // Interactive kernels have no terminal authority. Their frontend must
     // acknowledge removal and joining of input/render work itself.
     if (this.opts.kernelRunId === undefined) {
+      // Free the web port before the successor may bind it.
+      await this.opts.releaseWeb?.()
       await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
         type: 'dispatcher.terminal-released',
@@ -5537,16 +5561,22 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         ? { AB_TOKEN: projectToken(state.storeRef, state.repo, opts.env) }
         : {}),
     }
-    const opened = openStoreForRepoState(state, { env })
+    const web = await startOptionalDispatchWeb(opts, opts.repo ?? state.repo)
+    let opened: ReturnType<typeof openStoreForRepoState> | undefined
     try {
+      opened = openStoreForRepoState(state, { env })
       const interactive =
         opts.plain !== true && opts.terminal?.interactive === true && opts.input !== undefined
+      // Without a TTY the web UI is the only presentation: the viewer reads
+      // exactly as it would, and its text frames are discarded.
+      const plainOutput = web !== undefined ? () => {} : opts.stdout
+      const store = opened
       await new DispatchFrontend({
         viewer: { ...(opts.dispatchedBy !== undefined ? { dispatchedBy: opts.dispatchedBy } : {}) },
         repo: opts.repo ?? state.repo,
         checkout: state.checkout,
-        store: opened.store,
-        storeRef: opened.storeRef,
+        store: store.store,
+        storeRef: store.storeRef,
         env,
         terminal: opts.terminal ?? {
           columns: 100,
@@ -5559,7 +5589,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           ),
         },
         input: opts.input ?? { start: () => () => {} },
-        ...(!interactive ? { plainOutput: opts.stdout } : {}),
+        ...(!interactive ? { plainOutput } : {}),
+        ...(web !== undefined ? { web: { dispatch: web } } : {}),
         controlTickets: () =>
           lazyTicketSource(() =>
             openTicketSource(
@@ -5567,7 +5598,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 targetRepo: state.checkout,
                 exec: opts.exec,
                 env,
-                storeRef: opened.storeRef,
+                storeRef: store.storeRef,
                 stdout: opts.stdout,
               },
               'ab merge',
@@ -5581,7 +5612,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           : {}),
       }).run()
     } finally {
-      await opened.store.close()
+      await web?.close()
+      await opened?.store.close()
     }
     return
   }
@@ -5650,13 +5682,17 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           'interactive dashboard: pass --plain or run it without a TTY',
       )
     }
-    const opened = openStoreForRepoState(state, { env: resolvedOpts.env })
+    const web = await startOptionalDispatchWeb(resolvedOpts, state.repo)
+    let opened: ReturnType<typeof openStoreForRepoState> | undefined
     try {
+      opened = openStoreForRepoState(state, { env: resolvedOpts.env })
+      const store = opened
       const frontend = new DispatchFrontend({
         repo: state.repo,
         checkout: state.checkout,
-        storeRef: opened.storeRef,
-        store: opened.store,
+        storeRef: store.storeRef,
+        store: store.store,
+        ...(web !== undefined ? { web: { dispatch: web } } : {}),
         controlTickets: () =>
           lazyTicketSource(() =>
             openTicketSource(
@@ -5664,7 +5700,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 targetRepo: state.checkout,
                 exec: resolvedOpts.exec,
                 env: resolvedOpts.env,
-                storeRef: opened.storeRef,
+                storeRef: store.storeRef,
                 stdout: resolvedOpts.stdout,
               },
               'ab merge',
@@ -5686,11 +5722,48 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       })
       await frontend.run()
     } finally {
-      await opened.store.close()
+      await web?.close()
+      await opened?.store.close()
     }
     return
   }
 
+  // The plain kernel's web UI binds before config, wiring and any lease, and
+  // is fed by the repository view's own journal refreshes.
+  const web = await startOptionalDispatchWeb(resolvedOpts, state.repo)
+  if (web !== undefined) resolvedOpts.releaseWeb = web.close
+  try {
+    await runDispatchKernel(opts, resolvedOpts, state, originConfig, web)
+  } finally {
+    await web?.close()
+  }
+}
+
+async function startOptionalDispatchWeb(
+  opts: DispatchOpts,
+  repo: string,
+): Promise<DispatchWeb | undefined> {
+  if (opts.web === undefined) return undefined
+  const { start, ...options } = opts.web
+  return startDispatchWeb({
+    options,
+    repo,
+    env: opts.env,
+    stdout: opts.stdout,
+    stderr: opts.stderr,
+    ...(start !== undefined ? { start } : {}),
+  })
+}
+
+/** The in-process kernel path of `abDispatch`: plain/non-TTY dispatch,
+ * private kernel children and injected wiring. */
+async function runDispatchKernel(
+  opts: DispatchOpts,
+  resolvedOpts: DispatchOpts,
+  state: RepoStatePaths,
+  originConfig: Awaited<ReturnType<typeof fetchOriginModeConfig>> | undefined,
+  web: DispatchWeb | undefined,
+): Promise<void> {
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let configContent: string
   let config: Config
@@ -5893,6 +5966,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     // The loop's store-keyed identity (an explicit `repo` pins it).
     repo: resolvedOpts.repo ?? resolvedOpts.targetRepo,
     resident: resolvedOpts.once !== true,
+    // `--web` shows what these journal refreshes read; it never reads itself.
+    ...(web !== undefined ? { onRepositoryFacts: web.publishFacts } : {}),
   })
   await view.startJournal()
   const actor = humanActor(buildControlUser(resolvedOpts.env))

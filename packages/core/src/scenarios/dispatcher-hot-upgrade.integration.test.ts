@@ -268,6 +268,8 @@ scenario(
         '0.05',
         '--store',
         storePath,
+        '--web',
+        '--json',
       ],
       {
         cwd: repo,
@@ -281,8 +283,30 @@ scenario(
         stderr: 'pipe',
       },
     )
-    const stdout = new Response(child.stdout).text(),
-      stderr = new Response(child.stderr).text()
+    let output = ''
+    const stdout = (async () => {
+      const decoder = new TextDecoder()
+      for await (const chunk of child.stdout) output += decoder.decode(chunk, { stream: true })
+      return output
+    })()
+    const stderr = new Response(child.stderr).text()
+    // The URL the first generation announced must keep serving after each handoff.
+    const urlLines = () => output.split('\n').filter((line) => line.startsWith('{"url"'))
+    const servesFrames = async (url: string) => {
+      const page = await fetch(url)
+      expect(page.status).toBe(200)
+      await page.text()
+      const events = (await fetch(new URL('/events', url))).body!.getReader()
+      let received = ''
+      const decoder = new TextDecoder()
+      while (!received.includes('event: model')) {
+        const chunk = await events.read()
+        if (chunk.done) break
+        received += decoder.decode(chunk.value, { stream: true })
+      }
+      await events.cancel()
+      expect(received).toContain('event: model')
+    }
     const wait = eventWaiter({
       store,
       repo,
@@ -296,6 +320,9 @@ scenario(
     })
     try {
       await wait((events) => events.some((e) => e.type === 'dispatcher.runtime-recorded'))
+      await wait(async () => urlLines().length > 0)
+      const { url } = JSON.parse(urlLines()[0]!) as { url: string }
+      await servesFrames(url)
       for (const version of ['2.0.0', '3.0.0']) {
         await replace(version)
         const events = await wait((events) =>
@@ -349,6 +376,7 @@ scenario(
           ),
         ).toHaveLength(0)
         expect((await store.getRepo(repo))!.lease?.holder).toBe(completion.payload.successor)
+        await servesFrames(url)
       }
       const beforeFailure = (await store.getRepo(repo))!.lease!.holder
       const validConfig = await readFile(join(repo, 'autobuild.toml'), 'utf8')
@@ -380,6 +408,9 @@ scenario(
       await exitWithin(child, deadline(), 'launcher did not stop after interrupt')
       expect(child.exitCode).toBe(0)
       expect(await stderr).toContain('config reload rejected')
+      expect(await stderr).not.toContain('web UI unavailable')
+      await stdout
+      expect(urlLines()).toEqual([JSON.stringify({ url })])
     } finally {
       await stopChild(child, () => child.kill('SIGINT'))
       await stdout

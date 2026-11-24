@@ -418,6 +418,51 @@ test('public viewer bypasses the immutable launcher and execution config in non-
   await expect(access(join(cwd, '.autobuild/runtime'))).rejects.toThrow()
 })
 
+test('a non-TTY viewer with --web prints only the URL, serves frames, and closes on Ctrl-C', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'ab-viewer-web-'))
+  const child = Bun.spawn(
+    [process.execPath, distributionPath('bin/ab.ts'), 'dispatch', '--viewer', '--web', '--json'],
+    { cwd, env: { PATH: process.env.PATH }, stdout: 'pipe', stderr: 'pipe' },
+  )
+  const reader = child.stdout.getReader()
+  const decoder = new TextDecoder()
+  let output = ''
+  while (!output.includes('\n')) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    output += decoder.decode(chunk.value, { stream: true })
+  }
+  const { url } = JSON.parse(output.split('\n')[0]!) as { url: string }
+  const page = await fetch(url)
+  expect(page.status).toBe(200)
+  expect(page.headers.get('content-type')).toContain('text/html')
+  await page.text()
+  const events = await fetch(new URL('/events', url))
+  const stream = events.body!.getReader()
+  let received = ''
+  while (!received.includes('event: model')) {
+    const chunk = await stream.read()
+    if (chunk.done) break
+    received += decoder.decode(chunk.value, { stream: true })
+  }
+  expect(received).toContain('No dispatcher has run for this project yet.')
+  await stream.cancel()
+  child.kill('SIGINT')
+  const rest = (async () => {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) return
+      output += decoder.decode(chunk.value, { stream: true })
+    }
+  })()
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text(), rest])
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  // The web UI is the only presentation: no plain frame text.
+  expect(output.trim().split('\n')).toEqual([JSON.stringify({ url })])
+  await expect(fetch(url)).rejects.toThrow()
+})
+
 for (const fail of [false, true])
   test(`public hosted placement selects viewer before launcher (failure=${fail})`, async () => {
     const { MemoryBuildStore } = await import('../store/memory')
