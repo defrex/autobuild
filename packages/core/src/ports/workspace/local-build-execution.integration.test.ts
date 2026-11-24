@@ -137,7 +137,7 @@ let stopping = false
 process.on('SIGTERM', async () => {
   if (stopping) return
   stopping = true
-  await Bun.sleep(5200)
+  await Bun.sleep(500)
   process.kill(descendant.pid, 0)
   await writeFile(${JSON.stringify(persisted)}, 'complete')
   process.exit(0)
@@ -159,7 +159,9 @@ await Bun.sleep(60000)
       await waitFor(() => Bun.file(ready).size > 0)
       const descendant = Number(await Bun.file(ready).text())
       const stopping = handle.stop()
-      await Bun.sleep(5100)
+      // More than ten times the injected 20 ms stop timeout, and still
+      // inside the leader's 500 ms persistence.
+      await Bun.sleep(250)
       expect(await alive(leader!)).toBe(true)
       expect(await alive(descendant)).toBe(true)
       await stopping

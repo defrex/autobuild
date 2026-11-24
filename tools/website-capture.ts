@@ -538,6 +538,59 @@ export interface CaptureResult {
 const ordinal = (index: number, count: number) =>
   `${String(index).padStart(String(count).length, '0')}-of-${count}`
 
+/** One segment's screenshot bytes. */
+export type SegmentShot = Pick<CaptureSegment, 'index' | 'top' | 'height'> & { bytes: Uint8Array }
+
+/** Join every segment's rows into one page-ordered tile sequence with global
+ * numbering: a segment over `maxFrameBytes` is cut into strips, any other is
+ * one tile as shot. */
+export function segmentTiles(
+  frameId: string,
+  segments: readonly SegmentShot[],
+  maxFrameBytes: number,
+): (CaptureTile & { bytes: Uint8Array })[] {
+  const pieces: { segment: number; top: number; height: number; bytes: Uint8Array }[] = []
+  for (const segment of segments) {
+    let tiled: ReturnType<typeof tilePng>
+    try {
+      tiled = tilePng(segment.bytes, maxFrameBytes)
+    } catch (error) {
+      throw new Error(
+        `website capture ${frameId} tiling: ${error instanceof Error ? error.message : error}`,
+      )
+    }
+    if (tiled)
+      for (const tile of tiled)
+        pieces.push({
+          segment: segment.index,
+          top: segment.top + tile.top,
+          height: tile.height,
+          bytes: tile.bytes,
+        })
+    else
+      pieces.push({
+        segment: segment.index,
+        top: segment.top,
+        height: segment.height,
+        bytes: segment.bytes,
+      })
+  }
+  return pieces.map((piece, k) => {
+    const id = tileId(frameId, k + 1, pieces.length)
+    return {
+      id,
+      frame: frameId,
+      index: k + 1,
+      count: pieces.length,
+      top: piece.top,
+      height: piece.height,
+      png: `.ab/website-frames/${id}.png`,
+      segment: piece.segment,
+      bytes: piece.bytes,
+    }
+  })
+}
+
 /** Safe, in-order id for tile `index` of `count` within a frame. */
 export function tileId(frameId: string, index: number, count: number): string {
   return `${frameId}-tile-${ordinal(index, count)}`
@@ -1073,43 +1126,16 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
           await rm(png)
         }
       } else {
-        // Every segment's rows join one page-ordered tile sequence with global numbering.
-        const pieces: { segment: number; top: number; height: number; bytes: Uint8Array }[] = []
+        const shots: SegmentShot[] = []
         for (const segment of segments) {
           const png = join(outputDir, `${segment.id}.png`)
-          const tiled = await tiling(png)
-          if (tiled) {
-            for (const tile of tiled)
-              pieces.push({
-                segment: segment.index,
-                top: segment.top + tile.top,
-                height: tile.height,
-                bytes: tile.bytes,
-              })
-          } else {
-            pieces.push({
-              segment: segment.index,
-              top: segment.top,
-              height: segment.height,
-              bytes: new Uint8Array(await readFile(png)),
-            })
-          }
+          shots.push({ ...segment, bytes: new Uint8Array(await readFile(png)) })
           await rm(png)
         }
         result.tiles = []
-        for (const [k, piece] of pieces.entries()) {
-          const id = tileId(frame.id, k + 1, pieces.length)
-          await writeFile(join(outputDir, `${id}.png`), piece.bytes)
-          result.tiles.push({
-            id,
-            frame: frame.id,
-            index: k + 1,
-            count: pieces.length,
-            top: piece.top,
-            height: piece.height,
-            png: `.ab/website-frames/${id}.png`,
-            segment: piece.segment,
-          })
+        for (const { bytes, ...tile } of segmentTiles(frame.id, shots, maxFrameBytes)) {
+          await writeFile(join(outputDir, `${tile.id}.png`), bytes)
+          result.tiles.push(tile)
         }
         result.segments = segments
       }

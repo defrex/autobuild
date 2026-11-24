@@ -1072,6 +1072,14 @@ test.each([false, true])(
       availableUpgrade?: string
     }> = []
     let runId = ''
+    // Presentation polls on test time: each check first advances the refresh
+    // clock past a scheduled idle poll instead of waiting it out.
+    const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+    const time = new FakeRefreshScheduler()
+    const polled = (predicate: () => boolean) => async () => {
+      await time.advance(1_000)
+      return predicate()
+    }
     const write = (_chunk: string): void => {}
     const configContent = (capacity: number): string =>
       JSON.stringify({
@@ -1094,6 +1102,7 @@ test.each([false, true])(
       },
       input: { start: () => () => {} },
       once: false,
+      refreshScheduler: time,
       resolveDashboardRenderer: () => (model) => {
         frames.push({
           capacity: model.active.limit,
@@ -1138,7 +1147,9 @@ test.each([false, true])(
       payload: { run: runId, error: 'invalid capacity on disk' },
     })
     await waitFor(
-      () => frames.some((frame) => frame.warnings.some((line) => line.includes('rejected'))),
+      polled(() =>
+        frames.some((frame) => frame.warnings.some((line) => line.includes('rejected'))),
+      ),
       'rejected reload notice',
     )
     expect(frames.at(-1)?.capacity).toBe(2)
@@ -1162,7 +1173,10 @@ test.each([false, true])(
         },
       }),
     )
-    await waitFor(() => frames.some((frame) => frame.capacity === 3), 'accepted effective config')
+    await waitFor(
+      polled(() => frames.some((frame) => frame.capacity === 3)),
+      'accepted effective config',
+    )
 
     await store.appendRepo(repo, {
       actor: DISPATCHER,
@@ -1170,7 +1184,7 @@ test.each([false, true])(
       payload: { run: runId, version: '0.5.0' },
     })
     await waitFor(
-      () => frames.some((frame) => frame.availableUpgrade === '0.5.0'),
+      polled(() => frames.some((frame) => frame.availableUpgrade === '0.5.0')),
       'durable upgrade notice',
     )
 

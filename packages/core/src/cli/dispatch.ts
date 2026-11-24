@@ -47,7 +47,12 @@ import {
 } from '../ports/forge/readiness'
 import { createReadinessRedactor } from './init-readiness-shared'
 import { RepositoryPollCache } from './dashboard/repository-poll'
-import { DashboardRefresh, interactionRead, presentationReader } from './dashboard/refresh'
+import {
+  DashboardRefresh,
+  interactionRead,
+  presentationReader,
+  type RefreshScheduler,
+} from './dashboard/refresh'
 import { FOCUS_REPORTING_MODE, installPresentationSuspension } from './terminal-restore'
 import type { BuildState } from '../kernel/reducer'
 import {
@@ -446,6 +451,9 @@ export interface DispatchOpts {
   stderr: (line: string) => void
   /** Single pass then drain in-flight runners and exit; default is a loop. */
   once?: boolean
+  /** Test seam: the dashboard's presentation refresh timers. Unset keeps the
+   * real scheduler; kernel timers never use it. */
+  refreshScheduler?: RefreshScheduler
   /** Watch-loop cadence in ms (§3.3); default DEFAULT_INTERVAL_MS. */
   intervalMs?: number
   /** Explicit durable repository intake override. Omission reuses stored state,
@@ -4385,7 +4393,7 @@ class DispatchLoop {
           throw error
         }
       },
-      undefined,
+      this.opts.refreshScheduler,
       this.presentationStore.networkReads,
     )
     if (this.opts.once !== true) {

@@ -6660,7 +6660,8 @@ describe('native suspension and continuation', () => {
       await ready
       shutdown.abort()
       await entered
-      await Bun.sleep(5100)
+      // Past the 1 s bounded cleanup shutdown suspension once used.
+      await Bun.sleep(1500)
       expect(finished).toBe(false)
       expect(ofType(await h.store.getEvents(SLUG), 'session.suspended')).toHaveLength(0)
     } finally {
