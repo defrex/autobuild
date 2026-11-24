@@ -112,6 +112,7 @@ import {
   type BlobStore,
   type BuildRecord,
   type BuildDigest,
+  type OpenBuild,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -177,6 +178,9 @@ interface BuildState {
   earlierRewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'> | null>
   rewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'>>
   events: AbEvent[]
+  /** The build's latest terminal fact, maintained by `trackOpen` so open
+   * membership never scans the log. */
+  lastTerminal?: 'build.completed' | 'build.aborted'
   /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
   artifacts: Map<string, ArtifactMeta[]>
 }
@@ -355,8 +359,38 @@ export class MemoryBuildStore implements BuildStore {
       )
     }
     this.builds.set(input.slug, state)
+    this.openSet(input.repo).add(input.slug)
+    if (created !== undefined) this.trackOpen(state, created.type)
     this.advanceRepo(input.repo)
     return this.snapshot(state)
+  }
+
+  /** repo → open build slugs: every build whose latest terminal fact is not
+   * `build.completed`, maintained synchronously at each build-event write. */
+  private readonly openByRepo = new Map<string, Set<string>>()
+
+  private openSet(repo: string): Set<string> {
+    const set = this.openByRepo.get(repo) ?? new Set<string>()
+    this.openByRepo.set(repo, set)
+    return set
+  }
+
+  private trackOpen(state: BuildState, type: EventType): void {
+    if (type === 'build.completed' || type === 'build.aborted') state.lastTerminal = type
+    if (type === 'build.completed') this.openSet(state.record.repo).delete(state.record.slug)
+    else if (
+      (type === 'build.aborted' || type === 'build.reopened') &&
+      state.lastTerminal !== 'build.completed'
+    )
+      this.openSet(state.record.repo).add(state.record.slug)
+  }
+
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    const records = [...(this.openByRepo.get(repo) ?? [])]
+      .map((slug) => this.snapshot(this.state(slug)))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
+    const digests = await readPersistedBuildDigests(this, repo, records)
+    return records.map((record) => ({ record, digest: digests.get(record.slug)! }))
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
@@ -415,6 +449,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.trackOpen(state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -452,6 +487,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.trackOpen(state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -531,6 +567,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.trackOpen(state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -613,6 +650,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    this.trackOpen(state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>

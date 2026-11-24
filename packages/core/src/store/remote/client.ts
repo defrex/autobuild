@@ -100,7 +100,8 @@ import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { pollingSubscribe } from '../subscribe'
 import type { ReducerSnapshot, SnapshotScope } from '../snapshots'
-import type { BuildDigest } from '../types'
+import type { BuildDigest, OpenBuild } from '../types'
+import { OpenBuildsCapabilityError } from '../open-builds'
 import type {
   StreamChunk,
   StreamOutcome,
@@ -137,6 +138,7 @@ import {
   buildDigestListSchema,
   buildRecordListSchema,
   buildRecordWireSchema,
+  openBuildListSchema,
   conditionalEventResponseSchema,
   conditionalSessionEventResponseSchema,
   decodeBase64,
@@ -434,6 +436,33 @@ export class RemoteBuildStore implements BuildStore {
 
   async listBuilds(): Promise<BuildRecord[]> {
     return this.requestJson('GET', '/builds', buildRecordListSchema)
+  }
+
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    // Handled before the repository-existence gate like `build-digests`: an
+    // unknown repo answers 200 []. A server without the route answers a
+    // capability failure; listing every build instead is never allowed.
+    const path = `${this.repoPath(repo)}/open-builds`
+    const response = await this.raw('GET', path)
+    if (!response.ok) {
+      const body = errorBodySchema.safeParse(
+        await response
+          .clone()
+          .json()
+          .catch(() => null),
+      )
+      if (
+        response.status === 405 ||
+        (body.success &&
+          ((response.status === 501 && body.data.kind === 'unsupported-operation') ||
+            (response.status === 404 &&
+              body.data.kind === 'not-found' &&
+              body.data.error.startsWith('no route: GET'))))
+      )
+        throw new OpenBuildsCapabilityError(repo)
+      throw await this.toError(response)
+    }
+    return openBuildListSchema.parse(await response.json()) as OpenBuild[]
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {

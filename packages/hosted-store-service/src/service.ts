@@ -238,6 +238,10 @@ const storeResourceRoutes = new Set([
   // server before the repo-existence gate, so an unknown repo is still
   // classified here and answers 200 from build records.
   'GET build-digests',
+  // The open-build listing behind operator reads (#1230); like build-digests
+  // it is handled before the repo-existence gate and answers 200 [] for an
+  // unknown repo.
+  'GET open-builds',
   'GET change-position',
   'GET placement',
   'GET builds',

@@ -1101,6 +1101,33 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     return response
   }
 
+  /** `GET /repos/:repo/open-builds`: the records and digests of the repo's
+   * open builds, for operator reads whose cost must not grow with settled
+   * history. Served before the existence gate like `build-digests`, so an
+   * unknown repo answers 200 []. */
+  async function openBuildsRoute(req: Request, repo: string): Promise<Response> {
+    if (req.method !== 'GET') {
+      return fail(404, 'not-found', `no route: ${req.method} /repos/:repo/open-builds`)
+    }
+    const open = await store.listOpenBuilds(repo)
+    // Every client that calls this route postdates the additive audit signal;
+    // stripping it keeps the digest projection identical to build-digests.
+    const supportsAudit = clientSupportsIntegrationAuditPending(
+      req.headers.get(AUTOBUILD_VERSION_HEADER),
+    )
+    const response = json(
+      200,
+      supportsAudit
+        ? open
+        : open.map(({ record, digest: { integrationAuditPending: _audit, ...digest } }) => ({
+            record,
+            digest,
+          })),
+    )
+    if (store.catalogIdentity) response.headers.set(CATALOG_IDENTITY_HEADER, store.catalogIdentity)
+    return response
+  }
+
   async function sessionRoute(req: Request, url: URL, id: string, rest: string): Promise<Response> {
     const segments = rest.split('/')
     if (segments[0] === 'streams') {
@@ -1742,6 +1769,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       if (segments.length === 3 && segments[2] === 'build-digests') {
         return buildDigestRoute(req, repo)
+      }
+      if (segments.length === 3 && segments[2] === 'open-builds') {
+        return openBuildsRoute(req, repo)
       }
       // Ticket assets are keyed by repo and ticket, not by a journal row, so
       // they sit before the repository-existence gate like the session family.

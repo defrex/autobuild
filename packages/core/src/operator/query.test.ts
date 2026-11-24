@@ -16,7 +16,7 @@ import {
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
 import { MemoryBuildStore } from '../store/memory'
-import type { Artifact, BuildDigest, BuildStore, Clock } from '../store/types'
+import type { Artifact, BuildStore, Clock } from '../store/types'
 import {
   buildDashboardFromProjected,
   projectBuild,
@@ -151,8 +151,8 @@ describe('operator query wiring', () => {
     ).toEqual(['done', 'active', 'queued'])
   })
 
-  // AUT-488: the active and queued listings gate per-build history reads on
-  // one batch digest read, so their store cost stays flat as finished builds
+  // AUT-488, #1230: the active and queued listings read one open-build
+  // listing and no settled build, so their store cost stays flat as finished builds
   // accumulate. The old algorithm is computed inline in each test so the
   // output equivalence is pinned against the pre-change behavior, not against
   // a re-derivation of the new gate.
@@ -185,7 +185,7 @@ describe('operator query wiring', () => {
     return output.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
-  test('active and queued listings pay one digest read and skip finished histories', async () => {
+  test('active and queued listings pay one open-build listing and skip finished histories', async () => {
     for (const finishedCount of [3, 8]) {
       const store = new MemoryBuildStore({ clock })
       now = new Date('2026-09-02T00:00:01.000Z')
@@ -207,11 +207,12 @@ describe('operator query wiring', () => {
           scope,
           now,
         })
-        // The bound: exactly one digest read, and no history read for a done
-        // build — identical at both finished-build counts. Aborted builds are
-        // work builds of the repository view (their cleanup is pending), so
-        // they are restored from snapshots or read once; done ones never are.
-        expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+        // The bound: exactly one open-build listing, no full listing or
+        // digest batch, and no history read for a done build — identical at
+        // both finished-build counts.
+        expect(counting.counts.get('listOpenBuilds')).toBe(1)
+        expect(counting.counts.get('listBuilds') ?? 0).toBe(0)
+        expect(counting.counts.get('getRepoBuildDigests') ?? 0).toBe(0)
         for (const slug of finishedSlugs.filter((_, at) => at % 2 === 0)) {
           expect(counting.eventSlugs).not.toContain(slug)
         }
@@ -239,52 +240,6 @@ describe('operator query wiring', () => {
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
     expect(new Set(counting.eventSlugs).size).toBe(4)
     expect(summaries).toEqual(await legacyList(store, 'all'))
-  })
-
-  test('a build created between the record read and the digest read does not abort the listing', async () => {
-    // The concurrent-create shape for finding f_3cb67aba: the digest map
-    // holds one more build than the record list the listing already read.
-    // Records are read first, so the extra entry is harmless — the listing
-    // must succeed with the correct output, not throw. The call log below
-    // also pins the record-before-digest read order: swapping the two reads
-    // in listOperatorBuilds fails the assertion, so this test guards the
-    // order f_3cb67aba fixed, not just the harmless-extra-entry outcome.
-    class ConcurrentCreateStore extends MemoryBuildStore {
-      readonly calls: string[] = []
-      override async listBuilds() {
-        this.calls.push('listBuilds')
-        return super.listBuilds()
-      }
-      override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-        this.calls.push('getRepoBuildDigests')
-        const digests = await super.getRepoBuildDigests(repo)
-        digests.set('concurrent', { slug: 'concurrent', observations: [] })
-        return digests
-      }
-    }
-    const store = new ConcurrentCreateStore({ clock })
-    now = new Date('2026-09-02T00:00:01.000Z')
-    await createBuild(store, 'active-1', 'active')
-    await seedFinished(store, 'done-1', 'done')
-    const summaries = await listOperatorBuilds({ store, repo: REPO, scope: 'active', now })
-    expect(summaries.map((b) => b.slug)).toEqual(['active-1'])
-    expect(store.calls).toEqual(['listBuilds', 'getRepoBuildDigests', 'listBuilds'])
-  })
-
-  test('a missing digest entry is treated as a build with work and still lists it', async () => {
-    class IncompleteDigestStore extends MemoryBuildStore {
-      override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
-        const digests = await super.getRepoBuildDigests(repo)
-        digests.delete('active-1')
-        return digests
-      }
-    }
-    const store = new IncompleteDigestStore({ clock })
-    now = new Date('2026-09-02T00:00:01.000Z')
-    await createBuild(store, 'active-1', 'active')
-    expect(
-      (await listOperatorBuilds({ store, repo: REPO, scope: 'active', now })).map((b) => b.slug),
-    ).toEqual(['active-1'])
   })
 
   test('empty repository status and Harvest status are read-only defaults', async () => {
@@ -926,7 +881,7 @@ command = "postgres"
     expect(snapshot.model.builds.find((build) => build.slug === 'merged')).toBeUndefined()
   })
 
-  test('one snapshot reads persisted row facts, repository facts, one digest, and writes nothing', async () => {
+  test('one snapshot reads persisted row facts, repository facts, one open-build listing, and writes nothing', async () => {
     // More finished builds than rendered rows: seven `done` builds, one of
     // them carrying a pinned artifact that must NOT be fetched.
     const raw = await seedDashboardStore(4)
@@ -945,11 +900,12 @@ command = "postgres"
     // Fixed metadata reads plus one persisted repository projection and one
     // persisted fact read per rendered build. Pinned-config reads stay gated
     // to those same builds; actual SQL row costs are checked separately.
-    expect(counting.counts.get('listBuilds')).toBe(1)
+    expect(counting.counts.get('listBuilds') ?? 0).toBe(0)
     expect(counting.counts.get('getRepo')).toBe(1)
     expect(counting.counts.get('getRepoStateEvents') ?? 0).toBe(0)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
-    expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(counting.counts.get('getRepoBuildDigests') ?? 0).toBe(0)
+    expect(counting.counts.get('listOpenBuilds')).toBe(1)
     expect(counting.eventSlugs).toHaveLength(rowBuilds.length)
     expect([...counting.eventSlugs].sort()).toEqual(rowBuilds)
     expect(counting.counts.get('getArtifact')).toBe(rowBuilds.length)
@@ -1003,13 +959,13 @@ command = "postgres"
     expect(large.snapshot.model.triage).toBe(small.snapshot.model.triage)
 
     // Per-method call counts are identical across the two finished-build
-    // counts, including the single digest read.
+    // counts, including the single open-build listing.
     const methods = new Set([...small.counting.counts.keys(), ...large.counting.counts.keys()])
     for (const method of methods) {
       expect(large.counting.counts.get(method) ?? 0).toBe(small.counting.counts.get(method) ?? 0)
     }
-    expect(small.counting.counts.get('getRepoBuildDigests')).toBe(1)
-    expect(large.counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(small.counting.counts.get('listOpenBuilds')).toBe(1)
+    expect(large.counting.counts.get('listOpenBuilds')).toBe(1)
     // Finished builds never have their history read.
     expect(small.counting.eventSlugs).not.toContain('finished-1')
     expect(large.counting.eventSlugs).not.toContain('finished-4')

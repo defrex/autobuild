@@ -103,6 +103,7 @@ import {
   type BlobStore,
   type BuildRecord,
   type BuildDigest,
+  type OpenBuild,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -142,6 +143,7 @@ import {
   artifacts,
   builds,
   events,
+  openBuilds,
   repoArtifacts,
   repoEvents,
   repoStreams,
@@ -177,6 +179,40 @@ CREATE TRIGGER IF NOT EXISTS repo_holder_change AFTER UPDATE OF lease_holder ON 
  BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
  ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
 `
+
+/** The open-build set and the triggers that maintain it. A build is open
+ * while its latest terminal fact is not `build.completed`: inserting a build
+ * adds it, `build.completed` removes it, and `build.aborted` or
+ * `build.reopened` re-derive it. Triggers run inside the appending
+ * statement's transaction, so every append path — and any older binary
+ * writing the same file — keeps the set exact. */
+export const OPEN_BUILDS_DDL = `
+CREATE TABLE IF NOT EXISTS open_builds (
+  slug TEXT PRIMARY KEY REFERENCES builds(slug) ON DELETE CASCADE,
+  repo TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS open_builds_repo_slug ON open_builds (repo, slug);
+CREATE TRIGGER IF NOT EXISTS builds_open_insert AFTER INSERT ON builds
+ BEGIN INSERT OR IGNORE INTO open_builds(slug, repo) VALUES (NEW.slug, NEW.repo); END;
+CREATE TRIGGER IF NOT EXISTS events_open_completed AFTER INSERT ON events
+ WHEN NEW.type = 'build.completed'
+ BEGIN DELETE FROM open_builds WHERE slug = NEW.build; END;
+CREATE TRIGGER IF NOT EXISTS events_open_rederive AFTER INSERT ON events
+ WHEN NEW.type IN ('build.aborted', 'build.reopened')
+ BEGIN INSERT OR IGNORE INTO open_builds(slug, repo)
+  SELECT b.slug, b.repo FROM builds b WHERE b.slug = NEW.build AND NOT EXISTS (
+   SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = NEW.build
+    AND c.seq > COALESCE((SELECT MAX(a.seq) FROM events a
+     WHERE a.type = 'build.aborted' AND a.build = NEW.build), 0)); END;
+`
+
+/** The one-off backfill that runs only when `open_builds` is first created
+ * on an existing file. No read path or later open ever runs it. */
+const OPEN_BUILDS_BACKFILL = `INSERT OR IGNORE INTO open_builds(slug, repo)
+ SELECT b.slug, b.repo FROM builds b WHERE NOT EXISTS (
+  SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = b.slug
+   AND c.seq > COALESCE((SELECT MAX(a.seq) FROM events a
+    WHERE a.type = 'build.aborted' AND a.build = b.slug), 0))`
 
 export const BOOTSTRAP_DDL = [
   // Reducer snapshots: additive and idempotent, so databases that predate the
@@ -344,6 +380,7 @@ export const BOOTSTRAP_DDL = [
   `CREATE INDEX IF NOT EXISTS events_node_rewrite_previous ON events
     (build, json_extract(payload, '$.previous'), seq) WHERE type = 'node.rewritten'`,
   REPO_CHANGE_DDL,
+  OPEN_BUILDS_DDL,
 ] as const
 
 type BuildRow = typeof builds.$inferSelect
@@ -399,7 +436,22 @@ export class SqliteBuildStore implements BuildStore {
     this.sqlite.exec('PRAGMA busy_timeout = 5000')
     if (opts.bootstrap !== false) {
       this.sqlite.exec('PRAGMA journal_mode = WAL')
-      for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
+      // Creating `open_builds` and its backfill happen together under the
+      // write lock, so no writer interleaves between them; a file that already
+      // has the table never backfills again.
+      this.sqlite.exec('BEGIN IMMEDIATE')
+      try {
+        const openBuildsFresh =
+          this.sqlite
+            .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'open_builds'")
+            .get() === null
+        for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
+        if (openBuildsFresh) this.sqlite.exec(OPEN_BUILDS_BACKFILL)
+        this.sqlite.exec('COMMIT')
+      } catch (error) {
+        this.sqlite.exec('ROLLBACK')
+        throw error
+      }
       for (const table of ['events', 'repo_events']) {
         const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as {
           name: string
@@ -745,6 +797,19 @@ export class SqliteBuildStore implements BuildStore {
               .get(slug, previous)
     ) as { payload: string } | null
     return row ? eventPayloadSchemas['node.rewritten'].parse(JSON.parse(row.payload)) : null
+  }
+
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    const records = this.db
+      .select({ build: builds })
+      .from(openBuilds)
+      .innerJoin(builds, eq(builds.slug, openBuilds.slug))
+      .where(eq(openBuilds.repo, repo))
+      .orderBy(asc(builds.createdAt), asc(builds.slug))
+      .all()
+      .map((row) => this.toRecord(row.build))
+    const digests = await readPersistedBuildDigests(this, repo, records)
+    return records.map((record) => ({ record, digest: digests.get(record.slug)! }))
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {

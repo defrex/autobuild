@@ -44,6 +44,21 @@ export const builds = sqliteTable(
   (t) => [index('builds_repo_created_slug').on(t.repo, t.createdAt, t.slug)],
 )
 
+/** The open-build set (`BuildStore.listOpenBuilds`): one row per build whose
+ * latest terminal fact is not `build.completed`. Maintained by the
+ * `OPEN_BUILDS_DDL` triggers inside every appending statement's transaction,
+ * and backfilled once when the table is first created. */
+export const openBuilds = sqliteTable(
+  'open_builds',
+  {
+    slug: text('slug')
+      .primaryKey()
+      .references(() => builds.slug, { onDelete: 'cascade' }),
+    repo: text('repo').notNull(),
+  },
+  (t) => [index('open_builds_repo_slug').on(t.repo, t.slug)],
+)
+
 export const events = sqliteTable(
   'events',
   {

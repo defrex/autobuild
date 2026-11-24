@@ -116,6 +116,7 @@ export type {
   Clock,
   NewBuildInput,
   NewSessionInput,
+  OpenBuild,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
@@ -153,6 +154,7 @@ export type {
 export { assertPublicSnapshotReducer } from './snapshots'
 
 export { readPersistedBuildDigests } from './reduced-reads'
+export { OpenBuildsCapabilityError, openBuildMember } from './open-builds'
 
 export { dispatchPlacementSchema, dispatchPlacementReducer } from '../kernel/dispatch-placement'
 export type { DispatchPlacement } from '../kernel/dispatch-placement'

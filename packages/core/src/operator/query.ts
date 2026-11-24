@@ -55,7 +55,7 @@ import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import type { RepoViewStore } from '../processes/repo-view'
 import { withOperatorView } from './read-view'
 import type { RepositoryEvent } from '../events/repository'
-import type { BuildStore, Clock } from '../store/types'
+import type { BuildRecord, BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
 
@@ -87,40 +87,25 @@ async function listFromView(
   opts: { repo: string; scope: BuildListScope; now: Date },
 ): Promise<BuildSummary[]> {
   const statuses = new Set(statusFilter(opts.scope === 'all', opts.scope === 'queued'))
-  // Records are read and held before the digest read: builds are never
-  // deleted, so every record iterated below is guaranteed an entry in the
-  // digest map fetched after it — a build created between the two reads
-  // appears only in the digest map, which is harmless — and the completeness
-  // check can only ever catch a genuine adapter bug, never a concurrent
-  // dispatch. The reverse order would let a concurrent creation abort the
-  // whole listing (AUT-488 finding f_3cb67aba).
-  const records = await view.listBuilds()
-  // One digest read gates the per-build reads (AUT-488): the active and queued
-  // scopes never show a terminal build, so a build whose digest already
-  // carries a terminal fact is skipped and the listing's cost stays flat as
-  // finished builds accumulate. The `--all` scope includes terminal statuses,
-  // so it takes no digest read and skips nothing; its terminal builds are
-  // restored from the reducer snapshots the dispatcher leaves at settlement.
-  const digests = opts.scope === 'all' ? undefined : await readBuildDigests(view, opts.repo)
+  // The active and queued scopes never show a terminal build, so they iterate
+  // the store's open-build listing: its cost follows open builds and stays
+  // flat as finished builds accumulate. The `--all` scope is an explicit
+  // history read and lists every build; its terminal builds are restored from
+  // the reducer snapshots the dispatcher leaves at settlement.
+  const records =
+    opts.scope === 'all'
+      ? await view.listBuilds()
+      : (await view.listOpenBuilds(opts.repo))
+          // The digest's `terminal` follows `reduceBuild`'s terminal rule
+          // exactly (pinned in store/digest.test.ts), so `terminal !==
+          // undefined` is exactly reduced status `done`/`aborted`, which the
+          // active and queued status sets never include. Skipping an aborted
+          // build still in cleanup therefore cannot change the summaries.
+          .filter(({ digest }) => digest.terminal === undefined)
+          .map(({ record }) => record)
   const output: BuildSummary[] = []
   for (const record of records) {
     if (record.repo !== opts.repo) continue
-    if (digests !== undefined) {
-      // Completeness is contractual (one entry per repo build); a missing
-      // entry is an adapter bug and must fail loudly rather than silently
-      // drop the build from the listing.
-      const digest = digests.get(record.slug)
-      if (digest === undefined) {
-        throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
-      }
-      // The digest's `terminal` follows `reduceBuild`'s terminal rule exactly
-      // (in-order overwrite of `build.completed`/`build.aborted`, never
-      // cleared — pinned against `reduceBuild` in store/digest.test.ts), so
-      // `terminal !== undefined` is exactly reduced status `done`/`aborted`,
-      // which the active and queued status sets never include. Skipping the
-      // build therefore cannot change the emitted summaries.
-      if (digest.terminal !== undefined) continue
-    }
     const facts = await view.buildFacts(record.slug)
     const projected = summarizeFrom(
       record,
@@ -416,28 +401,20 @@ async function dashboardFromView(
   // more: no build can exist before a dispatcher claims one.
   if (facts.config.run === undefined) return noDispatcherRunSnapshot(opts.repo, facts, opts.clock)
   const { config, repositoryEvents, status } = await effectiveConfig(view, opts.repo, facts)
-  const records = await view.listBuilds()
-  // One digest read covers every build of the repository (AUT-487): the
-  // row gate (a `done` digest means no row) needs no per-build histories, so
-  // the snapshot's traffic stays flat as finished builds accumulate. Row-rendering builds derive from the repository view's
-  // reducer snapshots plus a delta read (AUT-650); every snapshot is a cache
-  // the event log regenerates, so the response equals a full replay's.
-  const digests = await readBuildDigests(view, opts.repo)
+  // The open-build listing covers every build that can render a row or hold
+  // capacity (AUT-487, #1230): settled builds are never read, so the
+  // snapshot's traffic stays flat as finished builds accumulate. Row-rendering
+  // builds derive from the repository view's reducer snapshots plus a delta
+  // read (AUT-650); every snapshot is a cache the event log regenerates, so
+  // the response equals a full replay's.
+  const open = await view.listOpenBuilds(opts.repo)
+  const records = open.map(({ record }) => record)
   const projected: DashboardBuild[] = []
   const capacityBuilds: CapacityBuild[] = []
-  for (const record of records) {
+  for (const { record, digest } of open) {
     if (record.repo !== opts.repo) continue
-    const digest = digests.get(record.slug)
-    // Completeness is contractual (one entry per repo build); a missing entry
-    // is an adapter bug and must fail loudly rather than silently drop the
-    // build from the active count or the row list.
-    if (digest === undefined) {
-      throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
-    }
-    // Reduced status is `done`/`aborted` exactly when a terminal fact exists,
-    // so `terminal === undefined` is exactly the old active test — no history
-    // read needed for the count.
-
+    // The listing holds no completed build; the guard keeps the row gate
+    // explicit should a store ever answer one.
     if (digest.terminal === 'done') continue
     // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
     // snapshot, AUT-496 detail query): a build that projects no row —
@@ -491,7 +468,7 @@ async function dashboardFromView(
     },
   )
   const model = buildDashboardFromProjected(
-    enrichIntegrationRows(projected, records),
+    enrichIntegrationRows(projected, await integrationRecords(view, opts.repo, projected, records)),
     {
       repo: opts.repo,
       queued: status.queued ?? 0,
@@ -507,6 +484,32 @@ async function dashboardFromView(
     repositoryEvents,
   )
   return dashboardSnapshot(model, opts.clock)
+}
+
+/** The records `enrichIntegrationRows` resolves node children against: the
+ * open records, plus the settled child builds a rendered node row still needs
+ * for a ticket identity or title. The extra reads are bounded by the rendered
+ * rows' own unresolved children, never by repository history. */
+async function integrationRecords(
+  view: RepoViewStore,
+  repo: string,
+  rows: readonly DashboardBuild[],
+  open: readonly BuildRecord[],
+): Promise<BuildRecord[]> {
+  const listed = new Set(open.map((record) => record.slug))
+  const wanted = new Set<string>()
+  for (const row of rows)
+    for (const child of row.integrationDetail?.children ?? []) {
+      if (!child.builds?.length) continue
+      if (!child.builds.includes(child.id) && child.title !== 'title unavailable') continue
+      for (const slug of child.builds) if (!listed.has(slug)) wanted.add(slug)
+    }
+  if (wanted.size === 0) return [...open]
+  const settled = await Promise.all([...wanted].map((slug) => view.getBuild(slug)))
+  return [
+    ...open,
+    ...settled.filter((record): record is BuildRecord => record !== null && record.repo === repo),
+  ].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
 }
 
 /** The dashboard of a repository with no recorded dispatcher run: repository
