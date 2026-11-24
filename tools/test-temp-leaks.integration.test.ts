@@ -355,10 +355,12 @@ const GIT_CONFIG_GET = `
     return { code: result.exitCode, value: result.stdout.toString().trim() };
   };`
 
-test('children read only the runner-owned git config, never the host global, XDG or system config', async () => {
+test('children read only the runner-owned git config and state home, never the host ones', async () => {
   const fixture = await inspectionRoot()
   try {
     const record = join(fixture, 'git-global')
+    const stateRecord = join(fixture, 'state-home')
+    const hostState = join(fixture, 'host-state')
     const code = await runInspected(
       [
         inline(`
@@ -366,6 +368,9 @@ test('children read only the runner-owned git config, never the host global, XDG
       import {writeFileSync} from 'node:fs';
       ${GIT_CONFIG_GET}
       writeFileSync(${JSON.stringify(record)}, process.env.GIT_CONFIG_GLOBAL ?? '');
+      const state = process.env.XDG_STATE_HOME ?? '';
+      writeFileSync(${JSON.stringify(stateRecord)}, state);
+      if (state === '' || state.startsWith(tmpdir() + '/')) process.exit(15);
       if (get('rerere.enabled').code !== 1) process.exit(10);
       if (get('rerere.autoupdate').code !== 1) process.exit(11);
       if (get('commit.gpgsign').code !== 1) process.exit(12);
@@ -373,12 +378,15 @@ test('children read only the runner-owned git config, never the host global, XDG
       if (process.env.GIT_CONFIG_NOSYSTEM !== '1') process.exit(14);
     `),
       ],
-      { env: await hostileGitHost(fixture) },
+      { env: { ...(await hostileGitHost(fixture)), XDG_STATE_HOME: hostState } },
     )
     expect(code).toBe(0)
     const global = await readFile(record, 'utf8')
     expect(global).not.toBe('')
     await expect(stat(dirname(global))).rejects.toMatchObject({ code: 'ENOENT' })
+    const state = await readFile(stateRecord, 'utf8')
+    expect(state).not.toBe(hostState)
+    await expect(stat(state)).rejects.toMatchObject({ code: 'ENOENT' })
   } finally {
     await rm(fixture, { recursive: true, force: true })
   }

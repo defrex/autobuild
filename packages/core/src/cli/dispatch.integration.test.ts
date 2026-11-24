@@ -21,6 +21,7 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -3008,6 +3009,95 @@ describe('abDispatch watch build-runner coordination', () => {
       await fx.cleanup()
     }
   }, 10_000)
+
+  test('an invalid new worktree destination fails fresh provisioning while a legacy workspace resumes and releases', async () => {
+    const fx = await makeFixture(readyTicket('T-fresh'), happyHandlers())
+    // The isolated destination itself holds a node_modules: never valid.
+    const bad = join(fx.tmp, 'bad-state', 'autobuild', 'worktrees', 'k')
+    await mkdir(join(bad, 'node_modules'), { recursive: true })
+    const legacyRoot = join(fx.checkout, '.autobuild', 'worktrees')
+    const workspaces = new GitWorktreeProvider({ root: legacyRoot, isolatedRoot: bad })
+    const slug = 'legacy-build'
+    const branch = `ab/${slug}`
+    const worktree = join(legacyRoot, `ab-${slug}`)
+    await git(['worktree', 'add', '-q', '-b', branch, worktree], fx.checkout)
+    const sha = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim()
+    const ticket = { source: 'fake', id: 'T-legacy', title: 'legacy' }
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: fx.origin, baseBranch: 'main' },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: worktree,
+        path: worktree,
+        localPath: worktree,
+        branch,
+        base: { source: 'remote', sha },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: { artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision }, ticket },
+      }),
+    )
+
+    try {
+      // Startup never refuses: the first pass resumes the legacy build to its
+      // PR; once that merges, the second pass releases its recorded worktree.
+      const pass = () =>
+        abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => ({ ...fx.wire(), workspaces }),
+        })
+      await pass()
+      let legacy = await fx.store.getEvents(slug)
+      const started = legacy.find((event) => event.type === 'execution.started')
+      expect(started?.payload).toMatchObject({ workspaceRef: worktree })
+      const finalized = legacy.find((event) => event.type === 'finalize.completed')
+      expect(finalized).toBeDefined()
+      fx.forge.setPrState((finalized!.payload as { pr: { number: number } }).pr.number, {
+        state: 'merged',
+        sha: 'merged-legacy',
+      })
+      await pass()
+      legacy = await fx.store.getEvents(slug)
+      expect(legacy.find((event) => event.type === 'workspace.released')?.payload).toMatchObject({
+        ref: worktree,
+      })
+      expect(existsSync(worktree)).toBe(false)
+      const list = await spawnExec(['git', 'worktree', 'list', '--porcelain'], {
+        cwd: fx.checkout,
+      })
+      expect(list.stdout).not.toContain(worktree)
+
+      const fresh = (await fx.store.listBuilds()).find((build) => build.slug !== slug)
+      expect(fresh).toBeDefined()
+      const freshEvents = await fx.store.getEvents(fresh!.slug)
+      const failed = freshEvents.find(
+        (event) => event.type === 'dispatch.failed' && event.payload.stage === 'workspace',
+      )
+      expect(JSON.stringify(failed?.payload)).toContain('is not isolated')
+      expect(freshEvents.some((event) => event.type === 'workspace.provisioned')).toBe(false)
+      expect(readdirSync(bad)).toEqual(['node_modules'])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
 
   test('a build still in a retired local worktree launches through that runtime, not the remote one', async () => {
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)

@@ -21,7 +21,9 @@
  * interpret a relative path from different working directories.
  */
 import { configuredStore } from './configured-store'
-import { join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
@@ -52,10 +54,44 @@ export interface RepoStatePaths {
   defaultLocalRoot: string
   /** Normalized local path, or an unchanged HTTP(S) URL. */
   storeRef: string
-  /** Root for local-only state (tickets and worktrees). */
+  /** Root for local-only state (database, blobs, tickets, accounts). */
   localStateRoot: string
-  /** Local scratch root used by GitWorktreeProvider. */
+  /** The state tree's own worktree directory, `<localStateRoot>/worktrees`.
+   * GitWorktreeProvider uses it for build worktrees only when it resolves
+   * outside the checkout; otherwise it is the legacy adoption root. */
   worktreeRoot: string
+  /** Per-checkout build worktree root outside the checkout's package
+   * ancestry: `<stateHome>/autobuild/worktrees/<checkout-name>-<hash12>`.
+   * GitWorktreeProvider chooses between it and `worktreeRoot` on canonical
+   * paths and validates the choice before provisioning. */
+  isolatedWorktreeRoot: string
+}
+
+/**
+ * The host's per-user state home: an absolute nonblank `XDG_STATE_HOME`, else
+ * `~/.local/state`. A relative value is ignored, as the XDG Base Directory
+ * specification requires. Read from the host process, never a command's
+ * injected environment.
+ */
+export function hostStateHome(
+  env: Record<string, string | undefined> = process.env,
+  home: string = homedir(),
+): string {
+  const xdg = env.XDG_STATE_HOME
+  return xdg !== undefined && xdg.trim() !== '' && isAbsolute(xdg)
+    ? resolve(xdg)
+    : join(home, '.local', 'state')
+}
+
+/** `<sanitized checkout basename>-<sha256(localStateRoot)[:12]>`: two
+ * checkouts, or two state trees of one checkout, never share a root. */
+function worktreeKey(checkout: string, localStateRoot: string): string {
+  const name =
+    basename(checkout)
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^[.-]+/, '') || 'repo'
+  const hash = createHash('sha256').update(localStateRoot).digest('hex').slice(0, 12)
+  return `${name}-${hash}`
 }
 
 function nonBlank(value: string | undefined): string | undefined {
@@ -66,9 +102,12 @@ function nonBlank(value: string | undefined): string | undefined {
  * Select state with one precedence rule for every sessionless command:
  * non-blank explicit `--store` > non-blank `AB_STORE` > `[store] url` > local default.
  *
- * A local selection relocates the whole local tree, including worktrees. A
- * remote store has no filesystem root, so its worktrees remain local beneath
- * the repository's implicit state root.
+ * A local selection relocates the whole local tree. A remote store has no
+ * filesystem root, so its local state stays beneath the repository's implicit
+ * state root. Build worktrees get two candidates — the state tree's own
+ * `worktrees/` and a per-checkout root under the host state home — and
+ * GitWorktreeProvider chooses between them on canonical paths, so a worktree
+ * never sits inside the checkout's package ancestry.
  */
 export function resolveRepoStatePaths(opts: {
   /** Repository identity: a normalized origin URL, or a local checkout path. */
@@ -79,6 +118,8 @@ export function resolveRepoStatePaths(opts: {
   storeRef?: string
   envStore?: string
   configStore?: string
+  /** Test seam: the host state home. Defaults to `hostStateHome()`. */
+  stateHome?: string
 }): RepoStatePaths {
   const checkout = resolve(opts.checkout ?? opts.repo)
   const defaultLocalRoot = join(checkout, LOCAL_STATE_DIR)
@@ -98,6 +139,12 @@ export function resolveRepoStatePaths(opts: {
     storeRef,
     localStateRoot,
     worktreeRoot: join(localStateRoot, 'worktrees'),
+    isolatedWorktreeRoot: join(
+      opts.stateHome ?? hostStateHome(),
+      'autobuild',
+      'worktrees',
+      worktreeKey(checkout, localStateRoot),
+    ),
   }
 }
 
@@ -178,6 +225,8 @@ export async function resolveRepoState(opts: {
   storeRef?: string
   envStore?: string
   configStore?: string
+  /** Test seam: the host state home. Defaults to `hostStateHome()`. */
+  stateHome?: string
 }): Promise<RepoStatePaths> {
   const checkout = await resolveMainRepo(opts.targetRepo, opts.exec)
   const origin = await resolveRepoOrigin(checkout, opts.exec)
@@ -189,5 +238,6 @@ export async function resolveRepoState(opts: {
     checkout,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.envStore !== undefined ? { envStore: opts.envStore } : {}),
+    ...(opts.stateHome !== undefined ? { stateHome: opts.stateHome } : {}),
   })
 }
