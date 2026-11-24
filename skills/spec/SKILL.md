@@ -123,6 +123,10 @@ in order, but as a conversation, not a form:
    ticket assets and cited by kind and name — see
    [Designs and reference material](#designs-and-reference-material).
 
+Before filing, search for an existing ticket covering the same work
+(`ab ticket search "<key words>"`, MCP `tickets.search`). If one exists, flesh
+it out through the ticket-argument path below instead of filing a duplicate.
+
 Draft the spec in full, show it, iterate until the user accepts. Then create
 the ticket with the spec as its body using `ab ticket create`. Honor a
 destination workflow state when the human already named one during grooming:
@@ -176,7 +180,8 @@ specs. This example assumes the repository's triage state is `Triage`, its ready
 state is `Ready`, and the human requested ready placement for the whole set.
 Use the repository's actual states; if final placement is non-ready, leave the
 set there after verification instead of promoting it. Root remains a valid
-explicit choice when each ticket is independently useful and safe to ship:
+explicit choice when each ticket is independently useful and safe to ship.
+Run the same duplicate search for each planned ticket before the first create:
 
 ```sh
 ab ticket create "Integration" --body integration.md --kind node --json --state Triage > node-ticket.json

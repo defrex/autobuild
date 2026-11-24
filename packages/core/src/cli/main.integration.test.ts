@@ -90,6 +90,7 @@ describe('runCli — routing and exit codes', () => {
       'ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
+      'ab ticket search <query> [--state <state>] [--labels a,b] [--limit <n>] [--cursor <cursor>] [--json]',
       'ab ticket show <id> [--store <ref>] [--json]',
       'ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--expected-revision <opaque>] [--json]',
       'ab ticket states [--json]',

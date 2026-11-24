@@ -25,6 +25,15 @@ describeTicketSourceContract('FakeTicketSource', async () => ({
   editableLabel: 'contract-editable',
 }))
 
+// The contract suite must accept a source that does not declare search.
+describeTicketSourceContract('FakeTicketSource without search', async () => ({
+  source: Object.assign(new FakeTicketSource([], { createState: 'Triage', doneState: 'Done' }), {
+    search: undefined,
+  }),
+  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+  editableLabel: 'contract-editable',
+}))
+
 describe('FakeTicketSource', () => {
   test('claim returns true exactly once per ticket (§12 claim-before-launch)', async () => {
     const source = new FakeTicketSource([ticket('t-1'), ticket('t-2')])

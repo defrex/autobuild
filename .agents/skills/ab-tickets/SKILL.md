@@ -114,6 +114,20 @@ the spec.
 
 ## Create a ticket
 
+Search for duplicates first:
+
+```
+ab ticket search "rate limit auth"
+```
+
+Over MCP, use `tickets.search`. It matches every word against titles and
+bodies in every state, including done and rejected tickets. Narrow it with
+`--state` or `--labels`, and page with the `--cursor` it prints. When a match
+already covers the work, update it, reopen it or block on it instead of filing
+another. A source without search refuses and names itself; then check the
+states the work could be in with `ab ticket list --state <state>` before
+filing.
+
 ```
 ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2] [--issues 824,820:refs] [--priority urgent] [--assignees alice,me]
 ```
