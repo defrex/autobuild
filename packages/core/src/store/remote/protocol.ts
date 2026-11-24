@@ -350,6 +350,9 @@ export const buildDigestWireSchema = z.object({
   readinessChangeSeq: z.number().int().positive().optional(),
   reclaimPending: z.literal(true).optional(),
   executionOpen: z.literal(true).optional(),
+  // Additive; an older service omits it, and its clients' optimization
+  // activity pass then fails closed with a typed capability error.
+  executionFacts: z.number().int().nonnegative().optional(),
   // Additive; an older service omits it, and its clients see no pending
   // rejection until the service deploys. Clients never read node logs instead.
   rejectionsPending: z.literal(true).optional(),
@@ -378,6 +381,18 @@ export const buildDigestWireSchema = z.object({
         emptyProposals: z.number().int().nonnegative(),
         openedAt: z.string().min(1),
         maxHours: z.number().positive().optional(),
+        // Additive active-hours clock; an older service omits it, and its
+        // clients skip the hours condition of a proposal request, which the
+        // build read then confirms.
+        clock: z
+          .object({
+            activeMs: z.number().nonnegative(),
+            spans: z.array(z.tuple([z.string().min(1), z.string().min(1)])),
+            open: z.array(z.string().min(1)),
+            stoppedAt: z.string().min(1).optional(),
+            settled: z.literal(true).optional(),
+          })
+          .optional(),
         proposal: z
           .object({
             request: z.string().min(1),
