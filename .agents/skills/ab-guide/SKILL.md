@@ -863,12 +863,20 @@ likes.
 |---|---|---|---|
 | `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from check steps in `[verify.<step>]` or `[finalize.<step>]`. |
 
-`setup` is special by convention: it runs after workspace provision and after a
-sandbox rehydrate. Failures are durable, remain visible in build status and the
-dashboard, and retry up to `[policy].maxSetupAttempts`; exhaustion raises a
-setup-targeted escalation without manufacturing a pipeline phase or verdict. An
-answer from your operator agent or you re-arms the budget, and a later successful `runner.attached` clears
-the current error. Values are never evaluated as config — they are handed to a
+`setup` is special by convention: it runs at every runner attachment (workspace
+provision, sandbox rehydrate, resume). It runs again before the next phase,
+check, verify, finalize or measurement step whenever a restack, wait-resume
+advance or completed reconcile moves the build onto a new base. Autobuild cannot
+see which files setup reads, so every base move counts as a dependency change;
+commits the build's own agents make do not move the base. Setup does not run
+while a reconcile resolver works on a replay: a resolver that needs the new
+dependencies to check its resolution runs the repository's setup itself.
+Failures, at attachment or after a base move, are durable, remain visible in
+build status and the dashboard, stop dependent work, and retry up to
+`[policy].maxSetupAttempts`; exhaustion raises a setup-targeted escalation
+without manufacturing a pipeline phase or verdict. An answer from your operator
+agent or you re-arms the budget, and only a later successful setup, recorded as
+a new `runner.attached`, clears the current error. Values are never evaluated as config — they are handed to a
 shell as written.
 
 Fresh init config deliberately leaves this map empty. The setup agent follows

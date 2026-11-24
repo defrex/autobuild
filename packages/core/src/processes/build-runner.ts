@@ -184,6 +184,7 @@ import {
   progressMeasurementDue,
 } from '../kernel/measurement'
 import { runPairedMeasurement, type MeasurementResult } from './measurement-runner'
+import { preparationStale, type WorkspacePreparation } from './workspace-preparation'
 import { JUDGE_ROLE } from '../config/roles'
 import type { PanelMetric } from '../objective'
 import type { PanelJudgeOutcome, PanelOrder } from '../kernel/panel'
@@ -1018,6 +1019,9 @@ export class BuildRunner {
   private readonly streamSessions: boolean
   private readonly onDiagnostic: (message: string) => void
   private attached = false
+  /** The base this process's own setup run prepared the workspace for;
+   * undefined when setup is unconfigured or the runner is unattached. */
+  private preparedFor: WorkspacePreparation | undefined
   private cancelHeartbeat: (() => void) | undefined
   /** Set when a heartbeat reports the lease lapsed (§7.4): the store never
    * renews an expired lease, so the holder must re-claim before doing any
@@ -1321,44 +1325,10 @@ export class BuildRunner {
     }, this.heartbeatMs)
 
     const setup = config.commands.setup
+    const preparedBase = verifyDiffBaseFrom(facts)
     if (setup !== undefined) {
-      let failure: EventPayload<'runner.setup-failed'> | undefined
-      try {
-        const result = await this.deps.exec(['sh', '-c', setup], {
-          cwd: this.deps.workspacePath,
-        })
-        if (result.exitCode !== 0) {
-          failure = {
-            command: setup,
-            attempt: streak + 1,
-            exitStatus: result.exitCode,
-            output: [result.stderr, result.stdout].filter((text) => text !== '').join('\n'),
-          }
-        }
-      } catch (error) {
-        failure = {
-          command: setup,
-          attempt: streak + 1,
-          exitStatus: null,
-          output: errorMessage(error),
-        }
-      }
-
-      if (failure !== undefined) {
-        try {
-          await store.append(slug, {
-            actor: KERNEL,
-            type: 'runner.setup-failed',
-            payload: failure,
-          } satisfies EventWrite<'runner.setup-failed'>)
-          const exhausted = failure.attempt >= config.policy.maxSetupAttempts
-          if (exhausted) await this.raiseSetupEscalation(failure)
-          throw new SetupFailureError(slug, failure, exhausted)
-        } finally {
-          this.stopHeartbeat()
-          this.attached = false
-        }
-      }
+      const failure = await this.executeSetup(setup, streak + 1)
+      if (failure !== undefined) await this.failSetup(failure, config)
     }
 
     if (recovering) {
@@ -1368,11 +1338,80 @@ export class BuildRunner {
       } catch (error) {
         this.stopHeartbeat()
         this.attached = false
+        this.preparedFor = undefined
         throw error
       }
     }
+    this.preparedFor = setup === undefined ? undefined : { base: preparedBase }
     this.attached = true
     return { kind: 'workspace-ready' }
+  }
+
+  /** Run `[commands].setup` in the workspace; the failure payload, if any. */
+  private async executeSetup(
+    setup: string,
+    attempt: number,
+  ): Promise<EventPayload<'runner.setup-failed'> | undefined> {
+    try {
+      const result = await this.deps.exec(['sh', '-c', setup], {
+        cwd: this.deps.workspacePath,
+      })
+      if (result.exitCode === 0) return undefined
+      return {
+        command: setup,
+        attempt,
+        exitStatus: result.exitCode,
+        output: [result.stderr, result.stdout].filter((text) => text !== '').join('\n'),
+      }
+    } catch (error) {
+      return { command: setup, attempt, exitStatus: null, output: errorMessage(error) }
+    }
+  }
+
+  /**
+   * Record a setup failure durably, raise the policy blocker at the attempt
+   * limit, and leave the runner unattached. Always throws `SetupFailureError`:
+   * only a later successful setup (`runner.attached`) clears the failure.
+   */
+  private async failSetup(
+    failure: EventPayload<'runner.setup-failed'>,
+    config: Config,
+  ): Promise<never> {
+    const { store, slug } = this.deps
+    try {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'runner.setup-failed',
+        payload: failure,
+      } satisfies EventWrite<'runner.setup-failed'>)
+      const exhausted = failure.attempt >= config.policy.maxSetupAttempts
+      if (exhausted) await this.raiseSetupEscalation(failure)
+      throw new SetupFailureError(slug, failure, exhausted)
+    } finally {
+      this.stopHeartbeat()
+      this.attached = false
+      this.preparedFor = undefined
+    }
+  }
+
+  /**
+   * Rerun setup before a workspace-using decision when a kernel operation
+   * moved the build onto a new base since this process prepared it
+   * (§15.6-C). Compares against facts `step()` already read; the only store
+   * read is the setup streak, once per base move.
+   */
+  private async refreshPreparation(
+    facts: Awaited<ReturnType<typeof readBuildFacts>>['value'],
+    decision: Decision,
+    config: Config,
+  ): Promise<void> {
+    const setup = config.commands.setup
+    const base = verifyDiffBaseFrom(facts)
+    if (setup === undefined || !preparationStale(this.preparedFor, base, decision)) return
+    const streak = await readBuildSelector(this.deps.store, this.deps.slug, 'setupStreak')
+    const failure = await this.executeSetup(setup, streak + 1)
+    if (failure !== undefined) await this.failSetup(failure, config)
+    this.preparedFor = { base }
   }
 
   /**
@@ -1395,6 +1434,7 @@ export class BuildRunner {
     const config = await this.captureConfig()
     const facts = (await readBuildFacts(store, slug)).value
     const decision = decideNextFromFacts(facts.state, facts.log, config)
+    await this.refreshPreparation(facts, decision, config)
     // A requested measurement runs where the pipeline is otherwise parked.
     const parked =
       decision.kind === 'run-measurement' ||
