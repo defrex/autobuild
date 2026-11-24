@@ -1972,6 +1972,48 @@ for (const json of [true, false]) {
   })
 }
 
+/** A remote store's held reads end on the server's clock. The memory adapter
+ * holds on wall time instead, so remote cases wrap it: each held read polls the
+ * adapter without a hold and ends when events arrive, the signal aborts, or
+ * the watch's manual clock passes the requested bound (wall time stays the
+ * backstop). The watch still issues every held read it would remotely. */
+function manualClockHolds(
+  store: MemoryBuildStore,
+  clock: ReturnType<typeof manualClock>,
+): MemoryBuildStore {
+  const held = new Set<PropertyKey>(['getBuildEventPage', 'getRepoEvents', 'getEvents'])
+  return new Proxy(store, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      if (typeof value !== 'function') return value
+      if (!held.has(key)) return value.bind(target)
+      return async (
+        subject: string,
+        since?: number,
+        opts?: { waitSeconds?: number; signal?: AbortSignal },
+      ) => {
+        const read = () => value.call(target, subject, since, { ...opts, waitSeconds: 0 })
+        const empty = (result: unknown[] | { events: unknown[] }) =>
+          (Array.isArray(result) ? result : result.events).length === 0
+        const holdMs = (opts?.waitSeconds ?? 0) * 1000
+        const until = clock().getTime() + holdMs
+        const backstop = Date.now() + holdMs
+        let result = await read()
+        while (
+          empty(result) &&
+          !opts?.signal?.aborted &&
+          clock().getTime() < until &&
+          Date.now() < backstop
+        ) {
+          await Bun.sleep(1)
+          result = await read()
+        }
+        return result
+      }
+    },
+  })
+}
+
 // Use the negotiated journal, including an unfinished drain: completion and
 // predecessor process exit are deliberately absent.
 for (const mode of [
@@ -1987,6 +2029,7 @@ for (const mode of [
       test(`handoff loss classification ${mode} remote=${remote} named=${named}`, async () => {
         const clock = manualClock()
         const store = new MemoryBuildStore({ clock })
+        const watched = remote ? manualClockHolds(store, clock) : store
         await store.ensureRepo(REPO)
         if (named) await seedRunningBuild(store, 'live')
         await store.claimRepoLease(REPO, 'old', 1000)
@@ -2020,7 +2063,7 @@ for (const mode of [
           return getReducerValue(scope, request)
         }
         let switched = false
-        const h = harness(store, {
+        const h = harness(watched, {
           now: clock,
           delay: async () => {
             clock.advance(1000)
@@ -2080,7 +2123,7 @@ for (const mode of [
           resetAt: clock().toISOString(),
         })
         const before = await store.getRepoEvents(REPO)
-        const resumed = harness(store, {
+        const resumed = harness(watched, {
           now: clock,
           delay: async () => {
             clock.advance(1000)

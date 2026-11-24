@@ -4,9 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
+import type { PipelineStep } from '../packages/core/src/cli/dashboard/model'
 import { stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
-import { type DashboardCaptureResult, WEBSITE_HERO_COLUMNS } from './dashboard-capture'
+import { projectWebParity } from '../packages/hosted-store-service/app/dashboard/view-model'
+import { type DashboardCaptureResult, FRAME_SPECS, WEBSITE_HERO_COLUMNS } from './dashboard-capture'
 
 let tmp: string
 
@@ -76,6 +78,43 @@ async function runCapture(name: string): Promise<Run> {
   const result = JSON.parse(await readFile(resultPath, 'utf8')) as DashboardCaptureResult
   for (const frame of result.frames) frame.png = new Uint8Array(await readFile(frame.pngPath))
   return { result, status: await git(workspace, 'status', '--porcelain') }
+}
+
+/** The web app's rows and step facts for a terminal frame's model: the
+ * terminal model's own rows, step for step. The web app receives the model
+ * over JSON, as the capture result does here. */
+function expectWebParity(frame: DashboardCaptureResult['frames'][number]): void {
+  const steps = (items: readonly PipelineStep[]) =>
+    items.map((step) => ({
+      label: step.label,
+      state: step.state,
+      ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
+      ...(step.count !== undefined ? { count: step.count } : {}),
+      ...(step.timing !== undefined ? { timing: step.timing } : {}),
+      ...(step.reason !== undefined ? { reason: step.reason } : {}),
+    }))
+  const terminal = {
+    ...(frame.model.rollback ? { rollback: frame.model.rollback } : {}),
+    ...(frame.model.handoffs ? { handoffs: frame.model.handoffs } : {}),
+    builds: frame.model.builds.map((build) => ({
+      identity: build.slug,
+      ...(build.draining ? { draining: true } : {}),
+      status: build.status,
+      ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),
+      steps: steps(build.integrationRow?.steps ?? build.steps),
+    })),
+    ...(frame.model.harvest
+      ? {
+          harvest: {
+            identity: 'Harvest' as const,
+            run: frame.model.harvest.run,
+            status: frame.model.harvest.status,
+            steps: steps(frame.model.harvest.steps),
+          },
+        }
+      : {}),
+  }
+  expect(projectWebParity(frame.model), frame.id).toEqual(terminal)
 }
 
 test('scripted dispatch capture is deterministic, mixed-state, paired, and source-clean', async () => {
@@ -557,6 +596,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       .filter((type) => type !== 'target.distance')
       .at(-1),
   ).toBe('code-review.started')
+  // Every capture fixture has identical web rows and step facts.
+  expect(first.result.frames.map((frame) => frame.id)).toEqual(FRAME_SPECS.map((frame) => frame.id))
+  for (const frame of first.result.frames) expectWebParity(frame)
   // Two full captures took 82.2s on the 4-vCPU sandbox with verification suites
   // and diagnostic checks overlapping; retain headroom without reducing evidence.
 }, 120_000)

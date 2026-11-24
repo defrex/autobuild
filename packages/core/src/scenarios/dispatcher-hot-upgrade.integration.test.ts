@@ -590,7 +590,9 @@ scenario(
 
       const packagedPath = 'packages/core/src/cli/dispatch-upgrade-target.ts'
       const bytes = await readFile(join(editor, packagedPath), 'utf8')
-      for (let i = 1; i <= 2; i++) {
+      // The production lock change and this packaged advance are two
+      // consecutive same-version adoptions.
+      for (let i = 1; i <= 1; i++) {
         const sha = await advance(packagedPath, `${bytes}\n// packaged source advance ${i}\n`)
         events = await complete(sha)
         const completion = events.findLast((e) => e.type === 'dispatcher.handoff-completed')!
@@ -650,7 +652,7 @@ scenario(
             e.type === 'dispatcher.upgrade-target-resolved' && e.payload.target.sha === disabledSha,
         ),
       ).toBe(false)
-      expect(disabledEvents.filter((e) => e.type === 'dispatcher.handoff-started')).toHaveLength(3)
+      expect(disabledEvents.filter((e) => e.type === 'dispatcher.handoff-started')).toHaveLength(2)
       expect(await readFile(dependency, 'utf8')).toBe(dependencyBefore)
       expect(await readFile(targetFile, 'utf8')).not.toContain('packaged source advance')
       expect(await readFile(join(editor, 'outside-distribution'), 'utf8')).toBe('excluded commit')
@@ -674,7 +676,10 @@ scenario(
   },
 )
 
-for (const crashed of process.platform === 'linux' ? [false, true, 'successor'] : [false])
+// On Linux the `successor` case also covers a plain terminal release: once its
+// gate opens, the predecessor releases the terminal normally and a later
+// successor takes over, under the same order, input and restore assertions.
+for (const crashed of process.platform === 'linux' ? [true, 'successor'] : [false])
   scenario(
     `PTY successor keeps descriptors and input after ${crashed === true ? 'predecessor death' : crashed === 'successor' ? 'successor preflight death' : 'terminal release'}`,
     async ({ mkdtemp, deadline }) => {
@@ -865,7 +870,11 @@ sys.exit(os.waitstatus_to_exitcode(status))
     },
   )
 
-for (const crash of ['immediate', 'phases', 'legacy', 'expired-reader'])
+// `phases` also covers the former `immediate` case: once the crash gate
+// exists, every later B process dies right after preflight, before its kernel
+// starts, and restored initialization survives a failed getRepo and a failed
+// appendRepo in turn.
+for (const crash of ['phases', 'legacy', 'expired-reader'])
   scenario(
     `real launcher supervises post-takeover crashes (${crash})`,
     async ({ mkdtemp, deadline }) => {
@@ -906,7 +915,7 @@ for (const crash of ['immediate', 'phases', 'legacy', 'expired-reader'])
             expiredReader
               ? `  if (${broken}) setInterval(async () => { if (await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82) }, 25);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`
               : phaseWork
-                ? `  if (${broken}) setInterval(async () => { if (await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82) }, 25);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`
+                ? `  if (${broken} && await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82);\n  if (${broken}) setInterval(async () => { if (await Bun.file(${JSON.stringify(crashGate)}).exists()) process.exit(82) }, 25);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`
                 : `  if (${broken}) process.exit(82);\n  process.env[DISPATCH_LAUNCH_CONTEXT_ENV]`,
           ),
       )
@@ -926,19 +935,19 @@ for (const crash of ['immediate', 'phases', 'legacy', 'expired-reader'])
           ),
         )
       } else {
-        // Fail one actual store operation during restored-generation initialization.
+        // Fail each actual store operation once during restored-generation
+        // initialization, first the authority read and then the publication.
         // The same process must retry, publish rollback once, and still adopt C.
         const handoff = join(original, 'packages/core/src/cli/dispatch-handoff.ts')
-        const operation = phaseWork ? 'appendRepo' : 'getRepo'
         await writeFile(
           handoff,
-          'let injectedRollbackFailure = false;\n' +
+          'const injectedRollbackFailures = new Set();\n' +
             (await readFile(handoff, 'utf8')).replace(
               '  const context = launch.rollback',
               `  if (launch.rollback) store = new Proxy(store, { get(target, key) {
               const value = Reflect.get(target, key);
-              if (key === '${operation}') return (...args) => {
-                if (!injectedRollbackFailure) { injectedRollbackFailure = true; throw new Error('injected rollback ${operation} failure'); }
+              if (key === 'getRepo' || key === 'appendRepo') return (...args) => {
+                if (!injectedRollbackFailures.has(key)) { injectedRollbackFailures.add(key); throw new Error('injected rollback ' + key + ' failure'); }
                 return value.apply(target, args);
               };
               return typeof value === 'function' ? value.bind(target) : value;
@@ -1194,9 +1203,9 @@ export default {name:'proof',apiVersion:'^1.0.0',agentRuntimes:{proof:()=>({serv
         expect(
           await exitWithin(child, deadline(), 'rollback launcher did not stop after interrupt'),
         ).toBe(0)
-        expect(await stderr).toContain(
-          `injected rollback ${phaseWork ? 'appendRepo' : 'getRepo'} failure`,
-        )
+        const diagnostics = await stderr
+        expect(diagnostics).toContain('injected rollback getRepo failure')
+        expect(diagnostics).toContain('injected rollback appendRepo failure')
         expect(
           (await store.getRepoEvents(repo)).filter(
             (e) => e.type === 'dispatcher.runtime-rolled-back',
