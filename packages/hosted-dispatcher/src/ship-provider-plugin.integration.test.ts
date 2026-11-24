@@ -163,7 +163,8 @@ describe('ship-provider-plugin: source checkout', () => {
     // The staged module must be self-contained: zero external module imports
     // (node builtins excepted) — the deployment's node_modules carries
     // nothing else the closure needs.
-    const bundle = await readFile(join(link, 'dist', 'index.js'), 'utf8')
+    const bundleBytes = await readFile(join(link, 'dist', 'index.js'))
+    const bundle = bundleBytes.toString('utf8')
     const imports = [...bundle.matchAll(/^import\s+[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]!)
     const external = imports.filter(
       (specifier) => !specifier.startsWith('node:') && !builtinModules.includes(specifier),
@@ -190,17 +191,12 @@ describe('ship-provider-plugin: source checkout', () => {
     expect(result!.appended).toBe(2)
     expect(result!.bytes).toBeGreaterThan(0)
     expect(lines.join('\n')).toContain('appended 2 entries to')
-  }, 60_000)
-
-  test('a re-run appends nothing and stages byte-identical files', async () => {
-    const { root, project, link } = await sourceFixture()
-    await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
-    const trace = await traceOf(project)
-    const bundle = await readFile(join(link, 'dist', 'index.js'))
-    const [result] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
-    expect(result!.appended).toBe(0)
-    expect(await traceOf(project)).toEqual(trace)
-    expect(await readFile(join(link, 'dist', 'index.js'))).toEqual(bundle)
+    const traceBytes = await readFile(tracePath)
+    const [rerun] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
+    expect(rerun!.appended).toBe(0)
+    expect(await traceOf(project)).toEqual(files)
+    expect(await readFile(tracePath)).toEqual(traceBytes)
+    expect(await readFile(join(link, 'dist', 'index.js'))).toEqual(bundleBytes)
   }, 60_000)
 
   test('a staged bundle in place of the workspace link falls back to the workspace tree', async () => {
@@ -525,34 +521,6 @@ describe('ship-provider-plugin: function-bundle evaluation', () => {
     const parsed = parsePluginManifest(namespace.default)
     expect(parsed.name).toBe('autobuild-vercel-sandbox')
     expect(Object.keys(parsed.workspaceProviders ?? {})).toEqual(['vercel-sandbox'])
-  }, 60_000)
-
-  test('the loader resolves the staged plugin from the traced function layout with the installer disabled (AUT-587)', async () => {
-    // The same-layout bound of AUT-587's AC#3, in a `bun --no-install`
-    // subprocess: with the installer disabled, ONLY the traced layout can
-    // satisfy the bare specifier — the staged package at the six-up
-    // repository-root `node_modules` the compiled `distributionRoot()`
-    // yields. This is the condition the failed deployment could not meet:
-    // loading the plugin from disk inside the function, under a
-    // no-install/process-safe loader. Mirrors the deployed call shape
-    // (dispatch's `loadPlugins(config.plugins, targetRepo)`): the scratch
-    // repository root is the repository candidate (no plugin there), the
-    // isolated tree is the installation root the compiled chunk derives.
-    const { root, project } = await sourceFixture()
-    const [staged] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
-
-    const isolated = await mkdtemp(join(tmpdir(), 'ab-plugin-isolated-'))
-    temporary.push(isolated)
-    const chunks = join(isolated, 'packages', 'hosted-store-service', '.next', 'server', 'chunks')
-    await mkdir(chunks, { recursive: true })
-    await writeFile(join(chunks, '[turbopack]_runtime.js'), '// placeholder runtime chunk')
-    const stagedDirectory = join(isolated, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
-    await mkdir(join(stagedDirectory, 'dist'), { recursive: true })
-    await copyFile(join(staged!.staging, 'package.json'), join(stagedDirectory, 'package.json'))
-    await copyFile(
-      join(staged!.staging, 'dist', 'index.js'),
-      join(stagedDirectory, 'dist', 'index.js'),
-    )
 
     // The deployment's dispatch call: packageRoot = the (config-only) target
     // repository, installationRoot = distributionRoot() derived from the
@@ -596,5 +564,10 @@ console.log(JSON.stringify({ reports: diagnosis.reports, healthy: diagnosis.heal
     expect(reports[0]?.notice).toContain('declares only builtin workspace-provider registration(s)')
     expect(healthy).toBe(true)
     expect(output).not.toContain('unable to write files')
+    expect(
+      await Bun.file(
+        join(isolated, 'node_modules', '@defrex', 'autobuild', 'package.json'),
+      ).exists(),
+    ).toBe(false)
   }, 120_000)
 })

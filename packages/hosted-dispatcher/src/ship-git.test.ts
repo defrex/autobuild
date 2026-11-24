@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { parseLdd } from './ship-git'
+import { parseLdDebug, parseLdd } from './ship-git'
 
 describe('parseLdd', () => {
   test('ldd output yields libraries, the loader and missing names', () => {
@@ -61,5 +61,24 @@ describe('parseLdd', () => {
       missing: [],
     })
     expect(parsed.libraries.filter((entry) => entry.soname.startsWith('/'))).toEqual([])
+  })
+})
+
+describe('build-host tool output', () => {
+  test('LD_DEBUG traces flag a host shell and host libraries', () => {
+    const root = '/tmp/abg01234567'
+    const parsed = parseLdDebug(
+      [
+        `     101:\tinitialize program: ${root}/bin/git`,
+        `     101:\t trying file=${root}/lib/libz.so.1`,
+        `     101:\tcalling init: ${root}/lib/libc.so.6`,
+        '     102:\tinitialize program: /bin/sh',
+        '     102:\t trying file=/usr/lib64/libc.so.6',
+        '     102:\tcalling init: /usr/lib64/libc.so.6',
+      ].join('\n'),
+      root,
+    )
+    expect(parsed.programs).toEqual([`${root}/bin/git`, '/bin/sh'])
+    expect(parsed.foreign).toEqual(['/bin/sh', '/usr/lib64/libc.so.6'])
   })
 })

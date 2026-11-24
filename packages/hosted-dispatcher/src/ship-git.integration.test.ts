@@ -4,12 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readElf } from './elf'
-import {
-  parseLdDebug,
-  stageGitForDeployment,
-  validateStagedTree,
-  type StageGitHost,
-} from './ship-git'
+import { stageGitForDeployment, validateStagedTree, type StageGitHost } from './ship-git'
 import { dispatchTracePath } from './ship-packed-distribution'
 import type { ShippedGitManifest } from './shipped-git'
 import { elf } from './testing/elf'
@@ -249,25 +244,6 @@ describe('stageGitForDeployment with a fake build host', () => {
     await expect(
       validateStagedTree(tree, '/tmp/abg01234567/ld', 'ld-linux-x86-64.so.2'),
     ).rejects.toThrow('bin/git: ELF machine 183 is not x86_64')
-  })
-})
-
-describe('build-host tool output', () => {
-  test('LD_DEBUG traces flag a host shell and host libraries', () => {
-    const root = '/tmp/abg01234567'
-    const parsed = parseLdDebug(
-      [
-        `     101:\tinitialize program: ${root}/bin/git`,
-        `     101:\t trying file=${root}/lib/libz.so.1`,
-        `     101:\tcalling init: ${root}/lib/libc.so.6`,
-        '     102:\tinitialize program: /bin/sh',
-        '     102:\t trying file=/usr/lib64/libc.so.6',
-        '     102:\tcalling init: /usr/lib64/libc.so.6',
-      ].join('\n'),
-      root,
-    )
-    expect(parsed.programs).toEqual([`${root}/bin/git`, '/bin/sh'])
-    expect(parsed.foreign).toEqual(['/bin/sh', '/usr/lib64/libc.so.6'])
   })
 })
 
