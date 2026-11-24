@@ -154,6 +154,8 @@ export const FORGE_READ_ALLOWLIST: readonly string[] = [
   'remoteBranchExists',
   'isCommitAncestor',
   'readFile',
+  'readTree',
+  'readBlob',
 ]
 
 const FORGE_CAPABILITIES = ['rewrite', 'kernelRewrite', 'prAttachments']

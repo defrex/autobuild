@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  AGENT_CONTEXT_CACHE_SLOT_PAYLOAD,
+  AGENT_CONTEXT_MAX_BYTES,
+} from '@defrex/autobuild/remote-store'
+import {
   HOSTED_ARTIFACT_MAX_BYTES,
   HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
   parseHostedStoreEnv,
@@ -22,6 +26,15 @@ describe('hosted store configuration', () => {
     expect(config.port).toBe(3000)
     expect(HOSTED_ARTIFACT_MAX_BYTES).toBe(2.5 * 1024 * 1024)
     expect(HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES).toBe(4 * 1024 * 1024)
+  })
+
+  test('admits the largest agent-context record and continuation slot', () => {
+    expect(AGENT_CONTEXT_MAX_BYTES).toBeLessThanOrEqual(HOSTED_ARTIFACT_MAX_BYTES)
+    // A slot's JSON is its counted payload plus a short header; gzip of
+    // incompressible base64 adds well under 64 KiB at this size.
+    expect(AGENT_CONTEXT_CACHE_SLOT_PAYLOAD + 64 * 1024).toBeLessThanOrEqual(
+      HOSTED_ARTIFACT_MAX_BYTES,
+    )
   })
 
   test('ignores all retired backend and lifecycle settings', () => {
