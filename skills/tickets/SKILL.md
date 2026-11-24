@@ -48,7 +48,8 @@ lands. The marker rules and the objective schema are in
 
 To groom an optimization node, follow the
 [grooming guidance](../ab-guide/references/optimization-nodes.md#grooming-an-optimization-node)
-for writing the purpose and choosing the harness, ε and budget.
+for writing the purpose, measuring where builds run, and choosing the
+harness, ε and budget.
 
 For node lifecycle, target validation and source-specific storage, read
 [nodes and targets](../ab-guide/references/integration-tree.md). When filing

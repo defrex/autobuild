@@ -489,7 +489,24 @@ for (const change of ['hours', 'budget', 'concurrency', 'stopped'] as const)
       expect(ofType(await h.events(node.slug), 'propose.started')).toHaveLength(0)
       expect(h.launched.some((entry) => entry.slug === node.slug)).toBe(false)
 
-      if (change === 'hours') h.clock.advance(3 * 3_600_000)
+      // Three active hours: a run of the node's own, under its open request.
+      if (change === 'hours') {
+        await h.store.append(node.slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'local', workspaceRef: `/ws/${node.slug}`, instance: 'hours-run' },
+        })
+        h.clock.advance(3 * 3_600_000)
+        await h.store.append(node.slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: {
+            instance: 'hours-run',
+            workspaceRef: `/ws/${node.slug}`,
+            outcome: 'completed',
+          },
+        })
+      }
       if (change === 'budget') await revise(h, node.slug, { maxAttempts: 0 + 1 })
       if (change === 'concurrency') await revise(h, node.slug, { concurrency: 2 })
       if (change === 'stopped')
