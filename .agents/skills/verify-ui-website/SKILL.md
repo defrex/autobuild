@@ -44,12 +44,12 @@ compare the rendered site with the approved design in `design/website/`, using t
    the guidance while performing the same capture and inspection below. If the
    file is absent, continue unchanged.
 2. Run `bun run capture:website`. Chromium is required. Read
-   `.ab/website-frames/verify-report.md` and `inventory.json`. Capture failure,
+   `.ab/website-frames/verify-report.md` and `inventory.json`. Follow the capture recovery policy below for capture failure,
    a partial inventory, missing or unopenable PNG or tile, an inventory
    `tiles` sequence whose `index` values are not contiguous `1..count`, tiles
    whose `top` and `height` rows are not contiguous from 0 to the entry's
    `height`, `segments` whose ranges do not cover the page, or missing final
-   motion evidence is a failure; attach nothing.
+   motion evidence; attach nothing while evidence is incomplete.
 3. Read the materialized spec, `design/website/README.md` and
    `design/website/design-system.md`. Open **every** PNG named by the inventory
    with the image-capable file tool and every paired landing reference.
@@ -116,7 +116,7 @@ compare the rendered site with the approved design in `design/website/`, using t
    upload rejection is a capture or tooling failure to report, not a reason to
    drop evidence.
 
-   On failure attach nothing, record each missing frame or finding (frame,
+   On a site defect with complete valid evidence attach nothing, record each missing frame or finding (frame,
    difference and location), then end exactly once:
 
    ```
@@ -128,8 +128,7 @@ compare the rendered site with the approved design in `design/website/`, using t
 - **Fail** when copy, section order, colors, or layout differ from the
   reference without the applicable leaf or node authorization, matching reference
   and README update, and matching capture required above, when the page scrolls
-  sideways at 390px, when the capture crashes,
-  or when a PNG or a tile of a tiled frame is missing or cannot be opened.
+  sideways at 390px. Capture crashes and missing/unopenable PNGs follow the recovery policy below.
 - **Fail** when no Chromium binary is available. That is a host setup problem
   for the operator, not a reason to skip: record the missing binary and
   `CHROMIUM_BIN` in the report and use the failing verdict.
@@ -146,6 +145,26 @@ compare the rendered site with the approved design in `design/website/`, using t
   exists.
 - If the capture fails before creating the report, create it only under
   `.ab/website-frames/`, record the command, the error, and the missing
-  evidence, then use the failing verdict.
+  evidence, then follow the capture recovery policy below.
 - Do not edit site code or fix what you find. Report it through the failing
   verdict.
+
+## Capture recovery policy
+
+A `classification: capture-error` report means capture evidence is unavailable,
+not a site-defect verdict. Visually suspicious missing landing pixels, a crash,
+a partial inventory or missing/unopenable frames receive the same recovery:
+preserve the first report and diagnostics under session scratch, rerun
+`bun run capture:website` once, and record both attempts. Inspect the new complete
+inventory, every PNG/tile and every existing visual and provenance check before
+passing. Never pass incomplete evidence.
+
+If evidence remains incomplete, attach no frames and end with
+`ab escalate "Website capture evidence unavailable after rerun" --refs <report-paths>`
+instead of a site-defect verdict. Preserve the explicit missing-Chromium failing
+verdict policy above. Existing DOM/probe assertion failures or real copy, layout,
+overflow and motion defects with valid evidence still fail; changed pages receive
+no waiver. Use the manifest commit range only to attribute a suspected defect,
+never to recalculate applicability or emit skip. When that range changes none of
+a page's inputs, never fail the build for missing or blank pixels on that page:
+rerun once, then escalate if evidence is still incomplete.

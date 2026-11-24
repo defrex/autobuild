@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { buildFiles, type SiteFiles } from '../packages/website/src/build'
 import { SEAMS } from '../packages/website/src/seams'
-import { ARTIFACT_MAX_BYTES, tilePng } from './website-capture-png'
+import { CaptureError, inspectPaint, type PaintRegion } from './website-capture-paint'
+import { ARTIFACT_MAX_BYTES, decodePng, tilePng } from './website-capture-png'
 
 const REPO_ROOT = join(import.meta.dir, '..')
 export const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, '.ab', 'website-frames')
@@ -173,6 +174,8 @@ export interface Probe {
     copyHeight: number
     copyPlaced: boolean
   }
+  paintRegions?: PaintRegion[]
+  readiness?: { fonts: string; elapsedMs: number }
   error?: string
   reducedMotion: boolean
   still: boolean
@@ -226,13 +229,25 @@ const KNOB_SETTLE_MS = 350
 
 function probeScript(frame: WebsiteFrame): string {
   const remote = frame.remote
+  const realtime = frame.kind !== 'docs'
   return `<script>
+addEventListener('unhandledrejection', event => { window.__captureReadinessError = String(event.reason) })
 addEventListener('DOMContentLoaded', () => setTimeout(async () => {
   ${frame.docsState === 'menu' ? `document.querySelector('[data-site-menu]')?.click()` : ''}
   ${frame.docsState === 'toc' ? `document.querySelector('[data-toc-toggle]')?.click()` : ''}
   ${frame.docsState === 'scrolled' ? `window.scrollTo(0, document.querySelectorAll('article h2')[2]?.offsetTop - 24 || 600)` : ''}
   ${remote ? `document.querySelector('[data-set="remote"]')?.click()` : ''}
   setTimeout(async () => {
+    const started = performance.now()
+    ${
+      realtime
+        ? `await document.fonts.ready
+    await Promise.all([...document.images].map(async image => {
+      if (!image.complete) await new Promise(resolve => { image.addEventListener('load', resolve, {once:true}); image.addEventListener('error', resolve, {once:true}) })
+      if (image.naturalWidth) await image.decode()
+    }))`
+        : ''
+    }
     ${frame.docsState === 'scrolled' ? `await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))` : ''}
     const knob = document.querySelector('.knob')
     // Chromium's virtual-time budget freezes the animation clock, so the glide never advances on
@@ -266,6 +281,38 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
         figures.push(record)
       }
     } catch (e) { error = String(e) }
+    ${realtime ? `await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))` : ''}
+    const paintRegions = []
+    ${
+      frame.kind !== 'docs'
+        ? `
+    for (const selector of ['header', 'h1', 'main .section h2', '[data-capture-figure]', 'footer']) {
+      const anchors = [...document.querySelectorAll(selector)]
+      if (!anchors.length) error = 'missing expected DOM anchor: ' + selector
+      for (const anchor of anchors) {
+        const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+          const node = walker.currentNode
+          if (!node.textContent.trim() || node.parentElement.closest('script,style')) continue
+          const style = getComputedStyle(node.parentElement)
+          if (style.visibility !== 'visible' || Number(style.opacity) === 0) continue
+          let parent = node.parentElement, background
+          while (parent) {
+            const color = getComputedStyle(parent).backgroundColor
+            if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') { background = color; break }
+            parent = parent.parentElement
+          }
+          const rgb = color => (color?.match(/[\\d.]+/g) || ['255','255','255']).slice(0,3).map(Number)
+          const range = document.createRange(); range.setStart(node, node.textContent.search(/\\S/)); range.setEnd(node, node.textContent.trimEnd().length)
+          for (const rect of range.getClientRects()) {
+            if (rect.width < 8 || rect.height < 8) continue
+            paintRegions.push({label: selector + ': ' + node.textContent.trim().slice(0,60), x:rect.x, y:rect.y, width:rect.width, height:rect.height, foreground:rgb(style.color), background:rgb(background)})
+          }
+        }
+      }
+    }`
+        : ''
+    }
     const still = !document.getAnimations().some(a => a.playState === 'running' || a.pending)
     const root = document.documentElement
     const sheet = [...document.styleSheets].find((s) => (s.href || '').endsWith('/site.css'))
@@ -301,7 +348,7 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
       copyPlaced: Boolean(copyRect && titleRect && (innerWidth < 720 ? copyRect.top >= titleRect.bottom && copyRect.left === titleRect.left : copyRect.left >= titleRect.right && copyRect.top < titleRect.bottom)),
       codeContained: [...document.querySelectorAll('article pre')].every(pre => pre.getBoundingClientRect().right <= innerWidth && pre.getBoundingClientRect().left >= 0 && getComputedStyle(pre).overflowX === 'auto'),
     } : undefined
-    const probe = { docs,
+    const probe = { docs, paintRegions, readiness: {fonts: document.fonts.status, elapsedMs: performance.now() - started},
       error, figures, still,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       sectionGaps,
@@ -739,6 +786,7 @@ export function serveSite(
 interface BrowserReply {
   result?: { value?: string }
   data?: string
+  exceptionDetails?: unknown
 }
 
 async function withBrowserTemp<T>(run: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
@@ -759,6 +807,7 @@ export async function runRealtimeChromium(
   height: number,
   mode: { dumpDom: true; pressEnterWhen?: string; timeoutMs?: number } | { screenshot: string },
   url: string,
+  motion: 'reduce' | 'normal' = 'reduce',
 ): Promise<string> {
   return withBrowserTemp(async (env) => {
     const proc = Bun.spawn(
@@ -768,7 +817,7 @@ export async function runRealtimeChromium(
         '--no-sandbox',
         '--disable-gpu',
         '--hide-scrollbars',
-        '--force-prefers-reduced-motion',
+        ...(motion === 'reduce' ? ['--force-prefers-reduced-motion'] : []),
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',
         '--remote-debugging-port=0',
@@ -799,8 +848,18 @@ export async function runRealtimeChromium(
       const ws = new WebSocket(target.webSocketDebuggerUrl)
       socket = ws
       await new Promise<void>((resolve, reject) => {
-        ws.onopen = () => resolve()
-        ws.onerror = () => reject(Error('Chromium debugger failed'))
+        const timeout = setTimeout(
+          () => reject(new CaptureError('Chromium debugger connection timed out')),
+          5000,
+        )
+        ws.onopen = () => {
+          clearTimeout(timeout)
+          resolve()
+        }
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          reject(new CaptureError('Chromium debugger failed'))
+        }
       })
       let sequence = 0
       const pending = new Map<
@@ -813,6 +872,8 @@ export async function runRealtimeChromium(
         if (!request) return
         pending.delete(reply.id)
         if (reply.error) request.reject(Error(JSON.stringify(reply.error)))
+        else if (reply.result?.exceptionDetails)
+          request.reject(Error(JSON.stringify(reply.result.exceptionDetails)))
         else request.resolve(reply.result)
       }
       const send = (method: string, params: Record<string, unknown> = {}): Promise<BrowserReply> =>
@@ -843,11 +904,8 @@ export async function runRealtimeChromium(
       await send('Page.navigate', { url })
       let dom = ''
       let keySent = false
-      for (
-        let attempt = 0;
-        attempt < (('dumpDom' in mode ? mode.timeoutMs : undefined) ?? 10000) / 50;
-        attempt++
-      ) {
+      const deadline = Date.now() + (('dumpDom' in mode ? mode.timeoutMs : undefined) ?? 10000)
+      while (Date.now() < deadline) {
         if ('dumpDom' in mode && mode.pressEnterWhen && !keySent) {
           const ready = await send('Runtime.evaluate', {
             expression: `Boolean(document.querySelector(${JSON.stringify(mode.pressEnterWhen)}))`,
@@ -882,18 +940,18 @@ export async function runRealtimeChromium(
       }
       if (!dom) {
         const state = await send('Runtime.evaluate', {
-          expression:
-            'JSON.stringify({url: location.href, ready: document.readyState, progress: document.body?.dataset.progress})',
+          expression: `JSON.stringify({url: location.href, ready: document.readyState, progress: document.body?.dataset.progress, inner: (() => { const doc = document.querySelector('iframe')?.contentDocument; return doc ? {ready:doc.readyState, fonts:doc.fonts.status, error:doc.defaultView.__captureReadinessError} : null })()})`,
           returnByValue: true,
         })
-        throw Error(`real-time capture produced no probe: ${state.result?.value}`)
+        throw new CaptureError(`real-time capture produced no probe: ${state.result?.value}`)
       }
       if ('screenshot' in mode) {
         const shot = await send('Page.captureScreenshot', {
           format: 'png',
           captureBeyondViewport: false,
         })
-        await writeFile(mode.screenshot, Buffer.from(shot.data ?? '', 'base64'))
+        if (!shot.data) throw new CaptureError('Chromium returned no screenshot data')
+        await writeFile(mode.screenshot, Buffer.from(shot.data, 'base64'))
       }
       return dom
     } finally {
@@ -924,7 +982,7 @@ async function runChromium(
   realTime = false,
 ): Promise<string> {
   await mkdir(profileDir, { recursive: true })
-  if (realTime) return runRealtimeChromium(chromium, profileDir, width, height, mode, url)
+  if (realTime) return runRealtimeChromium(chromium, profileDir, width, height, mode, url, motion)
   return withBrowserTemp(async (env) => {
     const proc = Bun.spawn(
       [
@@ -967,14 +1025,17 @@ async function runChromium(
 
 async function attempt<T>(label: string, run: (n: number) => Promise<T>): Promise<T> {
   let failure: Error | undefined
+  const history: string[] = []
   for (let n = 0; n < ATTEMPTS; n++) {
     try {
       return await run(n)
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error))
+      history.push(failure.message)
     }
   }
-  throw new Error(`website capture ${label}: ${failure?.message ?? 'no attempt ran'}`)
+  const ErrorType = failure instanceof CaptureError ? CaptureError : Error
+  throw new ErrorType(`website capture ${label}: attempts ${history.join('\nAttempt: ')}`)
 }
 
 export interface CaptureOptions {
@@ -988,6 +1049,8 @@ export interface CaptureOptions {
   files?: CaptureFiles
   /** Per-PNG ceiling; defaults to the store's artifact ceiling; tests pass a small value. */
   maxFrameBytes?: number
+  /** Internal fault-injection seam: alter bytes before the same production validation. */
+  screenshotBytes?: (bytes: Uint8Array, attempt: number) => Uint8Array
 }
 
 export async function captureWebsite(options: CaptureOptions = {}): Promise<string> {
@@ -1016,7 +1079,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
   const maxFrameBytes = options.maxFrameBytes ?? ARTIFACT_MAX_BYTES
   const results: CaptureResult[] = []
   try {
-    profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
+    profileRoot = await mkdtemp(join(outputDir, 'profiles-'))
     for (const frame of frames) {
       const frameUrl = (height: number, segment?: { top: number; height: number }) =>
         `${site.url}/__frame-${frame.id}.html?h=${height}${segment ? `&top=${segment.top}&seg=${segment.height}` : ''}`
@@ -1030,7 +1093,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
             { dumpDom: true },
             frameUrl(900),
             frame.motion,
-            frame.docsState === 'scrolled',
+            frame.kind !== 'docs' || frame.docsState === 'scrolled',
           ),
           `${frame.id} probe at ${frame.width}x900`,
         ),
@@ -1060,40 +1123,84 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
       for (const segment of segments) {
         const where = segmented ? ` segment ${segment.index}/${segment.count}` : ''
         const png = join(outputDir, `${segmented ? segment.id : frame.id}.png`)
-        await attempt(`${frame.id}${where} screenshot`, async (n) => {
-          await rm(png, { force: true })
-          const shotDom = await runChromium(
-            chromium,
-            join(profileRoot!, `${segmented ? segment.id : frame.id}-shot-${n}`),
-            frame.width,
-            segment.height,
-            { screenshot: png },
-            frameUrl(height, segmented ? segment : undefined),
-            frame.motion,
-            frame.docsState === 'scrolled',
+        const attemptHistory: unknown[] = []
+        try {
+          await attempt(`${frame.id}${where} screenshot`, async (n) => {
+            await rm(png, { force: true })
+            try {
+              const shotDom = await runChromium(
+                chromium,
+                join(profileRoot!, `${segmented ? segment.id : frame.id}-shot-${n}`),
+                frame.width,
+                segment.height,
+                { screenshot: png },
+                frameUrl(height, segmented ? segment : undefined),
+                frame.motion,
+                frame.kind !== 'docs' || frame.docsState === 'scrolled',
+              )
+              const shotProbe = parseProbe(
+                shotDom,
+                `${frame.id}${where} screenshot at ${frame.width}x${segment.height}`,
+              )
+              const shotProblems = probeProblems(frame, shotProbe)
+              if (JSON.stringify(shotProbe.figures) !== JSON.stringify(probe.figures))
+                shotProblems.push('screenshot figure inventory/state differs from measurement')
+              if (segmented && shotProbe.scrollHeight !== probe.scrollHeight)
+                shotProblems.push(
+                  `page height changed between measurement and${where} (${probe.scrollHeight}px, then ${shotProbe.scrollHeight}px)`,
+                )
+              if (shotProblems.length) throw Error(shotProblems.join('; '))
+              if (!existsSync(png) || (await stat(png)).size === 0) {
+                throw new CaptureError(`no screenshot written at ${png}`)
+              }
+              if (frame.kind !== 'docs') {
+                const bytes = new Uint8Array(await readFile(png))
+                if (options.screenshotBytes) await writeFile(png, options.screenshotBytes(bytes, n))
+                let image: ReturnType<typeof decodePng>
+                try {
+                  image = decodePng(new Uint8Array(await readFile(png)))
+                } catch (error) {
+                  throw new CaptureError(`invalid screenshot PNG: ${String(error)}`)
+                }
+                if (image.width !== frame.width || image.height !== segment.height)
+                  throw new CaptureError('incorrect screenshot dimensions')
+                const metrics = inspectPaint(image, shotProbe.paintRegions ?? [], segment.top)
+                await writeFile(
+                  join(outputDir, `${segment.id}-paint-${n}.json`),
+                  JSON.stringify(metrics, null, 2),
+                )
+                if (metrics.some((region) => region.failed)) {
+                  await rm(png, { force: true })
+                  throw new CaptureError(
+                    `incomplete paint: ${JSON.stringify(metrics.filter((region) => region.failed))}`,
+                  )
+                }
+              }
+              if (segmented) {
+                const bytes = await readFile(png)
+                const shot = bytes.byteLength >= 24 ? bytes.readUInt32BE(20) : 0
+                if (shot !== segment.height)
+                  throw new Error(`${where.trim()} is ${shot}px, expected ${segment.height}px`)
+              }
+              attemptHistory.push({ attempt: n + 1, status: 'complete' })
+            } catch (error) {
+              await rm(png, { force: true })
+              attemptHistory.push({
+                attempt: n + 1,
+                status: 'rejected',
+                classification:
+                  error instanceof CaptureError ? 'capture-error' : 'page-or-tool-error',
+                error: String(error),
+              })
+              throw error
+            }
+          })
+        } finally {
+          await writeFile(
+            join(outputDir, `${segment.id}-attempts.json`),
+            JSON.stringify(attemptHistory, null, 2),
           )
-          const shotProbe = parseProbe(
-            shotDom,
-            `${frame.id}${where} screenshot at ${frame.width}x${segment.height}`,
-          )
-          const shotProblems = probeProblems(frame, shotProbe)
-          if (JSON.stringify(shotProbe.figures) !== JSON.stringify(probe.figures))
-            shotProblems.push('screenshot figure inventory/state differs from measurement')
-          if (segmented && shotProbe.scrollHeight !== probe.scrollHeight)
-            shotProblems.push(
-              `page height changed between measurement and${where} (${probe.scrollHeight}px, then ${shotProbe.scrollHeight}px)`,
-            )
-          if (shotProblems.length) throw Error(shotProblems.join('; '))
-          if (!existsSync(png) || (await stat(png)).size === 0) {
-            throw new Error(`no screenshot written at ${png}`)
-          }
-          if (segmented) {
-            const bytes = await readFile(png)
-            const shot = bytes.byteLength >= 24 ? bytes.readUInt32BE(20) : 0
-            if (shot !== segment.height)
-              throw new Error(`${where.trim()} is ${shot}px, expected ${segment.height}px`)
-          }
-        })
+        }
       }
       const result: CaptureResult = { frame, probe, height }
       const tiling = async (png: string) => {
@@ -1162,7 +1269,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
   } catch (error) {
     await writeFile(
       join(outputDir, 'verify-report.md'),
-      `${renderReport(results, maxFrameBytes)}\nFAIL: ${String(error)}\nExpected inventory: ${JSON.stringify(frames)}`,
+      `${renderReport(results, maxFrameBytes)}\nclassification: ${error instanceof CaptureError ? 'capture-error' : 'page-or-tool-error'}\nFAIL: ${String(error)}\nExpected inventory: ${JSON.stringify(frames)}`,
     )
     throw error
   } finally {
