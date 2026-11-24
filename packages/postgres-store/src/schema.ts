@@ -1718,6 +1718,7 @@ export async function migratePostgres(
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
       await tx.unsafe(STREAM_SEED_SCHEMA_DDL)
       await ensureBuildChangePositions(tx as SQL)
+      await ensureBuildListingFacts(tx as SQL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
@@ -2191,6 +2192,98 @@ async function ensureBuildChangePositions(tx: SQL): Promise<void> {
     SELECT b.slug, b.repo, p.position FROM builds b JOIN repo_change_positions p ON p.repo = b.repo
     ON CONFLICT (slug) DO UPDATE SET position = EXCLUDED.position`
 }
+
+/** Applies `BUILD_LISTING_DDL`, backfilling one facts row per existing build
+ * only when `build_listing_facts` is new: kind from the latest
+ * `build.created`, merged when the latest `build.completed`/`build.reopened`
+ * is a merged completion. The migration's advisory lock and `CREATE TRIGGER`
+ * keep build writes out until commit. Later migrations cost one `to_regclass`
+ * lookup. */
+async function ensureBuildListingFacts(tx: SQL): Promise<void> {
+  const [row] = (await tx`SELECT to_regclass('build_listing_facts') IS NULL AS fresh`) as {
+    fresh: boolean
+  }[]
+  await tx.unsafe(BUILD_LISTING_DDL)
+  if (!row?.fresh) return
+  await tx`INSERT INTO build_listing_facts (slug, repo, created_at, updated_at, node, merged)
+    SELECT b.slug, b.repo, b.created_at, b.updated_at, COALESCE(k.node, false), COALESCE(m.merged, false)
+    FROM builds b
+    LEFT JOIN LATERAL (
+      SELECT e.payload->>'kind' = 'node' AS node FROM events e
+      WHERE e.type = 'build.created' AND e.build = b.slug ORDER BY e.seq DESC LIMIT 1
+    ) k ON true
+    LEFT JOIN LATERAL (
+      SELECT e.type = 'build.completed' AND e.payload->>'outcome' = 'merged' AS merged FROM events e
+      WHERE e.type IN ('build.completed', 'build.reopened') AND e.build = b.slug
+      ORDER BY e.seq DESC LIMIT 1
+    ) m ON true
+    ON CONFLICT (slug) DO NOTHING`
+}
+
+/**
+ * Additive listing facts behind the paged build listing's filters
+ * (`kind`, `outcome: merged`, `activeSince`); independent of the core lockstep
+ * marker. Triggers keep one row per build in the writing transaction of every
+ * path, including an older release writing to the same database: a build
+ * insert seeds it, `build.created` sets `node`, the latest `build.completed`
+ * sets `merged` and `build.reopened` clears it, and each `builds.updated_at`
+ * change is copied exactly. One index per filter class and order leads with
+ * that class's columns (`merged`, then `node`), so a filtered page, which
+ * bounds and orders by `(class columns, key, slug)`, is one backward range
+ * scan of exactly that index: no other index yields that order without a
+ * full sort. Hosted servers read the table, so migrate before rolling the
+ * service out. The triggers test event types and `updated_at` changes inside
+ * their functions, not in `WHEN` or `UPDATE OF` clauses: those make
+ * `events.type` and `builds.updated_at` trigger dependencies, which would
+ * block the column changes the schema-mismatch checks must still detect.
+ */
+export const BUILD_LISTING_DDL = `
+CREATE TABLE IF NOT EXISTS build_listing_facts (
+  slug text PRIMARY KEY REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text NOT NULL,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  node boolean NOT NULL DEFAULT false,
+  merged boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS build_listing_kind_created ON build_listing_facts(repo, node, created_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_created ON build_listing_facts(repo, merged, created_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_kind_created ON build_listing_facts(repo, merged, node, created_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_updated ON build_listing_facts(repo, updated_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_kind_updated ON build_listing_facts(repo, node, updated_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_updated ON build_listing_facts(repo, merged, updated_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_kind_updated ON build_listing_facts(repo, merged, node, updated_at, slug);
+CREATE OR REPLACE FUNCTION ab_build_listing_seeded() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO build_listing_facts(slug, repo, created_at, updated_at)
+ VALUES (NEW.slug, NEW.repo, NEW.created_at, NEW.updated_at) ON CONFLICT (slug) DO NOTHING;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION ab_build_listing_touched() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.updated_at IS DISTINCT FROM NEW.updated_at THEN
+  UPDATE build_listing_facts SET updated_at = NEW.updated_at WHERE slug = NEW.slug;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION ab_build_listing_event() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.type = 'build.created' THEN
+  UPDATE build_listing_facts SET node = COALESCE(NEW.payload->>'kind' = 'node', false) WHERE slug = NEW.build;
+ ELSIF NEW.type = 'build.completed' THEN
+  UPDATE build_listing_facts SET merged = COALESCE(NEW.payload->>'outcome' = 'merged', false) WHERE slug = NEW.build;
+ ELSIF NEW.type = 'build.reopened' THEN
+  UPDATE build_listing_facts SET merged = false WHERE slug = NEW.build;
+ END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS builds_listing_seeded ON builds;
+CREATE TRIGGER builds_listing_seeded AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_build_listing_seeded();
+DROP TRIGGER IF EXISTS builds_listing_touched ON builds;
+CREATE TRIGGER builds_listing_touched AFTER UPDATE ON builds FOR EACH ROW EXECUTE FUNCTION ab_build_listing_touched();
+DROP TRIGGER IF EXISTS events_listing_recorded ON events;
+CREATE TRIGGER events_listing_recorded AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_listing_event();
+`
 
 /**
  * Additive change-position plumbing; independent of the core lockstep marker.
