@@ -134,6 +134,9 @@ export function stepLine(step: PipelineStep, now: number, form: StepForm): strin
   return `${stepMark(step.state)} ${step.label}${stepNote(step, now, form)}${reason}`
 }
 
+/** The term an integration row's progress adds once its tree is verified. */
+export const PROGRESS_VERIFIED = 'verified'
+
 export interface OutcomeText {
   outcome: RosterOutcome
   word: string

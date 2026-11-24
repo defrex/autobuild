@@ -1387,6 +1387,11 @@ changed-builds feed, through the poll cache's shared row and header helpers
 (`readRowEnrichment`, `projectRowWithEnrichment`, `repositoryDashboardHeader`
 in `cli/dashboard/poll.ts`), so the terminal and the web project rows the same
 way.
+The `ab web` pages in
+`packages/ui/src/app/` render the frame's projection values, import
+`vocabulary.ts` by value only for step timers, use the page's embedded frame as
+a masked skeleton, and apply each frame through `StableFlow`'s layout
+transactions.
 
 The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
 increment `repo_change_positions` transactionally through triggers on build,

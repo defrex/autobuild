@@ -10,13 +10,17 @@ import {
   SegmentPopover,
 } from '../charts/gantt'
 import { type DurationMode, StepDurations, StepDurationsSkeleton } from '../charts/step-durations'
+import { formatDuration } from '../charts/model'
 import {
+  AttentionLine,
   BuildRow,
   type BuildRowModel,
-  BuildRowSkeleton,
   DispatcherStrip,
+  EmptySentence,
+  FactList,
   Masthead,
   PageNav,
+  SectionHeading,
 } from '../components/composites'
 import { Button, Choice, TextField, WordAction } from '../components/controls'
 import {
@@ -28,10 +32,15 @@ import {
   type ThemeChoice,
   ThemeMenu,
 } from '../components/display'
-import { Reserve } from '../components/motion'
+import { type FlowBlock, Masked, Reserve, StableFlow } from '../components/motion'
 import { installClsProbe } from '../cls-probe'
 import { chartHue, color, space, type } from '../tokens'
 import { fixtureBuilds, fixtureStepStats, NOW } from './fixtures'
+
+/** A step note as the projection writes it: `(4m12s)`. */
+const n = (ms: number) => `(${formatDuration(ms)})`
+/** The reserved width of a timed step's note. */
+const SIZER = '(99h59m59s)'
 
 function Section({
   id,
@@ -54,9 +63,22 @@ function Section({
 }
 
 /** Render the same content on both grounds, side by side. */
-function Grounds({ children, stacked = false }: { children: ReactNode; stacked?: boolean }) {
+function Grounds({
+  children,
+  stacked = false,
+  paired = false,
+}: {
+  children: ReactNode
+  stacked?: boolean
+  /** Side by side at every width, so content below one ground never moves. */
+  paired?: boolean
+}) {
   return (
-    <div data-catalog="grounds" data-stacked={stacked ? '' : undefined}>
+    <div
+      data-catalog="grounds"
+      data-stacked={stacked ? '' : undefined}
+      data-paired={paired ? '' : undefined}
+    >
       {(['light', 'dark'] as const).map((g) => (
         <div key={g} data-ground={g} data-catalog="ground">
           <span data-catalog="ground-label">{g}</span>
@@ -265,14 +287,50 @@ function Display() {
       <Specimen label="Steps">
         <StepList
           steps={[
-            { name: 'plan', state: 'done', elapsedMs: 384_000 },
-            { name: 'plan-review', state: 'done', elapsedMs: 252_000 },
-            { name: 'implement', state: 'retrying', elapsedMs: 1_812_000 },
-            { name: 'code-review', state: 'current', elapsedMs: 38_000 },
+            { name: 'plan', state: 'done', note: n(384_000) },
+            { name: 'plan-review', state: 'done', note: n(252_000) },
+            { name: 'implement', state: 'provisional', note: n(1_812_000) },
+            { name: 'code-review', state: 'current', note: n(38_000) },
             { name: 'verify', state: 'pending' },
             { name: 'finalize', state: 'pending' },
           ]}
         />
+      </Specimen>
+      <Specimen label="Steps with reserved note slots">
+        <StepList
+          steps={[
+            { name: 'plan', state: 'done', note: n(9_000), noteSizer: SIZER },
+            { name: 'implement', state: 'done', note: n(59_000), noteSizer: SIZER },
+            { name: 'code-review', state: 'provisional', note: n(3_599_000), noteSizer: SIZER },
+            {
+              name: 'verify:unit',
+              state: 'current',
+              note: '(2/3, 1h00m00s/2)',
+              noteSizer: '(2/3, 99h59m59s/2)',
+            },
+            { name: 'finalize', state: 'pending', noteSizer: SIZER },
+          ]}
+        />
+      </Specimen>
+      <Specimen label="Section heading and empty sentence">
+        <SectionHeading title="Needs attention" count="0" />
+        <EmptySentence>Nothing needs a person right now.</EmptySentence>
+      </Specimen>
+      <Specimen label="Facts">
+        <FactList
+          facts={[
+            { term: 'status', value: <StateWord tone="ok">RUNNING</StateWord> },
+            { term: 'phase', value: 'verify:unit', mono: true },
+            { term: 'merge', value: 'merge auto' },
+            { term: 'PR', value: <a href="#pr">PR open</a> },
+          ]}
+        />
+      </Specimen>
+      <Specimen label="Attention lines">
+        <AttentionLine tone="held" identity="#1090" href="#build">
+          waiting on #1084 and #1051 to merge
+        </AttentionLine>
+        <AttentionLine tone="alert">Janitor failing: worktree is locked</AttentionLine>
       </Specimen>
       <Specimen label="Sign-off regions">
         <div data-catalog="stack">
@@ -325,11 +383,12 @@ const rows: BuildRowModel[] = [
     slug: 'local-config-overrides',
     status: 'RUNNING',
     tone: 'live',
+    href: '#build',
     meta: 'round 2',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 412_000 },
-      { name: 'plan-review', state: 'done', elapsedMs: 198_000 },
-      { name: 'implement', state: 'current', elapsedMs: 1_302_000 },
+      { name: 'plan', state: 'done', note: n(412_000) },
+      { name: 'plan-review', state: 'done', note: n(198_000) },
+      { name: 'implement', state: 'current', note: n(1_302_000) },
       { name: 'code-review', state: 'pending' },
       { name: 'verify', state: 'pending' },
     ],
@@ -340,10 +399,11 @@ const rows: BuildRowModel[] = [
     slug: 'archive-ref-store-copy',
     status: 'BLOCKED',
     tone: 'alert',
+    href: '#build',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 388_000 },
-      { name: 'implement', state: 'done', elapsedMs: 2_410_000 },
-      { name: 'code-review', state: 'retrying', elapsedMs: 600_000 },
+      { name: 'plan', state: 'done', note: n(388_000) },
+      { name: 'implement', state: 'done', note: n(2_410_000) },
+      { name: 'code-review', state: 'provisional', note: n(600_000) },
     ],
     attention: (
       <SignOff
@@ -360,11 +420,36 @@ const rows: BuildRowModel[] = [
     tone: 'ok',
     meta: 'PR #1061',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 301_000 },
-      { name: 'implement', state: 'done', elapsedMs: 1_903_000 },
-      { name: 'verify', state: 'done', elapsedMs: 742_000 },
-      { name: 'finalize', state: 'done', elapsedMs: 64_000 },
+      { name: 'plan', state: 'done', note: n(301_000) },
+      { name: 'implement', state: 'done', note: n(1_903_000) },
+      { name: 'verify', state: 'done', note: n(742_000) },
+      { name: 'finalize', state: 'done', note: n(64_000) },
     ],
+  },
+  {
+    ticket: '#1093',
+    title: 'Record forge rate limits per credential',
+    slug: 'record-forge-rate-limits',
+    status: 'SUSPENDED',
+    tone: 'held',
+    href: '#build',
+    flags: [
+      { term: 'held', tone: 'held' },
+      { term: 'paused', tone: 'held' },
+    ],
+    meta: 'main +2 · merge off',
+    lines: [
+      {
+        text: 'ab/record-forge-rate-limits · restack idle · verify pending · not ready to land',
+        mono: true,
+      },
+      { text: 'review round ceiling: code 4', tone: 'pending' },
+    ],
+    steps: [
+      { name: 'plan', state: 'done', note: n(240_000) },
+      { name: 'implement', state: 'pending' },
+    ],
+    attention: <AttentionLine tone="alert">Janitor failing: worktree is locked</AttentionLine>,
   },
 ]
 
@@ -384,15 +469,18 @@ function Composites() {
         controls={<StateWord tone="held">INTAKE OFF</StateWord>}
       />
       <DispatcherStrip
-        facts={{
-          mode: 'running',
-          host: 'aron-desktop',
-          version: '1.9.0 · 500f2662',
-          active: 3,
-          capacity: 4,
-          queued: 5,
-          intake: true,
-          lastTick: '2s ago',
+        model={{
+          mode: { word: 'running', tone: 'ok' },
+          counts: [
+            { label: 'triage', value: '4' },
+            { label: 'queue', value: '5' },
+            { label: 'active', value: '3/4' },
+          ],
+          capacityNote: '(limit lowered from 6 while a handoff drains)',
+          gates: [
+            { label: 'intake', word: 'ON', tone: 'ok' },
+            { label: 'harvest', word: 'OFF', tone: 'held' },
+          ],
         }}
       />
       {rows.map((r) => (
@@ -407,8 +495,8 @@ const cycle: Pick<BuildRowModel, 'status' | 'tone' | 'steps' | 'attention'>[] = 
     status: 'RUNNING',
     tone: 'live',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 412_000 },
-      { name: 'implement', state: 'current', elapsedMs: 1_302_000 },
+      { name: 'plan', state: 'done', note: n(412_000) },
+      { name: 'implement', state: 'current', note: n(1_302_000) },
       { name: 'code-review', state: 'pending' },
       { name: 'verify', state: 'pending' },
     ],
@@ -417,8 +505,8 @@ const cycle: Pick<BuildRowModel, 'status' | 'tone' | 'steps' | 'attention'>[] = 
     status: 'BLOCKED',
     tone: 'alert',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 412_000 },
-      { name: 'implement', state: 'retrying', elapsedMs: 1_840_000 },
+      { name: 'plan', state: 'done', note: n(412_000) },
+      { name: 'implement', state: 'provisional', note: n(1_840_000) },
       { name: 'code-review', state: 'pending' },
       { name: 'verify', state: 'pending' },
     ],
@@ -428,13 +516,79 @@ const cycle: Pick<BuildRowModel, 'status' | 'tone' | 'steps' | 'attention'>[] = 
     status: 'MERGED',
     tone: 'ok',
     steps: [
-      { name: 'plan', state: 'done', elapsedMs: 412_000 },
-      { name: 'implement', state: 'done', elapsedMs: 2_210_000 },
-      { name: 'code-review', state: 'done', elapsedMs: 540_000 },
-      { name: 'verify', state: 'done', elapsedMs: 760_000 },
+      { name: 'plan', state: 'done', note: n(412_000) },
+      { name: 'implement', state: 'done', note: n(2_210_000) },
+      { name: 'code-review', state: 'done', note: n(540_000) },
+      { name: 'verify', state: 'done', note: n(760_000) },
     ],
   },
 ]
+
+const flowSteps = (note: string): BuildRowModel['steps'] => [
+  { name: 'plan', state: 'done', note: n(412_000), noteSizer: SIZER },
+  { name: 'implement', state: 'current', note, noteSizer: SIZER },
+  { name: 'code-review', state: 'pending', noteSizer: SIZER },
+]
+
+const flowRow = (slug: string, title: string, ticket: string): BuildRowModel => ({
+  ticket,
+  title,
+  slug,
+  status: 'RUNNING',
+  tone: 'ok',
+  href: '#build',
+  steps: flowSteps(n(1_200_000)),
+})
+
+/**
+ * A live page flow that changes on its own every 3 s, with no input to excuse
+ * a shift: a timer crossing 59m59s → 1h00m00s (in place), a row gaining a
+ * multi-sentence escalation, and a row moving to another list (transactions).
+ * Under `?cls=1` the title must stay `CLS 0.0000`.
+ */
+function LiveFlow() {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 3000)
+    return () => clearInterval(timer)
+  }, [])
+  const phase = tick % 4
+  const first: BuildRowModel = {
+    ...flowRow('stable-flow-timer', 'Keep a ticking step in its reserved slot', '#2001'),
+    steps: flowSteps(phase === 0 ? n(3_599_000) : n(3_600_000)),
+    ...(phase === 2
+      ? {
+          status: 'BLOCKED',
+          tone: 'alert' as const,
+          attention: (
+            <SignOff
+              kind="escalation"
+              question="The unit suite fails because the fixture clock is a day ahead. Should the fixture move, or should the test pin its own clock? Either answer resumes the build."
+            />
+          ),
+        }
+      : {}),
+  }
+  const second = flowRow('stable-flow-steady', 'A row that never changes', '#2002')
+  const mover = flowRow('stable-flow-mover', 'A row that moves between lists', '#2003')
+  const moved = phase === 3
+  const blocks: FlowBlock[] = [
+    { key: 'h:active', node: <SectionHeading title="Active" /> },
+    { key: `row:${first.slug}`, node: <BuildRow build={first} /> },
+    { key: `row:${second.slug}`, node: <BuildRow build={second} /> },
+    ...(moved ? [{ key: `row:${mover.slug}`, node: <BuildRow build={mover} /> }] : []),
+    { key: 'h:queued', node: <SectionHeading title="Queued" /> },
+    ...(moved
+      ? [{ key: 'empty:queued', node: <EmptySentence>No builds are queued.</EmptySentence> }]
+      : [
+          {
+            key: `row:${mover.slug}`,
+            node: <BuildRow build={{ ...mover, status: 'QUEUED', tone: 'live' }} />,
+          },
+        ]),
+  ]
+  return <StableFlow blocks={blocks} seq={tick} />
+}
 
 function States() {
   const [ready, setReady] = useState(false)
@@ -460,10 +614,17 @@ function States() {
         <Reserve
           ready={ready}
           placeholder={
-            <>
-              <BuildRowSkeleton />
-              <BuildRowSkeleton />
-            </>
+            <Masked>
+              <BuildRow
+                build={{
+                  ticket: '#1072',
+                  title: 'Rename the integration node kind',
+                  slug: 'rename-node-kind',
+                  ...(current as (typeof cycle)[number]),
+                }}
+              />
+              <BuildRow build={rows[2] as BuildRowModel} />
+            </Masked>
           }
         >
           <BuildRow
@@ -476,6 +637,14 @@ function States() {
           />
           <BuildRow build={rows[2] as BuildRowModel} />
         </Reserve>
+      </Grounds>
+      <Grounds>
+        <Specimen label="Masked row and its live twin">
+          <Masked>
+            <BuildRow build={rows[1] as BuildRowModel} />
+          </Masked>
+          <BuildRow build={rows[1] as BuildRowModel} />
+        </Specimen>
       </Grounds>
       <Grounds stacked>
         <Reserve ready={ready} placeholder={<GanttSkeleton rows={few.length} />}>
@@ -572,7 +741,7 @@ function Catalog() {
         <ThemeMenu value={theme} onValueChange={setTheme} />
       </header>
       <nav data-catalog="toc" aria-label="Catalog sections">
-        {['tokens', 'controls', 'display', 'composites', 'states', 'charts'].map((id) => (
+        {['tokens', 'controls', 'display', 'composites', 'states', 'charts', 'flow'].map((id) => (
           <a key={id} href={`#${id}`}>
             {id}
           </a>
@@ -619,6 +788,16 @@ function Catalog() {
         intro="Where the time goes. Work phases use the chart hues, review rounds are hatched, and waits use the state inks they already mean."
       >
         <Charts />
+      </Section>
+      {/* Last on the page: a flow that grows only extends the document. */}
+      <Section
+        id="flow"
+        title="Live flow"
+        intro="A page changing on its own every 3 s: a timer crossing an hour in its reserved slot, a row gaining an escalation, a row moving between lists. Blocks above a change never move; the changed region fades out, relayouts while invisible and fades back in. Under ?cls=1 the title stays CLS 0."
+      >
+        <Grounds paired>
+          <LiveFlow />
+        </Grounds>
       </Section>
     </main>
   )
