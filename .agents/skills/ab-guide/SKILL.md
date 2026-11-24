@@ -1822,6 +1822,25 @@ repository, so a later publish updates the same PR's head. A publication is a
 repository-journal fact naming the session owner (the `operator` field), the session, the branch, the
 commit, and the PR; a refused or failed attempt is journaled too.
 
+Where the tools are served:
+
+- **Local `ab mcp`** reads the checkout's config at startup. It lists the
+  `sandbox.*` tools only when `[orchestrator]` is enabled and the backend
+  builds; `sandbox.publish` also needs a forge and provider publication.
+- **Hosted `/mcp`** lists every `sandbox.*` tool whenever the deployment can
+  host operator sandboxes. Each call is checked against the repository's latest
+  deposited effective config and refused with a typed code that names the
+  reason:
+
+  | Code | Reason |
+  |---|---|
+  | `sandbox-orchestrator-disabled` | The latest effective config does not set `[orchestrator] enabled = true`. |
+  | `sandbox-no-effective-config` | No dispatcher has deposited an effective config for the repository. |
+  | `sandbox-effective-config-invalid` | The latest deposited effective config cannot be read. |
+  | `sandbox-backend-unavailable` | The sandbox backend could not be built. |
+
+  A new deposit takes effect on the next call.
+
 ### `[upgrade]`
 
 | Field | Default | Meaning |

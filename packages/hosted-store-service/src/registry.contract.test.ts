@@ -13,7 +13,13 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { OPERATOR_TOOL_ANNOTATIONS } from '@defrex/autobuild/operator'
-import { buildRegistry, RegistryError, TOOLS } from '@defrex/autobuild/operator'
+import {
+  buildRegistry,
+  operatorToolTable,
+  RegistryError,
+  SandboxUnavailableError,
+  TOOLS,
+} from '@defrex/autobuild/operator'
 import { createOperatorServer } from './operator-server'
 import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
@@ -1717,6 +1723,53 @@ describe('agent tool registry contract', () => {
     const error = await registry.call('sandbox.publish', {}).catch((e) => e)
     expect(error).toBeInstanceOf(RegistryError)
     expect((error as RegistryError).reason).toBe('unknown-tool')
+  })
+
+  test('the hosted sandbox mode serves the capability table and refuses per call with a typed reason', async () => {
+    const world = await seedWorld()
+    const sandboxNames = TOOLS.map((tool) => tool.name).filter((name) =>
+      name.startsWith('sandbox.'),
+    )
+    const names = (table: readonly { name: string }[]) => table.map((tool) => tool.name)
+    expect(sandboxNames).toHaveLength(7)
+    expect(names(operatorToolTable()).filter((name) => name.startsWith('sandbox.'))).toEqual([])
+    expect(names(operatorToolTable({ canPublish: false }))).toEqual(
+      names(TOOLS).filter((name) => name !== 'sandbox.publish'),
+    )
+    expect(operatorToolTable({ canPublish: true })).toBe(TOOLS)
+
+    const noPublish = buildRegistry({
+      store: world.store,
+      clock,
+      sandboxResolution: { canPublish: false },
+    })
+    expect(noPublish.entries).toEqual(operatorToolTable({ canPublish: false }))
+    const unpublished = await noPublish
+      .call('sandbox.publish', { repo, title: 't' }, { identity: 'Ada' })
+      .catch((e) => e)
+    expect((unpublished as RegistryError).reason).toBe('unknown-tool')
+
+    const hosted = buildRegistry({
+      store: world.store,
+      clock,
+      sandboxResolution: { canPublish: true },
+    })
+    expect(hosted.entries).toBe(TOOLS)
+    let resolved = 0
+    const sandboxFor = async () => {
+      resolved++
+      throw new SandboxUnavailableError('orchestrator-disabled', 'repository disables it')
+    }
+    const refused = await hosted
+      .call('sandbox.exec', { repo, command: 'ls' }, { identity: 'Ada', sandboxFor })
+      .catch((e) => e)
+    expect((refused as RegistryError).body).toEqual({
+      kind: 'refusal',
+      error: 'repository disables it',
+      code: 'sandbox-orchestrator-disabled',
+    })
+    await hosted.call('builds.list', { repo }, { identity: 'Ada', sandboxFor })
+    expect(resolved).toBe(1)
   })
 })
 

@@ -3994,16 +3994,26 @@ environmentVariables = ["MY_TOOL_CONFIG"]
 Set `MY_TOOL_CONFIG` in the host environment of the `ab mcp` process; a missing
 value fails the tool call that needs it, named as a typed `environment` error.
 
-Hosted sandbox tools compose their backend from the deposited effective config
-and the authenticated request's credentials. The request's
-`x-vercel-oidc-token` authenticates the Sandbox SDK; an explicit
-`VERCEL_OIDC_TOKEN` takes precedence, or the durable
-`VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple needs no header.
-Archive cleanup uses the same request credential threading. Provider or forge
-construction failures degrade sandbox tools only, with a diagnostic. Guests
-receive no credential. The dispatcher retains idle settlement but never
-constructs a turn runner. Tools stay gated by `[orchestrator].enabled` and the
-registry's closed-table filtering; external harnesses own approvals.
+On a hosted deployment:
+
+- **Listing.** `/mcp` lists every `sandbox.*` tool whenever the deployment has
+  a public origin. Listing reads nothing from the store.
+- **Gate.** Each call reads the repository's latest deposited effective config.
+  A closed gate is a typed refusal instead of a missing tool:
+  `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,
+  `sandbox-effective-config-invalid`, or `sandbox-backend-unavailable` for a
+  provider or forge construction failure, which also raises a diagnostic.
+- **Reuse.** The backend is composed once per process, repository,
+  effective-config revision and OIDC value, then reused. Its repo-scoped store
+  credential is cached until near expiry.
+- **Credentials.** `/mcp` forwards the request's `x-vercel-oidc-token` to the
+  in-process operator call, where it authenticates the Sandbox SDK. An explicit
+  `VERCEL_OIDC_TOKEN` takes precedence, and the durable
+  `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple needs no header.
+  Archive cleanup uses the same credential. Guests receive no credential.
+
+The dispatcher retains idle settlement but never constructs a turn runner.
+External harnesses own approvals.
 
 ## `[hooks]`
 

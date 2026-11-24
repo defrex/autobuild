@@ -2171,6 +2171,12 @@ be narrowed to the ambient build — and `--repo` constrains every call to one
 repository. Mutating tools attribute their writes to the sessionless operator
 identity, exactly as the other operator commands do.
 
+The hosted `/mcp` binding advertises exactly the table the hosted operator
+server dispatches: a filtered tool is neither advertised nor served. Its
+repo-gated `sandbox.*` tools are listed when the deployment can host operator
+sandboxes, and each call is refused with a typed reason when the repository's
+latest deposited effective config does not enable them.
+
 ### 8.10 Hosted project connection
 
 `ab connect <service-url>` requests owner browser approval for the normalized

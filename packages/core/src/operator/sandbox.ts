@@ -15,7 +15,7 @@ import { humanActor } from '../events/envelope'
 import type { Via } from '../events/envelope'
 import type { Forge } from '../ports/types'
 import {
-  SANDBOX_FORBIDDEN_ENV,
+  redactSandboxMessage,
   SandboxOperationError,
   type SandboxCommandResult,
   type SandboxEnvironmentIdentity,
@@ -24,6 +24,8 @@ import {
 import type { WorkspaceProvider } from '../ports/types'
 import { readRepositoryFacts } from '../store/reduced-reads'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
+
+export { redactSandboxMessage }
 
 /** Hard bound on one sandbox command wait, in seconds — shared with the
  * adapters (`SANDBOX_MAX_WAIT_SECONDS`). */
@@ -91,19 +93,6 @@ export function resolveSandboxRelativePath(path: string): string {
     throw new SandboxOperationError('exec', `sandbox path ${JSON.stringify(path)} names no file`)
   }
   return segments.join('/')
-}
-
-/** Redact values of credential-named environment variables from a provider
- * message (the existing credential-redaction discipline): the message may
- * travel to a tool caller, so a value of any forbidden name never rides on
- * it. Values are read from the host environment of the serving process. */
-export function redactSandboxMessage(message: string): string {
-  let redacted = message
-  for (const name of SANDBOX_FORBIDDEN_ENV) {
-    const value = process.env[name]
-    if (value !== undefined && value !== '') redacted = redacted.split(value).join('[REDACTED]')
-  }
-  return redacted
 }
 
 function describeError(error: unknown): string {

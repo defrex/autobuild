@@ -117,6 +117,13 @@ export { REDUCER_REVISIONS } from '../kernel/reducer-revisions'
 export { projectReducerValue } from '../store/reducer-value-validation'
 
 export { placementReadBudget } from './reduced-read-budget'
+export { operatorSandboxCallReadBudget } from './reduced-read-budget'
+export {
+  memoryOperatorSandbox,
+  MEMORY_SANDBOX_BASE_SHA,
+  MEMORY_SANDBOX_HEAD_SHA,
+  type MemoryOperatorSandbox,
+} from './memory-operator-sandbox'
 export { ticketRoleTickBudget } from './reduced-read-budget'
 export { urgentIntakeReadBudget } from './reduced-read-budget'
 export { openPrBackpressureReadBudget } from './reduced-read-budget'

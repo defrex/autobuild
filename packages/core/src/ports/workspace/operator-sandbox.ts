@@ -79,6 +79,19 @@ export interface SandboxWaitResult {
   stderr?: string
 }
 
+/** Redact values of credential-named environment variables from a provider
+ * message (the existing credential-redaction discipline): the message may
+ * travel to a tool caller, so a value of any forbidden name never rides on
+ * it. Values are read from the host environment of the serving process. */
+export function redactSandboxMessage(message: string): string {
+  let redacted = message
+  for (const name of SANDBOX_FORBIDDEN_ENV) {
+    const value = process.env[name]
+    if (value !== undefined && value !== '') redacted = redacted.split(value).join('[REDACTED]')
+  }
+  return redacted
+}
+
 /** Typed failure of one operator-sandbox operation. `stage` names where it
  * failed so a tool caller sees `sandbox-<stage>` codes; the message carries
  * the provider's text, redacted of credential values by the service. */
