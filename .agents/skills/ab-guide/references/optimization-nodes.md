@@ -755,7 +755,10 @@ out detached. `ab context` writes:
   quick-revised since its latest acceptance;
 - `progress.json`: starting, current, best and threshold values, attempt
   counts, attempts in flight, the plateau counter, consecutive empty proposals,
-  the opening time and the request (`id`, `head`, `room`);
+  the opening time (`openedAt`), `activeHours` and the request (`id`, `head`,
+  `room`). `activeHours` is the active-hours budget used so far, evaluated when
+  the context is materialized; `openedAt` is opening metadata, not the budget
+  clock;
 - `ledger.json`: `settled`, one entry per settled attempt with `nearMiss: true`
   on a near miss, and `inFlight`, the running attempts with their titles and
   strategies;

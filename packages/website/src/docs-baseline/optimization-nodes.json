@@ -4,7 +4,7 @@
   "title": "Optimization nodes",
   "group": "concepts",
   "description": "Let a node propose, measure and land its own attempts toward a metric or a judge panel, within a budget you approve once.",
-  "textHash": "ce9d63d665acab107476f0cde7860f7bf924700b1c709387f2352c3718d1834b",
+  "textHash": "6db2be0a5020011474ddb2047bbe36d7709d8511a442a6764c322b81cad4f5a1",
   "headings": [
     "When to use one",
     "A run, end to end",
