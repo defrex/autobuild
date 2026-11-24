@@ -284,7 +284,9 @@ registered build reducer, a pure invertible contribution, an accumulator with
 `add` and `subtract`); `ROLLUPS` in `kernel/reducer-registry.ts` registers them.
 `kernel/step-durations.ts` is the first rollup, folding
 `cli/dashboard/timeline.ts`'s `buildTimeline` segments into the log-scale
-histograms of `store/histogram.ts`. `store/rollups.ts` is the one engine every
+histograms of `store/histogram.ts`. `kernel/build-roster.ts` is the second:
+its `buildRosterEntry` build reducer feeds `buildRoster`, the live builds plus
+a capped history of the newest finished ones. `store/rollups.ts` is the one engine every
 adapter runs over a narrow `RollupStorage` port: fast path on an unchanged
 change position, otherwise an advance by the changed-builds feed, serialized
 per key and committed atomically with each build's absorbed contribution in

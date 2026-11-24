@@ -74,6 +74,7 @@ import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-
 import { sessionReducer } from '../store/session-reducer'
 import { pinnedAssetsReducer } from '../store/ticket-assets'
 import { autoMergeDefaultReducer } from './auto-merge-default'
+import { buildRosterEntryReducer, buildRosterRollup } from './build-roster'
 import { currentDeferralObservationReducer } from './auto-merge'
 import { dispatchSettingsReducer } from './dispatch-settings'
 import { dispatchStatusReducer } from './dispatch-status'
@@ -208,6 +209,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     covers: ['phaseIntervals', 'projectSessions'],
   },
   buildTimeline: { reducer: buildTimelineReducer, covers: [] },
+  buildRosterEntry: { reducer: buildRosterEntryReducer, covers: [] },
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },
   forgeHealthValue: { reducer: optionalValue(forgeHealthReducer), covers: [] },
@@ -414,6 +416,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
  * versions still derive from the revision ledger and their build reducer's. */
 export const ROLLUPS: Record<string, AnyRollupDefinition> = {
   stepDurations: stepDurationsRollup,
+  buildRoster: buildRosterRollup,
 }
 
 /** Event-array functions that are deliberately not reducers, each with the

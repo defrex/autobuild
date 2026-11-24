@@ -59,12 +59,14 @@ describe('stepDurations', () => {
     const unmerged = timeline(segs, { outcome: 'closed-unmerged' })
     const live = timeline(segs, { outcome: undefined })
     const node = timeline(segs, { kind: 'node' })
-    expect(rollup.contribute(unmerged, leafMerged, NOW)).toBeNull()
-    expect(rollup.contribute(live, leafMerged, NOW)).toBeNull()
-    expect(rollup.contribute(node, leafMerged, NOW)).toBeNull()
-    expect(rollup.contribute(unmerged, all, NOW)).not.toBeNull()
-    expect(rollup.contribute(node, rollup.args.parse({ kind: 'node' }), NOW)).not.toBeNull()
-    expect(rollup.contribute(timeline(segs), rollup.args.parse({ kind: 'node' }), NOW)).toBeNull()
+    expect(rollup.contribute(unmerged, leafMerged, NOW, 'b')).toBeNull()
+    expect(rollup.contribute(live, leafMerged, NOW, 'b')).toBeNull()
+    expect(rollup.contribute(node, leafMerged, NOW, 'b')).toBeNull()
+    expect(rollup.contribute(unmerged, all, NOW, 'b')).not.toBeNull()
+    expect(rollup.contribute(node, rollup.args.parse({ kind: 'node' }), NOW, 'b')).not.toBeNull()
+    expect(
+      rollup.contribute(timeline(segs), rollup.args.parse({ kind: 'node' }), NOW, 'b'),
+    ).toBeNull()
   })
 
   test('open and abandoned segments contribute nothing', () => {
@@ -72,7 +74,7 @@ describe('stepDurations', () => {
       segment('plan', '2026-11-20T10:00:00.000Z', 60_000, { state: 'abandoned' }),
       { ...segment('implement', '2026-11-20T10:00:00.000Z', 0), state: 'open', end: undefined },
     ])
-    expect(rollup.contribute(value, leafMerged, NOW)).toBeNull()
+    expect(rollup.contribute(value, leafMerged, NOW, 'b')).toBeNull()
   })
 
   test('assigns each segment to the UTC day it ended', () => {
@@ -83,6 +85,7 @@ describe('stepDurations', () => {
       ]),
       leafMerged,
       NOW,
+      'b',
     )!
     expect(Object.keys(c).sort()).toEqual(['2026-11-20', '2026-11-21'])
   })
@@ -92,6 +95,7 @@ describe('stepDurations', () => {
       timeline([segment('implement', '2026-11-22T00:00:00.000Z', 600_000, { merged: 5 })]),
       leafMerged,
       NOW,
+      'b',
     )!
     const value = rollup.finish(folded(c), { window: '7d' }, NOW, '9')
     expect(value.steps).toEqual([
@@ -107,6 +111,7 @@ describe('stepDurations', () => {
       ]),
       leafMerged,
       NOW,
+      'b',
     )!
     const b = rollup.contribute(
       timeline([
@@ -115,6 +120,7 @@ describe('stepDurations', () => {
       ]),
       leafMerged,
       NOW,
+      'b',
     )!
     const acc = folded(a)
     const before = structuredClone(acc)
@@ -135,11 +141,11 @@ describe('stepDurations', () => {
       segment('plan', oldEnd, 60_000),
       segment('plan', '2026-11-20T10:00:00.000Z', 60_000),
     ])
-    expect(Object.keys(rollup.contribute(value, leafMerged, NOW)!)).toEqual(['2026-11-20'])
+    expect(Object.keys(rollup.contribute(value, leafMerged, NOW, 'b')!)).toEqual(['2026-11-20'])
 
     // Absorbed earlier, when the old day was still retained.
     const earlier = new Date(NOW.getTime() - 10 * DAY)
-    const absorbed = rollup.contribute(value, leafMerged, earlier)!
+    const absorbed = rollup.contribute(value, leafMerged, earlier, 'b')!
     expect(Object.keys(absorbed)).toHaveLength(2)
     const acc = folded(absorbed)
     expect(rollup.expired(acc, earlier)).toBe(false)
@@ -158,7 +164,7 @@ describe('stepDurations', () => {
     const at = (daysAgo: number) =>
       segment('plan', new Date(NOW.getTime() - daysAgo * DAY).toISOString(), 10_000)
     const acc = folded(
-      rollup.contribute(timeline([at(0), at(1), at(5), at(20), at(100)]), leafMerged, NOW),
+      rollup.contribute(timeline([at(0), at(1), at(5), at(20), at(100)]), leafMerged, NOW, 'b'),
     )
     const count = (window: '24h' | '7d' | '30d' | 'all') =>
       rollup.finish(acc, { window }, NOW, '1').steps[0]?.count ?? 0
@@ -197,6 +203,7 @@ describe('stepDurations', () => {
       timeline([segment('plan', '2026-11-20T10:00:00.000Z', 60_000)]),
       leafMerged,
       NOW,
+      'b',
     )!
     const acc = folded(c)
     acc.days['2026-11-20']!.implement = {}
