@@ -1,5 +1,5 @@
 ---
-name: ab-guide
+name: guide
 description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; when a question mentions autobuild, autobuild.toml, or the `ab` CLI; or when writing the product's own name in prose, documentation, or a UI string.
 ---
 
@@ -864,7 +864,9 @@ likes.
 | `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from check steps in `[verify.<step>]` or `[finalize.<step>]`. |
 
 `setup` is special by convention: it runs at every runner attachment (workspace
-provision, sandbox rehydrate, resume). It runs again before the next phase,
+provision, sandbox rehydrate, resume). Local worktrees do not inherit the
+checkout's installed dependencies, so `setup` installs them. It runs again before
+the next phase,
 check, verify, finalize or measurement step whenever a restack, wait-resume
 advance or completed reconcile moves the build onto a new base. Autobuild cannot
 see which files setup reads, so every base move counts as a dependency change;
@@ -2092,24 +2094,36 @@ By default, each Git repository owns one self-contained state tree at
 
 - `autobuild.sqlite` — build records, event logs, and repository journals.
 - `blobs/` — content-addressed artifacts.
-- `worktrees/` — autobuild-created Git worktrees.
 - `tickets/` — the default location for the `file` ticket source.
+
+Build worktrees live outside the checkout, so tools that walk parent
+directories for `node_modules` never reach the checkout's packages. A state
+tree outside the checkout keeps them in its own `worktrees/`. Otherwise they
+go to `$XDG_STATE_HOME/autobuild/worktrees/<checkout>-<hash>/`, which defaults
+to `~/.local/state/…`. The destination is checked on real paths: it must not
+resolve inside the checkout, and no directory from it up to `/` may hold
+`node_modules`. When the check fails, each new build fails to provision with an
+error naming the remedy, and dispatch shows the same message as a startup
+notice. Builds already in a worktree continue and release. Builds whose
+worktree is still at the old `<main-repo>/.autobuild/worktrees/` location
+resume, clean up and release in place; nothing new is created there.
 
 The main checkout comes from Git's absolute repository/worktree topology, not
 blindly from the current worktree's top level or the parent of its Git common
 directory. Commands run in an autobuild-created linked worktree therefore read
 the main checkout's state and file tickets, while submodules and
 separate-Git-dir checkouts keep distinct roots beneath their own working trees.
-There is no home-directory fallback: a repository with no state tree starts
-empty.
+Store state has no home-directory fallback: a repository with no state tree
+starts empty.
 
 Every command uses the same precedence: explicit `--store <ref>` > nonempty
 `AB_STORE` > `[store] url` > `<main-repo>/.autobuild`. Relative local overrides are normalized
 against the main checkout. A local override relocates the whole state tree,
-including `worktrees/` and default file tickets; an explicit `[tickets].dir`
-remains repo-relative. An HTTP(S) URL still selects the remote store unchanged,
-while worktrees and default file tickets remain under the repository-default
-`.autobuild/` directory. The dispatcher passes its normalized selection to
+including default file tickets, and build worktrees follow it when it lies
+outside the checkout; an explicit `[tickets].dir` remains repo-relative. An
+HTTP(S) URL still selects the remote store unchanged, while default file
+tickets remain under the repository-default `.autobuild/` directory and build
+worktrees use the state-home location. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
 
 ### Several dispatchers on one repository
