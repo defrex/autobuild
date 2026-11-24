@@ -289,39 +289,7 @@ async function assertUntouched(fx: Awaited<ReturnType<typeof hostedFixture>>): P
   expect(await fx.synthesizeOpen()).toBe(true)
 }
 
-test('a synthesize session spanning several hosted invocations completes with no loss', async () => {
-  const fx = await hostedFixture()
-  try {
-    await fx.seed()
-    await fx.invoke(fx.synthesizeOpen)
-    expect(fx.starts).toHaveLength(1)
-    expect(await fx.count('harvest.execution.started')).toBe(1)
-
-    for (let i = 0; i < 2; i += 1) {
-      await fx.invoke()
-      await assertUntouched(fx)
-    }
-    expect(fx.observed).toEqual(['cmd-1', 'cmd-1'])
-
-    fx.synthesizeGate.resolve()
-    await fx.guest()
-    expect(await fx.count('harvest.completed')).toBe(1)
-
-    fx.observe({ state: 'ended', exitCode: 0 })
-    await fx.invoke()
-    expect(await fx.count('harvest.execution.released')).toBe(1)
-    expect(await fx.count('harvest.failed')).toBe(0)
-    expect(fx.starts).toHaveLength(1)
-    expect(reduceHarvest(await fx.repoEvents()).latest?.status).toBe('completed')
-    expect(fx.h.cliErrors).toEqual([])
-  } finally {
-    fx.synthesizeGate.resolve()
-    await fx.guest()?.catch(() => {})
-    await fx.h.cleanup()
-  }
-}, 60_000)
-
-test('a guest spanning the launching teardown and a successor invocation completes', async () => {
+test('a guest spanning launching teardown and several successor invocations completes with no loss', async () => {
   // A 1 ms interval makes every guest boundary re-check its authority. Before
   // AUT-1152 its heartbeat saw the successor's holder and the guest exited
   // `held` with its synthesize bracket open.
@@ -334,6 +302,13 @@ test('a guest spanning the launching teardown and a successor invocation complet
     expect(launching).toBeDefined()
     // `--once` teardown released the launching holder.
     expect((await fx.h.store.getRepo(fx.h.remote))?.lease?.holder).not.toBe(launching)
+
+    expect(await fx.count('harvest.execution.started')).toBe(1)
+    for (let i = 0; i < 2; i += 1) {
+      await fx.invoke()
+      await assertUntouched(fx)
+    }
+    expect(fx.observed).toEqual(['cmd-1', 'cmd-1'])
 
     let result: unknown
     let successor: string | undefined
@@ -349,6 +324,7 @@ test('a guest spanning the launching teardown and a successor invocation complet
     expect(await fx.count('harvest.completed')).toBe(1)
     expect(await fx.count('harvest.failed')).toBe(0)
     const run = reduceHarvest(await fx.repoEvents()).latest
+    expect(run?.status).toBe('completed')
     expect(run?.sessions.every((session) => session.status === 'ended')).toBe(true)
 
     fx.observe({ state: 'ended', exitCode: 0 })
