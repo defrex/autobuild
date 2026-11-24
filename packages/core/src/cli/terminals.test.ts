@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { z } from 'zod'
+import type { EventEnvelope } from '../events/catalog'
 import { humanActor } from '../events/envelope'
 import { autoMergeDeferralObservation, pendingAutoMerge } from '../kernel/auto-merge'
 import { FakeForge } from '../ports/forge/fake'
@@ -46,7 +47,7 @@ test.each([
     type: 'build.auto-merge-requested',
     payload: {},
   })
-  let existing: Awaited<ReturnType<typeof store.append>> | undefined
+  let existing: EventEnvelope<'observation.recorded'> | undefined
   if (variant === 'existing deferral') {
     existing = await store.append(
       BUILD,
