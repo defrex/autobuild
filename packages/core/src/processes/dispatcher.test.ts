@@ -1,6 +1,7 @@
 /**
  * Pure dispatcher helpers: spec conformance, dependency analysis, slug
- * normalization, the repository-pause predicate and default ticket states.
+ * normalization, the repository-pause predicate, default ticket states and
+ * ready criteria.
  * In memory, no store or adapter involved.
  */
 import { describe, expect, test } from 'bun:test'
@@ -15,6 +16,7 @@ import {
   heldByRepositoryPause,
   kebab,
   markRejected,
+  readyCriteria,
   specConformance,
   validateSlugCandidate,
   type DependencyVerdict,
@@ -359,5 +361,64 @@ describe('defaultProposalState', () => {
     expect(
       defaultProposalState(parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')),
     ).toBe('Triage')
+  })
+})
+
+describe('readyCriteria', () => {
+  const criteria = (toml: string) => readyCriteria(parseConfig(toml))
+  const FILE = '[tickets]\nsource = "file"\n'
+  const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
+  const GITHUB = '[tickets]\nsource = "github"\n'
+  const PLUGIN = '[tickets]\nsource = "jira"\n'
+
+  test('each source has its default label gate, and the state gate is always emitted', () => {
+    // File and plugin sources gate on state alone; Linear and GitHub keep the
+    // historical "autobuild" label as an additional narrowing gate.
+    for (const state of ['Ready', 'Todo']) {
+      expect(criteria(`${FILE}readyState = "${state}"\n`)).toEqual({ labels: [], state })
+      expect(criteria(`${LINEAR}readyState = "${state}"\n`)).toEqual({
+        labels: ['autobuild'],
+        state,
+      })
+    }
+    expect(criteria(GITHUB)).toEqual({ labels: ['autobuild'], state: 'ready' })
+    expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({ labels: [], state: 'Open' })
+    expect(criteria(`${PLUGIN}readyState = "Todo"\n`)).toEqual({ labels: [], state: 'Todo' })
+  })
+
+  test('an explicit readyLabels wins for every source, and an empty one is honored', () => {
+    for (const source of [FILE, LINEAR, PLUGIN]) {
+      expect(criteria(`${source}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
+        labels: ['urgent'],
+        state: 'Ready',
+      })
+    }
+    expect(criteria(`${LINEAR}readyLabels = []\nreadyState = "Ready"\n`)).toEqual({
+      labels: [],
+      state: 'Ready',
+    })
+    expect(criteria(`${GITHUB}readyLabels = []\n`)).toEqual({ labels: [], state: 'ready' })
+  })
+
+  test('readyAssignee joins the criteria only when configured', () => {
+    expect(criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "me"\n`)).toEqual({
+      labels: ['autobuild'],
+      state: 'Ready',
+      assignee: 'me',
+    })
+    expect(
+      criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "a@example.com"\n`).assignee,
+    ).toBe('a@example.com')
+    expect('assignee' in criteria(`${LINEAR}readyState = "Ready"\n`)).toBe(false)
+    expect(criteria(`${GITHUB}readyAssignee = "octocat"\n`)).toEqual({
+      labels: ['autobuild'],
+      state: 'ready',
+      assignee: 'octocat',
+    })
+  })
+
+  test('a config with no readyState fails at the tickets path', () => {
+    expect(() => criteria(LINEAR)).toThrow('tickets.readyState')
+    expect(() => criteria('')).toThrow('tickets.readyState')
   })
 })
