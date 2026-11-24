@@ -274,6 +274,9 @@ describe('real configuration reference', () => {
   })
 
   test('local-override labels follow the root key classification', () => {
+    expect(localOverrideBehavior('operator.dispatcher')).toBe(
+      'Local only: set in .autobuild/local.toml; rejected in autobuild.toml.',
+    )
     expect(localOverrideBehavior('capacity')).toBe('Allowed in .autobuild/local.toml.')
     expect(localOverrideBehavior('roles.<name>.model')).toBe('Allowed in .autobuild/local.toml.')
     expect(localOverrideBehavior('hooks.<name>.url')).toBe('Allowed in .autobuild/local.toml.')

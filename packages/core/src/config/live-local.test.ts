@@ -91,3 +91,22 @@ describe('LiveConfig with a local override layer', () => {
     expect(config.current().localOverrides).toBeUndefined()
   })
 })
+
+test('ownership reload is hot and remains valid in effective artifacts', async () => {
+  const { config } = live()
+  expect(
+    (await config.refresh({ committed: base, local: '[operator]\ndispatcher = "agent"' })).kind,
+  ).toBe('adopted')
+  const effective = config.current().config
+  expect(effective.operator?.dispatcher).toBe('agent')
+  const { decodeEffectiveConfig } = await import('../operator/query')
+  const { verify, finalize, ...root } = effective
+  const content = JSON.stringify({
+    ...root,
+    verify: { steps: verify.steps, ...verify.stepConfigs },
+    finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+  })
+  expect(
+    decodeEffectiveConfig(new TextEncoder().encode(content), 'test').operator?.dispatcher,
+  ).toBe('agent')
+})
