@@ -52,20 +52,6 @@ async function openPluginBuild(
   return { h, slug }
 }
 
-test('a plugin-selected forge drives publication, PR plumbing, and merged completion', async () => {
-  const { h, slug } = await openPluginBuild()
-  try {
-    h.forge.setPrState(1, { state: 'merged', sha: 'plugin-squash' })
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-    const events = await h.events(slug)
-    expect(reduceBuild(events).outcome).toBe('merged')
-    expect(ofType(events, 'pr.merged')[0]!.payload.sha).toBe('plugin-squash')
-    expect(h.tickets.transitions).toEqual([{ id: 'PF-1', state: 'Done' }])
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
-
 test('a plugin-selected forge drives closed-unmerged completion', async () => {
   const { h, slug } = await openPluginBuild({ ticket: 'PF-closed' })
   try {
@@ -80,7 +66,7 @@ test('a plugin-selected forge drives closed-unmerged completion', async () => {
   }
 }, 30_000)
 
-test('a plugin-selected forge drives conflict detection, reconcile publication, and eventual merge', async () => {
+test('a plugin-selected forge drives publication, conflict detection, reconcile publication, and merged completion', async () => {
   const handlers = happyHandlers()
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
@@ -134,6 +120,8 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     events = await h.events(slug)
     expect(reduceBuild(events).outcome).toBe('merged')
+    expect(ofType(events, 'pr.merged')[0]!.payload.sha).toBe('reconciled-plugin-squash')
+    expect(h.tickets.transitions).toEqual([{ id: 'PF-conflict', state: 'Done' }])
   } finally {
     await h.cleanup()
   }
