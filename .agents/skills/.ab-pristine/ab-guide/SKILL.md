@@ -1700,7 +1700,13 @@ issue on GitHub returns it to triage: the first read strips a stale pre-reopen
 state label. That check reads the issue's last 100 label and reopen events, so
 an issue whose deciding event is older is excluded with a diagnostic until its
 state label is removed and re-added. Blockers are native GitHub issue
-dependencies; a blocker in another repository never resolves. The ticket's own
+dependencies; a blocker in another repository never resolves. Blocker reads use
+the dependency list, not GitHub's lagging dependency summary, except broad
+listings and export, which can miss a blocker recorded seconds earlier. Claim
+re-reads blockers and leaves a ticket whose blocker was added after the
+dependency check ready for the next scan, and a ready-bound create with
+blockers opens in triage and moves to ready only after every blocker is
+recorded. The ticket's own
 issue is always a `closes` link. Links to other issues show on GitHub as
 `autobuild-link:<intent> #<n>` labels, one repository label per linked issue
 and intent, never deleted when unused; state and link labels are never ticket
@@ -2247,8 +2253,10 @@ to a ticket that has already been claimed into a build does not stop that build.
 For dependent tickets, follow the
 [safe blocker-filing workflow](references/ticket-dependencies.md): determine the
 intended final destination, stage outside ready, verify all blocker relationships,
-and move to ready last. Direct Linear and GitHub create the issue and its blockers
+and move to ready last. Direct Linear creates the issue and its blockers
 in separate requests; one `create --blocked-by` call is not atomic publication.
+GitHub stages a ready-bound create in triage itself and publishes it to ready
+after recording every blocker.
 Harvest's creation reservations cover Harvest only, not interactive CLI creates.
 Dependency order and JSON id extraction are still required, but do not alone
 prevent an active dispatcher from claiming a partially created ready ticket.
