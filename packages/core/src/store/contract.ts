@@ -6,7 +6,7 @@ import { AUTOBUILD_VERSION } from './remote/version'
 import { sameParentRejection } from '../kernel/node-restack-state'
 import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
-import { resolveReducerValue } from './reducer-values'
+import { resolveReducerValue, type JsonValue } from './reducer-values'
 import { resolveRollupValue } from './rollups'
 import { buildTimelineReducer } from '../cli/dashboard/timeline'
 import { stepDurationsRollup, type StepDurationsValue } from '../kernel/step-durations'
@@ -1885,8 +1885,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         store: BuildStore,
         slugs: string[],
         now: Date,
-        args = request.args,
-      ) => {
+        args: Record<string, unknown> = request.args,
+      ): Promise<JsonValue> => {
         const resolvedArgs = stepDurationsRollup.args.parse(args)
         const acc = stepDurationsRollup.initial()
         for (const slug of slugs) {
@@ -1902,7 +1902,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           { window: 'all' },
           now,
           await store.getRepoChangePosition(repo),
-        )
+        ) as unknown as JsonValue
       }
 
       test('answers the fold of every build timeline and advances after appends', async () => {
@@ -1953,7 +1953,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(answer.steps).toEqual([
             expect.objectContaining({ step: 'plan', count: 2, totalMs: 180_000 }),
           ])
-          expect(answer).toEqual(await expected(store, ['rollup-reopen'], clock(), {}))
+          expect(answer as unknown).toEqual(await expected(store, ['rollup-reopen'], clock(), {}))
         })
       })
 
