@@ -1998,25 +1998,69 @@ export class PostgresBuildStore implements BuildStore {
     ticketId: string,
     opts?: { revisions?: boolean },
   ): Promise<TicketAssetSummary[]> {
-    const rows: Row[] = await this.run(async (q) => {
-      const key = await this.ticketStorageKey(q, repo, ticketId)
-      const rows: Row[] =
-        await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} ORDER BY kind, name, revision`
-      const projected: Row[] = []
-      for (const row of rows)
-        projected.push({ ...row, ticket_id: (await this.currentAssetMeta(q, row)).ticketId })
-      return projected
+    return this.run(async (q) => {
+      // One ticket lookup gives both the storage key and the readable id.
+      const ticket = await this.hostedTicketRow(q, repo, ticketId)
+      const key = String(ticket?.id ?? ticketId)
+      const display = ticket?.readable_id ? String(ticket.readable_id) : ticketId
+      if (opts?.revisions) {
+        const rows: Row[] =
+          await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} AND removed = false ORDER BY kind, name, revision`
+        return rows.map((row) =>
+          summarizeTicketAsset({ ...this.ticketAssetMeta(row), ticketId: display }),
+        )
+      }
+      // Current assets: a loose index scan over the primary key visits each
+      // (kind, name) head once. Each seek starts past every revision of the
+      // previous name (or every row of the previous kind), so the work is
+      // independent of retained history, and no manifest leaves the database.
+      // Do not rewrite the next-name step as a row-value or OR predicate: those
+      // constrain only (repo, ticket_id) and walk the history they skip here.
+      const rows: Row[] = await q`
+        WITH RECURSIVE names AS (
+          (SELECT kind, name FROM ticket_assets
+            WHERE repo = ${repo} AND ticket_id = ${key}
+            ORDER BY kind, name LIMIT 1)
+          UNION ALL
+          SELECT n.kind, n.name FROM names p CROSS JOIN LATERAL (
+            (SELECT kind, name FROM ticket_assets
+              WHERE repo = ${repo} AND ticket_id = ${key} AND kind = p.kind AND name > p.name
+              ORDER BY name LIMIT 1)
+            UNION ALL
+            (SELECT kind, name FROM ticket_assets
+              WHERE repo = ${repo} AND ticket_id = ${key} AND kind > p.kind
+              ORDER BY kind, name LIMIT 1)
+            LIMIT 1) n
+        )
+        SELECT h.kind, h.name, h.revision, h.layout, h.size, h.created_at, h.file_count, h.dir_count
+        FROM names CROSS JOIN LATERAL (
+          SELECT a.kind, a.name, a.revision, a.layout, a.size, a.created_at, a.removed,
+            (SELECT count(*) FROM jsonb_array_elements(m.entries) e WHERE e->>'type' = 'file') AS file_count,
+            (SELECT count(*) FROM jsonb_array_elements(m.entries) e WHERE e->>'type' = 'dir') AS dir_count
+          FROM ticket_assets a
+          -- The manifest is written as an encoded JSON text, which lands as a
+          -- jsonb string scalar; decode it here as json() does on read.
+          CROSS JOIN LATERAL (SELECT CASE jsonb_typeof(a.manifest)
+            WHEN 'string' THEN (a.manifest #>> '{}')::jsonb ELSE a.manifest END AS entries) m
+          WHERE a.repo = ${repo} AND a.ticket_id = ${key} AND a.kind = names.kind AND a.name = names.name
+          ORDER BY a.revision DESC LIMIT 1) h
+        WHERE NOT h.removed
+        ORDER BY h.kind, h.name`
+      return rows.map(
+        (row): TicketAssetSummary => ({
+          repo,
+          ticketId: display,
+          kind: String(row.kind),
+          name: String(row.name),
+          revision: num(row.revision),
+          layout: String(row.layout) as TicketAssetSummary['layout'],
+          size: num(row.size),
+          fileCount: num(row.file_count),
+          dirCount: num(row.dir_count),
+          createdAt: iso(row.created_at),
+        }),
+      )
     })
-    if (opts?.revisions) {
-      return rows
-        .filter((row) => row.removed !== true)
-        .map((row) => summarizeTicketAsset(this.ticketAssetMeta(row)))
-    }
-    const latest = new Map<string, Row>()
-    for (const row of rows) latest.set(JSON.stringify([row.kind, row.name]), row)
-    return [...latest.values()]
-      .filter((row) => row.removed !== true)
-      .map((row) => summarizeTicketAsset(this.ticketAssetMeta(row)))
   }
 
   async removeTicketAsset(

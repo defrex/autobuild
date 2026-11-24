@@ -8,6 +8,7 @@ import {
   type OperatorBuildView,
   type OperatorDashboardSnapshot,
   type OperatorTicketDetail,
+  type OperatorTicketView,
   type OperatorTicketPage,
   type OperatorTicketQueue,
   type OperatorAnswerRequest,
@@ -129,7 +130,7 @@ export class OperatorApiClient {
     const suffix = query.size > 0 ? `tickets?${query}` : 'tickets'
     return this.request(repo, suffix)
   }
-  getTicket(repo: string, id: string): Promise<OperatorTicketDetail> {
+  getTicket(repo: string, id: string): Promise<OperatorTicketView> {
     return this.request(repo, `tickets/${encodeURIComponent(id)}`)
   }
   createTicket(repo: string, request: OperatorTicketCreateRequest): Promise<OperatorTicketDetail> {

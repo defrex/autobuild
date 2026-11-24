@@ -2078,6 +2078,10 @@ selected BuildStore:
   assets; revisions a build has pinned stay retrievable.
 - `ab ticket show <id>` lists the current assets (kind/name, revision, size);
   with `--json` the `Ticket` is extended with an `assets` array.
+- The agent tool registry (§8.9) offers `tickets.asset.attach`,
+  `tickets.asset.get` and `tickets.asset.remove` with the same rules, limits
+  and notes, carrying bytes as base64, and `tickets.get` carries the same
+  `assets` array.
 
 Observation harvest uses a separate typed, repository-scoped namespace
 (`ab harvest context|submit|verdict|status`), mirroring the build session

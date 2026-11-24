@@ -38,6 +38,7 @@ export type {
   OperatorBuildView,
   OperatorDashboardSnapshot,
   OperatorTicketDetail,
+  OperatorTicketView,
   OperatorTicketPage,
   OperatorTicketQueue,
 } from '@defrex/autobuild/operator'

@@ -4,11 +4,15 @@
  * MCP annotations are per-tool hints, never per-argument, so a tool whose
  * action set *may* destroy work carries `destructiveHint: true` for the whole
  * tool, and each destructive action value is additionally named in the input
- * field's description so a model still sees the per-value risk. Exactly four
- * tools may destroy work: `builds.control` (abort, discard),
- * `builds.answer` (revise-spec), `builds.reopen` (a spec revision, and it
- * revokes merge consent), and `tickets.move` (a move into the configured
- * ready state).
+ * field's description so a model still sees the per-value risk. The tools
+ * that may destroy work:
+ * - `optimization.stop` (abort aborts running attempts; a stop is final),
+ * - `builds.control` (abort, discard),
+ * - `builds.answer` (revise-spec),
+ * - `builds.reopen` (a spec revision, and it revokes merge consent),
+ * - `tickets.move` (a move into the configured ready state),
+ * - `tickets.asset.remove` (drops an asset from the ticket's current assets),
+ * - `sandbox.reset` and `sandbox.publish`.
  *
  * The registry entries and the contract suite both read this table, so a
  * change to any tool's risk class is a one-line visible diff this suite
@@ -211,6 +215,24 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     readOnlyHint: false,
     destructiveHint: false,
     idempotentHint: true,
+    approval: 'default',
+  },
+  'tickets.asset.attach': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'tickets.asset.get': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
+  'tickets.asset.remove': {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
     approval: 'default',
   },
   'notes.read': {
