@@ -36,5 +36,6 @@ describe('recordedBaseSha reducer', () => {
       ],
     ])
     expect(recordedBaseSha(log)).toBe('two')
+    expect(recordedBaseSha([])).toBeUndefined()
   })
 })
