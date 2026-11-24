@@ -101,7 +101,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the dispatch frontend (Store-backed, plus the viewer's ticket-source triage count), its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
-| `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
+| `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, the allowlisted `.autobuild/local.toml` override layer (`local.ts`), plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
 | `packages/core/src/scenarios/` | End-to-end harness over a temporary Git origin and worktrees (integration tests) and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
@@ -765,7 +765,8 @@ raise `BuildScopeError`. The shared Store suite applies these checks to memory,
 SQLite, and remote clients, while HTTP token scope remains defense in depth.
 
 **Live configuration.** `packages/core/src/config/live.ts` owns the running dispatcher's
-immutable last-valid main-checkout snapshot, exhaustive hot/restart field
+immutable last-valid main-checkout snapshot (`autobuild.toml` layered with
+`.autobuild/local.toml` through `config/local.ts`), exhaustive hot/restart field
 classification, and eager role resolver. The watch loop refreshes it before
 each tick and publishes the exact accepted TOML and the composed effective JSON
 atomically with a run-correlated `dispatcher.config-reloaded` repository fact
