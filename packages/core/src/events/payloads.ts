@@ -770,6 +770,48 @@ const optimizationPayloadSchemas = {
     cause: optimizationStopCauseSchema,
     mode: optimizationStopModeSchema,
   }),
+  /** The dispatcher accounted attempt execution facts into the node's
+   * active-hours clock (SPEC §13.1.1). `facts` are copied from attempt builds'
+   * `executionIntervals` values, sorted by `at`; `accounted` is each build's
+   * highest fact number the node has now seen; `watermark` bounds every later
+   * fact from below. `settles` closes the clock of a stopped node for good. */
+  'optimization.activity-recorded': z
+    .strictObject({
+      facts: z
+        .array(
+          z.strictObject({
+            build: z.string().min(1),
+            n: z.number().int().min(1),
+            instance: z.string().min(1),
+            kind: z.enum(['started', 'ended']),
+            at: z.iso.datetime(),
+          }),
+        )
+        .max(200),
+      accounted: z.record(z.string().min(1), z.number().int().nonnegative()),
+      released: z.array(z.string().min(1)).optional(),
+      watermark: z.iso.datetime(),
+      /** The dispatcher's first batch for this node: its clock tracks the
+       * builds of attempts that settle from here on. */
+      starts: z.literal(true).optional(),
+      settles: z.literal(true).optional(),
+    })
+    // `watermark` bounds compaction: every attempt fact stamped before it is
+    // in this batch or an earlier one. Facts may follow it.
+    .refine(
+      (batch) =>
+        batch.facts.every((fact, index) => index === 0 || batch.facts[index - 1]!.at <= fact.at),
+      'facts are sorted by at',
+    )
+    .refine(
+      (batch) =>
+        batch.facts.length > 0 ||
+        Object.keys(batch.accounted).length > 0 ||
+        (batch.released?.length ?? 0) > 0 ||
+        batch.starts === true ||
+        batch.settles === true,
+      'an activity batch records facts, accounted counts, releases, a start or a settlement',
+    ),
   /** A settled, non-accepted attempt's ticket was moved to the rejected role
    * (SPEC §13). Removes the node digest's pending rejection. */
   'attempt.ticket-rejected': z.strictObject({
@@ -1361,6 +1403,9 @@ export const eventPayloadSchemas = {
     outcome: z.enum(['completed', 'stopped', 'lost', 'relaunch']),
     exitCode: z.number().int().nullable().optional(),
   }),
+  /** Advisory: an optimization node has accounted this build's first `count`
+   * execution facts, so its `executionIntervals` value may drop them. */
+  'execution.accounted': z.strictObject({ count: z.number().int().min(1) }),
   'infrastructure.failed': z.strictObject({
     provider: z.string().min(1),
     workspaceRef: z.string().min(1),

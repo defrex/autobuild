@@ -124,6 +124,7 @@ import {
 } from '../kernel/dispatch-capacity'
 import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import {
+  ExecutionFactsMissingError,
   exhaustedStopDue,
   optimizationElapsedHours,
   proposalWithdrawalDue,
@@ -232,12 +233,13 @@ import { hasBuildTrailer } from '../kernel/build-identity'
 import { BuildDigestCapabilityError, digestNodeTargets, digestOptimization } from '../store/digest'
 import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { enforceOptimizationStop } from './optimization-stop'
+import { recordOptimizationActivity } from './optimization-activity'
 import { reconcileMergedAttempts } from './optimization-merges'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
-import { ticketPriority, urgentFirst } from '../ports/tickets/priority'
+import { ticketPriority, urgentFirstBy } from '../ports/tickets/priority'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
@@ -3222,6 +3224,21 @@ export class Dispatcher {
             // node's enforcer and completion see them as they are.
             if (await reconcileMergedAttempts(deps, record, state, builds))
               state = (await this.store.buildFacts(record.slug)).state
+            // The active-hours clock: attempt runs since the last pass, and a
+            // stopped node's one settlement, ahead of every early return.
+            try {
+              if (await recordOptimizationActivity(deps, record, state, builds))
+                state = (await this.store.buildFacts(record.slug)).state
+            } catch (error) {
+              if (
+                !(error instanceof BuildDigestCapabilityError) &&
+                !(error instanceof ExecutionFactsMissingError)
+              )
+                throw error
+              report.janitorDiagnostics.push(
+                `build ${record.slug}: optimization activity not recorded — ${error.message}`,
+              )
+            }
             if (await enforceOptimizationStop(deps, record, state, builds))
               state = (await this.store.buildFacts(record.slug)).state
           }
@@ -8558,13 +8575,16 @@ export class Dispatcher {
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
     const adjust = { settled: this.parkedSettled, denied: this.slotWaiters }
     let capacity = intakeCapacity(projection, adjust)
-    let urgentCapacity = tickets.priority ? intakeCapacity(projection, adjust, 'urgent') : capacity
+    let urgentCapacity = intakeCapacity(projection, adjust, 'urgent')
     let urgentWaiting = 0
+    // Each ready ticket's claim tier: an optimization attempt claims at its
+    // node's current build priority, any other ticket at its own priority
+    // when the source stores one. Filled once the claimable set is known.
+    let attemptTiers = new Map<string, TicketPriority>()
+    const tierOf = (ticket: Ticket): TicketPriority =>
+      attemptTiers.get(ticket.ref.id) ?? (tickets.priority ? ticketPriority(ticket) : 'normal')
     const urgentClaim = (ticket: Ticket) =>
-      !targeted &&
-      !!tickets.priority &&
-      ticket.kind !== 'node' &&
-      ticketPriority(ticket) === 'urgent'
+      !targeted && ticket.kind !== 'node' && tierOf(ticket) === 'urgent'
     // A targeted ticket's tier is its request's, never its ticket's priority.
     const startTier = (ticket: Ticket): TicketStartPriority =>
       targeted?.requests.get(ticket.ref.id)?.priority ?? 'manual'
@@ -8608,8 +8628,9 @@ export class Dispatcher {
     for (const [index, ticket] of [...conflicts.tickets].entries())
       settle(ticket, { outcome: 'invalid', detail: conflicts.diagnostics[index]! })
     const claimable = eligible.filter((ticket) => !conflicts.tickets.has(ticket))
+    if (!targeted) attemptTiers = await this.attemptClaimTiers(claimable)
     // A targeted pass keeps its tier-then-request order.
-    const ready = !targeted && this.deps.tickets.priority ? urgentFirst(claimable) : claimable
+    const ready = targeted ? claimable : urgentFirstBy(claimable, tierOf)
     report.invalidTickets += listing.diagnostics.length + conflicts.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics, ...conflicts.diagnostics)
     if (!targeted && normalPaused)
@@ -8659,13 +8680,11 @@ export class Dispatcher {
       paused ||
       (!targeted &&
         normalPaused &&
-        !ready.some(
-          (ticket) => ticketPriority(ticket) === 'urgent' && !withheld.has(ticket.ref.id),
-        )) ||
+        !ready.some((ticket) => tierOf(ticket) === 'urgent' && !withheld.has(ticket.ref.id))) ||
       (noBudget &&
         !ready.some(
           (ticket) =>
-            (targeted || !normalPaused || ticketPriority(ticket) === 'urgent') &&
+            (targeted || !normalPaused || tierOf(ticket) === 'urgent') &&
             (ticket.kind === 'node' ||
               (ticket.target !== undefined && (ticket.blockedBy?.length ?? 0) > 0)),
         ))
@@ -8874,7 +8893,7 @@ export class Dispatcher {
         claimLoopCompleted = false
         break
       }
-      if (!targeted && normalPaused && ticketPriority(ticket) !== 'urgent') continue
+      if (!targeted && normalPaused && tierOf(ticket) !== 'urgent') continue
       const urgent = urgentClaim(ticket)
       const budget = targeted
         ? targeted.budgets[startTier(ticket)]
@@ -9085,7 +9104,9 @@ export class Dispatcher {
           // `manual` is admission-only; an explicit urgent start is urgent.
           ...(startTier(ticket) === 'urgent' && targeted
             ? { priority: 'urgent' as const }
-            : this.claimedPriority(ticket)),
+            : tierOf(ticket) === 'urgent'
+              ? { priority: 'urgent' as const }
+              : {}),
         }
         // `build.created` rides with the record so the pinned assets and the
         // record exist together or not at all.
@@ -9180,6 +9201,88 @@ export class Dispatcher {
     }
   }
 
+  /** Builds whose ticket resolves to `target` under the repository's
+   * ticket migrations, newest first. A pure scan of the tick's listing. */
+  private targetBuilds(
+    target: string,
+    source: string,
+    all: readonly { record: BuildRecord; digest: BuildDigest }[],
+  ): { record: BuildRecord; digest: BuildDigest }[] {
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    return all
+      .filter(({ record }) => {
+        if (!record.ticket) return false
+        try {
+          return resolveTicketRef(migrations, record.ticket, source, record.slug).id === target
+        } catch {
+          return false
+        }
+      })
+      .sort(
+        (a, b) =>
+          b.record.createdAt.localeCompare(a.record.createdAt) ||
+          b.record.slug.localeCompare(a.record.slug),
+      )
+  }
+
+  /** The ticket identity the attempt claim gate and claim tier match
+   * attempts under: the configured source after recorded migrations. */
+  private attemptIdentity(): (ref: TicketRef) => string {
+    const migrations = this.store.repositoryFacts().ticketMigrations
+    return (ref) => {
+      try {
+        const resolved = resolveTicketRef(migrations, ref, this.deps.tickets.name)
+        return `${resolved.source}\u0000${resolved.id}`
+      } catch {
+        return `${ref.source}\u0000${ref.id}`
+      }
+    }
+  }
+
+  /**
+   * The claim tier of each ready optimization attempt: its node's current
+   * build priority (`ab priority <node>`), decided at claim, whatever the
+   * ticket says or whether its source stores priority. Nothing is reserved;
+   * other tickets keep their own tier. Costs one served node state per open,
+   * unstopped optimization node a ready ticket targets, and none otherwise.
+   */
+  private async attemptClaimTiers(
+    tickets: readonly Ticket[],
+  ): Promise<Map<string, TicketPriority>> {
+    const tiers = new Map<string, TicketPriority>()
+    const candidates = tickets.filter(
+      (ticket) => ticket.target !== undefined && ticket.kind !== 'node',
+    )
+    if (candidates.length === 0) return tiers
+    const all = await this.repoBuildDigests()
+    const nodes = new Map<string, BuildState>()
+    const key = this.attemptIdentity()
+    for (const ticket of candidates) {
+      const [latest, tied] = this.targetBuilds(ticket.target!, ticket.ref.source, all)
+      if (latest === undefined || tied?.record.createdAt === latest.record.createdAt) continue
+      const { record, digest } = latest
+      if (digest.terminal !== undefined || !digest.nodeOpened) continue
+      let signal: ReturnType<typeof digestOptimization>
+      try {
+        signal = digestOptimization(digest)
+      } catch (error) {
+        // An older store's digest: the ticket keeps its own tier.
+        if (error instanceof BuildDigestCapabilityError) continue
+        throw error
+      }
+      if (!signal || signal.stopped) continue
+      let state = nodes.get(record.slug)
+      if (state === undefined) {
+        state = (await this.store.buildFacts(record.slug)).state
+        nodes.set(record.slug, state)
+      }
+      if (state.optimization === undefined || state.optimization.stopped !== undefined) continue
+      if (optimizationAttempt(state.optimization, ticket.ref, key) !== undefined)
+        tiers.set(ticket.ref.id, buildPriority(state))
+    }
+    return tiers
+  }
+
   /**
    * Walk unresolved branches in provider order. Listing facts and dependency
    * reads share a tick-local cache; traversal visits are local to this root.
@@ -9204,29 +9307,7 @@ export class Dispatcher {
     if (ticket.target === undefined) return undefined
     const migrations = this.store.repositoryFacts().ticketMigrations
     const all = await this.repoBuildDigests()
-    const entries = all
-      .filter(
-        ({ record }) =>
-          record.ticket &&
-          (() => {
-            try {
-              const ref = resolveTicketRef(
-                migrations,
-                record.ticket,
-                ticket.ref.source,
-                record.slug,
-              )
-              return ref.id === ticket.target
-            } catch {
-              return false
-            }
-          })(),
-      )
-      .sort(
-        (a, b) =>
-          b.record.createdAt.localeCompare(a.record.createdAt) ||
-          b.record.slug.localeCompare(a.record.slug),
-      )
+    const entries = this.targetBuilds(ticket.target, ticket.ref.source, all)
     const latest = entries[0]
     if (latest && entries[1]?.record.createdAt === latest.record.createdAt)
       return `target node ${ticket.target} has ambiguous build generations at ${latest.record.createdAt}`
@@ -9246,14 +9327,7 @@ export class Dispatcher {
     if (state.pendingCommands.some((c) => c.command === 'abort'))
       return `target node ${ticket.target} is closing`
     if (state.optimization?.stopped !== undefined) {
-      const key = (ref: TicketRef) => {
-        try {
-          const resolved = resolveTicketRef(migrations, ref, this.deps.tickets.name)
-          return `${resolved.source}\u0000${resolved.id}`
-        } catch {
-          return `${ref.source}\u0000${ref.id}`
-        }
-      }
+      const key = this.attemptIdentity()
       const wanted = key(ticket.ref)
       if (
         optimizationAttempt(state.optimization, ticket.ref, key) !== undefined ||

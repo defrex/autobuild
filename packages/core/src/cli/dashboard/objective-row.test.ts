@@ -67,13 +67,18 @@ test('a command objective projects every field from the digest', () => {
     threshold: 35,
     noise: 1.6,
     attempts: { filed: 4, accepted: 1, rejected: 3, unmeasured: 0, running: 0 },
-    budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-11-17T00:00:00.000Z' },
+    budget: {
+      maxAttempts: 60,
+      maxHours: 24,
+      openedAt: '2026-11-17T00:00:00.000Z',
+      clock: { activeMs: 0, spans: [], open: [], stoppedAt: '2026-11-17T00:00:00.000Z' },
+    },
     stopped: { cause: 'plateau', mode: 'drain', at: '2026-11-17T00:00:00.000Z' },
   })
   expect(objectiveParts(row, 0)).toEqual([
     ['objective 50 → 44 (minimize)', 'threshold 35', 'noise ±1.6'],
     ['attempts 1 accepted', '3 rejected', '0 running'],
-    ['budget 4/60 attempts', '0.0/24 hours'],
+    ['budget 4/60 attempts', '0.0/24 active hours'],
     ['stopped plateau (drain)'],
   ])
   expect(objectiveSegments(row, 0)).toEqual(
@@ -100,19 +105,29 @@ test('a panel objective shows win rates, starting at one half', () => {
   ])
 })
 
-test('budget hours track the clock until the node stops, then freeze', () => {
+test('budget hours are active hours: they track an open run, then freeze at the stop', () => {
   const running = new OptimizationLogBuilder()
     .push(created)
     .accept(commandObjective({ target: { epsilon: { relative: 0.03 } } }), 1)
+  const idle = projectObjectiveRow(reduceBuild(running.events))!
+  expect(objectiveSegments(idle, 0)[0]).toBe('objective not measured · no threshold')
+  expect(objectiveElapsedHours(idle, new Date('2026-11-17T03:00:00Z'))).toBe(0)
+  running.activity([['attempt-a', 1, 'started', 'run', 0]])
   const row = projectObjectiveRow(reduceBuild(running.events))!
-  expect(objectiveSegments(row, 0)[0]).toBe('objective not measured · no threshold')
   expect(objectiveElapsedHours(row, new Date('2026-11-17T03:00:00Z'))).toBe(3)
-  expect(objectiveElapsedHours(row, new Date('2026-11-16T00:00:00Z'))).toBe(0)
   const stopped = projectObjectiveRow(
     reduceBuild(running.wait(90).stop('operator', 'abort').events),
   )!
   expect(objectiveElapsedHours(stopped, new Date('2026-11-18T00:00:00Z'))).toBe(1.5)
-  expect(objectiveSummary(reduceBuild(running.events), new Date(now))?.elapsedHours).toBe(1.5)
+  expect(stopped.budget.settling).toBe(true)
+  expect(objectiveParts(stopped, 1.5).at(-2)).toEqual([
+    'budget 0/60 attempts',
+    '1.5/24 active hours (settling)',
+  ])
+  expect(objectiveSummary(reduceBuild(running.events), new Date(now))).toMatchObject({
+    elapsedHours: 1.5,
+    settling: true,
+  })
 })
 
 test('a plain node and a work build have no objective row', () => {
@@ -188,7 +203,7 @@ test('narrow frames wrap large values between fields without truncating any', ()
         '0 rejected',
         '0 running',
         'budget 1/60 attempts',
-        '0.0/24 hours',
+        '0.0/24 active hours',
         'stopped threshold (abort)',
       ]) {
         const next = joined.indexOf(term, at)

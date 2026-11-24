@@ -8,6 +8,7 @@ import { settleAttempt } from '../kernel/attempt-settlement'
 import { mergedAttemptMeasurement } from '../kernel/landing-measurement'
 import type { BuildState } from '../kernel/reducer'
 import {
+  clockSettling,
   optimizationCompletionBlocker,
   optimizationElapsedHours,
   optimizationPendingCleanups,
@@ -37,7 +38,12 @@ export interface ObjectiveProgress {
   best?: number
   attempts: OptimizationState['attempts'] & { running: number }
   plateau: number
+  /** Active hours: the time the node's attempts, proposer or measurements
+   * ran, never time since opening. Constant once the node stopped. */
   elapsedHours: number
+  /** Stopped, and the dispatcher has not yet accounted attempt runs from
+   * before the stop: `elapsedHours` may rise once more. */
+  settling?: true
   eligibility: OptimizationStopEligibility
   stopped?: OptimizationState['stopped']
   /** Once stopped: what still keeps the node from completing, if anything. */
@@ -74,6 +80,7 @@ export function objectiveView(slug: string, state: OptimizationState, now: Date)
       attempts: { ...state.attempts, running: state.inFlight.length },
       plateau: state.plateau,
       elapsedHours: optimizationElapsedHours(state, now),
+      ...(clockSettling(state) ? { settling: true as const } : {}),
       eligibility: optimizationStopEligibility(state, now),
       ...(state.stopped !== undefined ? { stopped: state.stopped } : {}),
       ...(() => {

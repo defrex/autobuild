@@ -202,7 +202,7 @@ A node becomes an optimization node when its spec carries exactly one fenced
 block whose info string is exactly `autobuild-objective`, holding a TOML
 objective: a purpose, a command metric with a direction or a judge panel, a
 harness of path selectors, an epsilon, and a budget of `maxAttempts`,
-`maxHours` or both. A threshold and a plateau are optional; the stop mode
+`maxHours` (active hours, not wall-clock time) or both. A threshold and a plateau are optional; the stop mode
 defaults to `abort` and proposer concurrency to 1. The ticket's kind stays
 `node`; no label or state marks it. A heading named "Objective", a `toml` block,
 prose, inline code, a fence nested inside another fence (a Markdown example of
@@ -232,7 +232,7 @@ effective objective and marks each field that differs from the ticket's block
 
 Progress is derived from the node's log: starting value and noise spread,
 current and best values, attempts filed, accepted, rejected and running, the
-plateau counter, elapsed hours and attempts against the budget, and stop
+plateau counter, active hours and attempts against the budget, and stop
 eligibility by threshold, plateau and budget. A child is an attempt only when
 its ticket was created from a recorded proposal of the node; a repair child
 filed by hand counts toward neither budget nor plateau. Rejected attempts are
