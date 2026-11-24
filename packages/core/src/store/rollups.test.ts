@@ -70,6 +70,7 @@ describe('rollup engine', () => {
         buildTimelineReducer.reduce(await store.getEvents(slug)),
         args,
         clock(),
+        slug,
       )
       if (c) stepDurationsRollup.add(acc, c)
     }

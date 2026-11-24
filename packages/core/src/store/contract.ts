@@ -1894,6 +1894,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             buildTimelineReducer.reduce(await store.getEvents(slug)),
             resolvedArgs,
             now,
+            slug,
           )
           if (contribution) stepDurationsRollup.add(acc, contribution)
         }

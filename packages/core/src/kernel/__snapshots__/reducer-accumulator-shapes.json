@@ -10007,6 +10007,15 @@
     "$.queuedClosed: boolean",
     "$: object"
   ],
+  "buildRosterEntry": [
+    "$.createdAt: string",
+    "$.createdAt: undefined",
+    "$.kind: string",
+    "$.terminal.at: string",
+    "$.terminal.outcome: string",
+    "$.terminal: object",
+    "$: object"
+  ],
   "autoMergeDefault": [
     "$.latest.actor.kind: string",
     "$.latest.actor.user: string",
