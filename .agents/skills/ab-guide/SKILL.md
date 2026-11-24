@@ -218,7 +218,9 @@ gains one. Grooming the objective is the dispatch decision for the node's
 attempts: once the node is measured, its proposer files attempts straight to
 ready, within the groomed budget, and each must pass the ratchet before it
 lands. The marker rules and the objective schema are in
-[optimization nodes](references/optimization-nodes.md). To groom one, follow
+[optimization nodes](references/optimization-nodes.md).
+
+To groom an optimization node, follow
 the [grooming guidance](references/optimization-nodes.md#grooming-an-optimization-node):
 measure the evidence, threshold and ε where builds run, and choose a budget
 whose `maxHours` counts [active hours](references/optimization-nodes.md#active-hours),

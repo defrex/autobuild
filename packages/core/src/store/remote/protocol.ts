@@ -38,6 +38,7 @@ import { actorSchema } from '../../events/envelope'
 import { eventPayloadSchemas, WAIT_TICKET_LIMIT } from '../../events/payloads'
 import { ticketRefSchema } from '../../ontology'
 import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
+import type { ClockSpan } from '../../kernel/optimization-admission'
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
@@ -315,6 +316,17 @@ export const sessionDepositsResponseSchema = z.object({
 // The wire form of `BuildDigest` (store/types.ts). `terminal` is omitted when
 // the build's log carries no terminal fact, per the protocol's omission
 // convention for optional members.
+// A `[start, end]` active-hours span. Not `z.tuple`: a consumer compiling
+// without `strictNullChecks` (a plugin's default tsc) infers its members as
+// optional, which no longer assigns to `ClockSpan`.
+const clockSpanSchema = z.custom<ClockSpan>(
+  (value) =>
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((part) => typeof part === 'string' && part.length > 0),
+  { message: 'expected a [start, end] span of two non-empty strings' },
+)
+
 export const buildDigestWireSchema = z.object({
   compatibility: z
     .object({
@@ -387,7 +399,7 @@ export const buildDigestWireSchema = z.object({
         clock: z
           .object({
             activeMs: z.number().nonnegative(),
-            spans: z.array(z.tuple([z.string().min(1), z.string().min(1)])),
+            spans: z.array(clockSpanSchema),
             open: z.array(z.string().min(1)),
             stoppedAt: z.string().min(1).optional(),
             settled: z.literal(true).optional(),
