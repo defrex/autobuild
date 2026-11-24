@@ -4405,17 +4405,37 @@ that the server has no access control. Every page carries the CSP
 only a client bundle prebuilt from `packages/ui` and committed with the
 package, so serving it adds no runtime dependency. One refresh loop, alive
 only while at least one browser is subscribed, fans each changed model out
-over one server-sent event stream. Its recurring reads are repository-scope
-saved values gated on `getRepoChangePosition`, so its cost does not grow with
-history, build count or tab count, and it reads nothing while no browser is
-connected. It appends nothing, takes no lease and registers no presence.
+over one server-sent event stream. It appends nothing, takes no lease and
+registers no presence.
+
+Its frame is the repository header and notice plus the overview. A fresh
+process starts the overview from the `buildRoster` rollup (§7.7) and targeted
+reads of its live builds, then advances it by the changed-builds feed. Its
+recurring reads, made only while a browser is subscribed:
+
+| Occurrence | Reads | Cost |
+|---|---|---|
+| Every tick | `getRepoChangePosition` | 1 call, 0 event rows |
+| Position moved | `repositoryReadFacts` (with `getRepo`), `listBuildsChangedSince` | 3 calls; the feed returns only builds changed since the last poll |
+| Per changed build | `getBuild`, `buildReadFacts`, and while the build is visible `listStreams` and its pinned effective-config artifact | 4 calls, that build's new rows |
+| A changed build started, finished, aborted or is done | `buildRoster` | 1 call per poll |
+| New effective-config ref | `getRepoArtifact` | 1 call per ref |
+| Cold start: first read, repository reset | `buildRoster`, the per-build reads for each live build and each aborted entry among the roster's newest finished builds | O(live builds), independent of history |
+
+No read grows with history, build count or tab count, and nothing is read
+while no browser is connected. `ab web` never lists builds or reads events. A
+remote store that lacks the roster or the feed fails the read with its typed
+error and never falls back to either. Until the dispatcher records an
+effective configuration the frame has no `overview` and makes no build read.
 The web protocol's overview and rows carry the shared dashboard projection's
 terms: status, phase, attention, waits, step timers, finished outcomes, the
 dispatcher mode and the attention list. The terminal dashboard renders the
-same values.
+same values. For `ab web` the dispatcher mode is `running`, `stopped` or
+`handoff`, never `viewer`.
 
 `ab dispatch --web` serves the same server from the dispatcher process, in
-push mode: the hub owns no refresh loop and adds no store reads. It shows the
+push mode: the hub owns no refresh loop and adds no store reads. Its frames
+carry the repository header and notice, not the overview. It shows the
 repository facts that a refresh the dispatcher already makes has read: the
 frontend's refresh loop under a TTY, the kernel's repository-view journal
 refreshes in plain mode (so frames update at the dispatcher's tick cadence),
