@@ -842,6 +842,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         intervalMs,
         storeRef,
         repository,
+        web,
       } = parseDispatchArgs(rest, deps.processEnv ?? {})
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
@@ -862,6 +863,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(repository !== undefined && repository !== '' ? { repository } : {}),
+        ...(web !== undefined ? { web } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
         ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
         ...(deps.input !== undefined ? { input: deps.input } : {}),
