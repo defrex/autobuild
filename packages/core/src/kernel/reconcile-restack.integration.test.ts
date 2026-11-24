@@ -363,7 +363,7 @@ test('a branch race preserves external bytes while upstream B2 cannot move the f
       type: 'reconcile.completed',
       payload: { headSha: head, rewriteId: second.id, artifact },
     })
-    const { verifyDiffBaseReducer } = await import('../processes/build-runner')
+    const { verifyDiffBaseReducer } = await import('./verify-diff-base')
     const events = await store.getEvents(BUILD)
     expect(verifyDiffBaseReducer.reduce(events)).toBe(b1)
     let accumulator = verifyDiffBaseReducer.initial()
