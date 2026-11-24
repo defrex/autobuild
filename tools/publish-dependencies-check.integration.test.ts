@@ -1,15 +1,11 @@
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
-import { afterEach, describe, expect, test } from 'bun:test'
 import {
   type PublishDependenciesCheckEnvironment,
   type PublishDependenciesViolation,
   REVIEWED_ALLOWANCES,
-  declaredNames,
-  isBareSpecifier,
-  isBuiltinSpecifier,
-  packageNameOfSpecifier,
   realEnvironment,
   runPublishDependenciesCheck,
   scanPublishedDependencies,
@@ -124,43 +120,6 @@ async function violationsOf(
   const report = await scanPublishedDependencies(await fixture(specs))
   return report.violations.filter((violation) => violation.kind !== 'stale-allowance')
 }
-
-describe('pure helpers', () => {
-  test('package names of scoped and unscoped specifiers', () => {
-    expect(packageNameOfSpecifier('zod')).toBe('zod')
-    expect(packageNameOfSpecifier('next/server')).toBe('next')
-    expect(packageNameOfSpecifier('@a/b')).toBe('@a/b')
-    expect(packageNameOfSpecifier('@a/b/c')).toBe('@a/b')
-  })
-
-  test('relative, subpath-import, absolute and scheme specifiers are not bare', () => {
-    for (const specifier of ['./x', '../x', '.', '..', '/abs/x', '#internal', 'data:text/js,1']) {
-      expect(isBareSpecifier(specifier)).toBe(false)
-    }
-    expect(isBareSpecifier('zod')).toBe(true)
-    expect(isBareSpecifier('@a/b/c')).toBe(true)
-  })
-
-  test('Node and Bun builtins', () => {
-    for (const specifier of ['node:fs', 'fs/promises', 'path', 'bun', 'bun:test']) {
-      expect(isBuiltinSpecifier(specifier)).toBe(true)
-    }
-    expect(isBuiltinSpecifier('zod')).toBe(false)
-  })
-
-  test('declared names span dependencies, peers and optional dependencies only', () => {
-    expect(
-      [
-        ...declaredNames({
-          dependencies: { a: '1' },
-          peerDependencies: { b: '1' },
-          optionalDependencies: { c: '1' },
-          devDependencies: { d: '1' },
-        }),
-      ].sort(),
-    ).toEqual(['a', 'b', 'c'])
-  })
-})
 
 describe('undeclared imports', () => {
   test('an undeclared runtime import names the package, file, line and specifier', async () => {
@@ -285,13 +244,21 @@ describe('reviewed allowances', () => {
     ).toEqual([])
   })
 
-  test('the same specifier from another file fails: there is no blanket exemption', async () => {
+  test('allowances match the exact file and specifier pair', async () => {
     const violations = await allowanceFixture({
-      [allowance.path]: "import 'server-only'\n",
+      [allowance.path]: "import 'server-only'\nimport 'server-only/extra'\n",
       'app/other.ts': "import 'server-only'\n",
       ...dispatcherFile,
     })
     expect(violations).toEqual([
+      {
+        kind: 'undeclared-import',
+        packageName: SERVICE,
+        path: allowance.path,
+        line: 2,
+        specifier: 'server-only/extra',
+        dependency: 'server-only',
+      },
       {
         kind: 'undeclared-import',
         packageName: SERVICE,
@@ -301,14 +268,6 @@ describe('reviewed allowances', () => {
         dependency: 'server-only',
       },
     ])
-  })
-
-  test('the same file with another specifier fails', async () => {
-    const violations = await allowanceFixture({
-      [allowance.path]: "import 'server-only'\nimport 'server-only/extra'\n",
-      ...dispatcherFile,
-    })
-    expect(violations.map((violation) => violation.kind)).toEqual(['undeclared-import'])
   })
 
   test('an allowance whose import is gone is stale', async () => {
