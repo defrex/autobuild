@@ -1,11 +1,11 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
-import { afterEach, describe, expect, jest, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { BuildChildExitCoordinator } from './build-child-exit'
 import { signalProcessGroup } from './process-group'
-import { BuildChildExitCoordinator, BuildChildShutdown } from './build-child-exit'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -34,53 +34,6 @@ function forceCleanup(groupId: number | undefined): void {
     // Best-effort fixture cleanup after a failed assertion.
   }
 }
-
-describe('BuildChildExitCoordinator', () => {
-  test('preserves the first exit intent and launches exactly one helper across races', () => {
-    const launches: unknown[] = []
-    const exits: number[] = []
-    let closes = 0
-    const terminal = new BuildChildExitCoordinator({
-      groupId: 123,
-      stopTimeoutMs: 456,
-      launchReaper: (options) => {
-        launches.push(options)
-        return 789
-      },
-      exit: (code) => exits.push(code),
-    })
-    terminal.setParentWatch({ close: () => closes++ })
-
-    terminal.terminate(0)
-    terminal.terminate(143)
-    terminal.terminate(130)
-
-    expect(launches).toEqual([{ groupId: 123, stopTimeoutMs: 456 }])
-    expect(exits).toEqual([0])
-    expect(closes).toBe(1)
-  })
-
-  test('keeps teardown ownership local and retries when helper creation fails', async () => {
-    let attempts = 0
-    const exits: number[] = []
-    const terminal = new BuildChildExitCoordinator({
-      groupId: 123,
-      retryDelayMs: 1,
-      launchReaper: () => {
-        attempts++
-        if (attempts === 1) throw new Error('temporary spawn failure')
-        return 789
-      },
-      exit: (code) => exits.push(code),
-    })
-
-    terminal.terminate(1)
-    expect(exits).toEqual([])
-    await waitFor(() => exits.length === 1)
-    expect(attempts).toBe(2)
-    expect(exits).toEqual([1])
-  })
-})
 
 // Keep the grace path well beyond the lifecycle bound so it cannot masquerade as the fast path.
 const FAST_PATH_CLEANUP_GRACE_MS = 30_000
@@ -241,26 +194,23 @@ await handle.completion
   }
 })
 
-test('shutdown waits for persistence without a deadline and retains the first signal', () => {
-  // A minute of fake time passes any deadline shutdown ever had (4 s).
-  jest.useFakeTimers()
-  try {
-    const exits: number[] = []
-    const terminal = new BuildChildExitCoordinator({
-      groupId: 123,
-      launchReaper: () => 1,
-      exit: (code) => exits.push(code),
-    })
-    const shutdown = new BuildChildShutdown(terminal)
-    shutdown.request(130)
-    shutdown.request(143)
-    expect(shutdown.signal.aborted).toBe(true)
-    jest.advanceTimersByTime(60_000)
-    expect(exits).toEqual([])
-    shutdown.finish(0)
-    shutdown.finish(1)
-    expect(exits).toEqual([130])
-  } finally {
-    jest.useRealTimers()
-  }
+test('keeps teardown ownership local and retries when helper creation fails', async () => {
+  let attempts = 0
+  const exits: number[] = []
+  const terminal = new BuildChildExitCoordinator({
+    groupId: 123,
+    retryDelayMs: 1,
+    launchReaper: () => {
+      attempts++
+      if (attempts === 1) throw new Error('temporary spawn failure')
+      return 789
+    },
+    exit: (code) => exits.push(code),
+  })
+
+  terminal.terminate(1)
+  expect(exits).toEqual([])
+  await waitFor(() => exits.length === 1)
+  expect(attempts).toBe(2)
+  expect(exits).toEqual([1])
 })

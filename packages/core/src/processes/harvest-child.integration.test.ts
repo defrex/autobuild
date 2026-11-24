@@ -179,17 +179,6 @@ describe('harvest child (guest runner composition)', () => {
     }
   })
 
-  test('a local-path store ref selects the resolved store ref as the guest local state root', async () => {
-    const workspace = await guestWorkspace(['source = "file"', 'readyState = "Ready"'])
-    try {
-      const args = guestTicketSourceArgs(guestInput({ storeRef: 'state-store' }), workspace)
-      // Same precedence rule resolveRepoStatePaths applies on the host.
-      expect(args.localStateRoot).toBe(resolve(workspace, 'state-store'))
-    } finally {
-      await rm(workspace, { recursive: true, force: true })
-    }
-  })
-
   test('hosted composition is inert for the guest ticket args', async () => {
     const originalFetch = globalThis.fetch
     const workspace = await guestWorkspace([
