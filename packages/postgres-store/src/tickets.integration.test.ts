@@ -1398,3 +1398,39 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+import { MemoryBlobStore } from '@defrex/autobuild/plugin-sdk'
+import { openPostgresBuildStore } from './store'
+if (testUrl)
+  test('asset listings project the readable id for every spelling, current and historical', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const store = await openPostgresBuildStore(isolated.url, new MemoryBlobStore())
+    const source = db.source({
+      repo: 'one',
+      teamKey: 'ENG',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    try {
+      const ticket = await source.create({ title: 'One', body: 'Body' })
+      const [row] =
+        await db.sql`SELECT id FROM ab_tickets WHERE repo = 'one' AND readable_id = ${ticket.ref.id}`
+      await store.putTicketAsset('one', ticket.ref.id, {
+        kind: 'design',
+        name: 'canvas',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'canvas', content: new TextEncoder().encode('v0') }],
+      })
+      for (const id of [ticket.ref.id, ticket.ref.id.toLowerCase(), String(row.id)]) {
+        for (const opts of [undefined, { revisions: true }]) {
+          expect(
+            (await store.listTicketAssets('one', id, opts)).map((a) => [a.ticketId, a.name]),
+          ).toEqual([[ticket.ref.id, 'canvas']])
+        }
+      }
+    } finally {
+      await store.close()
+      await db.close()
+      await isolated.cleanup()
+    }
+  })

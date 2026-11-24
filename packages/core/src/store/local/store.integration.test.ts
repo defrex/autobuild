@@ -32,6 +32,7 @@ import { StreamBatchTooLargeError, StreamClosedError, type StreamPart } from '..
 import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
 import { openLocalStore, SqliteBuildStore } from './store'
+import * as heads from './ticket-asset-heads'
 
 const mkdtemp = temporaryDirectories(afterEach)
 
@@ -1220,4 +1221,72 @@ test('repository tail enforces its window before selecting and honors through', 
   } finally {
     await store.close()
   }
+})
+
+describe('SqliteBuildStore current ticket assets (store read cost)', () => {
+  test('each listing statement seeks the full primary-key prefix, skipping history', async () => {
+    const root = await freshRoot()
+    const store = openLocalStore(root)
+    const repo = '/acme/assets'
+    const put = (kind: string, name: string, text: string) =>
+      store.putTicketAsset(repo, 'T-1', {
+        kind,
+        name,
+        layout: 'file',
+        entries: [{ type: 'file', path: name, content: new TextEncoder().encode(text) }],
+      })
+    try {
+      for (const [kind, name] of [
+        ['design', 'a'],
+        ['design', 'b'],
+        ['ref', 'c'],
+        ['ref', 'd'],
+      ] as const)
+        for (let revision = 0; revision < 50; revision += 1) await put(kind, name, `${revision}`)
+      expect((await store.listTicketAssets(repo, 'T-1')).map((a) => [a.name, a.revision])).toEqual([
+        ['a', 49],
+        ['b', 49],
+        ['c', 49],
+        ['d', 49],
+      ])
+      const db = new Database(join(root, 'autobuild.sqlite'), { readonly: true })
+      try {
+        const plan = (sql: string, ...args: string[]) =>
+          (
+            db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as {
+              detail: string
+            }[]
+          ).map((row) => row.detail)
+        const cases = [
+          [heads.FIRST_NAME, ['repo', 'ticket_id'], [repo, 'T-1']],
+          [
+            heads.NEXT_NAME_SAME_KIND,
+            ['repo', 'ticket_id', 'kind', 'name>'],
+            [repo, 'T-1', 'design', 'a'],
+          ],
+          [heads.FIRST_NAME_NEXT_KIND, ['repo', 'ticket_id', 'kind>'], [repo, 'T-1', 'design']],
+          [heads.HEAD, ['repo', 'ticket_id', 'kind', 'name'], [repo, 'T-1', 'ref', 'c']],
+        ] as const
+        for (const [sql, columns, args] of cases) {
+          const constraint = columns
+            .map((column) => (column.endsWith('>') ? `${column}?` : `${column}=?`))
+            .join(' AND ')
+          const details = plan(sql, ...args)
+          // A composite primary key on a rowid table is its first autoindex.
+          expect(details).toContainEqual(
+            expect.stringMatching(
+              new RegExp(
+                `^SEARCH ticket_assets USING (COVERING )?INDEX sqlite_autoindex_ticket_assets_1 \\(${constraint.replaceAll('?', '\\?')}\\)$`,
+              ),
+            ),
+          )
+          expect(details.some((d) => /\bSCAN\b|TEMP B-TREE/.test(d))).toBe(false)
+        }
+      } finally {
+        db.close()
+      }
+    } finally {
+      await store.close()
+    }
+  })
 })

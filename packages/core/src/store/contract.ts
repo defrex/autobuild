@@ -14,6 +14,7 @@ import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
 import { MemoryBuildStore } from './memory'
+import { summarizeTicketAsset } from './ticket-assets'
 /**
  * Reusable contract suites for the BuildStore seam (SPEC §7). The in-memory
  * adapter's behavior *is* the contract; every adapter — SQLite (§7.2.1),
@@ -4173,6 +4174,73 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect((await store.listTicketAssets(REPO, 'T-1')).map((a) => a.revision)).toEqual([3])
           expect((await store.getTicketAsset(REPO, 'T-1', 'design', 'a'))?.meta.revision).toBe(3)
           expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 2)).toBeNull()
+        })
+      })
+
+      test("current listing returns each name's latest live revision under interleaved history", async () => {
+        await withStore(factory, undefined, async (store) => {
+          const put = (kind: string, name: string, text: string) =>
+            store.putTicketAsset(REPO, 'T-1', fileAsset(name, enc(text), kind))
+          // A tombstoned first name, a replaced name, a removed-then-reattached
+          // name sharing its prefix, a kind whose only name is tombstoned, a
+          // live tree, and a tombstoned last name.
+          await put('a', 'first', 'gone')
+          await store.removeTicketAsset(REPO, 'T-1', 'a', 'first')
+          for (const text of ['x0', 'x1', 'x2']) await put('a', 'x', text)
+          await put('a', 'xy', 'old')
+          await store.removeTicketAsset(REPO, 'T-1', 'a', 'xy')
+          await put('a', 'xy', 'back')
+          await put('b', 'only', 'gone')
+          await store.removeTicketAsset(REPO, 'T-1', 'b', 'only')
+          await store.putTicketAsset(
+            REPO,
+            'T-1',
+            treeAsset(
+              'x',
+              [{ type: 'file', path: 'index.html', content: enc('<p>') }],
+              [{ type: 'dir', path: 'img' }],
+              'c',
+            ),
+          )
+          await put('d', 'last', 'gone')
+          await store.removeTicketAsset(REPO, 'T-1', 'd', 'last')
+          // Unrelated tickets and repositories.
+          await store.putTicketAsset(REPO, 'T-2', fileAsset('b', enc('other'), 'a'))
+          await store.putTicketAsset('/other/repo', 'T-1', fileAsset('zz', enc('other'), 'a'))
+
+          const current = await store.listTicketAssets(REPO, 'T-1')
+          const heads = await Promise.all(
+            [
+              ['a', 'x'],
+              ['a', 'xy'],
+              ['c', 'x'],
+            ].map(async ([kind, name]) => {
+              const asset = await store.getTicketAsset(REPO, 'T-1', kind!, name!)
+              return summarizeTicketAsset(asset!.meta)
+            }),
+          )
+          expect(current).toEqual(heads)
+          expect(current.map((a) => [`${a.kind}/${a.name}`, a.revision])).toEqual([
+            ['a/x', 2],
+            ['a/xy', 2],
+            ['c/x', 0],
+          ])
+          expect(current[2]).toMatchObject({ layout: 'tree', fileCount: 1, dirCount: 1, size: 3 })
+          expect(
+            (await store.listTicketAssets(REPO, 'T-1', { revisions: true })).map(
+              (a) => `${a.kind}/${a.name}@${a.revision}`,
+            ),
+          ).toEqual([
+            'a/first@0',
+            'a/x@0',
+            'a/x@1',
+            'a/x@2',
+            'a/xy@0',
+            'a/xy@2',
+            'b/only@0',
+            'c/x@0',
+            'd/last@0',
+          ])
         })
       })
 
