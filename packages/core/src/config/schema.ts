@@ -1353,6 +1353,15 @@ export const hooksSchema = openMap('[hooks]', hookSchema)
 
 export const configRootSchema = z.strictObject({
   store: storeSchema.optional(),
+  operator: z
+    .strictObject({
+      dispatcher: documentSchema(z.enum(['human', 'agent']).optional(), {
+        description:
+          'Who runs the dispatcher when none is running. Repository instructions take precedence.',
+        default: 'Unset; ask who should run it.',
+      }),
+    })
+    .optional(),
   upgrade: z.strictObject({ automatic: z.boolean().default(true) }).prefault({}),
   hooks: hooksSchema.default({}),
   /** Base branch builds cut from and target (§16.1). */
@@ -1405,6 +1414,7 @@ export const configRootSchema = z.strictObject({
 
 documentFields(configRootSchema, {
   store: 'Optional remote BuildStore connection. Credentials live outside TOML.',
+  operator: 'Local-only dispatcher ownership preference; set in .autobuild/local.toml.',
   upgrade: 'Automatic dispatcher runtime target checks and adoption.',
   hooks:
     'Named observe-only hooks: the dispatcher delivers each matching watch record to a command or URL, in order and at least once.',
