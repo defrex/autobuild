@@ -4597,6 +4597,10 @@ over one server-sent event stream. Its recurring reads are repository-scope
 saved values gated on `getRepoChangePosition`, so its cost does not grow with
 history, build count or tab count, and it reads nothing while no browser is
 connected. It appends nothing, takes no lease and registers no presence.
+The web protocol's overview and rows carry the shared dashboard projection's
+terms: status, phase, attention, waits, step timers, finished outcomes, the
+dispatcher mode and the attention list. The terminal dashboard renders the
+same values.
 
 `ab dispatch --web` serves the same server from the dispatcher process, in
 push mode: the hub owns no refresh loop and adds no store reads. It shows the
