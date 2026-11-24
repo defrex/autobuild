@@ -110,6 +110,12 @@ export function parseConfigTable(
   }
 }
 
+/** Admission for committed input, separate from effective/artifact validation. */
+export function admitCommittedConfig(table: Record<string, unknown>, source: string): void {
+  if (Object.hasOwn(table, 'operator'))
+    throw new ConfigError(`${source}: [operator] is local-only; set it in .autobuild/local.toml`)
+}
+
 /** Validate a raw configuration table; every error names `source`. Deprecated
  * spellings are reported through `warn` after validation succeeds. */
 export function validateConfigTable(
@@ -161,7 +167,9 @@ export function parseConfig(
   source = 'autobuild.toml',
   warn: (message: string) => void = console.error,
 ): Config {
-  return validateConfigTable(parseConfigTable(tomlText, source), source, warn)
+  const table = parseConfigTable(tomlText, source)
+  admitCommittedConfig(table, source)
+  return validateConfigTable(table, source, warn)
 }
 
 /**

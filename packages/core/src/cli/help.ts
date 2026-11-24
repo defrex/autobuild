@@ -19,6 +19,19 @@ function page(lines: string[]): string {
  */
 export const HELP_CATALOG: readonly HelpEntry[] = [
   {
+    name: 'operator',
+    audience: 'human',
+    summary: 'Read or save the checkout-local dispatcher ownership preference.',
+    detail: page([
+      'Usage: ab operator dispatcher [human|agent] [--json]',
+      'Without a value, reads the preference (unset when absent) without creating a file.',
+      'Saving writes only .autobuild/local.toml and may normalize its TOML formatting.',
+      'Other settings are preserved. Writes are refused inside build or harvest sessions.',
+      'This command needs no store or credential and does not start or stop a dispatcher.',
+      'Repository instructions take precedence over this personal preference.',
+    ]),
+  },
+  {
     name: 'help',
     audience: 'human',
     summary: 'Show the command overview or detailed help for one command.',
