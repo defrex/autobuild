@@ -878,6 +878,105 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      /** The open listing equals the digest batch's non-completed entries,
+       * paired with their records in (createdAt, slug) order. */
+      async function expectOpenMatchesDigests(store: BuildStore, repo: string) {
+        const expected = []
+        for (const record of await store.listBuildsForRepo(repo)) {
+          const digest = (await store.getRepoBuildDigests(repo)).get(record.slug)!
+          if (digest.terminal !== 'done') expected.push({ record, digest })
+        }
+        const open = await store.listOpenBuilds(repo)
+        expect(open).toEqual(expected)
+        return open.map(({ record }) => record.slug)
+      }
+
+      test('lists open builds with their digests, only for that repo', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/open'
+          expect(await store.listOpenBuilds('acme/never-seen')).toEqual([])
+          for (const slug of ['ob-queued', 'ob-done', 'ob-aborted'])
+            await store.createBuild(sampleBuildInput(slug, { repo }))
+          await store.createBuild(sampleBuildInput('ob-other', { repo: 'acme/open-other' }))
+          await store.append('ob-done', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          await store.append('ob-aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+          expect((await expectOpenMatchesDigests(store, repo)).sort()).toEqual([
+            'ob-aborted',
+            'ob-queued',
+          ])
+          const aborted = (await store.listOpenBuilds(repo)).find(
+            ({ record }) => record.slug === 'ob-aborted',
+          )
+          expect(aborted?.digest.terminal).toBe('aborted')
+          expect(await expectOpenMatchesDigests(store, 'acme/open-other')).toEqual(['ob-other'])
+          // Read-only: builds created without ensureRepo create no journal record.
+          expect(await store.getRepo(repo)).toBeNull()
+        })
+      })
+
+      test('a settled leaf stays listed through reopen and leaves on completion; the latest terminal fact wins', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/open-reopen'
+          const slug = 'ob-reopen'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          await store.append(slug, buildCreatedWrite())
+          const reopen = {
+            actor: humanActor('ada'),
+            type: 'build.reopened',
+            payload: { feedback: 'rename the flag' },
+          } as const
+          const completed = {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          } as const
+          await store.append(slug, reopen)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([slug])
+          await store.append(slug, completed)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([])
+          // A reopen after completion cannot re-list it: reduceBuild never
+          // clears a terminal.
+          await store.append(slug, reopen)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([])
+          await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([slug])
+          await store.append(slug, reopen)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([slug])
+          await store.append(slug, completed)
+          await store.append(slug, reopen)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual([])
+        })
+      })
+
+      test('every append path maintains open membership', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/open-paths'
+          const completed = {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          } as const
+          for (const slug of ['ob-a', 'ob-b', 'ob-c', 'ob-d'])
+            await store.createBuild(sampleBuildInput(slug, { repo }))
+          await store.createBuild({
+            ...sampleBuildInput('ob-created', { repo }),
+            created: buildCreatedWrite(),
+          })
+          expect(await expectOpenMatchesDigests(store, repo)).toContain('ob-created')
+          await store.append('ob-a', completed)
+          expect(await store.appendIfCurrent('ob-b', 3, completed)).toBeNull()
+          expect(await expectOpenMatchesDigests(store, repo)).toContain('ob-b')
+          await store.appendIfCurrent('ob-b', 0, completed)
+          await store.appendWithArtifacts('ob-c', [], () => completed)
+          await store.appendWithArtifactsIfCurrent('ob-d', 0, [], () => completed)
+          expect(await expectOpenMatchesDigests(store, repo)).toEqual(['ob-created'])
+        })
+      })
+
       test('accepted targets and relaunch requests survive validated reductions and neutral settlement', async () => {
         await withStore(factory, undefined, async (store) => {
           const slug = 'relaunch-contract'
@@ -4511,6 +4610,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await expect(scoped.getRepoBuildDigests('acme/rate-limiter')).rejects.toThrow(
             /build-scoped store/,
           )
+          await expect(scoped.listOpenBuilds('acme/rate-limiter')).rejects.toThrow(
+            /build-scoped store/,
+          )
           await expect(scoped.close()).rejects.toThrow(/build-scoped store/)
         })
       })
@@ -5426,6 +5528,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               () => scoped.getRepoEvents('acme/a'),
               () => scoped.getRepoStateEvents('acme/a'),
               () => scoped.getRepoBuildDigests('acme/a'),
+              () => scoped.listOpenBuilds('acme/a'),
               () => scoped.createStream({ kind: 'build', build: 'scope-build' }, 'x'),
               () => scoped.createStream({ kind: 'repo', repo: 'acme/a' }, 'x'),
               () => scoped.close(),

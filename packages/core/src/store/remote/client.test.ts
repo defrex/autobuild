@@ -1,5 +1,6 @@
 import { StoreWriteTooLargeError } from './errors'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
+import { OpenBuildsCapabilityError } from '../open-builds'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER } from './version'
 /**
@@ -1413,6 +1414,52 @@ test('invalid digest batch fails schema validation without discovery fallback', 
   })
   await expect(client.getRepoBuildDigests('repo')).rejects.toThrow()
   expect(calls).toBe(1)
+})
+
+describe('open-build listing compatibility', () => {
+  const answer = (status: number, body: unknown) => {
+    const paths: string[] = []
+    const store = new RemoteBuildStore({
+      url: 'http://store.test/store',
+      fetchFn: (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input))
+        paths.push(url.pathname)
+        return Response.json(
+          body === 'route-miss'
+            ? { kind: 'not-found', error: `no route: GET ${url.pathname}` }
+            : body,
+          { status },
+        )
+      }) as unknown as typeof fetch,
+    })
+    return { store, paths }
+  }
+  for (const [status, body] of [
+    [404, 'route-miss'],
+    [404, { kind: 'not-found', error: 'no route: GET /repos/:repo/open-builds' }],
+    [405, { kind: 'not-found', error: 'method not allowed' }],
+    [501, { kind: 'unsupported-operation', error: 'unsupported' }],
+  ] as const) {
+    test(`an older server's ${status} is a typed capability failure with no fallback`, async () => {
+      const { store, paths } = answer(status, body)
+      await expect(store.listOpenBuilds('acme/repo')).rejects.toBeInstanceOf(
+        OpenBuildsCapabilityError,
+      )
+      expect(paths).toEqual(['/store/repos/acme%2Frepo/open-builds'])
+    })
+  }
+  for (const [status, body] of [
+    [404, { kind: 'not-found', error: 'no route: GET /repos/:repo/build-digests' }],
+    [500, { kind: 'internal', error: 'outage' }],
+  ] as const) {
+    test(`a ${status} that is not a missing route stays an ordinary error`, async () => {
+      const { store, paths } = answer(status, body)
+      const error = await store.listOpenBuilds('acme/repo').catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Error)
+      expect(error).not.toBeInstanceOf(OpenBuildsCapabilityError)
+      expect(paths).toHaveLength(1)
+    })
+  }
 })
 
 describe('latest artifact metadata compatibility', () => {

@@ -457,7 +457,8 @@ export class RemoteBuildStore implements BuildStore {
           ((response.status === 501 && body.data.kind === 'unsupported-operation') ||
             (response.status === 404 &&
               body.data.kind === 'not-found' &&
-              body.data.error.startsWith('no route: GET'))))
+              (body.data.error === 'no route: GET /repos/:repo/open-builds' ||
+                body.data.error === `no route: GET ${new URL(`${this.base}${path}`).pathname}`))))
       )
         throw new OpenBuildsCapabilityError(repo)
       throw await this.toError(response)
