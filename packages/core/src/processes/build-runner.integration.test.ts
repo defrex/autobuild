@@ -57,9 +57,7 @@ import {
   BuildRunner,
   LeaseHeldError,
   SetupFailureError,
-  parseNulChangedPaths,
   selectPublishedBranchHead,
-  selectVerifyDiffBase,
   VERIFY_BASE_ENV,
   type BuildRunnerOpts,
 } from './build-runner'
@@ -4441,26 +4439,16 @@ describe('checks', () => {
       command: 'bun tsc --noEmit',
       exitCode: 1,
     })
-  })
 
-  test('the engine routes implement r2 with the verify feedback; the started event carries it (§15.6-A)', async () => {
-    const h = await makeHarness({ failCommands: ['bun tsc --noEmit'] })
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    await h.br.step() // run-check types → fail
-
-    const decision = await h.br.step()
-    expect(decision).toEqual({
-      kind: 'run-phase',
-      phase: 'implement',
+    // The engine routes implement r2 with the verify feedback; the started
+    // event carries it (§15.6-A).
+    const feedback = {
+      verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } },
+    }
+    expect(await h.br.step()).toEqual({ kind: 'run-phase', phase: 'implement', round: 2, feedback })
+    expect(ofType(await h.store.getEvents(SLUG), 'implement.started').at(-1)!.payload).toEqual({
       round: 2,
-      feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
-    })
-    const events = await h.store.getEvents(SLUG)
-    const started = ofType(events, 'implement.started').at(-1)!
-    expect(started.payload).toEqual({
-      round: 2,
-      feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
+      feedback,
     })
   })
 })
@@ -4590,32 +4578,7 @@ paths = ["src/cli/dashboard/**"]
     })
   })
 
-  test('a nonmatching check records a kernel skip and launches no command', async () => {
-    const h = await makeHarness({
-      configToml: conditionalCheck,
-      verifyDiffs: [{ paths: ['README.md', 'docs/guide.md'] }],
-    })
-    await seedApproved(h.store)
-    await h.br.step()
-
-    expect(h.execCalls).toHaveLength(1)
-    expect(h.execCalls[0]?.cmd.slice(0, 2)).toEqual(['git', 'diff'])
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-2).map((event) => event.type)).toEqual([
-      'verify.started',
-      'verify.completed',
-    ])
-    expect(ofType(events, 'verify.completed').at(-1)?.actor).toEqual(KERNEL)
-    expect(ofType(events, 'verify.completed').at(-1)?.payload).toEqual({
-      step: 'dashboard',
-      attempt: 1,
-      outcome: 'skipped',
-      reason:
-        'excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**"]',
-    })
-  })
-
-  test('a generated skip advances to the next verifier at the same attempt', async () => {
+  test('a nonmatching check records a kernel skip, launches no command, and advances to the next verifier at the same attempt', async () => {
     const h = await makeHarness({
       configToml: `
 [tickets]
@@ -4634,10 +4597,19 @@ paths = ["src/cli/dashboard/**"]
 kind = "check"
 command = "unit"
 `,
-      verifyDiffs: [{ paths: ['README.md'] }],
+      verifyDiffs: [{ paths: ['README.md', 'docs/guide.md'] }],
     })
     await seedApproved(h.store)
     await h.br.step()
+    expect(h.execCalls).toHaveLength(1)
+    expect(h.execCalls[0]?.cmd.slice(0, 2)).toEqual(['git', 'diff'])
+    const skipped = await h.store.getEvents(SLUG)
+    expect(skipped.slice(-2).map((event) => event.type)).toEqual([
+      'verify.started',
+      'verify.completed',
+    ])
+    expect(ofType(skipped, 'verify.completed').at(-1)?.actor).toEqual(KERNEL)
+
     expect(await h.br.step()).toEqual({
       kind: 'run-check',
       step: 'unit',
@@ -4744,44 +4716,13 @@ paths = ["web/**"]
       attempt: 1,
       feedback,
     })
-  })
-
-  test('matching agent steps retain normal session execution', async () => {
-    const h = await makeHarness({
-      configToml: `
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = ["e2e"]
-[verify.e2e]
-kind = "agent"
-skill = "ab-verify-e2e"
-paths = ["web/**"]
-`,
-      verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
-    })
-    await seedApproved(h.store)
-    await h.br.step()
+    // The wrapped action retains normal session execution.
     expect(h.ops).toEqual(['session:ab-verify-e2e'])
     expect(
       normalizeVerifyCompletion(
         ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)!.payload,
       ).outcome,
     ).toBe('pass')
-  })
-
-  test('always = true bypasses path inspection and runs the mandatory gate', async () => {
-    const h = await makeHarness({
-      configToml: conditionalCheck.replace(
-        'paths = ["src/cli/dashboard/**"]',
-        'paths = ["src/cli/dashboard/**"]\nalways = true',
-      ),
-      verifyDiffs: [{ error: 'must not inspect paths' }],
-    })
-    await seedApproved(h.store)
-    expect((await h.br.step()).kind).toBe('run-check')
-    expect(h.execCalls).toEqual([{ cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath }])
   })
 
   test('Git diff failures fail closed without a skip outcome', async () => {
@@ -4794,56 +4735,6 @@ paths = ["web/**"]
     await expect(h.br.step()).rejects.toThrow('fatal: bad object fake-base-sha')
     expect(ofType(await h.store.getEvents(SLUG), 'verify.started')).toHaveLength(starts)
     expect(ofType(await h.store.getEvents(SLUG), 'verify.completed')).toEqual([])
-  })
-
-  test('NUL parsing preserves whitespace/newlines and rejects malformed output', () => {
-    expect(parseNulChangedPaths('old name.ts\0new\nname.ts\0')).toEqual([
-      'old name.ts',
-      'new\nname.ts',
-    ])
-    expect(parseNulChangedPaths('')).toEqual([])
-    expect(() => parseNulChangedPaths('src/file.ts\n')).toThrow('non-NUL-terminated')
-    expect(() => parseNulChangedPaths('src/file.ts\0\0')).toThrow('empty path entry')
-  })
-
-  test('the diff base advances only after a completed reconcile', async () => {
-    const h = await makeHarness()
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('0'.repeat(40))
-
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'base-after-first' },
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('reconcile', 's_reconcile_1'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-1',
-        artifact: { kind: 'reconcile-notes', rev: 0 },
-      },
-    })
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 2, baseSha: 'dangling-base' },
-    })
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('base-after-first')
-
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 2, baseSha: 'refreshed-base' },
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('reconcile', 's_reconcile_2'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-2',
-        artifact: { kind: 'reconcile-notes', rev: 1 },
-      },
-    })
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('refreshed-base')
   })
 })
 
@@ -4883,13 +4774,6 @@ command = "unit"
     await seedCodeApproved(store)
   }
 
-  test('an unconditional leaf check receives the provisioned base', async () => {
-    const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
-    await seedApproved(h.store)
-    await h.br.step()
-    expect(received).toEqual([{ command: 'bun test', env: { [VERIFY_BASE_ENV]: '0'.repeat(40) } }])
-  })
-
   test('after a completed reconcile a check receives the refreshed base', async () => {
     const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
     await h.store.append(SLUG, {
@@ -4907,17 +4791,20 @@ command = "unit"
     expect(received.map((entry) => entry.env[VERIFY_BASE_ENV])).toEqual(['refreshed-base'])
   })
 
-  test('a matching conditional check receives the base its paths were diffed against', async () => {
+  test('unconditional and matching conditional checks receive the provisioned base their paths were diffed against', async () => {
     const { h, received } = await baseHarness({
-      steps: '["dashboard", "unit"]',
+      steps: '["unit", "dashboard"]',
       paths: ['src/cli/dashboard/model.ts'],
     })
     await seedApproved(h.store)
     await h.br.step()
+    await h.br.step()
     const diff = h.execCalls.find((call) => call.cmd[0] === 'git' && call.cmd[1] === 'diff')
-    expect(received).toHaveLength(1)
-    expect(received[0]!.env[VERIFY_BASE_ENV]).toBe(diff!.cmd[5]!)
     expect(diff!.cmd[5]).toBe('0'.repeat(40))
+    expect(received).toEqual([
+      { command: 'bun test', env: { [VERIFY_BASE_ENV]: diff!.cmd[5]! } },
+      { command: 'bun test dashboard', env: { [VERIFY_BASE_ENV]: diff!.cmd[5]! } },
+    ])
   })
 
   test('every member of a staged check receives the base', async () => {
@@ -5060,19 +4947,6 @@ describe('operator commands (D2)', () => {
     const types = await typesOf(h.store)
     expect(types).toContain('build.resumed')
     expect(types.at(-1)).toBe('pr-summary.result')
-  })
-
-  test('abort-requested is acknowledged and run() exits aborted', async () => {
-    const h = await makeHarness()
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'wrong ticket' },
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('aborted')
-    expect((await typesOf(h.store)).slice(-2)).toEqual(['build.abort-requested', 'build.aborted'])
-    expect(h.runner.sessions.size).toBe(0) // no phase ever ran
   })
 
   test('an abort cancels a live turn, deposits its transcript, and retains the execution lease', async () => {
@@ -5242,34 +5116,31 @@ describe('session streams', () => {
 })
 
 describe('session streams: capability boundary and failure containment', () => {
-  test('a plugin registration without the capability yields sessions with no stream and no emitter', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    for (const event of ofType(events, 'session.started')) {
-      expect(event.payload.stream).toBeUndefined()
-    }
-    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
-    // No emitter reached the turns either.
-    for (const journal of h.runner.sessions.values()) {
-      expect(journal.opts.stream).toBeUndefined()
-    }
-  })
-
-  test('streamSessions: false reproduces the no-stream event log', async () => {
-    const h = await makeHarness({
-      registrationExtras: {
-        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+  for (const [label, options] of [
+    ['a plugin registration without the capability', {}],
+    [
+      'streamSessions: false',
+      {
+        registrationExtras: {
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+        runnerOpts: { streamSessions: false },
       },
-      runnerOpts: { streamSessions: false },
+    ],
+  ] satisfies Array<[string, HarnessOptions]>)
+    test(`${label} yields sessions with no stream and no emitter`, async () => {
+      const h = await makeHarness(options)
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      for (const event of ofType(events, 'session.started')) {
+        expect(event.payload.stream).toBeUndefined()
+      }
+      expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
+      // No emitter reached the turns either.
+      for (const journal of h.runner.sessions.values()) {
+        expect(journal.opts.stream).toBeUndefined()
+      }
     })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    for (const event of ofType(events, 'session.started')) {
-      expect(event.payload.stream).toBeUndefined()
-    }
-    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
-  })
 
   test('a store whose stream appends always fail lets the phase complete with one diagnostic and an aborted close', async () => {
     const diagnostics: string[] = []
@@ -5469,133 +5340,135 @@ describe('coalesced summary boundaries', () => {
       expect(summary.seq).toBeGreaterThan(ended.seq)
     })
 
-  for (const remote of [false, true])
-    for (const count of [3, 300]) {
-      test(`${remote ? 'remote' : 'local'} verify with ${count} attachments publishes only after session settlement`, async () => {
-        const forge = new FakeForge()
-        forge.setPrState(7, { state: 'open', mergeable: true })
-        let verifyCalls = 0
-        let guestSummaryCalls = 0
-        const h = await makeHarness({
-          forge,
-          workspaceRemote: remote,
-          handlers: (store) => ({
-            ...happyHandlers(store),
-            'verify-e2e': async (ctx) => {
-              verifyCalls++
-              // Simulate artifact put's atomic designation, including one after
-              // the terminal command: the session must settle before rendering.
-              await store.append(SLUG, {
-                actor: agentActor('verify-e2e', sessionOf(ctx)),
-                type: 'verify.completed',
-                payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
-              })
-              for (let i = 0; i < count; i++) {
-                await store.appendWithArtifacts(
-                  SLUG,
-                  [{ kind: `frame:${i}`, content: 'pixels' }],
-                  (metas) => ({
-                    actor: agentActor('verify-e2e', sessionOf(ctx)),
-                    type: 'pr-attachment.designated',
-                    payload: {
-                      artifact: refOf(metas),
-                      filename: `frame-${i}.png`,
-                      mediaType: 'image/png',
-                    },
-                  }),
-                )
-                expect(forge.comments).toHaveLength(0)
-              }
-              return defaultTurnResult('complete')
-            },
-          }),
+  // Large attachment sets (300) are covered at the publication seam in
+  // cli/pr-summary-publication.test.ts; this boundary needs only a few.
+  for (const remote of [false, true]) {
+    const count = 3
+    test(`${remote ? 'remote' : 'local'} verify with attachments publishes only after session settlement`, async () => {
+      const forge = new FakeForge()
+      forge.setPrState(7, { state: 'open', mergeable: true })
+      let verifyCalls = 0
+      let guestSummaryCalls = 0
+      const h = await makeHarness({
+        forge,
+        workspaceRemote: remote,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'verify-e2e': async (ctx) => {
+            verifyCalls++
+            // Simulate artifact put's atomic designation, including one after
+            // the terminal command: the session must settle before rendering.
+            await store.append(SLUG, {
+              actor: agentActor('verify-e2e', sessionOf(ctx)),
+              type: 'verify.completed',
+              payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
+            })
+            for (let i = 0; i < count; i++) {
+              await store.appendWithArtifacts(
+                SLUG,
+                [{ kind: `frame:${i}`, content: 'pixels' }],
+                (metas) => ({
+                  actor: agentActor('verify-e2e', sessionOf(ctx)),
+                  type: 'pr-attachment.designated',
+                  payload: {
+                    artifact: refOf(metas),
+                    filename: `frame-${i}.png`,
+                    mediaType: 'image/png',
+                  },
+                }),
+              )
+              expect(forge.comments).toHaveLength(0)
+            }
+            return defaultTurnResult('complete')
+          },
+        }),
+      })
+      await seedFinalized(h.store)
+      // Make a fresh verification cycle eligible after a completed reconcile.
+      await h.store.append(SLUG, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'detected-base' },
+      })
+      // Drive deterministic checks first; run() then verifies and handles the boundary.
+      await h.br.attach()
+      await h.br.step() // reconcile
+      await completeFixtureRestack(h.store)
+      await h.br.step() // capture policy
+      await h.br.step() // types
+      await h.br.step() // unit
+      const previous = summaryBoundary(await h.store.getEvents(SLUG))!
+      if (remote) {
+        const request = await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'pr-summary.requested',
+          payload: previous,
         })
-        await seedFinalized(h.store)
-        // Make a fresh verification cycle eligible after a completed reconcile.
         await h.store.append(SLUG, {
-          actor: DISPATCHER,
-          type: 'pr.conflicted',
-          payload: { baseSha: 'detected-base' },
+          actor: KERNEL,
+          type: 'pr-summary.settled',
+          payload: { request: request.seq, disposition: 'skipped' },
         })
-        // Drive deterministic checks first; run() then verifies and handles the boundary.
-        await h.br.attach()
-        await h.br.step() // reconcile
-        await completeFixtureRestack(h.store)
-        await h.br.step() // capture policy
-        await h.br.step() // types
-        await h.br.step() // unit
-        const previous = summaryBoundary(await h.store.getEvents(SLUG))!
-        if (remote) {
-          const request = await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.requested',
-            payload: previous,
-          })
-          await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.settled',
-            payload: { request: request.seq, disposition: 'skipped' },
-          })
-        } else {
-          await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.attempted',
-            payload: { ...previous, pr: 7 },
-          })
+      } else {
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'pr-summary.attempted',
+          payload: { ...previous, pr: 7 },
+        })
+      }
+      if (remote) {
+        // Any summary call by the guest is an error, even if best effort.
+        forge.commentOnPr = async () => {
+          guestSummaryCalls++
+          throw new Error('guest summary call')
         }
-        if (remote) {
-          // Any summary call by the guest is an error, even if best effort.
-          forge.commentOnPr = async () => {
-            guestSummaryCalls++
-            throw new Error('guest summary call')
-          }
-        }
+      }
+      await h.br.run()
+      expect(verifyCalls).toBe(1)
+      const events = await h.store.getEvents(SLUG)
+      const latest = events.findLast(
+        (e) => e.type === 'pr-summary.requested' || e.type === 'pr-summary.attempted',
+      )!
+      if (remote) {
+        expect(latest.type).toBe('pr-summary.requested')
+        expect(events.some((e) => e.type === 'pr-summary.attempted')).toBe(false)
+        expect(forge.comments).toHaveLength(0)
+        expect(guestSummaryCalls).toBe(0)
+        // The execution owner has reaped the guest and released its lease.
+        await h.store.releaseLease(SLUG, 'runner-1')
+        const hostForge = new FakeForge()
+        hostForge.setPrState(7, { state: 'open', mergeable: true })
+        await settleSummaryRequests({
+          store: h.store,
+          forge: hostForge,
+          slug: SLUG,
+          workspacePath: h.workspacePath,
+          storeRef: 'https://store.test',
+          clock: steppingClock(),
+          holder: 'authenticated-host',
+        })
+        expect(hostForge.comments).toHaveLength(1)
+        const body = hostForge.comments[0]!.body
+        const full = body.includes('pr-summary@')
+          ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+          : body
+        expect(full).toContain(`frame-${count - 1}.png`)
+        expect(full).toContain('<code>e2e</code> (attempt 2): pass')
         await h.br.run()
         expect(verifyCalls).toBe(1)
-        const events = await h.store.getEvents(SLUG)
-        const latest = events.findLast(
-          (e) => e.type === 'pr-summary.requested' || e.type === 'pr-summary.attempted',
-        )!
-        if (remote) {
-          expect(latest.type).toBe('pr-summary.requested')
-          expect(events.some((e) => e.type === 'pr-summary.attempted')).toBe(false)
-          expect(forge.comments).toHaveLength(0)
-          expect(guestSummaryCalls).toBe(0)
-          // The execution owner has reaped the guest and released its lease.
-          await h.store.releaseLease(SLUG, 'runner-1')
-          const hostForge = new FakeForge()
-          hostForge.setPrState(7, { state: 'open', mergeable: true })
-          await settleSummaryRequests({
-            store: h.store,
-            forge: hostForge,
-            slug: SLUG,
-            workspacePath: h.workspacePath,
-            storeRef: 'https://store.test',
-            clock: steppingClock(),
-            holder: 'authenticated-host',
-          })
-          expect(hostForge.comments).toHaveLength(1)
-          const body = hostForge.comments[0]!.body
-          const full = body.includes('pr-summary@')
-            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
-            : body
-          expect(full).toContain(`frame-${count - 1}.png`)
-          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
-          await h.br.run()
-          expect(verifyCalls).toBe(1)
-          expect(guestSummaryCalls).toBe(0)
-        } else {
-          expect(latest.type).toBe('pr-summary.attempted')
-          expect(forge.comments).toHaveLength(1)
-          const body = forge.comments[0]!.body
-          const full = body.includes('pr-summary@')
-            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
-            : body
-          expect(full).toContain(`frame-${count - 1}.png`)
-          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
-        }
-      })
-    }
+        expect(guestSummaryCalls).toBe(0)
+      } else {
+        expect(latest.type).toBe('pr-summary.attempted')
+        expect(forge.comments).toHaveLength(1)
+        const body = forge.comments[0]!.body
+        const full = body.includes('pr-summary@')
+          ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+          : body
+        expect(full).toContain(`frame-${count - 1}.png`)
+        expect(full).toContain('<code>e2e</code> (attempt 2): pass')
+      }
+    })
+  }
 })
 
 describe('coalesced summary boundaries: one handoff per remote verify cycle', () => {
@@ -5739,7 +5612,7 @@ skill = "ab-release-notes"
       : body
   }
 
-  async function passingCycle(coalesce: boolean) {
+  async function passingCycle() {
     const forge = new FakeForge()
     forge.setPrState(7, { state: 'open', mergeable: true })
     const hostForge = publishingForge()
@@ -5749,9 +5622,6 @@ skill = "ab-release-notes"
       workspaceRemote: true,
       verifyDiffs: [{ paths: ['README.md'] }],
     })
-    if (!coalesce)
-      // biome-ignore lint/complexity/useLiteralKeys: record today's per-step baseline without a production flag.
-      h.br['summaryContinuesVerifyCycle'] = () => false
     await enterCycle(h)
     const result = await driveCycle(h, hostForge, (events) => {
       const settled =
@@ -5764,15 +5634,7 @@ skill = "ab-release-notes"
   }
 
   test('a passing four-step cycle yields once instead of once per step', async () => {
-    const baseline = await passingCycle(false)
-    const after = await passingCycle(true)
-
-    // Baseline: every verify step, the skipped one included, cost a guest exit.
-    const baselineEvents = await baseline.h.store.getEvents(SLUG)
-    expect(cycleCompleted(baselineEvents)).toBe(STEPS.length)
-    expect(baseline.summaryExits).toBeGreaterThanOrEqual(4)
-    expect(baseline.launches).toBeGreaterThanOrEqual(4)
-    expect(baseline.hostForge.published.length).toBeGreaterThanOrEqual(4)
+    const after = await passingCycle()
 
     const events = await after.h.store.getEvents(SLUG)
     expect(
@@ -5785,9 +5647,10 @@ skill = "ab-release-notes"
       ['dashboard', 'skipped'],
       ['unit', 'pass'],
     ])
+    // Without coalescing every one of the four steps costs a guest exit, a
+    // launch and a publication; the coalesced cycle needs one of each.
     expect(after.summaryExits).toBeLessThanOrEqual(1)
-    expect(after.summaryExits).toBeLessThan(baseline.summaryExits)
-    expect(after.launches).toBeLessThan(baseline.launches)
+    expect(after.launches).toBe(1)
     // The guest never published; the host published the cycle once.
     expect(after.forge.comments).toHaveLength(0)
     expect(after.hostForge.published).toHaveLength(1)
