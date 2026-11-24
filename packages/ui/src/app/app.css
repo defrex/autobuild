@@ -1,0 +1,20 @@
+/* The web UI's page frame only; every other style comes from the design system. */
+
+[data-app="frame"] {
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0 var(--space-lg) var(--space-xxl);
+}
+[data-app="main"] {
+  padding-top: var(--space-sm);
+}
+[data-app="summary"] > p {
+  margin: var(--space-sm) 0;
+  max-width: var(--measure);
+}
+
+@media (max-width: 719px) {
+  [data-app="frame"] {
+    padding: 0 var(--space-md) var(--space-xl);
+  }
+}

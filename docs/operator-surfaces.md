@@ -63,6 +63,18 @@ readyState = "ready"
 
 `bun ab connect https://builds.example.com` approves the registered project and saves its credential outside the checkout; CI sets `AB_TOKEN` instead. It authorizes the project only, not forge or runtime access. See [Build store](build-store.md).
 
+### Web UI (`ab web`)
+
+```sh
+bun ab web
+```
+
+- Read-only: it appends no event, takes no dispatcher lease and registers no operator presence.
+- Binds `127.0.0.1` on a free port (`--port` picks one) and refuses requests whose Host is not loopback or the bound address.
+- `--host <addr>` serves beyond loopback with no access control; `ab web` warns that anyone who can reach the port can read the repository's builds.
+- `--json` prints one line, `{"url":"http://127.0.0.1:<port>/"}`, for agents that open or hand off the page.
+- Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
+
 ### Local stdio MCP
 
 For an agent with an MCP client but no convenient shell, configure the client to launch:

@@ -10,7 +10,7 @@ import {
 import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
 import { dispatchCapacity, startClaimDemand, urgentClaimDemand } from '../kernel/dispatch-capacity'
-import { forgeReadinessWarnings } from '../kernel/dispatch-status'
+import { dispatchWarningLines } from './dashboard/header'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
   DashboardRefresh,
@@ -505,11 +505,7 @@ export class DispatchFrontend {
     }
 
     const previous = this.model === undefined ? [] : dashboardSelections(this.model)
-    const warningLines = [
-      ...status.roleWarnings,
-      ...forgeReadinessWarnings(status),
-      ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
-    ]
+    const warningLines = dispatchWarningLines(status)
     const projected = buildDashboardFromProjected(
       snapshot.builds,
       {
