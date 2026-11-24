@@ -600,7 +600,7 @@ test('all retired resource scopes are refused before raw-store body processing',
 test('a store that predates the snapshot routes reads as no snapshots, never an error', async () => {
   const client = new RemoteBuildStore({
     url: 'http://old.test',
-    fetchFn: (async () =>
+    fetchFn: (async (_input: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify({ error: 'no route', kind: 'not-found' }), {
         status: 404,
       })) as typeof fetch,
