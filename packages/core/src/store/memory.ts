@@ -292,6 +292,58 @@ function removeListing(
     }
 }
 
+/** The only writer of a build record's `updatedAt`: it moves the build in
+ * every update-ordered listing it belongs to. Module-level, like the helpers
+ * below, so the read-budget harness's per-method call vectors stay unchanged. */
+function touchBuild(
+  feeds: Map<string, RepoFeed>,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  ts: string,
+): void {
+  if (ts === state.record.updatedAt) return
+  const feed = repoFeed(feeds, state.record.repo)
+  removeListing(feed, builds, state, ['updatedAt'])
+  state.record.updatedAt = ts
+  insertListing(feed, builds, state, ['updatedAt'])
+}
+
+/** Record an appended build event in the same synchronous step as its
+ * change position: the stored event, rewrite receipts, the listing facts it
+ * sets and the build's `updatedAt`. */
+function recordBuildEvent(
+  feeds: Map<string, RepoFeed>,
+  builds: Map<string, BuildState>,
+  state: BuildState,
+  envelope: AbEvent,
+): void {
+  state.events.push(structuredClone(envelope))
+  if (envelope.type === 'node.rewritten') {
+    const receipt = envelope.payload
+    state.earlierRewrites ??= new Map()
+    state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
+    state.rewrites ??= new Map()
+    state.rewrites.set(receipt.previous, structuredClone(receipt))
+    state.latestRewrite = structuredClone(receipt)
+  }
+  const facts =
+    envelope.type === 'build.created'
+      ? { node: envelope.payload.kind === 'node', merged: state.merged }
+      : envelope.type === 'build.completed'
+        ? { node: state.node, merged: envelope.payload.outcome === 'merged' }
+        : envelope.type === 'build.reopened'
+          ? { node: state.node, merged: false }
+          : undefined
+  if (facts && (facts.node !== state.node || facts.merged !== state.merged)) {
+    const feed = repoFeed(feeds, state.record.repo)
+    removeListing(feed, builds, state, ['createdAt', 'updatedAt'])
+    state.node = facts.node
+    state.merged = facts.merged
+    insertListing(feed, builds, state, ['createdAt', 'updatedAt'])
+  }
+  touchBuild(feeds, builds, state, envelope.ts)
+}
+
 /** The repository's feed, created on its first build write. Module-level so
  * the read-budget harness's per-method call vectors stay unchanged. */
 function repoFeed(feeds: Map<string, RepoFeed>, repo: string): RepoFeed {
@@ -598,48 +650,6 @@ export class MemoryBuildStore implements BuildStore {
     return readPersistedBuildDigests(this, repo)
   }
 
-  /** Record an appended build event in the same synchronous step: the stored
-   * event, rewrite receipts, the change position, the listing facts it sets
-   * and the build's `updatedAt`. */
-  private recordBuildEvent(state: BuildState, envelope: AbEvent): void {
-    state.events.push(structuredClone(envelope))
-    if (envelope.type === 'node.rewritten') {
-      const receipt = envelope.payload
-      state.earlierRewrites ??= new Map()
-      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
-      state.rewrites ??= new Map()
-      state.rewrites.set(receipt.previous, structuredClone(receipt))
-      state.latestRewrite = structuredClone(receipt)
-    }
-    this.advanceRepo(state.record.repo, state.record.slug)
-    const facts =
-      envelope.type === 'build.created'
-        ? { node: envelope.payload.kind === 'node', merged: state.merged }
-        : envelope.type === 'build.completed'
-          ? { node: state.node, merged: envelope.payload.outcome === 'merged' }
-          : envelope.type === 'build.reopened'
-            ? { node: state.node, merged: false }
-            : undefined
-    if (facts && (facts.node !== state.node || facts.merged !== state.merged)) {
-      const feed = repoFeed(this.feeds, state.record.repo)
-      removeListing(feed, this.builds, state, ['createdAt', 'updatedAt'])
-      state.node = facts.node
-      state.merged = facts.merged
-      insertListing(feed, this.builds, state, ['createdAt', 'updatedAt'])
-    }
-    this.touchBuild(state, envelope.ts)
-  }
-
-  /** The only writer of a build record's `updatedAt`: it moves the build in
-   * every update-ordered listing it belongs to. */
-  private touchBuild(state: BuildState, ts: string): void {
-    if (ts === state.record.updatedAt) return
-    const feed = repoFeed(this.feeds, state.record.repo)
-    removeListing(feed, this.builds, state, ['updatedAt'])
-    state.record.updatedAt = ts
-    insertListing(feed, this.builds, state, ['updatedAt'])
-  }
-
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const state = this.state(slug)
     const validated = validateEventWrite(event)
@@ -652,7 +662,8 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    this.recordBuildEvent(state, envelope as AbEvent)
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
+    this.advanceRepo(state.record.repo, slug)
     return envelope
   }
 
@@ -678,7 +689,8 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    this.recordBuildEvent(state, envelope as AbEvent)
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
+    this.advanceRepo(state.record.repo, slug)
     return envelope
   }
 
@@ -746,7 +758,8 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    this.recordBuildEvent(state, envelope as AbEvent)
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
+    this.advanceRepo(state.record.repo, slug)
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
@@ -817,7 +830,8 @@ export class MemoryBuildStore implements BuildStore {
       payload: validated.payload,
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
-    this.recordBuildEvent(state, envelope as AbEvent)
+    recordBuildEvent(this.feeds, this.builds, state, envelope as AbEvent)
+    this.advanceRepo(state.record.repo, slug)
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
@@ -858,7 +872,7 @@ export class MemoryBuildStore implements BuildStore {
     revs.push(meta)
     state.artifacts.set(artifact.kind, revs)
     this.pruneBuildKind(state, artifact.kind)
-    this.touchBuild(state, meta.createdAt)
+    touchBuild(this.feeds, this.builds, state, meta.createdAt)
     return structuredClone(meta)
   }
 
@@ -895,7 +909,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     state.nodeWriter = { holder, expiresAt: now + ttlMs, ttlMs }
-    this.touchBuild(state, new Date(now).toISOString())
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -907,7 +921,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     lease.expiresAt = now + lease.ttlMs
-    this.touchBuild(state, new Date(now).toISOString())
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -915,7 +929,7 @@ export class MemoryBuildStore implements BuildStore {
     const state = this.state(slug)
     if (state.nodeWriter?.holder === holder) {
       state.nodeWriter = undefined
-      this.touchBuild(state, this.now())
+      touchBuild(this.feeds, this.builds, state, this.now())
     }
   }
 
@@ -927,7 +941,7 @@ export class MemoryBuildStore implements BuildStore {
       return false
     }
     state.lease = { holder, expiresAt: now + ttlMs, ttlMs }
-    this.touchBuild(state, new Date(now).toISOString())
+    touchBuild(this.feeds, this.builds, state, new Date(now).toISOString())
     return true
   }
 
@@ -940,7 +954,7 @@ export class MemoryBuildStore implements BuildStore {
     }
     lease.expiresAt = now + lease.ttlMs
     state.record.heartbeatAt = new Date(now).toISOString()
-    this.touchBuild(state, state.record.heartbeatAt)
+    touchBuild(this.feeds, this.builds, state, state.record.heartbeatAt)
     return true
   }
 
@@ -948,7 +962,7 @@ export class MemoryBuildStore implements BuildStore {
     const state = this.state(slug)
     if (state.lease?.holder === holder) {
       state.lease = undefined
-      this.touchBuild(state, this.now())
+      touchBuild(this.feeds, this.builds, state, this.now())
     }
   }
 
