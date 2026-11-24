@@ -35,6 +35,7 @@ import {
   BUILD_PAGE_AFTER_SQL,
   BUILD_PAGE_SQL,
   CHANGED_BUILDS_SQL,
+  filteredBuildPageQuery,
   openLocalStore,
   SqliteBuildStore,
 } from './store'
@@ -1295,6 +1296,74 @@ test('old triggers recreated by an older runtime keep positions strictly ordered
   }
 })
 
+test('opening a database without listing facts backfills them once', async () => {
+  const root = await freshRoot()
+  const old = openLocalStore(root)
+  const created = (slug: string, kind: 'work' | 'node') => ({
+    actor: DISPATCHER,
+    type: 'build.created' as const,
+    payload: {
+      ticket: { source: 'file' as const, id: slug },
+      repo: 'repo',
+      baseBranch: 'main',
+      kind,
+    },
+  })
+  const complete = (slug: string, outcome: 'merged' | 'closed-unmerged') =>
+    old.append(slug, { actor: DISPATCHER, type: 'build.completed', payload: { outcome } })
+  await old.createBuild({ slug: 'bf-node', repo: 'repo', created: created('bf-node', 'node') })
+  await complete('bf-node', 'merged')
+  await old.createBuild({ slug: 'bf-work', repo: 'repo', created: created('bf-work', 'work') })
+  await complete('bf-work', 'merged')
+  await old.append('bf-work', {
+    actor: humanActor('op'),
+    type: 'build.reopened',
+    payload: { feedback: 'again' },
+  })
+  await old.createBuild({ slug: 'bf-leaf', repo: 'repo' })
+  await complete('bf-leaf', 'closed-unmerged')
+  await complete('bf-leaf', 'merged')
+  const slugs = async (
+    store: SqliteBuildStore,
+    opts: Parameters<SqliteBuildStore['listBuildsPage']>[1],
+  ) => (await store.listBuildsPage('repo', opts)).builds.map((build) => build.slug)
+  const expected = async (store: SqliteBuildStore) => ({
+    node: await slugs(store, { kind: 'node' }),
+    leaf: await slugs(store, { kind: 'leaf' }),
+    merged: await slugs(store, { outcome: 'merged' }),
+    active: await slugs(store, { activeSince: '2000-01-01T00:00:00Z' }),
+    activeMergedLeaf: await slugs(store, {
+      activeSince: '2000-01-01T00:00:00Z',
+      kind: 'leaf',
+      outcome: 'merged',
+    }),
+  })
+  const before = await expected(old)
+  expect(before.node).toEqual(['bf-node'])
+  expect(before.merged.sort()).toEqual(['bf-leaf', 'bf-node'])
+  sqliteOf(old).exec(`DROP TRIGGER builds_listing_seeded;
+    DROP TRIGGER builds_listing_touched;
+    DROP TRIGGER events_listing_kind;
+    DROP TRIGGER events_listing_completed;
+    DROP TRIGGER events_listing_reopened;
+    DROP TABLE build_listing_facts;`)
+  await old.close()
+  const upgraded = openLocalStore(root)
+  try {
+    expect(await expected(upgraded)).toEqual(before)
+  } finally {
+    await upgraded.close()
+  }
+  // A later open finds the table and keeps the facts.
+  const reopened = openLocalStore(root)
+  try {
+    expect(await expected(reopened)).toEqual(before)
+  } finally {
+    await reopened.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('feed and page statements range-scan their indexes', async () => {
   const root = await freshRoot()
   const store = openLocalStore(root)
@@ -1322,6 +1391,32 @@ test('feed and page statements range-scan their indexes', async () => {
       expect(page.some((detail) => /SCAN builds\b/.test(detail))).toBe(false)
       expect(page.some((detail) => /TEMP B-TREE/.test(detail))).toBe(false)
     }
+    // Every filter class in both orders, first and later pages: one backward
+    // search of its listing-facts index, never a scan, a sort or an event row.
+    const at = '2026-01-01T00:00:00.000Z'
+    for (const kind of [undefined, 'node', 'leaf'] as const)
+      for (const outcome of [undefined, 'merged'] as const)
+        for (const activeSince of [undefined, at])
+          for (const cursor of [undefined, { order: 'created' as const, at, slug: 'slug' }]) {
+            if (kind === undefined && outcome === undefined && activeSince === undefined) continue
+            const query = filteredBuildPageQuery(
+              'repo',
+              26,
+              {
+                ...(kind ? { kind } : {}),
+                ...(outcome ? { outcome } : {}),
+                ...(activeSince ? { activeSince } : {}),
+              },
+              cursor,
+            )
+            const page = plan(query.sql, ...query.params)
+            expect(
+              page.some((detail) => /SEARCH f USING (COVERING )?INDEX build_listing_/.test(detail)),
+            ).toBe(true)
+            expect(page.some((detail) => /\bSCAN\b/.test(detail))).toBe(false)
+            expect(page.some((detail) => /TEMP B-TREE/.test(detail))).toBe(false)
+            expect(page.some((detail) => /\bevents\b/.test(detail))).toBe(false)
+          }
   } finally {
     await store.close()
     await rm(root, { recursive: true, force: true })

@@ -22,6 +22,10 @@ import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import {
   BuildFeedUnsupportedError,
   decodeBuildPageCursor,
+  hasBuildPageFilters,
+  requireBuildPageCursorOrder,
+  resolveBuildPageFilters,
+  sameBuildPageFilters,
   parseChangePosition,
   resolveBuildPageLimit,
   type BuildPage,
@@ -1210,17 +1214,27 @@ export class RemoteBuildStore implements BuildStore {
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
     const query = new URLSearchParams({ limit: String(resolveBuildPageLimit(opts.limit)) })
+    const filters = resolveBuildPageFilters(opts)
     if (opts.cursor !== undefined) {
-      decodeBuildPageCursor(opts.cursor)
+      requireBuildPageCursorOrder(decodeBuildPageCursor(opts.cursor), filters)
       query.set('cursor', opts.cursor)
     }
+    if (filters.kind !== undefined) query.set('kind', filters.kind)
+    if (filters.outcome !== undefined) query.set('outcome', filters.outcome)
+    if (filters.activeSince !== undefined) query.set('activeSince', filters.activeSince)
+    const filtered = hasBuildPageFilters(filters)
     const page = await this.buildFeedRequest(
-      'buildPage',
+      filtered ? 'buildPageFilters' : 'buildPage',
       repo,
       'build-page',
       query,
       buildPageSchema,
     )
+    // An older server ignores the filter parameters and answers an
+    // unfiltered page without the echo. The client never filters that page
+    // itself and never retries without filters.
+    if (filtered && !sameBuildPageFilters(page.filters, filters))
+      throw new BuildFeedUnsupportedError('buildPageFilters')
     // Rebuilt field by field: a consumer compiling without strictNullChecks
     // infers zod's `.nullable()` as optional, which `BuildPage` rejects.
     return { builds: page.builds, next: page.next ?? null }
@@ -1232,7 +1246,7 @@ export class RemoteBuildStore implements BuildStore {
    * sit before): that is `BuildFeedUnsupportedError`, never a fallback to
    * listing builds or reading events. */
   private async buildFeedRequest<T>(
-    capability: 'changedBuilds' | 'buildPage',
+    capability: 'changedBuilds' | 'buildPage' | 'buildPageFilters',
     repo: string,
     route: 'changed-builds' | 'build-page',
     query: URLSearchParams,

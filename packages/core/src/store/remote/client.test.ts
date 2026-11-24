@@ -1688,6 +1688,11 @@ describe('changed-builds feed and paged listing compatibility', () => {
       capability: 'buildPage',
       act: (store: RemoteBuildStore) => store.listBuildsPage('org/repo'),
     },
+    {
+      route: 'build-page',
+      capability: 'buildPageFilters',
+      act: (store: RemoteBuildStore) => store.listBuildsPage('org/repo', { kind: 'node' }),
+    },
   ] as const
   for (const operation of operations)
     for (const [status, kind, error] of unsupported)
@@ -1748,7 +1753,48 @@ describe('changed-builds feed and paged listing compatibility', () => {
     await expect(store.listBuildsPage('repo', { cursor: '!' })).rejects.toThrow(
       BuildFeedValidationError,
     )
+    await expect(
+      store.listBuildsPage('repo', { kind: 'work' as unknown as 'leaf' }),
+    ).rejects.toThrow(BuildFeedValidationError)
+    const createdOrder = btoa(JSON.stringify({ v: 1, at: 'x', slug: 'y' })).replace(/=+$/, '')
+    await expect(
+      store.listBuildsPage('repo', { cursor: createdOrder, activeSince: '2026-11-24T00:00:00Z' }),
+    ).rejects.toThrow(BuildFeedValidationError)
     expect(calls).toBe(0)
+  })
+  test('a filtered page requires the server to echo the filters it applied', async () => {
+    const urls: string[] = []
+    let echo: unknown
+    const store = new RemoteBuildStore({
+      url: 'http://store.test',
+      fetchFn: (async (input: RequestInfo | URL) => {
+        urls.push(String(input))
+        return Response.json({
+          builds: [],
+          next: null,
+          ...(echo === undefined ? {} : { filters: echo }),
+        })
+      }) as unknown as typeof fetch,
+    })
+    const opts = {
+      kind: 'leaf',
+      outcome: 'merged',
+      activeSince: '2026-11-24T02:00:00+02:00',
+    } as const
+    // An older server ignores the parameters and answers without the echo.
+    for (const answer of [undefined, { kind: 'leaf', outcome: 'merged' }]) {
+      echo = answer
+      const failure = await store.listBuildsPage('repo', opts).catch((caught: unknown) => caught)
+      expect(failure).toBeInstanceOf(BuildFeedUnsupportedError)
+      expect((failure as BuildFeedUnsupportedError).capability).toBe('buildPageFilters')
+    }
+    expect(urls).toHaveLength(2)
+    const query = new URL(urls[0]!).searchParams
+    expect(query.get('kind')).toBe('leaf')
+    expect(query.get('outcome')).toBe('merged')
+    expect(query.get('activeSince')).toBe('2026-11-24T00:00:00.000Z')
+    echo = { kind: 'leaf', outcome: 'merged', activeSince: '2026-11-24T00:00:00.000Z' }
+    expect(await store.listBuildsPage('repo', opts)).toEqual({ builds: [], next: null })
   })
 })
 
