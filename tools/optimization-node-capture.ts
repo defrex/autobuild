@@ -13,8 +13,11 @@ export const OPTIMIZATION_NODE_SLUG = 'optimize-search-latency'
 const TICKET = { source: 'fake', id: 'OPT-1', title: 'Cut catalog search p95 latency' }
 
 /** A running optimization node's validated log: a measured baseline, one
- * accepted and one rejected attempt, two still in flight. It opens six hours
- * before the capture's render clock so the budget's hours are fixed. */
+ * accepted and one rejected attempt, two still in flight, one of them
+ * running. It opens six hours before the capture's render clock, so the
+ * budget's active hours are fixed at five: the node's opening measurement,
+ * the first two attempts' overlapping runs, and the third attempt's run up
+ * to the render clock, with an idle gap between. */
 export function optimizationNodeEvents(repo: string): AbEvent[] {
   return new OptimizationLogBuilder(OPTIMIZATION_NODE_SLUG, Date.parse('2026-07-15T06:10:00.000Z'))
     .push({
@@ -30,19 +33,29 @@ export function optimizationNodeEvents(repo: string): AbEvent[] {
     .accept(commandObjective({ target: { threshold: 35, epsilon: { relative: 0.03 } } }), 1)
     .wait(1)
     .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+    .execution('started', 'node-measure')
     .wait(10)
     .baseline(1, 50, 1.6)
+    .execution('ended', 'node-measure')
     .wait(1)
     .propose('r1', ['a1', 'a2', 'a3', 'a4'])
     .wait(90)
+    .activity([
+      ['attempt-a1', 1, 'started', 'run-a1', 87],
+      ['attempt-a1', 2, 'ended', 'run-a1', 2],
+      ['attempt-a2', 1, 'started', 'run-a2', 82],
+    ])
     .settle('a1', 'accepted', { revision: 1, baseline: 50, candidate: 44, delta: 6 })
     .wait(45)
+    .activity([['attempt-a2', 2, 'ended', 'run-a2', 2]])
     .settle(
       'a2',
       'no-improvement',
       { revision: 1, baseline: 44, candidate: 43.5, delta: 0.5 },
       'within noise',
-    ).events
+    )
+    .wait(55)
+    .activity([['attempt-a3', 1, 'started', 'run-a3', 2]]).events
 }
 
 /** The model with a running optimization node first in the list, projected

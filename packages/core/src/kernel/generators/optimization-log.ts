@@ -399,6 +399,107 @@ export class OptimizationLogBuilder {
   stop(cause: EventWrite<'optimization.stopped'>['payload']['cause'], mode: 'abort' | 'drain') {
     return this.push({ actor: KERNEL, type: 'optimization.stopped', payload: { cause, mode } })
   }
+
+  /** One of this log's own execution facts. */
+  execution(kind: 'started' | 'ended', instance: string) {
+    return kind === 'started'
+      ? this.push({
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'local', workspaceRef: '/ws', instance },
+        })
+      : this.push({
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance, workspaceRef: '/ws', outcome: 'completed' },
+        })
+  }
+
+  /** A dispatcher batch of attempt execution facts, each `[build, n, kind,
+   * instance, minutes before now]`. The watermark is the latest fact. */
+  activity(
+    facts: [string, number, 'started' | 'ended', string, number][],
+    extra: Pick<EventWrite<'optimization.activity-recorded'>['payload'], 'released' | 'settles'> & {
+      watermark?: string
+    } = {},
+  ) {
+    const now = this.clock
+    const written = facts
+      .map(([build, n, kind, instance, ago]) => ({
+        build,
+        n,
+        kind,
+        instance,
+        at: new Date(now - ago * 60_000).toISOString(),
+      }))
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.n - b.n))
+    const accounted: Record<string, number> = {}
+    for (const fact of written) accounted[fact.build] = Math.max(accounted[fact.build] ?? 0, fact.n)
+    const { watermark, ...rest } = extra
+    return this.push({
+      actor: DISPATCHER,
+      type: 'optimization.activity-recorded',
+      payload: {
+        facts: written,
+        accounted,
+        watermark: watermark ?? written.at(-1)?.at ?? new Date(now).toISOString(),
+        ...rest,
+      },
+    })
+  }
+}
+
+/** A running node's active-hours clock: its own measurement run, attempt
+ * runs batched with one still open, a tracked and a released build, and an
+ * acknowledged attempt log's execution facts. */
+export function optimizationClockLog(): AbEvent[] {
+  return new OptimizationLogBuilder('clock-node')
+    .accept(commandObjective(), 1)
+    .execution('started', 'node-1')
+    .wait(20)
+    .baseline(1, 50, 1.6)
+    .execution('ended', 'node-1')
+    .propose('r1', ['c1', 'c2'])
+    .wait(30)
+    .activity([
+      ['attempt-c1', 1, 'started', 'i1', 25],
+      ['attempt-c1', 2, 'ended', 'i1', 10],
+      ['attempt-c2', 1, 'started', 'i2', 5],
+    ])
+    .wait(10)
+    .activity([['attempt-c1', 3, 'started', 'i3', 8]])
+    .wait(10)
+    .activity([['attempt-c1', 4, 'ended', 'i3', 2]], { released: ['attempt-c1'] })
+    .push({ actor: DISPATCHER, type: 'execution.accounted', payload: { count: 1 } }).events
+}
+
+/** A stopped node whose settlement closed its clock for good. */
+export function optimizationSettledClockLog(): AbEvent[] {
+  return new OptimizationLogBuilder('settled-node')
+    .accept(commandObjective(), 1)
+    .baseline(1, 50, 1.6)
+    .propose('r1', ['s1'])
+    .wait(30)
+    .activity([['attempt-s1', 1, 'started', 'i1', 20]])
+    .wait(30)
+    .stop('operator', 'abort')
+    .settle('s1', 'stopped')
+    .wait(5)
+    .activity([['attempt-s1', 2, 'ended', 'i1', 10]], { settles: true }).events
+}
+
+/** An attempt log's execution facts with an acknowledgment, for the
+ * `executionIntervals` value: facts above the acknowledged count remain. */
+export function executionIntervalsLog(): AbEvent[] {
+  return new OptimizationLogBuilder('attempt-x1')
+    .execution('started', 'x1')
+    .wait(10)
+    .execution('ended', 'x1')
+    .wait(5)
+    .execution('started', 'x2')
+    .push({ actor: DISPATCHER, type: 'execution.accounted', payload: { count: 1 } })
+    .wait(5)
+    .execution('ended', 'x2').events
 }
 
 /** A node log that reaches every digest and ledger field, for shape coverage. */
