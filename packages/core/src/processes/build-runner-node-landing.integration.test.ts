@@ -1,6 +1,3 @@
-// Load the reducer registry first: build-runner's import cycle otherwise reaches
-// a reducer before it is initialized when this file runs alone.
-import '../kernel/reducer-registry'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
