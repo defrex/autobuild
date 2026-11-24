@@ -2581,8 +2581,8 @@ Humans may run `ab dispatch --viewer` from a local checkout to watch dispatch
 elsewhere without taking a lease or starting any dispatch work. The optional
 `--dispatched-by <label>` is descriptive input: every frame shows `viewer` or
 `viewer · dispatched by <label>`. Plain/non-TTY output prints the same at startup
-and emits state changes. `--once` reads one snapshot; `--interval <s>` sets the
-viewer polling cadence. Startup intake flags and explicit `--repository` are
+and emits state changes; with `--web` it prints only the web UI's URL. `--once`
+reads one snapshot; `--interval <s>` sets the viewer polling cadence. Startup intake flags and explicit `--repository` are
 rejected. With no recorded dispatcher run the viewer says no dispatcher has run
 for this project yet; with a run whose effective configuration is not yet
 durable it waits.

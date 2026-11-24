@@ -296,6 +296,8 @@ The versioned v1 launch contract consists of argv, a consumed one-shot
 `AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
 `handoff`, `failed`. Public invocations discard inherited markers. No private
 operational channel exists; work outcomes still come only from durable state.
+For `--web` without a fixed port, the launcher rewrites that argv once to pin a
+reserved `--port`; it still opens no store.
 The runtime-owned `--read-upgrade` reader supports an optional independently
 versioned conditional environment exchange, preserving full v1 answers for old
 peers. The launcher retains only its current successful answer and pre-read
@@ -4539,6 +4541,21 @@ over one server-sent event stream. Its recurring reads are repository-scope
 saved values gated on `getRepoChangePosition`, so its cost does not grow with
 history, build count or tab count, and it reads nothing while no browser is
 connected. It appends nothing, takes no lease and registers no presence.
+
+`ab dispatch --web` serves the same server from the dispatcher process, in
+push mode: the hub owns no refresh loop and adds no store reads. It shows the
+repository facts that a refresh the dispatcher already makes has read: the
+frontend's refresh loop under a TTY, the kernel's repository-view journal
+refreshes in plain mode (so frames update at the dispatcher's tick cadence),
+and the viewer loop for `--viewer`. A TTY keeps the terminal dashboard;
+under `--plain` or without a TTY the web UI is the only presentation. The
+server binds before the repository lease, so a taken port fails dispatch
+before it claims anything. For `--web` without a fixed port, the launcher
+reserves a free port once and pins `--port` into every generation's argv. A
+generation closes its server before it appends `dispatcher.terminal-released`,
+and its successor, which already holds the lease, rebinds the same port, so
+the URL survives automatic runtime upgrades. Only a first generation announces
+the URL, so it is printed once.
 
 Within the immutable generation, interactive `ab dispatch` owns the terminal in a frontend process and supervises
 one private child containing the dispatcher, build runners, Harvest, config and
