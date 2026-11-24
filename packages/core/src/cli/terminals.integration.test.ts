@@ -127,10 +127,10 @@ describe('ab done — discipline (D5)', () => {
       payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
     })
     const deps = planDeps({ round: 1 })
+    const before = await eventTypes()
     await expect(done(deps)).rejects.toThrow(
       /second terminal call rejected \(D5\): plan\.completed for plan@1 already recorded at seq \d+/,
     )
-    const before = await eventTypes()
     await expect(escalate(deps, { question: 'unsure about scope' })).rejects.toThrow(
       /second terminal call rejected/,
     )
