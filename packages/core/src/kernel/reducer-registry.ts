@@ -45,12 +45,10 @@ import { ticketSourceHealthReducer } from './ticket-source-health'
  */
 import { recordedBaseShaReducer } from '../config/pipeline-source'
 import { openWorkspaceReducer } from '../processes/build-execution-state'
-import {
-  phaseFailuresReducer,
-  publishedBranchHeadReducer,
-  setupStreakReducer,
-  verifyDiffBaseReducer,
-} from '../processes/build-runner'
+import { phaseFailuresReducer } from './phase-failures'
+import { publishedBranchHeadReducer } from './published-branch-head'
+import { setupStreakReducer } from './setup-streak'
+import { verifyDiffBaseReducer } from './verify-diff-base'
 import {
   baseBranchReducer,
   openBuildWorkspaceReducer,
