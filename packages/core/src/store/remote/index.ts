@@ -62,6 +62,25 @@ export type {
   ReducerValueStorage,
   ValueCacheRow,
 } from '../reducer-values'
+export {
+  KeyedMutex,
+  ROLLUP_LEASE_MS,
+  ROLLUP_LEASE_WAIT_MS,
+  ROLLUP_RENEW_BATCH,
+  RollupLeaseLostError,
+  RollupLeaseTimeoutError,
+  readRollupValue,
+  resolveRollupValue,
+  rollupEntry,
+} from '../rollups'
+export type {
+  ResolvedRollup,
+  RollupAdvance,
+  RollupReads,
+  RollupRow,
+  RollupStorage,
+} from '../rollups'
+export type { ReducerValueScope, RollupScope } from '../snapshots'
 
 export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/service-facts'
 
