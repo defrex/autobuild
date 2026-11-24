@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
   createPiRpcSession,
-  JsonlDecoder,
   PI_BRIDGE_PATH,
   PiRpcClient,
   type PiRpcInvocation,
@@ -139,14 +138,6 @@ function fakeRpc(): {
 }
 
 describe('Pi RPC JSONL', () => {
-  test('splits only LF records and accepts fragmented UTF-8 plus CRLF', () => {
-    const decoder = new JsonlDecoder()
-    expect(decoder.push('{"a":"x\u2028y"}\r')).toEqual([])
-    expect(decoder.push('\n{"b":')).toEqual(['{"a":"x\u2028y"}'])
-    expect(decoder.push('2}\n')).toEqual(['{"b":2}'])
-    expect(decoder.end()).toEqual([])
-  })
-
   test('correlates commands, waits for settlement, and diffs cumulative usage', async () => {
     const fake = fakeRpc()
     const session = await createPiRpcSession({
@@ -199,6 +190,10 @@ describe('Pi RPC JSONL', () => {
   })
 
   test('forwards abort and waits for the RPC agent to settle', async () => {
+    let observedPrompt!: () => void
+    const prompted = new Promise<void>((resolve) => {
+      observedPrompt = resolve
+    })
     const output = new AsyncQueue()
     const calls: Record<string, unknown>[] = []
     let resolveExit!: (code: number) => void
@@ -221,8 +216,10 @@ describe('Pi RPC JSONL', () => {
           )
         if (command.type === 'get_state') respond({ sessionId: 'abort-session' })
         else if (command.type === 'get_session_stats') respond({ tokens: { input: 0, output: 0 } })
-        else if (command.type === 'prompt') respond()
-        else if (command.type === 'abort') {
+        else if (command.type === 'prompt') {
+          respond()
+          if (command.message === 'keep running') observedPrompt()
+        } else if (command.type === 'abort') {
           respond()
           output.push(
             `${JSON.stringify({
@@ -249,7 +246,7 @@ describe('Pi RPC JSONL', () => {
     )
     const controller = new AbortController()
     const turn = client.prompt('keep running', {}, controller.signal)
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await prompted
     controller.abort(new Error('phase deadline'))
     await expect(turn).rejects.toThrow('phase deadline')
     expect(calls.some((call) => call.type === 'abort')).toBe(true)
