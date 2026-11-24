@@ -46,6 +46,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+import type { BuildPage, BuildPageOptions, ChangedBuilds } from './types'
 import type {
   TicketAsset,
   TicketAssetInput,
@@ -263,6 +264,14 @@ export function scopeLocalStoreToPhaseSession(
     async getRepoChangePosition(repo: string): Promise<string> {
       own('getRepoChangePosition', 'repo', repo)
       return store.getRepoChangePosition(repo)
+    },
+    async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+      own('listBuildsChangedSince', 'repo', repo)
+      return store.listBuildsChangedSince(repo, position)
+    },
+    async listBuildsPage(repo: string, opts?: BuildPageOptions): Promise<BuildPage> {
+      own('listBuildsPage', 'repo', repo)
+      return store.listBuildsPage(repo, opts)
     },
     async listBuilds(): Promise<BuildRecord[]> {
       return admin('listBuilds')
@@ -692,6 +701,8 @@ const JUDGE_REFUSED: Record<
   listBuilds: 'read',
   listBuildsForRepo: 'read',
   getRepoChangePosition: 'read',
+  listBuildsChangedSince: 'read',
+  listBuildsPage: 'read',
   appendIfCurrent: 'write',
   appendWithArtifacts: 'write',
   appendWithArtifactsIfCurrent: 'write',

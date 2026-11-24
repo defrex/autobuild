@@ -1,3 +1,4 @@
+import { BuildFeedUnsupportedError, BuildFeedValidationError } from '../build-feed'
 import { StoreWriteTooLargeError } from './errors'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import { OpenBuildsCapabilityError } from '../open-builds'
@@ -366,6 +367,18 @@ describe('request construction', () => {
         responses: [{ body: [] }],
         act: (s) => s.listBuildsForRepo('repo'),
         path: '/repos/repo/builds',
+        method: 'GET',
+      },
+      listBuildsChangedSince: {
+        responses: [{ body: { position: '7', builds: [{ slug: 'a', position: '7' }] } }],
+        act: (s) => s.listBuildsChangedSince('repo', '3'),
+        path: '/repos/repo/changed-builds?since=3',
+        method: 'GET',
+      },
+      listBuildsPage: {
+        responses: [{ body: { builds: [], next: null } }],
+        act: (s) => s.listBuildsPage('repo', { limit: 10 }),
+        path: '/repos/repo/build-page?limit=10',
         method: 'GET',
       },
       listBuilds: {
@@ -1654,5 +1667,87 @@ describe('build creation identity capability', () => {
     const store = new RemoteBuildStore({ url: 'http://store.test', fetchFn })
     await store.createBuild({ slug: 's', repo: '/r', creationKey: 'prep_1' })
     expect(calls[0]?.body).toMatchObject({ creationKey: 'prep_1' })
+  })
+})
+
+describe('changed-builds feed and paged listing compatibility', () => {
+  const unsupported = [
+    [501, 'unsupported-operation', 'feed unsupported'],
+    [404, 'not-found', 'no route: GET /repos/:repo/ROUTE'],
+    [404, 'not-found', 'no route: GET /repos/org%2Frepo/ROUTE'],
+    [404, 'not-found', 'unknown repo "org/repo"'],
+  ] as const
+  const operations = [
+    {
+      route: 'changed-builds',
+      capability: 'changedBuilds',
+      act: (store: RemoteBuildStore) => store.listBuildsChangedSince('org/repo', '0'),
+    },
+    {
+      route: 'build-page',
+      capability: 'buildPage',
+      act: (store: RemoteBuildStore) => store.listBuildsPage('org/repo'),
+    },
+  ] as const
+  for (const operation of operations)
+    for (const [status, kind, error] of unsupported)
+      test(`${operation.route}: ${status} ${error} is a typed capability error after one request`, async () => {
+        const urls: string[] = []
+        const store = new RemoteBuildStore({
+          url: 'http://store.test',
+          fetchFn: (async (input: RequestInfo | URL) => {
+            urls.push(String(input))
+            return Response.json(
+              { kind, error: error.replace('ROUTE', operation.route) },
+              { status },
+            )
+          }) as unknown as typeof fetch,
+        })
+        const failure = await operation.act(store).catch((caught: unknown) => caught)
+        expect(failure).toBeInstanceOf(BuildFeedUnsupportedError)
+        expect((failure as BuildFeedUnsupportedError).capability).toBe(operation.capability)
+        expect(urls).toHaveLength(1)
+        expect(new URL(urls[0]!).pathname).toBe(`/repos/org%2Frepo/${operation.route}`)
+      })
+  for (const operation of operations)
+    for (const [status, body] of [
+      [404, { kind: 'not-found', error: 'unknown repo "other"' }],
+      [404, { kind: 'not-found', error: 'no route: GET /repos/:repo/builds' }],
+      [500, { kind: 'internal', error: 'outage' }],
+      [400, { kind: 'validation', error: 'bad' }],
+    ] as const)
+      test(`${operation.route}: ${status} ${body.error} is not a capability error`, async () => {
+        let calls = 0
+        const store = new RemoteBuildStore({
+          url: 'http://store.test',
+          fetchFn: (async () => {
+            calls++
+            return Response.json(body, { status })
+          }) as unknown as typeof fetch,
+        })
+        const failure = await operation.act(store).catch((caught: unknown) => caught)
+        expect(failure).toBeInstanceOf(Error)
+        expect(failure).not.toBeInstanceOf(BuildFeedUnsupportedError)
+        expect(calls).toBe(1)
+      })
+  test('arguments are validated before any request', async () => {
+    let calls = 0
+    const store = new RemoteBuildStore({
+      url: 'http://store.test',
+      fetchFn: (async () => {
+        calls++
+        return Response.json({})
+      }) as unknown as typeof fetch,
+    })
+    await expect(store.listBuildsChangedSince('repo', '01')).rejects.toThrow(
+      BuildFeedValidationError,
+    )
+    await expect(store.listBuildsPage('repo', { limit: 0 })).rejects.toThrow(
+      BuildFeedValidationError,
+    )
+    await expect(store.listBuildsPage('repo', { cursor: '!' })).rejects.toThrow(
+      BuildFeedValidationError,
+    )
+    expect(calls).toBe(0)
   })
 })

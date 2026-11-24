@@ -20,6 +20,15 @@ import {
 } from '../event-reads'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import {
+  BuildFeedUnsupportedError,
+  decodeBuildPageCursor,
+  parseChangePosition,
+  resolveBuildPageLimit,
+  type BuildPage,
+  type BuildPageOptions,
+  type ChangedBuilds,
+} from '../build-feed'
+import {
   operatorPresenceBodySchema,
   operatorPresenceWireSchema,
   operatorPresenceListSchema,
@@ -136,9 +145,11 @@ import {
   artifactMetaListSchema,
   artifactMetaWireSchema,
   buildDigestListSchema,
+  buildPageSchema,
   buildRecordListSchema,
   buildRecordWireSchema,
   openBuildListSchema,
+  changedBuildsSchema,
   conditionalEventResponseSchema,
   conditionalSessionEventResponseSchema,
   decodeBase64,
@@ -1115,6 +1126,69 @@ export class RemoteBuildStore implements BuildStore {
 
   async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
     return this.requestJson('GET', `${this.repoPath(repo)}/builds`, buildRecordListSchema)
+  }
+
+  async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+    parseChangePosition(position)
+    return this.buildFeedRequest(
+      'changedBuilds',
+      repo,
+      'changed-builds',
+      new URLSearchParams({ since: position }),
+      changedBuildsSchema,
+    )
+  }
+
+  async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
+    const query = new URLSearchParams({ limit: String(resolveBuildPageLimit(opts.limit)) })
+    if (opts.cursor !== undefined) {
+      decodeBuildPageCursor(opts.cursor)
+      query.set('cursor', opts.cursor)
+    }
+    const page = await this.buildFeedRequest(
+      'buildPage',
+      repo,
+      'build-page',
+      query,
+      buildPageSchema,
+    )
+    // Rebuilt field by field: a consumer compiling without strictNullChecks
+    // infers zod's `.nullable()` as optional, which `BuildPage` rejects.
+    return { builds: page.builds, next: page.next ?? null }
+  }
+
+  /** One request to an additive feed route. A server on this release line
+   * that lacks the route answers 501, or 404 from its route table (or, for a
+   * journal-less repository, from its existence gate, which the feed routes
+   * sit before): that is `BuildFeedUnsupportedError`, never a fallback to
+   * listing builds or reading events. */
+  private async buildFeedRequest<T>(
+    capability: 'changedBuilds' | 'buildPage',
+    repo: string,
+    route: 'changed-builds' | 'build-page',
+    query: URLSearchParams,
+    schema: { parse: (data: unknown) => T },
+  ): Promise<T> {
+    const response = await this.raw('GET', `${this.repoPath(repo)}/${route}?${query}`)
+    if (response.ok) return schema.parse(await response.json())
+    const body = errorBodySchema.safeParse(
+      await response
+        .clone()
+        .json()
+        .catch(() => null),
+    )
+    if (
+      body.success &&
+      ((response.status === 501 && body.data.kind === 'unsupported-operation') ||
+        (response.status === 404 &&
+          body.data.kind === 'not-found' &&
+          (body.data.error === `no route: GET /repos/:repo/${route}` ||
+            body.data.error ===
+              `no route: GET ${new URL(`${this.base}${this.repoPath(repo)}/${route}`).pathname}` ||
+            body.data.error === `unknown repo "${repo}"`)))
+    )
+      throw new BuildFeedUnsupportedError(capability)
+    throw await this.toError(response)
   }
 
   async getRepoHighWater(repo: string): Promise<number> {
