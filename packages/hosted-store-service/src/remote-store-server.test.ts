@@ -1130,6 +1130,22 @@ test('feed and page routes answer journal-less repositories with one store read 
   expect(await page.json()).toMatchObject({ builds: [{ slug: 'feed-only' }], next: null })
   expect(calls).toEqual(['listBuildsPage'])
   calls.length = 0
+  // A filtered page echoes the normalized filters it applied.
+  const filtered = await get(
+    '/repos/org%2Frepo/build-page?kind=leaf&outcome=merged&activeSince=2000-01-01T00:00Z',
+  )
+  expect(filtered.status).toBe(200)
+  expect(await filtered.json()).toEqual({
+    builds: [],
+    next: null,
+    filters: { kind: 'leaf', outcome: 'merged', activeSince: '2000-01-01T00:00:00.000Z' },
+  })
+  expect(
+    await (
+      await get('/repos/org%2Frepo/build-page?kind=leaf&activeSince=2000-01-01T00:00Z')
+    ).json(),
+  ).toMatchObject({ builds: [{ slug: 'feed-only' }], filters: { kind: 'leaf' } })
+  calls.length = 0
   expect(await (await get('/repos/unknown/changed-builds?since=0')).json()).toEqual({
     position: '0',
     builds: [],
@@ -1149,6 +1165,10 @@ test('feed and page routes answer journal-less repositories with one store read 
     '/repos/org%2Frepo/build-page?limit=101',
     '/repos/org%2Frepo/build-page?limit=x',
     '/repos/org%2Frepo/build-page?cursor=!',
+    '/repos/org%2Frepo/build-page?kind=work',
+    '/repos/org%2Frepo/build-page?kind=',
+    '/repos/org%2Frepo/build-page?outcome=abandoned',
+    '/repos/org%2Frepo/build-page?activeSince=nope',
   ]) {
     const response = await get(path)
     expect(response.status).toBe(400)

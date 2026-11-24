@@ -39,6 +39,7 @@ export * from './compatibility'
 export {
   BuildFeedUnsupportedError,
   BuildFeedValidationError,
+  parseBuildPageFilterParams,
   parseBuildPageLimitParam,
   parseChangePosition,
 } from '../build-feed'

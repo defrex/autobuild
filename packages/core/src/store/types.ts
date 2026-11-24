@@ -3,7 +3,14 @@ import type { BoundedEventReads } from './event-reads'
 import type { OperatorIdentity, OperatorPresence } from './operator-presence'
 export type { OperatorIdentity, OperatorPresence } from './operator-presence'
 import type { BuildPage, BuildPageOptions, ChangedBuilds } from './build-feed'
-export type { BuildPage, BuildPageOptions, ChangedBuild, ChangedBuilds } from './build-feed'
+export type {
+  BuildPage,
+  BuildPageFilters,
+  BuildPageKind,
+  BuildPageOptions,
+  ChangedBuild,
+  ChangedBuilds,
+} from './build-feed'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
 /**
  * The BuildStore seam (SPEC §7): the durable home of everything a build
@@ -384,10 +391,30 @@ export interface BuildStore extends BoundedEventReads {
    * One page of `repo`'s builds, newest first by creation with slug
    * descending to break ties. Records match `listBuildsForRepo` records,
    * including the ticket projection. `next` is null on the last page. Cursors
-   * are opaque and valid only for the adapter that issued them. A page's cost
-   * does not depend on the repository's build count. An unknown repository
-   * answers `{builds: [], next: null}` and creates no state. A malformed
-   * cursor or a limit outside 1..100 rejects with `BuildFeedValidationError`.
+   * are opaque, valid only for the adapter that issued them, and continue
+   * only a request with the same filters.
+   *
+   * Optional filters narrow the page: `kind` (`leaf` or `node`, from the
+   * build's `build.created` kind), `outcome: 'merged'` (the latest
+   * `build.completed` was merged and no `build.reopened` followed) and
+   * `activeSince` (an ISO instant; `updatedAt` at or after it). They are
+   * answered from per-build facts written in the same transaction as the
+   * event or write that changes them, never from events or reduced values.
+   * Without `activeSince` a filtered page is the filtered subsequence of the
+   * creation order. With it, the page is ordered by `updatedAt` descending,
+   * then slug descending, and its cursor carries `(updatedAt, slug)`. Because
+   * `updatedAt` moves, a build written between two page requests may appear
+   * twice in one traversal or be skipped once; consumers dedupe by slug.
+   * Every write bumps `updatedAt` and a build's span never ends later than its
+   * latest event, so `activeSince` matches a superset of the builds whose span
+   * overlaps the window.
+   *
+   * Every filter combination is one bounded range scan: a page reads at most
+   * `limit + 1` entries, whatever the repository's build count or the number
+   * of matches. An unknown repository answers `{builds: [], next: null}` and
+   * creates no state. A malformed cursor, a cursor of the other order, an
+   * invalid filter or a limit outside 1..100 rejects with
+   * `BuildFeedValidationError`.
    */
   listBuildsPage(repo: string, opts?: BuildPageOptions): Promise<BuildPage>
 
