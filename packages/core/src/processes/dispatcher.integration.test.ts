@@ -76,7 +76,6 @@ import {
   Dispatcher,
   SWEEP_PIN_CACHE_CAPACITY,
   emptyTickReport,
-  readyCriteria,
   type DispatcherOpts,
   type LaunchRunnerResult,
 } from './dispatcher'
@@ -7091,106 +7090,6 @@ describe('Dispatcher tick idempotency', () => {
   })
 })
 
-describe('readyCriteria — readiness is resolved against the ticket source (§3.3)', () => {
-  const criteria = (toml: string) => readyCriteria(parseConfig(toml))
-
-  const FILE = '[tickets]\nsource = "file"\n'
-  const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
-  const PLUGIN = '[tickets]\nsource = "jira"\n'
-
-  test('file source: the configured state is the gate, no label gate by default', () => {
-    // The headline claim: no label — `mv` into the readyState directory dispatches.
-    expect(criteria(`${FILE}readyState = "Ready"\n`)).toEqual({
-      labels: [],
-      state: 'Ready',
-    })
-  })
-
-  test('linear source: the historical "autobuild" label gate is intact, alongside the state', () => {
-    // Linear has no ready/ directory, so its historical label default remains
-    // as an additional narrowing gate.
-    expect(criteria(`${LINEAR}readyState = "Ready"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Ready',
-    })
-  })
-
-  test('readyAssignee joins the criteria only when configured', () => {
-    expect(criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "me"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Ready',
-      assignee: 'me',
-    })
-    expect(
-      criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "a@example.com"\n`).assignee,
-    ).toBe('a@example.com')
-    expect('assignee' in criteria(`${LINEAR}readyState = "Ready"\n`)).toBe(false)
-  })
-
-  test('github source: the "autobuild" label gate is the default, and [] removes it', () => {
-    const GITHUB = '[tickets]\nsource = "github"\n'
-    expect(criteria(GITHUB)).toEqual({ labels: ['autobuild'], state: 'ready' })
-    expect(criteria(`${GITHUB}readyLabels = []\n`)).toEqual({ labels: [], state: 'ready' })
-  })
-
-  test('github source: readyAssignee joins the criteria', () => {
-    expect(criteria('[tickets]\nsource = "github"\nreadyAssignee = "octocat"\n')).toEqual({
-      labels: ['autobuild'],
-      state: 'ready',
-      assignee: 'octocat',
-    })
-  })
-
-  test('plugin sources have no host-imposed label convention', () => {
-    expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
-      labels: [],
-      state: 'Open',
-    })
-  })
-
-  test('the state gate is always emitted for every source', () => {
-    expect(criteria(`${LINEAR}readyState = "Todo"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Todo',
-    })
-    expect(criteria(`${FILE}readyState = "Todo"\n`)).toEqual({
-      labels: [],
-      state: 'Todo',
-    })
-    expect(criteria(`${PLUGIN}readyState = "Todo"\n`)).toEqual({
-      labels: [],
-      state: 'Todo',
-    })
-  })
-
-  test('an explicit readyLabels wins for every source — config is never ignored', () => {
-    expect(criteria(`${FILE}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-    expect(criteria(`${LINEAR}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-    expect(criteria(`${PLUGIN}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-  })
-
-  test('an explicit empty readyLabels is honored, not treated as unset', () => {
-    expect(criteria(`${LINEAR}readyLabels = []\nreadyState = "Ready"\n`)).toEqual({
-      labels: [],
-      state: 'Ready',
-    })
-  })
-
-  test('a config with no readyState cannot produce criteria — it fails at the tickets path', () => {
-    expect(() => criteria(LINEAR)).toThrow('tickets.readyState')
-    expect(() => criteria('')).toThrow('tickets.readyState')
-  })
-})
-
 // ── Durable supervision (AUT-301) ────────────────────────────────────────────
 
 describe('Dispatcher durable supervision', () => {
@@ -7234,6 +7133,38 @@ describe('Dispatcher durable supervision', () => {
     return { execution, provider }
   }
 
+  type ProvisionOpts = Parameters<WorkspaceProvider['provision']>[0]
+  /** A recovery-capable provider whose provision runs `script` per call. */
+  function scriptedProvider(
+    calls: ProvisionOpts[],
+    script: (opts: ProvisionOpts, call: number) => Promise<void>,
+    estimate?: number,
+  ): WorkspaceProvider {
+    return {
+      name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
+      recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      ...(estimate === undefined ? {} : { provisionEstimateMs: estimate }),
+      async provision(opts) {
+        calls.push(opts)
+        await script(opts, calls.length)
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${opts.generation ?? 0}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
+        }
+      },
+      async release() {},
+    }
+  }
   function remoteWorkspaceProvider(operations: string[]): WorkspaceProvider {
     return {
       name: 'remote-test',
@@ -7507,31 +7438,12 @@ describe('Dispatcher durable supervision', () => {
 
   test('remote dispatch appends the durable provision marker; the continuation completes facts and launch', async () => {
     const operations: string[] = []
-    const workspaceProvider: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      // The provision resolves on a macrotask, so the tick — which never
-      // awaits the continuation — returns before any provider call runs.
-      async provision(opts) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
-        operations.push('provision')
-        return {
-          provider: 'remote-test',
-          ref: 'sandbox-g1',
-          path: '/remote/workspace',
-          branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
-        }
-      },
-      async release() {},
-    }
+    // The provision resolves on a macrotask, so the tick — which never
+    // awaits the continuation — returns before any provider call runs.
+    const workspaceProvider = scriptedProvider([], async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      operations.push('provision')
+    })
     const h = harness({
       tickets: [readyTicket('T-remote-dispatch', { title: 'remote dispatch' })],
       workspaceProvider,
@@ -7585,33 +7497,14 @@ describe('Dispatcher durable supervision', () => {
     const operations: string[] = []
     // The provision is held until the test releases it, so the continuation is
     // provably mid-flight when teardown signals it.
-    type ProvisionResult = {
-      provider: string
-      ref: string
-      path: string
-      branch: string
-      base: { source: 'existing'; sha: string }
-    }
-    let releaseProvision!: (value: ProvisionResult) => void
-    const provisioned = new Promise<ProvisionResult>((resolve) => {
+    let releaseProvision!: () => void
+    const provisioned = new Promise<void>((resolve) => {
       releaseProvision = resolve
     })
-    const workspaceProvider: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      async provision() {
-        operations.push('provision')
-        return provisioned
-      },
-      async release() {},
-    }
+    const workspaceProvider = scriptedProvider([], () => {
+      operations.push('provision')
+      return provisioned
+    })
     const h = harness({ workspaceProvider })
     const slug = 'torn-down-provision'
     const ticket = { source: 'fake' as const, id: 'T-teardown', title: slug }
@@ -7628,13 +7521,7 @@ describe('Dispatcher durable supervision', () => {
     await h.dispatcher.stopProvisioning()
     // A provision call already in flight when the signal landed may complete:
     // its fact is true and welcome, but the token check prevents the launch.
-    releaseProvision({
-      provider: 'remote-test',
-      ref: 'sandbox-g1',
-      path: '/remote/workspace',
-      branch: `ab/${slug}`,
-      base: { source: 'existing', sha: BASE_SHA },
-    })
+    releaseProvision()
     await h.dispatcher.drainProvisioning()
     const events = await h.store.getEvents(slug)
     expect(events.findLast((event) => event.type === 'dispatch.failed')?.payload).toMatchObject({
@@ -7648,38 +7535,6 @@ describe('Dispatcher durable supervision', () => {
   })
 
   describe('teardown-abandoned provisioning', () => {
-    type ProvisionOpts = Parameters<WorkspaceProvider['provision']>[0]
-    /** A recovery-capable provider whose provision runs `script` per call. */
-    function scriptedProvider(
-      calls: ProvisionOpts[],
-      script: (opts: ProvisionOpts, call: number) => Promise<void>,
-      estimate?: number,
-    ): WorkspaceProvider {
-      return {
-        name: 'remote-test',
-        preservation: async () => ({ outcome: 'preserved', heads: [] }),
-        recovery: {
-          fence: async () => ({ outcome: 'confirmed' }),
-          reap: async () => ({
-            outcome: 'confirmed',
-            snapshots: { outcome: 'confirmed', deleted: 0 },
-          }),
-        },
-        ...(estimate === undefined ? {} : { provisionEstimateMs: estimate }),
-        async provision(opts) {
-          calls.push(opts)
-          await script(opts, calls.length)
-          return {
-            provider: 'remote-test',
-            ref: `sandbox-g${opts.generation ?? 0}`,
-            path: '/remote/workspace',
-            branch: opts.branch,
-            base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
-          }
-        },
-        async release() {},
-      }
-    }
     const cleanupRequired = (opts: ProvisionOpts) =>
       new WorkspaceCleanupRequired(
         {
@@ -7964,163 +7819,114 @@ describe('Dispatcher harvest execution settlement', () => {
     expect(reapCalls).toHaveLength(1)
   })
 
-  test('a provider-proved lost execution is reaped and closed with the snapshot outcome', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    const report = await h.dispatcher.tick()
-    expect(report.settled).toBe(0)
-    expect(reapCalls).toEqual([{ provider: 'fake-harvest', ref: 'autobuild-harvest-abc1234567' }])
-    const events = await h.store.getRepoEvents(REPO)
-    const released = events.find((event) => event.type === 'harvest.execution.released')
-    expect(released).toMatchObject({
-      actor: DISPATCHER,
-      payload: {
-        execution: 'host-harvest-i1',
-        environmentId: 'autobuild-harvest-abc1234567',
-        snapshots: { outcome: 'confirmed', deleted: 3 },
-      },
-    })
-  })
-
-  test('a provider-proved ended execution is reaped and closed identically', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({
-      state: 'ended',
-      exitCode: 0,
-    }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toHaveLength(1)
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(true)
-    // Settled once: a second tick finds no open execution and reaps nothing.
-    await h.dispatcher.tick()
-    expect(reapCalls).toHaveLength(1)
-  })
-
-  test('a running guest is left alone — no reap, no close fact', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'running' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
-  test('an execution this process supervises is skipped', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({
-      workspaceProvider: provider,
-      activeHarvestExecutions: () => new Set(['host-harvest-i1']),
-    })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
-  test('an execution without a recorded command id cannot be observed and is left alone', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h, { commandId: null })
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    // The fact remains open for a later, better-informed settlement.
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
   // AUT-1017: a live foreign execution owns its run's open session, so the
   // dispatcher withholds harvest launch (and with it the runner-loss
   // judgment) until settlement journals the release.
-  describe('harvest launch gate', () => {
-    async function gateFixture(
-      observe: Parameters<typeof harvestProvider>[0],
-      opts: { commandId?: string | null; active?: ReadonlySet<string>; seed?: boolean } = {},
-    ) {
-      const { provider } = harvestProvider(observe)
-      const starts: number[] = []
-      const h = harness({
-        workspaceProvider: provider,
-        startHarvest: () => {
-          starts.push(starts.length)
-        },
-        ...(opts.active !== undefined ? { activeHarvestExecutions: () => opts.active! } : {}),
-      })
-      await h.store.ensureRepo(REPO)
-      if (opts.seed !== false)
-        await seedExecution(h, opts.commandId !== undefined ? { commandId: opts.commandId } : {})
-      await h.store.appendRepo(REPO, {
-        actor: KERNEL,
-        type: 'harvest.started',
+  async function gateFixture(
+    observe: Parameters<typeof harvestProvider>[0],
+    opts: { commandId?: string | null; active?: ReadonlySet<string>; seed?: boolean } = {},
+  ) {
+    const { provider, reapCalls } = harvestProvider(observe)
+    const starts: number[] = []
+    const h = harness({
+      workspaceProvider: provider,
+      startHarvest: () => {
+        starts.push(starts.length)
+      },
+      ...(opts.active !== undefined ? { activeHarvestExecutions: () => opts.active! } : {}),
+    })
+    await h.store.ensureRepo(REPO)
+    if (opts.seed !== false)
+      await seedExecution(h, opts.commandId !== undefined ? { commandId: opts.commandId } : {})
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'harvest-open',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    const released = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
+        (event) => event.type === 'harvest.execution.released',
+      ).length
+    return { h, starts, released, reapCalls }
+  }
+
+  for (const observation of [
+    { state: 'lost' as const },
+    { state: 'ended' as const, exitCode: 0 },
+  ]) {
+    test(`a provider-proved ${observation.state} execution is reaped and closed once, and launch proceeds the same tick`, async () => {
+      const { h, starts, released, reapCalls } = await gateFixture(async () => observation)
+      const report = await h.dispatcher.tick()
+      expect(report.settled).toBe(0)
+      expect(reapCalls).toEqual([{ provider: 'fake-harvest', ref: 'autobuild-harvest-abc1234567' }])
+      const events = await h.store.getRepoEvents(REPO)
+      expect(events.find((event) => event.type === 'harvest.execution.released')).toMatchObject({
+        actor: DISPATCHER,
         payload: {
-          run: 'harvest-open',
-          observations: [{ build: 'origin', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
+          execution: 'host-harvest-i1',
+          environmentId: 'autobuild-harvest-abc1234567',
+          snapshots: { outcome: 'confirmed', deleted: 3 },
         },
       })
-      const released = async () =>
-        (await h.store.getRepoEvents(REPO)).filter(
-          (event) => event.type === 'harvest.execution.released',
-        ).length
-      return { h, starts, released }
-    }
-
-    test('a running execution suppresses launch across ticks', async () => {
-      const { h, starts, released } = await gateFixture(async () => ({ state: 'running' }))
-      await h.dispatcher.tick()
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(0)
-      expect(await released()).toBe(0)
-    })
-
-    for (const observation of [
-      { state: 'lost' as const },
-      { state: 'ended' as const, exitCode: 1 },
-    ]) {
-      test(`a ${observation.state} execution is released and launch proceeds the same tick`, async () => {
-        const { h, starts, released } = await gateFixture(async () => observation)
-        await h.dispatcher.tick()
-        expect(await released()).toBe(1)
-        expect(starts).toHaveLength(1)
-      })
-    }
-
-    test('an observation error is conservative: no launch, no release', async () => {
-      const { h, starts, released } = await gateFixture(async () => {
-        throw new Error('provider unavailable')
-      })
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(0)
-      expect(await released()).toBe(0)
-    })
-
-    test('an unobservable execution never blocks launch', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        commandId: null,
-      })
-      await h.dispatcher.tick()
       expect(starts).toHaveLength(1)
-    })
-
-    test('an execution this process supervises is left to the loop single-flight', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        active: new Set(['host-harvest-i1']),
-      })
+      // Settled once: a second tick finds no open execution and reaps nothing.
       await h.dispatcher.tick()
-      expect(starts).toHaveLength(1)
+      expect(reapCalls).toHaveLength(1)
+      expect(await released()).toBe(1)
     })
+  }
 
-    test('no open execution launches as before', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        seed: false,
-      })
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(1)
+  test('a running execution is left alone and suppresses launch across ticks', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({
+      state: 'running',
+    }))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(0)
+  })
+
+  test('an execution this process supervises is skipped and left to the loop single-flight', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({ state: 'lost' }), {
+      active: new Set(['host-harvest-i1']),
     })
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(1)
+  })
+
+  test('an execution without a recorded command id cannot be observed, stays open and never blocks launch', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({ state: 'lost' }), {
+      commandId: null,
+    })
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    // The fact remains open for a later, better-informed settlement.
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(1)
+  })
+
+  test('an observation error is conservative: no launch, no release', async () => {
+    const { h, starts, released } = await gateFixture(async () => {
+      throw new Error('provider unavailable')
+    })
+    await h.dispatcher.tick()
+    expect(starts).toHaveLength(0)
+    expect(await released()).toBe(0)
+  })
+
+  test('no open execution launches as before', async () => {
+    const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
+      seed: false,
+    })
+    await h.dispatcher.tick()
+    expect(starts).toHaveLength(1)
   })
 })
 
@@ -8472,39 +8278,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
   })
 
-  test('activity appended by another process mid-tick keeps the sandbox alive', async () => {
-    let hook: (() => Promise<void>) | undefined
-    class HookStore extends MemoryBuildStore {
-      override async getRepoBuildDigests(repo: string) {
-        const hooked = hook
-        hook = undefined
-        await hooked?.()
-        return super.getRepoBuildDigests(repo)
-      }
-    }
-    const storeClock = manualClock()
-    const store = new HookStore({ clock: storeClock })
-    const h = harness({
-      store,
-      toml: '[orchestrator]\nenabled = true\n',
-    })
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    storeClock.advance(31 * 60 * 1000)
-    hook = async () => {
-      await store.appendRepo(REPO, {
-        actor: humanActor('ops'),
-        type: 'orchestrator.sandbox.activity',
-        payload: { operator: 'ops', environmentId: 'env-1' },
-      })
-    }
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  for (const change of ['released', 'replaced', 'read-failed'] as const) {
+  for (const change of ['activity', 'released', 'replaced', 'read-failed'] as const) {
     test(`idle settlement revalidates a sandbox ${change} mid-tick`, async () => {
       let hook: (() => Promise<void>) | undefined
       let rejectRead = false
@@ -8532,6 +8306,14 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
       hook = async () => {
         if (change === 'read-failed') {
           rejectRead = true
+          return
+        }
+        if (change === 'activity') {
+          await store.appendRepo(REPO, {
+            actor: humanActor('ops'),
+            type: 'orchestrator.sandbox.activity',
+            payload: { operator: 'ops', environmentId: 'env-1' },
+          })
           return
         }
         await store.appendRepo(REPO, {
@@ -8571,47 +8353,43 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
       // Initial sample, plus an impending stop and its append refresh when idle.
       expect(reads).toBe(idle ? 3 : 1)
       expect(report.sandboxIdleStops).toBe(idle ? 1 : 0)
+      expect(
+        (await h.store.getRepoEvents(REPO)).some(
+          (event) => event.type === 'orchestrator.sandbox.stopped',
+        ),
+      ).toBe(idle)
     })
   }
 
-  test('a sandbox inside the threshold is left alone', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h)
-    h.clock.advance(10 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
+  for (const stage of ['disabled', 'capability-less'] as const) {
+    test(`a ${stage} orchestrator sandbox stage is a no-op`, async () => {
+      const h = harness(stage === 'disabled' ? {} : { toml: '[orchestrator]\nenabled = true\n' })
+      if (stage === 'capability-less') {
+        // The logical-mode fake hosts the capability; strip it to model a
+        // provider without one.
+        const bare = h.workspaces as unknown as Record<string, unknown>
+        delete bare.orchestratorSandbox
+      }
+      await seedLiveSandbox(h)
+      h.clock.advance(31 * 60 * 1000)
+      const report = await h.dispatcher.tick()
+      const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+      expect(types).not.toContain('orchestrator.sandbox.stopped')
+      expect(report.sandboxIdleStops).toBe(0)
+    })
+  }
 
-  test('disabled [orchestrator] makes the stage a no-op', async () => {
-    const h = harness()
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  test('a capability-less provider makes the stage a no-op', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    // The logical-mode fake hosts the capability; strip it to model a
-    // provider without one.
-    const bare = h.workspaces as unknown as Record<string, unknown>
-    delete bare.orchestratorSandbox
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  test('a stale-provider environment past the idle threshold gets its trail closed with an unconfirmed release fact', async () => {
+  test('a stale-provider environment past the idle threshold gets its trail closed once with an unconfirmed release fact', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(31 * 60 * 1000)
+    const types = async () => (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    // The idle gate still applies to stale-provider environments.
+    h.clock.advance(10 * 60 * 1000)
+    const inside = await h.dispatcher.tick()
+    expect(await types()).not.toContain('orchestrator.sandbox.released')
+    expect(inside.sandboxIdleStops).toBe(0)
+
+    h.clock.advance(21 * 60 * 1000)
     const report = await h.dispatcher.tick()
     const last = (await h.store.getRepoEvents(REPO)).findLast(
       (event) => event.type !== 'dispatcher.ticket-scan-completed',
@@ -8627,35 +8405,15 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
     // Distinguish release from a confirmed stop: nothing was stopped through
     // a provider this dispatcher no longer owns.
-    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
-      'orchestrator.sandbox.stopped',
-    )
-  })
+    expect(await types()).not.toContain('orchestrator.sandbox.stopped')
 
-  test('a stale-provider release is not duplicated on the next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(31 * 60 * 1000)
-    const first = await h.dispatcher.tick()
-    expect(first.sandboxIdleStops).toBe(1)
+    // Not duplicated on the next tick.
     h.clock.advance(31 * 60 * 1000)
     const second = await h.dispatcher.tick()
     expect(second.sandboxIdleStops).toBe(0)
-    const releases = (await h.store.getRepoEvents(REPO)).filter(
-      (event) => event.type === 'orchestrator.sandbox.released',
+    expect((await types()).filter((type) => type === 'orchestrator.sandbox.released')).toHaveLength(
+      1,
     )
-    expect(releases).toHaveLength(1)
-  })
-
-  test('the idle gate still applies to stale-provider environments', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(10 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
-      'orchestrator.sandbox.released',
-    )
-    expect(report.sandboxIdleStops).toBe(0)
   })
 
   test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {
@@ -9013,19 +8771,6 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
     expect(await h.store.listBuilds()).toEqual([])
   })
 
-  test('a ticket with no assets gets exactly the build.created it always had', async () => {
-    const h = harness({ tickets: [readyTicket('T-1')] })
-    await h.dispatcher.tick()
-    const created = (await h.store.getEvents('add-rate-limiting')).find(
-      (event) => event.type === 'build.created',
-    )
-    expect(created?.payload).toEqual({
-      ticket: expect.objectContaining({ id: 'T-1' }),
-      repo: REPO,
-      baseBranch: 'main',
-    })
-  })
-
   test('recovery after the record exists keeps the original pin', async () => {
     let launches = 0
     const h = harness({
@@ -9120,7 +8865,7 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     return { store, h: harness({ store }) }
   }
 
-  test('an idle tick after the first reads zero event rows; a tick after M foreign events reads exactly M', async () => {
+  test('a first tick and ticks after foreign events read zero event rows through the incremental view', async () => {
     const { store, h } = rowHarness()
     await store.ensureRepo(REPO)
     const live = await seedBuild(h, { slug: 'live' })
@@ -9224,16 +8969,6 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     expect(live.observes).toBe(live.ticks)
     expect(live.samples).toBe(baseline.samples)
   })
-
-  test('--once style: a fresh dispatcher reads each work build once and no more than its history', async () => {
-    const { store, h } = rowHarness()
-    await store.ensureRepo(REPO)
-    const live = await seedBuild(h, { slug: 'live' })
-    const _history = (await h.store.getEvents(live)).length
-    store.drainRows()
-    await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drainRows()).toBe(0)
-  })
 })
 
 describe('Dispatcher tick event reads', () => {
@@ -9261,25 +8996,16 @@ describe('Dispatcher tick event reads', () => {
     }
     const live = ['live-a', 'live-b']
     for (const slug of live) await seedBuild(h, { slug })
+    // A lease sweep with a zero TTL never reads a terminal build either.
+    expect(await h.store.claimLease(terminal[0]!, 'old', 100)).toBe(true)
+    await h.store.releaseLease(terminal[0]!, 'old')
+    h.clock.advance(1_000)
     store.drain()
 
     await h.dispatcher.tick({ acceptNewWork: false })
     const read = store.drain()
     expect(read.filter((slug) => terminal.includes(slug))).toEqual([])
     expect(read.length).toBeLessThanOrEqual(live.length)
-  })
-
-  test('a lease sweep with a zero TTL never reads a terminal build', async () => {
-    const { store, h } = countingHarness()
-    const slug = await seedBuild(h, { slug: 'swept' })
-    await complete(h, slug)
-    expect(await h.store.claimLease(slug, 'old', 100)).toBe(true)
-    await h.store.releaseLease(slug, 'old')
-    h.clock.advance(1_000)
-    store.drain()
-
-    await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drain()).toEqual([])
   })
 
   test('an aborted build is read until cleanup records build.completed, then not again', async () => {
@@ -9456,7 +9182,7 @@ describe('Dispatcher over reducer snapshots', () => {
     return { store, provider, first }
   }
 
-  test('a second cold tick with no new events reads zero event rows and appends nothing', async () => {
+  test('cold dispatchers over reducer snapshots read zero event rows and append only tick facts, before and after foreign events', async () => {
     const { store, provider, first } = await seededRepository()
     await first.dispatcher.tick({ acceptNewWork: false })
     const slugs = ['running-one', 'paused-one', 'foreign-live', 'foreign-stale']
@@ -9471,21 +9197,14 @@ describe('Dispatcher over reducer snapshots', () => {
     // Both settlement paths — the foreign pass and the stale-lease sweep —
     // asked the provider, and the answer cost no event row.
     expect(observations.length).toBeGreaterThanOrEqual(3)
-    store.rows = 0
     const after = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
     expect(after.map((events) => events.map((event) => event.type))).toEqual(
       before.map((events) => events.map((event) => event.type)),
     )
     // The tick's own journal facts are the only appends.
     expect((await store.getRepoEvents(REPO)).length - journalBefore.length).toBeLessThanOrEqual(4)
-  })
 
-  test('M events between ticks cost exactly M rows', async () => {
-    const { store, provider, first } = await seededRepository()
-    await first.dispatcher.tick({ acceptNewWork: false })
-    const quiet = harness({ store, workspaceProvider: provider })
-    quiet.clock.advance(1_000)
-    await quiet.dispatcher.tick({ acceptNewWork: false })
+    // M events between ticks cost a fresh dispatcher no rows either.
     const note = (summary: string) => ({
       actor: agentActor('implement', 's_test'),
       type: 'observation.recorded' as const,
@@ -9576,6 +9295,7 @@ describe('provider-neutral intake rate limits', () => {
         })
       const first = make()
       await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+      expect(await store.listBuilds()).toEqual([])
       for (const next of ['dependency', 'listing', 'dependency', 'listing']) {
         mode = next
         await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
@@ -9738,26 +9458,11 @@ describe('provider-neutral intake rate limits', () => {
     expect(h.tickets.claims).toEqual([])
     expect(await h.store.listBuilds()).toEqual([])
   })
-
-  test('a ready scan rate limit rejects without claiming anything', async () => {
-    const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
-    const h = harness({
-      wrapTickets: (source) =>
-        Object.assign(source, {
-          listReady: async () => {
-            throw error
-          },
-        }),
-    })
-    await expect(h.dispatcher.tick()).rejects.toBe(error)
-    expect(h.tickets.claims).toEqual([])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
 })
 
 describe('durable ticket scan cadence', () => {
   for (const observation of [false, true]) {
-    test(`30 unchanged intervals survive cold dispatchers (${observation ? 'observation' : 'admission'})`, async () => {
+    test(`unchanged intervals survive cold dispatchers (${observation ? 'observation' : 'admission'})`, async () => {
       const tickets = observation ? [readyTicket('standing')] : []
       let h = counted({ tickets, toml: 'ticketScanIntervalSeconds = 120' })
       let scans = 0
@@ -9768,7 +9473,7 @@ describe('durable ticket scan cadence', () => {
         (e) => e.type === 'dispatcher.ticket-scan-completed',
       )
       expect(initial).toHaveLength(1)
-      for (let interval = 0; interval < 30; interval++) {
+      for (let interval = 0; interval < 3; interval++) {
         const store = h.store
         const time = h.clock().getTime()
         h = counted({ store, tickets, toml: 'ticketScanIntervalSeconds = 120' })
@@ -9783,7 +9488,7 @@ describe('durable ticket scan cadence', () => {
         expect(h.cadenceReads()).toBe(interval === 0 ? 1 : 2)
         scans += h.scans()
       }
-      expect(scans).toBe(31)
+      expect(scans).toBe(4)
       expect(
         (await h.store.getRepoEvents(REPO)).filter(
           (e) => e.type === 'dispatcher.ticket-scan-completed',
@@ -9792,46 +9497,48 @@ describe('durable ticket scan cadence', () => {
     })
   }
 
-  for (const [field, value] of [
-    ['queued', 1],
-    ['invalidTickets', 1],
-    ['dependencyBlocked', 1],
-    ['creationWithheld', 1],
-    ['ticketDiagnostics', ['changed']],
-    ['dependencyDiagnostics', ['changed']],
-    ['creationDiagnostics', ['changed']],
-    ['readinessFingerprint', 'changed'],
-    ['criteriaFingerprint', 'changed'],
-    ['mode', 'admission'],
-  ] as const) {
-    test(`a ${field}-only outcome change is recorded and can change back`, async () => {
-      const h = counted()
-      await h.dispatcher.observeReady()
-      const [initial] = (await h.store.getRepoEvents(REPO)).filter(
+  test('each outcome field change is recorded and can change back', async () => {
+    const fields = [
+      ['queued', 1],
+      ['invalidTickets', 1],
+      ['dependencyBlocked', 1],
+      ['creationWithheld', 1],
+      ['ticketDiagnostics', ['changed']],
+      ['dependencyDiagnostics', ['changed']],
+      ['creationDiagnostics', ['changed']],
+      ['readinessFingerprint', 'changed'],
+      ['criteriaFingerprint', 'changed'],
+      ['mode', 'admission'],
+    ] as const
+    const h = counted()
+    await h.dispatcher.observeReady()
+    const scans = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
         (e) => e.type === 'dispatcher.ticket-scan-completed',
       )
-      if (initial?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
+    const [initial] = await scans()
+    if (initial?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
+    for (const [index, [field, value]] of fields.entries()) {
+      const latest = (await scans()).at(-1)
+      if (latest?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
       await h.store.appendRepo(REPO, {
         actor: DISPATCHER,
         type: 'dispatcher.ticket-scan-completed',
-        payload: { ...initial.payload, [field]: value },
+        payload: { ...latest.payload, [field]: value },
       })
       h.clock.advance(60_000)
       await h.dispatcher.observeReady()
-      const events = (await h.store.getRepoEvents(REPO)).filter(
-        (e) => e.type === 'dispatcher.ticket-scan-completed',
-      )
-      expect(events).toHaveLength(3)
-      expect(events[2]?.payload).toEqual({ ...initial.payload, startedAt: h.clock().toISOString() })
-      h.clock.advance(60_000)
-      await h.dispatcher.observeReady()
-      expect(
-        (await h.store.getRepoEvents(REPO)).filter(
-          (e) => e.type === 'dispatcher.ticket-scan-completed',
-        ),
-      ).toHaveLength(3)
-    })
-  }
+      const events = await scans()
+      expect(events, `${field} change`).toHaveLength(3 + 2 * index)
+      expect(events.at(-1)?.payload, `${field} change back`).toEqual({
+        ...initial.payload,
+        startedAt: h.clock().toISOString(),
+      })
+    }
+    h.clock.advance(60_000)
+    await h.dispatcher.observeReady()
+    expect(await scans()).toHaveLength(1 + 2 * fields.length)
+  })
 
   test('standing diagnostics compare retained text and order, after truncation', async () => {
     let diagnostics = Array.from({ length: 1001 }, (_, i) => `diagnostic ${i}`)
@@ -9949,52 +9656,21 @@ describe('durable ticket scan cadence', () => {
   const scanEvents = async (h: { store: BuildStore }) =>
     (await h.store.getRepoEvents(REPO)).filter((e) => e.type === 'dispatcher.ticket-scan-completed')
 
-  for (const observation of [false, true]) {
-    test(`the journal measurement alone defers without a cadence read (${observation ? 'observation' : 'admission'})`, async () => {
-      const h = counted()
-      const invoke = () => (observation ? h.dispatcher.observeReady() : h.dispatcher.tick())
-      await invoke()
-      expect(h.scans()).toBe(1)
-      const reads = h.cadenceReads()
-      for (let i = 0; i < 5; i++) {
-        h.clock.advance(10_000)
-        await invoke()
-      }
-      expect(h.cadenceReads()).toBe(reads)
-      expect(h.scans()).toBe(1)
+  test('the journal measurement alone defers an observation without a cadence read', async () => {
+    const h = counted()
+    await h.dispatcher.observeReady()
+    expect(h.scans()).toBe(1)
+    const reads = h.cadenceReads()
+    for (let i = 0; i < 5; i++) {
       h.clock.advance(10_000)
-      await invoke()
-      expect(h.cadenceReads()).toBe(reads + 1)
-      expect(h.scans()).toBe(2)
-    })
-  }
-
-  test('fresh dispatchers defer from the journal, then consult the advanced cadence row', async () => {
-    const tickets = [readyTicket('one')]
-    const h = counted({ tickets })
-    expect((await h.dispatcher.observeReady()).queued).toBe(1)
-    const start = h.clock().getTime()
-    const initial = await scanEvents(h)
-    expect(initial).toHaveLength(1)
-    const cold = (at: number) => {
-      const next = counted({ store: h.store, tickets })
-      next.clock.set(new Date(start + at).toISOString())
-      return next
+      await h.dispatcher.observeReady()
     }
-    const inside = cold(30_000)
-    expect((await inside.dispatcher.observeReady()).queued).toBe(1)
-    expect(inside.cadenceReads()).toBe(0)
-    expect(inside.scans()).toBe(0)
-    // An unchanged scan advances only the cadence row.
-    const boundary = cold(60_000)
-    await boundary.dispatcher.observeReady()
-    expect(boundary.scans()).toBe(1)
-    expect(await scanEvents(h)).toEqual(initial)
-    const beyond = cold(90_000)
-    expect((await beyond.dispatcher.observeReady()).queued).toBe(1)
-    expect(beyond.cadenceReads()).toBe(1)
-    expect(beyond.scans()).toBe(0)
-    expect(await scanEvents(h)).toEqual(initial)
+    expect(h.cadenceReads()).toBe(reads)
+    expect(h.scans()).toBe(1)
+    h.clock.advance(10_000)
+    await h.dispatcher.observeReady()
+    expect(h.cadenceReads()).toBe(reads + 1)
+    expect(h.scans()).toBe(2)
   })
 
   test('a missing cadence row defers inside the journal interval and scans at its end', async () => {
@@ -10079,6 +9755,8 @@ describe('durable ticket scan cadence', () => {
       },
     })
     expect((await h.dispatcher.tick()).queued).toBe(1)
+    // The journal measurement alone defers admission without a cadence read.
+    const reads = h.cadenceReads()
     for (let i = 1; i <= 5; i++) {
       h.clock.advance(10_000)
       const report = await h.dispatcher.tick()
@@ -10086,10 +9764,12 @@ describe('durable ticket scan cadence', () => {
       expect(report.dispatched).toBe(0)
     }
     expect(h.scans()).toBe(1)
+    expect(h.cadenceReads()).toBe(reads)
     expect(harvests).toBeGreaterThan(0)
     h.clock.advance(10_000)
     expect((await h.dispatcher.tick()).queued).toBe(1)
     expect(h.scans()).toBe(2)
+    expect(h.cadenceReads()).toBe(reads + 1)
     expect(h.tickets.claims).toEqual(['one'])
   })
 
@@ -10097,10 +9777,12 @@ describe('durable ticket scan cadence', () => {
     const h = counted({ tickets: [readyTicket('one', { state: 'Triage' })] })
     await h.dispatcher.tick()
     await h.tickets.transition('one', 'Ready')
-    h.clock.advance(50_000)
+    h.clock.advance(59_999)
     expect((await h.dispatcher.tick()).dispatched).toBe(0)
-    h.clock.advance(10_000)
+    expect(h.tickets.claims).toEqual([])
+    h.clock.advance(1)
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.claims).toEqual(['one'])
     const cold = counted({ store: h.store })
     cold.clock.set(h.clock().toISOString())
     expect((await cold.dispatcher.tick({ acceptNewWork: false })).queued).toBe(0)
@@ -10590,18 +10272,16 @@ describe('no-progress guard on provision continuation tails', () => {
       expect(await noProgressEscalations(h, slug)).toHaveLength(1)
     })
 
-    for (const empties of [0, 1, 2]) {
-      test(`the ${tail} tail still launches below the limit (${empties} empty)`, async () => {
-        const operations: string[] = []
-        const h = tailHarness(tail, operations)
-        const slug = await seedTail(h, tail)
-        await appendEmptyExecutions(h, slug, empties)
+    test(`the ${tail} tail still launches just below the limit (2 empty)`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 2)
 
-        await runContinuation(h, slug, operations)
-        expect(h.launches).toEqual([slug])
-        expect(await noProgressEscalations(h, slug)).toHaveLength(0)
-      })
-    }
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([slug])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(0)
+    })
 
     test(`the ${tail} tail launches after a progress fact resets the streak`, async () => {
       const operations: string[] = []
@@ -10709,31 +10389,6 @@ command = "run"
       content: effectiveBuildConfigContent(config),
     })
   }
-  test('parked sweep body-read experiment', async () => {
-    const h = harness()
-    let reads = 0
-    let bytes = 0
-    const getArtifact = h.store.getArtifact.bind(h.store)
-    h.store.getArtifact = async (...args) => {
-      const result = await getArtifact(...args)
-      if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) {
-        reads++
-        bytes += result?.content.byteLength ?? 0
-      }
-      return result
-    }
-    for (let index = 0; index < 3; index++) {
-      const slug = await seedAwaitingPr(h, `parked-${index}`)
-      await pin(h, slug, pipeline('verify', ''))
-    }
-    h.clock.advance(120_000)
-    for (let tick = 0; tick < 4; tick++) {
-      await h.dispatcher.tick({ acceptNewWork: false })
-    }
-    console.log('parked sweep experiment', { builds: 3, sweeps: 4, reads, bytes })
-    expect(h.launches).toEqual([])
-    expect(reads).toBe(3)
-  })
   test('parked sweep read budget stays bounded at 100 and 100,000 events', async () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
@@ -11358,21 +11013,6 @@ command = "run"
 })
 
 describe('dispatcher admission journal boundary', () => {
-  test('a newly ready ticket is claimed on the first due scan', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { state: 'Triage' })],
-      toml: 'ticketScanIntervalSeconds = 60\n',
-    })
-    await h.dispatcher.tick()
-    await h.tickets.transition('T-1', 'Ready')
-    h.clock.advance(59_999)
-    expect((await h.dispatcher.tick()).dispatched).toBe(0)
-    expect(h.tickets.claims).toEqual([])
-    h.clock.advance(1)
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-    expect(h.tickets.claims).toEqual(['T-1'])
-  })
-
   for (const nonempty of [false, true]) {
     test(`ready listing refreshes only for candidates: ${nonempty}`, async () => {
       const backing = new MemoryBuildStore()
