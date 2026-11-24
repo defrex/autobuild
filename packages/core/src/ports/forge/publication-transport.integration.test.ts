@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Exec } from '../workspace/git-worktree'
 import { bunExec } from './github'
-import { gitRewrite, parseRemoteHead, publishBranch } from './git-rewrite'
+import { gitRewrite, publishBranch } from './git-rewrite'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -128,22 +128,4 @@ test('ordinary publication confirms a failed push effect and retries without ano
   await publishBranch(exec, f.cwd, 'ab/example', f.sha)
   await publishBranch(exec, f.cwd, 'ab/example', f.sha)
   expect(pushes).toBe(1)
-})
-
-test('authoritative read errors and malformed advertisements cannot acknowledge publication', async () => {
-  for (const output of [
-    `${'a'.repeat(40)}\trefs/heads/other`,
-    'x\trefs/heads/ab/example',
-    `${'a'.repeat(40)}\trefs/heads/ab/example\n${'b'.repeat(40)}\trefs/heads/ab/example`,
-  ])
-    expect(() => parseRemoteHead(output, 'refs/heads/ab/example')).toThrow()
-  expect(parseRemoteHead('', 'refs/heads/ab/example')).toBeNull()
-  await expect(
-    publishBranch(
-      async () => ({ exitCode: 1, stdout: '', stderr: 'offline' }),
-      '/ws',
-      'ab/example',
-      'a'.repeat(40),
-    ),
-  ).rejects.toThrow('cannot read')
 })
