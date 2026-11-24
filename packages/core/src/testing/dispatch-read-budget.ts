@@ -1,5 +1,5 @@
 import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
-import { readRepositoryFacts } from '../store/reduced-reads'
+import { readBuildFacts, readRepositoryFacts } from '../store/reduced-reads'
 import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { catalogSnapshotName, loadReducerSnapshot } from '../store/snapshots'
@@ -10,7 +10,10 @@ import { createTerminalModeController } from '../cli/terminal-restore'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { WebModelHub } from '../web/hub'
 import { readOnlyStore } from '../web/read-only'
-import { projectRepositoryFrame, RepositoryFrameSource } from '../web/repository-source'
+import { OverviewFrameSource } from '../web/overview-source'
+import { projectRepositoryFrame } from '../web/repository-source'
+import { finishedOutcomeText } from '../cli/dashboard/vocabulary'
+import { measureStoreReads } from './reduced-read-budget'
 import type { WebServerStarter } from '../web/server'
 import { startDispatchWeb, type DispatchWeb } from '../cli/dispatch-web'
 import { abDispatch } from '../cli/dispatch'
@@ -481,6 +484,8 @@ export async function dispatchReadBudget(
     expect(metrics.rows).toBe(before.rows)
     expect(await store.getRepoHighWater(retentionRepo)).toBe(position)
   }
+  // Last: its 100,000 seeded builds would slow every section after it.
+  await webOverviewReadBudget(store, backing)
 }
 
 /** Viewer cold/idle reads must reuse canonical values even without a frontend checkpoint. */
@@ -715,35 +720,52 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
   }
 }
 
-/** Store methods whose cost grows with build count; `ab web`'s shell never calls them. */
-const BUILD_SCOPE_READS = new Set([
-  'listBuildsForRepo',
+/** Store methods that scan history: their cost grows with build count or log
+ * length. `ab web` never calls them. */
+const HISTORY_READS = new Set([
   'listBuilds',
-  'getRepoBuildDigests',
+  'listBuildsForRepo',
+  'listBuildsPage',
   'getEvents',
-  'getBuild',
-  'listStreams',
-  'getArtifact',
-  'getRepoArtifact',
+  'getRepoEvents',
+  'getRepoBuildDigests',
 ])
 
+/** The four targeted reads one visible build costs `ab web`, as labelled by
+ * `countingStore` with `slugs`. */
+const overviewBuildReads = (slug: string) => [
+  `getArtifact:${slug}`,
+  `getBuild:${slug}`,
+  `getReducerValue:build:${slug}`,
+  `listStreams:${slug}`,
+]
+
 /** Count every store call by name; reduced-value reads also by scope kind,
- * and with `reducers` by reducer name too. */
-function countingStore(store: BuildStore, reducers = false) {
+ * with `reducers` by reducer name too, and with `slugs` every build-scope
+ * call also by the build it names. */
+function countingStore(store: BuildStore, opts: { reducers?: boolean; slugs?: boolean } = {}) {
   const calls: string[] = []
+  const label = (name: string, args: unknown[]): string => {
+    const scope = args[0] as string | { kind?: string; slug?: string; build?: string }
+    if (name === 'getReducerValue') {
+      const kind = (scope as { kind?: string }).kind
+      const slug = opts.slugs && kind === 'build' ? `:${(scope as { slug: string }).slug}` : ''
+      const reducer = opts.reducers ? `:${(args[1] as { reducer?: string }).reducer}` : ''
+      return `getReducerValue:${kind}${reducer}${slug}`
+    }
+    if (!opts.slugs) return name
+    if (name === 'listStreams' && typeof scope === 'object' && scope.build !== undefined)
+      return `${name}:${scope.build}`
+    if (name === 'getBuild' || name === 'getArtifact' || name === 'getEvents')
+      return `${name}:${String(scope)}`
+    return name
+  }
   const proxy = new Proxy(store, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver)
       if (typeof value !== 'function') return value
       return (...args: unknown[]) => {
-        const name = String(key)
-        calls.push(
-          name === 'getReducerValue'
-            ? `getReducerValue:${(args[0] as { kind?: string }).kind}${
-                reducers ? `:${(args[1] as { reducer?: string }).reducer}` : ''
-              }`
-            : name,
-        )
+        calls.push(label(String(key), args))
         return Reflect.apply(value, target, args)
       }
     },
@@ -759,9 +781,11 @@ function countingStore(store: BuildStore, reducers = false) {
 /**
  * `ab web`'s shared refresh loop (RFC 0007 §9.3): with no browser connected
  * it reads nothing; with one or ten connected, each tick reads one change
- * position while nothing changes; and the cost is the same at 100 and
- * 100,000 repository events and at 2 and 200 builds, because the repository
- * frame never makes a build-scope read.
+ * position while nothing changes; the idle cost is the same at 100 and
+ * 100,000 repository events and at 2 and 200 builds; a change to one build
+ * reads that build only; and no tick ever scans history. The overview's
+ * 100,000-build axis is `webOverviewReadBudget`, which `dispatchReadBudget`
+ * runs last.
  */
 async function webReadBudget(
   store: BuildStore,
@@ -799,7 +823,7 @@ async function webReadBudget(
         if (configured) {
           const config = await backing.putRepoArtifact(repo, {
             kind: 'config',
-            content: JSON.stringify({ capacity: 4 }),
+            content: JSON.stringify(OVERVIEW_BUDGET_CONFIG),
           })
           await backing.appendRepo(repo, {
             actor: DISPATCHER,
@@ -827,10 +851,10 @@ async function webReadBudget(
           }
           const frames: string[][] = []
           for (const subscribers of [1, 10]) {
-            const counter = countingStore(store)
+            const counter = countingStore(store, { slugs: true })
             const time = new FakeRefreshScheduler()
             const hub = new WebModelHub({
-              source: new RepositoryFrameSource(readOnlyStore(counter.proxy), repo),
+              source: new OverviewFrameSource(readOnlyStore(counter.proxy), repo),
               networkReads: store.networkReads === true,
               scheduler: time,
             })
@@ -858,10 +882,12 @@ async function webReadBudget(
             else expect(idle).toEqual(expected)
 
             // 6. Build activity moves the position; the next tick reads at most
-            // one saved repository value and no journal rows.
+            // one saved repository value, no journal rows and, with a config,
+            // that build's targeted reads only.
             counter.calls.length = 0
             slices?.reset()
-            await backing.append(`web-budget-${length}-${configured ? 'c' : 'u'}-0`, {
+            const touched = `web-budget-${length}-${configured ? 'c' : 'u'}-0`
+            await backing.append(touched, {
               actor: KERNEL,
               type: 'runner.attached',
               payload: { instance: 'runner-again', host: 'budget', resumedFromSeq: 0 },
@@ -871,6 +897,22 @@ async function webReadBudget(
             const moved = counter.histogram()
             expect(moved.getRepo ?? 0).toBeLessThanOrEqual(1)
             expect(moved['getReducerValue:repo'] ?? 0).toBeLessThanOrEqual(1)
+            const {
+              getRepoChangePosition: _position,
+              getRepo: _repo,
+              'getReducerValue:repo': _facts,
+              ...buildScope
+            } = moved
+            expect(buildScope).toEqual(
+              configured
+                ? Object.fromEntries(
+                    ['listBuildsChangedSince', ...overviewBuildReads(touched)].map((name) => [
+                      name,
+                      1,
+                    ]),
+                  )
+                : {},
+            )
             expect(slices?.rows() ?? 0).toBe(0)
             expect(rawCalls).toBe(0)
             // One appended repository event costs one journal row.
@@ -889,11 +931,8 @@ async function webReadBudget(
             expect(changed.getRepo).toBe(1)
             expect(changed['getReducerValue:repo']).toBe(1)
 
-            // 3. Never a build-scope read, and every read goes through the guard.
-            for (const name of counter.calls) {
-              expect(BUILD_SCOPE_READS.has(name)).toBe(false)
-              expect(name.startsWith('getReducerValue:') ? name : 'repo').toMatch(/repo$/u)
-            }
+            // 3. Never a history scan, and every read goes through the guard.
+            for (const name of counter.calls) expect(HISTORY_READS.has(name)).toBe(false)
             // Every subscriber received the same frames.
             for (const list of received) expect(list).toEqual(received[0]!)
             frames.push(received[0]!)
@@ -918,6 +957,189 @@ async function webReadBudget(
   }
 }
 
+/** A minimal effective config the dashboard can project rows against. */
+const OVERVIEW_BUDGET_CONFIG = {
+  capacity: 4,
+  roles: { default: { runtime: 'claude' } },
+  tickets: { source: 'file', readyState: 'ready' },
+}
+
+/**
+ * `ab web`'s overview costs the same at 100 and 100,000 builds (5 live, the
+ * rest finished): a fresh process reads the `buildRoster` rollup and only the
+ * live builds; an idle poll reads the change position; a change to one build
+ * reads that build only, plus one roster read when the build starts or
+ * finishes, including one created and finished between two polls; and no
+ * read scans history. Row metrics need a memory backing, so other backings
+ * skip it.
+ */
+async function webOverviewReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  if (!(backing instanceof MemoryBuildStore)) return
+  type Phase = { calls: Record<string, number>; rows: number; repoRows: number }
+  const results: Record<number, Record<string, Phase>> = {}
+  // A later completion than every seeded one, so it sorts first.
+  const later = () => new Promise((resolve) => setTimeout(resolve, 2))
+  for (const n of [100, 100_000]) {
+    const repo = `/web-overview-budget-${n}`
+    // Slugs are store-wide; histograms drop this prefix so sizes compare.
+    const prefix = `overview-${n}-`
+    const live = (i: number) => `${prefix}live-${i}`
+    await backing.ensureRepo(repo)
+    const create = (slug: string) =>
+      backing.createBuild({
+        slug,
+        repo,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { ticket: { source: 'file', id: slug, title: slug }, repo, baseBranch: 'main' },
+        },
+      })
+    const complete = (slug: string, outcome: 'merged' | 'abandoned' = 'merged') =>
+      backing.append(slug, { actor: DISPATCHER, type: 'build.completed', payload: { outcome } })
+    for (let i = 0; i < n - 5; i++) {
+      const slug = `${prefix}done-${String(i).padStart(6, '0')}`
+      await create(slug)
+      // Every fourth build aborts, then finishes its cleanup.
+      if (i % 4 === 3) {
+        await backing.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+        await complete(slug, 'abandoned')
+      } else await complete(slug)
+    }
+    for (let i = 0; i < 5; i++) await create(live(i))
+    const config = await backing.putRepoArtifact(repo, {
+      kind: 'config',
+      content: JSON.stringify(OVERVIEW_BUDGET_CONFIG),
+    })
+    await backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'web-overview-budget',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: config.kind, rev: config.revision },
+      },
+    })
+    // The canonical materializations happen once, before any measured read.
+    await readRepositoryFacts(store, repo)
+    await store.getReducerValue({ kind: 'rollup', repo }, { reducer: 'buildRoster' })
+    for (let i = 0; i < 5; i++) await readBuildFacts(store, live(i))
+
+    const counter = countingStore(store, { slugs: true })
+    // A fresh process: no state but the saved values.
+    const source = new OverviewFrameSource(readOnlyStore(counter.proxy), repo)
+    const phases: Record<string, Phase> = {}
+    let frame!: Awaited<ReturnType<OverviewFrameSource['read']>>['frame']
+    const measure = async (phase: string) => {
+      counter.calls.length = 0
+      const metrics = await measureStoreReads(backing, async () => {
+        frame = (await source.read()).frame
+      })
+      for (const name of counter.calls) expect(HISTORY_READS.has(name)).toBe(false)
+      const calls = Object.fromEntries(
+        Object.entries(counter.histogram()).map(([name, count]) => [
+          name.replaceAll(prefix, ''),
+          count,
+        ]),
+      )
+      phases[phase] = { calls, rows: metrics.rows, repoRows: metrics.repoRows }
+      return phases[phase]!
+    }
+    const buildScope = (calls: Record<string, number>) =>
+      Object.fromEntries(
+        Object.entries(calls).filter(
+          ([name]) =>
+            name.includes(':') &&
+            name !== 'getReducerValue:repo' &&
+            name !== 'getReducerValue:rollup',
+        ),
+      )
+    // Expected reads name builds without the prefix.
+    const reads = (...slugs: string[]) =>
+      Object.fromEntries(
+        slugs
+          .map((slug) => slug.replace(prefix, ''))
+          .flatMap(overviewBuildReads)
+          .map((name) => [name, 1]),
+      )
+    const named = (calls: Record<string, number>, slug: string) =>
+      Object.keys(buildScope(calls)).every((name) => name.endsWith(`:${slug.replace(prefix, '')}`))
+
+    // (a) The first read: the roster plus the five live builds.
+    const first = await measure('first')
+    expect(first.calls['getReducerValue:rollup']).toBe(1)
+    expect(buildScope(first.calls)).toEqual(reads(...[0, 1, 2, 3, 4].map(live)))
+    expect(first.rows).toBe(0)
+    expect(first.repoRows).toBe(0)
+    expect(frame.overview!.active.length + frame.overview!.queued.length).toBe(5)
+    expect(frame.overview!.finished).toHaveLength(10)
+
+    // (b) Idle: the change position only.
+    expect(await measure('idle')).toEqual({
+      calls: { getRepoChangePosition: 1 },
+      rows: 0,
+      repoRows: 0,
+    })
+
+    // (c) One event on a live build: that build's reads and its one new row.
+    await backing.append(live(0), {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner-0', host: 'budget', resumedFromSeq: 0 },
+    })
+    const event = await measure('event')
+    expect(buildScope(event.calls)).toEqual(reads(live(0)))
+    expect(event.calls['getReducerValue:rollup']).toBeUndefined()
+    expect(event.rows).toBe(1)
+
+    // (d) A live build completes: its reads plus one roster read.
+    await later()
+    await complete(live(1))
+    const completion = await measure('completion')
+    expect(named(completion.calls, live(1))).toBe(true)
+    expect(completion.calls['getReducerValue:rollup']).toBe(1)
+    const shown = () =>
+      [...frame.overview!.active, ...frame.overview!.queued].map((row) => row.slug)
+    expect(shown()).not.toContain(live(1))
+    expect(frame.overview!.finished[0]).toMatchObject({
+      slug: live(1),
+      word: finishedOutcomeText('merged').word,
+    })
+
+    // (e) A new build: its reads plus one roster read.
+    await create(`${prefix}new-0`)
+    const created = await measure('created')
+    expect(buildScope(created.calls)).toEqual(reads(`${prefix}new-0`))
+    expect(created.calls['getReducerValue:rollup']).toBe(1)
+    expect(shown()).toContain(`${prefix}new-0`)
+
+    // (f) A build created and completed between two reads.
+    await later()
+    const blinked = `${prefix}blink-0`
+    await create(blinked)
+    await complete(blinked)
+    const blink = await measure('blink')
+    expect(Object.keys(buildScope(blink.calls)).every((name) => name.endsWith(':blink-0'))).toBe(
+      true,
+    )
+    expect(blink.calls['getReducerValue:rollup']).toBe(1)
+    expect(frame.overview!.finished[0]).toMatchObject({
+      slug: blinked,
+      word: finishedOutcomeText('merged').word,
+    })
+    expect(shown()).not.toContain(blinked)
+    expect(await measure('after')).toEqual({
+      calls: { getRepoChangePosition: 1 },
+      rows: 0,
+      repoRows: 0,
+    })
+    results[n] = phases
+  }
+  expect(results[100_000]).toEqual(results[100]!)
+}
+
 /** Subscribers to a push hub: one from the start, ten more joining mid-run. */
 class WebSubscribers {
   readonly early: string[] = []
@@ -933,7 +1155,7 @@ class WebSubscribers {
     }
   }
   /** Every subscriber saw the same frames from when it joined, ending at the
-   * frame `ab web` shows for the repository's current facts. */
+   * repository frame (header and notice) for the repository's current facts. */
   async expectConsistent(store: BuildStore, repo: string): Promise<void> {
     expect(this.early.length).toBeGreaterThan(0)
     expect(this.late).toHaveLength(10)
@@ -964,7 +1186,8 @@ interface ParityContext {
  * the same script runs twice on fresh, identical repositories, once without
  * the web UI and once with one subscriber from the start and ten joining
  * mid-run. The store-call histograms and journal rows must be equal, and the
- * frame the web serves must be the one `ab web` shows.
+ * frame the web serves must be the repository frame for the repository's
+ * facts: `ab dispatch --web` pushes the header and notice, not the overview.
  */
 async function webPresentationParity(store: BuildStore, backing: BuildStore): Promise<void> {
   const slices = countJournalSlices(backing)
@@ -980,7 +1203,7 @@ async function webPresentationParity(store: BuildStore, backing: BuildStore): Pr
       await prepare(repo)
       // The one canonical materialization precedes either run.
       await readRepositoryFacts(store, repo)
-      const counter = countingStore(store, true)
+      const counter = countingStore(store, { reducers: true })
       let subscribers: WebSubscribers | undefined
       const start: WebServerStarter = async (opts) => {
         subscribers = new WebSubscribers(opts.hub)
