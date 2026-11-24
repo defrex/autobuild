@@ -25,7 +25,7 @@ import { sequentialIds } from '../ids'
 import { LocalGitForge } from '../ports/forge/local-git'
 import { bunExec } from '../ports/forge/github'
 import { leafRestackLog } from '../kernel/generators/leaf-restack-log'
-import { BuildRunner, selectVerifyDiffBase } from './build-runner'
+import { BuildRunner, SetupFailureError, selectVerifyDiffBase } from './build-runner'
 import { readBuildFacts } from '../store/reduced-reads'
 import { headPathsFor } from '../kernel/head-paths'
 import { settlePendingPublication } from '../cli/publication-settlement'
@@ -893,4 +893,162 @@ test('trusted automatic publication waits for both session and guest settlement 
   expect((await store.getEvents(BUILD)).filter((e) => e.type === 'restack.completed')).toHaveLength(
     1,
   )
+})
+
+/** A leaf prepared by `[commands].setup` before `main` changes `manifest`,
+ * modelling a target that brings new dependencies. The check passes only when
+ * setup prepared the current tree. */
+async function dependencyRestackFixture(setup: string) {
+  const cwd = await mkdtemp(join(tmpdir(), 'ab-leaf-setup-'))
+  const git = async (args: string[]) => {
+    const result = await bunExec(['git', ...args], { cwd })
+    if (result.exitCode !== 0) throw new Error(result.stderr)
+    return result.stdout.trim()
+  }
+  const file = async (name: string, text: string) => {
+    await writeFile(join(cwd, name), text)
+    await git(['add', name])
+    await git(['commit', '-qm', name])
+    return git(['rev-parse', 'HEAD'])
+  }
+  const toml = `
+[roles.default]
+runtime = "scripted"
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+setup = ${JSON.stringify(`${setup} && echo run >> .setup-count`)}
+test = "cmp manifest .prepared"
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "test"
+`
+  await git(['init', '-q', '-b', 'main'])
+  await git(['config', 'user.name', 'Test'])
+  await git(['config', 'user.email', 'test@example.invalid'])
+  await git(['config', 'commit.gpgsign', 'false'])
+  await file('.gitignore', '.prepared\n.setup-count\n')
+  await file('manifest', 'a\n')
+  await file('autobuild.toml', toml)
+  const base = await file('base', 'base\n')
+  await git(['checkout', '-qb', BRANCH])
+  const oldHead = await file('feature', 'leaf\n')
+  await git(['checkout', '-q', 'main'])
+  const target = await file('manifest', 'a\nb\n')
+  await git(['checkout', '-q', BRANCH])
+  const store = await seedStore()
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'git-worktree',
+      remote: false,
+      ref: cwd,
+      branch: BRANCH,
+      base: { source: 'remote', sha: base },
+    },
+  })
+  for (const event of leafRestackLog().slice(2, 6)) {
+    const payload =
+      event.type === 'implement.completed'
+        ? { ...event.payload, commits: { base, head: oldHead } }
+        : event.payload
+    await store.append(BUILD, { actor: event.actor, type: event.type, payload })
+  }
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: target },
+  })
+  const deps = {
+    store: store.scopeBuild(BUILD),
+    config: parseConfig(toml),
+    runtimes: {
+      scripted: {
+        runner: new ScriptedAgentRunner({ script: async () => defaultTurnResult() }),
+        servesModels: [],
+      },
+    },
+    workspacePath: cwd,
+    branch: BRANCH,
+    slug: BUILD,
+    exec: bunExec,
+    forge: new LocalGitForge({ exec: bunExec, repoRoot: cwd }),
+    ids: sequentialIds(),
+    clock: () => new Date(),
+    instance: 'test',
+    host: 'test',
+    opts: { scheduleHeartbeat: () => () => {} },
+  }
+  const read = (name: string) => Bun.file(join(cwd, name)).text()
+  return { cwd, store, deps, target, read }
+}
+
+test('a dependency-changing restack reruns setup before verification', async () => {
+  const { store, deps, read } = await dependencyRestackFixture('cp manifest .prepared')
+  const runner = new BuildRunner(deps)
+  await runner.attach()
+  expect(await read('.prepared')).toBe('a\n')
+  expect(await runner.step()).toMatchObject({ kind: 'restack' })
+  expect((await readBuildFacts(store, BUILD)).value.log.restack.completed).toBeDefined()
+  expect(await runner.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
+  expect(await read('.prepared')).toBe('a\nb\n')
+  expect(await read('.setup-count')).toBe('run\nrun\n')
+  const events = await store.getEvents(BUILD)
+  expect(events.find((e) => e.type === 'verify.completed')?.payload).toMatchObject({
+    step: 'unit',
+    outcome: 'pass',
+  })
+  expect(events.filter((e) => e.type === 'runner.setup-failed')).toHaveLength(0)
+})
+
+test('a failing post-restack setup blocks verification until a new runner prepares the restacked tree', async () => {
+  const flagDir = await mkdtemp(join(tmpdir(), 'ab-leaf-setup-flag-'))
+  const flag = join(flagDir, 'fail')
+  const { store, deps, read } = await dependencyRestackFixture(
+    `test ! -e ${JSON.stringify(flag)} && cp manifest .prepared`,
+  )
+  // The runner prepares the old tree; its rerun after the restack fails.
+  const prepared = new BuildRunner(deps)
+  await prepared.attach()
+  await writeFile(flag, '')
+  expect(await prepared.step()).toMatchObject({ kind: 'restack' })
+  await expect(prepared.step()).rejects.toBeInstanceOf(SetupFailureError)
+  let events = await store.getEvents(BUILD)
+  const restacked = events.find((e) => e.type === 'restack.completed')!.seq
+  const failures = () =>
+    events.filter((e) => e.type === 'runner.setup-failed').map((e) => e.payload.attempt)
+  expect(failures().at(-1)).toBe(1)
+  expect((await readBuildFacts(store, BUILD)).value.state.setupFailure).toBeDefined()
+  const startedAfter = () =>
+    events.filter(
+      (e) => e.seq > restacked && (e.type === 'verify.started' || e.type === 'verify.completed'),
+    )
+  expect(startedAfter()).toHaveLength(0)
+
+  // A retry runs against the restacked tree; it never inherits old success.
+  const attachedBefore = events.filter((e) => e.type === 'runner.attached').length
+  await expect(new BuildRunner(deps).attach()).rejects.toBeInstanceOf(SetupFailureError)
+  events = await store.getEvents(BUILD)
+  expect(failures().at(-1)).toBe(2)
+  expect(events.filter((e) => e.type === 'runner.attached')).toHaveLength(attachedBefore)
+  expect(startedAfter()).toHaveLength(0)
+
+  await rm(flag)
+  const recovered = new BuildRunner(deps)
+  await recovered.attach()
+  events = await store.getEvents(BUILD)
+  expect(events.findLast((e) => e.type === 'runner.attached')?.payload.resumedFromSeq).toBe(
+    events.findLast((e) => e.type === 'runner.setup-failed')!.seq,
+  )
+  expect((await readBuildFacts(store, BUILD)).value.state.setupFailure).toBeUndefined()
+  expect(await read('.prepared')).toBe('a\nb\n')
+  expect(await recovered.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
+  events = await store.getEvents(BUILD)
+  expect(events.find((e) => e.type === 'verify.completed')?.payload).toMatchObject({
+    outcome: 'pass',
+  })
 })
