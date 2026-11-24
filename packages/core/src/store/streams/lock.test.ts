@@ -8,35 +8,34 @@ import { describe, expect, test } from 'bun:test'
 import { StreamLocks } from './lock'
 
 describe('StreamLocks', () => {
-  test('concurrent holders on one key never overlap (strict mutual exclusion)', async () => {
-    const locks = new StreamLocks()
-    let depth = 0
-    let overlaps = 0
-    const holder = () =>
-      locks.run('stream-a', async () => {
-        depth += 1
-        if (depth > 1) overlaps += 1
-        // A suspension point wide enough for any other holder to intrude if
-        // the mutex failed — the overlap count, not timing, is the assertion.
-        await new Promise<void>((resolve) => setTimeout(resolve, 5))
-        depth -= 1
-      })
-    await Promise.all(Array.from({ length: 6 }, holder))
-    expect(overlaps).toBe(0)
-    expect(depth).toBe(0)
-  })
-
-  test('holders run in FIFO launch order', async () => {
+  test('concurrent holders exclude each other and enter in FIFO launch order', async () => {
     const locks = new StreamLocks()
     const order: number[] = []
-    await Promise.all(
-      Array.from({ length: 5 }, (_, index) =>
-        locks.run('stream-a', async () => {
-          order.push(index)
-        }),
-      ),
+    let release!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const firstEntered = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const first = locks.run('stream-a', async () => {
+      order.push(0)
+      entered()
+      await gate
+    })
+    await firstEntered
+    const queued = Array.from({ length: 5 }, (_, i) =>
+      locks.run('stream-a', () => {
+        order.push(i + 1)
+      }),
     )
-    expect(order).toEqual([0, 1, 2, 3, 4])
+    // Settle queued continuations while the first holder remains suspended.
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(order).toEqual([0])
+    release()
+    await Promise.all([first, ...queued])
+    expect(order).toEqual([0, 1, 2, 3, 4, 5])
   })
 
   test('a throwing holder releases the key and does not poison later holders', async () => {
