@@ -56,11 +56,17 @@ import type {
 import { SQL } from 'bun'
 import {
   BuildFeedValidationError,
+  buildPageOrder,
   decodeBuildPageCursor,
   encodeBuildPageCursor,
+  hasBuildPageFilters,
+  requireBuildPageCursorOrder,
+  resolveBuildPageFilters,
   parseChangePosition,
   resolveBuildPageLimit,
   type BuildPage,
+  type BuildPageCursor,
+  type BuildPageFilters,
   type BuildPageOptions,
   type ChangedBuilds,
 } from '@defrex/autobuild/store-adapter'
@@ -159,6 +165,56 @@ import {
 import type { ReducerSnapshot, SnapshotScope } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 import { PlanRetryRunner, type Exec, type Row } from './retry'
+
+/**
+ * A filtered page's candidate statement: one backward range scan of the
+ * `build_listing_facts` index for the filter class and order, at most `limit`
+ * entries, joined to `builds` by primary key.
+ *
+ * The class index leads with the class's columns (`merged`, then `node`), and
+ * the statement both bounds and orders by the row `(class columns, key,
+ * slug)` instead of testing the columns for equality. The planner therefore
+ * sees no constant to drop from the order, and every other index would need a
+ * full sort to produce it, so no plan can walk a wider index and discard
+ * non-matching rows, however the classes are distributed over time. The lower
+ * bound is `activeSince` or `-infinity`; the upper bound is the cursor or
+ * `infinity`. The cursor keeps the ordering column's exact text.
+ */
+export function filteredBuildPageQuery(
+  repo: string,
+  limit: number,
+  filters: BuildPageFilters,
+  cursor?: BuildPageCursor,
+): { sql: string; params: (string | number)[] } {
+  const column = buildPageOrder(filters) === 'updated' ? 'updated_at' : 'created_at'
+  const classColumns: string[] = []
+  const classValues: string[] = []
+  if (filters.outcome === 'merged') {
+    classColumns.push('f.merged')
+    classValues.push('true')
+  }
+  if (filters.kind !== undefined) {
+    classColumns.push('f.node')
+    classValues.push(String(filters.kind === 'node'))
+  }
+  const key = [...classColumns, `f.${column}`, 'f.slug'].join(', ')
+  const bound = (at: string, slug: string) => [...classValues, at, slug].join(', ')
+  return {
+    sql: `SELECT b.*, f.${column}::text AS cursor_at, f.${column} AS page_key
+      FROM build_listing_facts f JOIN builds b ON b.slug = f.slug
+      WHERE f.repo = $1 AND (${key}) < (${bound('$2::timestamptz', '$3')})
+        AND (${key}) >= (${bound('$5::timestamptz', "''")})
+      ORDER BY ${[...classColumns, `f.${column}`, 'f.slug'].map((name) => `${name} DESC`).join(', ')}
+      LIMIT $4`,
+    params: [
+      repo,
+      cursor?.at ?? 'infinity',
+      cursor?.slug ?? '',
+      limit,
+      filters.activeSince ?? '-infinity',
+    ],
+  }
+}
 
 /** `timestamptz::text` under the ISO DateStyle, the page cursor's sort key. */
 const POSTGRES_TIMESTAMP_TEXT =
@@ -383,9 +439,15 @@ export class PostgresBuildStore implements BuildStore {
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
     const limit = resolveBuildPageLimit(opts.limit)
-    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
+    const filters = resolveBuildPageFilters(opts)
+    const cursor =
+      opts.cursor === undefined
+        ? undefined
+        : requireBuildPageCursorOrder(decodeBuildPageCursor(opts.cursor), filters)
     if (cursor && !POSTGRES_TIMESTAMP_TEXT.test(cursor.at))
       throw new BuildFeedValidationError('malformed build page cursor')
+    if (hasBuildPageFilters(filters))
+      return this.listFilteredBuildsPage(repo, limit, filters, cursor)
     // The first page starts below every real key, so both pages are one
     // backward range scan of builds_repo_created_slug, limit + 1 rows; the
     // extra row decides `next`. The cursor keeps created_at's exact text, so
@@ -416,7 +478,45 @@ export class PostgresBuildStore implements BuildStore {
         builds: page.map((row) => this.projectedRecord(row)),
         next:
           rows.length > limit && last
-            ? encodeBuildPageCursor({ at: String(last.cursor_at), slug: String(last.slug) })
+            ? encodeBuildPageCursor({
+                order: 'created',
+                at: String(last.cursor_at),
+                slug: String(last.slug),
+              })
+            : null,
+      }
+    })
+  }
+
+  private async listFilteredBuildsPage(
+    repo: string,
+    limit: number,
+    filters: BuildPageFilters,
+    cursor: BuildPageCursor | undefined,
+  ): Promise<BuildPage> {
+    const order = buildPageOrder(filters)
+    const { sql: candidates, params } = filteredBuildPageQuery(repo, limit + 1, filters, cursor)
+    return this.run(async (q) => {
+      const rows: Row[] = !(await this.hasReadableTicketSchema(q))
+        ? await q.unsafe(candidates, params)
+        : await q.unsafe(
+            `SELECT p.*, t.readable_id AS projected_ticket_id FROM (${candidates}) p
+            LEFT JOIN LATERAL (
+              SELECT readable_id FROM ab_tickets
+              WHERE p.ticket->>'source' = 'hosted' AND repo = p.repo
+                AND (id = p.ticket->>'id' OR lower(readable_id) = lower(p.ticket->>'id'))
+              LIMIT 1
+            ) t ON true
+            ORDER BY p.page_key DESC, p.slug DESC`,
+            params,
+          )
+      const page = rows.slice(0, limit)
+      const last = page.at(-1)
+      return {
+        builds: page.map((row) => this.projectedRecord(row)),
+        next:
+          rows.length > limit && last
+            ? encodeBuildPageCursor({ order, at: String(last.cursor_at), slug: String(last.slug) })
             : null,
       }
     })
