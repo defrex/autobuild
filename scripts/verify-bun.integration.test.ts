@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { lstatSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -31,9 +31,10 @@ async function fixture(current = 'old', mode = 'ok') {
     printf '%s\\n' "$@" >> "$HOME/npm-args"
     ${mode === 'fail' ? 'exit 23' : ''}
     sleep 0.1
-    mkdir -p "$3/node_modules/.bin"
-    printf '#!/bin/sh\\necho ${mode === 'wrong' ? 'wrong' : version}\\n' > "$3/node_modules/.bin/bun"
-    chmod +x "$3/node_modules/.bin/bun"
+    mkdir -p "$3/node_modules/bun/bin" "$3/node_modules/.bin"
+    printf '#!/bin/sh\\necho ${mode === 'wrong' ? 'wrong' : version}\\n' > "$3/node_modules/bun/bin/bun.exe"
+    chmod +x "$3/node_modules/bun/bin/bun.exe"
+    ln -sfn ../bun/bin/bun.exe "$3/node_modules/.bin/bun"
   `,
   )
   const env = { ...process.env, HOME: root, PATH: `${bin}:/usr/bin:/bin` }
@@ -88,7 +89,15 @@ test('cold installation is serialized, cached, and selects descendant Bun', asyn
       throwIfNoEntry: false,
     }),
   ).toBeUndefined()
-  expect((await run(['bun', '--version'])).code).toBe(0)
+  // npm names the binary bun.exe behind .bin/bun; Bun reports the resolved
+  // bun.exe as process.execPath, so a PATH built from its directory needs bun.
+  expect(await readlink(join(cache, 'node_modules/bun/bin/bun'))).toBe('bun.exe')
+  const execPathDir = await run([
+    'bash',
+    '-c',
+    'd=$(dirname "$(readlink -f "$(command -v bun)")"); PATH=$d bun --version',
+  ])
+  expect(execPathDir).toMatchObject({ code: 0, stdout: `${version}\n` })
   expect(await readFile(join(root, 'npm-args'), 'utf8')).toBe(args)
   const forwarded = await run([
     'bash',
@@ -98,6 +107,21 @@ test('cold installation is serialized, cached, and selects descendant Bun', asyn
     'spaces $ and *',
   ])
   expect(forwarded).toMatchObject({ code: 17, stdout: 'spaces $ and *' })
+})
+
+test('existing cache without the bun sibling is repaired without reinstalling', async () => {
+  const { root, run } = await fixture()
+  const cache = join(root, '.cache/autobuild-repository-verify-bun')
+  const exe = join(cache, 'node_modules/bun/bin/bun.exe')
+  await mkdir(join(cache, 'node_modules/.bin'), { recursive: true })
+  await mkdir(join(cache, 'node_modules/bun/bin'), { recursive: true })
+  await writeFile(exe, `#!/bin/sh\necho ${version}\n`)
+  await chmod(exe, 0o755)
+  await symlink('../bun/bin/bun.exe', join(cache, 'node_modules/.bin/bun'))
+  expect(await run(['bun', '--version'])).toMatchObject({ code: 0, stdout: `${version}\n` })
+  expect(await Bun.file(join(root, 'npm-args')).exists()).toBe(false)
+  expect(await readlink(join(cache, 'node_modules/bun/bin/bun'))).toBe('bun.exe')
+  expect(lstatSync(join(cache, 'install.lock.link'), { throwIfNoEntry: false })).toBeUndefined()
 })
 
 for (const mode of ['fail', 'wrong']) {
