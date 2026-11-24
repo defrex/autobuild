@@ -609,6 +609,7 @@ describe('runCli — read-only status routing', () => {
       operator: { presence: 'loaded', registrations: [] },
       sandboxes: [],
       upgradeStatus: {},
+      dispatcherRunning: false,
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],
       hooks: [],
