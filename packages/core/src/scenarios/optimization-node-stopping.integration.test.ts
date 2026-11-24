@@ -325,49 +325,22 @@ test('drain mode lets a running attempt finish and cancels a queued one', async 
     await tick(h)
 
     expect(ofType(await h.events(a1.slug), 'build.abort-requested')).toHaveLength(0)
-    expect(ofType(await h.events(a2.slug), 'build.abort-requested')).toHaveLength(1)
+    // Queued, so cancelled even in drain mode, naming the stop's cause and mode.
+    expect(
+      ofType(await h.events(a2.slug), 'build.abort-requested').map((e) => e.payload.reason),
+    ).toEqual([`optimization node ${node} stopped (operator, drain)`])
     expect(ofType(await h.events(a2.slug), 'build.aborted')).toHaveLength(1)
     const state = reduceBuild(await h.events(node))
     expect(state.optimization?.inFlight.map((a) => a.ticket.id)).toEqual(['A1'])
-    expect(
-      ofType(await h.events(node), 'attempt.settled').map((e) => e.payload.attempt.proposal),
-    ).toEqual(['p-A2'])
+    expect(ofType(await h.events(node), 'attempt.settled').map((e) => e.payload)).toEqual([
+      expect.objectContaining({
+        attempt: expect.objectContaining({ proposal: 'p-A2', build: a2.slug }),
+        outcome: 'stopped',
+      }),
+    ])
     await expect(
       controlBuild({ store: h.store, repo: h.origin, slug: node, action: { kind: 'land' } }),
     ).rejects.toThrow('attempts still in flight: A1')
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
-
-test('a recorded exhausted stop is enforced with the same modes', async (makeHarness) => {
-  const h = await makeHarness({
-    localGitForge: true,
-    configToml: WITH_REJECTED,
-    handlers: happyHandlers(),
-    tickets: [optimizationNode()],
-  })
-  try {
-    const node = await openNode(h)
-    await propose(h, node, ['A1'])
-    h.tickets.add(attemptTicket('A1'))
-    await tick(h)
-    const a1 = (await buildFor(h, 'A1'))!
-    await h.store.append(node, {
-      actor: DISPATCHER,
-      type: 'optimization.stopped',
-      payload: { cause: 'exhausted', mode: 'drain' },
-    })
-    await tick(h)
-    await tick(h)
-    // Queued, so cancelled even in drain mode.
-    expect(ofType(await h.events(a1.slug), 'build.abort-requested')[0]?.payload.reason).toBe(
-      `optimization node ${node} stopped (exhausted, drain)`,
-    )
-    expect(ofType(await h.events(node), 'attempt.settled')[0]?.payload).toMatchObject({
-      attempt: { proposal: 'p-A1', build: a1.slug },
-      outcome: 'stopped',
-    })
   } finally {
     await h.cleanup()
   }
