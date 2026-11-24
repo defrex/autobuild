@@ -57,6 +57,9 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
       // construction site alike) has already rejected anything else.
       return new GitWorktreeProvider({
         root: resolve(opts.worktreeRoot),
+        ...(opts.isolatedWorktreeRoot !== undefined
+          ? { isolatedRoot: opts.isolatedWorktreeRoot }
+          : {}),
         sandboxRoot:
           opts.sandboxRoot ?? resolve(join(opts.worktreeRoot, '..', 'orchestrator-sandboxes')),
         setupCommand: opts.sandboxSetupCommand,
