@@ -463,3 +463,137 @@ describe('frame tiling under the artifact ceiling', () => {
     120_000,
   )
 })
+
+test.skipIf(!chromiumBinary())(
+  'landing paint rejection retries fresh shots and never publishes incomplete evidence',
+  async () => {
+    const { decodePng, encodePng } = await import('./website-capture-png')
+    const files = { ...(await buildFiles()) }
+    const frame = { ...WEBSITE_FRAMES[0]!, motion: 'reduce' as const }
+    for (const exhaust of [false, true]) {
+      const outputDir = scratchDir(`paint-${exhaust}`)
+      let shots = 0
+      const promise = capture({
+        files,
+        frames: [frame],
+        includeMotionSamples: false,
+        outputDir,
+        screenshotBytes(bytes, attempt) {
+          shots++
+          if (attempt && !exhaust) return bytes
+          const image = decodePng(bytes)
+          // Simulate an unpainted header while leaving the DOM and other pixels intact.
+          for (const row of image.rows.slice(0, 100)) row.fill(0)
+          return encodePng(image)
+        },
+      })
+      if (exhaust) {
+        await expect(promise).rejects.toThrow('incomplete paint')
+        expect(existsSync(join(outputDir, 'inventory.json'))).toBe(false)
+        expect(existsSync(join(outputDir, 'desktop.png'))).toBe(false)
+        expect(await Bun.file(join(outputDir, 'verify-report.md')).text()).toContain(
+          'classification: capture-error',
+        )
+      } else {
+        await promise
+        expect(existsSync(join(outputDir, 'inventory.json'))).toBe(true)
+        expect(existsSync(join(outputDir, 'desktop.png'))).toBe(true)
+      }
+      expect(shots).toBe(2)
+      const history = await Bun.file(join(outputDir, 'desktop-segment-1-of-1-attempts.json')).json()
+      expect(history.map((entry: { status: string }) => entry.status)).toEqual([
+        'rejected',
+        exhaust ? 'rejected' : 'complete',
+      ])
+    }
+  },
+  30_000,
+)
+
+test('website verifier retries unavailable captures and escalates without passing incomplete evidence', async () => {
+  const skill = await Bun.file(
+    join(import.meta.dir, '../.agents/skills/verify-ui-website/SKILL.md'),
+  ).text()
+  for (const phrase of [
+    'Never pass incomplete evidence',
+    'ab escalate',
+    'record both attempts',
+    'never fail the build for missing or blank pixels on that page',
+    'no Chromium binary',
+  ])
+    expect(skill).toContain(phrase)
+})
+
+test.skipIf(!chromiumBinary())(
+  'real-time landing readiness awaits fonts and image decode, with bounded unavailable-evidence diagnostics',
+  async () => {
+    const { runRealtimeChromium } = await import('./website-capture')
+    const { mkdir } = await import('node:fs/promises')
+    const frame = {
+      ...WEBSITE_FRAMES[0]!,
+      motion: 'normal' as const,
+      figure: 'readiness-figure',
+      duration: 100,
+      sample: 'final' as const,
+    }
+    const built = { ...(await buildFiles()) }
+    const readiness = `<script>
+Object.defineProperty(document.fonts, 'ready', {value: new Promise(resolve=>setTimeout(() => {document.querySelector('h1').textContent='Ready fonts'; resolve()},900))});
+HTMLImageElement.prototype.decode = () => new Promise(resolve=>setTimeout(() => {document.querySelector('footer span').textContent='Decoded image'; resolve()},300));
+window.__websiteCapture = {'readiness-figure': {duration:100, ready:Promise.resolve(), seek: async (timeMs) => ({timeMs,complete:timeMs===100})}};
+</script><div data-capture-figure="readiness-figure" data-capture-animated>Readiness figure</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3C/svg%3E" style="position:absolute" />`
+    const files = {
+      ...built,
+      'index.html': built['index.html'].replace('</body>', `${readiness}</body>`),
+    }
+    const outputDir = scratchDir('readiness')
+    await capture({ files, frames: [frame], outputDir, includeMotionSamples: false })
+    const inventory = await Bun.file(join(outputDir, 'inventory.json')).json()
+    expect(inventory[0].probe.readiness.elapsedMs).toBeGreaterThanOrEqual(300)
+    expect(inventory[0].probe.readiness.fonts).toBe('loaded')
+    expect(
+      inventory[0].probe.paintRegions.some(
+        (region: { label: string }) => region.label === 'h1: Ready fonts',
+      ),
+    ).toBe(true)
+    expect(
+      inventory[0].probe.paintRegions.some(
+        (region: { label: string }) => region.label === 'footer: Decoded image',
+      ),
+    ).toBe(true)
+    expect(inventory[0].probe.reducedMotion).toBe(false)
+    expect(inventory[0].probe.figures).toContainEqual({
+      id: 'readiness-figure',
+      animated: true,
+      duration: 100,
+      timeMs: 100,
+      complete: true,
+    })
+    const stalled = {
+      ...built,
+      'index.html': built['index.html'].replace(
+        '</body>',
+        `<script>Object.defineProperty(document.fonts,'ready',{value:new Promise(()=>{})})</script></body>`,
+      ),
+    }
+    const site = serveSite(stalled, [frame])
+    const profile = scratchDir('readiness-profile')
+    ownedOutput.add(profile)
+    await mkdir(profile, { recursive: true })
+    try {
+      await expect(
+        runRealtimeChromium(
+          chromiumBinary()!,
+          profile,
+          1440,
+          900,
+          { dumpDom: true, timeoutMs: 500 },
+          `${site.url}/__frame-desktop.html?h=900`,
+        ),
+      ).rejects.toThrow('real-time capture produced no probe')
+    } finally {
+      site.stop()
+    }
+  },
+  15_000,
+)
