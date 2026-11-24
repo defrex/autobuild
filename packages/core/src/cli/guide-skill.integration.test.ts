@@ -501,6 +501,7 @@ describe('ab-guide — source-agnostic ticket operations', () => {
       '`ab ticket block <id> <blocker-id[,blocker-id...]> [--json]`',
       '`ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]`',
       '`ab ticket list [--state <state>] [--labels a,b] [--json]`',
+      '`ab ticket search <query> [--state <state>] [--labels a,b] [--limit <n>] [--cursor <cursor>] [--json]`',
       '`ab ticket show <id> [--json]`',
       '`ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--json]`',
       '`ab ticket states [--json]`',

@@ -50,6 +50,8 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketListing,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketStateCount,
   TicketStateInfo,
@@ -58,6 +60,7 @@ import type {
 } from '../types'
 import { validateTicketUpdate } from './update'
 import { normalizeIssueLinks } from './issue-links'
+import { pageSearch } from './search'
 
 /** Repo-relative fallback when no selected local-state root is supplied. */
 export const DEFAULT_TICKETS_DIR = '.autobuild/tickets'
@@ -175,6 +178,21 @@ export class FileTicketSource implements TicketSource {
       ),
       diagnostics: listing.diagnostics,
     }
+  }
+
+  async search(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    const state =
+      query.state === undefined ? undefined : resolveState(query.state, await this.states())
+    // The single tracker scan: listAll walks the state directories once and
+    // reads each ticket file once. Hits are projected from that scan, so there
+    // is no follow-up read per result.
+    const listing = await this.listAll()
+    return pageSearch(
+      this.name,
+      listing.tickets,
+      { ...query, ...(state !== undefined ? { state } : {}) },
+      listing.diagnostics,
+    )
   }
 
   async get(id: string): Promise<Ticket | null> {
