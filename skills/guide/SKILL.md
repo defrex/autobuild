@@ -3883,4 +3883,7 @@ Gantt clock axes (actual times) and relative axes (aligned starts), repeated rou
 parallel segments and explicit waits. Step-duration charts compare per-run means
 and percentiles or total accumulated time. These catalog views do not imply
 dedicated production analytics routes or filters. Open tabs share refresh work;
-standalone web serving reads nothing while no browser is connected.
+standalone web serving reads nothing while no browser is connected. While a tab is
+open, `ab web` starts its overview from the build roster, reads only live and
+changed builds, and reads only the repository change position while idle.
+`ab dispatch --web` adds no reads and shows the repository header without the overview.
