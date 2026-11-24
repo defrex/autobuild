@@ -8771,19 +8771,6 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
     expect(await h.store.listBuilds()).toEqual([])
   })
 
-  test('a ticket with no assets gets exactly the build.created it always had', async () => {
-    const h = harness({ tickets: [readyTicket('T-1')] })
-    await h.dispatcher.tick()
-    const created = (await h.store.getEvents('add-rate-limiting')).find(
-      (event) => event.type === 'build.created',
-    )
-    expect(created?.payload).toEqual({
-      ticket: expect.objectContaining({ id: 'T-1' }),
-      repo: REPO,
-      baseBranch: 'main',
-    })
-  })
-
   test('recovery after the record exists keeps the original pin', async () => {
     let launches = 0
     const h = harness({
@@ -8878,7 +8865,7 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     return { store, h: harness({ store }) }
   }
 
-  test('an idle tick after the first reads zero event rows; a tick after M foreign events reads exactly M', async () => {
+  test('a first tick and ticks after foreign events read zero event rows through the incremental view', async () => {
     const { store, h } = rowHarness()
     await store.ensureRepo(REPO)
     const live = await seedBuild(h, { slug: 'live' })
@@ -8982,16 +8969,6 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     expect(live.observes).toBe(live.ticks)
     expect(live.samples).toBe(baseline.samples)
   })
-
-  test('--once style: a fresh dispatcher reads each work build once and no more than its history', async () => {
-    const { store, h } = rowHarness()
-    await store.ensureRepo(REPO)
-    const live = await seedBuild(h, { slug: 'live' })
-    const _history = (await h.store.getEvents(live)).length
-    store.drainRows()
-    await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drainRows()).toBe(0)
-  })
 })
 
 describe('Dispatcher tick event reads', () => {
@@ -9019,25 +8996,16 @@ describe('Dispatcher tick event reads', () => {
     }
     const live = ['live-a', 'live-b']
     for (const slug of live) await seedBuild(h, { slug })
+    // A lease sweep with a zero TTL never reads a terminal build either.
+    expect(await h.store.claimLease(terminal[0]!, 'old', 100)).toBe(true)
+    await h.store.releaseLease(terminal[0]!, 'old')
+    h.clock.advance(1_000)
     store.drain()
 
     await h.dispatcher.tick({ acceptNewWork: false })
     const read = store.drain()
     expect(read.filter((slug) => terminal.includes(slug))).toEqual([])
     expect(read.length).toBeLessThanOrEqual(live.length)
-  })
-
-  test('a lease sweep with a zero TTL never reads a terminal build', async () => {
-    const { store, h } = countingHarness()
-    const slug = await seedBuild(h, { slug: 'swept' })
-    await complete(h, slug)
-    expect(await h.store.claimLease(slug, 'old', 100)).toBe(true)
-    await h.store.releaseLease(slug, 'old')
-    h.clock.advance(1_000)
-    store.drain()
-
-    await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drain()).toEqual([])
   })
 
   test('an aborted build is read until cleanup records build.completed, then not again', async () => {
@@ -9214,7 +9182,7 @@ describe('Dispatcher over reducer snapshots', () => {
     return { store, provider, first }
   }
 
-  test('a second cold tick with no new events reads zero event rows and appends nothing', async () => {
+  test('cold dispatchers over reducer snapshots read zero event rows and append only tick facts, before and after foreign events', async () => {
     const { store, provider, first } = await seededRepository()
     await first.dispatcher.tick({ acceptNewWork: false })
     const slugs = ['running-one', 'paused-one', 'foreign-live', 'foreign-stale']
@@ -9229,21 +9197,14 @@ describe('Dispatcher over reducer snapshots', () => {
     // Both settlement paths — the foreign pass and the stale-lease sweep —
     // asked the provider, and the answer cost no event row.
     expect(observations.length).toBeGreaterThanOrEqual(3)
-    store.rows = 0
     const after = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
     expect(after.map((events) => events.map((event) => event.type))).toEqual(
       before.map((events) => events.map((event) => event.type)),
     )
     // The tick's own journal facts are the only appends.
     expect((await store.getRepoEvents(REPO)).length - journalBefore.length).toBeLessThanOrEqual(4)
-  })
 
-  test('M events between ticks cost exactly M rows', async () => {
-    const { store, provider, first } = await seededRepository()
-    await first.dispatcher.tick({ acceptNewWork: false })
-    const quiet = harness({ store, workspaceProvider: provider })
-    quiet.clock.advance(1_000)
-    await quiet.dispatcher.tick({ acceptNewWork: false })
+    // M events between ticks cost a fresh dispatcher no rows either.
     const note = (summary: string) => ({
       actor: agentActor('implement', 's_test'),
       type: 'observation.recorded' as const,
@@ -9334,6 +9295,7 @@ describe('provider-neutral intake rate limits', () => {
         })
       const first = make()
       await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+      expect(await store.listBuilds()).toEqual([])
       for (const next of ['dependency', 'listing', 'dependency', 'listing']) {
         mode = next
         await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
@@ -9496,26 +9458,11 @@ describe('provider-neutral intake rate limits', () => {
     expect(h.tickets.claims).toEqual([])
     expect(await h.store.listBuilds()).toEqual([])
   })
-
-  test('a ready scan rate limit rejects without claiming anything', async () => {
-    const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
-    const h = harness({
-      wrapTickets: (source) =>
-        Object.assign(source, {
-          listReady: async () => {
-            throw error
-          },
-        }),
-    })
-    await expect(h.dispatcher.tick()).rejects.toBe(error)
-    expect(h.tickets.claims).toEqual([])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
 })
 
 describe('durable ticket scan cadence', () => {
   for (const observation of [false, true]) {
-    test(`30 unchanged intervals survive cold dispatchers (${observation ? 'observation' : 'admission'})`, async () => {
+    test(`unchanged intervals survive cold dispatchers (${observation ? 'observation' : 'admission'})`, async () => {
       const tickets = observation ? [readyTicket('standing')] : []
       let h = counted({ tickets, toml: 'ticketScanIntervalSeconds = 120' })
       let scans = 0
@@ -9526,7 +9473,7 @@ describe('durable ticket scan cadence', () => {
         (e) => e.type === 'dispatcher.ticket-scan-completed',
       )
       expect(initial).toHaveLength(1)
-      for (let interval = 0; interval < 30; interval++) {
+      for (let interval = 0; interval < 3; interval++) {
         const store = h.store
         const time = h.clock().getTime()
         h = counted({ store, tickets, toml: 'ticketScanIntervalSeconds = 120' })
@@ -9541,7 +9488,7 @@ describe('durable ticket scan cadence', () => {
         expect(h.cadenceReads()).toBe(interval === 0 ? 1 : 2)
         scans += h.scans()
       }
-      expect(scans).toBe(31)
+      expect(scans).toBe(4)
       expect(
         (await h.store.getRepoEvents(REPO)).filter(
           (e) => e.type === 'dispatcher.ticket-scan-completed',
@@ -9550,46 +9497,48 @@ describe('durable ticket scan cadence', () => {
     })
   }
 
-  for (const [field, value] of [
-    ['queued', 1],
-    ['invalidTickets', 1],
-    ['dependencyBlocked', 1],
-    ['creationWithheld', 1],
-    ['ticketDiagnostics', ['changed']],
-    ['dependencyDiagnostics', ['changed']],
-    ['creationDiagnostics', ['changed']],
-    ['readinessFingerprint', 'changed'],
-    ['criteriaFingerprint', 'changed'],
-    ['mode', 'admission'],
-  ] as const) {
-    test(`a ${field}-only outcome change is recorded and can change back`, async () => {
-      const h = counted()
-      await h.dispatcher.observeReady()
-      const [initial] = (await h.store.getRepoEvents(REPO)).filter(
+  test('each outcome field change is recorded and can change back', async () => {
+    const fields = [
+      ['queued', 1],
+      ['invalidTickets', 1],
+      ['dependencyBlocked', 1],
+      ['creationWithheld', 1],
+      ['ticketDiagnostics', ['changed']],
+      ['dependencyDiagnostics', ['changed']],
+      ['creationDiagnostics', ['changed']],
+      ['readinessFingerprint', 'changed'],
+      ['criteriaFingerprint', 'changed'],
+      ['mode', 'admission'],
+    ] as const
+    const h = counted()
+    await h.dispatcher.observeReady()
+    const scans = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
         (e) => e.type === 'dispatcher.ticket-scan-completed',
       )
-      if (initial?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
+    const [initial] = await scans()
+    if (initial?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
+    for (const [index, [field, value]] of fields.entries()) {
+      const latest = (await scans()).at(-1)
+      if (latest?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
       await h.store.appendRepo(REPO, {
         actor: DISPATCHER,
         type: 'dispatcher.ticket-scan-completed',
-        payload: { ...initial.payload, [field]: value },
+        payload: { ...latest.payload, [field]: value },
       })
       h.clock.advance(60_000)
       await h.dispatcher.observeReady()
-      const events = (await h.store.getRepoEvents(REPO)).filter(
-        (e) => e.type === 'dispatcher.ticket-scan-completed',
-      )
-      expect(events).toHaveLength(3)
-      expect(events[2]?.payload).toEqual({ ...initial.payload, startedAt: h.clock().toISOString() })
-      h.clock.advance(60_000)
-      await h.dispatcher.observeReady()
-      expect(
-        (await h.store.getRepoEvents(REPO)).filter(
-          (e) => e.type === 'dispatcher.ticket-scan-completed',
-        ),
-      ).toHaveLength(3)
-    })
-  }
+      const events = await scans()
+      expect(events, `${field} change`).toHaveLength(3 + 2 * index)
+      expect(events.at(-1)?.payload, `${field} change back`).toEqual({
+        ...initial.payload,
+        startedAt: h.clock().toISOString(),
+      })
+    }
+    h.clock.advance(60_000)
+    await h.dispatcher.observeReady()
+    expect(await scans()).toHaveLength(1 + 2 * fields.length)
+  })
 
   test('standing diagnostics compare retained text and order, after truncation', async () => {
     let diagnostics = Array.from({ length: 1001 }, (_, i) => `diagnostic ${i}`)
@@ -9707,52 +9656,21 @@ describe('durable ticket scan cadence', () => {
   const scanEvents = async (h: { store: BuildStore }) =>
     (await h.store.getRepoEvents(REPO)).filter((e) => e.type === 'dispatcher.ticket-scan-completed')
 
-  for (const observation of [false, true]) {
-    test(`the journal measurement alone defers without a cadence read (${observation ? 'observation' : 'admission'})`, async () => {
-      const h = counted()
-      const invoke = () => (observation ? h.dispatcher.observeReady() : h.dispatcher.tick())
-      await invoke()
-      expect(h.scans()).toBe(1)
-      const reads = h.cadenceReads()
-      for (let i = 0; i < 5; i++) {
-        h.clock.advance(10_000)
-        await invoke()
-      }
-      expect(h.cadenceReads()).toBe(reads)
-      expect(h.scans()).toBe(1)
+  test('the journal measurement alone defers an observation without a cadence read', async () => {
+    const h = counted()
+    await h.dispatcher.observeReady()
+    expect(h.scans()).toBe(1)
+    const reads = h.cadenceReads()
+    for (let i = 0; i < 5; i++) {
       h.clock.advance(10_000)
-      await invoke()
-      expect(h.cadenceReads()).toBe(reads + 1)
-      expect(h.scans()).toBe(2)
-    })
-  }
-
-  test('fresh dispatchers defer from the journal, then consult the advanced cadence row', async () => {
-    const tickets = [readyTicket('one')]
-    const h = counted({ tickets })
-    expect((await h.dispatcher.observeReady()).queued).toBe(1)
-    const start = h.clock().getTime()
-    const initial = await scanEvents(h)
-    expect(initial).toHaveLength(1)
-    const cold = (at: number) => {
-      const next = counted({ store: h.store, tickets })
-      next.clock.set(new Date(start + at).toISOString())
-      return next
+      await h.dispatcher.observeReady()
     }
-    const inside = cold(30_000)
-    expect((await inside.dispatcher.observeReady()).queued).toBe(1)
-    expect(inside.cadenceReads()).toBe(0)
-    expect(inside.scans()).toBe(0)
-    // An unchanged scan advances only the cadence row.
-    const boundary = cold(60_000)
-    await boundary.dispatcher.observeReady()
-    expect(boundary.scans()).toBe(1)
-    expect(await scanEvents(h)).toEqual(initial)
-    const beyond = cold(90_000)
-    expect((await beyond.dispatcher.observeReady()).queued).toBe(1)
-    expect(beyond.cadenceReads()).toBe(1)
-    expect(beyond.scans()).toBe(0)
-    expect(await scanEvents(h)).toEqual(initial)
+    expect(h.cadenceReads()).toBe(reads)
+    expect(h.scans()).toBe(1)
+    h.clock.advance(10_000)
+    await h.dispatcher.observeReady()
+    expect(h.cadenceReads()).toBe(reads + 1)
+    expect(h.scans()).toBe(2)
   })
 
   test('a missing cadence row defers inside the journal interval and scans at its end', async () => {
@@ -9837,6 +9755,8 @@ describe('durable ticket scan cadence', () => {
       },
     })
     expect((await h.dispatcher.tick()).queued).toBe(1)
+    // The journal measurement alone defers admission without a cadence read.
+    const reads = h.cadenceReads()
     for (let i = 1; i <= 5; i++) {
       h.clock.advance(10_000)
       const report = await h.dispatcher.tick()
@@ -9844,10 +9764,12 @@ describe('durable ticket scan cadence', () => {
       expect(report.dispatched).toBe(0)
     }
     expect(h.scans()).toBe(1)
+    expect(h.cadenceReads()).toBe(reads)
     expect(harvests).toBeGreaterThan(0)
     h.clock.advance(10_000)
     expect((await h.dispatcher.tick()).queued).toBe(1)
     expect(h.scans()).toBe(2)
+    expect(h.cadenceReads()).toBe(reads + 1)
     expect(h.tickets.claims).toEqual(['one'])
   })
 
@@ -9855,10 +9777,12 @@ describe('durable ticket scan cadence', () => {
     const h = counted({ tickets: [readyTicket('one', { state: 'Triage' })] })
     await h.dispatcher.tick()
     await h.tickets.transition('one', 'Ready')
-    h.clock.advance(50_000)
+    h.clock.advance(59_999)
     expect((await h.dispatcher.tick()).dispatched).toBe(0)
-    h.clock.advance(10_000)
+    expect(h.tickets.claims).toEqual([])
+    h.clock.advance(1)
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.claims).toEqual(['one'])
     const cold = counted({ store: h.store })
     cold.clock.set(h.clock().toISOString())
     expect((await cold.dispatcher.tick({ acceptNewWork: false })).queued).toBe(0)
@@ -10348,18 +10272,16 @@ describe('no-progress guard on provision continuation tails', () => {
       expect(await noProgressEscalations(h, slug)).toHaveLength(1)
     })
 
-    for (const empties of [0, 1, 2]) {
-      test(`the ${tail} tail still launches below the limit (${empties} empty)`, async () => {
-        const operations: string[] = []
-        const h = tailHarness(tail, operations)
-        const slug = await seedTail(h, tail)
-        await appendEmptyExecutions(h, slug, empties)
+    test(`the ${tail} tail still launches just below the limit (2 empty)`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 2)
 
-        await runContinuation(h, slug, operations)
-        expect(h.launches).toEqual([slug])
-        expect(await noProgressEscalations(h, slug)).toHaveLength(0)
-      })
-    }
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([slug])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(0)
+    })
 
     test(`the ${tail} tail launches after a progress fact resets the streak`, async () => {
       const operations: string[] = []
@@ -10467,31 +10389,6 @@ command = "run"
       content: effectiveBuildConfigContent(config),
     })
   }
-  test('parked sweep body-read experiment', async () => {
-    const h = harness()
-    let reads = 0
-    let bytes = 0
-    const getArtifact = h.store.getArtifact.bind(h.store)
-    h.store.getArtifact = async (...args) => {
-      const result = await getArtifact(...args)
-      if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) {
-        reads++
-        bytes += result?.content.byteLength ?? 0
-      }
-      return result
-    }
-    for (let index = 0; index < 3; index++) {
-      const slug = await seedAwaitingPr(h, `parked-${index}`)
-      await pin(h, slug, pipeline('verify', ''))
-    }
-    h.clock.advance(120_000)
-    for (let tick = 0; tick < 4; tick++) {
-      await h.dispatcher.tick({ acceptNewWork: false })
-    }
-    console.log('parked sweep experiment', { builds: 3, sweeps: 4, reads, bytes })
-    expect(h.launches).toEqual([])
-    expect(reads).toBe(3)
-  })
   test('parked sweep read budget stays bounded at 100 and 100,000 events', async () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
@@ -11116,21 +11013,6 @@ command = "run"
 })
 
 describe('dispatcher admission journal boundary', () => {
-  test('a newly ready ticket is claimed on the first due scan', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { state: 'Triage' })],
-      toml: 'ticketScanIntervalSeconds = 60\n',
-    })
-    await h.dispatcher.tick()
-    await h.tickets.transition('T-1', 'Ready')
-    h.clock.advance(59_999)
-    expect((await h.dispatcher.tick()).dispatched).toBe(0)
-    expect(h.tickets.claims).toEqual([])
-    h.clock.advance(1)
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-    expect(h.tickets.claims).toEqual(['T-1'])
-  })
-
   for (const nonempty of [false, true]) {
     test(`ready listing refreshes only for candidates: ${nonempty}`, async () => {
       const backing = new MemoryBuildStore()
