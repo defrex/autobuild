@@ -278,6 +278,21 @@ wrong-version or ahead-of-log rows are repaired only by comparing the exact row
 observed, atomically with the log boundary. A losing writer still returns its
 correct prefix. Missing or unreadable cache state replays; log failures propagate.
 
+**Derived reducers.** A `{kind: 'rollup', repo}` scope answers a value across a
+repository's builds (SPEC §7.7). `kernel/rollup.ts` defines the three parts (a
+registered build reducer, a pure invertible contribution, an accumulator with
+`add` and `subtract`); `ROLLUPS` in `kernel/reducer-registry.ts` registers them.
+`kernel/step-durations.ts` is the first rollup, folding
+`cli/dashboard/timeline.ts`'s `buildTimeline` segments into the log-scale
+histograms of `store/histogram.ts`. `store/rollups.ts` is the one engine every
+adapter runs over a narrow `RollupStorage` port: fast path on an unchanged
+change position, otherwise an advance by the changed-builds feed, serialized
+per key and committed atomically with each build's absorbed contribution in
+`reducer_snapshots`. The memory adapter serializes with a keyed mutex, SQLite
+with a `rollup-lease` row, and Postgres with a transaction-scoped advisory lock
+whose transaction runs every query of the advance. Remote clients make one
+`rollup-values` request and require an equal version.
+
 The remote adapter makes one value request; only the finished answer crosses the
 wire. The service uses named effective-configuration references for hosted ticket
 operations (including policy publication) and semantic build/harvest lifecycle

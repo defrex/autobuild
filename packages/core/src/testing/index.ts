@@ -87,6 +87,9 @@ export {
 
 export {
   buildFeedReadBudget,
+  rollupReadBudget,
+  rollupRemoteReadBudget,
+  type RollupReadCost,
   catalogSkewReadBudget,
   reducedReadBudget,
   countHistoricalRows,

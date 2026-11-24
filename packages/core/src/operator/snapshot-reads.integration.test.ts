@@ -1,4 +1,5 @@
-import { resolveReducerValue } from '../store/reducer-values'
+import { resolveReducerValue, type ReducerValueRequest } from '../store/reducer-values'
+import type { SnapshotScope } from '../store/snapshots'
 /**
  * The operator read paths run on the snapshot-backed repository view (AUT-650):
  * polls use canonical reducer values without reading public build event APIs,
@@ -144,7 +145,7 @@ function instrument(backing: MemoryBuildStore, opts: { noSnapshots?: boolean } =
           lookups += 1
           if (gate.hold !== undefined) await gate.hold
           if (opts.noSnapshots === true) {
-            const [scope, request] = args as Parameters<BuildStore['getReducerValue']>
+            const [scope, request] = args as [SnapshotScope, ReducerValueRequest]
             const selected = resolveReducerValue(scope, request)
             const events =
               scope.kind === 'build'

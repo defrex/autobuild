@@ -14,7 +14,7 @@ import type { ReducerValueRequest, ReducerValue } from './reducer-values'
  * that repository's record: what attempt resolution needs (RFC 0005 §6.1).
  * Nothing else outside its own build is readable, and nothing is writable.
  */
-import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+import type { ReducerSnapshot, ReducerValueScope, SnapshotScope } from './snapshots'
 import { readBuildFacts } from './reduced-reads'
 import { appendJudgePreference, judgeScopeRefusal, type JudgeScope } from './judge-authority'
 import type { EventType } from '../events/payloads'
@@ -164,8 +164,8 @@ export function scopeLocalStoreToPhaseSession(
     )
     return grant
   }
-  const readsTarget = async (target: SnapshotScope, reducer: string): Promise<boolean> => {
-    if (scope.kind !== 'build') return false
+  const readsTarget = async (target: ReducerValueScope, reducer: string): Promise<boolean> => {
+    if (scope.kind !== 'build' || target.kind === 'rollup') return false
     if (target.kind === 'build' ? reducer !== 'buildReadFacts' : reducer !== 'repositoryReadFacts')
       return false
     const granted = await targetGrant()
@@ -474,9 +474,10 @@ export function scopeLocalStoreToPhaseSession(
       return store.getRepoHighWater(repo)
     },
     async getReducerValue(
-      target: SnapshotScope,
+      target: ReducerValueScope,
       request: ReducerValueRequest,
     ): Promise<ReducerValue> {
+      // A rollup spans its repository's builds, so it is owned like `repo`.
       const kind = target.kind === 'build' ? 'build' : 'repo'
       const id = target.kind === 'build' ? target.slug : target.repo
       if (!isOwn(kind, id) && !(await readsTarget(target, request.reducer))) {
