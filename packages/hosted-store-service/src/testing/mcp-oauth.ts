@@ -83,6 +83,8 @@ export function buildApp(
   options: {
     serviceEnv?: Record<string, string>
     projects?: string[]
+    /** Observes every request the MCP endpoint delegates to the service. */
+    onDelegate?: (request: Request) => void
   } & Pick<
     HostedStoreServiceOptions,
     'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError'
@@ -116,7 +118,10 @@ export function buildApp(
     config,
     auth,
     storeSecret: env.AB_STORE_SECRET!,
-    delegate: (request) => service.fetch(request),
+    delegate: (request) => {
+      options.onDelegate?.(request)
+      return service.fetch(request)
+    },
     entries: service.operatorTools,
   })
   const app: App = async (request) => {

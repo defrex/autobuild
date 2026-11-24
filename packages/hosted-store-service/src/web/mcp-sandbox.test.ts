@@ -72,6 +72,7 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
   const forge = new FakeForge()
   const issued: string[] = []
   const reported: unknown[] = []
+  const delegated: string[] = []
   let composed = 0
   let failCompose = false
   const { app, backing, service } = buildApp(env, auth, testAccess(env, testProjects(PROJECTS)), {
@@ -79,6 +80,9 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
     projects: PROJECTS,
     reportInternalError: (error) => {
       reported.push(error)
+    },
+    onDelegate: (request) => {
+      delegated.push(decodeURIComponent(new URL(request.url).pathname))
     },
     issueDispatcherCredential: async (repo, creator) => {
       issued.push(`${repo} ${creator}`)
@@ -122,6 +126,7 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
     forge,
     issued,
     reported,
+    delegated,
     composed: () => composed,
     failCompose: (value: boolean) => {
       failCompose = value
@@ -137,6 +142,59 @@ async function call(client: Client, name: string, args: Record<string, unknown>)
     body = JSON.parse(text)
   } catch {}
   return { isError: result.isError === true, body }
+}
+
+/** Minimal schema-valid input for every operator tool, against the enabled
+ * repository. Unknown slugs and ticket ids refuse in the domain, after
+ * dispatch, which is what the parity test needs. */
+const ref = { repo: ENABLED }
+const build = { ...ref, slug: 'parity-missing' }
+const ticket = { ...ref, id: 'PARITY-1' }
+const PARITY_INPUTS: Record<string, Record<string, unknown>> = {
+  'merges.list': ref,
+  'landings.list': ref,
+  'tickets.tree': ref,
+  'builds.list': { ...ref, scope: 'all' },
+  'builds.get': build,
+  'builds.events': { ...build, cursor: 0, waitSeconds: 0 },
+  'builds.artifact': { ...build, kind: 'plan' },
+  'builds.restack': build,
+  'optimization.revise': { ...build, maxAttempts: 1 },
+  'optimization.stop': build,
+  'optimization.settle-unmeasured': {
+    ...build,
+    attempt: 'parity-attempt',
+    policy: 'release-unmeasured',
+  },
+  'builds.control': { ...build, action: 'pause' },
+  'builds.answer': { ...build, resolution: 'retry' },
+  'builds.reopen': { ...build, feedback: 'parity' },
+  'repository.forge_clear': { ...ref, forge: 'github', reason: 'parity' },
+  'repository.status': ref,
+  'repository.events': { ...ref, waitSeconds: 0, filter: 'all' },
+  'repository.settings': { ...ref, setting: 'intake', enabled: true },
+  'repository.bulk_control': { ...ref, action: 'resume' },
+  'harvest.status': ref,
+  'harvest.control': { ...ref, action: 'toggle-gate' },
+  'tickets.states': ref,
+  'tickets.state.create': { ...ref, name: 'parity' },
+  'tickets.list': ref,
+  'tickets.get': ticket,
+  'tickets.create': { ...ref, title: 'Parity', body: 'parity' },
+  'tickets.update': { ...ticket, title: 'Parity' },
+  'tickets.block': { ...ticket, blockerIds: ['PARITY-2'] },
+  'tickets.unblock': { ...ticket, blockerIds: ['PARITY-2'] },
+  'tickets.move': { ...ticket, state: 'ready' },
+  'tickets.start': ticket,
+  'notes.read': ref,
+  'notes.write': { ...ref, document: 'parity' },
+  'sandbox.exec': { ...ref, command: 'true' },
+  'sandbox.start': { ...ref, command: 'true' },
+  'sandbox.wait': { ...ref, commandId: 'cmd-parity', waitSeconds: 0 },
+  'sandbox.read_file': { ...ref, path: 'missing.txt' },
+  'sandbox.write_file': { ...ref, path: 'parity.txt', content: 'parity', encoding: 'utf8' },
+  'sandbox.reset': ref,
+  'sandbox.publish': { ...ref, title: 'Parity' },
 }
 
 const sandboxNames = TOOLS.map((tool) => tool.name as string).filter((name) =>
@@ -223,17 +281,25 @@ describe('hosted sandbox tools over /mcp', () => {
     const h = await harness()
     try {
       const { tools } = await h.client.listTools()
-      expect(h.service.operatorTools.map((tool) => tool.name as string).sort()).toEqual(
-        tools
-          .map((tool) => tool.name)
-          .filter((name) => name !== 'repositories.list')
-          .sort(),
+      const advertised = tools
+        .map((tool) => tool.name)
+        .filter((name) => name !== 'repositories.list')
+      expect(advertised.sort()).toEqual(
+        h.service.operatorTools.map((tool) => tool.name as string).sort(),
       )
-      for (const tool of tools) {
-        if (tool.name === 'repositories.list') continue
-        const result = await h.client
-          .callTool({ name: tool.name, arguments: { repo: ENABLED } })
-          .catch((error: unknown) => ({ thrown: String(error) }))
+      for (const name of advertised) {
+        // Schema-valid input, so the call passes MCP validation and reaches
+        // the operator server's dispatch. A domain refusal there is fine; an
+        // unknown tool is the drift this test exists to catch.
+        const args = PARITY_INPUTS[name]
+        expect(args, `parity input for ${name}`).toBeDefined()
+        const entry = h.service.operatorTools.find((tool) => tool.name === name)!
+        expect(entry.inputSchema.safeParse(args).success, `valid input for ${name}`).toBe(true)
+        const before = h.delegated.length
+        const result = await h.client.callTool({ name, arguments: args })
+        expect(h.delegated.slice(before), `${name} reaches the operator server`).toEqual([
+          `/operator/v1/repos/${ENABLED}/tools/${name}`,
+        ])
         expect(JSON.stringify(result)).not.toContain('unknown tool')
       }
     } finally {
