@@ -839,7 +839,7 @@ test('a provider retain callback settles past refused archives and records forge
   expect(events.some((e) => e.type === 'reconcile.completed')).toBe(true)
 })
 
-test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as const)(
+test.each(['available', 'refused-archive-retry'] as const)(
   'legacy loss with %s preserves guarded publication behavior',
   async (outcome) => {
     const h = await seedRestackPublication()
@@ -858,7 +858,6 @@ test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as co
     let recoveries = 0
     h.deps.publication!.recoverCandidate = async () => {
       recoveries++
-      if (outcome === 'unavailable-inspection') throw new Error('transport unavailable')
       if (outcome === 'refused-archive-retry' && recoveries === 1) throw new Error(refusal)
       return true
     }
@@ -869,9 +868,7 @@ test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as co
       calls++
       return { kind: 'published' }
     }
-    if (outcome === 'unavailable-inspection')
-      await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('transport unavailable')
-    else if (outcome === 'refused-archive-retry') {
+    if (outcome === 'refused-archive-retry') {
       // A failed archive fallback neither retires the candidate nor reports recovery.
       await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(refusal)
       expect(calls).toBe(0)
@@ -884,13 +881,10 @@ test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as co
       await settlePendingPublication(h.deps, SLUG)
       await settlePendingPublication(h.deps, SLUG)
     }
-    const recovered = outcome !== 'unavailable-inspection'
-    expect(calls).toBe(recovered ? 1 : 0)
+    expect(calls).toBe(1)
     const events = await h.store.getEvents(SLUG)
     expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(0)
-    expect(events.filter((event) => event.type === 'reconcile.completed')).toHaveLength(
-      recovered ? 1 : 0,
-    )
+    expect(events.filter((event) => event.type === 'reconcile.completed')).toHaveLength(1)
   },
 )
 

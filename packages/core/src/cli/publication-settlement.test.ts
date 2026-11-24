@@ -486,3 +486,31 @@ describe('settlePendingPublication: ticket-wait commits', () => {
     ])
   })
 })
+
+test('legacy loss with unavailable-inspection preserves guarded publication behavior', async () => {
+  const h = await seedRestackPublication()
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'publication.lost',
+    payload: {
+      request: h.request.seq,
+      operation: 'reconcile',
+      branch: BRANCH,
+      sha: SHA,
+      reason: 'replacement',
+    },
+  })
+  h.deps.publication!.recoverCandidate = async () => {
+    throw new Error('transport unavailable')
+  }
+  let calls = 0
+  h.deps.publication!.rewrite = async () => {
+    calls++
+    return { kind: 'published' }
+  }
+  await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('transport unavailable')
+  expect(calls).toBe(0)
+  const events = await h.store.getEvents(SLUG)
+  expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(0)
+  expect(events.filter((event) => event.type === 'reconcile.completed')).toHaveLength(0)
+})
