@@ -1,0 +1,495 @@
+import { describe, expect, test } from 'bun:test'
+import {
+  CREDENTIAL_MISS_TTL_MS,
+  createGitHubFetchTransport,
+  GH_CLI_TOKEN_COMMAND,
+  GitHubApiError,
+  githubTokenFromEnv,
+  githubTokenFromGhCli,
+  githubTokenSource,
+  resolveGitHubToken,
+  type GitHubCliExec,
+} from './github-transport'
+
+/** A request recorder standing in for global fetch, answering from a
+ * scripted response. Returns the captured URL/headers for assertions. */
+function stubFetch(respond: (url: string, init: RequestInit) => Response | Promise<Response>): {
+  calls: { url: string; init: RequestInit }[]
+  restore: () => void
+} {
+  const calls: { url: string; init: RequestInit }[] = []
+  const original = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    calls.push({ url, init: init ?? {} })
+    return respond(url, init ?? {})
+  }) as typeof fetch
+  return { calls, restore: () => (globalThis.fetch = original) }
+}
+
+describe('createGitHubFetchTransport', () => {
+  test('serializes request.query into the URL', async () => {
+    const stub = stubFetch(
+      () => new Response('{}', { headers: { 'Content-Type': 'application/json' } }),
+    )
+    try {
+      const transport = createGitHubFetchTransport({ token: 't' })
+      await transport('GET', 'repos/acme/app/contents/autobuild.toml', {
+        query: { ref: 'dev' },
+      })
+      expect(stub.calls[0]?.url).toBe(
+        'https://api.github.com/repos/acme/app/contents/autobuild.toml?ref=dev',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('appends query parameters to an absolute URL that already carries one', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    try {
+      const transport = createGitHubFetchTransport({ token: 't' })
+      await transport('GET', 'https://objects.example/asset.tgz?X-Amz-Signature=abc', {
+        query: { ref: 'main' },
+      })
+      expect(stub.calls[0]?.url).toBe(
+        'https://objects.example/asset.tgz?X-Amz-Signature=abc&ref=main',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('delivers binary bodies as unmodified bytes (no text round-trip)', async () => {
+    // Arbitrary non-UTF8 bytes — a text decode/re-encode would corrupt them
+    // into replacement characters (f_0a8691c2).
+    const payload = Uint8Array.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x80, 0x81])
+    const stub = stubFetch(
+      () =>
+        new Response(payload as unknown as BodyInit, {
+          headers: { 'Content-Type': 'application/octet-stream' },
+        }),
+    )
+    try {
+      const transport = createGitHubFetchTransport({ token: 't' })
+      const response = await transport('GET', 'https://objects.example/autobuild-1.0.0.tgz')
+      expect(response.bytes).toEqual(payload)
+      expect(response.json).toBeUndefined()
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('empty non-JSON bodies carry no bytes', async () => {
+    const stub = stubFetch(() => new Response(null, { status: 204 }))
+    try {
+      const transport = createGitHubFetchTransport({ token: 't' })
+      const response = await transport('DELETE', 'repos/acme/app/git/refs/heads/ab/x')
+      expect(response.status).toBe(204)
+      expect(response.bytes).toBeUndefined()
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('non-JSON error bodies still yield an API message', async () => {
+    const stub = stubFetch(() => new Response('<html>bad gateway</html>', { status: 502 }))
+    try {
+      const transport = createGitHubFetchTransport({ token: 't' })
+      const error = await transport('GET', 'repos/acme/app').catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(GitHubApiError)
+      expect((error as GitHubApiError).status).toBe(502)
+      expect((error as GitHubApiError).message).toBe('<html>bad gateway</html>')
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('sends the token, API version, and JSON bodies', async () => {
+    const stub = stubFetch(
+      () => new Response('{}', { headers: { 'Content-Type': 'application/json' } }),
+    )
+    try {
+      const transport = createGitHubFetchTransport({ token: 'secret-token' })
+      await transport('POST', 'repos/acme/app/pulls', { body: { title: 'hi' } })
+      const init = stub.calls[0]!.init
+      const headers = init.headers as Record<string, string>
+      expect(headers.Authorization).toBe('Bearer secret-token')
+      expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28')
+      expect(headers['Content-Type']).toBe('application/json')
+      expect(init.body).toBe(JSON.stringify({ title: 'hi' }))
+    } finally {
+      stub.restore()
+    }
+  })
+})
+
+describe('resolveGitHubToken', () => {
+  const answering =
+    (stdout: string, probes: string[][] = []): GitHubCliExec =>
+    async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout, stderr: '' }
+    }
+
+  test('prefers GITHUB_TOKEN, then GH_TOKEN, without touching the gh CLI', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-a',
+    })
+    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toEqual({ token: 'env-b' })
+    expect(probes).toEqual([])
+  })
+
+  test('an exported-but-empty GITHUB_TOKEN does not mask GH_TOKEN', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-b',
+    })
+    expect(githubTokenFromEnv({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' })).toBe('env-b')
+    expect(probes).toEqual([])
+  })
+
+  test('falls back to the gh CLI login when the environment carries no token', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: '' }, exec)).toEqual({
+      token: 'gho_keyring',
+    })
+    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
+  })
+
+  test('a miss names what was tried: gh unauthenticated, silent, or missing', async () => {
+    const unauthenticated = await githubTokenFromGhCli(async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'no oauth token found for github.com\n',
+    }))
+    expect(unauthenticated.token).toBeUndefined()
+    expect(unauthenticated).toMatchObject({
+      reason: '`gh auth token --hostname github.com` exited 1: no oauth token found for github.com',
+    })
+
+    const silent = await githubTokenFromGhCli(async () => ({
+      exitCode: 0,
+      stdout: '  \n',
+      stderr: '',
+    }))
+    expect(silent).toMatchObject({
+      reason: '`gh auth token --hostname github.com` printed no token',
+    })
+
+    const missing = await githubTokenFromGhCli(async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(missing).toMatchObject({
+      reason: '`gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+
+    const resolved = await resolveGitHubToken({}, async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(resolved).toEqual({
+      token: undefined,
+      reason:
+        'GITHUB_TOKEN and GH_TOKEN are unset and `gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+  })
+})
+
+describe('createGitHubFetchTransport token resolution', () => {
+  test('resolves a token source once, on the first request, and reuses it', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let resolutions = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          resolutions += 1
+          return 'gho_lazy'
+        },
+      })
+      expect(resolutions).toBe(0)
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(resolutions).toBe(1)
+      for (const call of stub.calls) {
+        expect((call.init.headers as Record<string, string>).Authorization).toBe('Bearer gho_lazy')
+      }
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('memoizes a miss for the TTL, then asks the source again', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
+    let clock = 1_000_000
+    try {
+      const transport = createGitHubFetchTransport({
+        now: () => clock,
+        token: async () => {
+          attempts += 1
+          // The keyring is locked for the first window only.
+          return attempts === 1 ? undefined : 'gho_unlocked'
+        },
+      })
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(attempts).toBe(1)
+      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+      clock += CREDENTIAL_MISS_TTL_MS
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_unlocked',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('re-resolves after 401 Unauthorized at most once per interval, so a re-login is picked up without a spawn per request', async () => {
+    let status = 401
+    const stub = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: 'Bad credentials' }), {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    let clock = 5_000_000
+    let resolutions = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        now: () => clock,
+        token: async () => {
+          resolutions += 1
+          return resolutions === 1 ? 'gho_revoked' : 'gho_fresh'
+        },
+      })
+      // Inside the interval the stale token keeps failing without re-resolving.
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      expect(resolutions).toBe(1)
+      // Past the interval, the next 401 drops it and the following request resolves afresh.
+      clock += CREDENTIAL_MISS_TTL_MS
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      status = 204
+      await transport('GET', 'user')
+      expect(resolutions).toBe(2)
+      expect((stub.calls[2]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_revoked',
+      )
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_fresh',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('a failed anonymous request names why it was anonymous', async () => {
+    const stub = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: 'Not Found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    try {
+      const exec: GitHubCliExec = async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'no oauth token found for github.com\n',
+      })
+      const transport = createGitHubFetchTransport({ token: githubTokenSource({}, exec) })
+      await expect(transport('GET', 'repos/acme/private/pulls/1')).rejects.toThrow(
+        'Not Found (request was unauthenticated: GITHUB_TOKEN and GH_TOKEN are unset and ' +
+          '`gh auth token --hostname github.com` exited 1: no oauth token found for github.com)',
+      )
+      // A literal miss says so too; an authenticated failure is left alone.
+      const anonymous = createGitHubFetchTransport({ token: undefined })
+      await expect(anonymous('GET', 'user')).rejects.toThrow(
+        'Not Found (request was unauthenticated: no GitHub credential was available)',
+      )
+      const authenticated = createGitHubFetchTransport({ token: 'gho_x' })
+      await expect(authenticated('GET', 'user')).rejects.toThrow(/^Not Found$/)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('a successful anonymous response, 304 included, names why it was anonymous', async () => {
+    let status = 200
+    const stub = stubFetch(() =>
+      status === 304
+        ? new Response(null, { status: 304 })
+        : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+    try {
+      const anonymous = createGitHubFetchTransport({ token: undefined })
+      expect((await anonymous('GET', 'user')).unauthenticated).toBe(
+        'no GitHub credential was available',
+      )
+      const authenticated = createGitHubFetchTransport({ token: 'gho_x' })
+      expect(await authenticated('GET', 'user')).not.toHaveProperty('unauthenticated')
+      status = 304
+      expect((await anonymous('GET', 'user')).unauthenticated).toBe(
+        'no GitHub credential was available',
+      )
+      expect(await authenticated('GET', 'user')).not.toHaveProperty('unauthenticated')
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('retries a source whose probe rejected instead of caching the failure', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          attempts += 1
+          if (attempts === 1) throw new Error('keyring locked')
+          return 'gho_second'
+        },
+      })
+      await expect(transport('GET', 'user')).rejects.toThrow('keyring locked')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_second',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+})
+
+test('summary cooldown recognizes documented rate limits but excludes permission denial', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-15T00:00:00Z')
+  for (const error of [
+    new GitHubApiError(429, 'slow down'),
+    new GitHubApiError(403, 'API rate limit exceeded'),
+    new GitHubApiError(403, 'secondary content creation rate limit'),
+    new GitHubApiError(403, 'limited', {}, { 'x-ratelimit-remaining': '0' }),
+  ]) {
+    expect(githubRateLimitUntil(error, now)).toBe('2026-10-15T00:01:00.000Z')
+  }
+  expect(
+    githubRateLimitUntil(new GitHubApiError(403, 'Resource not accessible by integration'), now),
+  ).toBeUndefined()
+  expect(
+    githubRateLimitUntil(new GitHubApiError(429, 'limited', {}, { 'retry-after': '120' }), now),
+  ).toBe('2026-10-15T00:02:00.000Z')
+})
+
+test('summary cooldown uses the primary reset only when primary quota is exhausted', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-15T00:00:00Z')
+  const reset = String((now + 50 * 60_000) / 1000)
+  for (const status of [403, 429]) {
+    for (const remaining of ['4800', undefined]) {
+      for (const retry of ['60', '120', undefined]) {
+        const error = new GitHubApiError(
+          status,
+          'Secondary content creation rate limit',
+          {},
+          {
+            'x-ratelimit-reset': reset,
+            ...(remaining === undefined ? {} : { 'x-ratelimit-remaining': remaining }),
+            ...(retry === undefined ? {} : { 'retry-after': retry }),
+          },
+        )
+        expect(githubRateLimitUntil(error, now)).toBe(
+          new Date(now + (retry === '120' ? 120_000 : 60_000)).toISOString(),
+        )
+      }
+    }
+    expect(
+      githubRateLimitUntil(
+        new GitHubApiError(
+          status,
+          'Rate limit exceeded',
+          {},
+          {
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': reset,
+            'retry-after': '60',
+          },
+        ),
+        now,
+      ),
+    ).toBe('2026-10-15T00:50:00.000Z')
+  }
+})
+
+test('fetch errors retain lowercased cooldown headers', async () => {
+  const stub = stubFetch(
+    () =>
+      new Response(JSON.stringify({ message: 'secondary rate limit' }), {
+        status: 403,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '120',
+          'X-RateLimit-Reset': '1792022520',
+        },
+      }),
+  )
+  try {
+    const error = await createGitHubFetchTransport({ token: 't' })(
+      'POST',
+      'repos/acme/app/issues/1/comments',
+    ).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(GitHubApiError)
+    expect((error as GitHubApiError).headers['retry-after']).toBe('120')
+    expect((error as GitHubApiError).headers['x-ratelimit-reset']).toBe('1792022520')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('classification preserves GraphQL limits, secondary deadlines and transient versus permission failures', async () => {
+  const { classifyGitHubFailure } = await import('./github-transport')
+  const { isForgeFailure } = await import('../forge-failure')
+  const now = Date.parse('2026-10-20T00:00:00Z')
+  const primary = classifyGitHubFailure(
+    new GitHubApiError(
+      200,
+      'API rate limit exceeded',
+      { errors: [{ type: 'RATE_LIMITED' }] },
+      { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String((now + 120_000) / 1000) },
+    ),
+    now,
+  )
+  expect(isForgeFailure(primary) && primary.details).toEqual({
+    kind: 'rate-limited',
+    resetAt: '2026-10-20T00:02:00.000Z',
+  })
+  const secondary = classifyGitHubFailure(new GitHubApiError(200, 'secondary rate limit'), now)
+  expect(isForgeFailure(secondary) && secondary.details).toEqual({
+    kind: 'rate-limited',
+    resetAt: '2026-10-20T00:01:00.000Z',
+  })
+  for (const error of [new GitHubApiError(503, 'unavailable'), new TypeError('fetch failed')]) {
+    const failure = classifyGitHubFailure(error, now)
+    expect(isForgeFailure(failure) && failure.details.kind).toBe('transient')
+  }
+  const permission = new GitHubApiError(403, 'Resource not accessible by integration')
+  expect(classifyGitHubFailure(permission, now)).toBe(permission)
+})
+
+test('GraphQL RATE_LIMITED discriminants do not depend on the error prose', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-20T00:00:00.000Z')
+  expect(
+    githubRateLimitUntil(
+      new GitHubApiError(200, 'request refused', { errors: [{ type: 'RATE_LIMITED' }] }),
+      now,
+    ),
+  ).toBe('2026-10-20T00:01:00.000Z')
+})
