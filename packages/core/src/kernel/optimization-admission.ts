@@ -180,7 +180,7 @@ export function optimizationActivityBatch(
     const tracked = clock.builds[input.build] !== undefined
     const seen = clock.builds[input.build] ?? 0
     // The instance the clock holds open for this build after this batch.
-    let open = clock.open[input.build]?.instance
+    let open: string | undefined = clock.open[input.build]?.instance
     let through = seen
     if (!input.missing && input.value !== undefined) {
       const value = input.value
