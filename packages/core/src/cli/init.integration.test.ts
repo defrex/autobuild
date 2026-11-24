@@ -189,16 +189,24 @@ describe('agent-driven ab init', () => {
   test('writes a valid stack-neutral skeleton independent of manifests', async () => {
     const cargo = join(target, 'cargo')
     const node = join(target, 'node')
+    const scripts = join(target, 'scripts')
     await mkdir(cargo)
     await mkdir(node)
+    await mkdir(scripts)
     await writeFile(join(cargo, 'Cargo.toml'), '[package]\nname = "fixture"\n')
     await writeFile(join(node, 'package.json'), '{ definitely invalid json')
 
+    await writeFile(
+      join(scripts, 'package.json'),
+      JSON.stringify({ scripts: { test: 'bun test' } }),
+    )
+    await abInit({ targetRepo: scripts, runtimes: TEST_RUNTIMES, env: {} })
     await abInit({ targetRepo: cargo, runtimes: TEST_RUNTIMES, env: {} })
     await abInit({ targetRepo: node, runtimes: TEST_RUNTIMES, env: {} })
     const cargoSource = await readFile(join(cargo, 'autobuild.toml'), 'utf8')
     const nodeSource = await readFile(join(node, 'autobuild.toml'), 'utf8')
     expect(nodeSource).toBe(cargoSource)
+    expect(await readFile(join(scripts, 'autobuild.toml'), 'utf8')).toBe(cargoSource)
 
     const config = parseConfig(cargoSource)
     expect(config.commands).toEqual({})
