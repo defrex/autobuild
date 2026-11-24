@@ -39,16 +39,22 @@ export const AGENT_CONTEXT_MAX_RAW_BYTES = 32 * MIB
 /** Continuation packing size: serialized part bytes per slot (a storage
  * packing size, never a limit on the record). */
 export const AGENT_CONTEXT_CACHE_SLOT_PAYLOAD = 1.75 * MIB
-/** Enough slots for the raw input bound's base64 encoding. */
-export const AGENT_CONTEXT_CACHE_SLOTS = Math.ceil(
-  (AGENT_CONTEXT_MAX_RAW_BYTES * 4) / 3 / AGENT_CONTEXT_CACHE_SLOT_PAYLOAD,
-)
 /** Decoded-size ceiling for any record a reader accepts. */
 export const AGENT_CONTEXT_MAX_DECODED_BYTES =
   Math.ceil((AGENT_CONTEXT_MAX_RAW_BYTES * 4) / 3) + MIB
 /** Per-part envelope cost counted against a slot's payload (oid, offset,
  * JSON punctuation), so a slot of many tiny parts still stays in bounds. */
 export const AGENT_CONTEXT_CACHE_PART_OVERHEAD = 128
+/** Parts the slot budget leaves envelope room for, beyond the base64 itself. */
+const AGENT_CONTEXT_CACHE_PART_HEADROOM = 65_536
+/** Enough slots for the raw input bound's base64 plus the envelopes of
+ * 65,536 parts. A capture beyond that (tens of thousands of captured files)
+ * drops the excess, which a later invocation fetches again. */
+export const AGENT_CONTEXT_CACHE_SLOTS = Math.ceil(
+  ((AGENT_CONTEXT_MAX_RAW_BYTES * 4) / 3 +
+    AGENT_CONTEXT_CACHE_PART_HEADROOM * AGENT_CONTEXT_CACHE_PART_OVERHEAD) /
+    AGENT_CONTEXT_CACHE_SLOT_PAYLOAD,
+)
 
 const content = {
   oid: z.string().min(1),

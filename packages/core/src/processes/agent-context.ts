@@ -50,6 +50,9 @@ const FETCH_CONCURRENCY = 8
 /** Time kept back from the invocation deadline for the continuation write. */
 const DEADLINE_RESERVE_MS = 2_000
 const LARGEST = 5
+/** A failed capture is retried at the same head after this long, and at
+ * once when the head moves, so a persistent failure costs no per-tick reads. */
+export const AGENT_CONTEXT_RETRY_MS = 5 * 60_000
 
 export interface AgentContextBounds {
   maxBytes: number
@@ -101,7 +104,7 @@ export class AgentContextCapture {
    * dispatcher is the pointer's only writer while it holds the repository. */
   private pointer: AgentContextPointer | null | undefined
   private unavailableReported = false
-  private lastFailure: string | undefined
+  private lastFailure: { message: string; head?: string; at: number } | undefined
 
   constructor(opts: {
     store: Store
@@ -138,18 +141,19 @@ export class AgentContextCapture {
     let head: string | undefined
     try {
       head = await forge.remoteBranchSha(opts.baseBranch)
+      const failed = this.lastFailure
+      if (failed?.head === head && this.now() - failed.at < AGENT_CONTEXT_RETRY_MS) return []
       const diagnostics = await this.capture(head, opts)
       this.lastFailure = undefined
       return diagnostics
     } catch (error) {
       rethrowAuthorityLapse(error)
-      // Re-read the pointer next time: a failed write may or may not have landed.
-      this.pointer = undefined
       if (error instanceof ForgeRequestDeferred) return []
       const text = message(error)
-      // Retried every tick; reported once per distinct failure.
-      if (this.lastFailure === text) return []
-      this.lastFailure = text
+      const repeated = this.lastFailure?.message === text
+      this.lastFailure = { message: text, ...(head !== undefined ? { head } : {}), at: this.now() }
+      // Reported once per distinct failure.
+      if (repeated) return []
       return [
         { kind: 'capture-failed', ...(head !== undefined ? { commit: head } : {}), message: text },
       ]
@@ -398,8 +402,7 @@ export class AgentContextCapture {
   }): Promise<void> {
     const { continuation, wanted, fetched } = input
     const reuse =
-      continuation !== undefined &&
-      continuation.intact &&
+      continuation?.intact === true &&
       continuation.slots.every((slot) => slot.parts.every((part) => wanted.has(part.oid)))
     let captureId: string
     let base: AgentContextCacheSlot[]

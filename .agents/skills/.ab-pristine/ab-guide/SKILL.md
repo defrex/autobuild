@@ -2126,6 +2126,53 @@ tickets remain under the repository-default `.autobuild/` directory and build
 worktrees use the state-home location. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
 
+### Repository agent context
+
+Every dispatcher, in checkout or origin mode, keeps one record of the
+repository's agent context at the base-branch head in the store. It reads the
+tree through the forge (`git` for `local-git`, the Git Data API for GitHub), so
+both modes record identical content for the same commit. The record names its
+base commit and captures:
+
+- **Skills.** Every skill directory under `.agents/skills/` and
+  `.claude/skills/` that holds a `SKILL.md`, with all its files. A skill present
+  in both, symlinked or byte-identical, appears once with every install path.
+  Repository-local skills without the `ab-` prefix are included; dot-directories
+  such as `.ab-pristine` are not.
+- **Agent instructions.** Every `AGENTS.md` and `CLAUDE.md`, root and nested,
+  each with its directory. In one directory the two collapse into one entry
+  when they are the same file or identical.
+- **Imports.** Files the instructions import by `@path`, resolved relative to
+  the importing file and followed transitively. Each is a separate entry, never
+  inlined. A path outside the repository is listed as omitted.
+
+| Repository artifact | Holds | Written |
+| --- | --- | --- |
+| `agent-context` | The record: gzip JSON, metadata `{ schema, commit, digest, bytes, rawBytes }` | Only when the content digest changes |
+| `agent-context-head` | Pointer: last base head handled, input fingerprint, standing diagnostic | When the base head changes |
+| `agent-context-cache.<i>` | Blob bytes an interrupted capture already fetched | Only when an invocation deadline cuts a capture short |
+
+An unchanged base head costs one head read per tick, one small pointer read per
+fresh process, and no tree, blob, record or event reads. Readers take the
+latest `agent-context` revision only.
+
+Two bounds apply, and each has a typed tick-report diagnostic that `ab
+dispatch` prints:
+
+- `oversize`: the encoded record exceeds 2.25 MiB.
+- `raw-oversize`: the captured files exceed 32 MiB before encoding.
+
+Both name the bound and the largest contributors. They, and `tree-unlistable`
+(the forge cannot list one directory completely), keep the last good revision
+and are reported once per base head. `capture-failed` retries every tick and is
+reported once per distinct failure; `unavailable` means the forge cannot read
+trees.
+
+All three kinds are retention-managed like the dispatcher config artifacts: the
+newest 200 revisions of each kind survive (`AB_ARTIFACT_RETENTION_MAX_REVISIONS`
+overrides the bound). The dispatcher only writes the record; serving it to
+connected agents is a separate concern.
+
 ### Several dispatchers on one repository
 
 One repository driven by several dispatchers — for example each engineer

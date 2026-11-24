@@ -1080,6 +1080,7 @@ test('populated pre-telemetry SQLite repositories upgrade and share quiet comple
         ticketDiagnostics,
         creationDiagnostics,
         dependencyDiagnostics,
+        agentContextDiagnostics,
         ...counters
       } = emptyTickReport()
       clock.advance(1000)
