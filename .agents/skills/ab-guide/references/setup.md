@@ -24,6 +24,16 @@ Keep the default `git-worktree` provider unless the maintainer explicitly opts
 into remote builds. It creates local disposable worktrees and uses the tools,
 network, and credentials available to the dispatcher machine.
 
+Local worktrees live outside the checkout, under
+`$XDG_STATE_HOME/autobuild/worktrees/` (default `~/.local/state/…`), or in the
+store's own `worktrees/` when a local store lies outside the checkout. They do
+not inherit the checkout's `node_modules`, so `[commands].setup` must install
+dependencies. If the destination resolves inside the checkout or has a
+`node_modules` directory above it, new builds fail to provision and dispatch
+shows a startup notice: set `XDG_STATE_HOME` to an absolute directory outside
+the checkout with no `node_modules` above it, or select a local store outside
+the checkout.
+
 For remote execution, set `[workspace].provider = "vercel-sandbox"`. A Vercel
 Sandbox is a fresh independent machine; a runtime that works on the setup
 machine is not evidence that it works there. Confirm all of these with the
