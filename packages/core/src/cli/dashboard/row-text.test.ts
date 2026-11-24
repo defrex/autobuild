@@ -52,6 +52,18 @@ const row = (extra: Partial<DashboardBuild> = {}, repositoryPaused = false) =>
   projectRowText(build(extra), { repositoryPaused })
 
 describe('projectRowText', () => {
+  test('carries the ticket title and URL as identity, absent rather than undefined', () => {
+    const identity = { repo: 'r', status: 'running' as const }
+    const titled = row({
+      collectionIdentity: { ...identity, title: 'Fix the gate', url: 'https://t.test/7' },
+    })
+    expect(titled.title).toBe('Fix the gate')
+    expect(titled.ticketUrl).toBe('https://t.test/7')
+    const bare = row({ collectionIdentity: { ...identity, title: undefined, url: undefined } })
+    expect(JSON.parse(JSON.stringify(bare))).toEqual(bare)
+    expect('title' in bare || 'ticketUrl' in bare).toBe(false)
+  })
+
   test('flags: held only for queued rows under a repository hold, then draining, paused', () => {
     expect(row({ status: 'queued' }, true).flags.map((f) => f.term)).toEqual(['held'])
     expect(row({}, true).flags).toEqual([])

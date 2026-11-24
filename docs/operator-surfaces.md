@@ -74,6 +74,7 @@ bun ab web
 - `--host <addr>` serves beyond loopback with no access control; `ab web` warns that anyone who can reach the port can read the repository's builds.
 - `--json` prints one line, `{"url":"http://127.0.0.1:<port>/"}`, for agents that open or hand off the page.
 - Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
+- Pages: the overview (`/`) shows the dispatcher's mode, capacity, what needs attention, and active, queued and recently finished builds. Each row links to its build page (`/builds/<slug>`). An active or queued build's page shows its ticket, phase, steps and attention; a recently finished build's page shows only its outcome, kind and completion time, because the roster keeps no finished tickets. Build pages cover the builds the overview lists, not older history. Both pages update live and offer no actions.
 
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
