@@ -2232,7 +2232,10 @@ async function ensureBuildListingFacts(tx: SQL): Promise<void> {
  * bounds and orders by `(class columns, key, slug)`, is one backward range
  * scan of exactly that index: no other index yields that order without a
  * full sort. Hosted servers read the table, so migrate before rolling the
- * service out.
+ * service out. The triggers test event types and `updated_at` changes inside
+ * their functions, not in `WHEN` or `UPDATE OF` clauses: those make
+ * `events.type` and `builds.updated_at` trigger dependencies, which would
+ * block the column changes the schema-mismatch checks must still detect.
  */
 export const BUILD_LISTING_DDL = `
 CREATE TABLE IF NOT EXISTS build_listing_facts (
@@ -2258,7 +2261,9 @@ BEGIN
 END $$;
 CREATE OR REPLACE FUNCTION ab_build_listing_touched() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- UPDATE build_listing_facts SET updated_at = NEW.updated_at WHERE slug = NEW.slug;
+ IF OLD.updated_at IS DISTINCT FROM NEW.updated_at THEN
+  UPDATE build_listing_facts SET updated_at = NEW.updated_at WHERE slug = NEW.slug;
+ END IF;
  RETURN NEW;
 END $$;
 CREATE OR REPLACE FUNCTION ab_build_listing_event() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -2275,12 +2280,9 @@ END $$;
 DROP TRIGGER IF EXISTS builds_listing_seeded ON builds;
 CREATE TRIGGER builds_listing_seeded AFTER INSERT ON builds FOR EACH ROW EXECUTE FUNCTION ab_build_listing_seeded();
 DROP TRIGGER IF EXISTS builds_listing_touched ON builds;
-CREATE TRIGGER builds_listing_touched AFTER UPDATE OF updated_at ON builds
-FOR EACH ROW WHEN (OLD.updated_at IS DISTINCT FROM NEW.updated_at) EXECUTE FUNCTION ab_build_listing_touched();
+CREATE TRIGGER builds_listing_touched AFTER UPDATE ON builds FOR EACH ROW EXECUTE FUNCTION ab_build_listing_touched();
 DROP TRIGGER IF EXISTS events_listing_recorded ON events;
-CREATE TRIGGER events_listing_recorded AFTER INSERT ON events
-FOR EACH ROW WHEN (NEW.type IN ('build.created', 'build.completed', 'build.reopened'))
-EXECUTE FUNCTION ab_build_listing_event();
+CREATE TRIGGER events_listing_recorded AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION ab_build_listing_event();
 `
 
 /**
