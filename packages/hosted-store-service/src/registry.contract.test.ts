@@ -778,6 +778,67 @@ describe('agent tool registry contract', () => {
     expect(result).toMatchObject({ tickets: [], diagnostics: ['native'], total: 42 })
   })
 
+  test('tickets.search matches title and body with filters and cursor paging', async () => {
+    const world = await seedWorld()
+    const run = toolFor(world)
+    const ids = (result: object) =>
+      (result as { tickets: Array<{ id: string }> }).tickets.map((hit) => hit.id)
+    const byTitle = await run('tickets.search', { repo, query: 'SEEDED' })
+    expectEqual(byTitle, {
+      tickets: [
+        { id: 'AUT-1', title: 'Seeded ticket', state: 'Todo', labels: ['web'], kind: 'work' },
+      ],
+      diagnostics: [],
+    })
+    expectJsonClean(byTitle)
+    expectEqual(ids(await run('tickets.search', { repo, query: 'body' })), ['AUT-1', 'AUT-2'])
+    expectEqual(ids(await run('tickets.search', { repo, query: 'body', labels: ['web'] })), [
+      'AUT-1',
+    ])
+    expectEqual(ids(await run('tickets.search', { repo, query: 'body', state: 'Backlog' })), [
+      'AUT-2',
+    ])
+    const first = (await run('tickets.search', { repo, query: 'body', limit: 1 })) as {
+      cursor?: string
+    }
+    expectEqual(ids(first), ['AUT-1'])
+    const rest = await run('tickets.search', {
+      repo,
+      query: 'body',
+      limit: 1,
+      cursor: first.cursor,
+    })
+    expectEqual(ids(rest), ['AUT-2'])
+    expect((rest as { cursor?: string }).cursor).toBeUndefined()
+    expectEqual(
+      (await toolFailure(() => run('tickets.search', { repo, query: 'body', cursor: 'nope' })))
+        .code,
+      'search-cursor-invalid',
+    )
+  })
+
+  test('tickets.search refuses a source without search and never lists', async () => {
+    const world = await seedWorld()
+    const forbidden = async () => {
+      throw new Error('must not list')
+    }
+    Object.assign(world.source, {
+      search: undefined,
+      listReady: forbidden,
+      listAll: forbidden,
+      listPage: forbidden,
+      get: forbidden,
+    })
+    expectEqual(
+      await toolFailure(() => toolFor(world)('tickets.search', { repo, query: 'seed' })),
+      {
+        kind: 'refusal',
+        error: 'fake ticket source does not support search; no tickets were read',
+        code: 'search-unsupported',
+      },
+    )
+  })
+
   test('tickets.get matches the ticket detail route', async () => {
     const world = await seedWorld()
     const originalGet = world.source.get.bind(world.source)
@@ -1312,6 +1373,7 @@ describe('agent tool registry contract', () => {
       'tickets.states': { repo },
       'tickets.state.create': { repo, name: 'icebox' },
       'tickets.list': { repo },
+      'tickets.search': { repo, query: 'seed' },
       'tickets.get': { repo, id: 'AUT-1' },
       'tickets.create': { repo, title: 't', body: 'b' },
       'tickets.update': { repo, id: 'AUT-1', title: 'new' },
@@ -1344,6 +1406,7 @@ describe('agent tool registry contract', () => {
       'tickets.states': { repo },
       'tickets.state.create': { repo, name: 'icebox' },
       'tickets.list': { repo },
+      'tickets.search': { repo, query: 'seed' },
       'tickets.get': { repo, id: 'AUT-1' },
       'notes.read': { repo },
     }
