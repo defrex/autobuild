@@ -439,7 +439,12 @@ function selectImports(
     instructionAt.set(instruction.realPath, instruction.paths[0]!)
     for (const path of instruction.paths) instructionAt.set(path, instruction.paths[0]!)
   }
-  const byReal = new Map<string, ImportSelection>()
+  // One entry per (resolved file, real directory its imports resolve from).
+  // Two aliases of one file in different directories resolve their own
+  // relative imports differently, so each is traversed; the key set is finite
+  // (real blobs × real directories), so cycles and looping directory links
+  // still terminate.
+  const byKey = new Map<string, ImportSelection>()
   const queue: { id: string; directory: string; file: FileSelection; imports: Set<string> }[] =
     instructions.map((instruction) => ({
       id: instruction.paths[0]!,
@@ -468,7 +473,10 @@ function selectImports(
         if (instruction !== importer.id) importer.imports.add(instruction)
         continue
       }
-      const existing = byReal.get(resolved.path)
+      const parent = assembly.resolve(dirname(path))
+      if (parent.kind !== 'tree') continue
+      const key = `${resolved.path}\0${parent.path}`
+      const existing = byKey.get(key)
       if (existing) {
         existing.importedBy.add(importer.id)
         if (existing.path !== importer.id) importer.imports.add(existing.path)
@@ -486,17 +494,17 @@ function selectImports(
         },
         imports: new Set(),
       }
-      byReal.set(resolved.path, selection)
+      byKey.set(key, selection)
       importer.imports.add(path)
       queue.push({
         id: path,
-        directory: dirname(path),
+        directory: parent.path,
         file: selection.file,
         imports: selection.imports,
       })
     }
   }
-  return [...byReal.values()].sort((a, b) => compare(a.path, b.path))
+  return [...byKey.values()].sort((a, b) => compare(a.path, b.path))
 }
 
 /** One assembly pass over `entries`; see the module comment. */
