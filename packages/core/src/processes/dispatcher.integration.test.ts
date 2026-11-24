@@ -3825,32 +3825,6 @@ describe('Dispatcher janitor', () => {
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
   })
 
-  test('native auto-merge completion is observed by the ordinary next poll', async () => {
-    const h = harness()
-    const slug = await seedAwaitingPr(h)
-    await h.store.append(slug, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    h.forge.setPrState(1, { state: 'open', mergeable: true })
-    await h.store.claimLease(slug, 'runner-live', 60_000)
-    await h.dispatcher.tick()
-
-    h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
-    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.workspaces.releases).toEqual([])
-    await h.store.releaseLease(slug, 'runner-live')
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-    expect((await h.store.getEvents(slug)).map((e) => e.type).slice(-5)).toEqual([
-      'pr.merged',
-      'workspace.fenced',
-      'workspace.commits-preserved',
-      'workspace.released',
-      'build.completed',
-    ])
-  })
-
   test('a local checkout collision is nonfatal, observed once, and retries to a guarded squash', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)
@@ -3958,6 +3932,8 @@ describe('Dispatcher janitor', () => {
     // recorded — including between the merge fact and build.completed.
     h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    // The held runner lease keeps the workspace until the runner lets go.
+    expect(h.workspaces.releases).toEqual([])
     await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     expect((await h.store.getEvents(slug)).map((event) => event.type).slice(-5)).toEqual([
@@ -4408,7 +4384,7 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.squashMergeCalls).toEqual([])
   })
 
-  test('conflicted PR: pr.conflicted{baseSha} + runner re-attach, deduped while pending', async () => {
+  test('conflicted PR: pr.conflicted{baseSha} from the forge + runner re-attach, deduped while pending', async () => {
     const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
     const slug = await seedBuild(h, { ticketId: 'T-1', pr: PR })
     h.forge.setPrState(1, { state: 'open', mergeable: false })
@@ -4435,26 +4411,23 @@ describe('Dispatcher janitor', () => {
     const after = await h.store.getEvents(slug)
     expect(after.filter((e) => e.type === 'pr.conflicted')).toHaveLength(1)
     expect(h.launches).toEqual([slug])
-  })
 
-  test('baseSha never reads the physical checkout for an origin-URL identity', async () => {
-    // The forge is authoritative even when a physical checkout exists.
-    const h = harness({
+    // The forge is authoritative even when a physical checkout exists: an
+    // origin-URL identity never reads the checkout for baseSha.
+    const url = harness({
       tickets: [readyTicket('T-1', { labels: [] })],
       repo: 'https://github.com/acme/app',
       checkout: '/repos/checkout',
     })
-    const slug = await seedBuild(h, {
+    const urlSlug = await seedBuild(url, {
       ticketId: 'T-1',
       pr: PR,
       repo: 'https://github.com/acme/app',
     })
-    h.forge.setPrState(1, { state: 'open', mergeable: false })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
-    expect(h.execCalls).toEqual([
-      ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
+    url.forge.setPrState(1, { state: 'open', mergeable: false })
+    expect(await url.dispatcher.tick()).toEqual({ ...emptyTickReport(), conflicted: 1 })
+    expect(url.execCalls).toEqual([
+      ['git', 'rev-parse', '--verify', `refs/heads/ab/${urlSlug}^{commit}`],
     ])
   })
 
@@ -4555,6 +4528,15 @@ describe('Dispatcher janitor', () => {
     expect(events.at(-1)?.payload).toEqual({ baseSha: 'b'.repeat(40) })
   })
 
+  // AUT-520/AUT-527: isRemoteWorkspace decides both the local-branch git
+  // steps (remote workspaces never create a local branch) and the closePr path
+  // forgeWorkspacePath picks (remote forges close against the store identity,
+  // local forges against the physical checkout). These cross-cases pin
+  // marker-over-name precedence for both: the marker decides when present,
+  // overriding a suggestive provider name in either direction; the name
+  // reading is only the legacy fallback for journals written before the marker
+  // existed. The closePr call precedes any PR-settlement branch, so an open PR
+  // pins the path decision for every settlement case.
   test.each([
     ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
     ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
@@ -4564,7 +4546,7 @@ describe('Dispatcher janitor', () => {
       false,
     ],
   ])(
-    'abort cleanup skips the local-branch git step for remote workspaces: %s',
+    'abort cleanup follows isRemoteWorkspace for the local-branch git step and closePr: %s',
     async (_name, provider, remote) => {
       // Harness wiring follows the provider name only: the dispatcher routes
       // release and reap by the name on the provisioned fact, so the fake
@@ -4579,20 +4561,16 @@ describe('Dispatcher janitor', () => {
       })
       const slug = await seedBuild(h, {
         ticketId: 'T-1',
+        pr: PR,
         workspaceProvider: provider,
         ...(remote !== undefined ? { workspaceRemote: remote } : {}),
       })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
       await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
-      const report = await h.dispatcher.tick({ acceptNewWork: false })
-      expect(report.janitorDiagnostics).toEqual([])
-      expect(report.abandoned).toBe(1)
+      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
       const events = await h.store.getEvents(slug)
       expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
-      // The marker decides when present, overriding a suggestive provider
-      // name in either direction; the name reading is only the fallback for
-      // journals written before the marker existed. Remote workspaces never
-      // create a local branch, so the git steps and their fact are skipped.
       expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(
         !expectRemote,
       )
@@ -4601,6 +4579,12 @@ describe('Dispatcher janitor', () => {
       } else {
         expect(h.execCalls).toContainEqual(['git', 'check-ref-format', `refs/heads/ab/${slug}`])
       }
+      expect(h.forge.closePrCalls).toEqual([
+        { workspacePath: expectRemote ? REPO : `/ws/ab/${slug}`, number: PR.number },
+      ])
+      expect(events.some((event) => event.type === 'pr.closed')).toBe(true)
+      // The workspace (a sandbox when remote) is released after the PR closes.
+      expect(h.workspaces.releases).toHaveLength(1)
       expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     },
   )
@@ -4639,55 +4623,22 @@ describe('Dispatcher janitor', () => {
 
     h.clock.advance(30_000)
     fail = false
-    await h.dispatcher.tick({ acceptNewWork: false })
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
     events = await h.store.getEvents(slug)
-    expect(
-      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
-    ).toMatchObject({
+    const confirmed = events
+      .filter((event) => event.type === 'infrastructure.cleanup-attempted')
+      .at(-1)
+    expect(confirmed?.payload).toMatchObject({
+      provider: 'remote-test',
+      workspaceRef: 'sandbox-g0',
       operation: 'delete',
       outcome: 'confirmed',
       attempt: 2,
       snapshots: { outcome: 'confirmed', deleted: 2 },
     })
-    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
-  })
-
-  test('remote release records snapshot purge evidence before the durable release fact', async () => {
-    const remote: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        async reap() {
-          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 3 } }
-        },
-      },
-      async provision() {
-        throw new Error('not used')
-      },
-      async release() {},
-    }
-    const h = harness({ workspaceProvider: remote })
-    const slug = await seedBuild(h, {
-      workspaceRef: 'sandbox-g0',
-      workspaceProvider: 'remote-test',
-    })
-    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-    expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
-    const events = await h.store.getEvents(slug)
-    const cleaned = events.filter((event) => event.type === 'infrastructure.cleanup-attempted')
-    expect(cleaned).toHaveLength(1)
-    expect(cleaned[0]?.payload).toMatchObject({
-      provider: 'remote-test',
-      workspaceRef: 'sandbox-g0',
-      operation: 'delete',
-      attempt: 1,
-      outcome: 'confirmed',
-      snapshots: { outcome: 'confirmed', deleted: 3 },
-    })
+    // Snapshot purge evidence lands immediately before the durable release fact.
     const releasedIndex = events.findIndex((event) => event.type === 'workspace.released')
-    expect(releasedIndex).toBe(events.indexOf(cleaned[0]!) + 1)
+    expect(releasedIndex).toBe(events.indexOf(confirmed!) + 1)
   })
 
   test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
@@ -4724,6 +4675,15 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.comments).toEqual([
       { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
     ])
+    // The default hand-back is reported once and settled.
+    const handback = (await h.store.getRepoEvents(REPO)).filter(
+      (event) => event.type === 'ticket.handed-back' || event.type === 'ticket.handback-settled',
+    )
+    expect(handback.map((event) => event.type)).toEqual([
+      'ticket.handed-back',
+      'ticket.handback-settled',
+    ])
+    expect(handback[0]?.payload).toMatchObject({ cause: 'abort', state: 'Triage', role: 'triage' })
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
@@ -4803,23 +4763,6 @@ describe('Dispatcher janitor', () => {
         requested: 'ready',
         missing: expect.arrayContaining(["an '## Out of scope' heading"]),
       })
-    })
-
-    test('a default abort keeps its Triage comment and reports once', async () => {
-      const h = harness({ tickets: [readyTicket('T-1')] })
-      const slug = await seedBuild(h, { ticketId: 'T-1' })
-      await requestAbort(h, slug)
-
-      await h.dispatcher.tick({ acceptNewWork: false })
-      expect(h.tickets.comments).toEqual([
-        { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
-      ])
-      const journal = await handbacks(h)
-      expect(journal.map((event) => event.type)).toEqual([
-        'ticket.handed-back',
-        'ticket.handback-settled',
-      ])
-      expect(journal[0]?.payload).toMatchObject({ cause: 'abort', state: 'Triage', role: 'triage' })
     })
 
     test('a completion that fails after the report committed retries without a second move or report', async () => {
@@ -5093,38 +5036,15 @@ describe('Dispatcher janitor', () => {
     })
   })
 
-  test('aborted remote build closes its PR from the dispatcher checkout before releasing the sandbox', async () => {
-    const h = harness({ workspaceName: 'vercel-sandbox' })
-    const slug = await seedBuild(h, { slug: 'remote-abort', pr: PR })
-    await h.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'workspace.provisioned',
-      payload: {
-        provider: 'vercel-sandbox',
-        ref: 'sandbox-remote-abort',
-        path: '/vercel/sandbox/workspace',
-        remote: true,
-        branch: `ab/${slug}`,
-        base: { source: 'existing', sha: 'a'.repeat(40) },
-      },
-    })
-    h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
-    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
-    expect(h.forge.closePrCalls).toEqual([{ workspacePath: REPO, number: PR.number }])
-    expect(h.workspaces.releases.at(-1)?.ref).toBe('sandbox-remote-abort')
-  })
-
   // AUT-527 audit: the parameterized dimension here is the PR's forge state at
   // abort time (open / closed / merged), orthogonal to the marker-vs-name
   // decision of isRemoteWorkspace. But the closePr workspacePath asserted below
   // comes from forgeWorkspacePath, which branches on isRemoteWorkspace — a
   // marker-sensitive decision this site's default seed (legacy local, no
   // remote marker) cannot discriminate: under a name-keyed revert every case
-  // still reads local and still passes. The 'abort cleanup closePr targets the
-  // path isRemoteWorkspace names' test.each below pins that precedence for the
-  // saga's closePr step with marker-over-name cross-cases.
+  // still reads local and still passes. The 'abort cleanup follows
+  // isRemoteWorkspace' test.each above pins that precedence for the saga's
+  // closePr step with marker-over-name cross-cases.
   test.each([
     ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
     ['already closed', { state: 'closed' } as const, 'pr.closed'],
@@ -5147,53 +5067,6 @@ describe('Dispatcher janitor', () => {
           buildTrailerPresent: false,
         })
       }
-    },
-  )
-
-  // AUT-527: forgeWorkspacePath branches on isRemoteWorkspace to pick the
-  // closePr path — remote forges close against the store identity, local
-  // forges against the physical checkout. These cross-cases pin marker-over-
-  // name precedence for that decision: the marker decides when present,
-  // overriding a suggestive provider name in either direction; the name
-  // reading is only the legacy fallback. The PR-state dimension above is
-  // orthogonal (the closePr call precedes any settlement branch), so an open
-  // PR pins the path decision for every settlement case.
-  test.each([
-    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
-    ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
-    [
-      'a provisioned payload carrying the local marker over a remote-suggestive name',
-      'vercel-sandbox',
-      false,
-    ],
-  ])(
-    'abort cleanup closePr targets the path isRemoteWorkspace names: %s',
-    async (_name, provider, remote) => {
-      // Harness wiring follows the provider name only: the dispatcher routes
-      // release and reap by the name on the provisioned fact, so the fake
-      // provider must present under that name. The closePr path expectation
-      // derives from the marker (with the legacy fallback), mirroring
-      // isRemoteWorkspace — not from the name.
-      const nameSuggestsRemote = provider === 'vercel-sandbox'
-      const expectRemote = remote ?? nameSuggestsRemote
-      const h = harness({
-        workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
-        tickets: [readyTicket('T-1', { labels: [] })],
-      })
-      const slug = await seedBuild(h, {
-        ticketId: 'T-1',
-        pr: PR,
-        workspaceProvider: provider,
-        ...(remote !== undefined ? { workspaceRemote: remote } : {}),
-      })
-      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
-      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
-      expect(h.forge.closePrCalls).toEqual([
-        { workspacePath: expectRemote ? REPO : `/ws/ab/${slug}`, number: PR.number },
-      ])
-      expect((await h.store.getEvents(slug)).some((event) => event.type === 'pr.closed')).toBe(true)
     },
   )
 
@@ -5245,7 +5118,7 @@ describe('Dispatcher janitor', () => {
   // readings of isRemoteWorkspace agree on by construction; the settled count
   // cannot change the marker reading. Marker-over-name precedence for this
   // saga is already pinned in both directions by the AUT-520 cross-cases at
-  // the 'abort cleanup skips the local-branch git step' test.each above.
+  // the 'abort cleanup follows isRemoteWorkspace' test.each above.
   test.each([0, 1, 2, 3, 4, 5])(
     'a crash after cleanup checkpoint prefix %i resumes only the remaining external effects',
     async (settled) => {
@@ -5315,7 +5188,7 @@ describe('Dispatcher janitor', () => {
   // local, no remote marker), so marker-keyed and name-keyed readings of
   // isRemoteWorkspace agree by construction. Marker-over-name precedence for
   // the abort-cleanup saga is pinned by the AUT-520 cross-cases at the
-  // 'abort cleanup skips the local-branch git step' test.each above.
+  // 'abort cleanup follows isRemoteWorkspace' test.each above.
   test.each(['closePr', 'deleteBranch'] as const)(
     'missing Forge %s capability leaves cleanup pending with an actionable diagnostic',
     async (capability) => {
