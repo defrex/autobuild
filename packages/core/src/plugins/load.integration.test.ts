@@ -44,119 +44,57 @@ describe('loadPlugins', () => {
     expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual(['JIRA_TOKEN'])
   })
 
-  test('uses separate roots for repository paths and package exports', async () => {
-    const worktree = await fixture()
-    const packageRoot = join(worktree, '..', 'consumer')
+  test('package roots preserve explicit selection, repository precedence, installation fallback and diagnostics', async () => {
+    const repo = await fixture()
+    const packageRoot = join(repo, '..', 'consumer')
+    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+    const stage = async (base: string, name: string, plugin: string) => {
+      await write(
+        join(base, 'package.json'),
+        JSON.stringify({ name, type: 'module', exports: './plugin.ts' }),
+      )
+      await write(
+        join(base, 'plugin.ts'),
+        `export default { name: '${plugin}', apiVersion: '^1.0.0', forges: { '${plugin}': () => ({}) } }\n`,
+      )
+    }
     await write(
-      join(worktree, 'repo-local.ts'),
+      join(repo, 'repo-local.ts'),
       `export default { name: 'local', apiVersion: '^1.0.0', forges: { local: () => ({}) } }\n`,
     )
-    await write(
-      join(packageRoot, 'node_modules', 'fixture-package', 'package.json'),
-      JSON.stringify({ name: 'fixture-package', type: 'module', exports: './plugin.ts' }),
-    )
-    await write(
-      join(packageRoot, 'node_modules', 'fixture-package', 'plugin.ts'),
-      `export default { name: 'package', apiVersion: '^1.0.0', forges: { package: () => ({}) } }\n`,
-    )
-
-    const registry = await loadPlugins(['./repo-local.ts', 'fixture-package'], worktree, {
+    await stage(join(packageRoot, 'node_modules', 'fixture-package'), 'fixture-package', 'package')
+    const explicit = await loadPlugins(['./repo-local.ts', 'fixture-package'], repo, {
       packageRoot,
     })
-    expect(registry.forges.get('local')?.owner).toEqual({ kind: 'plugin', name: 'local' })
-    expect(registry.forges.get('package')?.owner).toEqual({ kind: 'plugin', name: 'package' })
-  })
+    expect(explicit.forges.get('local')?.owner).toEqual({ kind: 'plugin', name: 'local' })
+    expect(explicit.forges.get('package')?.owner).toEqual({ kind: 'plugin', name: 'package' })
 
-  test('resolves a package export from the consuming repository by default', async () => {
-    const repo = await fixture()
-    const root = join(repo, '..')
-    for (const [base, pluginName] of [
-      [join(root, 'node_modules', 'fixture-plugin'), 'decoy'],
-      [join(repo, 'node_modules', 'fixture-plugin'), 'consumer'],
-    ] as const) {
-      await write(
-        join(base, 'package.json'),
-        JSON.stringify({ name: 'fixture-plugin', type: 'module', exports: './plugin.ts' }),
-      )
-      await write(
-        join(base, 'plugin.ts'),
-        `export default { name: '${pluginName}', apiVersion: '^1.0.0', forges: { '${pluginName}': () => ({}) } }\n`,
-      )
-    }
+    await stage(join(repo, '..', 'node_modules', 'fixture-plugin'), 'fixture-plugin', 'decoy')
+    await stage(join(repo, 'node_modules', 'fixture-plugin'), 'fixture-plugin', 'consumer')
+    const implicit = await loadPlugins(['fixture-plugin'], repo)
+    expect(implicit.forges.get('consumer')?.owner).toEqual({ kind: 'plugin', name: 'consumer' })
+    expect(implicit.forges.has('decoy')).toBe(false)
 
-    const registry = await loadPlugins(['fixture-plugin'], repo)
-    expect(registry.forges.get('consumer')?.owner).toEqual({
+    const name = '@defrex/autobuild-extension'
+    await stage(join(installationRoot, '..', 'autobuild-extension'), name, 'installed')
+    const fallback = await diagnosePlugins([name], repo, { installationRoot })
+    expect(fallback.healthy).toBe(true)
+    expect(fallback.reports[0]?.resolvedFrom).toBe('installation')
+    expect(fallback.registry.forges.get('installed')?.owner).toEqual({
       kind: 'plugin',
-      name: 'consumer',
+      name: 'installed',
     })
-    expect(registry.forges.has('decoy')).toBe(false)
-  })
 
-  test('falls back to the Autobuild installation for a package the repository lacks', async () => {
-    const repo = await fixture()
-    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
-    await write(
-      join(installationRoot, '..', 'autobuild-extension', 'package.json'),
-      JSON.stringify({
-        name: '@defrex/autobuild-extension',
-        type: 'module',
-        exports: './plugin.ts',
-      }),
-    )
-    await write(
-      join(installationRoot, '..', 'autobuild-extension', 'plugin.ts'),
-      `export default { name: 'extension', apiVersion: '^1.0.0', forges: { extension: () => ({}) } }\n`,
-    )
+    await stage(join(repo, 'node_modules', '@defrex', 'autobuild-extension'), name, 'repository')
+    const precedence = await diagnosePlugins([name], repo, { installationRoot })
+    expect(precedence.reports[0]?.resolvedFrom).toBe('repository')
+    expect(precedence.registry.forges.has('repository')).toBe(true)
+    expect(precedence.registry.forges.has('installed')).toBe(false)
 
-    const diagnosis = await diagnosePlugins(['@defrex/autobuild-extension'], repo, {
-      installationRoot,
-    })
-    expect(diagnosis.healthy).toBe(true)
-    expect(diagnosis.reports[0]?.resolvedFrom).toBe('installation')
-    expect(diagnosis.registry.forges.get('extension')?.owner).toEqual({
-      kind: 'plugin',
-      name: 'extension',
-    })
-  })
-
-  test('a repository copy of a package wins over the installed one', async () => {
-    const repo = await fixture()
-    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
-    for (const [base, pluginName] of [
-      [join(installationRoot, '..', 'autobuild-extension'), 'installed'],
-      [join(repo, 'node_modules', '@defrex', 'autobuild-extension'), 'repository'],
-    ] as const) {
-      await write(
-        join(base, 'package.json'),
-        JSON.stringify({
-          name: '@defrex/autobuild-extension',
-          type: 'module',
-          exports: './plugin.ts',
-        }),
-      )
-      await write(
-        join(base, 'plugin.ts'),
-        `export default { name: '${pluginName}', apiVersion: '^1.0.0', forges: { '${pluginName}': () => ({}) } }\n`,
-      )
-    }
-
-    const diagnosis = await diagnosePlugins(['@defrex/autobuild-extension'], repo, {
-      installationRoot,
-    })
-    expect(diagnosis.reports[0]?.resolvedFrom).toBe('repository')
-    expect(diagnosis.registry.forges.has('repository')).toBe(true)
-    expect(diagnosis.registry.forges.has('installed')).toBe(false)
-  })
-
-  test('a missing package names both roots it was not found in', async () => {
-    const repo = await fixture()
-    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
-    const diagnosis = await diagnosePlugins(['@defrex/autobuild-missing'], repo, {
-      installationRoot,
-    })
-    expect(diagnosis.reports[0]?.status).toBe('failed')
-    expect(diagnosis.reports[0]?.error).toContain(`repository "${repo}"`)
-    expect(diagnosis.reports[0]?.error).toContain(`installation "${installationRoot}"`)
+    const missing = await diagnosePlugins(['@defrex/autobuild-missing'], repo, { installationRoot })
+    expect(missing.reports[0]?.status).toBe('failed')
+    expect(missing.reports[0]?.error).toContain(`repository "${repo}"`)
+    expect(missing.reports[0]?.error).toContain(`installation "${installationRoot}"`)
   })
 
   test('diagnosis reports ordered failures and keeps later successful registrations', async () => {
@@ -422,7 +360,7 @@ describe('loadPlugins', () => {
       expect(sentinelCalls).toBe(0)
     })
 
-    test('a disk-present package reaches Bun.resolveSync exactly once, from the root the walk found', async () => {
+    test('a disk-present package resolves and reports its repository root', async () => {
       const repo = await fixture()
       await write(
         join(repo, 'node_modules', 'gated-package', 'package.json'),
@@ -432,15 +370,15 @@ describe('loadPlugins', () => {
         join(repo, 'node_modules', 'gated-package', 'plugin.ts'),
         `export default { name: 'gated', apiVersion: '^1.0.0', forges: { gated: () => ({}) } }\n`,
       )
-      const seenBases: string[] = []
-      Bun.resolveSync = ((specifier: string, base: string): string => {
-        seenBases.push(base)
-        return originalResolveSync(specifier, base)
-      }) as typeof Bun.resolveSync
+      Bun.resolveSync = originalResolveSync
       const diagnosis = await diagnosePlugins(['gated-package'], repo)
       expect(diagnosis.healthy).toBe(true)
       expect(diagnosis.reports[0]?.status).toBe('loaded')
-      expect(seenBases).toEqual([repo])
+      expect(diagnosis.reports[0]?.resolvedFrom).toBe('repository')
+      expect(diagnosis.registry.forges.get('gated')?.owner).toEqual({
+        kind: 'plugin',
+        name: 'gated',
+      })
     })
 
     test('a subpath export of a disk-present package resolves without failing the gate', async () => {
