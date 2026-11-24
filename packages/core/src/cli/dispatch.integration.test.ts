@@ -11265,8 +11265,12 @@ test('unfocused frontend leaves the supervised kernel ticking and running a read
         (event) => event.type === 'session.started',
       )
     })
-    const journal = await fx.store.getRepoEvents(fx.origin)
-    expect(journal.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+    // The tick that launched the session completes after its last stage.
+    await waitFor(async () =>
+      (await fx.store.getRepoEvents(fx.origin)).some(
+        (event) => event.type === 'dispatcher.tick-completed',
+      ),
+    )
     expect(fx.tickets.claims.length).toBeGreaterThan(0)
     const slug = (await fx.store.listBuilds())[0]!.slug
     await waitFor(() => term.all().includes(slug))
