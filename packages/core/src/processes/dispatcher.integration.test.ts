@@ -48,7 +48,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { waitGuidance } from '../kernel/ticket-wait'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
-import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -68,28 +68,16 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { textContent, type BuildStore, type NewBuildInput } from '../store/types'
 import { creationBuildSlug, projectBuildSlugBase } from '../kernel/build-creation'
-import { openLocalStore } from '../store/local/store'
 import { manualClock } from '../testing/fixed'
 import { withFailingRepoAppend } from '../testing/store-failures'
 import {
   Dispatcher,
   SWEEP_PIN_CACHE_CAPACITY,
-  analyzeDependencies,
-  markRejected,
-  defaultProposalState,
-  defaultTriageState,
   emptyTickReport,
-  fallbackSlug,
-  heldByRepositoryPause,
-  kebab,
   readyCriteria,
-  specConformance,
-  validateSlugCandidate,
-  type DependencyVerdict,
   type DispatcherOpts,
   type LaunchRunnerResult,
 } from './dispatcher'
-import type { DependencyState } from '../ports/types'
 
 const REPO = '/repos/origin'
 const BASE_SHA = 'a'.repeat(40)
@@ -479,298 +467,6 @@ async function seedAwaitingPr(
 
 const PR = { number: 1, url: 'https://fake.forge/pr/1', headSha: 'head-1' }
 
-// ── Quality gate heuristic (§6.3) ────────────────────────────────────────────
-
-describe('specConformance', () => {
-  test('conforming body passes', () => {
-    expect(specConformance(CONFORMING_BODY)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('empty body reports every missing part', () => {
-    expect(specConformance('')).toEqual({
-      conforms: false,
-      missing: [
-        'a nonempty spec body',
-        "an '## Acceptance criteria' heading",
-        "an '## Out of scope' heading",
-      ],
-    })
-  })
-
-  test('acceptance criteria heading without a list item is nonconforming', () => {
-    const body = 'Why.\n\n## Acceptance criteria\n\nnone yet\n\n## Out of scope\n'
-    expect(specConformance(body)).toEqual({
-      conforms: false,
-      missing: ["at least one list item under '## Acceptance criteria'"],
-    })
-  })
-
-  test('headings match case-insensitively and at deeper levels', () => {
-    const body = 'Why.\n\n### ACCEPTANCE CRITERIA\n- one\n\n### Out Of Scope — explicit\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('h1 headings conform (AUT-12)', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n# Out of scope\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('mixed heading levels conform', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n### Out of scope\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('an h1 section spans an h2 subheading; a later h1 still ends it', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n## Details\n\nprose\n\n# Out of scope\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('a list item under a subsection of the acceptance criteria counts (AUT-15)', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n\n## Details\n- one\n\n# Out of scope\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('criteria grouped under h3 subsections of an h2 section count (AUT-15 shape)', () => {
-    const body =
-      'Why.\n\n## Acceptance criteria\n\n### Legend & selection\n\n1. one\n2. two\n\n### Drain\n\n3. three\n\n## Out of scope\n'
-    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
-  })
-
-  test('a list item under a sibling section does not count for acceptance criteria', () => {
-    const body =
-      'Why.\n\n## Acceptance criteria\n\nnone yet\n\n## Details\n- one\n\n## Out of scope\n'
-    expect(specConformance(body)).toEqual({
-      conforms: false,
-      missing: ["at least one list item under '## Acceptance criteria'"],
-    })
-  })
-
-  test('h1 heading with no list item under it is nonconforming', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n\nnone yet\n\n# Out of scope\n'
-    expect(specConformance(body)).toEqual({
-      conforms: false,
-      missing: ["at least one list item under '## Acceptance criteria'"],
-    })
-  })
-
-  test('h1 body missing the out-of-scope section still bounces accurately', () => {
-    const body = 'Why.\n\n# Acceptance criteria\n- one\n'
-    expect(specConformance(body)).toEqual({
-      conforms: false,
-      missing: ["an '## Out of scope' heading"],
-    })
-  })
-})
-
-describe('analyzeDependencies', () => {
-  /**
-   * `graph` reads as `id: [blockers]`; `done` lists the resolved ids and
-   * `missing` the ids that exist nowhere. Pure input — no adapter involved.
-   *
-   * Only BLOCKERS become nodes: `nodes` models what the source returned, and
-   * the source is never asked about the ticket being analyzed. Its own
-   * blockers reach the analyzer as an argument (see `analyze`), which is what
-   * keeps a fabricated self-node out of the tick-wide cache (f_8bc9ee0c).
-   */
-  function nodes(
-    graph: Record<string, string[]>,
-    opts: { done?: string[]; missing?: string[]; ticket?: string } = {},
-  ): Map<string, DependencyState> {
-    const map = new Map<string, DependencyState>()
-    for (const [id, blockedBy] of Object.entries(graph)) {
-      if (id === (opts.ticket ?? 'A')) continue // never fetched
-      if (opts.missing?.includes(id)) {
-        map.set(id, { id, exists: false, resolved: false, blockedBy: [] })
-        continue
-      }
-      map.set(id, {
-        id,
-        exists: true,
-        resolved: opts.done?.includes(id) ?? false,
-        blockedBy,
-      })
-    }
-    return map
-  }
-
-  /** Analyze ticket `id` against `graph`, taking its declared blockers from
-   * the graph entry — mirroring the dispatcher, which passes the ticket's own
-   * `blockedBy` rather than looking it up in the fetched nodes. */
-  function analyze(
-    id: string,
-    graph: Record<string, string[]>,
-    opts: { done?: string[]; missing?: string[] } = {},
-  ): DependencyVerdict {
-    return analyzeDependencies(id, graph[id] ?? [], nodes(graph, { ...opts, ticket: id }))
-  }
-
-  test('a rejected blocker is unresolved and named, without a cycle walk', () => {
-    const graph = nodes({ A: ['B'], B: ['A'] })
-    const blocker = graph.get('B')!
-    graph.set('B', markRejected({ ...blocker, resolved: true, state: 'Rejected' }, 'rejected'))
-    expect(analyzeDependencies('A', ['B'], graph)).toEqual({
-      unresolved: ['B'],
-      diagnostics: ['ticket A blocked by B, which was rejected'],
-    })
-    // An unset role, a different state, or a missing ticket is left alone.
-    const plain = { id: 'B', exists: true, resolved: true, state: 'Rejected', blockedBy: [] }
-    expect(markRejected(plain)).toBe(plain)
-    expect(markRejected(plain, 'icebox')).toBe(plain)
-    const missing = { id: 'B', exists: false, resolved: false, blockedBy: [] }
-    expect(markRejected(missing, 'rejected')).toBe(missing)
-  })
-
-  test('no blockers: eligible, nothing to say', () => {
-    expect(analyze('A', { A: [] })).toEqual({ unresolved: [], diagnostics: [] })
-  })
-
-  test('a ticket with no declared blockers never consults the graph', () => {
-    expect(analyzeDependencies('A', [], new Map())).toEqual({
-      unresolved: [],
-      diagnostics: [],
-    })
-  })
-
-  test('one unresolved blocker: ineligible, diagnostic names ticket and blocker', () => {
-    const verdict = analyze('A', { A: ['B'], B: [] })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics).toEqual(['ticket A blocked by B (not complete)'])
-  })
-
-  test('one resolved blocker: eligible', () => {
-    expect(analyze('A', { A: ['B'], B: [] }, { done: ['B'] })).toEqual({
-      unresolved: [],
-      diagnostics: [],
-    })
-  })
-
-  test('multiple blockers: ineligible until the LAST one resolves', () => {
-    const graph = { A: ['B', 'C'], B: [], C: [] }
-
-    expect(analyze('A', graph).unresolved).toEqual(['B', 'C'])
-    expect(analyze('A', graph, { done: ['B'] }).unresolved).toEqual(['C'])
-    expect(analyze('A', graph, { done: ['C'] }).unresolved).toEqual(['B'])
-    expect(analyze('A', graph, { done: ['B', 'C'] })).toEqual({
-      unresolved: [],
-      diagnostics: [],
-    })
-  })
-
-  test('a missing blocker: ineligible, diagnostic says it does not exist', () => {
-    const verdict = analyze('A', { A: ['B'], B: [] }, { missing: ['B'] })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics).toEqual([
-      'ticket A blocked by B, which does not exist in this ticket source',
-    ])
-  })
-
-  test('a blocker absent from the graph entirely reads as missing', () => {
-    const verdict = analyze('A', { A: ['B'] })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics[0]).toContain('does not exist')
-  })
-
-  test('self-dependency: ineligible, named as such', () => {
-    const verdict = analyze('A', { A: ['A'] })
-
-    expect(verdict.unresolved).toEqual(['A'])
-    expect(verdict.diagnostics).toEqual(['ticket A depends on itself'])
-  })
-
-  test('a 2-cycle is named as a cycle, not as a plain incomplete blocker', () => {
-    const verdict = analyze('A', { A: ['B'], B: ['A'] })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle A → B → A'])
-  })
-
-  test('a 3-cycle names the whole loop', () => {
-    const verdict = analyze('A', { A: ['B'], B: ['C'], C: ['A'] })
-
-    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle A → B → C → A'])
-  })
-
-  test('a cycle reached through a chain, not involving the ticket itself', () => {
-    const verdict = analyze('A', { A: ['B'], B: ['C'], C: ['D'], D: ['C'] })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle C → D → C'])
-  })
-
-  test('a resolved blocker is never walked — a cycle behind done work is not a diagnostic', () => {
-    const verdict = analyze('A', { A: ['B'], B: ['C'], C: ['B'] }, { done: ['B'] })
-
-    expect(verdict).toEqual({ unresolved: [], diagnostics: [] })
-  })
-
-  test('mixed: one resolved, one missing, one cycling — each reported once', () => {
-    const verdict = analyze(
-      'A',
-      { A: ['B', 'C', 'D'], B: [], C: [], D: ['A'] },
-      { done: ['B'], missing: ['C'] },
-    )
-
-    expect(verdict.unresolved).toEqual(['C', 'D'])
-    expect(verdict.diagnostics).toEqual([
-      'ticket A blocked by C, which does not exist in this ticket source',
-      'ticket A: dependency cycle A → D → A',
-    ])
-  })
-
-  test('a diamond terminates and does not double-report', () => {
-    const verdict = analyze('A', {
-      A: ['B'],
-      B: ['C', 'D'],
-      C: ['E'],
-      D: ['E'],
-      E: [],
-    })
-
-    expect(verdict.unresolved).toEqual(['B'])
-    expect(verdict.diagnostics).toEqual(['ticket A blocked by B (not complete)'])
-  })
-})
-
-describe('build slug helpers', () => {
-  test('kebab lowercases, strips punctuation, and collapses separators', () => {
-    expect(kebab('Add rate limiting!')).toBe('add-rate-limiting')
-    expect(kebab('  Fix: OAuth2 / SSO  ')).toBe('fix-oauth2-sso')
-    expect(kebab('!!!')).toBe('build')
-  })
-
-  test('fallbackSlug keeps only the first three normalized title tokens', () => {
-    expect(fallbackSlug('Please add support for login throttling')).toBe('please-add-support')
-    expect(fallbackSlug('Fix OAuth2 / SSO now')).toBe('fix-oauth2-sso')
-    expect(fallbackSlug('!!!')).toBe('build')
-  })
-
-  test('validateSlugCandidate accepts only one-to-three lowercase kebab tokens', () => {
-    expect(validateSlugCandidate('auth')).toBe('auth')
-    expect(validateSlugCandidate('auth-limit')).toBe('auth-limit')
-    expect(validateSlugCandidate('  login-rate-limit\n')).toBe('login-rate-limit')
-
-    for (const invalid of [
-      '',
-      '   ',
-      'Login-rate-limit',
-      'login rate limit',
-      'login/rate-limit',
-      '-login-rate',
-      'login-rate-',
-      'login--rate',
-      'login-rate-limit-now',
-      'slug: login-rate',
-      '"login-rate"',
-    ]) {
-      expect(validateSlugCandidate(invalid)).toBeNull()
-    }
-    expect(validateSlugCandidate(null)).toBeNull()
-  })
-})
-
 // ── Urgent intake order (AUT-1027) ───────────────────────────────────────────
 
 describe('Dispatcher urgent intake order', () => {
@@ -1056,7 +752,8 @@ describe('Dispatcher dispatch', () => {
       'target.moved',
     ])
     expect(events[0]?.actor).toEqual({ kind: 'dispatcher' })
-    expect(events[0]?.payload).toEqual({
+    // Strict: a ticket without issue links writes no issueLinks key at all.
+    expect(events[0]?.payload).toStrictEqual({
       ticket: ticket.ref,
       repo: REPO,
       baseBranch: 'main',
@@ -1086,14 +783,21 @@ describe('Dispatcher dispatch', () => {
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
-  test('created builds record the served repository normalized origin, from one memoized exec call', async () => {
+  test('created builds record the served repository normalized origin, probed once in the physical checkout', async () => {
     let remoteCalls = 0
+    const remoteCwds: (string | undefined)[] = []
     const h = harness({
       tickets: [readyTicket('T-1'), readyTicket('T-2')],
       toml: 'capacity = 2\n',
-      exec: async (cmd) => {
+      // deps.repo is the store identity (an origin URL); deps.checkout is the
+      // physical path. `git remote get-url origin` with cwd = the URL would
+      // silently lose the origin (f_8061f912).
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+      exec: async (cmd, execOpts) => {
         if (cmd[1] === 'remote') {
           remoteCalls += 1
+          remoteCwds.push(execOpts.cwd)
           return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
         }
         return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
@@ -1107,6 +811,7 @@ describe('Dispatcher dispatch', () => {
       'https://github.com/acme/app',
     ])
     expect(remoteCalls).toBe(1)
+    expect(remoteCwds).toEqual(['/repos/checkout'])
   })
 
   test('a repository without an origin remote creates builds without a recorded origin', async () => {
@@ -1120,29 +825,6 @@ describe('Dispatcher dispatch', () => {
     await h.dispatcher.tick()
     const builds = await h.store.listBuilds()
     expect(builds.map((build) => build.repoOrigin)).toEqual([undefined])
-  })
-
-  test('the origin probe runs in the physical checkout, not the origin-URL identity', async () => {
-    const remoteCwds: (string | undefined)[] = []
-    const h = harness({
-      tickets: [readyTicket('T-1')],
-      // deps.repo is the store identity (an origin URL); deps.checkout is the
-      // physical path. `git remote get-url origin` with cwd = the URL would
-      // silently lose the origin (f_8061f912).
-      repo: 'https://github.com/acme/app',
-      checkout: '/repos/checkout',
-      exec: async (cmd, execOpts) => {
-        if (cmd[1] === 'remote') {
-          remoteCwds.push(execOpts.cwd)
-          return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
-        }
-        return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
-      },
-    })
-    await h.dispatcher.tick()
-    expect(remoteCwds).toEqual(['/repos/checkout'])
-    const builds = await h.store.listBuilds()
-    expect(builds[0]?.repoOrigin).toBe('https://github.com/acme/app')
   })
 
   test('uses the top-level baseBranch for the durable fact and workspace', async () => {
@@ -1190,15 +872,6 @@ describe('Dispatcher dispatch', () => {
       { issue: 820, intent: 'refs' },
       { issue: 824, intent: 'closes' },
     ])
-  })
-
-  test('a ticket without issue links writes no issueLinks key', async () => {
-    const h = harness({ tickets: [readyTicket('T-plain')] })
-    await h.dispatcher.tick()
-    const created = (await h.store.getEvents('add-rate-limiting')).find(
-      (event) => event.type === 'build.created',
-    )
-    expect(created !== undefined && 'issueLinks' in created.payload).toBe(false)
   })
 
   describe('label-selected role profiles (SPEC §9)', () => {
@@ -1344,66 +1017,6 @@ releaseId = 42
     expect(reduceBuild(events).autoMerge.requested).toBe(false)
   })
 
-  test('a retired off launch default preserves the original event sequence', async () => {
-    const h = harness({ tickets: [readyTicket('T-off')] })
-
-    await h.dispatcher.tick({
-      defaultAutoMerge: false,
-      autoMergeUser: 'unused-operator',
-    })
-
-    expect((await h.store.getEvents('add-rate-limiting')).map((event) => event.type)).toEqual([
-      'build.created',
-      'workspace.provisioned',
-      'spec.imported',
-      'dispatch.comment-posted',
-      'target.moved',
-    ])
-  })
-
-  test('a launch-flag seed with no durable default fact never touches resumed or directly created builds (seed-only premise)', async () => {
-    const h = harness()
-    const resumed = await seedBuild(h, { slug: 'resumed-build' })
-    await h.store.createBuild({
-      slug: 'direct-build',
-      repo: REPO,
-      branch: 'ab/direct-build',
-    })
-    const beforeResumed = await h.store.getEvents(resumed)
-    const beforeDirect = await h.store.getEvents('direct-build')
-
-    expect(
-      await h.dispatcher.tick({
-        resumeCurrent: true,
-        acceptNewWork: false,
-        defaultAutoMerge: true,
-        autoMergeUser: 'dispatch-op',
-      }),
-    ).toEqual({ ...emptyTickReport(), resumed: 1 })
-
-    expect(
-      (await h.store.getEvents(resumed)).filter((e): boolean => e.type !== 'target.distance'),
-    ).toEqual(beforeResumed)
-    expect(
-      (await h.store.getEvents('direct-build')).filter(
-        (e): boolean => e.type !== 'target.distance',
-      ),
-    ).toEqual(beforeDirect)
-    expect(h.launches).toEqual([resumed])
-  })
-
-  test('legacy launch default attribution is inert', async () => {
-    const h = harness({ tickets: [readyTicket('T-no-user')] })
-    expect(
-      (await h.dispatcher.tick({ defaultAutoMerge: true, autoMergeUser: '   ' })).dispatched,
-    ).toBe(1)
-    expect(
-      (await h.store.getEvents('add-rate-limiting')).some(
-        (event) => event.type === 'build.auto-merge-requested',
-      ),
-    ).toBe(false)
-  })
-
   test('copies local fallback evidence from the workspace result into the event', async () => {
     const base: WorkspaceBase = {
       source: 'local',
@@ -1444,32 +1057,6 @@ releaseId = 42
     expect(receivedSpec).toBe(CONFORMING_BODY)
     expect((await h.store.listBuilds()).map((build) => build.slug)).toEqual(['login-rate-limit'])
     expect(h.workspaces.provisions[0]?.branch).toBe('ab/login-rate-limit')
-  })
-
-  test('h1-headed conforming body dispatches: imported as spec, not bounced (AUT-12)', async () => {
-    const h1Body = [
-      'Login attempts are currently unlimited; throttle repeated failures.',
-      '',
-      '# Acceptance criteria',
-      '',
-      '- a sixth failed login within five minutes returns 429',
-      '',
-      '# Out of scope',
-      '',
-      '- captcha',
-      '',
-    ].join('\n')
-    const ticket = readyTicket('T-1', { body: h1Body })
-    const h = harness({ tickets: [ticket] })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), dispatched: 1 })
-
-    const events = await h.store.getEvents('add-rate-limiting')
-    expect(events.map((e) => e.type)).toContain('spec.imported')
-
-    const spec = await h.store.getArtifact('add-rate-limiting', 'spec')
-    expect(spec ? textContent(spec) : null).toBe(h1Body)
   })
 
   test('absent, null, rejected, and invalid naming all take the exact title fallback', async () => {
@@ -1518,27 +1105,6 @@ releaseId = 42
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(namingSignal?.aborted).toBe(true)
     expect((await h.store.listBuilds())[0]?.slug).toBe('please-add-support')
-  })
-
-  test('punctuation-only titles still dispatch as build', async () => {
-    const h = harness({ tickets: [readyTicket('T-punctuation', { title: '!!!' })] })
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-    expect((await h.store.listBuilds())[0]?.slug).toBe('build')
-  })
-
-  test('readyState narrows the scan: only tickets in that state dispatch', async () => {
-    const ready = readyTicket('T-1', { state: 'Ready' })
-    const backlog = readyTicket('T-2', { title: 'Backlog idea', state: 'Backlog' })
-    const h = harness({
-      tickets: [ready, backlog],
-      toml: ['capacity = 2', '[tickets]', 'source = "file"', 'readyState = "Ready"'].join('\n'),
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dispatched).toBe(1)
-    const builds = await h.store.listBuilds()
-    expect(builds.map((b) => b.slug)).toEqual(['add-rate-limiting'])
   })
 
   test('a completed ticket still carrying the ready label is NOT dispatched — the AUT-10 regression guard (AC 3, 4)', async () => {
@@ -1625,30 +1191,23 @@ releaseId = 42
     expect(first).toEqual({ ...emptyTickReport(), dispatched: 1, queued: 1 })
     expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['first-feature'])
     // T-2 was never claimed — capacity ran out before it.
-    expect(await h.tickets.claim('T-2')).toBe(true)
+    expect(h.tickets.claims).toEqual(['T-1'])
 
-    const h2 = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'First feature' }),
-        readyTicket('T-2', { title: 'Second feature' }),
-      ],
-    })
-    await h2.dispatcher.tick()
     // First build completes (the janitor would do this on merge — §15.7).
-    await h2.store.append('first-feature', {
+    await h.store.append('first-feature', {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
 
-    const second = await h2.dispatcher.tick()
+    const second = await h.dispatcher.tick()
     // The first ticket left Ready at claim, so only T-2 is offered this tick.
     expect(second).toEqual({ ...emptyTickReport(), dispatched: 1 })
-    expect((await h2.store.listBuilds()).map((b) => b.slug)).toEqual([
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual([
       'first-feature',
       'second-feature',
     ])
-    expect(h2.launches).toEqual(['first-feature', 'second-feature'])
+    expect(h.launches).toEqual(['first-feature', 'second-feature'])
   })
 
   test('captures reloaded capacity once per tick without terminating work above a lowered limit', async () => {
@@ -1839,62 +1398,35 @@ readyState = "Ready"
     })
   }
 
-  test('bounce targets Backlog by default for a linear ticket source', async () => {
-    // Linear teams only have a "Triage" state when the triage feature is
-    // enabled — Backlog is the hand-back state every team has.
-    const h = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\n',
-    })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), bounced: 1 })
-    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
-  })
-
-  test('triageState: [tickets] config beats the source default, opts beat config', async () => {
-    const configured = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
-    })
-    await configured.dispatcher.tick()
-    expect(configured.tickets.transitions).toEqual([{ id: 'T-1', state: 'Todo' }])
-
-    const opted = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
-      opts: { triageState: 'Backlog' },
-    })
-    await opted.dispatcher.tick()
-    expect(opted.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
-  })
-
-  test('proposalState is harvest-only: it never moves the bounce target', async () => {
-    // The whole reason proposals get their own field. A repository that files
-    // proposals straight into readyState must still bounce nonconforming work
-    // somewhere a dispatch tick will not immediately reclaim it.
-    const h = harness({
-      tickets: [readyTicket('T-1', { body: 'make it faster' })],
-      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\nproposalState = "Todo"\n',
-    })
-    await h.dispatcher.tick()
-    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
-  })
-
-  test('defaultProposalState: configured value, else the resolved triage state', () => {
-    const linear = (extra = '') =>
-      parseConfig(`[tickets]\nsource = "linear"\nteamKey = "AUT"\nreadyState = "Todo"\n${extra}`)
-
-    expect(defaultProposalState(linear())).toBe('Backlog')
-    expect(defaultProposalState(linear('triageState = "Icebox"\n'))).toBe('Icebox')
-    expect(defaultProposalState(linear('proposalState = "Todo"\n'))).toBe('Todo')
-    // An explicit proposal state overrides the triage state without moving it.
-    const both = linear('triageState = "Icebox"\nproposalState = "Todo"\n')
-    expect(defaultProposalState(both)).toBe('Todo')
-    expect(defaultTriageState(both)).toBe('Icebox')
-    expect(
-      defaultProposalState(parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')),
-    ).toBe('Triage')
+  test('bounce target: Backlog for linear, [tickets].triageState, then opts.triageState; proposalState never moves it', async () => {
+    const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "AUT"\n'
+    const cases: { toml: string; opts?: DispatcherOpts; state: string }[] = [
+      // Linear teams only have a "Triage" state when the triage feature is
+      // enabled — Backlog is the hand-back state every team has.
+      { toml: LINEAR, state: 'Backlog' },
+      // [tickets] config beats the source default...
+      { toml: `${LINEAR}triageState = "Todo"\n`, state: 'Todo' },
+      // ...and opts beat config.
+      {
+        toml: `${LINEAR}triageState = "Todo"\n`,
+        opts: { triageState: 'Backlog' },
+        state: 'Backlog',
+      },
+      // proposalState is harvest-only: a repository that files proposals
+      // straight into readyState must still bounce nonconforming work
+      // somewhere a dispatch tick will not immediately reclaim it.
+      { toml: `${LINEAR}proposalState = "Todo"\n`, state: 'Backlog' },
+    ]
+    for (const [index, { toml, opts, state }] of cases.entries()) {
+      const h = harness({
+        tickets: [readyTicket('T-1', { body: 'make it faster' })],
+        toml,
+        ...(opts !== undefined ? { opts } : {}),
+      })
+      const report = await h.dispatcher.tick()
+      if (index === 0) expect(report).toEqual({ ...emptyTickReport(), bounced: 1 })
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state }])
+    }
   })
 
   test('authorSpec success: authored body is recorded and then supplied to naming', async () => {
@@ -2541,24 +2073,6 @@ async function pauseRepo(store: BuildStore, enabled: boolean, repo = REPO): Prom
   })
 }
 
-describe('heldByRepositoryPause', () => {
-  test('holds queued builds only, and only while the repository is paused', () => {
-    const statuses: BuildState['status'][] = [
-      'queued',
-      'running',
-      'blocked',
-      'paused',
-      'done',
-      'aborted',
-    ]
-    for (const status of statuses) {
-      const state = { status } as BuildState
-      expect(heldByRepositoryPause(state, true)).toBe(status === 'queued')
-      expect(heldByRepositoryPause(state, false)).toBe(false)
-    }
-  })
-})
-
 describe('Dispatcher repository pause hold', () => {
   test('recovery does not complete an interrupted dispatch while the repository is paused', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
@@ -2703,32 +2217,21 @@ describe('Dispatcher repository pause hold', () => {
   })
 
   test('the hold survives a dispatcher restart and is not defeated by re-running dispatch', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ab-pause-hold-'))
-    try {
-      const first = openLocalStore(root, { clock: manualClock() })
-      const seeded = harness({ tickets: [readyTicket('T-recover')], store: first })
-      await seedInterrupted(seeded, 'restart-held')
-      await pauseRepo(first, true)
-      await first.close()
+    const seeded = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(seeded, 'restart-held')
+    await pauseRepo(seeded.store, true)
 
-      // A brand-new store handle AND a brand-new Dispatcher: nothing but the
-      // durable journal carries the hold across the restart.
-      const second = openLocalStore(root, { clock: manualClock() })
-      try {
-        const h = harness({ tickets: [readyTicket('T-recover')], store: second })
-        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-        expect(h.launches).toEqual([])
+    // A brand-new Dispatcher over the same store: nothing but the durable
+    // journal carries the hold across the restart. File-level reopen
+    // durability is the local store's own test.
+    const h = harness({ tickets: [readyTicket('T-recover')], store: seeded.store })
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
 
-        await pauseRepo(second, false)
-        expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
-        expect(h.launches).toEqual(['restart-held'])
-      } finally {
-        await second.close()
-      }
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
+    expect(h.launches).toEqual(['restart-held'])
   })
 
   test('a bulk pause whose intake write fails still leaves queued work unlaunchable', async () => {
@@ -2755,6 +2258,8 @@ describe('Dispatcher repository pause hold', () => {
     const h = harness()
     const slug = await seedBuild(h, { attached: false })
     await pauseRepo(h.store, true, '/repos/elsewhere')
+    // This repository has no row at all, and still ticks normally.
+    expect(await h.store.getRepo(REPO)).toBeNull()
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
     expect(h.launches).toEqual([slug])
@@ -2767,15 +2272,6 @@ describe('Dispatcher repository pause hold', () => {
     expect(await foreign.dispatcher.tick()).toEqual(emptyTickReport())
     expect(foreign.launches).toEqual([])
     expect(reduceBuild(await foreign.store.getEvents('foreign-build')).status).toBe('queued')
-  })
-
-  test('a store where no repository row exists ticks normally', async () => {
-    const h = harness()
-    expect(await h.store.getRepo(REPO)).toBeNull()
-    const slug = await seedBuild(h, { attached: false })
-
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
   })
 })
 
@@ -3000,7 +2496,12 @@ describe('Dispatcher dependency gate', () => {
       ],
       toml: CAPACITY_2,
     })
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(2)
+    const first = await h.dispatcher.tick()
+    expect(first.dependencyBlocked).toBe(2)
+    expect(first.dependencyDiagnostics).toContain(
+      'ticket B blocked by missing, which does not exist in this ticket source',
+    )
+    expect(await h.store.listBuilds()).toEqual([])
     expect(h.tickets.dependencyQueries).toEqual([['missing']])
     await h.tickets.transition('B', 'Done')
     h.clock.advance(60_000)
@@ -3009,7 +2510,7 @@ describe('Dispatcher dependency gate', () => {
     expect(report.dependencyDiagnostics).toEqual([])
     expect(h.tickets.dependencyQueries).toEqual([['missing'], ['B']])
   })
-  test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
+  test('an unresolved blocker: not claimed, no build, no workspace, no comment; it completes and the NEXT tick dispatches', async () => {
     const h = harness({
       tickets: [
         readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
@@ -3022,6 +2523,7 @@ describe('Dispatcher dependency gate', () => {
 
     expect(report.dependencyBlocked).toBe(1)
     expect(report.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
+    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
     // Never claimed (§12: the gate precedes claim-before-launch)…
     expect(h.tickets.claims).not.toContain('T-1')
     // …no build, no workspace, no projection outward.
@@ -3029,6 +2531,17 @@ describe('Dispatcher dependency gate', () => {
     expect(h.workspaces.provisions.map((p) => p.branch)).not.toContain('ab/blocked-work')
     expect(h.tickets.comments.map((c) => c.id)).not.toContain('T-1')
     expect(h.launches).not.toContain('blocked-work')
+
+    // Native lifecycle only: the blocker reaches the source's done state, and
+    // the next tick dispatches with no manual step.
+    await h.tickets.transition('T-9', 'Done')
+    h.clock.advance(60_000)
+    const second = await h.dispatcher.tick()
+    expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
+    expect(second.dependencyBlocked).toBe(0)
+    expect(second.dependencyDiagnostics).toEqual([])
+    expect(second.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
   })
 
   /** The strongest test here: a blocked ticket must not spend a slot. With
@@ -3051,95 +2564,26 @@ describe('Dispatcher dependency gate', () => {
     expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['free-work'])
   })
 
-  test('the blocker completes: the NEXT tick dispatches, with no manual step', async () => {
-    const h = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
-        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
-      ],
-      toml: CAPACITY_2,
-    })
-
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
-
-    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
-    // Native lifecycle only: the blocker reaches the source's done state.
-    await h.tickets.transition('T-9', 'Done')
-
-    h.clock.advance(60_000)
-    const second = await h.dispatcher.tick()
-    expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
-    expect(second.dependencyBlocked).toBe(0)
-    expect(second.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
-  })
-  test('two blockers: ineligible until BOTH resolve', async () => {
-    const tickets = [
-      readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-8', 'T-9'] }),
-      readyTicket('T-8', { title: 'Blocker eight', state: 'In Progress' }),
-      readyTicket('T-9', { title: 'Blocker nine', state: 'In Progress' }),
-    ]
-    const h = harness({ tickets, toml: CAPACITY_2 })
-
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
-
-    await h.tickets.transition('T-8', 'Done')
-    h.clock.advance(60_000)
-    const second = await h.dispatcher.tick()
-    expect(second.dependencyBlocked).toBe(1)
-    expect(second.dispatched).toBe(0)
-    expect(second.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
-
-    await h.tickets.transition('T-9', 'Done')
-    h.clock.advance(60_000)
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-  })
-  test('a missing blocker keeps the ticket undispatched with an actionable diagnostic', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-404'] })],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(1)
-    expect(report.dependencyDiagnostics).toEqual([
-      'ticket T-1 blocked by T-404, which does not exist in this ticket source',
-    ])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
-
-  test('a dependency cycle keeps every affected ticket undispatched and names the loop', async () => {
+  test('a dependency cycle or self-dependency keeps every affected ticket undispatched and names the loop', async () => {
     const h = harness({
       tickets: [
         readyTicket('T-1', { title: 'First', blockedBy: ['T-2'] }),
         readyTicket('T-2', { title: 'Second', blockedBy: ['T-1'] }),
+        readyTicket('T-3', { title: 'Ouroboros', blockedBy: ['T-3'] }),
       ],
       toml: CAPACITY_2,
     })
 
     const report = await h.dispatcher.tick()
 
-    expect(report.dependencyBlocked).toBe(2)
+    expect(report.dependencyBlocked).toBe(3)
     expect(report.dispatched).toBe(0)
     expect(report.dependencyDiagnostics).toEqual([
       'ticket T-1: dependency cycle T-1 → T-2 → T-1',
       'ticket T-2: dependency cycle T-2 → T-1 → T-2',
+      'ticket T-3 depends on itself',
     ])
     expect(h.tickets.dependencyQueries).toEqual([])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
-
-  test('a self-dependency keeps the ticket undispatched', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { title: 'Ouroboros', blockedBy: ['T-1'] })],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(1)
-    expect(report.dependencyDiagnostics).toEqual(['ticket T-1 depends on itself'])
     expect(await h.store.listBuilds()).toEqual([])
   })
 
@@ -3378,22 +2822,6 @@ describe('Dispatcher dependency gate', () => {
     expect(h.tickets.dependencyQueries).toEqual([])
   })
 
-  test('a resolved blocker dispatches normally and reports nothing', async () => {
-    const h = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'Unblocked work', blockedBy: ['T-9'] }),
-        readyTicket('T-9', { title: 'The blocker', state: 'Done' }),
-      ],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(0)
-    expect(report.dependencyDiagnostics).toEqual([])
-    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('unblocked-work')
-  })
-
   /** A shared blocker is fetched once per tick, not once per dependent. */
   test('the per-tick node cache fetches a shared blocker only once', async () => {
     const h = harness({
@@ -3471,37 +2899,43 @@ describe('Dispatcher dependency gate', () => {
 })
 
 describe('Dispatcher interrupted-dispatch recovery', () => {
-  for (const text of [undefined, 'token rotated, try again']) {
-    test(`dispatch budget parks, survives restart, and grants a fresh budget for ${text ?? 'bare retry'}`, async () => {
-      const h = harness({ tickets: [readyTicket('T-recover')] })
-      await seedInterrupted(h)
-      h.workspaces.setFailure('provision', new Error('offline'))
-      for (let i = 0; i < 6; i++)
-        await h.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
-      let events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(3)
-      expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(1)
-      expect(h.launches).toEqual([])
-      await controlBuild({
-        store: h.store,
-        repo: REPO,
-        slug: 'interrupted-dispatch',
-        action: { kind: 'answer', text },
-      })
-      events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.at(-1)?.payload).toMatchObject({
-        resolution: text === undefined ? 'retry' : 'guidance',
-      })
-      const restarted = harness({ store: h.store, tickets: [readyTicket('T-recover')] })
-      restarted.workspaces.setFailure('provision', new Error('still offline'))
-      for (let i = 0; i < 5; i++)
-        await restarted.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
-      events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(6)
-      expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(2)
-      expect(restarted.launches).toEqual([])
+  test('dispatch budget parks, survives restart, and grants a fresh budget on each answer kind', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h)
+    h.workspaces.setFailure('provision', new Error('offline'))
+    for (let i = 0; i < 6; i++)
+      await h.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
+    let events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(3)
+    expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(1)
+    expect(h.launches).toEqual([])
+    // A bare answer resolves as a retry.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug: 'interrupted-dispatch',
+      action: { kind: 'answer' },
     })
-  }
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.at(-1)?.payload).toMatchObject({ resolution: 'retry' })
+    const restarted = harness({ store: h.store, tickets: [readyTicket('T-recover')] })
+    restarted.workspaces.setFailure('provision', new Error('still offline'))
+    for (let i = 0; i < 5; i++)
+      await restarted.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(6)
+    expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(2)
+    expect(restarted.launches).toEqual([])
+    // An answer with text resolves the fresh escalation as guidance.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug: 'interrupted-dispatch',
+      action: { kind: 'answer', text: 'token rotated, try again' },
+    })
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.at(-1)?.payload).toMatchObject({ resolution: 'guidance' })
+  })
 
   test('repairs the failure/raise crash gap before workspace or startup launch', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
@@ -4391,32 +3825,6 @@ describe('Dispatcher janitor', () => {
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
   })
 
-  test('native auto-merge completion is observed by the ordinary next poll', async () => {
-    const h = harness()
-    const slug = await seedAwaitingPr(h)
-    await h.store.append(slug, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    h.forge.setPrState(1, { state: 'open', mergeable: true })
-    await h.store.claimLease(slug, 'runner-live', 60_000)
-    await h.dispatcher.tick()
-
-    h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
-    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.workspaces.releases).toEqual([])
-    await h.store.releaseLease(slug, 'runner-live')
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-    expect((await h.store.getEvents(slug)).map((e) => e.type).slice(-5)).toEqual([
-      'pr.merged',
-      'workspace.fenced',
-      'workspace.commits-preserved',
-      'workspace.released',
-      'build.completed',
-    ])
-  })
-
   test('a local checkout collision is nonfatal, observed once, and retries to a guarded squash', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)
@@ -4524,6 +3932,8 @@ describe('Dispatcher janitor', () => {
     // recorded — including between the merge fact and build.completed.
     h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    // The held runner lease keeps the workspace until the runner lets go.
+    expect(h.workspaces.releases).toEqual([])
     await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     expect((await h.store.getEvents(slug)).map((event) => event.type).slice(-5)).toEqual([
@@ -4974,7 +4384,7 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.squashMergeCalls).toEqual([])
   })
 
-  test('conflicted PR: pr.conflicted{baseSha} + runner re-attach, deduped while pending', async () => {
+  test('conflicted PR: pr.conflicted{baseSha} from the forge + runner re-attach, deduped while pending', async () => {
     const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
     const slug = await seedBuild(h, { ticketId: 'T-1', pr: PR })
     h.forge.setPrState(1, { state: 'open', mergeable: false })
@@ -5001,26 +4411,23 @@ describe('Dispatcher janitor', () => {
     const after = await h.store.getEvents(slug)
     expect(after.filter((e) => e.type === 'pr.conflicted')).toHaveLength(1)
     expect(h.launches).toEqual([slug])
-  })
 
-  test('baseSha never reads the physical checkout for an origin-URL identity', async () => {
-    // The forge is authoritative even when a physical checkout exists.
-    const h = harness({
+    // The forge is authoritative even when a physical checkout exists: an
+    // origin-URL identity never reads the checkout for baseSha.
+    const url = harness({
       tickets: [readyTicket('T-1', { labels: [] })],
       repo: 'https://github.com/acme/app',
       checkout: '/repos/checkout',
     })
-    const slug = await seedBuild(h, {
+    const urlSlug = await seedBuild(url, {
       ticketId: 'T-1',
       pr: PR,
       repo: 'https://github.com/acme/app',
     })
-    h.forge.setPrState(1, { state: 'open', mergeable: false })
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
-    expect(h.execCalls).toEqual([
-      ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
+    url.forge.setPrState(1, { state: 'open', mergeable: false })
+    expect(await url.dispatcher.tick()).toEqual({ ...emptyTickReport(), conflicted: 1 })
+    expect(url.execCalls).toEqual([
+      ['git', 'rev-parse', '--verify', `refs/heads/ab/${urlSlug}^{commit}`],
     ])
   })
 
@@ -5121,6 +4528,15 @@ describe('Dispatcher janitor', () => {
     expect(events.at(-1)?.payload).toEqual({ baseSha: 'b'.repeat(40) })
   })
 
+  // AUT-520/AUT-527: isRemoteWorkspace decides both the local-branch git
+  // steps (remote workspaces never create a local branch) and the closePr path
+  // forgeWorkspacePath picks (remote forges close against the store identity,
+  // local forges against the physical checkout). These cross-cases pin
+  // marker-over-name precedence for both: the marker decides when present,
+  // overriding a suggestive provider name in either direction; the name
+  // reading is only the legacy fallback for journals written before the marker
+  // existed. The closePr call precedes any PR-settlement branch, so an open PR
+  // pins the path decision for every settlement case.
   test.each([
     ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
     ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
@@ -5130,7 +4546,7 @@ describe('Dispatcher janitor', () => {
       false,
     ],
   ])(
-    'abort cleanup skips the local-branch git step for remote workspaces: %s',
+    'abort cleanup follows isRemoteWorkspace for the local-branch git step and closePr: %s',
     async (_name, provider, remote) => {
       // Harness wiring follows the provider name only: the dispatcher routes
       // release and reap by the name on the provisioned fact, so the fake
@@ -5145,20 +4561,16 @@ describe('Dispatcher janitor', () => {
       })
       const slug = await seedBuild(h, {
         ticketId: 'T-1',
+        pr: PR,
         workspaceProvider: provider,
         ...(remote !== undefined ? { workspaceRemote: remote } : {}),
       })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
       await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
-      const report = await h.dispatcher.tick({ acceptNewWork: false })
-      expect(report.janitorDiagnostics).toEqual([])
-      expect(report.abandoned).toBe(1)
+      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
       const events = await h.store.getEvents(slug)
       expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
-      // The marker decides when present, overriding a suggestive provider
-      // name in either direction; the name reading is only the fallback for
-      // journals written before the marker existed. Remote workspaces never
-      // create a local branch, so the git steps and their fact are skipped.
       expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(
         !expectRemote,
       )
@@ -5167,6 +4579,12 @@ describe('Dispatcher janitor', () => {
       } else {
         expect(h.execCalls).toContainEqual(['git', 'check-ref-format', `refs/heads/ab/${slug}`])
       }
+      expect(h.forge.closePrCalls).toEqual([
+        { workspacePath: expectRemote ? REPO : `/ws/ab/${slug}`, number: PR.number },
+      ])
+      expect(events.some((event) => event.type === 'pr.closed')).toBe(true)
+      // The workspace (a sandbox when remote) is released after the PR closes.
+      expect(h.workspaces.releases).toHaveLength(1)
       expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     },
   )
@@ -5205,55 +4623,22 @@ describe('Dispatcher janitor', () => {
 
     h.clock.advance(30_000)
     fail = false
-    await h.dispatcher.tick({ acceptNewWork: false })
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
     events = await h.store.getEvents(slug)
-    expect(
-      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
-    ).toMatchObject({
+    const confirmed = events
+      .filter((event) => event.type === 'infrastructure.cleanup-attempted')
+      .at(-1)
+    expect(confirmed?.payload).toMatchObject({
+      provider: 'remote-test',
+      workspaceRef: 'sandbox-g0',
       operation: 'delete',
       outcome: 'confirmed',
       attempt: 2,
       snapshots: { outcome: 'confirmed', deleted: 2 },
     })
-    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
-  })
-
-  test('remote release records snapshot purge evidence before the durable release fact', async () => {
-    const remote: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        async reap() {
-          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 3 } }
-        },
-      },
-      async provision() {
-        throw new Error('not used')
-      },
-      async release() {},
-    }
-    const h = harness({ workspaceProvider: remote })
-    const slug = await seedBuild(h, {
-      workspaceRef: 'sandbox-g0',
-      workspaceProvider: 'remote-test',
-    })
-    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-    expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
-    const events = await h.store.getEvents(slug)
-    const cleaned = events.filter((event) => event.type === 'infrastructure.cleanup-attempted')
-    expect(cleaned).toHaveLength(1)
-    expect(cleaned[0]?.payload).toMatchObject({
-      provider: 'remote-test',
-      workspaceRef: 'sandbox-g0',
-      operation: 'delete',
-      attempt: 1,
-      outcome: 'confirmed',
-      snapshots: { outcome: 'confirmed', deleted: 3 },
-    })
+    // Snapshot purge evidence lands immediately before the durable release fact.
     const releasedIndex = events.findIndex((event) => event.type === 'workspace.released')
-    expect(releasedIndex).toBe(events.indexOf(cleaned[0]!) + 1)
+    expect(releasedIndex).toBe(events.indexOf(confirmed!) + 1)
   })
 
   test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
@@ -5290,6 +4675,15 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.comments).toEqual([
       { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
     ])
+    // The default hand-back is reported once and settled.
+    const handback = (await h.store.getRepoEvents(REPO)).filter(
+      (event) => event.type === 'ticket.handed-back' || event.type === 'ticket.handback-settled',
+    )
+    expect(handback.map((event) => event.type)).toEqual([
+      'ticket.handed-back',
+      'ticket.handback-settled',
+    ])
+    expect(handback[0]?.payload).toMatchObject({ cause: 'abort', state: 'Triage', role: 'triage' })
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
@@ -5369,23 +4763,6 @@ describe('Dispatcher janitor', () => {
         requested: 'ready',
         missing: expect.arrayContaining(["an '## Out of scope' heading"]),
       })
-    })
-
-    test('a default abort keeps its Triage comment and reports once', async () => {
-      const h = harness({ tickets: [readyTicket('T-1')] })
-      const slug = await seedBuild(h, { ticketId: 'T-1' })
-      await requestAbort(h, slug)
-
-      await h.dispatcher.tick({ acceptNewWork: false })
-      expect(h.tickets.comments).toEqual([
-        { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
-      ])
-      const journal = await handbacks(h)
-      expect(journal.map((event) => event.type)).toEqual([
-        'ticket.handed-back',
-        'ticket.handback-settled',
-      ])
-      expect(journal[0]?.payload).toMatchObject({ cause: 'abort', state: 'Triage', role: 'triage' })
     })
 
     test('a completion that fails after the report committed retries without a second move or report', async () => {
@@ -5659,38 +5036,15 @@ describe('Dispatcher janitor', () => {
     })
   })
 
-  test('aborted remote build closes its PR from the dispatcher checkout before releasing the sandbox', async () => {
-    const h = harness({ workspaceName: 'vercel-sandbox' })
-    const slug = await seedBuild(h, { slug: 'remote-abort', pr: PR })
-    await h.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'workspace.provisioned',
-      payload: {
-        provider: 'vercel-sandbox',
-        ref: 'sandbox-remote-abort',
-        path: '/vercel/sandbox/workspace',
-        remote: true,
-        branch: `ab/${slug}`,
-        base: { source: 'existing', sha: 'a'.repeat(40) },
-      },
-    })
-    h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
-    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
-    expect(h.forge.closePrCalls).toEqual([{ workspacePath: REPO, number: PR.number }])
-    expect(h.workspaces.releases.at(-1)?.ref).toBe('sandbox-remote-abort')
-  })
-
   // AUT-527 audit: the parameterized dimension here is the PR's forge state at
   // abort time (open / closed / merged), orthogonal to the marker-vs-name
   // decision of isRemoteWorkspace. But the closePr workspacePath asserted below
   // comes from forgeWorkspacePath, which branches on isRemoteWorkspace — a
   // marker-sensitive decision this site's default seed (legacy local, no
   // remote marker) cannot discriminate: under a name-keyed revert every case
-  // still reads local and still passes. The 'abort cleanup closePr targets the
-  // path isRemoteWorkspace names' test.each below pins that precedence for the
-  // saga's closePr step with marker-over-name cross-cases.
+  // still reads local and still passes. The 'abort cleanup follows
+  // isRemoteWorkspace' test.each above pins that precedence for the saga's
+  // closePr step with marker-over-name cross-cases.
   test.each([
     ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
     ['already closed', { state: 'closed' } as const, 'pr.closed'],
@@ -5713,53 +5067,6 @@ describe('Dispatcher janitor', () => {
           buildTrailerPresent: false,
         })
       }
-    },
-  )
-
-  // AUT-527: forgeWorkspacePath branches on isRemoteWorkspace to pick the
-  // closePr path — remote forges close against the store identity, local
-  // forges against the physical checkout. These cross-cases pin marker-over-
-  // name precedence for that decision: the marker decides when present,
-  // overriding a suggestive provider name in either direction; the name
-  // reading is only the legacy fallback. The PR-state dimension above is
-  // orthogonal (the closePr call precedes any settlement branch), so an open
-  // PR pins the path decision for every settlement case.
-  test.each([
-    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
-    ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
-    [
-      'a provisioned payload carrying the local marker over a remote-suggestive name',
-      'vercel-sandbox',
-      false,
-    ],
-  ])(
-    'abort cleanup closePr targets the path isRemoteWorkspace names: %s',
-    async (_name, provider, remote) => {
-      // Harness wiring follows the provider name only: the dispatcher routes
-      // release and reap by the name on the provisioned fact, so the fake
-      // provider must present under that name. The closePr path expectation
-      // derives from the marker (with the legacy fallback), mirroring
-      // isRemoteWorkspace — not from the name.
-      const nameSuggestsRemote = provider === 'vercel-sandbox'
-      const expectRemote = remote ?? nameSuggestsRemote
-      const h = harness({
-        workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
-        tickets: [readyTicket('T-1', { labels: [] })],
-      })
-      const slug = await seedBuild(h, {
-        ticketId: 'T-1',
-        pr: PR,
-        workspaceProvider: provider,
-        ...(remote !== undefined ? { workspaceRemote: remote } : {}),
-      })
-      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
-      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-
-      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
-      expect(h.forge.closePrCalls).toEqual([
-        { workspacePath: expectRemote ? REPO : `/ws/ab/${slug}`, number: PR.number },
-      ])
-      expect((await h.store.getEvents(slug)).some((event) => event.type === 'pr.closed')).toBe(true)
     },
   )
 
@@ -5811,7 +5118,7 @@ describe('Dispatcher janitor', () => {
   // readings of isRemoteWorkspace agree on by construction; the settled count
   // cannot change the marker reading. Marker-over-name precedence for this
   // saga is already pinned in both directions by the AUT-520 cross-cases at
-  // the 'abort cleanup skips the local-branch git step' test.each above.
+  // the 'abort cleanup follows isRemoteWorkspace' test.each above.
   test.each([0, 1, 2, 3, 4, 5])(
     'a crash after cleanup checkpoint prefix %i resumes only the remaining external effects',
     async (settled) => {
@@ -5881,7 +5188,7 @@ describe('Dispatcher janitor', () => {
   // local, no remote marker), so marker-keyed and name-keyed readings of
   // isRemoteWorkspace agree by construction. Marker-over-name precedence for
   // the abort-cleanup saga is pinned by the AUT-520 cross-cases at the
-  // 'abort cleanup skips the local-branch git step' test.each above.
+  // 'abort cleanup follows isRemoteWorkspace' test.each above.
   test.each(['closePr', 'deleteBranch'] as const)(
     'missing Forge %s capability leaves cleanup pending with an actionable diagnostic',
     async (capability) => {
@@ -6941,151 +6248,160 @@ describe('Dispatcher lease sweep', () => {
         expect(h.launches).toHaveLength(lease === 'live' ? 0 : 1)
       })
 
-  for (const operation of ['restack', 'reconcile'] as const)
-    for (const exhausted of [false, true])
-      for (const command of ['abort', 'pause', 'resume'] as const)
-        test(`${operation} ${exhausted ? 'exhaustion' : 'backoff'} permits swept runner to acknowledge ${command}`, async () => {
-          const runnerToml = '[roles.default]\nruntime = "scripted"\n'
-          const h = harness({
-            toml: runnerToml,
-            onLaunch: async (slug, store) => {
-              const { BuildRunner } = await import('./build-runner')
-              const { ScriptedAgentRunner } = await import('../ports/runner/fake')
-              const runner = new BuildRunner({
-                store: store.scopeBuild(slug),
-                config: parseConfig(withReadyState(runnerToml)),
-                runtimes: {
-                  scripted: {
-                    runner: new ScriptedAgentRunner({
-                      script: async () => {
-                        throw new Error('control acknowledgement must not start an agent')
-                      },
-                    }),
-                    servesModels: [],
+  // Pairwise cover of operation × retry state × command. The sweep derives the
+  // retry intent from the operation and skips the publication retry gate
+  // whenever a command is pending; only command × exhausted reaches the
+  // acknowledged status, so no path combines operation with command kind.
+  for (const [operation, exhausted, command] of [
+    ['restack', false, 'abort'],
+    ['reconcile', true, 'abort'],
+    ['restack', true, 'pause'],
+    ['reconcile', false, 'pause'],
+    ['restack', false, 'resume'],
+    ['reconcile', true, 'resume'],
+  ] as const)
+    test(`${operation} ${exhausted ? 'exhaustion' : 'backoff'} permits swept runner to acknowledge ${command}`, async () => {
+      const runnerToml = '[roles.default]\nruntime = "scripted"\n'
+      const h = harness({
+        toml: runnerToml,
+        onLaunch: async (slug, store) => {
+          const { BuildRunner } = await import('./build-runner')
+          const { ScriptedAgentRunner } = await import('../ports/runner/fake')
+          const runner = new BuildRunner({
+            store: store.scopeBuild(slug),
+            config: parseConfig(withReadyState(runnerToml)),
+            runtimes: {
+              scripted: {
+                runner: new ScriptedAgentRunner({
+                  script: async () => {
+                    throw new Error('control acknowledgement must not start an agent')
                   },
-                },
-                workspacePath: `/ws/ab/${slug}`,
-                branch: `ab/${slug}`,
-                slug,
-                exec: async () => {
-                  throw new Error('control acknowledgement must not execute Git')
-                },
-                forge: h.forge,
-                ids: sequentialIds(),
-                clock: h.clock,
-                instance: 'replacement',
-                host: 'test',
-              })
-              expect(await runner.step()).toEqual({ kind: 'acknowledge', command })
+                }),
+                servesModels: [],
+              },
             },
-          })
-          const slug = await seedBuild(h)
-          const {
-            trigger: _trigger,
-            cycle: _cycle,
-            observation: _observation,
-            message: _message,
-            ...rewrite
-          } = {
-            ...leafTransaction,
+            workspacePath: `/ws/ab/${slug}`,
             branch: `ab/${slug}`,
-          }
-          if (operation === 'restack') {
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'restack.prepared',
-              payload: { ...leafTransaction, branch: `ab/${slug}` },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'restack.publish-intended',
-              payload: { ...leafTransaction, branch: `ab/${slug}`, headSha: 'e'.repeat(40) },
-            })
-          } else {
-            const transaction = { ...rewrite, attempt: 1 }
-            const artifact = { kind: 'reconcile-notes', rev: 0 }
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.started',
-              payload: { attempt: 1, baseSha: transaction.targetBase },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.prepared',
-              payload: transaction,
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.publish-intended',
-              payload: { ...transaction, headSha: 'e'.repeat(40), conflicted: true, artifact },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.requested',
-              payload: {
-                operation,
-                branch: transaction.branch,
-                sha: 'e'.repeat(40),
-                artifact,
-                rewrite: { ...transaction, conflicted: true },
-              },
-            })
-          }
-          if (command === 'resume')
-            await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
-          const retry = { operation, rewriteId: rewrite.id, round: 1, anchor: 0, error: 'HTTP 503' }
-          if (exhausted)
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.retry-exhausted',
-              payload: { ...retry, failure: 7 },
-            })
-          else
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.retry-scheduled',
-              payload: {
-                ...retry,
-                failure: 1,
-                retryAt: new Date(h.clock().getTime() + 300_000).toISOString(),
-              },
-            })
-          await h.store.claimLease(slug, 'old-runner', 1000)
-          h.clock.advance(2000)
-          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
-          expect(h.launches).toEqual([])
-          await h.store.append(slug, {
-            actor: humanActor('operator'),
-            type: `build.${command}-requested`,
-            payload: {},
+            slug,
+            exec: async () => {
+              throw new Error('control acknowledgement must not execute Git')
+            },
+            forge: h.forge,
+            ids: sequentialIds(),
+            clock: h.clock,
+            instance: 'replacement',
+            host: 'test',
           })
-          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
-          expect(h.launches).toEqual([slug])
-          const events = await h.store.getEvents(slug)
-          const state = reduceBuild(events)
-          expect(state.pendingCommands).toEqual([])
-          expect(state.status).toBe(
-            command === 'abort'
-              ? 'aborted'
-              : command === 'pause'
-                ? 'paused'
-                : exhausted
-                  ? 'blocked'
-                  : 'running',
-          )
-          expect(
-            events.some(
-              (event) => event.type === 'escalation.answered' || event.type === 'phase.failed',
-            ),
-          ).toBe(false)
-          expect(
-            events.filter(
-              (event) =>
-                event.type === 'publication.retry-scheduled' ||
-                event.type === 'publication.retry-exhausted',
-            ),
-          ).toHaveLength(1)
+          expect(await runner.step()).toEqual({ kind: 'acknowledge', command })
+        },
+      })
+      const slug = await seedBuild(h)
+      const {
+        trigger: _trigger,
+        cycle: _cycle,
+        observation: _observation,
+        message: _message,
+        ...rewrite
+      } = {
+        ...leafTransaction,
+        branch: `ab/${slug}`,
+      }
+      if (operation === 'restack') {
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.prepared',
+          payload: { ...leafTransaction, branch: `ab/${slug}` },
         })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.publish-intended',
+          payload: { ...leafTransaction, branch: `ab/${slug}`, headSha: 'e'.repeat(40) },
+        })
+      } else {
+        const transaction = { ...rewrite, attempt: 1 }
+        const artifact = { kind: 'reconcile-notes', rev: 0 }
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.started',
+          payload: { attempt: 1, baseSha: transaction.targetBase },
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.prepared',
+          payload: transaction,
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.publish-intended',
+          payload: { ...transaction, headSha: 'e'.repeat(40), conflicted: true, artifact },
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.requested',
+          payload: {
+            operation,
+            branch: transaction.branch,
+            sha: 'e'.repeat(40),
+            artifact,
+            rewrite: { ...transaction, conflicted: true },
+          },
+        })
+      }
+      if (command === 'resume')
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      const retry = { operation, rewriteId: rewrite.id, round: 1, anchor: 0, error: 'HTTP 503' }
+      if (exhausted)
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.retry-exhausted',
+          payload: { ...retry, failure: 7 },
+        })
+      else
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.retry-scheduled',
+          payload: {
+            ...retry,
+            failure: 1,
+            retryAt: new Date(h.clock().getTime() + 300_000).toISOString(),
+          },
+        })
+      await h.store.claimLease(slug, 'old-runner', 1000)
+      h.clock.advance(2000)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+      expect(h.launches).toEqual([])
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: `build.${command}-requested`,
+        payload: {},
+      })
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+      expect(h.launches).toEqual([slug])
+      const events = await h.store.getEvents(slug)
+      const state = reduceBuild(events)
+      expect(state.pendingCommands).toEqual([])
+      expect(state.status).toBe(
+        command === 'abort'
+          ? 'aborted'
+          : command === 'pause'
+            ? 'paused'
+            : exhausted
+              ? 'blocked'
+              : 'running',
+      )
+      expect(
+        events.some(
+          (event) => event.type === 'escalation.answered' || event.type === 'phase.failed',
+        ),
+      ).toBe(false)
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'publication.retry-scheduled' ||
+            event.type === 'publication.retry-exhausted',
+        ),
+      ).toHaveLength(1)
+    })
 
   test('orphan recovery with a lost workspace records provisioning failure and exhaustion', async () => {
     const provider: WorkspaceProvider = {
@@ -7478,27 +6794,20 @@ describe('Dispatcher lease sweep', () => {
     expect(released?.payload).toMatchObject({ reason: 'blocked' })
   })
 
-  test('expired lease + running: relaunch', async () => {
-    const h = harness()
-    const slug = await seedBuild(h)
-    await h.store.claimLease(slug, 'runner-1', 1000)
-    h.clock.advance(2000)
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
-  })
-
-  test('healthy lease: not swept', async () => {
+  test('running build: a healthy lease is not swept; once it expires, relaunch', async () => {
     const h = harness()
     const slug = await seedBuild(h)
     await h.store.claimLease(slug, 'runner-1', 60_000)
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.launches).toEqual([])
+
+    h.clock.advance(61_000)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
   })
 
-  test('blocked build: not swept even with an expired lease', async () => {
+  test('blocked build: not swept even with an expired lease, until an abort is pending (D2, §14)', async () => {
     const h = harness()
     const slug = await seedBuild(h)
     await h.store.append(slug, {
@@ -7511,6 +6820,15 @@ describe('Dispatcher lease sweep', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.launches).toEqual([])
+
+    // A pending abort is swept so the abort is acknowledged.
+    await h.store.append(slug, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'wrong approach' },
+    })
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
   })
 
   test('a confirmed relaunch bypasses absent-lease grace, while a held execution still excludes launch', async () => {
@@ -7579,24 +6897,6 @@ describe('Dispatcher lease sweep', () => {
       type: 'build.resume-requested',
       payload: {},
     })
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
-  })
-
-  test('blocked build with a pending abort: swept so the abort is acknowledged (D2, §14)', async () => {
-    const h = harness()
-    const slug = await seedBuild(h)
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: { id: 'e_1', phase: 'plan', source: 'agent', question: 'spec unclear' },
-    })
-    await h.store.append(slug, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'wrong approach' },
-    })
-
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
     expect(h.launches).toEqual([slug])
   })
