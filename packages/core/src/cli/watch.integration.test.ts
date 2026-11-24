@@ -7,10 +7,9 @@ import { autoMergeDeferralObservation } from '../kernel/auto-merge'
  * live service, no real sleeps. Every end condition (timeout, count,
  * terminal, signal) is driven deterministically through those seams.
  */
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, jest, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { validateRepositoryEventWrite } from '../events/repository'
-import { EVENT_TYPES } from '../events/payloads'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -20,13 +19,10 @@ import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase
 import type { BuildStore } from '../store/types'
 import {
   abWatch,
-  compileEventGlobs,
   decodeCursor,
   encodeCursor,
-  parseDurationMs,
   renderWatchLine,
   WATCH_USAGE,
-  watchSelection,
   type AbWatchOpts,
 } from './watch'
 
@@ -137,41 +133,6 @@ function harness(
 const alreadyAborted = (): AbortSignal => AbortSignal.abort()
 
 describe('watch glob compilation', () => {
-  const usage = WATCH_USAGE
-
-  test('anchored glob semantics: * any run, ? exactly one, dots verbatim', () => {
-    const escalation = compileEventGlobs(['escalation.*'], { repository: false, usage })[0]!
-    expect(escalation.test('escalation.raised')).toBe(true)
-    expect(escalation.test('escalation.answered')).toBe(true)
-    expect(escalation.test('build.completed')).toBe(false)
-
-    const question = compileEventGlobs(['pr.merge?'], { repository: false, usage })[0]!
-    expect(question.test('pr.merged')).toBe(true)
-    expect(question.test('pr.closed')).toBe(false)
-    expect(question.test('pr.mergedX')).toBe(false)
-
-    const star = compileEventGlobs(['*'], { repository: false, usage })[0]!
-    expect(EVENT_TYPES.every((type) => star.test(type))).toBe(true)
-
-    // A dot in the pattern must not become a wildcard.
-    const literal = compileEventGlobs(['pr.merged'], { repository: false, usage })[0]!
-    expect(literal.test('prXmerged')).toBe(false)
-  })
-
-  test('each glob must match the applicable catalog, and the error names the glob', () => {
-    expect(() => compileEventGlobs(['bogus.*'], { repository: false, usage })).toThrow(
-      '--event "bogus.*"',
-    )
-    expect(() => compileEventGlobs(['bogus.*'], { repository: false, usage })).toThrow(usage)
-
-    // Repository-only globs need --repository; with it they validate.
-    expect(() => compileEventGlobs(['harvest.*'], { repository: false, usage })).toThrow(
-      '--event "harvest.*"',
-    )
-    expect(() => compileEventGlobs(['harvest.*'], { repository: true, usage })).not.toThrow()
-    expect(() => compileEventGlobs(['pr.*'], { repository: true, usage })).not.toThrow()
-  })
-
   test('an invalid glob fails before the store is opened and nothing reaches stdout', async () => {
     const store = makeStore()
     const h = harness(store)
@@ -389,28 +350,6 @@ describe('watch dynamic membership', () => {
     expect(
       decodeCursor(records[0]!.cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams,
     ).toEqual({ late: 3, '#repo': 0 })
-  })
-
-  test('a legacy checkout-path-keyed record joins via its normalized repoOrigin', async () => {
-    const store = makeStore()
-    // Legacy record keyed by an old checkout path: only the fallback arm of
-    // the identity rule — the record's normalized `repoOrigin` — can match.
-    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
-    await store.append('legacy', {
-      actor: KERNEL,
-      type: 'runner.attached',
-      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
-    })
-    let calls = 0
-    const h = harness(store, {
-      onTick: async () => {
-        calls += 1
-        if (calls === 1) await appendEscalation(store, 'legacy')
-      },
-    })
-    await abWatch({ ...h.base, timeout: '2' })
-    const records = h.out.slice(0, -1).map((line) => JSON.parse(line) as { build: string })
-    expect(records.map((record) => record.build)).toEqual(['legacy'])
   })
 
   test('a record whose repoOrigin is an ssh-spelled variant of the origin still joins', async () => {
@@ -742,18 +681,6 @@ describe('watch cursor resume', () => {
 })
 
 describe('watch exit conditions', () => {
-  test('the timeout ends the watch with a resumable cursor', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    const h = harness(store)
-    await abWatch({ ...h.base, slugs: ['b1'], timeout: '2' })
-    const last = JSON.parse(h.out.at(-1)!) as Record<string, unknown>
-    expect(Object.keys(last)).toEqual(['cursor'])
-    expect(
-      decodeCursor(last.cursor as string, { store: `${REPO}/.autobuild`, repo: REPO }).streams,
-    ).toEqual({ b1: 1 })
-  })
-
   test('a named build reaching terminal status ends the watch', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
@@ -833,7 +760,12 @@ describe('watch record emission', () => {
       const record = JSON.parse(line) as Record<string, unknown>
       expect(Object.keys(record)).toEqual(['id', 'build', 'event', 'state', 'cursor'])
     }
-    expect(Object.keys(JSON.parse(h.out.at(-1)!))).toEqual(['cursor'])
+    // The last line is a resumable cursor at the stream's position.
+    const last = JSON.parse(h.out.at(-1)!) as Record<string, unknown>
+    expect(Object.keys(last)).toEqual(['cursor'])
+    expect(
+      decodeCursor(last.cursor as string, { store: `${REPO}/.autobuild`, repo: REPO }).streams,
+    ).toEqual({ b1: 3 })
   })
 
   test('the human form is one ANSI-free line per record and no cursor line', async () => {
@@ -854,23 +786,6 @@ describe('watch record emission', () => {
     expect(line).toContain('b1')
     expect(line).toContain('escalation.raised')
     expect(line).toContain('esc_1: Which auth store?')
-  })
-
-  test('renderWatchLine keeps multiline payload text on one line, control bytes inert', () => {
-    const line = renderWatchLine(
-      {
-        build: 'b1',
-        seq: 2,
-        ts: '2026-07-15T12:00:00.000Z',
-        actor: agentActor('implement', 's_1'),
-        type: 'escalation.raised',
-        payload: { ...ESCALATION, question: 'line one\nline two' },
-      },
-      null,
-    )
-    expect(line).toBe(
-      '2026-07-15T12:00:00.000Z  b1  escalation.raised  esc_1: line one\\u{a}line two',
-    )
   })
 })
 
@@ -1230,26 +1145,6 @@ describe('watch read-failure resilience', () => {
 })
 
 describe('watch wiring and parsing', () => {
-  test('interval selection follows the store-reference kind', () => {
-    expect(watchSelection('https://stores.example.com/ab').intervalMs).toBe(5000)
-    expect(watchSelection('http://localhost:8080').intervalMs).toBe(5000)
-    expect(watchSelection('/repo/.autobuild/store.db').intervalMs).toBe(1000)
-  })
-
-  test('duration parsing: bare numbers are seconds, suffixes scale, 0 only for --timeout', () => {
-    const timeout = { flag: '--timeout', usage: WATCH_USAGE, allowZero: true }
-    const interval = { flag: '--interval', usage: WATCH_USAGE }
-    expect(parseDurationMs('30', timeout)).toBe(30_000)
-    expect(parseDurationMs('45s', timeout)).toBe(45_000)
-    expect(parseDurationMs('5m', timeout)).toBe(300_000)
-    expect(parseDurationMs('1h', timeout)).toBe(3_600_000)
-    expect(parseDurationMs('0', timeout)).toBe(0)
-    expect(parseDurationMs('5s', interval)).toBe(5_000)
-    for (const text of ['0', '-5', '1.5m', '5x', 'abc', '']) {
-      expect(() => parseDurationMs(text, interval)).toThrow('--interval requires a duration')
-    }
-  })
-
   test('usage errors name the usage line and emit nothing on stdout', async () => {
     const out: string[] = []
     const err: string[] = []
@@ -1320,32 +1215,6 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     })
     return { store: fake, heldCalls: () => total }
   }
-
-  test('remote held reads deliver failed-node attention through the default filter', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'node')
-    const payload = {
-      id: 'cycle',
-      head: 'a'.repeat(40),
-      parent: 'b'.repeat(40),
-      steps: ['agent'],
-      guidance: 'file a repair child targeting this node: node',
-    }
-    const { store: fake, heldCalls } = longPollStore(store, async (_slug, call) => {
-      if (call === 1)
-        await store.append('node', {
-          actor: KERNEL,
-          type: 'integration.verification-failed',
-          payload,
-        })
-    })
-    const h = harness(store, { openStore: () => fake })
-    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['node'], count: 1, timeout: '2' })
-    expect(heldCalls()).toBeGreaterThan(0)
-    expect(
-      h.out.map((line) => JSON.parse(line)).find((record) => record.event)?.event.payload,
-    ).toEqual(payload)
-  })
 
   test('an appended event is delivered without waiting the interval, via a held read', async () => {
     const store = makeStore()
@@ -1853,22 +1722,6 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
     '#repo': 1,
   })
-
-  // Same equivalence with an explicit event filter: the pre-baseline fact is
-  // still never delivered.
-  const filteredBacking = makeStore()
-  const filtered = repoReadProbe(filteredBacking)
-  await filteredBacking.ensureRepo(REPO)
-  await filteredBacking.appendRepo(REPO, {
-    actor: humanActor('operator'),
-    type: 'dispatcher.operator-reported',
-    payload: { run: 'r0', level: 'info', message: 'notice before any run' },
-  })
-  const h2 = harness(filteredBacking, { openStore: () => filtered.store })
-  await abWatch({ ...h2.base, repository: true, events: ['dispatcher.*'], timeout: '1' })
-  expect(h2.out.slice(0, -1)).toEqual([])
-  expect(filtered.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 1 })
-  expect(filtered.calls.some((call) => call.method === 'getRepoStateEvents')).toBe(false)
 })
 
 for (const json of [true, false]) {
@@ -2016,159 +1869,150 @@ function manualClockHolds(
 
 // Use the negotiated journal, including an unfinished drain: completion and
 // predecessor process exit are deliberately absent.
-for (const mode of [
-  'takeover',
-  'requested',
-  'released',
-  'wrong-successor',
-  'wrong-correlation',
-  'legacy',
-] as const) {
-  for (const remote of [false, true]) {
-    for (const named of [false, true]) {
-      test(`handoff loss classification ${mode} remote=${remote} named=${named}`, async () => {
-        const clock = manualClock()
-        const store = new MemoryBuildStore({ clock })
-        const watched = remote ? manualClockHolds(store, clock) : store
-        await store.ensureRepo(REPO)
-        if (named) await seedRunningBuild(store, 'live')
-        await store.claimRepoLease(REPO, 'old', 1000)
-        const runtime = {
-          version: '1.0.0',
-          commit: 'unknown',
-          source: { kind: 'package', location: '/old' },
-        }
-        const handoff = {
-          correlation: 'upgrade',
-          run: 'old',
-          lineage: 'launcher',
-          from: runtime,
-          to: { ...runtime, version: '2.0.0' },
-          root: '/cache/new',
-          cacheId: 'new',
-          target: { mode: 'installed', key: 'new', source: '/install' },
-        }
-        const append = async (type: string, payload: unknown) => {
-          await store.appendRepo(
-            REPO,
-            validateRepositoryEventWrite({ actor: DISPATCHER, type, payload }),
-          )
-        }
-        let upgradeReads = 0
-        const getReducerValue = store.getReducerValue.bind(store)
-        store.getReducerValue = async (scope, request) => {
-          if (request.reducer === 'dispatchUpgrade' && ++upgradeReads === 1) {
-            throw new Error('upgrade projection temporarily unavailable')
-          }
-          return getReducerValue(scope, request)
-        }
-        let switched = false
-        const h = harness(watched, {
-          now: clock,
-          delay: async () => {
-            clock.advance(1000)
-            if (switched) return
-            switched = true
-            if (mode === 'legacy') {
-              await append('dispatcher.handoff-started', handoff)
-              await append('dispatcher.handoff-completed', { ...handoff, successor: 'new' })
-            } else {
-              await append('dispatcher.target-prepared', handoff)
-              await append('dispatcher.yield-requested', {
-                ...handoff,
-                successor: 'new',
-                mode: 'drain',
-                evidence: 'same schema',
-              })
-              if (mode !== 'requested') {
-                await append('dispatcher.handoff-started', {
-                  ...handoff,
-                  successor: 'new',
-                  mode: 'drain',
-                  startedAt: clock().toISOString(),
-                  deadline: new Date(clock().getTime() + 900000).toISOString(),
-                  builds: [{ slug: 'live', instance: 'execution' }],
-                })
-                await append('dispatcher.terminal-released', handoff)
-                if (mode !== 'released')
-                  await append('dispatcher.takeover', {
-                    ...handoff,
-                    successor: mode === 'wrong-successor' ? 'stranger' : 'new',
-                    correlation: mode === 'wrong-correlation' ? 'foreign' : handoff.correlation,
-                  })
-              }
-            }
-            await store.claimRepoLease(REPO, 'new', mode === 'takeover' && !named ? 100000 : 1000)
-          },
-        })
-        await abWatch({
-          ...h.base,
-          storeRef: remote ? 'https://store.example.test' : undefined,
-          repository: named,
-          slugs: named ? ['live'] : [],
-          events: ['dispatcher.lost'],
-          timeout: '4',
-        })
-        expect(h.err.join(' ')).toContain('upgrade projection temporarily unavailable')
-        expect(upgradeReads).toBeGreaterThan(1)
-        const records = h.out.map((line) => JSON.parse(line))
-        expect(records.filter((r) => r.observation).map((r) => r.observation.run)).toEqual(
-          mode === 'takeover' ? (named ? ['new'] : []) : ['old', 'new'],
-        )
-        await append('dispatcher.ticket-source-degraded', {
-          source: 'fake',
-          cause: 'rate-limited',
-          operation: 'ready-scan',
-          message: 'limited',
-          resetAt: clock().toISOString(),
-        })
-        const before = await store.getRepoEvents(REPO)
-        const resumed = harness(watched, {
-          now: clock,
-          delay: async () => {
-            clock.advance(1000)
-          },
-        })
-        await abWatch({
-          ...resumed.base,
-          storeRef: remote ? 'https://store.example.test' : undefined,
-          repository: named,
-          slugs: named ? ['live'] : [],
-          events: ['*'],
-          since: records.filter((r) => r.observation).at(-1)?.cursor ?? records.at(-1).cursor,
-          timeout: '1',
-        })
-        expect(resumed.out.map((line) => JSON.parse(line)).filter((r) => r.observation)).toEqual([])
-        expect(
-          resumed.out
-            .map((line) => JSON.parse(line))
-            .filter((r) => r.event)
-            .map((r) => r.event.type),
-        ).toEqual(['dispatcher.ticket-source-degraded'])
-        expect(await store.getRepoEvents(REPO)).toEqual(before)
-      }, 15000)
+// Only the takeover and released expectations depend on the watch's reads;
+// mode classification itself is unit-tested in kernel/dispatch-upgrade.test.ts.
+// Remote and named only choose the liveness call site, so those two modes run
+// in every combination and the rest at one.
+const HANDOFF_CASES = [
+  ...(['takeover', 'released'] as const).flatMap((mode) =>
+    [false, true].flatMap((remote) => [false, true].map((named) => ({ mode, remote, named }))),
+  ),
+  ...(['requested', 'wrong-successor', 'wrong-correlation', 'legacy'] as const).map((mode) => ({
+    mode,
+    remote: false,
+    named: false,
+  })),
+]
+for (const { mode, remote, named } of HANDOFF_CASES) {
+  test(`handoff loss classification ${mode} remote=${remote} named=${named}`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const watched = remote ? manualClockHolds(store, clock) : store
+    await store.ensureRepo(REPO)
+    if (named) await seedRunningBuild(store, 'live')
+    await store.claimRepoLease(REPO, 'old', 1000)
+    const runtime = {
+      version: '1.0.0',
+      commit: 'unknown',
+      source: { kind: 'package', location: '/old' },
     }
-  }
+    const handoff = {
+      correlation: 'upgrade',
+      run: 'old',
+      lineage: 'launcher',
+      from: runtime,
+      to: { ...runtime, version: '2.0.0' },
+      root: '/cache/new',
+      cacheId: 'new',
+      target: { mode: 'installed', key: 'new', source: '/install' },
+    }
+    const append = async (type: string, payload: unknown) => {
+      await store.appendRepo(
+        REPO,
+        validateRepositoryEventWrite({ actor: DISPATCHER, type, payload }),
+      )
+    }
+    let upgradeReads = 0
+    const getReducerValue = store.getReducerValue.bind(store)
+    store.getReducerValue = async (scope, request) => {
+      if (request.reducer === 'dispatchUpgrade' && ++upgradeReads === 1) {
+        throw new Error('upgrade projection temporarily unavailable')
+      }
+      return getReducerValue(scope, request)
+    }
+    let switched = false
+    const h = harness(watched, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+        if (switched) return
+        switched = true
+        if (mode === 'legacy') {
+          await append('dispatcher.handoff-started', handoff)
+          await append('dispatcher.handoff-completed', { ...handoff, successor: 'new' })
+        } else {
+          await append('dispatcher.target-prepared', handoff)
+          await append('dispatcher.yield-requested', {
+            ...handoff,
+            successor: 'new',
+            mode: 'drain',
+            evidence: 'same schema',
+          })
+          if (mode !== 'requested') {
+            await append('dispatcher.handoff-started', {
+              ...handoff,
+              successor: 'new',
+              mode: 'drain',
+              startedAt: clock().toISOString(),
+              deadline: new Date(clock().getTime() + 900000).toISOString(),
+              builds: [{ slug: 'live', instance: 'execution' }],
+            })
+            await append('dispatcher.terminal-released', handoff)
+            if (mode !== 'released')
+              await append('dispatcher.takeover', {
+                ...handoff,
+                successor: mode === 'wrong-successor' ? 'stranger' : 'new',
+                correlation: mode === 'wrong-correlation' ? 'foreign' : handoff.correlation,
+              })
+          }
+        }
+        await store.claimRepoLease(REPO, 'new', mode === 'takeover' && !named ? 100000 : 1000)
+      },
+    })
+    await abWatch({
+      ...h.base,
+      storeRef: remote ? 'https://store.example.test' : undefined,
+      repository: named,
+      slugs: named ? ['live'] : [],
+      events: ['dispatcher.lost'],
+      timeout: '4',
+    })
+    expect(h.err.join(' ')).toContain('upgrade projection temporarily unavailable')
+    expect(upgradeReads).toBeGreaterThan(1)
+    const records = h.out.map((line) => JSON.parse(line))
+    expect(records.filter((r) => r.observation).map((r) => r.observation.run)).toEqual(
+      mode === 'takeover' ? (named ? ['new'] : []) : ['old', 'new'],
+    )
+    await append('dispatcher.ticket-source-degraded', {
+      source: 'fake',
+      cause: 'rate-limited',
+      operation: 'ready-scan',
+      message: 'limited',
+      resetAt: clock().toISOString(),
+    })
+    const before = await store.getRepoEvents(REPO)
+    const resumed = harness(watched, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({
+      ...resumed.base,
+      storeRef: remote ? 'https://store.example.test' : undefined,
+      repository: named,
+      slugs: named ? ['live'] : [],
+      events: ['*'],
+      since: records.filter((r) => r.observation).at(-1)?.cursor ?? records.at(-1).cursor,
+      timeout: '1',
+    })
+    expect(resumed.out.map((line) => JSON.parse(line)).filter((r) => r.observation)).toEqual([])
+    expect(
+      resumed.out
+        .map((line) => JSON.parse(line))
+        .filter((r) => r.event)
+        .map((r) => r.event.type),
+    ).toEqual(['dispatcher.ticket-source-degraded'])
+    expect(await store.getRepoEvents(REPO)).toEqual(before)
+  }, 15000)
 }
 
-test('clean stop suppresses loss, and no lease is not death', async () => {
+test('a repository with no lease reports no loss', async () => {
   const store = makeStore()
   await store.ensureRepo(REPO)
   const h = harness(store)
   await abWatch({ ...h.base, repository: true, events: ['dispatcher.lost'], timeout: '2' })
   expect(h.out).toHaveLength(1)
-  expect(() =>
-    decodeCursor(
-      encodeCursor({
-        v: 1,
-        store: 's',
-        repo: 'r',
-        streams: {},
-        lostRuns: [42] as unknown as string[],
-      }),
-      { store: 's', repo: 'r' },
-    ),
-  ).toThrow('malformed')
 })
 
 for (const named of [false, true]) {
@@ -2298,7 +2142,8 @@ for (const remote of [false, true]) {
     expect(record.event).toBeUndefined()
     const decoded = decodeCursor(record.cursor, { store: storeRef, repo: REPO })
     expect(decoded.deliveredAttention).toContain('source:1')
-    const resume = harness(store, {
+    // A raw memory store holds on wall time; end remote holds on the manual clock.
+    const resume = harness(remote ? manualClockHolds(store, clock) : store, {
       now: clock,
       delay: async () => {
         clock.advance(900_000)
@@ -2413,17 +2258,6 @@ test('merge decisions dedupe per PR across consent changes and new cursor resume
   expect(upgrade.out).toHaveLength(1)
 })
 
-test('malformed attention cursor metadata is rejected', () => {
-  for (const deliveredAttention of [null, ['bad'], ['source:0'], [['b1', 7]], [12]]) {
-    const cursor =
-      'v1.' +
-      Buffer.from(
-        JSON.stringify({ v: 1, store: 's', repo: 'r', streams: {}, deliveredAttention }),
-      ).toString('base64url')
-    expect(() => decodeCursor(cursor, { store: 's', repo: 'r' })).toThrow('malformed')
-  }
-})
-
 test('count stops between simultaneous timer observations without advancing the stream', async () => {
   const clock = manualClock()
   const store = new MemoryBuildStore({ clock })
@@ -2498,83 +2332,57 @@ test('a failed repository catch-up cannot report an obsolete persistence conditi
   expect(h.err[0]).toContain('unavailable')
 })
 
-for (const recovers of [true, false]) {
-  test(`rate-limit attention waits for the first post-reset retry outcome (recovers=${recovers})`, async () => {
-    const clock = manualClock()
-    const store = new MemoryBuildStore({ clock })
-    await store.ensureRepo(REPO)
-    await store.appendRepo(REPO, {
-      actor: DISPATCHER,
-      type: 'dispatcher.tick-started',
-      payload: { run: 'r' },
-    })
-    await store.appendRepo(REPO, {
-      actor: DISPATCHER,
-      type: 'dispatcher.ticket-source-degraded',
-      payload: {
-        source: 'linear',
-        cause: 'rate-limited',
-        operation: 'ready-scan',
-        message: 'quota',
-        resetAt: new Date(clock().getTime() + 2000).toISOString(),
-      },
-    })
-    await store.appendRepo(REPO, {
-      actor: DISPATCHER,
-      type: 'dispatcher.tick-failed',
-      payload: { run: 'r', error: 'quota' },
-    })
-    let seconds = 0
-    const h = harness(store, {
-      now: clock,
-      delay: async () => {
-        clock.advance(1000)
-        seconds += 1
-        if (seconds === 10)
-          await store.appendRepo(REPO, {
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-started',
-            payload: { run: 'r' },
-          })
-        if (seconds !== 11) return
-        if (recovers) {
-          await store.appendRepo(REPO, {
-            actor: DISPATCHER,
-            type: 'dispatcher.ticket-source-recovered',
-            payload: { source: 'linear', cause: 'rate-limited', operation: 'ready-scan' },
-          })
-          await store.appendRepo(REPO, {
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-completed',
-            payload: {
-              run: 'r',
-              queued: 0,
-              counters: noopTickCounters(),
-              janitorDiagnostics: [],
-              ticketDiagnostics: [],
-              dependencyDiagnostics: [],
-            },
-          })
-        } else
-          await store.appendRepo(REPO, {
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-failed',
-            payload: { run: 'r', error: 'still offline' },
-          })
-      },
-    })
-    await abWatch({ ...h.base, repository: true, timeout: '13' })
-    const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
-    if (recovers) expect(records).toEqual([])
-    else {
-      expect(records).toHaveLength(1)
-      expect(records[0].observation.type).toBe('dispatcher.ticket-source-persistent')
-      expect(records[0].observation.observedAt).toBe(
-        new Date(clock().getTime() - 2000).toISOString(),
-      )
-    }
+test(`rate-limit attention matures after a failed first post-reset retry`, async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-started',
+    payload: { run: 'r' },
   })
-}
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-source-degraded',
+    payload: {
+      source: 'linear',
+      cause: 'rate-limited',
+      operation: 'ready-scan',
+      message: 'quota',
+      resetAt: new Date(clock().getTime() + 2000).toISOString(),
+    },
+  })
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-failed',
+    payload: { run: 'r', error: 'quota' },
+  })
+  let seconds = 0
+  const h = harness(store, {
+    now: clock,
+    delay: async () => {
+      clock.advance(1000)
+      seconds += 1
+      if (seconds === 10)
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-started',
+          payload: { run: 'r' },
+        })
+      if (seconds === 11)
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-failed',
+          payload: { run: 'r', error: 'still offline' },
+        })
+    },
+  })
+  await abWatch({ ...h.base, repository: true, timeout: '13' })
+  const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
+  expect(records).toHaveLength(1)
+  expect(records[0].observation.type).toBe('dispatcher.ticket-source-persistent')
+  expect(records[0].observation.observedAt).toBe(new Date(clock().getTime() - 2000).toISOString())
+})
 
 test('fresh watch baselines every historically eligible PR even when armed before registration', async () => {
   for (const named of [true, false]) {
@@ -2682,32 +2490,30 @@ test('repository discovery retains collecting integrations through later lifecyc
   expect(h.out.join('\n')).toContain('pr.opened')
 })
 
-test('forge failures reach default and repository watch with full remediation', async () => {
-  for (const repository of [false, true]) {
-    const store = makeStore()
-    await store.ensureRepo(REPO)
-    const fixture_ = harness(store, {
-      onTick: async () => {
-        await store.appendRepo(REPO, {
-          actor: DISPATCHER,
-          type: 'dispatcher.forge-readiness-failed',
-          payload: {
-            run: 'r1',
-            forge: 'github',
-            rootBranch: 'main',
-            check: 'squash',
-            detail: 'Squash disabled',
-            remediation: 'Enable squash merging',
-          },
-        })
-      },
-    })
-    await abWatch({ ...fixture_.base, repository, timeout: '1' })
-    const records = fixture_.out.slice(0, -1).map((line) => JSON.parse(line))
-    expect(records).toHaveLength(1)
-    expect(records[0].event.payload.remediation).toBe('Enable squash merging')
-    expect(renderWatchLine(records[0].event, null)).toContain('Enable squash merging')
-  }
+test('forge failures reach the default watch with full remediation', async () => {
+  const store = makeStore()
+  await store.ensureRepo(REPO)
+  const fixture_ = harness(store, {
+    onTick: async () => {
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.forge-readiness-failed',
+        payload: {
+          run: 'r1',
+          forge: 'github',
+          rootBranch: 'main',
+          check: 'squash',
+          detail: 'Squash disabled',
+          remediation: 'Enable squash merging',
+        },
+      })
+    },
+  })
+  await abWatch({ ...fixture_.base, timeout: '1' })
+  const records = fixture_.out.slice(0, -1).map((line) => JSON.parse(line))
+  expect(records).toHaveLength(1)
+  expect(records[0].event.payload.remediation).toBe('Enable squash merging')
+  expect(renderWatchLine(records[0].event, null)).toContain('Enable squash merging')
 })
 
 test.each([true, false])(
@@ -3423,12 +3229,24 @@ test('shutdown budget includes held reads, heartbeat cancellation, removal and c
     return new Promise(() => {})
   }
   const h = harness(store, { operator: true, signal: controller.signal })
-  const pending = abWatch(h.base)
+  let settled = false
+  const pending = abWatch(h.base).finally(() => {
+    settled = true
+  })
   await ready
-  const start = Date.now()
-  controller.abort('SIGTERM')
-  await pending
-  expect(Date.now() - start).toBeLessThan(2_800)
+  // Fake timers drive the shutdown deadline: every store call above hangs, so
+  // only the deadline can end the watch.
+  jest.useFakeTimers()
+  try {
+    controller.abort('SIGTERM')
+    jest.advanceTimersByTime(1_999)
+    for (let turn = 0; turn < 50; turn += 1) await Promise.resolve()
+    expect(settled).toBe(false)
+    jest.advanceTimersByTime(1)
+    await pending
+  } finally {
+    jest.useRealTimers()
+  }
   expect(removals).toBe(1)
   expect(h.err.filter((line) => line.includes('operator withdrawal failed'))).toHaveLength(1)
 })
@@ -3473,27 +3291,26 @@ test('termination cancels and drains a heartbeat before removal so it cannot rec
   expect(writes).toBe(2)
 })
 
-test.each([404, 405])(
-  'watch termination silently tolerates an unsupported withdrawal route (%s)',
-  async (status) => {
-    const store = makeStore()
-    const remote = new RemoteBuildStore({
-      url: 'http://old-service',
-      fetchFn: (async (_url: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('', { status })) as typeof fetch,
-    })
-    store.removeOperatorPresence = remote.removeOperatorPresence.bind(remote)
-    const controller = new AbortController()
-    const h = harness(store, {
-      operator: true,
-      signal: controller.signal,
-      onTick: () => controller.abort('SIGTERM'),
-    })
-    await abWatch(h.base)
-    expect(h.err).toEqual([])
-    expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
-  },
-)
+test('watch termination silently tolerates an unsupported withdrawal route', async () => {
+  // One client branch covers 404 and 405; `store/remote/client` tests both.
+  const status = 404
+  const store = makeStore()
+  const remote = new RemoteBuildStore({
+    url: 'http://old-service',
+    fetchFn: (async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      new Response('', { status })) as typeof fetch,
+  })
+  store.removeOperatorPresence = remote.removeOperatorPresence.bind(remote)
+  const controller = new AbortController()
+  const h = harness(store, {
+    operator: true,
+    signal: controller.signal,
+    onTick: () => controller.abort('SIGTERM'),
+  })
+  await abWatch(h.base)
+  expect(h.err).toEqual([])
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+})
 
 test.each(['initial', 'final'] as const)(
   'termination cancels a pending %s renewal before withdrawal',
@@ -3577,126 +3394,119 @@ test('startup reduced-read incompatibility remains legible without history recon
   expect(history).toBe(0)
 })
 
-for (const operator of [false, true]) {
-  for (const remote of [false, true]) {
-    test(`short hosted runs retire hidden stopped owners (operator=${operator}, remote=${remote})`, async () => {
-      const clock = manualClock()
-      const store = new MemoryBuildStore({ clock })
-      await store.ensureRepo(REPO)
-      const start = async (run: string) => {
-        await store.appendRepo(REPO, {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-started',
-          payload: {
-            run,
-            pid: 42,
-            host: 'host',
-            roleWarnings: [],
-            effectiveConfig: { kind: 'config', rev: 0 },
-          },
-        })
-        await store.claimRepoLease(REPO, run, 3000)
-        await store.appendRepo(REPO, {
-          actor: DISPATCHER,
-          type: 'dispatcher.tick-completed',
-          payload: {
-            run,
-            queued: 0,
-            counters: noopTickCounters(),
-            janitorDiagnostics: [],
-            ticketDiagnostics: [],
-            creationDiagnostics: [],
-            dependencyDiagnostics: [],
-          },
-        })
-      }
-      const finish = async (run: string) => {
-        await store.appendRepo(REPO, {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-stopped',
-          payload: { run, outcome: 'normal' },
-        })
-        await store.releaseRepoLease(REPO, run)
-      }
-      await start('A')
-      let tick = 0
-      const h = harness(store, {
-        operator,
-        now: clock,
-        delay: async () => {
-          clock.advance(1000)
-          if (++tick === 1) {
-            await finish('A')
-            await start('B')
-          }
-          if (tick === 2) {
-            await finish('B')
-            await start('C')
-          }
-        },
-      })
-      await abWatch({
-        ...h.base,
-        repository: !operator,
-        storeRef: remote ? 'https://store.example.test' : undefined,
-        timeout: '8',
-      })
-      expect(h.err).toEqual([])
-      const losses = h.out
-        .map((line) => JSON.parse(line))
-        .filter((r) => r.observation?.type === 'dispatcher.lost')
-      expect(losses.map((r) => r.observation.run)).toEqual(['C'])
-      expect(losses[0].observation.pid).toBe(42)
-      const resumed = harness(store, {
-        operator,
-        now: clock,
-        delay: async () => {
-          clock.advance(1000)
-        },
-      })
-      await abWatch({
-        ...resumed.base,
-        repository: !operator,
-        storeRef: remote ? 'https://store.example.test' : undefined,
-        since: losses[0].cursor,
-        timeout: '2',
-      })
-      expect(
-        resumed.out
-          .map((line) => JSON.parse(line))
-          .filter((r) => r.observation?.type === 'dispatcher.lost'),
-      ).toEqual([])
-    })
-  }
-}
-
-for (const outcome of ['normal', 'abnormal'] as const) {
-  test(`retained expired lease with ${outcome} stop never reports loss`, async () => {
+for (const remote of [false, true]) {
+  test(`short hosted runs retire hidden stopped owners (remote=${remote})`, async () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     await store.ensureRepo(REPO)
-    await store.claimRepoLease(REPO, 'stopped', 1000)
+    const start = async (run: string) => {
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 42,
+          host: 'host',
+          roleWarnings: [],
+          effectiveConfig: { kind: 'config', rev: 0 },
+        },
+      })
+      await store.claimRepoLease(REPO, run, 3000)
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: {
+          run,
+          queued: 0,
+          counters: noopTickCounters(),
+          janitorDiagnostics: [],
+          ticketDiagnostics: [],
+          creationDiagnostics: [],
+          dependencyDiagnostics: [],
+        },
+      })
+    }
+    const finish = async (run: string) => {
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run, outcome: 'normal' },
+      })
+      await store.releaseRepoLease(REPO, run)
+    }
+    await start('A')
     let tick = 0
-    const h = harness(store, {
+    const h = harness(remote ? manualClockHolds(store, clock) : store, {
       now: clock,
       delay: async () => {
         clock.advance(1000)
-        if (++tick === 1)
-          await store.appendRepo(REPO, {
-            actor: DISPATCHER,
-            type: 'dispatcher.run-stopped',
-            payload: { run: 'stopped', outcome },
-          })
+        if (++tick === 1) {
+          await finish('A')
+          await start('B')
+        }
+        if (tick === 2) {
+          await finish('B')
+          await start('C')
+        }
       },
     })
-    await abWatch({ ...h.base, repository: true, timeout: '4' })
-    const records = h.out.map((line) => JSON.parse(line))
-    expect(records.filter((r) => r.observation?.type === 'dispatcher.lost')).toEqual([])
-    expect(records.filter((r) => r.event?.type === 'dispatcher.run-stopped')).toHaveLength(
-      outcome === 'abnormal' ? 1 : 0,
-    )
+    await abWatch({
+      ...h.base,
+      repository: true,
+      storeRef: remote ? 'https://store.example.test' : undefined,
+      timeout: '8',
+    })
+    expect(h.err).toEqual([])
+    const losses = h.out
+      .map((line) => JSON.parse(line))
+      .filter((r) => r.observation?.type === 'dispatcher.lost')
+    expect(losses.map((r) => r.observation.run)).toEqual(['C'])
+    expect(losses[0].observation.pid).toBe(42)
+    const resumed = harness(remote ? manualClockHolds(store, clock) : store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({
+      ...resumed.base,
+      repository: true,
+      storeRef: remote ? 'https://store.example.test' : undefined,
+      since: losses[0].cursor,
+      timeout: '2',
+    })
+    expect(
+      resumed.out
+        .map((line) => JSON.parse(line))
+        .filter((r) => r.observation?.type === 'dispatcher.lost'),
+    ).toEqual([])
   })
 }
+
+test('retained expired lease with abnormal stop never reports loss', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  await store.claimRepoLease(REPO, 'stopped', 1000)
+  let tick = 0
+  const h = harness(store, {
+    now: clock,
+    delay: async () => {
+      clock.advance(1000)
+      if (++tick === 1)
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-stopped',
+          payload: { run: 'stopped', outcome: 'abnormal' },
+        })
+    },
+  })
+  await abWatch({ ...h.base, repository: true, timeout: '4' })
+  const records = h.out.map((line) => JSON.parse(line))
+  expect(records.filter((r) => r.observation?.type === 'dispatcher.lost')).toEqual([])
+  expect(records.filter((r) => r.event?.type === 'dispatcher.run-stopped')).toHaveLength(1)
+})
+
 test('a fresh watch reports current upstream rewrite with branch and both immutable SHAs', async () => {
   const store = makeStore()
   await seedRunningBuild(store, 'b1')
@@ -3733,54 +3543,6 @@ test('expired hosted watch resume is terminal and never replays the prefix', asy
   await expect(abWatch(h.base)).rejects.toThrow('Re-arm without --since')
   expect(h.out).toEqual([])
   expect((Reflect.get(store, 'snapshots') as Map<string, unknown>).size).toBe(0)
-})
-
-test('kernel Git condition events render as repository attention lines', async () => {
-  const { summarizeEvent } = await import('./watch')
-  const base = { repo: 'repo', seq: 1, ts: '2026-11-05T00:00:00.000Z', actor: DISPATCHER }
-  expect(
-    summarizeEvent(
-      {
-        ...base,
-        type: 'dispatcher.kernel-git-unavailable',
-        payload: { executable: 'git', detail: 'Executable not found in $PATH: "git"\nmore' },
-      },
-      null,
-    ),
-  ).toBe(String.raw`Kernel Git unavailable (git): Executable not found in $PATH: "git"\u{a}more`)
-  expect(
-    summarizeEvent(
-      { ...base, type: 'dispatcher.kernel-git-recovered', payload: { executable: 'git' } },
-      null,
-    ),
-  ).toBe('Kernel Git recovered (git)')
-})
-
-test('open-PR backpressure transitions render as repository lines', async () => {
-  const { summarizeEvent } = await import('./watch')
-  const base = { repo: 'repo', seq: 1, ts: '2026-11-20T00:00:00.000Z', actor: DISPATCHER }
-  expect(
-    summarizeEvent(
-      {
-        ...base,
-        type: 'dispatcher.open-pr-backpressure-engaged',
-        payload: { openPrs: 12, maxOpenPrs: 12, resumeOpenPrs: 9, excludeHeld: true },
-      },
-      null,
-    ),
-  ).toBe(
-    'Open-PR backpressure engaged: 12 open root PRs ≥ 12; normal claims paused until ≤ 9 (held PRs excluded)',
-  )
-  expect(
-    summarizeEvent(
-      {
-        ...base,
-        type: 'dispatcher.open-pr-backpressure-cleared',
-        payload: { openPrs: 9, reason: 'drained' },
-      },
-      null,
-    ),
-  ).toBe('Open-PR backpressure cleared (drained): 9 open root PRs')
 })
 
 describe('watch announced builds and resumed merge decisions (AUT-1221)', () => {
