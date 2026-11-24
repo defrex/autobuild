@@ -7,8 +7,6 @@ import {
   AUTH_SCHEMA_CHECKSUM,
   AUTH_SCHEMA_V1_CHECKSUM,
   AUTH_SCHEMA_V1_DDL,
-  AUTH_SCHEMA_V2_CHECKSUM,
-  AUTH_SCHEMA_V2_DDL,
   AUTH_SCHEMA_VERSION,
 } from './auth-schema'
 
@@ -21,16 +19,6 @@ import {
   SCHEMA_V16_CHECKSUM,
   SCHEMA_V1_CHECKSUM,
   SCHEMA_V1_DDL,
-  SCHEMA_V2_DDL,
-  SCHEMA_V3_DDL,
-  SCHEMA_V4_DDL,
-  SCHEMA_V5_DDL,
-  SCHEMA_V6_CHECKSUM,
-  SCHEMA_V6_DDL,
-  SCHEMA_V7_CHECKSUM,
-  SCHEMA_V7_DDL,
-  SCHEMA_V8_CHECKSUM,
-  SCHEMA_V8_DDL,
   SCHEMA_V9_DDL,
   SCHEMA_V9_CHECKSUM,
   SCHEMA_VERSION,
@@ -67,32 +55,6 @@ async function schemaHarness(): Promise<{ url: string; cleanup: () => Promise<vo
     },
   }
 }
-
-// A frozen DDL constant must be pre-trimmed: a deployed marker's checksum is
-// taken over the trimmed DDL (the migration runner applies `.trim()` before
-// hashing), so an untrimmed constant hashes surrounding whitespace no deployed
-// database ever carried and its promotion branch never matches — every real
-// database of that version then fails migration with "marker is
-// incompatible". This is the AUT-489 round-2 finding (the v7 freeze shipped
-// without `.trim()`); the assertion makes the whole frozen family unable to
-// regress. Pure constants, so this runs without a live Postgres.
-describe('frozen PostgreSQL schema DDL constants', () => {
-  for (const [name, ddl] of [
-    ['SCHEMA_V1_DDL', SCHEMA_V1_DDL],
-    ['SCHEMA_V2_DDL', SCHEMA_V2_DDL],
-    ['SCHEMA_V3_DDL', SCHEMA_V3_DDL],
-    ['SCHEMA_V4_DDL', SCHEMA_V4_DDL],
-    ['SCHEMA_V5_DDL', SCHEMA_V5_DDL],
-    ['SCHEMA_V6_DDL', SCHEMA_V6_DDL],
-    ['SCHEMA_V7_DDL', SCHEMA_V7_DDL],
-    ['SCHEMA_V8_DDL', SCHEMA_V8_DDL],
-    ['SCHEMA_DDL', SCHEMA_DDL],
-  ] as const) {
-    test(`${name} is pre-trimmed`, () => {
-      expect(ddl).toBe(ddl.trim())
-    })
-  }
-})
 
 if (testUrl) {
   describe('PostgreSQL schema migration', () => {
@@ -207,167 +169,6 @@ if (testUrl) {
     //   2. Delete the fixture that falls out of the two-version window.
     //   3. Leave the baseline untouched.
     //
-    // Retirement is mechanical because the baseline covers every frozen
-    // version's generic upgrade behavior — seeded legacy rows, backfill
-    // distinctness and set {1..N}, sequence continuity above the legacy
-    // maximum, the widened-CHECK session-scoped write probe, per-table
-    // collision checks, and idempotence. First application of this policy
-    // retired the build-store fixtures for v1–v5 (plus the second v4
-    // fixture); their coverage is subsumed per the PR description.
-    test('upgrades a genuine v6 database in place: the build-digest scan index, preserving prior rows', async () => {
-      const harness = await schemaHarness()
-      const sql = new SQL(harness.url)
-      try {
-        // Create a real v6 database: v6 DDL, v6 marker, plus a build with a
-        // long non-digest history the index upgrade must leave untouched.
-        await sql.unsafe(SCHEMA_V6_DDL)
-        // The genuine v6 marker is version 6 literally: SCHEMA_VERSION moves
-        // on with every schema revision, and a v6 checksum under any other
-        // version is (correctly) rejected as incompatible.
-        await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, 6, ${SCHEMA_V6_CHECKSUM}, ${new Date().toISOString()})`
-        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
-          VALUES ('v6-build', 'acme/v6', ${CONTRACT_T0}, ${CONTRACT_T0})`
-        await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
-          VALUES ('v6-build', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'build.created', '{"ticket":{"source":"file","id":"V6"},"repo":"acme/v6","baseBranch":"main"}')`
-
-        await migratePostgres(harness.url)
-
-        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
-        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
-        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
-
-        // The index exists under its pinned name and the legacy row survived.
-        // pg_indexes spans every schema in the database, and the live-test
-        // suites share one database with concurrently migrating isolated
-        // schemas — scope the lookup to this test's schema or a sibling
-        // schema's same-named index is counted too.
-        const indexes =
-          await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'events' AND indexname = 'events_type_build_seq'`
-        expect(indexes).toHaveLength(1)
-        const legacy = await sql`SELECT seq, type FROM events WHERE build = 'v6-build'`
-        expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1])
-
-        // The migrated store digests the legacy row and answers new writes.
-        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
-        try {
-          const digests = await store.getRepoBuildDigests('acme/v6')
-          expect([...digests.keys()]).toEqual(['v6-build'])
-          expect(digests.get('v6-build')).toEqual({
-            slug: 'v6-build',
-            observations: [],
-            executionFacts: 0,
-            nodeTargets: [],
-          })
-        } finally {
-          await store.close()
-        }
-
-        // The upgrade is idempotent.
-        await migratePostgres(harness.url)
-      } finally {
-        await sql.close()
-        await harness.cleanup()
-      }
-    })
-
-    test('upgrades a genuine v7 database in place: the repository-journal state-read index, preserving prior rows', async () => {
-      const harness = await schemaHarness()
-      const sql = new SQL(harness.url)
-      try {
-        // Create a real v7 database: v7 DDL, v7 marker, plus a journal with
-        // dispatcher facts (the noise the new index must stop scanning) and
-        // a durable harvest fact the bounded read must keep.
-        await sql.unsafe(SCHEMA_V7_DDL)
-        // The genuine v7 marker is version 7 literally: SCHEMA_VERSION moves
-        // on with every schema revision, and a v7 checksum under any other
-        // version is (correctly) rejected as incompatible.
-        await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, 7, ${SCHEMA_V7_CHECKSUM}, ${new Date().toISOString()})`
-        await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
-          VALUES ('acme/v7', ${CONTRACT_T0}, ${CONTRACT_T0})`
-        await sql`INSERT INTO repo_events (repo, seq, ts, actor, type, payload)
-          VALUES ('acme/v7', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.run-started',
-            '{"run":"r1","pid":1,"effectiveConfig":{"kind":"effective-config","rev":0},"roleWarnings":[]}'),
-          ('acme/v7', 2, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.tick-completed',
-            '{"run":"r1","queued":0,"counters":{"merged":0,"closed":0,"conflicted":0,"abandoned":0,"discarded":0,"janitorFailed":0,"recovered":0,"dispatchFailed":0,"resumed":0,"swept":0,"dispatched":0,"authored":0,"bounced":0,"claimRaces":0,"invalidTickets":0,"dependencyBlocked":0,"harvestStarted":0,"harvestResumed":0,"harvestCompleted":0,"harvestEscalated":0,"harvestFailed":0},"janitorDiagnostics":[],"ticketDiagnostics":[],"dependencyDiagnostics":[]}'),
-          ('acme/v7', 3, ${CONTRACT_T0}, '{"kind":"kernel"}', 'harvest.started',
-            '{"run":"h1","observations":[{"build":"b","seq":1}],"scan":{"kind":"harvest-scan","rev":0}}')`
-
-        await migratePostgres(harness.url)
-
-        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
-        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
-        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
-
-        // The index exists under its pinned name and the legacy rows survived.
-        const indexes =
-          await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'repo_events' AND indexname = 'repo_events_type_repo_seq'`
-        expect(indexes).toHaveLength(1)
-        const legacy = await sql`SELECT seq, type FROM repo_events WHERE repo = 'acme/v7'`
-        expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1, 2, 3])
-
-        // The migrated store's bounded read keeps the anchor and the tail
-        // from it (the same run's tick fact) plus the durable fact — exactly
-        // the oracle over the full replay.
-        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
-        try {
-          const subset = await store.getRepoStateEvents('acme/v7')
-          expect(subset.map((event) => event.seq)).toEqual([1, 2, 3])
-        } finally {
-          await store.close()
-        }
-
-        // The upgrade is idempotent.
-        await migratePostgres(harness.url)
-      } finally {
-        await sql.close()
-        await harness.cleanup()
-      }
-    })
-
-    test('upgrades a genuine v8 database in place: the ticket_assets table, preserving prior rows', async () => {
-      const harness = await schemaHarness()
-      const sql = new SQL(harness.url)
-      try {
-        await sql.unsafe(SCHEMA_V8_DDL)
-        // The genuine v8 marker is version 8 literally (see the v7 test).
-        await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, 8, ${SCHEMA_V8_CHECKSUM}, ${new Date().toISOString()})`
-        await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
-          VALUES ('acme/v8', ${CONTRACT_T0}, ${CONTRACT_T0})`
-        expect(((await sql`SELECT to_regclass('ticket_assets') AS t`) as Row[])[0]?.t).toBeNull()
-
-        await migratePostgres(harness.url)
-
-        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
-        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
-        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
-        expect(
-          ((await sql`SELECT repo FROM repo_streams`) as Row[]).map((row) => row.repo),
-        ).toEqual(['acme/v8'])
-
-        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
-        try {
-          const meta = await store.putTicketAsset('acme/v8', 'T-1', {
-            kind: 'design',
-            name: 'a',
-            layout: 'file',
-            entries: [{ type: 'file', path: 'a', content: new Uint8Array([1]) }],
-          })
-          expect(meta.revision).toBe(0)
-        } finally {
-          await store.close()
-        }
-
-        // The upgrade is idempotent.
-        await migratePostgres(harness.url)
-      } finally {
-        await sql.close()
-        await harness.cleanup()
-      }
-    })
-
     test.each(['project_journal', 'project_registry_state'])(
       'refuses missing registry table %s',
       async (table) => {
@@ -489,56 +290,6 @@ if (testUrl) {
       }
     })
 
-    test('upgrades a genuine v2 auth database in place: the oauthApplication.authenticationScheme column, preserving prior rows', async () => {
-      const harness = await schemaHarness()
-      const sql = new SQL(harness.url)
-      try {
-        // Create a real v2 auth database: v2 DDL, a current build-store
-        // marker (migratePostgres validates both), a v2 auth marker, plus a
-        // legacy client row written before authenticationScheme existed —
-        // legacy rows legitimately lack the field, so it backfills as NULL
-        // ("field absent", the builds.repo_origin precedent).
-        await sql.unsafe(SCHEMA_DDL)
-        await sql.unsafe(AUTH_SCHEMA_V2_DDL)
-        await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
-        await sql`INSERT INTO ab_auth_schema_migrations VALUES
-          (true, 2, ${AUTH_SCHEMA_V2_CHECKSUM}, ${new Date().toISOString()})`
-        await sql`INSERT INTO "oauthApplication"
-          (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
-           "createdAt", "updatedAt")
-          VALUES ('legacy', 'legacy-client', 'legacy-id', 'secret', 'https://claude.ai', 'web',
-                  false, ${CONTRACT_T0}, ${CONTRACT_T0})`
-
-        await migratePostgres(harness.url)
-
-        const marker = await sql`SELECT version, checksum FROM ab_auth_schema_migrations`
-        expect(Number(marker[0]?.version)).toBe(AUTH_SCHEMA_VERSION)
-        expect(marker[0]?.checksum).toBe(AUTH_SCHEMA_CHECKSUM)
-
-        // The legacy row survives with authenticationScheme NULL.
-        const legacy =
-          await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'legacy'`
-        expect(legacy[0]?.authenticationScheme).toBeNull()
-
-        // A row carrying the column round-trips.
-        await sql`INSERT INTO "oauthApplication"
-          (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
-           "createdAt", "updatedAt", "authenticationScheme")
-          VALUES ('c2', 'e2e-mcp-client', 'client-2', 'secret', 'https://claude.ai', 'web',
-                  false, ${CONTRACT_T0}, ${CONTRACT_T0}, 'none')`
-        const clients =
-          await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'c2'`
-        expect(clients[0]?.authenticationScheme).toBe('none')
-
-        // The upgrade is idempotent.
-        await migratePostgres(harness.url)
-      } finally {
-        await sql.close()
-        await harness.cleanup()
-      }
-    })
-
     // The retention baseline (AUT-547): instead of one hand-written fixture
     // per schema version accumulating forever, a loop iterates every entry of
     // the frozen-family map (schema-guard.test.ts) — for each frozen version,
@@ -547,9 +298,8 @@ if (testUrl) {
     // and assert the shared upgrade properties. The loop never retires: a
     // new schema bump adds a frozen entry (schema-guard.test.ts's contiguity
     // test fails a bump without a freeze) and the loop covers it
-    // automatically. The hand-written fixtures above retain only the two
-    // most recent versions per family, for deltas the loop cannot assert
-    // (pinned index names, version-specific oracles).
+    // automatically. Version-specific seeds and oracles below retain index
+    // and adapter behavior against their exact released starting shapes.
     const LEGACY_SEEDS: Record<number, { sessions?: number; streams?: number }> = {
       // v1: canary builds row only — no streams/sessions tables exist in the
       // v1 DDL.
@@ -572,10 +322,8 @@ if (testUrl) {
       // counters — there is no sessions delta to exercise here.
       4: { streams: 2 },
       5: { streams: 2 },
-      // v6/v7: canary builds row only. Their streams already carry
-      // creation_seq, and the versions' real subjects (pinned index names,
-      // the digest read, the bounded state-read oracle) stay covered by the
-      // retained v6/v7 fixtures above.
+      // v6/v7 streams already carry creation_seq. Their version-specific
+      // event seeds and adapter oracles run locally in the baseline below.
       6: {},
       7: {},
     }
@@ -607,6 +355,30 @@ if (testUrl) {
             (true, ${version}, ${frozen.checksum}, ${new Date().toISOString()})`
           await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
             VALUES ('guard-canary', 'acme/guard', ${CONTRACT_T0}, ${CONTRACT_T0})`
+          if (version === 6) {
+            await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+              VALUES ('v6-build', 'acme/v6', ${CONTRACT_T0}, ${CONTRACT_T0})`
+            await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
+              VALUES ('v6-build', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'build.created', '{"ticket":{"source":"file","id":"V6"},"repo":"acme/v6","baseBranch":"main"}')`
+          }
+          if (version === 7) {
+            await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
+              VALUES ('acme/v7', ${CONTRACT_T0}, ${CONTRACT_T0})`
+            await sql`INSERT INTO repo_events (repo, seq, ts, actor, type, payload)
+              VALUES ('acme/v7', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.run-started',
+                '{"run":"r1","pid":1,"effectiveConfig":{"kind":"effective-config","rev":0},"roleWarnings":[]}'),
+              ('acme/v7', 2, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.tick-completed',
+                '{"run":"r1","queued":0,"counters":{"merged":0,"closed":0,"conflicted":0,"abandoned":0,"discarded":0,"janitorFailed":0,"recovered":0,"dispatchFailed":0,"resumed":0,"swept":0,"dispatched":0,"authored":0,"bounced":0,"claimRaces":0,"invalidTickets":0,"dependencyBlocked":0,"harvestStarted":0,"harvestResumed":0,"harvestCompleted":0,"harvestEscalated":0,"harvestFailed":0},"janitorDiagnostics":[],"ticketDiagnostics":[],"dependencyDiagnostics":[]}'),
+              ('acme/v7', 3, ${CONTRACT_T0}, '{"kind":"kernel"}', 'harvest.started',
+                '{"run":"h1","observations":[{"build":"b","seq":1}],"scan":{"kind":"harvest-scan","rev":0}}')`
+          }
+          if (version === 8) {
+            await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
+              VALUES ('acme/v8', ${CONTRACT_T0}, ${CONTRACT_T0})`
+            expect(
+              ((await sql`SELECT to_regclass('ticket_assets') AS t`) as Row[])[0]?.t,
+            ).toBeNull()
+          }
           const seeds = LEGACY_SEEDS[version] ?? {}
           if (seeds.sessions) {
             // Same-millisecond ties, ids inserted in reversed order: legacy
@@ -662,6 +434,55 @@ if (testUrl) {
 
           const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
           try {
+            if (version === 6) {
+              // The index exists under its pinned name and the legacy row survived.
+              // pg_indexes spans every schema in the database, and the live-test
+              // suites share one database with concurrently migrating isolated
+              // schemas — scope the lookup to this test's schema or a sibling
+              // schema's same-named index is counted too.
+              const indexes =
+                await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'events' AND indexname = 'events_type_build_seq'`
+              expect(indexes).toHaveLength(1)
+              const legacy = await sql`SELECT seq, type FROM events WHERE build = 'v6-build'`
+              expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1])
+
+              // The migrated store digests the legacy row and answers new writes.
+              const digests = await store.getRepoBuildDigests('acme/v6')
+              expect([...digests.keys()]).toEqual(['v6-build'])
+              expect(digests.get('v6-build')).toEqual({
+                slug: 'v6-build',
+                observations: [],
+                executionFacts: 0,
+                nodeTargets: [],
+              })
+            }
+            if (version === 7) {
+              // The index exists under its pinned name and the legacy rows survived.
+              const indexes =
+                await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'repo_events' AND indexname = 'repo_events_type_repo_seq'`
+              expect(indexes).toHaveLength(1)
+              const legacy = await sql`SELECT seq, type FROM repo_events WHERE repo = 'acme/v7'`
+              expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1, 2, 3])
+
+              // The migrated store's bounded read keeps the anchor and the tail
+              // from it (the same run's tick fact) plus the durable fact — exactly
+              // the oracle over the full replay.
+              const subset = await store.getRepoStateEvents('acme/v7')
+              expect(subset.map((event) => event.seq)).toEqual([1, 2, 3])
+            }
+            if (version === 8) {
+              expect(
+                ((await sql`SELECT repo FROM repo_streams`) as Row[]).map((row) => row.repo),
+              ).toEqual(['acme/v8'])
+
+              const meta = await store.putTicketAsset('acme/v8', 'T-1', {
+                kind: 'design',
+                name: 'a',
+                layout: 'file',
+                entries: [{ type: 'file', path: 'a', content: new Uint8Array([1]) }],
+              })
+              expect(meta.revision).toBe(0)
+            }
             // Sequence continuity where a backfill ran: the new rows'
             // counters sit strictly above the legacy maximum. Deterministic
             // (N legacy rows backfill 1..N and setval positions the next
@@ -738,8 +559,7 @@ if (testUrl) {
         const harness = await schemaHarness()
         const sql = new SQL(harness.url)
         try {
-          // Seed a coherent whole database the way the genuine-v2 auth
-          // fixture above does: the current build-store DDL and marker
+          // Seed a coherent whole database: the current build-store DDL and marker
           // (migratePostgres validates both markers), this version's frozen
           // auth DDL and genuine marker, and a canary user row the upgrade
           // must preserve. The v2 iteration additionally seeds the version's
@@ -776,6 +596,15 @@ if (testUrl) {
             const legacy =
               await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'guard-legacy'`
             expect(legacy[0]?.authenticationScheme).toBeNull()
+            // A row carrying the column round-trips.
+            await sql`INSERT INTO "oauthApplication"
+              (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
+               "createdAt", "updatedAt", "authenticationScheme")
+              VALUES ('c2', 'e2e-mcp-client', 'client-2', 'secret', 'https://claude.ai', 'web',
+                      false, ${CONTRACT_T0}, ${CONTRACT_T0}, 'none')`
+            const clients =
+              await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'c2'`
+            expect(clients[0]?.authenticationScheme).toBe('none')
           }
 
           const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())

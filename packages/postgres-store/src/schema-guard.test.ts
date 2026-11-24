@@ -1,5 +1,5 @@
 import { CryptoHasher } from 'bun'
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 
 import {
   AUTH_SCHEMA_CHECKSUM,
@@ -13,6 +13,7 @@ import {
 } from './auth-schema'
 import {
   SCHEMA_CHECKSUM,
+  SCHEMA_DDL,
   SCHEMA_V22_DDL,
   SCHEMA_V22_CHECKSUM,
   SCHEMA_V21_DDL,
@@ -302,5 +303,31 @@ test('every frozen checksum equals a fresh SHA-256 of its DDL', () => {
         )
       }
     }
+  }
+})
+
+// A frozen DDL constant must be pre-trimmed: a deployed marker's checksum is
+// taken over the trimmed DDL (the migration runner applies `.trim()` before
+// hashing), so an untrimmed constant hashes surrounding whitespace no deployed
+// database ever carried and its promotion branch never matches — every real
+// database of that version then fails migration with "marker is
+// incompatible". This is the AUT-489 round-2 finding (the v7 freeze shipped
+// without `.trim()`); the assertion makes the whole frozen family unable to
+// regress. Pure constants, so this runs without a live Postgres.
+describe('frozen PostgreSQL schema DDL constants', () => {
+  for (const [name, ddl] of [
+    ['SCHEMA_V1_DDL', SCHEMA_V1_DDL],
+    ['SCHEMA_V2_DDL', SCHEMA_V2_DDL],
+    ['SCHEMA_V3_DDL', SCHEMA_V3_DDL],
+    ['SCHEMA_V4_DDL', SCHEMA_V4_DDL],
+    ['SCHEMA_V5_DDL', SCHEMA_V5_DDL],
+    ['SCHEMA_V6_DDL', SCHEMA_V6_DDL],
+    ['SCHEMA_V7_DDL', SCHEMA_V7_DDL],
+    ['SCHEMA_V8_DDL', SCHEMA_V8_DDL],
+    ['SCHEMA_DDL', SCHEMA_DDL],
+  ] as const) {
+    test(`${name} is pre-trimmed`, () => {
+      expect(ddl).toBe(ddl.trim())
+    })
   }
 })
