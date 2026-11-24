@@ -5,7 +5,7 @@ import { WebModelHub } from '../web/hub'
 import { loopbackHosts } from '../web/http'
 import { repositoryLabel } from '../web/page'
 import { readOnlyStore } from '../web/read-only'
-import { RepositoryFrameSource } from '../web/repository-source'
+import { OverviewFrameSource } from '../web/overview-source'
 import { parseWebPort as parseOptionPort, DEFAULT_WEB_HOST, isLoopbackHost } from '../web/options'
 import { startWebServer, type StartedWebServer, type WebServerStarter } from '../web/server'
 
@@ -96,7 +96,7 @@ export async function abWeb(opts: AbWebOpts): Promise<void> {
     async ({ store, repo }) => {
       const reader = readOnlyStore(store)
       const hub = new WebModelHub({
-        source: new RepositoryFrameSource(reader, repo),
+        source: new OverviewFrameSource(reader, repo),
         networkReads: store.networkReads === true,
         ...(opts.scheduler !== undefined ? { scheduler: opts.scheduler } : {}),
         onError: (error) =>
