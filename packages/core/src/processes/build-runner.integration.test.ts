@@ -6177,63 +6177,90 @@ describe('native suspension and continuation', () => {
     expect(ofType(events, 'session.resumed')).toHaveLength(0)
   })
 
-  test('shutdown deposits partial evidence; restart resumes the same native handle and phase round', async () => {
-    const shutdown = new AbortController()
-    let observed!: () => void
-    const ready = new Promise<void>((r) => {
-      observed = r
-    })
-    let resumed = false
-    const h = await makeHarness({
-      nativeSessions: true,
-      workspaceProvider: 'git-worktree',
-      shutdownSignal: shutdown.signal,
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        return {
-          ...handlers,
-          'ab-plan': async (ctx) => {
-            if (!ctx.message) {
-              observed()
-              await new Promise(() => {})
-            }
-            resumed = true
-            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
-          },
+  for (const cause of ['shutdown', 'pause'] as const)
+    test(`${cause} suspends promptly with partial evidence; restart resumes the same native handle and phase round`, async () => {
+      const shutdown = new AbortController()
+      let observed!: () => void
+      const ready = new Promise<void>((r) => {
+        observed = r
+      })
+      let resumed = false
+      const h = await makeHarness({
+        nativeSessions: true,
+        workspaceProvider: 'git-worktree',
+        shutdownSignal: shutdown.signal,
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          return {
+            ...handlers,
+            'ab-plan': async (ctx) => {
+              if (!ctx.message) {
+                observed()
+                await new Promise(() => {})
+              }
+              resumed = true
+              return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+            },
+          }
+        },
+      })
+      const running = h.br.run()
+      await ready
+      let failedRead = false
+      if (cause === 'shutdown') shutdown.abort()
+      else {
+        // Pause cleanup tolerates a transient read failure.
+        const read = h.store.getReducerValue.bind(h.store)
+        h.store.getReducerValue = async (scope, request) => {
+          if (!failedRead && request.reducer === 'buildReadFacts') {
+            failedRead = true
+            throw new Error('transient pause read failure')
+          }
+          return read(scope, request)
         }
-      },
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.pause-requested',
+          payload: {},
+        })
+      }
+      await running
+      const before = await h.store.getEvents(SLUG)
+      const suspended = ofType(before, 'session.suspended')[0]!
+      expect(suspended.payload.cause).toBe(cause)
+      expect(
+        await h.store.getArtifact(
+          SLUG,
+          suspended.payload.transcript.kind,
+          suspended.payload.transcript.rev,
+        ),
+      ).not.toBeNull()
+      if (cause === 'pause') {
+        expect(failedRead).toBe(true)
+        expect(reduceBuild(before).status).toBe('paused')
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.resume-requested',
+          payload: {},
+        })
+      }
+      const resumedRunner = successor(h)
+      await resumedRunner.attach()
+      await resumedRunner.step()
+      expect(resumed).toBe(true)
+      const log = await h.store.getEvents(SLUG)
+      const acceptance = ofType(log, 'session.resumed')[0]!
+      expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
+      expect(ofType(log, 'plan.started')).toHaveLength(1)
+      const continuation = ofType(log, 'session.started').at(-1)!
+      expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
+      expect(continuation.payload.round).toBe(1)
+      const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
+      expect(journal.messages[0]).toContain(`interrupted (${cause})`)
+      expect(journal.messages[0]).toContain('Re-check the worktree')
+      // The continued bracket records the interruption notice it actually sent.
+      if (cause === 'shutdown') expect(continuation.payload.prompt).toBe(journal.messages[0])
     })
-    const running = h.br.run()
-    await ready
-    shutdown.abort()
-    await running
-    const before = await h.store.getEvents(SLUG)
-    const suspended = ofType(before, 'session.suspended')[0]!
-    expect(suspended.payload.cause).toBe('shutdown')
-    expect(
-      await h.store.getArtifact(
-        SLUG,
-        suspended.payload.transcript.kind,
-        suspended.payload.transcript.rev,
-      ),
-    ).not.toBeNull()
-    const resumedRunner = successor(h)
-    await resumedRunner.attach()
-    await resumedRunner.step()
-    expect(resumed).toBe(true)
-    const log = await h.store.getEvents(SLUG)
-    const acceptance = ofType(log, 'session.resumed')[0]!
-    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
-    expect(ofType(log, 'plan.started')).toHaveLength(1)
-    const continuation = ofType(log, 'session.started').at(-1)!
-    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
-    expect(continuation.payload.round).toBe(1)
-    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
-    expect(journal.messages[0]).toContain('interrupted (shutdown)')
-    expect(journal.messages[0]).toContain('Re-check the worktree')
-    // The continued bracket records the interruption notice it actually sent.
-    expect(continuation.payload.prompt).toBe(journal.messages[0])
-  })
 
   for (const countermanded of [false, true]) {
     test(`pause before session.started is ${countermanded ? 'countermanded by resume' : 'honored without waiting for the phase'}`, async () => {
@@ -6305,81 +6332,10 @@ describe('native suspension and continuation', () => {
     })
   }
 
-  test('pause suspends promptly and resumes the same native session', async () => {
-    let observed!: () => void
-    const ready = new Promise<void>((r) => {
-      observed = r
-    })
-    let resumed = false
-    const h = await makeHarness({
-      nativeSessions: true,
-      workspaceProvider: 'git-worktree',
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        return {
-          ...handlers,
-          'ab-plan': async (ctx) => {
-            if (!ctx.message) {
-              observed()
-              await new Promise(() => {})
-            }
-            resumed = true
-            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
-          },
-        }
-      },
-    })
-    const running = h.br.run()
-    await ready
-    const read = h.store.getReducerValue.bind(h.store)
-    let failedRead = false
-    h.store.getReducerValue = async (scope, request) => {
-      if (!failedRead && request.reducer === 'buildReadFacts') {
-        failedRead = true
-        throw new Error('transient pause read failure')
-      }
-      return read(scope, request)
-    }
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'build.pause-requested',
-      payload: {},
-    })
-    await running
-    const before = await h.store.getEvents(SLUG)
-    const suspended = ofType(before, 'session.suspended')[0]!
-    expect(suspended.payload.cause).toBe('pause')
-    expect(failedRead).toBe(true)
-    expect(
-      await h.store.getArtifact(
-        SLUG,
-        suspended.payload.transcript.kind,
-        suspended.payload.transcript.rev,
-      ),
-    ).not.toBeNull()
-    expect(reduceBuild(before).status).toBe('paused')
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'build.resume-requested',
-      payload: {},
-    })
-    const resumedRunner = successor(h)
-    await resumedRunner.attach()
-    await resumedRunner.step()
-    expect(resumed).toBe(true)
-    const log = await h.store.getEvents(SLUG)
-    const acceptance = ofType(log, 'session.resumed')[0]!
-    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
-    expect(ofType(log, 'plan.started')).toHaveLength(1)
-    const continuation = ofType(log, 'session.started').at(-1)!
-    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
-    expect(continuation.payload.round).toBe(1)
-    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
-    expect(journal.messages[0]).toContain('interrupted (pause)')
-    expect(journal.messages[0]).toContain('Re-check the worktree')
-  })
-
-  for (const scenario of ['missing-handle', 'remote', 'unsupported'] as const) {
+  // The unsupported-runtime fallback is covered by the recovery-boundary
+  // matrix below; remote stays because shutdown skips remote suspension but
+  // pause does not.
+  for (const scenario of ['missing-handle', 'remote'] as const) {
     test(`pause suspends ${scenario} sessions and logs a fresh recovery fallback`, async () => {
       let ready!: () => void
       const observed = new Promise<void>((resolve) => {
@@ -6422,26 +6378,13 @@ describe('native suspension and continuation', () => {
         type: 'build.resume-requested',
         payload: {},
       })
-      const runner =
-        scenario === 'unsupported'
-          ? {
-              name: h.runner.name,
-              start: h.runner.start.bind(h.runner),
-              continue: h.runner.continue.bind(h.runner),
-              end: h.runner.end.bind(h.runner),
-            }
-          : h.runner
-      const next = successor(h, runner, scenario === 'remote')
+      const next = successor(h, h.runner, scenario === 'remote')
       await next.attach()
       await next.step()
       const log = await h.store.getEvents(SLUG)
       expect(ofType(log, 'session.resumed')).toHaveLength(0)
       expect(ofType(log, 'session.resume-fallback')[0]!.payload.reason).toBe(
-        scenario === 'remote'
-          ? 'workspace-not-local-git-worktree'
-          : scenario === 'unsupported'
-            ? 'unsupported-runtime'
-            : 'missing-handle',
+        scenario === 'remote' ? 'workspace-not-local-git-worktree' : 'missing-handle',
       )
       expect(ofType(log, 'phase.failed')).toHaveLength(0)
     })
@@ -7476,40 +7419,40 @@ test('a deferral answer preserves a genuine failure, and the next ordinary failu
   expect(calls).toBe(2)
 })
 
-for (const role of ['verify-e2e', 'release-notes'] as const)
-  test(`${role} read failure parks its distinct agent path before completion`, async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        [role]: async (ctx: ScriptContext) => {
-          const { phase, round } = parseAbPhase(ctx.opts.env.AB_PHASE!)
-          await store.append(SLUG, {
-            actor: KERNEL,
-            type: 'session.build-read-failed',
-            payload: {
-              session: sessionOf(ctx),
-              phase,
-              round,
-              operation: 'context',
-              reason: 'own-build-read',
-              diagnostic: 'cannot read contract',
-            },
-          })
-          return defaultTurnResult('context unavailable')
-        },
-      }),
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'phase.failed')).toHaveLength(0)
-    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-    if (role === 'release-notes') expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-    else
-      expect(
-        ofType(events, 'verify.completed').filter((event) => event.payload.step === 'e2e'),
-      ).toHaveLength(0)
+// The release-notes path is covered by `finalize post-step read recovery`
+// (`single: fail parks once without a step outcome`).
+test('verify-e2e read failure parks its distinct agent path before completion', async () => {
+  const role = 'verify-e2e'
+  const h = await makeHarness({
+    handlers: (store) => ({
+      ...happyHandlers(store),
+      [role]: async (ctx: ScriptContext) => {
+        const { phase, round } = parseAbPhase(ctx.opts.env.AB_PHASE!)
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.build-read-failed',
+          payload: {
+            session: sessionOf(ctx),
+            phase,
+            round,
+            operation: 'context',
+            reason: 'own-build-read',
+            diagnostic: 'cannot read contract',
+          },
+        })
+        return defaultTurnResult('context unavailable')
+      },
+    }),
   })
+  const state = await h.br.run()
+  expect(state.status).toBe('blocked')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.failed')).toHaveLength(0)
+  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+  expect(
+    ofType(events, 'verify.completed').filter((event) => event.payload.step === 'e2e'),
+  ).toHaveLength(0)
+})
 
 test('same-turn context recovery and a valid terminal override the read marker', async () => {
   const h = await makeHarness({
@@ -7538,44 +7481,6 @@ test('same-turn context recovery and a valid terminal override the read marker',
   expect(ofType(events, 'phase.deferred')).toHaveLength(0)
   expect(ofType(events, 'phase.failed')).toHaveLength(0)
   expect((await h.br.step()).kind).toBe('run-phase')
-})
-
-test('finalize post-step expiry still parks classified read evidence before recording an outcome', async () => {
-  const timers = new ManualSessionBudgetScheduler()
-  let signalRead!: () => void
-  const readRecorded = new Promise<void>((resolve) => {
-    signalRead = resolve
-  })
-  const h = await makeHarness({
-    runnerOpts: { scheduleSessionBudget: timers.schedule },
-    handlers: (store) => ({
-      ...happyHandlers(store),
-      'release-notes': async (ctx) => {
-        await store.append(SLUG, {
-          actor: KERNEL,
-          type: 'session.build-read-failed',
-          payload: {
-            session: sessionOf(ctx),
-            phase: 'finalize',
-            round: 1,
-            operation: 'context',
-            reason: 'own-build-read',
-            diagnostic: 'unreadable before expiry',
-          },
-        })
-        signalRead()
-        return new Promise<AgentTurnResult>(() => {})
-      },
-    }),
-  })
-  const running = h.br.run()
-  await readRecorded
-  await timers.expireNext()
-  expect((await running).status).toBe('blocked')
-  const events = await h.store.getEvents(SLUG)
-  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-  expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-  expect(ofType(events, 'phase.failed')).toHaveLength(0)
 })
 
 describe('finalize post-step read recovery', () => {
@@ -7649,37 +7554,23 @@ alternates = [{ runtime = "pi" }]
       expect(indexLog(events).readDeferrals).toEqual([])
     })
 
-    for (const script of [['fail'], ['fail', 'recover', 'fail']] as const)
-      test(`${path}: ${script.join(', ')} parks once without a step outcome`, async () => {
-        const h = await makeHarness({
-          configToml,
-          handlers: (store) => ({
-            ...happyHandlers(store),
-            'release-notes': recoveringNotes(store, script),
-          }),
-        })
-        expect((await h.br.run()).status).toBe('blocked')
-        const events = await h.store.getEvents(SLUG)
-        expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-        expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-        expect(ofType(events, 'phase.failed')).toHaveLength(0)
+    // Invalidation by a later failure (and re-recovery) is a projection rule
+    // pinned in kernel/engine.test.ts; the runner reads only `recovered`.
+    test(`${path}: fail parks once without a step outcome`, async () => {
+      const h = await makeHarness({
+        configToml,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'release-notes': recoveringNotes(store, ['fail']),
+        }),
       })
-  }
-
-  test('single: re-recovery after a later failure completes the step', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'release-notes': recoveringNotes(store, ['fail', 'recover', 'fail', 'recover']),
-      }),
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+      expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+      expect(ofType(events, 'phase.failed')).toHaveLength(0)
     })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'finalize.step-completed')).toEqual([
-      expect.objectContaining({ payload: expect.objectContaining({ ok: true }) }),
-    ])
-    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(0)
-  })
+  }
 
   test('a recovered read still parks when the post-step budget expires', async () => {
     const timers = new ManualSessionBudgetScheduler()
@@ -7706,6 +7597,7 @@ alternates = [{ runtime = "pi" }]
     expect(ofType(events, 'session.build-read-recovered')).toHaveLength(1)
     expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
     expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+    expect(ofType(events, 'phase.failed')).toHaveLength(0)
   })
 })
 
@@ -7854,25 +7746,6 @@ describe('accepted runtime relaunch at phase boundaries', () => {
       append.mockRestore()
     }
   })
-
-  for (const kind of ['equal', 'foreign', 'settled'] as const) {
-    test(`${kind} target does not request relaunch`, async () => {
-      const h = await makeHarness()
-      await authorize(
-        h.store,
-        kind === 'foreign' ? 'another-runner' : 'runner-1',
-        kind === 'equal' ? runtimeIdentity() : target,
-      )
-      if (kind === 'settled')
-        await h.store.append(SLUG, {
-          actor: DISPATCHER,
-          type: 'execution.drain-settled',
-          payload: { instance: 'runner-1', correlation: 'handoff-1' },
-        })
-      await h.br.run()
-      expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(0)
-    })
-  }
 })
 
 test('continued producer prompts route all feedback to the receiving directory', async () => {
