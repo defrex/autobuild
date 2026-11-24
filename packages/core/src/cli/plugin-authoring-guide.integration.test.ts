@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PLUGIN_PORTS } from '../plugins/registry'
-import { BUN_AGENT_ENV_KEYS, BUN_REPORTER_ENVS, expectBunContractPassed } from './testkit'
+import { BUN_AGENT_ENV_KEYS, expectBunContractPassed } from './testkit'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const GUIDE = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
@@ -147,13 +147,11 @@ describe('plugin authoring guide', () => {
     expect(list.stdout).toContain('walkthrough owner=plugin:walkthrough')
     expect(list.stdout).toContain('contract=available')
 
-    for (const mode of BUN_REPORTER_ENVS) {
-      const contract = await run(root, ['plugin', 'test', 'ticket-source', 'walkthrough'], mode.env)
-      expectBunContractPassed(
-        contract.status,
-        `${mode.label} reporter\n${contract.stdout}\n${contract.stderr}`,
-      )
-    }
+    // The walkthrough's contract passes in the ordinary reporter mode. The
+    // agent reporter mode is held by plugin.integration.test.ts ("real Bun
+    // bridge forwards child output…") and bin-ab.integration.test.ts.
+    const contract = await run(root, ['plugin', 'test', 'ticket-source', 'walkthrough'])
+    expectBunContractPassed(contract.status, `${contract.stdout}\n${contract.stderr}`)
   }, 60_000)
 
   test('the package example names a placeholder, never a concrete host release', async () => {
