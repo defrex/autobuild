@@ -774,7 +774,7 @@ or a repository without builds.
 | `getRepoChangePosition` | `GET /repos/{repo}/change-position` | none | `200 {"position": string}`: the canonical unsigned decimal change position, `"0"` for an unknown repository. Positions are ordered: a later build creation, build event, repository event or repository lease holder change yields a strictly greater value, compared numerically |
 | `listBuildsForRepo` | `GET /repos/{repo}/builds` | none | `200` + `BuildRecord[]` ordered by creation time, then slug |
 | `listBuildsChangedSince` | `GET /repos/{repo}/changed-builds?since={p}` | required `since`, a canonical unsigned decimal no greater than 9223372036854775807; anything else is `400 validation` | `200 {"position": string, "builds": [{"slug": string, "position": string}]}`: the builds whose latest change position is greater than `since`, ascending by position and each once, with the repository head read in the same snapshot. Reads no event rows. An unknown repository answers `{"position": "0", "builds": []}` |
-| `listBuildsPage` | `GET /repos/{repo}/build-page?limit={n}&cursor={c}` | optional `limit`, a decimal integer from 1 to 100 (default 25); optional `cursor`, a `next` value this server issued. A bad limit or a malformed cursor is `400 validation` | `200 {"builds": BuildRecord[], "next": string \| null}`: one page newest first by creation time, slug descending to break ties, with records as `builds` returns them; `next` is `null` on the last page. A page's cost does not depend on the repository's build count |
+| `listBuildsPage` | `GET /repos/{repo}/build-page?limit={n}&cursor={c}&kind={k}&outcome=merged&activeSince={t}` | optional `limit`, a decimal integer from 1 to 100 (default 25); optional `cursor`, a `next` value this server issued for the same filters; optional `kind`, `leaf` or `node`; optional `outcome`, only `merged`; optional `activeSince`, an ISO instant with a zone. A bad limit, a malformed cursor, a cursor of the other order, or an empty or invalid filter is `400 validation` | `200 {"builds": BuildRecord[], "next": string \| null, "filters"?: {"kind"?, "outcome"?, "activeSince"?}}`: one page newest first by creation time, slug descending to break ties, with records as `builds` returns them; `next` is `null` on the last page. `kind` and `outcome` keep that order. `activeSince` keeps builds whose `updatedAt` is at or after it, ordered by `updatedAt` then slug, both descending, a superset of builds active in the window; a build written between two requests can appear twice or be skipped once, so dedupe by slug. A filtered answer echoes the normalized filters it applied as `filters`. Every page, filtered or not, costs at most `limit + 1` index entries and no event rows |
 | `getReducerValue` (rollup scope) | `POST /repos/{repo}/rollup-values` | a named-value request with optional `read`; see [Rollup values](#rollup-values) | `200 {"version", "cursor": 0, "value"}`: the canonical rollup; an unknown repository answers the empty value |
 | `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
@@ -785,7 +785,12 @@ The `changed-builds` and `build-page` routes are additive and keep the
 protocol version. A server on the same release line that lacks them answers
 `501 unsupported-operation` or `404 not-found`; the shipped client reports
 that as a typed `BuildFeedUnsupportedError` and never falls back to listing
-builds or reading events.
+builds or reading events. The `build-page` filters are additive too. A server
+that predates them ignores the parameters and answers an unfiltered page
+without `filters`, so the client requires an echo equal to the filters it sent
+and otherwise raises `BuildFeedUnsupportedError` with capability
+`buildPageFilters`. It never filters an unfiltered page client-side and never
+retries without the filters.
 
 There is no repository-list operation. `ensureRepo` is the only repository
 creation operation and must not reset timestamps, events, artifacts, or lease

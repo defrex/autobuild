@@ -17,11 +17,17 @@ import {
 } from '../reducer-values'
 import { validateTickFinish } from '../repo-tick'
 import {
+  buildPageOrder,
   decodeBuildPageCursor,
   encodeBuildPageCursor,
+  hasBuildPageFilters,
+  requireBuildPageCursorOrder,
+  resolveBuildPageFilters,
   parseChangePosition,
   resolveBuildPageLimit,
   type BuildPage,
+  type BuildPageCursor,
+  type BuildPageFilters,
   type BuildPageOptions,
   type ChangedBuilds,
 } from '../build-feed'
@@ -253,6 +259,127 @@ export function ensureBuildChangePositions(sqlite: Database): void {
     .immediate()
 }
 
+/** The paged listing's per-build facts, one index per (filter class x order).
+ * The partial indexes name `merged = 1` so a merged query reads only merged
+ * builds. */
+const BUILD_LISTING_INDEXES = [
+  ['build_listing_kind_created', 'repo, node, created_at, slug', ''],
+  ['build_listing_merged_created', 'repo, created_at, slug', ' WHERE merged = 1'],
+  ['build_listing_merged_kind_created', 'repo, node, created_at, slug', ' WHERE merged = 1'],
+  ['build_listing_updated', 'repo, updated_at, slug', ''],
+  ['build_listing_kind_updated', 'repo, node, updated_at, slug', ''],
+  ['build_listing_merged_updated', 'repo, updated_at, slug', ' WHERE merged = 1'],
+  ['build_listing_merged_kind_updated', 'repo, node, updated_at, slug', ' WHERE merged = 1'],
+] as const
+
+/**
+ * Per-build listing facts behind the paged listing's filters (`kind`,
+ * `outcome: merged`, `activeSince`). Triggers keep them in the writing
+ * transaction of every path, including an older runtime on the same file: a
+ * build insert seeds the row, `build.created` sets `node`, the latest
+ * `build.completed` sets `merged` and `build.reopened` clears it, and every
+ * `updated_at` change on `builds` is mirrored. A side table leaves `builds`
+ * and its catalog shape untouched.
+ */
+export const BUILD_LISTING_DDL = `
+CREATE TABLE IF NOT EXISTS build_listing_facts (slug TEXT PRIMARY KEY, repo TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, node INTEGER NOT NULL DEFAULT 0, merged INTEGER NOT NULL DEFAULT 0);
+${BUILD_LISTING_INDEXES.map(([name, columns, where]) => `CREATE INDEX IF NOT EXISTS ${name} ON build_listing_facts(${columns})${where};`).join('\n')}
+CREATE TRIGGER IF NOT EXISTS builds_listing_seeded AFTER INSERT ON builds
+ BEGIN INSERT INTO build_listing_facts(slug, repo, created_at, updated_at)
+ VALUES (NEW.slug, NEW.repo, NEW.created_at, NEW.updated_at) ON CONFLICT(slug) DO NOTHING; END;
+CREATE TRIGGER IF NOT EXISTS builds_listing_touched AFTER UPDATE OF updated_at ON builds
+ WHEN OLD.updated_at IS NOT NEW.updated_at
+ BEGIN UPDATE build_listing_facts SET updated_at = NEW.updated_at WHERE slug = NEW.slug; END;
+CREATE TRIGGER IF NOT EXISTS events_listing_kind AFTER INSERT ON events
+ WHEN NEW.type = 'build.created'
+ BEGIN UPDATE build_listing_facts SET node = COALESCE(json_extract(NEW.payload, '$.kind') = 'node', 0)
+ WHERE slug = NEW.build; END;
+CREATE TRIGGER IF NOT EXISTS events_listing_completed AFTER INSERT ON events
+ WHEN NEW.type = 'build.completed'
+ BEGIN UPDATE build_listing_facts SET merged = COALESCE(json_extract(NEW.payload, '$.outcome') = 'merged', 0)
+ WHERE slug = NEW.build; END;
+CREATE TRIGGER IF NOT EXISTS events_listing_reopened AFTER INSERT ON events
+ WHEN NEW.type = 'build.reopened'
+ BEGIN UPDATE build_listing_facts SET merged = 0 WHERE slug = NEW.build; END;
+`
+
+/** Runs once, when `build_listing_facts` is first created: one row per
+ * existing build from its record and its latest relevant events. */
+const BUILD_LISTING_BACKFILL = `
+${BUILD_LISTING_DDL}
+INSERT INTO build_listing_facts(slug, repo, created_at, updated_at, node, merged)
+ SELECT b.slug, b.repo, b.created_at, b.updated_at,
+ COALESCE((SELECT json_extract(e.payload, '$.kind') = 'node' FROM events e
+   WHERE e.type = 'build.created' AND e.build = b.slug ORDER BY e.seq DESC LIMIT 1), 0),
+ COALESCE((SELECT e.type = 'build.completed' AND json_extract(e.payload, '$.outcome') = 'merged'
+   FROM events e WHERE e.type IN ('build.completed', 'build.reopened') AND e.build = b.slug
+   ORDER BY e.seq DESC LIMIT 1), 0)
+ FROM builds b WHERE true
+ ON CONFLICT(slug) DO NOTHING;
+`
+
+/**
+ * Install the listing facts. Process start costs one `sqlite_master` lookup
+ * once the table exists; only a database that lacks it takes a write
+ * transaction, rechecked under BEGIN IMMEDIATE, and backfills once.
+ */
+export function ensureBuildListingFacts(sqlite: Database): void {
+  const present = () =>
+    sqlite
+      .query(
+        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'build_listing_facts'",
+      )
+      .get() !== null
+  if (present()) return
+  sqlite
+    .transaction(() => {
+      if (!present()) sqlite.exec(BUILD_LISTING_BACKFILL)
+    })
+    .immediate()
+}
+
+/**
+ * A filtered build page: one backward range scan of the listing-facts index
+ * for the filter class and order, at most `limit + 1` entries, joined to
+ * `builds` by primary key. `INDEXED BY` makes a plan that cannot use the
+ * index an error instead of a scan.
+ */
+export function filteredBuildPageQuery(
+  repo: string,
+  limit: number,
+  filters: BuildPageFilters,
+  cursor?: BuildPageCursor,
+): { sql: string; params: (string | number)[] } {
+  const updated = filters.activeSince !== undefined
+  const column = updated ? 'updated_at' : 'created_at'
+  const merged = filters.outcome === 'merged'
+  const kind = filters.kind !== undefined
+  const index = `build_listing${merged ? '_merged' : ''}${kind ? '_kind' : ''}_${updated ? 'updated' : 'created'}`
+  const where = ['f.repo = ?']
+  const params: (string | number)[] = [repo]
+  if (kind) {
+    where.push('f.node = ?')
+    params.push(filters.kind === 'node' ? 1 : 0)
+  }
+  if (merged) where.push('f.merged = 1')
+  if (updated) {
+    where.push('f.updated_at >= ?')
+    params.push(filters.activeSince!)
+  }
+  if (cursor) {
+    where.push(`(f.${column}, f.slug) < (?, ?)`)
+    params.push(cursor.at, cursor.slug)
+  }
+  params.push(limit)
+  return {
+    sql: `SELECT ${BUILD_PAGE_COLUMNS_B}, f.${column} AS cursorAt
+FROM build_listing_facts f INDEXED BY ${index} JOIN builds b ON b.slug = f.slug
+WHERE ${where.join(' AND ')}
+ORDER BY f.${column} DESC, f.slug DESC LIMIT ?`,
+    params,
+  }
+}
+
 /** The changed-builds feed: the head plus an index range scan, one snapshot. */
 export const CHANGED_BUILDS_SQL = `SELECT h.head AS head, c.slug AS slug, CAST(c.position AS TEXT) AS position
 FROM (SELECT CAST(COALESCE((SELECT position FROM repo_change_positions WHERE repo = ?1), 0) AS TEXT) AS head) h
@@ -262,6 +389,10 @@ ORDER BY c.position`
 const BUILD_PAGE_COLUMNS = `slug, repo, ticket, branch, repo_origin AS repoOrigin,
  created_at AS createdAt, updated_at AS updatedAt, heartbeat_at AS heartbeatAt,
  lease_holder AS leaseHolder, lease_expires_at AS leaseExpiresAt`
+
+const BUILD_PAGE_COLUMNS_B = `b.slug AS slug, b.repo AS repo, b.ticket AS ticket, b.branch AS branch,
+ b.repo_origin AS repoOrigin, b.created_at AS createdAt, b.updated_at AS updatedAt,
+ b.heartbeat_at AS heartbeatAt, b.lease_holder AS leaseHolder, b.lease_expires_at AS leaseExpiresAt`
 
 /** A build page, newest first: a backward scan of `builds_repo_created_slug`. */
 export const BUILD_PAGE_SQL = `SELECT ${BUILD_PAGE_COLUMNS} FROM builds WHERE repo = ?1
@@ -509,6 +640,7 @@ export class SqliteBuildStore implements BuildStore {
       this.sqlite.exec('PRAGMA journal_mode = WAL')
       for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
       ensureBuildChangePositions(this.sqlite)
+      ensureBuildListingFacts(this.sqlite)
       for (const table of ['events', 'repo_events']) {
         const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as {
           name: string
@@ -591,6 +723,7 @@ export class SqliteBuildStore implements BuildStore {
     try {
       for (const ddl of BOOTSTRAP_DDL) expected.exec(ddl)
       ensureBuildChangePositions(expected)
+      ensureBuildListingFacts(expected)
       // ALTER appends columns, and legacy creation-order columns have a DEFAULT
       // used only for backfill. Neither changes the target's runtime requirements.
       const catalog = (database: Database) => {
@@ -831,24 +964,34 @@ export class SqliteBuildStore implements BuildStore {
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
     const limit = resolveBuildPageLimit(opts.limit)
-    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
-    type PageRow = Omit<BuildRecordRow, 'ticket'> & { ticket: string | null }
-    const rows = cursor
-      ? this.sqlite
-          .query<PageRow, [string, number, string, string]>(BUILD_PAGE_AFTER_SQL)
-          .all(repo, limit + 1, cursor.at, cursor.slug)
-      : this.sqlite.query<PageRow, [string, number]>(BUILD_PAGE_SQL).all(repo, limit + 1)
-    const builds = rows
-      .slice(0, limit)
-      .map((row) =>
-        this.toRecord({ ...row, ticket: row.ticket === null ? null : JSON.parse(row.ticket) }),
-      )
-    const last = builds.at(-1)
+    const filters = resolveBuildPageFilters(opts)
+    const cursor =
+      opts.cursor === undefined
+        ? undefined
+        : requireBuildPageCursorOrder(decodeBuildPageCursor(opts.cursor), filters)
+    const order = buildPageOrder(filters)
+    type PageRow = Omit<BuildRecordRow, 'ticket'> & { ticket: string | null; cursorAt?: string }
+    let rows: PageRow[]
+    if (hasBuildPageFilters(filters)) {
+      const query = filteredBuildPageQuery(repo, limit + 1, filters, cursor)
+      rows = this.sqlite.query<PageRow, (string | number)[]>(query.sql).all(...query.params)
+    } else {
+      rows = cursor
+        ? this.sqlite
+            .query<PageRow, [string, number, string, string]>(BUILD_PAGE_AFTER_SQL)
+            .all(repo, limit + 1, cursor.at, cursor.slug)
+        : this.sqlite.query<PageRow, [string, number]>(BUILD_PAGE_SQL).all(repo, limit + 1)
+    }
+    const page = rows.slice(0, limit)
+    const builds = page.map(({ cursorAt: _, ...row }) =>
+      this.toRecord({ ...row, ticket: row.ticket === null ? null : JSON.parse(row.ticket) }),
+    )
+    const last = page.at(-1)
     return {
       builds,
       next:
         rows.length > limit && last
-          ? encodeBuildPageCursor({ at: last.createdAt, slug: last.slug })
+          ? encodeBuildPageCursor({ order, at: last.cursorAt ?? last.createdAt, slug: last.slug })
           : null,
     }
   }

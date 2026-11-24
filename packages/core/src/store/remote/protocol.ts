@@ -174,10 +174,21 @@ export const changedBuildsSchema = z.object({
   ),
 })
 
-/** `GET repos/:repo/build-page?limit=N[&cursor=C]`: one page, newest first. */
+/** The normalized filters a server applied to a build page. */
+export const buildPageFiltersSchema = z.object({
+  kind: z.enum(['leaf', 'node']).optional(),
+  outcome: z.literal('merged').optional(),
+  activeSince: z.string().optional(),
+})
+
+/** `GET repos/:repo/build-page?limit=N[&cursor=C][&kind=K][&outcome=merged]
+ * [&activeSince=T]`: one page, newest first by creation, or by update under
+ * `activeSince`. A filtered answer echoes the filters it applied, so a client
+ * can tell it from an older server that ignored them. */
 export const buildPageSchema = z.object({
   builds: buildRecordListSchema,
   next: z.string().nullable(),
+  filters: buildPageFiltersSchema.optional(),
 })
 
 export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })

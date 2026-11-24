@@ -7750,6 +7750,136 @@ export async function buildFeedReadBudget(): Promise<{
   return { builds, repeated, paging }
 }
 
+/**
+ * A filtered build page costs what its page costs: at most `limit + 1` listing
+ * entries and no event row, the same at 100 and 100,000 builds, however many
+ * builds match. Covers a rare filter matching only the oldest builds, a rare
+ * activity window, a large active set, a rare kind inside it, an empty
+ * intersection and later pages. Returns each request's page costs by size.
+ */
+export async function filteredBuildPageReadBudget(): Promise<
+  Record<number, Record<string, BuildFeedReadCost[]>>
+> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  type Store = import('../store/memory').MemoryBuildStore
+  type Options = import('../store/build-feed').BuildPageOptions
+  const repo = 'filtered-budget/repo'
+  const slug = (i: number) => `lf-${String(i).padStart(6, '0')}`
+  const t0 = '2026-11-24T00:00:00.000Z'
+  const t1 = '2026-11-24T01:00:00.000Z'
+  const nodes = 30
+  const range = (from: number, to: number) =>
+    Array.from({ length: from - to + 1 }, (_, i) => slug(from - i))
+  const measure = async (store: Store, opts: Options) => {
+    const feedReads = Reflect.get(store, 'feedReads') as { examined: number }
+    feedReads.examined = 0
+    let page: import('../store/build-feed').BuildPage | undefined
+    const metrics = await measureStoreReads(store, async () => {
+      page = await store.listBuildsPage(repo, opts)
+    })
+    const cost: BuildFeedReadCost = {
+      calls: metrics.calls,
+      rows: metrics.rows,
+      repoRows: metrics.repoRows,
+      bytes: metrics.bytes,
+      examined: feedReads.examined,
+    }
+    return { page: page!, cost }
+  }
+  /** Pages of one request, checked against their expected slugs; the last
+   * expected page is the final one unless `more` says the walk stops early. */
+  const walk = async (store: Store, opts: Options, expected: string[][], more = false) => {
+    const costs: BuildFeedReadCost[] = []
+    let cursor: string | undefined
+    for (const [index, slugs] of expected.entries()) {
+      const { page, cost } = await measure(store, {
+        ...opts,
+        ...(cursor === undefined ? {} : { cursor }),
+      })
+      expect(page.builds.map((build) => build.slug)).toEqual(slugs)
+      expect(page.next === null).toBe(!more && index === expected.length - 1)
+      cursor = page.next ?? undefined
+      costs.push(cost)
+    }
+    return costs
+  }
+
+  const sizes = [100, 100_000] as const
+  const costs: Record<number, Record<string, BuildFeedReadCost[]>> = {}
+  for (const n of sizes) {
+    let now = t0
+    const store = new MemoryBuildStore({ clock: () => new Date(now) })
+    // The oldest builds are merged nodes; every later build is a plain leaf.
+    for (let i = 0; i < n; i++)
+      await store.createBuild({
+        slug: slug(i),
+        repo,
+        ...(i < nodes
+          ? {
+              created: {
+                actor: DISPATCHER,
+                type: 'build.created' as const,
+                payload: {
+                  ticket: { source: 'file' as const, id: slug(i) },
+                  repo,
+                  baseBranch: 'main',
+                  kind: 'node' as const,
+                },
+              },
+            }
+          : {}),
+      })
+    for (let i = 0; i < nodes; i++)
+      await store.append(slug(i), {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    // Three old builds are active again at t1.
+    now = t1
+    for (const i of [1, 2, 3])
+      await store.append(slug(i), { actor: KERNEL, type: 'build.aborted', payload: {} })
+    const recent = [slug(3), slug(2), slug(1)]
+    const oldNodes = [range(29, 5), range(4, 0)]
+    costs[n] = {
+      node: await walk(store, { kind: 'node' }, oldNodes),
+      merged: await walk(store, { outcome: 'merged' }, oldNodes),
+      mergedNode: await walk(store, { kind: 'node', outcome: 'merged' }, oldNodes),
+      mergedLeaf: await walk(store, { kind: 'leaf', outcome: 'merged' }, [[]]),
+      recent: await walk(store, { activeSince: t1 }, [recent]),
+      active: await walk(
+        store,
+        { activeSince: t0 },
+        [[...recent, ...range(n - 1, n - 22)], range(n - 23, n - 47)],
+        true,
+      ),
+      activeNode: await walk(store, { activeSince: t0, kind: 'node' }, [
+        [...recent, ...range(29, 8)],
+        [...range(7, 4), slug(0)],
+      ]),
+      recentLeaf: await walk(store, { activeSince: t1, kind: 'leaf' }, [[]]),
+    }
+  }
+  for (const n of sizes)
+    for (const [name, pages] of Object.entries(costs[n]!))
+      for (const cost of pages) {
+        // `snapshot` is the memory store copying each returned record.
+        const { snapshot: copies = 0, ...reads } = cost.calls
+        expect(reads).toEqual({ listBuildsPage: 1 })
+        expect(copies).toBeLessThanOrEqual(25)
+        expect(cost.rows).toBe(0)
+        expect(cost.repoRows).toBe(0)
+        expect(cost.examined).toBeLessThanOrEqual(
+          name === 'recent' ? 4 : name === 'mergedLeaf' || name === 'recentLeaf' ? 1 : 26,
+        )
+      }
+  const shape = (pages: BuildFeedReadCost[]) =>
+    pages.map(({ calls, rows, repoRows, examined }) => ({ calls, rows, repoRows, examined }))
+  for (const name of Object.keys(costs[sizes[0]]!))
+    expect(shape(costs[sizes[1]]![name]!)).toEqual(shape(costs[sizes[0]]![name]!))
+  return costs
+}
+
 /** What one measured rollup read cost (SPEC §7.7). */
 export interface RollupReadCost {
   calls: Record<string, number>
