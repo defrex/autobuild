@@ -5522,6 +5522,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       // exactly as it would, and its text frames are discarded.
       const plainOutput = web !== undefined ? () => {} : opts.stdout
       const store = opened
+      web?.attachStore(store.store)
       await new DispatchFrontend({
         viewer: { ...(opts.dispatchedBy !== undefined ? { dispatchedBy: opts.dispatchedBy } : {}) },
         repo: opts.repo ?? state.repo,
@@ -5638,6 +5639,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     try {
       opened = openStoreForRepoState(state, { env: resolvedOpts.env })
       const store = opened
+      web?.attachStore(store.store)
       const frontend = new DispatchFrontend({
         repo: state.repo,
         checkout: state.checkout,
@@ -5917,9 +5919,12 @@ async function runDispatchKernel(
     // The loop's store-keyed identity (an explicit `repo` pins it).
     repo: resolvedOpts.repo ?? resolvedOpts.targetRepo,
     resident: resolvedOpts.once !== true,
-    // `--web` shows what these journal refreshes read; it never reads itself.
-    ...(web !== undefined ? { onRepositoryFacts: web.publishFacts } : {}),
+    // `--web` shows what these journal refreshes read. Their frames carry no
+    // change position, so while a browser is connected each one reads one
+    // `getRepoChangePosition` for the page's refetch signal; nothing else.
+    ...(web !== undefined ? { onRepositoryFacts: (facts) => web.publishFacts(facts) } : {}),
   })
+  web?.attachStore(wiring.store)
   await view.startJournal()
   const actor = humanActor(buildControlUser(resolvedOpts.env))
   if (resolvedOpts.intake !== undefined) {

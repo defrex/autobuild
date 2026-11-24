@@ -12,6 +12,8 @@ import type {
   FinishedRowText,
   HarvestRowText,
 } from '../cli/dashboard/row-text'
+import type { TimelineSegment } from '../cli/dashboard/timeline'
+import type { StepDurationStat, StepDurationWindow } from '../kernel/step-durations'
 
 /**
  * Row and overview terms are aliases of the shared dashboard projection, never
@@ -40,7 +42,60 @@ export interface WebFrame {
   overview?: WebOverview
   /** A one-line notice standing in for content that cannot be shown yet. */
   notice?: string
+  /** The repository change position the frame's facts were read at. It moves
+   * on every build and repository event, so a change the analytics page or a
+   * build timeline could reflect always makes a new frame; the page refetches
+   * those explicit reads when it differs from the last one it fetched at. */
+  position?: string
 }
+
+/** The analytics page's question: a window plus the step-duration rollup's
+ * own key arguments, and an opaque listing cursor for the Gantt's page. */
+export interface WebAnalyticsQuery {
+  window: StepDurationWindow
+  outcome: 'merged' | 'all'
+  kind: 'leaf' | 'node' | 'all'
+  page?: string
+}
+
+/** One Gantt row: a build's identity and its raw timeline segments, with ISO
+ * times, from the build's saved `buildTimeline` value. */
+export interface WebTimelineRow {
+  slug: string
+  ticketId?: string
+  ticketUrl?: string
+  title?: string
+  kind: 'work' | 'node'
+  /** The latest completion outcome; absent while not completed. */
+  outcome?: string
+  createdAt?: string
+  segments: TimelineSegment[]
+}
+
+/** `GET /api/analytics`: both charts for one query. */
+export interface WebAnalytics {
+  /** The normalised query the answer is for. */
+  query: WebAnalyticsQuery
+  /** The repository change position the answer reflects. */
+  position: string
+  /** The window's first instant (ISO), shared by both charts. */
+  windowStart: string
+  /** Per step, in pipeline order with waits last. */
+  durations: StepDurationStat[]
+  /** One page of builds active in the window, most recently active first. */
+  gantt: { rows: WebTimelineRow[]; next: string | null }
+}
+
+/** `GET /api/builds/<slug>/timeline`. */
+export interface WebBuildTimeline {
+  row: WebTimelineRow
+}
+
+/** The read-only JSON routes beside the event stream. */
+export const WEB_API = {
+  analytics: '/api/analytics',
+  timeline: (slug: string) => `/api/builds/${encodeURIComponent(slug)}/timeline`,
+} as const
 
 /**
  * Produces frames for the shared refresh loop. `live` asks for the fast
