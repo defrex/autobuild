@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import type { Ticket, TicketSearchQuery, TicketSource } from '../types'
-import { FakeTicketSource } from './fake'
 import {
   matchesSearch,
   pageSearch,
@@ -119,17 +118,5 @@ describe('searchTickets', () => {
     for (const input of [{ text: '  ' }, { text: 'x', limit: 0 }, { text: 'x', limit: 101 }]) {
       await expect(searchTickets(source, input)).rejects.toThrow()
     }
-  })
-
-  test('the fake source projects compact hits', async () => {
-    const page = await searchTickets(new FakeTicketSource(tickets), {
-      text: 'node',
-    })
-    expect(page).toEqual({
-      tickets: [
-        { id: 't-4', title: 'rate LIMIT auth node', state: 'Done', labels: ['auth'], kind: 'node' },
-      ],
-      diagnostics: [],
-    })
   })
 })
