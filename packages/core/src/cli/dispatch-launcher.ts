@@ -6,7 +6,8 @@ import {
   sourceContent,
   type SourceLaunch,
 } from './dispatch-upgrade-source'
-import { parseDispatchArgs } from './dispatch-args'
+import { parseDispatchArgs, pinWebPort } from './dispatch-args'
+import { DEFAULT_WEB_HOST, reserveWebPort } from '../web/options'
 import { operatorStopped, restoreLauncherTerminal } from './dispatch-launch-stop'
 import { watchPresentationJob } from './dispatch-presentation-job'
 import { dirname, basename, resolve, join } from 'node:path'
@@ -73,9 +74,18 @@ export async function prepareLaunchRuntime(
     provenance: await guestArchiveProvenance(originalInstall),
   })
 }
-export async function launchDispatcher(argv: string[]): Promise<number> {
-  // The caller already parsed this argv; only presentation matters here.
-  const { plain } = parseDispatchArgs(argv.slice(1), process.env)
+export async function launchDispatcher(launchArgv: string[]): Promise<number> {
+  // The caller already parsed this argv; only presentation and the web port matter here.
+  const { plain, web } = parseDispatchArgs(launchArgv.slice(1), process.env)
+  // `--web` without a fixed port: reserve one now and pin it into every
+  // generation's argv, so the announced URL survives runtime upgrades.
+  const argv =
+    web !== undefined && web.port === 0
+      ? [
+          'dispatch',
+          ...pinWebPort(launchArgv.slice(1), await reserveWebPort(web.host ?? DEFAULT_WEB_HOST)),
+        ]
+      : launchArgv
   const checkout = await resolveMainRepo(process.cwd(), gitExec)
   // Keep the public installation pathname rather than its realpath into Bun's version store.
   const entry = resolve(process.argv[1] ?? '')
