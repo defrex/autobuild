@@ -799,8 +799,11 @@ field from events.
 `false` for a plain node. For an optimization node it is a bounded summary of
 the node's own optimization facts: `stopped?` and `measured?` (each `true` when
 set), `inFlight`, `concurrency`, `attemptRoom?` (absent without an attempts
-budget), `emptyProposals`, `openedAt`, `maxHours?`, `proposal?: {request,
-deposited?: {ids, at}}`, and `wakeSeq?` and `deferredSeq?`, the sequences of
+budget), `emptyProposals`, `openedAt`, `maxHours?`, `clock?: {activeMs,
+spans, open, stoppedAt?, settled?}` (the active-hours clock: activity
+compacted before the last batch, closed spans since, and the start time of
+each open run), `proposal?: {request, deposited?: {ids, at}}`, and `wakeSeq?`
+and `deferredSeq?`, the sequences of
 the latest fact that can clear a proposer deferral and of the latest
 `optimization.proposal-deferred`. A dispatcher selects nodes to request
 proposals for, file proposals from and stop as exhausted from this member
@@ -808,7 +811,18 @@ alone. The member is additive and keeps the protocol version. A node digest
 without it is an older service's answer: the client fails the proposer stage
 and the attempt-creation hold closed with a typed capability error, proposing
 nothing and withholding every ready ticket that carries a creation key for
-that pass, and it never falls back to reading each node's facts.
+that pass, and it never falls back to reading each node's facts. A node digest
+whose signal lacks `clock` skips the hours condition of a proposal request,
+which the build read then confirms.
+
+`executionFacts` is present on every build digest: the count of the build's
+`execution.started` and `execution.ended` facts. The dispatcher's
+optimization activity pass compares it with what a node's clock has
+accounted, and reads the build's served `executionIntervals` value, which
+holds only the execution facts no node has acknowledged, only when it grew.
+The member is additive and keeps the protocol version. A digest without it is
+an older service's answer: the activity pass fails closed with a typed
+capability error and never reads the build's events instead.
 
 The digest is derived from the event log on every call — the server persists
 nothing and there is no refresh step. Protocol version `3` reshaped the

@@ -109,6 +109,8 @@ export const buildEventPolicy = {
   'panel.judged': 'decisive',
   'panel.judge-ended': 'decisive',
   'optimization.stopped': 'decisive',
+  // A reader that ignored it would budget the wrong active hours.
+  'optimization.activity-recorded': 'decisive',
   'attempt.ticket-rejected': 'decisive',
   'attempt.merged-unmeasured': 'decisive',
   'attempt.branch-deleted': 'decisive',
@@ -135,6 +137,8 @@ export const buildEventPolicy = {
   'execution.drain-settled': 'decisive',
   'execution.started': 'decisive',
   'execution.ended': 'decisive',
+  // A reader that ignores it only keeps more facts in `executionIntervals`.
+  'execution.accounted': 'advisory',
   'infrastructure.failed': 'decisive',
   'infrastructure.cleanup-attempted': 'decisive',
   'pr-summary.requested': 'decisive',

@@ -127,7 +127,7 @@ test('budget, hours and threshold stops are recorded once on the next tick', asy
   }
 }, 30_000)
 
-test('the hours budget fires on an idle node from the clock alone', async (makeHarness) => {
+test('the hours budget counts active hours: idle time never fires it, an attempt run does', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     configToml: WITH_REJECTED,
@@ -136,7 +136,35 @@ test('the hours budget fires on an idle node from the clock alone', async (makeH
   })
   try {
     const node = await openNode(h)
+    await propose(h, node, ['A1'])
     await tick(h)
+    h.clock.advance(3 * 3_600_000)
+    await h.dispatcher.tick()
+    expect(ofType(await h.events(node), 'optimization.stopped')).toHaveLength(0)
+    // The attempt's build runs for an hour, with ticks before and after.
+    const record = (await h.store.listBuilds()).find((r) => r.slug === node)!
+    await h.store.createBuild({
+      slug: 'attempt-a1',
+      repo: record.repo,
+      ticket: { source: 'fake', id: 'A1' },
+      branch: 'ab/attempt-a1',
+    })
+    await h.store.append('attempt-a1', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'A1' },
+        repo: record.repo,
+        baseBranch: record.branch!,
+        target: { ticket: { source: 'fake', id: 'OPT' }, build: node },
+      },
+    })
+    await h.store.append('attempt-a1', {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'local', workspaceRef: '/ws/attempt-a1', instance: 'run-1' },
+    })
+    await h.dispatcher.tick()
     expect(ofType(await h.events(node), 'optimization.stopped')).toHaveLength(0)
     h.clock.advance(3_600_000)
     await h.dispatcher.tick()
