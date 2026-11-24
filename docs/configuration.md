@@ -1660,12 +1660,17 @@ test = "bun test"
 publish = "bun run publish"
 ```
 
-`setup` is special by convention: the kernel runs it after workspace provision
-and after sandbox rehydration. A failure is recorded durably with its command,
+`setup` is special by convention: the kernel runs it at every runner
+attachment (workspace provision, sandbox rehydration, resume), and again before
+the next workspace-using phase, check, finalize or measurement step whenever a
+restack, wait-resume advance or completed reconcile moves the build onto a new
+base. Every base move counts as a dependency change; agent commits and an
+in-progress reconcile replay do not trigger a rerun. A failure is recorded durably with its command,
 exit status, attempt, and output. Retries are bounded by
 `policy.maxSetupAttempts`; exhaustion blocks on a setup-targeted policy
-escalation without creating a phase or verification result. A later successful
-attachment clears the current error projection. Other names run only when
+escalation without creating a phase or verification result. A failure after a
+base move stops dependent work the same way. Only a later successful attachment
+clears the current error projection. Other names run only when
 referenced by a configured check. A check's `command` value is the key in this
 map, not an inline shell command. The kernel passes the mapped string to a shell
 as written.
