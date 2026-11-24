@@ -323,7 +323,10 @@ product code, and the web app has a recorded design system. Any change under
   The `ui-app` verify step runs the same capture through the
   repository-local `verify-ui-app` skill for any build that touches
   `packages/hosted-store-service/app/**`. The terminal dashboard keeps its own `ui-tui` step and
-  `readme-headline` check.
+  `readme-headline` check. Builds touching `packages/ui/**` or
+  `packages/core/src/web/**` get the `ui-web` step, which runs
+  `bun run capture:ui-web` through the `verify-ui-web` skill into
+  `.ab/ui-web-frames/` and fails on cumulative layout shift above 0.002.
 - **Parity is the vocabulary, not the pixels.** A change to what a row says
   belongs in the shared projection under `packages/core/src/cli/dashboard/`,
   never in one frontend alone; presentation may differ, terms may not.
