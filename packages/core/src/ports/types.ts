@@ -917,6 +917,16 @@ export type {
   ForgeRequestObserver,
 } from './forge-failure'
 
+/** One entry of a commit's recursive tree (`Forge.readTree`). `size` is a
+ * blob's exact byte length (symlinks included); trees and submodules have none. */
+export interface ForgeTreeEntry {
+  path: string
+  mode: '100644' | '100755' | '040000' | '120000' | '160000'
+  type: 'blob' | 'tree' | 'commit'
+  oid: string
+  size?: number
+}
+
 export interface Forge {
   /** Optional observation epoch. Concurrent operations outside the callback stay independent. */
   withReadScope?<T>(work: () => Promise<T>): Promise<T>
@@ -1079,6 +1089,12 @@ export interface Forge {
    * False means a proven non-descendant; absent capability or unknown objects
    * must fail closed, never authorize replay. */
   isCommitAncestor?(ancestor: string, descendant: string): Promise<boolean>
+  /** Optional capability: the complete recursive tree of `commit`, tree
+   * entries included, each with its object id. Never partial: an adapter that
+   * cannot list some directory throws `ForgeTreeUnlistable` naming it. */
+  readTree?(commit: string): Promise<ForgeTreeEntry[]>
+  /** Optional capability: exact bytes of the blob `oid`, verified against it. */
+  readBlob?(oid: string): Promise<Uint8Array>
   /** Optional checkout-less capability: raw file bytes from the repository.
    * Ref omitted → the repository's default branch. Throws when the path does
    * not exist. Its absence retains reading configuration from a checkout. */

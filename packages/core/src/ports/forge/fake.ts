@@ -6,7 +6,9 @@ import {
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
 import { ForgeMergeQueueRejection, type BuildLandingOptions } from '../types'
-import { ArchiveConflictError, ForgeRejection } from '../forge-failure'
+import { ArchiveConflictError, ForgeRejection, ForgeTreeUnlistable } from '../forge-failure'
+import { createHash } from 'node:crypto'
+import { gitBlobOid } from './git-blob'
 import { findSummaryMarker } from './summary-marker'
 /**
  * FakeForge (SPEC §3.2): in-memory Forge for seam tests. Gate existence and
@@ -27,6 +29,7 @@ import type {
   PrAttachmentReclaimRequest,
   PrAttachmentUploadRequest,
   Forge,
+  ForgeTreeEntry,
   IssueLink,
   PrRef,
   PrState,
@@ -101,6 +104,63 @@ export type HeadSha = string | ((number: number) => string)
 export type MergeSha = string | ((number: number) => string)
 
 type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
+
+/** A seeded tree file: content, a symlink target, or a submodule commit. */
+export type FakeTreeFile = string | Uint8Array | { symlink: string } | { submodule: string }
+
+/** Synthesize a commit's recursive tree listing from `files`: blob entries
+ * with real git blob ids and sizes, plus directory entries whose ids are
+ * deterministic over their children (a child change changes every ancestor). */
+export function fakeTree(files: Record<string, FakeTreeFile>): {
+  entries: ForgeTreeEntry[]
+  blobs: Map<string, Uint8Array>
+} {
+  const encoder = new TextEncoder()
+  const entries = new Map<string, ForgeTreeEntry>()
+  const blobs = new Map<string, Uint8Array>()
+  for (const [path, file] of Object.entries(files)) {
+    if (typeof file === 'object' && 'submodule' in file) {
+      entries.set(path, { path, mode: '160000', type: 'commit', oid: file.submodule })
+      continue
+    }
+    const symlink = typeof file === 'object' && 'symlink' in file
+    const bytes =
+      typeof file === 'string'
+        ? encoder.encode(file)
+        : symlink
+          ? encoder.encode(file.symlink)
+          : (file as Uint8Array)
+    const oid = gitBlobOid(bytes)
+    blobs.set(oid, bytes)
+    entries.set(path, {
+      path,
+      mode: symlink ? '120000' : '100644',
+      type: 'blob',
+      oid,
+      size: bytes.byteLength,
+    })
+  }
+  const dirs = new Set<string>()
+  for (const path of entries.keys()) {
+    const parts = path.split('/')
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'))
+  }
+  // Deepest first, so each directory hashes its already-identified children.
+  for (const dir of [...dirs].sort((a, b) => b.split('/').length - a.split('/').length)) {
+    const children = [...entries.values()]
+      .filter(
+        (entry) =>
+          entry.path.startsWith(`${dir}/`) && !entry.path.slice(dir.length + 1).includes('/'),
+      )
+      .map((entry) => `${entry.mode} ${entry.path} ${entry.oid}`)
+      .sort()
+    const oid = createHash('sha1')
+      .update(`tree\0${children.join('\n')}`)
+      .digest('hex')
+    entries.set(dir, { path: dir, mode: '040000', type: 'tree', oid })
+  }
+  return { entries: [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : 1)), blobs }
+}
 
 export class FakeForge implements Forge {
   readiness: ForgeReadinessCheck[] = readinessChecks(
@@ -216,6 +276,14 @@ export class FakeForge implements Forge {
   readonly files = new Map<string, string>()
   readonly commitMessages = new Map<string, string>()
   readonly buildSlugs = new Map<number, string>()
+  /** Seedable tree reads: listings by commit (unseeded commits list empty),
+   * blob bytes by id, and commits whose listing throws `ForgeTreeUnlistable`
+   * naming a directory. */
+  readonly trees = new Map<string, ForgeTreeEntry[]>()
+  readonly blobs = new Map<string, Uint8Array>()
+  readonly unlistable = new Map<string, string>()
+  readonly treeReads: string[] = []
+  readonly blobReads: string[] = []
 
   /** Journals — public so tests assert directly on call order and args. */
   readonly pushes: PushRecord[] = []
@@ -664,6 +732,29 @@ export class FakeForge implements Forge {
 
   async remoteBranchExists(branch: string): Promise<boolean> {
     return this.remoteBranches.has(branch)
+  }
+
+  /** Seed `commit`'s tree from `files` (see `fakeTree`). */
+  seedTree(commit: string, files: Record<string, FakeTreeFile>): ForgeTreeEntry[] {
+    const { entries, blobs } = fakeTree(files)
+    this.trees.set(commit, entries)
+    for (const [oid, bytes] of blobs) this.blobs.set(oid, bytes)
+    return entries
+  }
+
+  async readTree(commit: string): Promise<ForgeTreeEntry[]> {
+    this.treeReads.push(commit)
+    const directory = this.unlistable.get(commit)
+    if (directory !== undefined) throw new ForgeTreeUnlistable(directory)
+    // An unseeded commit is a repository with no agent context.
+    return structuredClone(this.trees.get(commit) ?? [])
+  }
+
+  async readBlob(oid: string): Promise<Uint8Array> {
+    this.blobReads.push(oid)
+    const bytes = this.blobs.get(oid)
+    if (bytes === undefined) throw new Error(`FakeForge: unknown blob ${oid}`)
+    return new Uint8Array(bytes)
   }
 
   async readFile(path: string, ref?: string): Promise<string> {
