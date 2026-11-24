@@ -256,6 +256,16 @@ File, Linear and GitHub retain fallback; the remote `HostedTicketSource`
 forwards pages to the service's native paging (`list-page`), falling back only
 against a service predating it. The POST list-ready protocol stays exhaustive.
 
+Search is an optional API 1.11 ticket-source capability:
+`search?(query: TicketSearchQuery): Promise<TicketSearchPage>`. It matches
+every query word against titles and bodies, filters by state and labels, and
+returns compact hits with an opaque cursor; `tickets.search` and
+`ab ticket search` call it. The file source implements it with one tracker scan
+per call, and the in-memory fake used for tests implements it too. The hosted,
+GitHub and Linear sources refuse with `search-unsupported`, and nothing falls
+back to a listing. See the
+[optional ticket search capability](plugin-authoring.md#optional-ticket-search-capability).
+
 Bounded state counts are another optional capability:
 `countStates?(names: readonly string[]): Promise<TicketStateCount[]>`. It returns
 `{name, tickets}` for each requested name that resolves (exactly, else by one

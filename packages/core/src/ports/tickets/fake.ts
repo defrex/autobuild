@@ -13,12 +13,15 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketListing,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketUpdate,
   TicketMutation,
 } from '../types'
 import { validateTicketUpdate } from './update'
 import { normalizeIssueLinks } from './issue-links'
+import { pageSearch } from './search'
 
 function cloneTicket(ticket: Ticket, doneState: string): Ticket {
   return {
@@ -124,6 +127,14 @@ export class FakeTicketSource implements TicketSource {
         .map((ticket) => cloneTicket(ticket, this.doneState)),
       diagnostics: [],
     }
+  }
+
+  async search(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    return pageSearch(
+      this.name,
+      [...this.tickets.values()].map((ticket) => cloneTicket(ticket, this.doneState)),
+      query,
+    )
   }
 
   async get(id: string): Promise<Ticket | null> {

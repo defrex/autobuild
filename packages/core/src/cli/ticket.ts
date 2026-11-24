@@ -7,6 +7,7 @@ import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-lin
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
 import { creationAssignees, parseAssigneesFlag } from '../ports/tickets/assignees'
 import { creationLabels } from '../ports/tickets/labels'
+import { searchTickets, TICKET_SEARCH_MAX_LIMIT } from '../ports/tickets/search'
 import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import {
@@ -154,6 +155,20 @@ export interface TicketListOpts extends TicketCommandOpts {
   json?: boolean
 }
 
+export interface TicketSearchOpts extends TicketCommandOpts {
+  /** Separate diagnostic sink so `--json` stdout remains one bare value. */
+  stderr: (line: string) => void
+  /** Words every match contains in its title or body. */
+  query: string
+  /** Only this state; omitted searches every state. */
+  state?: string
+  /** Every requested label must match. */
+  labels?: string[]
+  limit?: number
+  cursor?: string
+  json?: boolean
+}
+
 export interface TicketShowOpts extends TicketCommandOpts {
   id: string
   json?: boolean
@@ -228,6 +243,7 @@ type TicketCommandName =
   | 'block'
   | 'unblock'
   | 'list'
+  | 'search'
   | 'show'
   | 'move'
   | 'attach'
@@ -536,6 +552,39 @@ export async function abTicketList(opts: TicketListOpts): Promise<void> {
     return
   }
   for (const ticket of listing.tickets) opts.stdout(ticketSummary(ticket))
+}
+
+/** `ab ticket search <query>` — the same page `tickets.search` returns. */
+export async function abTicketSearch(opts: TicketSearchOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(opts, 'search')
+  const page = await searchTickets(source, {
+    text: opts.query,
+    ...(opts.state !== undefined ? { state: opts.state } : {}),
+    ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
+  })
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify(page, null, 2))
+    return
+  }
+  for (const diagnostic of page.diagnostics) opts.stderr(diagnostic)
+  if (page.tickets.length === 0) {
+    opts.stdout(`no tickets matched "${opts.query}" in the configured ${source.name} ticket source`)
+    return
+  }
+  for (const hit of page.tickets) {
+    const fields = [
+      `${source.name}:${hit.id}`,
+      `(${hit.state ?? 'state unknown'})`,
+      `[${hit.kind}]`,
+      `— ${hit.title}`,
+    ]
+    if (hit.labels.length > 0) fields.push(`— labels: ${hit.labels.join(', ')}`)
+    if (hit.target !== undefined) fields.push(`— target: ${hit.target}`)
+    opts.stdout(fields.join(' '))
+  }
+  if (page.cursor !== undefined) opts.stdout(`more matches: rerun with --cursor ${page.cursor}`)
 }
 
 /** `ab ticket show <id>` — complete metadata plus the body/spec. */
@@ -1016,6 +1065,8 @@ const BLOCK_USAGE =
 const UNBLOCK_USAGE =
   'usage: ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
 const LIST_USAGE = 'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
+const SEARCH_USAGE =
+  'usage: ab ticket search <query> [--state <state>] [--labels a,b] [--limit <n>] [--cursor <cursor>] [--json] (§8.8)'
 const SHOW_USAGE = 'usage: ab ticket show <id> [--store <ref>] [--json] (§8.8)'
 const ATTACH_USAGE =
   'usage: ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json] (§8.8)'
@@ -1038,6 +1089,7 @@ export const TICKET_USAGE = [
   BLOCK_USAGE,
   UNBLOCK_USAGE,
   LIST_USAGE,
+  SEARCH_USAGE,
   SHOW_USAGE,
   MOVE_USAGE,
   STATES_USAGE,
@@ -1285,6 +1337,41 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...opts,
         ...(state !== undefined ? { state } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        json: parsed.flags.has('json'),
+      })
+      return
+    }
+
+    case 'search': {
+      const parsed = parseArgs(
+        args,
+        { state: 'value', labels: 'value', limit: 'value', cursor: 'value', json: 'boolean' },
+        SEARCH_USAGE,
+      )
+      const query = parsed.positionals.join(' ')
+      if (query.trim() === '') throw new Error(SEARCH_USAGE)
+      const state = stringFlag(parsed, 'state')
+      if (state !== undefined && state.trim() === '') throw new Error(SEARCH_USAGE)
+      const cursor = stringFlag(parsed, 'cursor')
+      if (cursor !== undefined && cursor.trim() === '') throw new Error(SEARCH_USAGE)
+      const labels = stringFlag(parsed, 'labels')
+      const limitText = stringFlag(parsed, 'limit')
+      let limit: number | undefined
+      if (limitText !== undefined) {
+        limit = /^\d+$/.test(limitText) ? Number(limitText) : Number.NaN
+        if (!Number.isInteger(limit) || limit < 1 || limit > TICKET_SEARCH_MAX_LIMIT) {
+          throw new Error(
+            `--limit must be an integer from 1 to ${TICKET_SEARCH_MAX_LIMIT}, got "${limitText}"\n${SEARCH_USAGE}`,
+          )
+        }
+      }
+      await abTicketSearch({
+        ...opts,
+        query,
+        ...(state !== undefined ? { state } : {}),
+        ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
         json: parsed.flags.has('json'),
       })
       return

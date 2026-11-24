@@ -220,6 +220,7 @@ describe('layered CLI help catalog', () => {
         'ticket block',
         'ticket unblock',
         'ticket list',
+        'ticket search',
         'ticket show',
         'ticket move',
         'same ready criteria as dispatch',
