@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { spawnExec } from '../ports/workspace/git-worktree'
+import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { resolveMainRepo, resolveRepoState } from './repo-state'
 
 const cleanup: string[] = []
@@ -89,6 +90,7 @@ test('resolveRepoState selects paths after resolving repository identity', async
     targetRepo: '/linked',
     exec,
     envStore: 'shared-state',
+    stateHome: '/state',
   })
   expect(state).toMatchObject({
     // Identity is the normalized origin, not the checkout path.
@@ -97,6 +99,7 @@ test('resolveRepoState selects paths after resolving repository identity', async
     storeRef: '/main/repo/shared-state',
     worktreeRoot: '/main/repo/shared-state/worktrees',
   })
+  expect(state.isolatedWorktreeRoot).toStartWith('/state/autobuild/worktrees/repo-')
 })
 
 test('resolveRepoState falls back to the resolved checkout path when the checkout has no origin', async () => {
@@ -139,4 +142,51 @@ test('resolveRepoState resolves one identity for two checkouts of one repository
   expect(guest.repo).toBe('https://github.com/acme/app')
   expect(host.checkout).toBe('/host/checkout')
   expect(guest.checkout).toBe('/guest/checkout')
+})
+
+test('a new build worktree cannot resolve a package installed only in the checkout', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ab-repo-state-isolation-'))
+  cleanup.push(root)
+  const checkout = join(root, 'checkout')
+  const stateHome = join(root, 'state')
+  await git(root, 'init', '-b', 'main', checkout)
+  await git(checkout, 'config', 'user.email', 'test@example.com')
+  await git(checkout, 'config', 'user.name', 'Test')
+  await writeFile(join(checkout, 'package.json'), '{"name":"fixture","private":true}\n')
+  await writeFile(join(checkout, '.gitignore'), 'node_modules/\n')
+  await git(checkout, 'add', '.')
+  await git(checkout, 'commit', '-m', 'fixture')
+  const pkg = join(checkout, 'node_modules', 'only-in-checkout')
+  await mkdir(pkg, { recursive: true })
+  await writeFile(join(pkg, 'package.json'), '{"name":"only-in-checkout","main":"index.js"}\n')
+  await writeFile(join(pkg, 'index.js'), 'module.exports = 1\n')
+
+  const resolveFrom = (dir: string) => [
+    () => Bun.resolveSync('only-in-checkout', dir),
+    () => createRequire(join(dir, 'package.json')).resolve('only-in-checkout'),
+  ]
+  // Positive control: both resolvers find the package from the checkout.
+  for (const resolver of resolveFrom(checkout)) expect(resolver()).toContain('only-in-checkout')
+
+  const state = await resolveRepoState({ targetRepo: checkout, exec: spawnExec, stateHome })
+  const provider = new GitWorktreeProvider({
+    root: state.worktreeRoot,
+    isolatedRoot: state.isolatedWorktreeRoot,
+  })
+  const handle = await provider.provision({
+    repo: checkout,
+    baseBranch: 'main',
+    branch: 'ab/isolated',
+  })
+  expect(relative(await realpath(checkout), handle.path)).toStartWith('..')
+  for (const resolver of resolveFrom(handle.path)) expect(resolver).toThrow()
+
+  // Shared state still resolves through the main checkout from the new location.
+  const fromWorktree = await resolveRepoState({
+    targetRepo: handle.path,
+    exec: spawnExec,
+    stateHome,
+  })
+  expect(fromWorktree).toEqual(state)
+  await provider.release(handle)
 })
