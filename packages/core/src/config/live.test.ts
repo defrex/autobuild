@@ -1,0 +1,539 @@
+import { describe, expect, spyOn, test } from 'bun:test'
+import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
+import { parseConfig } from './load'
+import {
+  BUILD_OWNED_CONFIG_PATHS,
+  CONFIG_RELOAD_CLASSIFICATION,
+  LiveConfig,
+  composeBuildConfig,
+  composeReloadedConfig,
+  restartRequiredChanges,
+} from './live'
+import { TOP_LEVEL_KEYS } from './schema'
+import { assertCreateAssigneeAccepted, assertReadyAssigneeAccepted } from './ready-assignee'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+
+const base = `
+capacity = 1
+
+[tickets]
+source = "file"
+readyState = "ready"
+
+[roles.default]
+runtime = "pi"
+model = "gpt-old"
+`
+
+const runtimes: RuntimeRegistry = {
+  pi: {
+    runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+    servesModels: ['gpt-'],
+  },
+}
+
+describe('live dispatcher config', () => {
+  test('classifies every root key and pins only startup adapter fields', () => {
+    expect(Object.keys(CONFIG_RELOAD_CLASSIFICATION).sort()).toEqual(
+      [...TOP_LEVEL_KEYS].filter((key) => key !== 'merge').sort(),
+    )
+    const startup = parseConfig(base)
+    const candidate = parseConfig(
+      base
+        .replace('capacity = 1', 'capacity = 3\nforge = "local-git"')
+        .replace('readyState = "ready"', 'readyState = "queued"')
+        .replace('model = "gpt-old"', 'model = "gpt-new"'),
+    )
+    expect(restartRequiredChanges(startup, candidate)).toEqual(['forge'])
+    const effective = composeReloadedConfig(startup, candidate)
+    expect(effective.capacity).toBe(3)
+    expect(effective.forge).toBe(startup.forge)
+    expect(effective.tickets.readyState).toBe('queued')
+    expect(effective.roles.default?.model).toBe('gpt-new')
+  })
+
+  test('publishes before adoption and retries the same valid body after publication failure', async () => {
+    const published: string[] = []
+    let fail = true
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(base),
+      base,
+      runtimes,
+      async ({ content }) => {
+        published.push(content)
+        if (fail) throw new Error('store unavailable')
+      },
+    )
+    const changed = base.replace('capacity = 1', 'capacity = 2')
+    expect(await live.refresh(changed)).toEqual({
+      kind: 'publication-failed',
+      error: 'store unavailable',
+      deprecations: [],
+    })
+    expect(live.current().revision).toBe(0)
+    expect(live.current().config.capacity).toBe(1)
+
+    fail = false
+    const adopted = await live.refresh(changed)
+    expect(adopted.kind).toBe('adopted')
+    expect(live.current().revision).toBe(1)
+    expect(live.current().config.capacity).toBe(2)
+    expect(published).toHaveLength(2)
+  })
+
+  test('a reload introducing an invalid profile is rejected and keeps the running snapshot', async () => {
+    const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {})
+    const accepted = live.current()
+    const duplicate = `${base}
+[profiles.deep]
+label = "deep"
+
+[profiles.thorough]
+label = "Deep"
+`
+    const incompatible = `${base}
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.implement]
+model = "claude-opus-5-5"
+`
+    const first = await live.refresh(duplicate)
+    expect(first.kind).toBe('rejected')
+    expect(first.kind === 'rejected' && first.error).toContain('both declare label')
+    const second = await live.refresh(incompatible)
+    expect(second.kind).toBe('rejected')
+    expect(second.kind === 'rejected' && second.error).toContain('[profiles.deep.roles.implement]')
+    expect(live.current()).toBe(accepted)
+
+    const valid = incompatible.replace('claude-opus-5-5', 'gpt-new')
+    expect((await live.refresh(valid)).kind).toBe('adopted')
+    expect(live.current().resolver.profile('deep')?.resolve('implement').model).toBe('gpt-new')
+    expect(live.current().resolver.resolve('implement').model).toBe('gpt-old')
+  })
+
+  test('refreshFrom adopts hot changes from a non-disk source and holds restart-required fields', async () => {
+    // Origin mode: the dispatcher reads autobuild.toml from the forge. A hot
+    // change (capacity) adopts immediately; a restart-classified change
+    // (forge) keeps the startup adapter and is reported as restart-required.
+    const published: string[] = []
+    const live = new LiveConfig(
+      'https://github.com/acme/app/autobuild.toml@main',
+      parseConfig(base),
+      base,
+      runtimes,
+      async ({ content, restartRequired }) => {
+        published.push(content)
+        expect(restartRequired).toBeDefined()
+      },
+    )
+    const forge = { content: base }
+    const read = async (): Promise<string> => forge.content
+
+    const hot = base.replace('capacity = 1', 'capacity = 3')
+    forge.content = hot
+    const adopted = await live.refreshFrom(read)
+    expect(adopted).toMatchObject({
+      kind: 'adopted',
+      snapshot: { revision: 1, config: { capacity: 3 } },
+    })
+    expect((adopted as { restartRequired?: string[] }).restartRequired).toEqual([])
+    expect(published).toEqual([hot])
+
+    // A read failure keeps the last valid snapshot and is reported once.
+    const failing = async (): Promise<string> => {
+      throw new Error('GitHub API rate limited')
+    }
+    const rejected = await live.refreshFrom(failing)
+    expect(rejected).toMatchObject({
+      kind: 'rejected',
+      error: expect.stringContaining(
+        'could not be read during live reload: GitHub API rate limited',
+      ),
+      notify: true,
+    })
+    expect(await live.refreshFrom(failing)).toMatchObject({ kind: 'rejected', notify: false })
+    expect(live.current().config.capacity).toBe(3)
+
+    // Restart-classified changes hold the startup-built adapter fields.
+    const restart = hot.replace('capacity = 3', 'capacity = 3\nforge = "local-git"')
+    forge.content = restart
+    const outcome = await live.refreshFrom(read)
+    expect(outcome).toMatchObject({ kind: 'adopted', restartRequired: ['forge'] })
+    expect(live.current().config.forge).toBe('github')
+    expect(live.current().config.capacity).toBe(3)
+    expect(live.current().revision).toBe(2)
+  })
+
+  test('keeps the last valid snapshot, suppresses duplicate invalid notices, then recovers', async () => {
+    const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {})
+    const invalid = base.replace('capacity = 1', 'capacity = 0')
+    const first = await live.refresh(invalid)
+    const second = await live.refresh(invalid)
+    expect(first).toMatchObject({ kind: 'rejected', notify: true })
+    expect(second).toMatchObject({ kind: 'rejected', notify: false })
+    expect(live.current().config.capacity).toBe(1)
+
+    expect((await live.refresh(base.replace('capacity = 1', 'capacity = 4'))).kind).toBe('adopted')
+    expect(live.current().config.capacity).toBe(4)
+  })
+
+  test('names exactly the build-owned config sections', () => {
+    expect([...BUILD_OWNED_CONFIG_PATHS].sort()).toEqual([
+      'commands',
+      'finalize',
+      'verify',
+      'workspace',
+    ])
+  })
+
+  test('composes build-owned pipeline sections with live deployment sections', () => {
+    const pipeline = parseConfig(`${base}
+[commands]
+lint = "old-lint"
+
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "lint"
+`)
+    const deployment = parseConfig(
+      `${base.replace('capacity = 1', 'capacity = 4').replace('model = "gpt-old"', 'model = "gpt-new"')}\n[policy]\nstallRounds = 9\n`,
+    )
+    const composed = composeBuildConfig(pipeline, deployment)
+    // Build-owned: the pipeline source wins, so a base-branch reload cannot
+    // retarget the verify universe or the deterministic commands.
+    expect(composed.verify.steps).toEqual(['unit'])
+    expect(composed.commands.lint).toBe('old-lint')
+    // Deployment-owned and dispatcher-owned: the live snapshot wins.
+    expect(composed.roles.default?.model).toBe('gpt-new')
+    expect(composed.policy.stallRounds).toBe(9)
+    expect(composed.capacity).toBe(4)
+  })
+
+  test('validates a new route against the startup runtime catalog before publication', async () => {
+    let publishes = 0
+    const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {
+      publishes += 1
+    })
+    const incompatible = base.replace('model = "gpt-old"', 'model = "claude-new"')
+    const outcome = await live.refresh(incompatible)
+    expect(outcome).toMatchObject({ kind: 'rejected', notify: true })
+    expect(publishes).toBe(0)
+    expect(live.current().resolver.resolve('implement').model).toBe('gpt-old')
+  })
+})
+
+test('ticket scan cadence reloads and belongs to the deployment configuration', async () => {
+  const startup = parseConfig(base)
+  const candidateText = `ticketScanIntervalSeconds = 23\n${base}`
+  const candidate = parseConfig(candidateText)
+  expect(composeReloadedConfig(startup, candidate).ticketScanIntervalSeconds).toBe(23)
+  expect(composeBuildConfig(startup, candidate).ticketScanIntervalSeconds).toBe(23)
+  const live = new LiveConfig('autobuild.toml', startup, base, runtimes, async () => {})
+  expect((await live.refresh(candidateText)).kind).toBe('adopted')
+  expect(live.current().config.ticketScanIntervalSeconds).toBe(23)
+})
+
+describe('live createLabels', () => {
+  const github = base.replace('source = "file"\nreadyState = "ready"', 'source = "github"')
+
+  test('a createLabels change is hot, and a refused name keeps the previous snapshot', async () => {
+    expect(CONFIG_RELOAD_CLASSIFICATION.tickets.createLabels).toBe('hot')
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+    )
+    const labelled = github.replace(
+      'source = "github"',
+      'source = "github"\ncreateLabels = ["autobuild"]',
+    )
+    expect(restartRequiredChanges(parseConfig(github), parseConfig(labelled))).toEqual([])
+    expect((await live.refresh(labelled)).kind).toBe('adopted')
+    expect(live.current().config.tickets.createLabels).toEqual(['autobuild'])
+    const accepted = live.current()
+    const refused = await live.refresh(labelled.replace('["autobuild"]', '["autobuild", "node"]'))
+    expect(refused.kind).toBe('rejected')
+    if (refused.kind === 'rejected') expect(refused.error).toContain('node kind label')
+    expect(live.current()).toBe(accepted)
+    expect(live.current().config.tickets.createLabels).toEqual(['autobuild'])
+  })
+})
+
+describe('live merge policy', () => {
+  test('rejects malformed replacement rules and retains the last accepted policy', async () => {
+    const initial = `${base}\n[[merge]]\nmode = "consent"\n`
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(initial),
+      initial,
+      runtimes,
+      async () => {},
+    )
+    expect((await live.refresh(initial.replace('"consent"', '"auto"'))).kind).toBe('adopted')
+    expect((await live.refresh(initial.replace('"consent"', '"invalid"'))).kind).toBe('rejected')
+    expect(live.current().config.landing).toEqual([{ mode: 'auto' }])
+  })
+
+  test('build composition keeps current dispatcher policy rather than the pinned branch policy', () => {
+    const pipeline = parseConfig(`${base}\n[[merge]]\nmode = "consent"\n`)
+    const current = parseConfig(`${base}\n[[merge]]\nmode = "auto"\n`)
+    expect(composeBuildConfig(pipeline, current).landing).toEqual([{ mode: 'auto' }])
+    expect(BUILD_OWNED_CONFIG_PATHS).not.toContain('landing')
+  })
+})
+
+describe('live config deprecation notices', () => {
+  const landing = 'autobuild.toml: [[landing]] is deprecated; use [[merge]] instead'
+  const legacy = `landing = []\n${base}`
+
+  test('reports accepted deprecations from startup and adoption without writing', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const live = new LiveConfig(
+        'autobuild.toml',
+        parseConfig(legacy, 'autobuild.toml', () => {}),
+        legacy,
+        runtimes,
+        async () => {},
+        [landing],
+      )
+      expect(live.deprecations()).toEqual([landing])
+      expect((await live.refresh(base)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([])
+      const changed = legacy.replace('capacity = 1', 'capacity = 2')
+      expect((await live.refresh(changed)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([landing])
+      expect(await live.refresh(changed)).toEqual({ kind: 'unchanged' })
+      expect(live.deprecations()).toEqual([landing])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test('returns a rejected candidate deprecation once per distinct content', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const live = new LiveConfig(
+        'autobuild.toml',
+        parseConfig(base),
+        base,
+        runtimes,
+        async () => {},
+      )
+      // Schema-valid, but routed to a model the startup runtime catalog cannot serve.
+      const rejected = legacy.replace('model = "gpt-old"', 'model = "claude-new"')
+      const outcomes = [
+        await live.refresh(rejected),
+        await live.refresh(rejected),
+        await live.refresh(rejected),
+      ]
+      expect(outcomes.map((o) => o.kind === 'rejected' && o.deprecations)).toEqual([
+        [landing],
+        [],
+        [],
+      ])
+      expect(live.deprecations()).toEqual([])
+
+      // Returning to the accepted file and re-saving the same change notices once more.
+      expect(await live.refresh(base)).toEqual({ kind: 'unchanged' })
+      const again = await live.refresh(rejected)
+      expect(again.kind === 'rejected' && again.deprecations).toEqual([landing])
+
+      // Schema-invalid legacy text reports only its validation error.
+      const invalid = await live.refresh(legacy.replace('capacity = 1', 'capacity = 0'))
+      expect(invalid.kind).toBe('rejected')
+      expect(invalid.kind === 'rejected' && invalid.deprecations).toBeUndefined()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test('returns a publication-failed candidate deprecation once, then adopts it', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let fail = true
+      const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {
+        if (fail) throw new Error('store unavailable')
+      })
+      const outcomes = [
+        await live.refresh(legacy),
+        await live.refresh(legacy),
+        await live.refresh(legacy),
+      ]
+      expect(outcomes.map((o) => o.kind === 'publication-failed' && o.deprecations)).toEqual([
+        [landing],
+        [],
+        [],
+      ])
+      expect(live.deprecations()).toEqual([])
+      fail = false
+      expect((await live.refresh(legacy)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([landing])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
+test('upgrade drain policy defaults, validates and hot reloads after publication', async () => {
+  expect(parseConfig(base).policy.upgradeDrainSeconds).toBe(900)
+  for (const value of ['0', '-1', '1.5'])
+    expect(() => parseConfig(`${base}\n[policy]\nupgradeDrainSeconds=${value}`)).toThrow()
+  const published: number[] = []
+  const live = new LiveConfig(
+    'autobuild.toml',
+    parseConfig(base),
+    base,
+    runtimes,
+    async ({ effectiveConfig }) => {
+      published.push(effectiveConfig.policy.upgradeDrainSeconds)
+    },
+  )
+  expect((await live.refresh(`${base}\n[policy]\nupgradeDrainSeconds=30`)).kind).toBe('adopted')
+  expect(published).toEqual([30])
+  expect(live.current().config.policy.upgradeDrainSeconds).toBe(30)
+})
+
+test('renaming policy spelling keeps effective policy and reload classification unchanged', async () => {
+  const legacy = `${base}\n[[landing]]\nmode = "consent"\n`
+  const modern = legacy.replace('[[landing]]', '[[merge]]')
+  const publications: { effectiveChanged: boolean; restartRequired: readonly string[] }[] = []
+  const live = new LiveConfig(
+    'autobuild.toml',
+    parseConfig(legacy, 'autobuild.toml', () => {}),
+    legacy,
+    runtimes,
+    async (input) => {
+      publications.push(input)
+    },
+  )
+  const initial = live.current().config
+  const result = await live.refresh(modern)
+  expect(result.kind).toBe('adopted')
+  expect(publications).toEqual([
+    expect.objectContaining({ effectiveChanged: false, restartRequired: [] }),
+  ])
+  expect(live.current().config).toEqual(initial)
+  expect(await live.refresh(modern)).toEqual({ kind: 'unchanged' })
+})
+
+describe('live readyAssignee', () => {
+  const github = base.replace('source = "file"\nreadyState = "ready"', 'source = "github"')
+
+  async function preparedSource(identity: string | null) {
+    const fake = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: fake.transportAs(identity),
+      repository: fake.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    await source.prepareReadyAssignee()
+    fake.resetRequests()
+    return { fake, source }
+  }
+
+  test('a reload the running source refuses keeps the previous snapshot unpublished', async () => {
+    const { fake, source } = await preparedSource(null)
+    let publishes = 0
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {
+        publishes += 1
+      },
+      [],
+      (next) => assertReadyAssigneeAccepted(next.tickets, source),
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\nreadyAssignee = "me"'),
+    )
+    expect(outcome).toMatchObject({ kind: 'rejected', notify: true })
+    if (outcome.kind === 'rejected') expect(outcome.error).toContain('has no user')
+    expect(live.current().config.tickets.readyAssignee).toBeUndefined()
+    expect(live.current().revision).toBe(0)
+    expect(publishes).toBe(0)
+    expect(fake.requests).toHaveLength(0)
+  })
+
+  test('an accepted readyAssignee change is adopted for the next scan, with no request', async () => {
+    const { fake, source } = await preparedSource('alice')
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => assertReadyAssigneeAccepted(next.tickets, source),
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\nreadyAssignee = "me"'),
+    )
+    expect(outcome.kind).toBe('adopted')
+    expect(live.current().config.tickets.readyAssignee).toBe('me')
+    expect(fake.requests).toHaveLength(0)
+  })
+
+  test('a reload introducing a createAssignee the running source refuses is rejected', async () => {
+    const { fake, source } = await preparedSource(null)
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => {
+        assertReadyAssigneeAccepted(next.tickets, source)
+        assertCreateAssigneeAccepted(next.tickets, source)
+      },
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\ncreateAssignee = "me"'),
+    )
+    expect(outcome).toMatchObject({ kind: 'rejected', notify: true })
+    if (outcome.kind === 'rejected') {
+      expect(outcome.error).toContain('[tickets].createAssignee = "me"')
+      expect(outcome.error).toContain('has no user')
+    }
+    expect(live.current().config.tickets.createAssignee).toBeUndefined()
+    expect(fake.requests).toHaveLength(0)
+    const prepared = await preparedSource('alice')
+    const adopting = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => assertCreateAssigneeAccepted(next.tickets, prepared.source),
+    )
+    const adopted = await adopting.refresh(
+      github.replace('source = "github"', 'source = "github"\ncreateAssignee = "me"'),
+    )
+    expect(adopted.kind).toBe('adopted')
+    expect(adopting.current().config.tickets.createAssignee).toBe('me')
+    expect(prepared.fake.requests).toHaveLength(0)
+  })
+})

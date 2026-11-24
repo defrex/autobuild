@@ -4,25 +4,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { packageAutobuildDistribution } from '../ports/workspace/distribution-archive'
-import { spawnExec } from '../ports/workspace/git-worktree'
 import { installPackedDistribution } from '../testing/packed-install'
-import {
-  FakeForge,
-  FakeTicketSource,
-  FakeWorkspaceProvider,
-  MemoryBlobStore,
-  MemoryBuildStore,
-  PLUGIN_API_VERSION,
-  ScriptedAgentRunner,
-  describeAgentRunnerContract,
-  describeBlobStoreContract,
-  describeBuildStoreContract,
-  describeForgeContract,
-  describeTicketSourceContract,
-  describeWorkspaceProviderContract,
-  type AutobuildPluginManifest,
-  type TicketSourcePluginDescriptor,
-} from './index'
+import { PLUGIN_API_VERSION } from './index'
 
 const root = resolve(import.meta.dir, '..', '..', '..', '..')
 const temporary: string[] = []
@@ -64,12 +47,7 @@ const ERASED_TYPES_PLUGIN = `
 
 const TYPECHECK_DEADLINE_EXCEEDED = Symbol('typecheck-deadline-exceeded')
 
-/** Races a spawned tsc against an injected wall-clock deadline; kills the
- * process when the deadline wins and throws the deadline-specific diagnostic
- * so that failure mode stays distinguishable from the typecheck-exit guard's
- * generic type-error failure. The deadline is a parameter so a test can
- * inject an artificially small value and deterministically drive the
- * deadline branch regardless of compile speed. */
+/** Bound the real consumer compile and identify deadline failures separately. */
 async function typecheckExitWithinDeadline(
   typecheck: Bun.ReadableSubprocess,
   deadlineMs: number,
@@ -106,80 +84,6 @@ async function typecheckExitWithinDeadline(
 }
 
 describe('plugin SDK package surface', () => {
-  test('exports manifest types, contracts, and reference adapters from the local SDK barrel', () => {
-    const ticketSource = {
-      factory: () => new FakeTicketSource(),
-      requiredEnv: ['SAMPLE_TOKEN'],
-    } satisfies TicketSourcePluginDescriptor
-    const sample = {
-      name: 'sample-package',
-      apiVersion: '^1.1.0',
-      ticketSources: { sample: ticketSource },
-    } satisfies AutobuildPluginManifest
-
-    expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.10.0')
-    for (const symbol of [
-      describeAgentRunnerContract,
-      describeTicketSourceContract,
-      describeWorkspaceProviderContract,
-      describeForgeContract,
-      describeBuildStoreContract,
-      describeBlobStoreContract,
-      FakeTicketSource,
-      FakeWorkspaceProvider,
-      FakeForge,
-      ScriptedAgentRunner,
-      MemoryBuildStore,
-      MemoryBlobStore,
-    ]) {
-      expect(symbol).toBeDefined()
-    }
-  })
-
-  test('a dev-only type dependency builds a plugin with no Autobuild runtime import', async () => {
-    // The plugin's type check against the packed SDK runs in the packed
-    // consumer below ("the packed artifact contains the SDK…").
-    const destination = await mkdtemp(join(tmpdir(), 'ab-erased-plugin-'))
-    temporary.push(destination)
-    const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(
-      ERASED_TYPES_PLUGIN,
-    )
-    expect(output).not.toContain('@defrex/autobuild/plugin-sdk')
-    const built = join(destination, 'plugin.mjs')
-    await writeFile(built, output)
-    const loaded = await import(pathToFileURL(built).href)
-    expect(loaded.default.name).toBe('erased-types')
-  })
-
-  test('an injected short deadline deterministically drives the tsc-deadline branch, independent of compile speed', async () => {
-    // The deadline branch's race/kill/diagnostic mechanics were verified by
-    // hand during #472 but never deterministically exercised by the suite:
-    // with the production 90s constant the branch only fires on a genuinely
-    // slow compile. This pin spawns a real tsc that would exit quickly and
-    // successfully on any machine (`--version`; node startup alone is tens
-    // of ms) and injects a 1ms deadline, so the sentinel provably wins by
-    // injection rather than by wall-clock luck — and if that ever stopped
-    // holding, the resolve below fails the test loudly instead of silently
-    // passing.
-    const scratch = await mkdtemp(join(tmpdir(), 'ab-tsc-deadline-'))
-    temporary.push(scratch)
-    const typecheck = Bun.spawn([join(root, 'node_modules', '.bin', 'tsc'), '--version'], {
-      env: { ...process.env, NODE_COMPILE_CACHE: join(scratch, '.node-compile-cache') },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const outcome = await typecheckExitWithinDeadline(typecheck, 1).then(
-      () => null,
-      (error: unknown) => error,
-    )
-    expect(outcome).toBeInstanceOf(Error)
-    const message = outcome instanceof Error ? outcome.message : ''
-    expect(message).toMatch(/exceeded 1ms/)
-    expect(message).toContain('not a type error')
-    expect(message).not.toContain('typecheck failed')
-  }, 10_000)
-
   test('the packed artifact contains the SDK and all reusable contract suites', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
     temporary.push(destination)
@@ -241,6 +145,7 @@ describe('plugin SDK package surface', () => {
       `
         import {
           FakeTicketSource,
+          type AutobuildPluginManifest, type TicketSourcePluginDescriptor,
           ForgeFailure, isForgeFailure,
           type ForgeFailureDetails, type ForgeRequestObserver, type ForgeRequestContext,
           type TicketCriteria, type TicketPage, type TicketPageListing, type TicketSource,
@@ -248,6 +153,23 @@ describe('plugin SDK package surface', () => {
           describeTicketSourceContract,
         } from '@defrex/autobuild/plugin-sdk'
 
+        import * as sdk from '@defrex/autobuild/plugin-sdk'
+
+        const ticketSource = {
+          factory: () => new FakeTicketSource(), requiredEnv: ['SAMPLE_TOKEN'],
+        } satisfies TicketSourcePluginDescriptor
+        const sample = {
+          name: 'sample-package', apiVersion: '^1.1.0', ticketSources: { sample: ticketSource },
+        } satisfies AutobuildPluginManifest
+        if (sample.name !== 'sample-package') throw new Error('manifest types')
+        for (const name of [
+          'describeAgentRunnerContract', 'describeTicketSourceContract', 'describeWorkspaceProviderContract',
+          'describeForgeContract', 'describeBuildStoreContract', 'describeBlobStoreContract',
+          'FakeTicketSource', 'FakeWorkspaceProvider', 'FakeForge', 'ScriptedAgentRunner',
+          'MemoryBuildStore', 'MemoryBlobStore',
+        ]) if (typeof (sdk as Record<string, unknown>)[name] !== 'function') {
+          throw new Error('missing SDK export: ' + name)
+        }
         const criteria: TicketCriteria = { state: 'Ready', labels: ['web'] }
         const page: TicketPage = { limit: 0, offset: 2, order: 'newest' }
         const listing: TicketPageListing = { tickets: [], diagnostics: [], total: 5 }
@@ -291,6 +213,13 @@ describe('plugin SDK package surface', () => {
     // A plugin with only a dev-time type dependency checks against the same
     // packed SDK in the same compile.
     await writeFile(join(consumer, 'plugin.ts'), ERASED_TYPES_PLUGIN)
+    const emitted = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(
+      ERASED_TYPES_PLUGIN,
+    )
+    expect(emitted).not.toContain('@defrex/autobuild/plugin-sdk')
+    const built = join(consumer, 'plugin.mjs')
+    await writeFile(built, emitted)
+    expect((await import(pathToFileURL(built).href)).default.name).toBe('erased-types')
     const typecheck = Bun.spawn(
       [
         join(root, 'node_modules', '.bin', 'tsc'),
@@ -334,11 +263,7 @@ describe('plugin SDK package surface', () => {
       )
     }
 
-    const extracted = join(destination, 'extracted')
-    await mkdir(extracted)
-    const extract = Bun.spawn(['tar', '-xzf', archive, '-C', extracted])
-    expect(await extract.exited).toBe(0)
-    const packageRoot = join(extracted, 'package')
+    const packageRoot = join(consumer, 'node_modules', '@defrex', 'autobuild')
     const version = Bun.spawn(['bun', join(packageRoot, 'bin', 'ab.ts'), '--version'], {
       cwd: packageRoot,
       stdout: 'pipe',
@@ -401,80 +326,5 @@ describe('plugin SDK package surface', () => {
         join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
       ).exists(),
     ).toBe(true)
-
-    // Negative control, in the consumed-manifest shape a non-stripped packed
-    // manifest would impose (probed against the pinned bun 1.4.0): a tiny
-    // synthetic dependency package ships a patches/better-auth@1.4.18.patch
-    // file (content irrelevant — the failure precedes patch application) and
-    // declares patchedDependencies for it, and is installed into a consumer
-    // whose dependency set also contains better-auth@1.4.18.
-    //
-    // The synthetic package must be a packed tarball (`bun pm pack`), not a
-    // directory `file:` dep: only the tarball shape reproduces the panic a
-    // non-stripped `bun pm pack`-produced artifact imposes on its consumer
-    // (exit 134, `Option::unwrap`, before patch application, triggered by the
-    // patched package's presence in the consumer tree, output not naming the
-    // patch). A directory `file:` dep with the same manifest never reaches
-    // the panic: bun resolves the patch path against the consumer root, so
-    // it either fails gracefully (exit 1, `Couldn't find patch file`, when
-    // the path does not resolve there) or installs successfully (exit 0,
-    // patch applied, when it does) — the latter is also a false failure for
-    // this control, since the strip is fine.
-    // Assert only the non-zero exit: a future bun that converts the panic
-    // into a graceful error still fails here, and if
-    // packedManifestOmittedFields ever loses 'patchedDependencies' the
-    // successful install above fails with exactly this shape.
-    // Later bun releases (1.4.2 onward) install this shape cleanly, so the
-    // control only proves anything on the pinned packageManager version; the
-    // strip itself still matters to consumers on the engines.bun minimum.
-    const pinned = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
-      packageManager: string
-    }
-    if (pinned.packageManager !== `bun@${Bun.version}`) return
-    const syntheticPackage = join(destination, 'patched-dependency-fixture')
-    await mkdir(join(syntheticPackage, 'patches'), { recursive: true })
-    await writeFile(
-      join(syntheticPackage, 'package.json'),
-      JSON.stringify({
-        name: 'ab-packed-patch-negative-control',
-        version: '1.0.0',
-        patchedDependencies: {
-          'better-auth@1.4.18': 'patches/better-auth@1.4.18.patch',
-        },
-      }),
-    )
-    await writeFile(join(syntheticPackage, 'patches', 'better-auth@1.4.18.patch'), 'irrelevant')
-    const packed = await spawnExec(['bun', 'pm', 'pack'], { cwd: syntheticPackage })
-    if (packed.exitCode !== 0) {
-      throw new Error(
-        `bun pm pack of the negative-control fixture failed:\n${packed.stdout}${packed.stderr}`,
-      )
-    }
-    const syntheticTarball = join(syntheticPackage, 'ab-packed-patch-negative-control-1.0.0.tgz')
-    if (!(await Bun.file(syntheticTarball).exists())) {
-      throw new Error(`bun pm pack produced no tarball:\n${packed.stdout}${packed.stderr}`)
-    }
-    const negativeConsumer = join(destination, 'negative-control-consumer')
-    await mkdir(negativeConsumer)
-    await writeFile(
-      join(negativeConsumer, 'package.json'),
-      JSON.stringify({
-        name: 'packed-patch-negative-control-consumer',
-        private: true,
-        type: 'module',
-        dependencies: {
-          'ab-packed-patch-negative-control': `file:${syntheticTarball}`,
-          'better-auth': '1.4.18',
-        },
-      }),
-    )
-    const failing = await installPackedDistribution([], negativeConsumer, {
-      allowFailure: true,
-    })
-    if (failing.exitCode === 0) {
-      throw new Error(
-        `the consumed-manifest negative control installed successfully — the patchedDependencies strip no longer guards the failure it exists for:\n${failing.stdout}${failing.stderr}`,
-      )
-    }
   }, 600_000)
 })

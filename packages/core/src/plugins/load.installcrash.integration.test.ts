@@ -98,28 +98,7 @@ function run(
 }
 
 describe('plugin loading with the installer out of reach (AUT-587)', () => {
-  test('an unresolvable bare specifier is a failed report, never a process crash', async () => {
-    const repo = await fixture()
-    const installationRoot = join(repo, '..', 'installation')
-    await mkdir(installationRoot, { recursive: true })
-    const runner = await writeRunner(repo, ['@defrex/autobuild-nonexistent-plugin'], '')
-    const { exitCode, reports, output } = run(runner, repo, installationRoot)
-    // The whole point: the loader REPORTS, the process survives.
-    expect(exitCode).toBe(0)
-    expect(reports).toHaveLength(1)
-    expect(reports[0]).toMatchObject({
-      module: '@defrex/autobuild-nonexistent-plugin',
-      status: 'failed',
-      stage: 'resolution',
-      resolutionKind: 'package',
-    })
-    expect(reports[0]?.error).toContain(`repository "${repo}"`)
-    expect(reports[0]?.error).toContain(`installation "${installationRoot}"`)
-    expect(output).not.toContain('EROFS')
-    expect(output).not.toContain('unable to write files')
-  })
-
-  test('a package staged on disk loads from disk with the installer disabled', async () => {
+  test('missing packages and repo paths report failures around a disk-loaded package without crashing', async () => {
     const repo = await fixture()
     const installationRoot = join(repo, '..', 'installation')
     await mkdir(installationRoot, { recursive: true })
@@ -132,32 +111,37 @@ describe('plugin loading with the installer out of reach (AUT-587)', () => {
       join(repo, 'node_modules', 'staged-plugin', 'plugin.ts'),
       `export default { name: 'staged', apiVersion: '^1.0.0', forges: { staged: () => ({}) } }\n`,
     )
-    const runner = await writeRunner(repo, ['staged-plugin'], '')
-    const { exitCode, reports } = run(runner, repo, installationRoot)
+    const runner = await writeRunner(
+      repo,
+      ['@defrex/autobuild-nonexistent-plugin', 'staged-plugin', './absent.ts'],
+      '',
+    )
+    const { exitCode, reports, output } = run(runner, repo, installationRoot)
     expect(exitCode).toBe(0)
+    expect(reports).toHaveLength(3)
     expect(reports[0]).toMatchObject({
+      module: '@defrex/autobuild-nonexistent-plugin',
+      status: 'failed',
+      stage: 'resolution',
+      resolutionKind: 'package',
+    })
+    expect(reports[0]?.error).toContain(`repository "${repo}"`)
+    expect(reports[0]?.error).toContain(`installation "${installationRoot}"`)
+    expect(reports[1]).toMatchObject({
       module: 'staged-plugin',
       status: 'loaded',
       stage: 'loaded',
       resolvedFrom: 'repository',
     })
-    expect(reports[0]?.resolved).toContain(join('node_modules', 'staged-plugin'))
-  })
-
-  test('a missing repo-path specifier stays a catchable resolution failure', async () => {
-    const repo = await fixture()
-    const installationRoot = join(repo, '..', 'installation')
-    await mkdir(installationRoot, { recursive: true })
-    const runner = await writeRunner(repo, ['./absent.ts'], '')
-    const { exitCode, reports, output } = run(runner, repo, installationRoot)
-    expect(exitCode).toBe(0)
-    expect(reports[0]).toMatchObject({
+    expect(reports[1]?.resolved).toContain(join('node_modules', 'staged-plugin'))
+    expect(reports[2]).toMatchObject({
       module: './absent.ts',
       status: 'failed',
       stage: 'resolution',
       resolutionKind: 'repo-path',
     })
-    expect(reports[0]?.error).toContain('could not be resolved from repository')
+    expect(reports[2]?.error).toContain('could not be resolved from repository')
+    expect(output).not.toContain('EROFS')
     expect(output).not.toContain('unable to write files')
   })
 })
