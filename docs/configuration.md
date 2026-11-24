@@ -401,6 +401,7 @@ These fields hot-reload:
 | `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary, except existing ChatGPT descriptors require stopped dispatch before replacement or removal (see [accounts](#accounts)); credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[profiles]` | Next agent session of a build that selected the profile; builds without it are unaffected. A build's selected profile name never changes after claim. |
+| `[operator]` | Next explicit ownership decision; never starts or restarts a dispatcher. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[hooks]` | After the next dispatcher tick: an added hook starts at its baseline, a removed one stops, and a changed one resumes from its saved progress. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
@@ -432,6 +433,45 @@ generated markers is maintained by hand. Defaults below are parser input default
 resolver inheritance is described separately. Nested required fields are required
 when their containing table or array entry is supplied.
 
+## `[operator]`
+
+<!-- configuration-reference:operator -->
+
+#### `operator`
+
+**TOML key:** `operator`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Local only: set in .autobuild/local.toml; rejected in autobuild.toml.
+
+**Description:** Local-only dispatcher ownership preference; set in .autobuild/local.toml.
+
+**Constraints:** None beyond the input type.
+
+#### `operator.dispatcher`
+
+**TOML key:** `operator.dispatcher`
+
+- **Type:** `"human" | "agent"`
+- **Default:** `Unset; ask who should run it.`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Local only: set in .autobuild/local.toml; rejected in autobuild.toml.
+
+**Description:** Who runs the dispatcher when none is running. Repository instructions take precedence.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/operator -->
+
+`[operator]` is local-only, even when empty. Read or set the optional ownership
+choice with `ab operator dispatcher [human|agent] [--json]`. Unset has no default;
+repository instructions take precedence. Changes are hot and never start or stop
+a dispatcher. See [dispatcher ownership](dispatcher.md#dispatcher-ownership).
+
 ## Local overrides (`.autobuild/local.toml`)
 
 Some settings are personal: how many builds one machine runs, which model
@@ -440,7 +480,8 @@ subscriptions a person holds, which notifications they want. Put those in
 
 - **Location:** `.autobuild/local.toml` beside `autobuild.toml` in the checkout.
   `ab init` adds `.autobuild/` to `.gitignore`, so the file is never committed.
-  Edit it by hand; it uses the same TOML spelling as `autobuild.toml`.
+  Edit overrides by hand, or use `ab operator dispatcher [human|agent] [--json]`
+  for ownership; saving may normalize TOML formatting.
 - **Readers:** every `ab` command that reads configuration from that checkout,
   including a checkout-mode `ab dispatch`. Build worktrees never contain the
   file, so scoped phase commands are unaffected. Origin-mode and hosted
@@ -472,6 +513,7 @@ subscriptions a person holds, which notifications they want. Put those in
 |---|---|
 | `capacity` | Allowed |
 | `ticketScanIntervalSeconds` | Allowed |
+| `[operator]` | Allowed |
 | `[upgrade]` | Allowed |
 | `[hooks]` | Allowed |
 | `[roles]` | Allowed |
@@ -494,7 +536,8 @@ subscriptions a person holds, which notifications they want. Put those in
 
 Allowed sections describe the local machine and process (`capacity`,
 `ticketScanIntervalSeconds`, `[upgrade]`), personal notifications (`[hooks]`),
-or the subscriptions a person holds (`[roles]`, `[accounts]`). Everything else
+the subscriptions a person holds (`[roles]`, `[accounts]`), or personal dispatcher
+ownership (`[operator]`, which is local-only). Everything else
 must agree across everyone sharing the repository's store, ticket source and
 forge, or defines a build's pipeline, which comes from the build's own branch
 on every machine. Each field block below repeats its section's classification.
