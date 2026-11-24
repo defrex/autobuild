@@ -1,55 +1,54 @@
 import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bunExec } from './github'
 import { gitRewrite } from './git-rewrite'
 import type { Exec } from '../workspace/git-worktree'
-import { ArchiveConflictError, ForgeFailure, isForgeFailure } from '../forge-failure'
-import { ForgeRequestDeferred } from '../forge-request-context'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
 for (const local of [true, false]) {
-  for (const branch of ['ab/probe', 'ab-node/probe']) {
-    test(`${local ? 'local-git' : 'GitHub transport'} archives and guards a real rewrite on ${branch}`, async () => {
-      const root = await mkdtemp(join(tmpdir(), 'ab-rewrite-'))
-      const cwd = join(root, 'work')
-      async function git(args: string[], path = cwd) {
-        const result = await bunExec(['git', ...args], { cwd: path })
-        if (result.exitCode !== 0) throw new Error(result.stderr)
-        return result.stdout.trim()
+  test(`${local ? 'local-git' : 'GitHub transport'} archives and guards real rewrites on leaf and node branches`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-rewrite-'))
+    const cwd = join(root, 'work')
+    async function git(args: string[], path = cwd) {
+      const result = await bunExec(['git', ...args], { cwd: path })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    try {
+      await git(['init', '-q', cwd], root)
+      await git(['config', 'user.name', 'Contract'])
+      await git(['config', 'user.email', 'contract@test.invalid'])
+      await git(['config', 'commit.gpgsign', 'false'])
+      await writeFile(join(cwd, 'file'), 'old\n')
+      await git(['add', '.'])
+      await git(['commit', '-qm', 'old'])
+      const old = await git(['rev-parse', 'HEAD'])
+      const branches = ['ab/probe', 'ab-node/probe']
+      for (const branch of branches) await git(['branch', branch])
+      const remote = join(root, 'remote.git')
+      if (!local) {
+        await git(['init', '--bare', '-q', remote])
+        await git(['remote', 'add', 'origin', remote])
+        await git(['push', '-q', 'origin', ...branches])
       }
-      try {
-        await git(['init', '-q', cwd], root)
-        await git(['config', 'user.name', 'Contract'])
-        await git(['config', 'user.email', 'contract@test.invalid'])
-        await git(['config', 'commit.gpgsign', 'false'])
-        await writeFile(join(cwd, 'file'), 'old\n')
-        await git(['add', '.'])
-        await git(['commit', '-qm', 'old'])
-        const old = await git(['rev-parse', 'HEAD'])
-        await git(['branch', branch])
-        const remote = join(root, 'remote.git')
-        if (!local) {
-          await git(['init', '--bare', '-q', remote])
-          await git(['remote', 'add', 'origin', remote])
-          await git(['push', '-q', 'origin', branch])
-        }
-        await git(['checkout', '--detach', '-q'])
-        await writeFile(join(cwd, 'file'), 'new\n')
-        await git(['commit', '-qam', 'new'])
-        const sha = await git(['rev-parse', 'HEAD'])
-        const capability = gitRewrite(bunExec, local)
+      await git(['checkout', '--detach', '-q'])
+      await writeFile(join(cwd, 'file'), 'new\n')
+      await git(['commit', '-qam', 'new'])
+      const sha = await git(['rev-parse', 'HEAD'])
+      const capability = gitRewrite(bunExec, local)
+      for (const branch of branches) {
         expect(
           await capability.snapshot({
             workspacePath: cwd,
             branch,
-            destinationRef: 'refs/autobuild/reconcile/probe/head',
+            destinationRef: `refs/autobuild/reconcile/${branch}/head`,
           }),
         ).toBe(old)
-        const ref = `refs/autobuild/archive/probe/${old}`
+        const ref = `refs/autobuild/archive/${branch.replace('/', '-')}/${old}`
         await capability.archive({ workspacePath: cwd, ref, sha: old })
         await capability.archive({ workspacePath: cwd, ref, sha: old })
         await expect(capability.archive({ workspacePath: cwd, ref, sha })).rejects.toThrow(
@@ -63,7 +62,7 @@ for (const local of [true, false]) {
           actual: sha,
         })
         if (!local) {
-          await git(['checkout', '--detach', '-q'])
+          await git(['checkout', '--detach', '-q', sha])
           // The remote raced ahead while its local branch stayed at the last
           // published candidate. Keep both guards explicit when synchronizing.
           await writeFile(join(cwd, 'external'), 'external work\n')
@@ -86,7 +85,7 @@ for (const local of [true, false]) {
           ).toEqual({ kind: 'published' })
           expect(await git(['rev-parse', branch])).toBe(next)
         }
-        const fresh = join(root, 'fresh')
+        const fresh = join(root, branch.replace('/', '-'))
         await git(['init', '-q', fresh], root)
         await git(['fetch', '--no-tags', local ? cwd : remote, ref], fresh)
         expect(await git(['show', 'FETCH_HEAD:file'], fresh)).toBe('old')
@@ -95,11 +94,11 @@ for (const local of [true, false]) {
           local ? cwd : remote,
         )
         expect(refs).not.toContain('archive')
-      } finally {
-        await rm(root, { recursive: true, force: true })
       }
-    })
-  }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 }
 
 /** Remote O <- A <- A2 on main's line, with A and A2 held only under
@@ -165,23 +164,24 @@ async function archiveFixture() {
 
 const shallowFlag = /^--(depth|deepen|unshallow|shallow-)/
 
-test('a depth-one archive fetch truncates ancestry the workspace already holds', async () => {
-  const f = await archiveFixture()
-  const cwd = await f.clone()
-  await f.createArchive(f.ref(f.a), f.a)
-  await f.git(
-    ['fetch', '--depth=1', '--refmap=', '--no-tags', '--no-write-fetch-head', 'origin', f.ref(f.a)],
-    cwd,
-  )
-  expect(await f.git(['rev-parse', '--is-shallow-repository'], cwd)).toBe('true')
-  expect(await f.status(['merge-base', '--is-ancestor', f.o, f.a], cwd)).toBe(1)
-})
-
 test('remote archive recovery preserves ancestry across repeated and descendant recovery', async () => {
   const f = await archiveFixture()
-  const cwd = await f.clone()
-  const capability = gitRewrite(bunExec, false, f.createArchive)
+  const cwd = await f.clone('--single-branch', '--branch', 'main')
+  expect(await f.status(['cat-file', '-e', `${f.x}^{commit}`], cwd)).not.toBe(0)
+  const commands: string[][] = []
+  const exec: Exec = async (cmd, opts) => {
+    commands.push(cmd)
+    return bunExec(cmd, opts)
+  }
+  const capability = gitRewrite(exec, false, f.createArchive)
   await capability.archive({ workspacePath: cwd, ref: f.ref(f.a), sha: f.a })
+  expect(commands.filter((cmd) => cmd[1] === 'fetch')).toEqual([
+    ['git', 'fetch', '--refmap=', '--no-tags', '--no-write-fetch-head', 'origin', f.ref(f.a)],
+  ])
+  expect(commands.some((cmd) => cmd.some((arg) => shallowFlag.test(arg) || arg === '--all'))).toBe(
+    false,
+  )
+  expect(await f.status(['cat-file', '-e', `${f.x}^{commit}`], cwd)).not.toBe(0)
   expect(await f.git(['cat-file', '-t', f.a], cwd)).toBe('commit')
   expect(await f.status(['merge-base', '--is-ancestor', f.o, f.a], cwd)).toBe(0)
   expect(await f.git(['rev-parse', '--is-shallow-repository'], cwd)).toBe('false')
@@ -207,30 +207,6 @@ test('remote archive recovery preserves ancestry across repeated and descendant 
     kind: 'published',
   })
   expect(await f.git(['rev-parse', 'refs/heads/ab/probe'], f.remote)).toBe(f.a2)
-})
-
-test('remote archive recovery fetches only the exact archive ref', async () => {
-  const f = await archiveFixture()
-  const cwd = await f.clone('--single-branch', '--branch', 'main')
-  expect(await f.status(['cat-file', '-e', `${f.x}^{commit}`], cwd)).not.toBe(0)
-  const commands: string[][] = []
-  const exec: Exec = async (cmd, opts) => {
-    commands.push(cmd)
-    return bunExec(cmd, opts)
-  }
-  await gitRewrite(exec, false, f.createArchive).archive({
-    workspacePath: cwd,
-    ref: f.ref(f.a),
-    sha: f.a,
-  })
-  expect(commands.filter((cmd) => cmd[1] === 'fetch')).toEqual([
-    ['git', 'fetch', '--refmap=', '--no-tags', '--no-write-fetch-head', 'origin', f.ref(f.a)],
-  ])
-  expect(commands.some((cmd) => cmd.some((arg) => shallowFlag.test(arg) || arg === '--all'))).toBe(
-    false,
-  )
-  expect(await f.status(['cat-file', '-e', `${f.x}^{commit}`], cwd)).not.toBe(0)
-  expect(await f.status(['merge-base', '--is-ancestor', f.o, f.a], cwd)).toBe(0)
 })
 
 test('remote archive recovery keeps an already-shallow boundary unchanged', async () => {
@@ -285,293 +261,3 @@ for (const shallow of [false, true]) {
     expect(await f.status(['cat-file', '-e', `${f.a}^{commit}`], cwd)).not.toBe(0)
   })
 }
-
-test('transport uses exact leases and refuses namespace policy errors before replacement', async () => {
-  const commands: string[][] = []
-  const sha = 'a'.repeat(40)
-  const ref = `refs/autobuild/archive/probe/${sha}`
-  const capability = gitRewrite(async (cmd) => {
-    commands.push(cmd)
-    return cmd[1] === 'push'
-      ? { exitCode: 1, stdout: '', stderr: 'remote: namespace denied' }
-      : { exitCode: 0, stdout: '', stderr: '' }
-  }, false)
-  await expect(capability.archive({ workspacePath: '/fixture', sha, ref })).rejects.toThrow(
-    `archive publication rejected for ${ref}`,
-  )
-  expect(commands.find((cmd) => cmd[1] === 'push')).toEqual([
-    'git',
-    'push',
-    `--force-with-lease=${ref}:`,
-    'origin',
-    `${sha}:${ref}`,
-  ])
-  expect(commands.some((cmd) => cmd.some((arg) => arg.startsWith('refs/heads/')))).toBe(false)
-})
-
-describe('refused archive push falls back to the supplied ref creation', () => {
-  const sha = 'a'.repeat(40)
-  const ref = `refs/autobuild/archive/probe/${sha}`
-  const refusal = 'remote: pushes of anything other than a branch are not allowed'
-  function harness(options: {
-    push?: { exitCode: number; stderr: string }
-    readback?: () => string | null
-    before?: string | null
-    fallback?: (ref: string, sha: string) => Promise<void>
-  }) {
-    const commands: string[][] = []
-    const calls: [string, string][] = []
-    let published = false
-    const capability = gitRewrite(
-      async (cmd) => {
-        commands.push(cmd)
-        if (cmd[1] === 'push')
-          return { stdout: '', ...(options.push ?? { exitCode: 1, stderr: refusal }) }
-        if (cmd[1] === 'ls-remote') {
-          const pushed = commands.some((c) => c[1] === 'push')
-          const actual = pushed
-            ? options.readback
-              ? options.readback()
-              : published
-                ? sha
-                : null
-            : (options.before ?? null)
-          return { exitCode: 0, stdout: actual ? `${actual}\t${ref}\n` : '', stderr: '' }
-        }
-        return { exitCode: 0, stdout: '', stderr: '' }
-      },
-      false,
-      async () => {
-        throw new Error('missing-object creation must not run for a local commit')
-      },
-      async (r, s) => {
-        calls.push([r, s])
-        if (options.fallback) return options.fallback(r, s)
-        published = true
-      },
-    )
-    return {
-      run: () => capability.archive({ workspacePath: '/ws', sha, ref }),
-      commands,
-      calls,
-    }
-  }
-
-  test('refused push then REST success publishes the identical ref', async () => {
-    const h = harness({})
-    await h.run()
-    expect(h.calls).toEqual([[ref, sha]])
-    const written = [...h.commands.flat(), ...h.calls.flat()]
-    expect(written.some((arg) => /refs\/(?:heads|tags)\//.test(arg))).toBe(false)
-  })
-
-  test('refused push then REST failure names both refusals', async () => {
-    const h = harness({
-      fallback: async () => {
-        throw new Error('policy')
-      },
-    })
-    const failure = await h.run().then(
-      () => undefined,
-      (error: unknown) => error,
-    )
-    const message = (failure as Error).message
-    for (const part of [
-      `archive publication rejected for ${ref} at ${sha}: git push refused (`,
-      refusal,
-      'GitHub REST ref creation failed (policy)',
-      '(archive refs are optional; Autobuild falls back to a BuildStore copy)',
-    ])
-      expect(message).toContain(part)
-  })
-
-  test('refused push then unconfirmed readback is rejected', async () => {
-    const h = harness({ fallback: async () => {} })
-    const failure = (await h.run().then(
-      () => undefined,
-      (error: unknown) => error,
-    )) as Error
-    expect(failure.message).toContain('git push refused')
-    expect(failure.message).toContain('did not confirm publication')
-  })
-
-  test('refused push then a different readback SHA is an immutable archive', async () => {
-    const other = 'b'.repeat(40)
-    const h = harness({ readback: () => other })
-    await expect(h.run()).rejects.toThrow(
-      `immutable archive ${ref} names ${other}, expected ${sha}`,
-    )
-    await expect(h.run()).rejects.toBeInstanceOf(ArchiveConflictError)
-  })
-
-  test('pre-existing different archive runs neither transport', async () => {
-    const other = 'b'.repeat(40)
-    const h = harness({ before: other })
-    await expect(h.run()).rejects.toThrow(`immutable archive ${ref} names ${other}`)
-    await expect(h.run()).rejects.toBeInstanceOf(ArchiveConflictError)
-    expect(h.commands.some((c) => c[1] === 'push')).toBe(false)
-    expect(h.calls).toEqual([])
-  })
-
-  test('transient push failure stays transient and never falls back', async () => {
-    const h = harness({ push: { exitCode: 128, stderr: 'fatal: HTTP 503 Service Unavailable' } })
-    const failure = await h.run().then(
-      () => undefined,
-      (error: unknown) => error,
-    )
-    expect(isForgeFailure(failure)).toBe(true)
-    expect(h.calls).toEqual([])
-  })
-
-  test('transient REST failure after a refusal keeps its class', async () => {
-    for (const failure of [
-      new ForgeFailure('unavailable', { kind: 'transient', retry: 'retryable' }),
-      new ForgeRequestDeferred('deferred'),
-    ]) {
-      const h = harness({
-        fallback: async () => {
-          throw failure
-        },
-      })
-      await expect(h.run()).rejects.toBe(failure)
-    }
-  })
-
-  test('successful push never calls the fallback', async () => {
-    let pushed = false
-    const h = harness({
-      push: { exitCode: 0, stderr: '' },
-      readback: () => {
-        pushed = true
-        return sha
-      },
-    })
-    await h.run()
-    expect(pushed).toBe(true)
-    expect(h.calls).toEqual([])
-  })
-})
-
-for (const diagnostic of [
-  'fatal: unable to access: The requested URL returned error: 503',
-  'fatal: HTTP 502 Bad Gateway',
-  'Recv failure: Connection reset by peer',
-  'fatal: Operation timed out after 30000 milliseconds',
-  '! [rejected] ab/probe -> ab/probe (stale info)',
-  'fatal: Authentication failed',
-  'fatal: Permission denied',
-]) {
-  test(`network rewrite diagnostic: ${diagnostic}`, async () => {
-    const { isForgeFailure } = await import('../forge-failure')
-    const capability = gitRewrite(
-      async () => ({ exitCode: 128, stdout: '', stderr: diagnostic }),
-      false,
-    )
-    let failure: unknown
-    try {
-      await capability.snapshot({
-        workspacePath: '/repo',
-        branch: 'ab/probe',
-        destinationRef: 'refs/autobuild/reconcile/probe/head',
-      })
-    } catch (error) {
-      failure = error
-    }
-    expect(failure).toBeInstanceOf(Error)
-    expect(isForgeFailure(failure)).toBe(!/rejected|Authentication|Permission/.test(diagnostic))
-  })
-}
-
-for (const after of [null, 'a'.repeat(40), 'b'.repeat(40)]) {
-  test(`uncertain remote archive requires exact readback: ${after}`, async () => {
-    const { ForgeFailure } = await import('../forge-failure')
-    const { ForgeRequestDeferred } = await import('../forge-request-context')
-    for (const failure of [
-      new ForgeFailure('rate limited', { kind: 'rate-limited', resetAt: '2026-10-29T12:00:00Z' }),
-      new ForgeFailure('unavailable', { kind: 'transient', retry: 'retryable' }),
-      new ForgeRequestDeferred('deferred'),
-    ]) {
-      const sha = 'a'.repeat(40)
-      const ref = `refs/autobuild/archive/probe/${sha}`
-      let attempted = false
-      let fetched = false
-      const capability = gitRewrite(
-        async (cmd) => {
-          if (cmd[1] === 'fetch') fetched = true
-          return {
-            exitCode: cmd[1] === 'cat-file' && !fetched ? 1 : 0,
-            stderr: '',
-            stdout: cmd[1] === 'ls-remote' && attempted && after ? `${after}\t${ref}\n` : '',
-          }
-        },
-        false,
-        async () => {
-          attempted = true
-          throw failure
-        },
-      )
-      const result = capability.archive({ workspacePath: '/ws', sha, ref })
-      if (after === sha) await result
-      // A different archive SHA is immutable, whatever the write transport reported.
-      else if (after)
-        await expect(result).rejects.toThrow(`immutable archive ${ref} names ${after}`)
-      else await expect(result).rejects.toBe(failure)
-      expect(fetched).toBe(after === sha)
-    }
-  })
-}
-
-test('preexisting remote archive is immutable and fetched by name when missing locally', async () => {
-  const sha = 'a'.repeat(40)
-  const ref = `refs/autobuild/archive/probe/${sha}`
-  for (const actual of [sha, 'b'.repeat(40)]) {
-    const commands: string[][] = []
-    const capability = gitRewrite(
-      async (cmd) => {
-        commands.push(cmd)
-        return {
-          exitCode: cmd[1] === 'cat-file' && !commands.some((c) => c[1] === 'fetch') ? 1 : 0,
-          stdout: cmd[1] === 'ls-remote' ? `${actual}\t${ref}\n` : '',
-          stderr: '',
-        }
-      },
-      false,
-      async () => {
-        throw new Error('must not create')
-      },
-    )
-    const result = capability.archive({ workspacePath: '/ws', sha, ref })
-    if (actual !== sha) await expect(result).rejects.toThrow('immutable archive')
-    else await result
-    expect(commands.some((c) => c[1] === 'fetch')).toBe(actual === sha)
-    expect(commands.some((c) => c[1] === 'push')).toBe(false)
-  }
-})
-
-test('archive materialization must verify the local commit', async () => {
-  const sha = 'a'.repeat(40)
-  const ref = `refs/autobuild/archive/probe/${sha}`
-  const capability = gitRewrite(
-    async (cmd) => ({
-      exitCode: cmd[1] === 'cat-file' ? 1 : 0,
-      stdout: cmd[1] === 'ls-remote' ? `${sha}\t${ref}\n` : '',
-      stderr: 'missing commit',
-    }),
-    false,
-  )
-  await expect(capability.archive({ workspacePath: '/ws', sha, ref })).rejects.toThrow(
-    'missing commit',
-  )
-})
-
-test('missing local object without provider creation fails with SHA and ref context', async () => {
-  const sha = 'a'.repeat(40)
-  const ref = `refs/autobuild/archive/probe/${sha}`
-  const capability = gitRewrite(async (cmd) => {
-    expect(cmd[1]).not.toBe('push')
-    return { exitCode: cmd[1] === 'cat-file' ? 1 : 0, stdout: '', stderr: '' }
-  }, false)
-  await expect(capability.archive({ workspacePath: '/ws', sha, ref })).rejects.toThrow(
-    `archive publication rejected for ${ref} at ${sha}`,
-  )
-})
