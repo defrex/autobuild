@@ -81,9 +81,15 @@ function expectNoCounts(github: FakeGitHubIssues): void {
   expect(github.count('comments-list')).toBe(0)
 }
 
-test('a merged build closes its issue as completed, with no state label', async () => {
+test('a sub-issue of a grouping issue builds as a root leaf; merged, it closes as completed with no state label', async () => {
   const { h, github, issue } = await githubHarness()
+  // A ready sub-issue of a non-node grouping issue dispatches as an ordinary root leaf.
+  const group = github.fileIssue({ title: 'Grouping epic', labels: ['autobuild'] })
+  github.uiAddSubIssue(group, issue)
   await openPr(h, github, issue)
+  expect(reduceBuild(await h.events(SLUG)).target).toBeUndefined()
+  expect(github.issue(issue)?.parent).toBe(`${github.owner}/${github.name}#${group}`)
+  expect(github.issue(group)?.labels).toEqual(['autobuild'])
   h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
   const ticks = [await h.dispatcher.tick(), await h.dispatcher.tick()]
   expect(ticks.some((tick) => tick.merged === 1)).toBe(true)
@@ -360,16 +366,4 @@ test('createAssignee = "me" adds no GitHub request to any dispatcher tick', asyn
   expect(w.count('user')).toBe(0)
   expect(w.count('assignee-check')).toBe(0)
   expectNoCounts(w)
-}, 30_000)
-
-test('a ready sub-issue of a non-node grouping issue dispatches as an ordinary root leaf', async () => {
-  const { h, github, issue } = await githubHarness()
-  const group = github.fileIssue({ title: 'Grouping epic', labels: ['autobuild'] })
-  github.uiAddSubIssue(group, issue)
-  await openPr(h, github, issue)
-  const state = reduceBuild(await h.events(SLUG))
-  expect(state.target).toBeUndefined()
-  expect(github.issue(issue)?.parent).toBe(`${github.owner}/${github.name}#${group}`)
-  expect(github.issue(group)?.labels).toEqual(['autobuild'])
-  expectNoCounts(github)
 }, 30_000)
