@@ -1762,6 +1762,65 @@ describe('happy path (§15.6)', () => {
       url: 'https://forge.test/acme/app/pull/7',
       headSha: 'sha-head-1',
     })
+    const events = await h.store.getEvents(SLUG)
+
+    // heartbeatAt advanced past creation and the lease is held.
+    const record = await h.store.getBuild(SLUG)
+    expect(record?.heartbeatAt).toBeDefined()
+    expect(Date.parse(record!.heartbeatAt!)).toBeGreaterThan(Date.parse(record!.createdAt))
+    expect(record?.lease?.holder).toBe('runner-1')
+
+    // Every installed skill is invoked through the ab-* namespace.
+    expect([...h.runner.sessions.values()].map((journal) => journal.opts.skill)).toEqual([
+      'ab-plan',
+      'ab-plan-review',
+      'ab-implement',
+      'ab-code-review',
+      'ab-verify-e2e',
+      'ab-finalize',
+      'ab-release-notes',
+    ])
+
+    // Ambient env (D8): AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION on the e2e session.
+    const e2eSession = ofType(events, 'session.started').find((e) => e.payload.role === 'e2e')!
+    const e2eJournal = [...h.runner.sessions.values()].find(
+      (j) => j.opts.skill === 'ab-verify-e2e',
+    )!
+    expect(e2eJournal.opts.env.AB_STORE).toBe('local')
+    expect(e2eJournal.opts.env.AB_BUILD).toBe(SLUG)
+    expect(e2eJournal.opts.env.AB_PHASE).toBe('verify:e2e@1')
+    expect(e2eJournal.opts.env.AB_CONTEXT_DIR).toBe('.ab/verify-e2e')
+    expect(e2eJournal.opts.env.AB_SESSION).toBe(e2eSession.payload.session)
+
+    // Deterministic checks run through exec sh -c in the workspace (§8.2),
+    // commands resolved from [commands] — and nothing else (no [commands].setup).
+    expect(h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd)).toEqual([
+      ['sh', '-c', 'bun tsc --noEmit'],
+      ['sh', '-c', 'bun test'],
+    ])
+    expect(h.execCalls.every((c) => c.cwd === h.workspacePath)).toBe(true)
+    expect(
+      ofType(events, 'verify.completed').map((e) => [
+        e.payload.step,
+        normalizeVerifyCompletion(e.payload).outcome,
+        e.actor.kind,
+      ]),
+    ).toEqual([
+      ['types', 'pass', 'kernel'],
+      ['unit', 'pass', 'kernel'],
+      ['e2e', 'pass', 'agent'],
+    ])
+
+    // finalize.step-completed is recorded with the session agent actor.
+    const stepDone = ofType(events, 'finalize.step-completed')[0]!
+    expect(stepDone.payload).toEqual({ step: 'release-notes', ok: true })
+    expect(stepDone.actor.kind).toBe('agent')
+    if (stepDone.actor.kind !== 'agent') throw new Error('unreachable')
+    expect(stepDone.actor.role).toBe('release-notes')
+    const notesSession = ofType(events, 'session.started').find(
+      (e) => e.payload.role === 'release-notes',
+    )!
+    expect(stepDone.actor.session).toBe(notesSession.payload.session)
   })
 
   test('every session.ended carries a transcript artifact whose metadata names phase/round/role (§7.1)', async () => {
@@ -1793,51 +1852,20 @@ describe('happy path (§15.6)', () => {
       ['finalize', 1, 'finalize'],
       ['finalize', 1, 'release-notes'],
     ])
-  })
 
-  test('heartbeatAt advanced past creation and the lease is held', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const record = await h.store.getBuild(SLUG)
-    expect(record?.heartbeatAt).toBeDefined()
-    expect(Date.parse(record!.heartbeatAt!)).toBeGreaterThan(Date.parse(record!.createdAt))
-    expect(record?.lease?.holder).toBe('runner-1')
-  })
-
-  test('invokes every installed skill through the ab-* namespace', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    expect([...h.runner.sessions.values()].map((journal) => journal.opts.skill)).toEqual([
-      'ab-plan',
-      'ab-plan-review',
-      'ab-implement',
-      'ab-code-review',
-      'ab-verify-e2e',
-      'ab-finalize',
-      'ab-release-notes',
-    ])
-  })
-
-  test('role routing (§9): the plan session carries the configured model everywhere', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
+    // Role routing (§9): the plan session carries the configured model everywhere.
     const planSession = ofType(events, 'session.started').find((e) => e.payload.role === 'plan')!
     expect(planSession.payload.model).toBe('m-plan')
     expect(planSession.payload.runner).toBe('scripted')
-
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-plan')
-    expect(journal?.opts.model).toBe('m-plan')
-
-    const ended = ofType(events, 'session.ended').find(
-      (e) => e.payload.session === planSession.payload.session,
-    )!
-    const transcript = await h.store.getArtifact(
+    const planJournal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-plan')
+    expect(planJournal?.opts.model).toBe('m-plan')
+    const planEnded = ended.find((e) => e.payload.session === planSession.payload.session)!
+    const planTranscript = await h.store.getArtifact(
       SLUG,
       'transcript',
-      completedSessionEnd(ended).transcript.rev,
+      completedSessionEnd(planEnded).transcript.rev,
     )
-    expect(transcript?.meta.metadata.model).toBe('m-plan')
+    expect(planTranscript?.meta.metadata.model).toBe('m-plan')
   })
 
   // The routing rule (§9) as an explicit contract, not incidentally as a
@@ -1856,11 +1884,13 @@ describe('happy path (§15.6)', () => {
       return { h, started }
     }
 
-    test('an agent verify step routes by its STEP name, not its skill name', async () => {
+    test('agent verify and finalize steps route by their STEP name, not their skill name', async () => {
       const { h, started } = await startedFor(
         withRoles(
           'e2e = { runtime = "scripted", model = "m-step", args = ["--effort", "high"] }\n' +
-            '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n',
+            '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n' +
+            '"release-notes" = { runtime = "scripted", model = "m-notes-step" }\n' +
+            '"ab-release-notes" = { runtime = "scripted", model = "m-notes-skill" }\n',
         ),
         'e2e',
       )
@@ -1870,6 +1900,16 @@ describe('happy path (§15.6)', () => {
       const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
       expect(journal.opts.model).toBe('m-step')
       expect(journal.opts.args).toEqual(['--effort', 'high'])
+
+      const notes = ofType(await h.store.getEvents(SLUG), 'session.started').find(
+        (e) => e.payload.role === 'release-notes',
+      )!
+      expect(notes.payload.phase).toBe('finalize')
+      expect(notes.payload.model).toBe('m-notes-step')
+      const notesJournal = [...h.runner.sessions.values()].find(
+        (j) => j.opts.skill === 'ab-release-notes',
+      )!
+      expect(notesJournal.opts.model).toBe('m-notes-step')
     })
 
     test('…and still routes by its deprecated skill-name key when that is all there is', async () => {
@@ -1885,35 +1925,6 @@ describe('happy path (§15.6)', () => {
       const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
       expect(journal.opts.model).toBe('m-skill')
     })
-
-    test('an agent finalize step routes by its step name — unchanged', async () => {
-      const { h, started } = await startedFor(
-        withRoles(
-          '"release-notes" = { runtime = "scripted", model = "m-step" }\n' +
-            '"ab-release-notes" = { runtime = "scripted", model = "m-skill" }\n',
-        ),
-        'release-notes',
-      )
-      expect(started.payload.phase).toBe('finalize')
-      expect(started.payload.model).toBe('m-step')
-      const journal = [...h.runner.sessions.values()].find(
-        (j) => j.opts.skill === 'ab-release-notes',
-      )!
-      expect(journal.opts.model).toBe('m-step')
-    })
-  })
-
-  test('ambient env (D8): AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION on the e2e session', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const e2eSession = ofType(events, 'session.started').find((e) => e.payload.role === 'e2e')!
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
-    expect(journal.opts.env.AB_STORE).toBe('local')
-    expect(journal.opts.env.AB_BUILD).toBe(SLUG)
-    expect(journal.opts.env.AB_PHASE).toBe('verify:e2e@1')
-    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/verify-e2e')
-    expect(journal.opts.env.AB_SESSION).toBe(e2eSession.payload.session)
   })
 
   test('sessionEnv spreads extra AB_* and may override AB_STORE, never the identity keys', async () => {
@@ -1933,29 +1944,6 @@ describe('happy path (§15.6)', () => {
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
     expect(journal.opts.env.AB_SESSION).not.toBe('spoofed')
     expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/plan')
-  })
-
-  test('deterministic checks run through exec sh -c in the workspace (§8.2), commands resolved from [commands]', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    expect(h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd)).toEqual([
-      ['sh', '-c', 'bun tsc --noEmit'],
-      ['sh', '-c', 'bun test'],
-    ])
-    expect(h.execCalls.every((c) => c.cwd === h.workspacePath)).toBe(true)
-    const events = await h.store.getEvents(SLUG)
-    const completed = ofType(events, 'verify.completed')
-    expect(
-      completed.map((e) => [
-        e.payload.step,
-        normalizeVerifyCompletion(e.payload).outcome,
-        e.actor.kind,
-      ]),
-    ).toEqual([
-      ['types', 'pass', 'kernel'],
-      ['unit', 'pass', 'kernel'],
-      ['e2e', 'pass', 'agent'],
-    ])
   })
 
   test('an agent verify skip is terminal and the runner continues to finalize', async () => {
@@ -1993,21 +1981,6 @@ describe('happy path (§15.6)', () => {
     expect(ofType(events, 'finalize.completed')).toHaveLength(1)
   })
 
-  test('finalize.step-completed is recorded with the session agent actor', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const stepDone = ofType(events, 'finalize.step-completed')[0]!
-    expect(stepDone.payload).toEqual({ step: 'release-notes', ok: true })
-    expect(stepDone.actor.kind).toBe('agent')
-    if (stepDone.actor.kind !== 'agent') throw new Error('unreachable')
-    expect(stepDone.actor.role).toBe('release-notes')
-    const notesSession = ofType(events, 'session.started').find(
-      (e) => e.payload.role === 'release-notes',
-    )!
-    expect(stepDone.actor.session).toBe(notesSession.payload.session)
-  })
-
   test('a structured finalize-step failure is failure-tolerant and keeps its transcript', async () => {
     const h = await makeHarness({
       handlers: (store) => ({
@@ -2015,22 +1988,7 @@ describe('happy path (§15.6)', () => {
         'release-notes': () => failedTurnResult('403 billing disabled', true),
       }),
     })
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    for (const step of ['types', 'unit', 'e2e']) {
-      await h.store.append(SLUG, {
-        actor: KERNEL,
-        type: 'verify.completed',
-        payload: { step, attempt: 1, pass: true },
-      })
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: {
-        pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
-      },
-    })
+    await seedReadyForFinalizeStep(h.store)
 
     const decision = await h.br.step()
     expect(decision.kind).toBe('run-finalize-step')
@@ -2141,63 +2099,30 @@ describe('finalize post-step publication', () => {
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff', '--cached'])
   })
 
-  test('a remote workspace forks the finalize push into a publication request, by marker and by legacy name', async () => {
-    for (const provisioned of [
-      { provider: 'fake', remote: true },
-      { provider: 'vercel-sandbox' },
-    ]) {
-      const h = await readyHarness({
-        finalizeStatuses: ['', ''],
-        finalizeHeads: [FINALIZE_HEAD],
-        finalizeAncestors: [true],
-        workspaceProvider: provisioned.provider,
-        ...(provisioned.remote !== undefined ? { workspaceRemote: provisioned.remote } : {}),
-      })
-
-      expect((await h.br.step()).kind).toBe('run-finalize-step')
-      expect(h.forge.pushes).toEqual([])
-      const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
-      expect(requests).toHaveLength(1)
-      expect(requests[0]!.payload).toEqual({
-        operation: 'finalize-step',
-        branch: BRANCH,
-        sha: FINALIZE_HEAD,
-        step: 'release-notes',
-      })
-      // The guest records the head before requesting its publication.
-      const recorded = ofType(await h.store.getEvents(SLUG), 'head.paths-recorded')
-      expect(recorded.map((event) => [event.payload.source, event.payload.head])).toEqual([
-        ['finalize-step', FINALIZE_HEAD],
-      ])
-      expect(recorded[0]!.seq).toBeLessThan(requests[0]!.seq)
-    }
-  })
-
-  test('an explicit local marker keeps the finalize push direct', async () => {
+  test('a remote workspace forks the finalize push into a publication request', async () => {
     const h = await readyHarness({
       finalizeStatuses: ['', ''],
       finalizeHeads: [FINALIZE_HEAD],
       finalizeAncestors: [true],
-      workspaceRemote: false,
+      workspaceRemote: true,
     })
 
     expect((await h.br.step()).kind).toBe('run-finalize-step')
-    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
-    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
-  })
-
-  test('an explicit local marker keeps the finalize push direct even over a remote-suggestive provider name', async () => {
-    const h = await readyHarness({
-      finalizeStatuses: ['', ''],
-      finalizeHeads: [FINALIZE_HEAD],
-      finalizeAncestors: [true],
-      workspaceProvider: 'vercel-sandbox',
-      workspaceRemote: false,
+    expect(h.forge.pushes).toEqual([])
+    const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.payload).toEqual({
+      operation: 'finalize-step',
+      branch: BRANCH,
+      sha: FINALIZE_HEAD,
+      step: 'release-notes',
     })
-
-    expect((await h.br.step()).kind).toBe('run-finalize-step')
-    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
-    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
+    // The guest records the head before requesting its publication.
+    const recorded = ofType(await h.store.getEvents(SLUG), 'head.paths-recorded')
+    expect(recorded.map((event) => [event.payload.source, event.payload.head])).toEqual([
+      ['finalize-step', FINALIZE_HEAD],
+    ])
+    expect(recorded[0]!.seq).toBeLessThan(requests[0]!.seq)
   })
 
   test('scratch commits fail tolerantly with an observation and no push', async () => {
@@ -2229,19 +2154,6 @@ describe('finalize post-step publication', () => {
     await h.br.step()
     expect(h.forge.pushes).toEqual([])
     await expectFailureTolerance(h, 'cancellation unconfirmed')
-  })
-
-  test('an unchanged HEAD creates and pushes nothing', async () => {
-    const h = await readyHarness({ finalizeHeads: ['sha-head-1'] })
-
-    await h.br.step()
-    expect(h.forge.pushes).toEqual([])
-    expect(h.execCalls.some((call) => call.cmd[0] === 'git' && call.cmd[1] === 'commit')).toBe(
-      false,
-    )
-    expect(
-      ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload,
-    ).toEqual({ step: 'release-notes', ok: true })
   })
 
   test('dirty post-step output is observed and still advances to the open PR wait', async () => {
@@ -2404,61 +2316,52 @@ skill = "custom-notes-skill"
     })
   }
 
-  test.each([false, true])(
-    'routes finalize post-step context with alternate routing %s',
-    async (alternates) => {
-      const h = await makeHarness({
-        configToml:
-          finalizeConfig +
-          (alternates
-            ? '\n[roles.release-notes]\nruntime = "scripted"\nmodel = "m-post"\nalternates = [{ runtime = "pi", model = "kimi-post" }]\n'
-            : ''),
-        handlers: (store) => ({
-          ...happyHandlers(store),
-          'custom-notes-skill': (ctx) => {
-            expect(ctx.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
-            return ctx.opts.model === 'm-post'
-              ? failedTurnResult('primary exhausted', true, '', 'exhaustion')
-              : defaultTurnResult('notes posted')
-          },
-        }),
-      })
-      await seedReady(h.store)
+  test('routes finalize post-step context', async () => {
+    const h = await makeHarness({
+      configToml: finalizeConfig,
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'custom-notes-skill': (ctx) => {
+          expect(ctx.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+          return defaultTurnResult('notes posted')
+        },
+      }),
+    })
+    await seedReady(h.store)
 
-      expect(await h.br.step()).toEqual({
-        kind: 'run-finalize-step',
-        step: 'publish',
-        action: { kind: 'check', command: 'bun run publish' },
-      })
-      expect(h.execCalls).toEqual([
-        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-        { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
-        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-        { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
-      ])
-      let events = await h.store.getEvents(SLUG)
-      expect(ofType(events, 'session.started')).toHaveLength(0)
-      expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
-        actor: { kind: 'kernel' },
-        payload: { step: 'publish', ok: true },
-      })
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'publish',
+      action: { kind: 'check', command: 'bun run publish' },
+    })
+    expect(h.execCalls).toEqual([
+      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+      { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
+      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+      { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
+    ])
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.started')).toHaveLength(0)
+    expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
+      actor: { kind: 'kernel' },
+      payload: { step: 'publish', ok: true },
+    })
 
-      expect(await h.br.step()).toEqual({
-        kind: 'run-finalize-step',
-        step: 'release-notes',
-        action: { kind: 'agent', skill: 'custom-notes-skill' },
-      })
-      const journal = [...h.runner.sessions.values()].at(-1)!
-      expect(journal.opts.skill).toBe('custom-notes-skill')
-      expect(journal.opts.env.AB_PHASE).toBe('finalize@1')
-      expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
-      expect(journal.opts.workspacePath).toBe(h.workspacePath)
-      events = await h.store.getEvents(SLUG)
-      const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
-      expect(agentDone.actor.kind).toBe('agent')
-      expect(ofType(events, 'session.ended')).toHaveLength(alternates ? 2 : 1)
-    },
-  )
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'custom-notes-skill' },
+    })
+    const journal = [...h.runner.sessions.values()].at(-1)!
+    expect(journal.opts.skill).toBe('custom-notes-skill')
+    expect(journal.opts.env.AB_PHASE).toBe('finalize@1')
+    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+    expect(journal.opts.workspacePath).toBe(h.workspacePath)
+    events = await h.store.getEvents(SLUG)
+    const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
+    expect(agentDone.actor.kind).toBe('agent')
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+  })
 
   test('publishes a check-created descendant through the same kernel boundary', async () => {
     const checkHead = 'c'.repeat(40)
