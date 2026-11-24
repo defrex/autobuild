@@ -39,7 +39,9 @@ system.** For anything repository-specific — what verify steps run here, which
 runner a role uses, what `test` actually invokes — read the repo, not this
 document:
 
-- `autobuild.toml` at the repo root — the live configuration.
+- `autobuild.toml` at the repo root — the live configuration, layered in that
+  checkout with an uncommitted `.autobuild/local.toml` when one exists (see
+  [Local overrides](#local-overrides)).
 - `.agents/skills/ab-*/SKILL.md` — the installed skills *as this repo edited
   them*. They are editable by design, so the vendored copy may deliberately
   differ from the distribution's default described here.
@@ -486,12 +488,15 @@ The distinctions that change an administrator's answer:
   within the generation; `--once`, origin-mode and hot development paths bypass
   the launcher. `--once` remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
-  the last valid snapshot from the **main checkout**; dispatch, setup, and each
+  the last valid snapshot from the **main checkout**: its `autobuild.toml`
+  layered with `.autobuild/local.toml`, read together as one candidate before
+  every tick. Dispatch, setup, and each
   pipeline step capture it at their action boundary, without interrupting an
   agent turn or command already running. Missing, unreadable, malformed, and
   routing-invalid candidates retain that snapshot with deduplicated operator
   notice, and restoring a valid file resumes reload. Scoped phase CLI processes
-  still read the build worktree's branch-owned file. Dispatcher merge readiness,
+  still read the build worktree's branch-owned file, which never has a local
+  override layer. Dispatcher merge readiness,
   resume, and execution recovery use the runner's pinned commands, verify, and
   finalize configuration through the cycle capture's exact artifact revision.
   Lease sweeps reuse at most 128 parsed effective-config pins in a disposable
@@ -623,6 +628,33 @@ clock is therefore consulted only once that window ends, at most one scan
 interval after the recorded measurement; the dispatcher then treats it as a
 clock rollback, rescans, and resets the cache to the current clock.
 
+### Local overrides
+
+`.autobuild/local.toml`, beside `autobuild.toml` in a checkout, overrides
+personal settings for every `ab` command that reads configuration from that
+checkout, including a checkout-mode dispatcher. `ab init` ignores `.autobuild/`,
+so the file is never committed; edit it by hand.
+
+- **Allowed:** `capacity`, `ticketScanIntervalSeconds`, `[upgrade]`, `[hooks]`,
+  `[roles]`, `[accounts]`.
+- **Committed only:** every other section — store, forge, plugins, tickets,
+  orchestrator, PR, merge, policy, base branch, generated files and profiles
+  must agree across everyone sharing the store and ticket source, and the
+  build-owned `[verify]`, `[finalize]`, `[commands]` and `[workspace]` come from
+  the build's own branch. A local file that sets one is rejected with
+  `<path>: <key> can only be set in autobuild.toml`; an unknown key is
+  rejected with `<path>: "<key>" is not a configuration setting`. Both messages
+  then list the allowed sections.
+- **Merge:** tables merge key by key; scalars and arrays replace whole. A local
+  file adds or changes keys but cannot remove a committed role, hook or key.
+  Invalid local values get the `autobuild.toml` message, naming the local file.
+- **Reload:** a running dispatcher picks up edits with the same hot or
+  restart treatment per field; a rejected file keeps the last accepted
+  configuration running.
+- **Visibility:** `ab repository status` prints
+  `dispatcher local overrides (<path>): <settings>` (`localOverrides` in
+  `--json`) when the held dispatcher took settings from its local file.
+- Build worktrees, origin-mode and hosted dispatchers never read it.
 
 ### Root scalars
 

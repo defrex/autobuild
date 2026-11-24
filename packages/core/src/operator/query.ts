@@ -36,6 +36,8 @@ import {
 } from '../cli/status'
 import {
   repositoryStatusFromFacts,
+  localOverridesFromArtifact,
+  readHeldEffectiveConfig,
   readRepositoryCapacity,
   type RepositoryStatus,
 } from '../cli/repository-status'
@@ -365,8 +367,14 @@ export async function getRepositoryStatus(
     const { dispatcher } = await readDispatcherLiveness(store, repo, now)
     const facts = (await readRepositoryFacts(view, repo)).value
     const status = repositoryStatusFromFacts(repo, facts, dispatcher, now)
-    const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, now)
-    return { ...status, ...(capacity ? { capacity } : {}) }
+    const held = await readHeldEffectiveConfig(store, repo, facts, dispatcher)
+    const capacity = await readRepositoryCapacity(store, repo, facts, held, now)
+    const localOverrides = localOverridesFromArtifact(held)
+    return {
+      ...status,
+      ...(capacity ? { capacity } : {}),
+      ...(localOverrides ? { localOverrides } : {}),
+    }
   })
 }
 
