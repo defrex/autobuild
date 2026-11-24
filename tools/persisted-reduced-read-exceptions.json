@@ -63,7 +63,7 @@
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
   },
-  "packages/core/src/processes/build-runner.ts::selectPublishedBranchHead::reduce": {
+  "packages/core/src/kernel/published-branch-head.ts::selectPublishedBranchHead::reduce": {
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
   },
