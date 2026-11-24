@@ -51,13 +51,14 @@ import type {
   TicketCreateOptions,
   TicketCriteria,
   TicketDraft,
+  TicketClaimOptions,
   TicketListing,
   TicketSource,
   TicketStateCount,
   TicketStateInfo,
   TicketUpdate,
 } from '../types'
-import { TicketSourceRateLimitError } from '../types'
+import { TicketClaimBlockedError, TicketSourceRateLimitError } from '../types'
 import {
   type CreationIntent,
   effectiveLabels,
@@ -180,11 +181,16 @@ interface HydrateOptions {
   target?: string | null
   /** False for reads that never return a target (dependency states). */
   resolveTarget?: boolean
+  /** Trust a zero dependency summary instead of reading the list; only for
+   * broad listings that never feed a claim decision. */
+  trustEmptySummary?: boolean
 }
 
 interface Blockers {
   ids: string[]
   resolved: boolean
+  /** Ids that are foreign or not closed as completed. */
+  unresolved: string[]
   issues: GitHubIssue[]
 }
 
@@ -706,10 +712,21 @@ export class GitHubTicketSource implements TicketSource {
     }
   }
 
-  private async blockers(issue: GitHubIssue, remember: boolean): Promise<Blockers> {
+  /**
+   * The issue's blockers from its dependency list. GitHub's dependency
+   * summary lags the edges by seconds, so a zero summary is trusted only
+   * when `trustEmptySummary` says the caller is a broad listing that never
+   * feeds a claim decision.
+   */
+  private async blockers(
+    issue: GitHubIssue,
+    remember: boolean,
+    trustEmptySummary = false,
+  ): Promise<Blockers> {
     const summary = issue.issue_dependencies_summary
     const total = summary?.total_blocked_by ?? summary?.blocked_by
-    if (total === 0) return { ids: [], resolved: true, issues: [] }
+    if (total === 0 && trustEmptySummary)
+      return { ids: [], resolved: true, unresolved: [], issues: [] }
     const issues: GitHubIssue[] = []
     let page: string | undefined = '1'
     while (page !== undefined) {
@@ -724,14 +741,20 @@ export class GitHubTicketSource implements TicketSource {
       page = nextPage(response.link)
     }
     const ids: string[] = []
-    let resolved = true
+    const unresolved: string[] = []
     for (const blocker of issues) {
       const repo = this.repositoryOf(blocker)
       const local = repo === undefined || repo.toLowerCase() === this.fullName.toLowerCase()
-      ids.push(local ? String(blocker.number) : `${repo}#${blocker.number}`)
-      if (!local || !isClosedCompleted(blocker)) resolved = false
+      const id = local ? String(blocker.number) : `${repo}#${blocker.number}`
+      ids.push(id)
+      if (!local || !isClosedCompleted(blocker)) unresolved.push(id)
     }
-    return { ids: [...new Set(ids)], resolved, issues }
+    return {
+      ids: [...new Set(ids)],
+      resolved: unresolved.length === 0,
+      unresolved: [...new Set(unresolved)],
+      issues,
+    }
   }
 
   /** Whether `issue` is issue `number` of the configured repository. */
@@ -821,7 +844,7 @@ export class GitHubTicketSource implements TicketSource {
         }
       }
     }
-    const blockers = await this.blockers(issue, opts.remember)
+    const blockers = await this.blockers(issue, opts.remember, opts.trustEmptySummary)
     const target = await this.targetOf(issue, opts)
     return {
       ticket: this.toTicket(current, state, blockers.ids, links.links, target),
@@ -916,7 +939,7 @@ export class GitHubTicketSource implements TicketSource {
     const diagnostics: string[] = []
     for (const issue of issues) {
       opts.signal?.throwIfAborted()
-      const hydrated = await this.hydrate(issue, { remember: false })
+      const hydrated = await this.hydrate(issue, { remember: false, trustEmptySummary: true })
       diagnostics.push(...hydrated.diagnostics)
       if (!hydrated.listed && hydrated.diagnostics.length === 0)
         diagnostics.push(`github #${issue.number}: has no readable state`)
@@ -974,6 +997,7 @@ export class GitHubTicketSource implements TicketSource {
       await this.listIssues('listAll', { state: 'all' }, false),
       () => true,
       false,
+      true,
     )
   }
 
@@ -1010,6 +1034,7 @@ export class GitHubTicketSource implements TicketSource {
         await listIssues('list', { state: 'all', ...labelQuery() }, false),
         () => true,
         false,
+        true,
       )
     const wanted = criteria.state
     const holds = (ticket: Ticket) => holdsState(ticket.state, wanted)
@@ -1021,15 +1046,18 @@ export class GitHubTicketSource implements TicketSource {
         await listIssues('list', { state: 'closed', ...labelQuery() }, false),
         holds,
         false,
+        true,
       )
     if (holdsState(wanted, this.lifecycle.triage))
       return this.listing(
         await listIssues('list', { state: 'open', ...labelQuery() }, false),
         holds,
         false,
+        true,
       )
     // A label state: the ready listing is the recurring dispatcher read, so
-    // it alone is remembered, oldest first for a stable order.
+    // it alone is remembered, oldest first for a stable order. It alone also
+    // confirms a zero dependency summary, since it feeds claim decisions.
     const recurring = holdsState(wanted, this.lifecycle.ready)
     const listing = await this.listing(
       await listIssues(
@@ -1044,6 +1072,7 @@ export class GitHubTicketSource implements TicketSource {
       ),
       holds,
       recurring,
+      !recurring,
     )
     if (!recurring || login === undefined) return listing
     return {
@@ -1120,10 +1149,11 @@ export class GitHubTicketSource implements TicketSource {
     issues: GitHubIssue[],
     keep: (ticket: Ticket) => boolean,
     remember: boolean,
+    trustEmptySummary: boolean,
   ): Promise<TicketListing> {
     const parents = new Map(issues.map((issue) => [issue.number, issue]))
     const parentReads = new Map<number, Promise<GitHubIssue | null>>()
-    return this.collect(issues, keep, { remember, parents, parentReads })
+    return this.collect(issues, keep, { remember, parents, parentReads, trustEmptySummary })
   }
 
   private async collect(
@@ -1222,11 +1252,14 @@ export class GitHubTicketSource implements TicketSource {
 
   /**
    * Claim-before-launch (SPEC §12): a fresh, unconditional read re-checks the
-   * issue is open, in the ready state and carries every ready label; then the
-   * ready label becomes the claimed one. The pair is not transactional, which
-   * the single-writer dispatcher (§12) makes acceptable.
+   * issue is open, in the ready state and carries every ready label; then a
+   * fresh, unconditional read of the dependency list refuses an unresolved
+   * blocker the caller's dependency check did not evaluate, because GitHub's
+   * dependency summary lags its edges. Only then does the ready label become
+   * the claimed one. The pair is not transactional, which the single-writer
+   * dispatcher (§12) makes acceptable.
    */
-  async claim(id: string): Promise<boolean> {
+  async claim(id: string, opts: TicketClaimOptions = {}): Promise<boolean> {
     const number = parseIssueId(id)
     if (number === null) return false
     const read = await this.readIssue('claim', number, false)
@@ -1242,6 +1275,10 @@ export class GitHubTicketSource implements TicketSource {
       if (verdict === 'stale') await this.heal(issue)
       if (verdict !== 'fresh') return false
     }
+    const blockers = await this.blockers(issue, false)
+    const evaluated = new Set(opts.blockedBy ?? [])
+    const added = blockers.unresolved.filter((blocker) => !evaluated.has(blocker))
+    if (added.length > 0) throw new TicketClaimBlockedError(this.name, String(number), added)
     await this.ensureLabels('claim', [stateLabel(this.lifecycle.doing)])
     await this.patchIssue('claim', number, {
       labels: [
@@ -1373,8 +1410,12 @@ export class GitHubTicketSource implements TicketSource {
       if (adopted !== undefined) return this.adopt(adopted, blockedBy, assignees, labels)
     }
     // A closing create state opens the issue without a state label and
-    // closes it as a follow-up.
-    const initial = write.labels
+    // closes it as a follow-up. A ready-bound create with blockers opens
+    // staged in triage and moves to ready only after every blocker is
+    // recorded, so no dispatcher can claim it unblocked.
+    const initial = this.stagesCreate(state, blockedBy)
+      ? write.labels.filter((name) => !isStateLabel(name))
+      : write.labels
     await this.ensureLabels('create', initial)
     const intent: CreationIntent = {
       state,
@@ -1497,10 +1538,17 @@ export class GitHubTicketSource implements TicketSource {
     return this.fresh('create', issue.number)
   }
 
+  /** Whether a create into `state` with `blockedBy` opens staged in triage:
+   * the ready state is the one a dispatcher claims from. */
+  private stagesCreate(state: string, blockedBy: readonly string[]): boolean {
+    return blockedBy.length > 0 && holdsState(state, this.lifecycle.ready)
+  }
+
   /**
    * The create's follow-ups, shared by a first attempt and a recovery so both
    * run the same idempotent steps: the closure, any missing link labels, the
-   * blockers, then the marker rewritten to its plain (complete) form.
+   * target, the blockers, a staged create's deferred ready state, then the
+   * marker rewritten to its plain (complete) form.
    */
   private async finishCreate(
     issue: GitHubIssue,
@@ -1534,8 +1582,13 @@ export class GitHubTicketSource implements TicketSource {
     }
     if (intent.target !== undefined)
       await this.recordTarget(current, intent.target, adopting, key !== undefined)
+    const staged = this.stagesCreate(intent.state, intent.blockedBy)
     if (intent.blockedBy.length > 0)
-      await this.recordBlockers(current, intent.blockedBy, adopting, key !== undefined)
+      await this.recordBlockers(current, intent.blockedBy, adopting, key !== undefined, staged)
+    // A recovery publishes only an issue still staged (open, no state label);
+    // one a person has moved since is left alone.
+    if (staged && current.state === 'open' && stateLabelsOf(current).length === 0)
+      await this.publishStaged(current, intent.state, key !== undefined)
     if (key !== undefined) {
       const { body } = splitCreationMarker(current.body)
       await this.patchIssue('create', current.number, { body: encodeCreationMarker(body, key) })
@@ -1554,14 +1607,38 @@ export class GitHubTicketSource implements TicketSource {
     return data.repository?.issue?.timelineItems.totalCount ?? 0
   }
 
+  /** Move a staged create into its intended ready state once every blocker
+   * is recorded. A failure says the issue exists, with its blockers, and was
+   * left in triage. */
+  private async publishStaged(
+    issue: GitHubIssue,
+    state: string,
+    retryableByKey: boolean,
+  ): Promise<void> {
+    try {
+      await this.applyState('create', issue, state)
+    } catch (error) {
+      throw new Error(
+        `github create: ticket "${issue.number}" ${retryableByKey ? 'already exists' : 'was created'} at ${issue.html_url} ` +
+          `and every blocker was recorded, but it was left in ${this.lifecycle.triage} instead of ${state}. ` +
+          (retryableByKey
+            ? 'Retry with the same creation key; GitHub will adopt this ticket and finish only what is missing. '
+            : `Do not rerun ticket creation; move it with \`ab ticket move ${issue.number} ${state}\`. `) +
+          `Underlying failure: ${message(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
   /** Record blockers on a created issue. Every failure says the issue exists,
    * and which blockers were and were not recorded, so a retry adopts it
-   * rather than duplicating it. */
+   * rather than duplicating it. A staged create says it was left in triage. */
   private async recordBlockers(
     issue: GitHubIssue,
     requested: string[],
     readExisting: boolean,
     retryableByKey: boolean,
+    staged = false,
   ): Promise<void> {
     const recorded: string[] = []
     try {
@@ -1572,17 +1649,30 @@ export class GitHubTicketSource implements TicketSource {
         recorded.push(blocker)
       }
     } catch (error) {
-      if (error instanceof TicketSourceRateLimitError && recorded.length === 0 && !retryableByKey)
+      // A staged create always says the issue exists: it is not where the
+      // caller asked for it.
+      if (
+        error instanceof TicketSourceRateLimitError &&
+        recorded.length === 0 &&
+        !retryableByKey &&
+        staged === false
+      )
         throw error
       const unrecorded = requested.filter((id) => !recorded.includes(id))
+      const ready = staged ? this.lifecycle.ready : undefined
       throw new Error(
         `github create: ticket "${issue.number}" ${retryableByKey ? 'already exists' : 'was created'} at ${issue.html_url}, ` +
           'but its blockers were not all recorded. ' +
           `Blockers recorded: ${blockerList(requested.filter((id) => recorded.includes(id)))}. ` +
           `Blockers not recorded: ${blockerList(unrecorded)}. ` +
+          (ready !== undefined
+            ? `It was left in ${this.lifecycle.triage} instead of ${ready} so no dispatcher claims it. `
+            : '') +
           (retryableByKey
             ? 'Retry with the same creation key; GitHub will adopt this ticket and finish only what is missing. '
-            : 'Do not rerun ticket creation; repair the blockers on the existing ticket. ') +
+            : ready !== undefined
+              ? `Do not rerun ticket creation; repair the blockers on the existing ticket, then move it with \`ab ticket move ${issue.number} ${ready}\`. `
+              : 'Do not rerun ticket creation; repair the blockers on the existing ticket. ') +
           `Underlying failure: ${message(error)}`,
         { cause: error },
       )
