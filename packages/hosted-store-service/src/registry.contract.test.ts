@@ -250,6 +250,7 @@ describe('agent tool registry contract', () => {
       const described = tool.description.length > 0 && tool.outputDescription.length > 0
       expect(described).toBe(true)
     }
+    expect(OPERATOR_TOOL_ANNOTATIONS['tickets.asset.remove'].destructiveHint).toBe(true)
   })
 
   test('builds.list matches the builds route for every scope', async () => {
@@ -788,6 +789,15 @@ describe('agent tool registry contract', () => {
       const ticket = await originalGet(id)
       return ticket ? { ...ticket, comments } : null
     }
+    await world.store.putTicketAsset(repo, 'AUT-1', {
+      kind: 'design',
+      name: 'canvas',
+      layout: 'tree',
+      entries: [
+        { type: 'file', path: 'index.html', content: new TextEncoder().encode('<p>') },
+        { type: 'dir', path: 'img' },
+      ],
+    })
     const route = await api(
       createOperatorServer({
         projects: testProjects([repo]),
@@ -800,7 +810,161 @@ describe('agent tool registry contract', () => {
     const tool = await toolFor(world)('tickets.get', { repo, id: 'AUT-1' })
     expectEqual(tool, route.body)
     expect((tool as { ticket: { comments: unknown } }).ticket.comments).toEqual(comments)
+    expectEqual((tool as { assets: unknown }).assets, [
+      { kind: 'design', name: 'canvas', revision: 0, size: 3, layout: 'tree', fileCount: 1 },
+    ])
     expectJsonClean(tool)
+  })
+
+  test('ticket asset tools round-trip exact bytes and follow the CLI rules', async () => {
+    const world = await seedWorld()
+    const tool = toolFor(world)
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
+    const every = Uint8Array.from({ length: 256 }, (_, i) => i)
+    const target = { repo, id: 'AUT-1' }
+    const fileAsset = (content: Uint8Array) => ({
+      ...target,
+      kind: 'design',
+      name: 'bytes.bin',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'bytes.bin', contentBase64: b64(content) }],
+    })
+    const attached = (await tool('tickets.asset.attach', fileAsset(every))) as {
+      asset: { revision: number }
+      replaced: boolean
+      activeBuilds: string[]
+    }
+    expect(attached.replaced).toBe(false)
+    // The seeded demo build holds AUT-1 open.
+    expect(attached.activeBuilds).toEqual(['demo'])
+    expectJsonClean(attached)
+    expect(world.source.comments.at(-1)?.body).toStartWith('Ticket asset attached')
+    const got = (await tool('tickets.asset.get', {
+      ...target,
+      kind: 'design',
+      name: 'bytes.bin',
+    })) as { entries: { contentBase64: string; size: number }[] }
+    expectJsonClean(got)
+    expect(got.entries[0]?.size).toBe(256)
+    expectEqual(new Uint8Array(Buffer.from(got.entries[0]!.contentBase64, 'base64')), every)
+
+    const nested = Uint8Array.from([0, 255, 10, 13])
+    const tree = [
+      { type: 'file', path: 'index.html', contentBase64: b64(new TextEncoder().encode('<p>')) },
+      { type: 'dir', path: 'empty' },
+      { type: 'file', path: 'img/a.bin', contentBase64: b64(nested) },
+      { type: 'file', path: 'zero', contentBase64: '' },
+    ]
+    await tool('tickets.asset.attach', {
+      ...target,
+      kind: 'design',
+      name: 'site',
+      layout: 'tree',
+      entries: tree,
+    })
+    const site = (await tool('tickets.asset.get', { ...target, kind: 'design', name: 'site' })) as {
+      entries: Record<string, unknown>[]
+    }
+    expectEqual(
+      site.entries.map(({ size: _size, ...entry }) => entry),
+      tree,
+    )
+
+    const again = (await tool('tickets.asset.attach', fileAsset(nested))) as {
+      asset: { revision: number }
+      replaced: boolean
+    }
+    expect(again.replaced).toBe(true)
+    expect(again.asset.revision).toBeGreaterThan(attached.asset.revision)
+    expect(world.source.comments.at(-1)?.body).toStartWith('Ticket asset replaced')
+    const first = (await tool('tickets.asset.get', {
+      ...target,
+      kind: 'design',
+      name: 'bytes.bin',
+      rev: attached.asset.revision,
+    })) as { entries: { contentBase64: string }[] }
+    expect(first.entries[0]?.contentBase64).toBe(b64(every))
+    const listed = async () =>
+      ((await tool('tickets.get', target)) as { assets: { name: string }[] }).assets.map(
+        (asset) => asset.name,
+      )
+    expect(await listed()).toEqual(['bytes.bin', 'site'])
+
+    const removed = (await tool('tickets.asset.remove', {
+      ...target,
+      kind: 'design',
+      name: 'bytes.bin',
+    })) as { removed: { revision: number } }
+    expect(removed.removed.revision).toBe(again.asset.revision)
+    expect(world.source.comments.at(-1)?.body).toStartWith('Ticket asset removed')
+    expect(await listed()).toEqual(['site'])
+    const gone = { ...target, kind: 'design', name: 'bytes.bin' }
+    expect((await toolFailure(() => tool('tickets.asset.get', gone))).kind).toBe('not-found')
+    expect(
+      (
+        (await tool('tickets.asset.get', { ...gone, rev: attached.asset.revision })) as {
+          entries: unknown[]
+        }
+      ).entries,
+    ).toHaveLength(1)
+    expect((await toolFailure(() => tool('tickets.asset.remove', gone))).kind).toBe('not-found')
+
+    const unknown = { ...fileAsset(every), id: 'AUT-404' }
+    expect((await toolFailure(() => tool('tickets.asset.attach', unknown))).kind).toBe('not-found')
+    expect(await world.store.listTicketAssets(repo, 'AUT-404')).toEqual([])
+  })
+
+  test('the attach schema accepts base64 up to the default 25 MiB asset limit', () => {
+    const schema = TOOLS.find((tool) => tool.name === 'tickets.asset.attach')!.inputSchema
+    const input = (contentBase64: string) => ({
+      repo,
+      id: 'AUT-1',
+      kind: 'design',
+      name: 'big.bin',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'big.bin', contentBase64 }],
+    })
+    const full = Buffer.alloc(25 * 1024 * 1024, 0xa5).toString('base64')
+    for (const contentBase64 of [Buffer.alloc(7_500_000).toString('base64'), full])
+      expect(schema.safeParse(input(contentBase64)).success).toBe(true)
+    // A stray character deep inside a large payload is still refused.
+    expect(
+      schema.safeParse(input(`${full.slice(0, 4_000_000)}*${full.slice(4_000_001)}`)).success,
+    ).toBe(false)
+  })
+
+  test('asset validation failures are typed, not internal', async () => {
+    const world = await seedWorld()
+    const tool = toolFor(world)
+    const file = (path: string) => ({ type: 'file', path, contentBase64: 'AA==' })
+    const invalid = [
+      { kind: 'a/b', name: 'x', layout: 'file', entries: [file('x')] },
+      { kind: 'design', name: 'x', layout: 'file', entries: [file('a'), file('b')] },
+      { kind: 'design', name: 'x', layout: 'tree', entries: [file('../x')] },
+      { kind: 'design', name: 'x', layout: 'tree', entries: [file('a'), file('a')] },
+    ]
+    for (const input of invalid) {
+      const body = await toolFailure(() =>
+        tool('tickets.asset.attach', { repo, id: 'AUT-1', ...input }),
+      )
+      expect(body.kind).toBe('validation')
+      expect(body.code).toBe('ticket-asset-invalid')
+    }
+    world.store.ticketAssetLimits = async () => ({ maxBytes: 4, maxEntries: 1000 })
+    const over = await toolFailure(() =>
+      tool('tickets.asset.attach', {
+        repo,
+        id: 'AUT-1',
+        kind: 'design',
+        name: 'big',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'big', contentBase64: 'AAAAAAA=' }],
+      }),
+    )
+    expect(over).toMatchObject({ kind: 'validation', code: 'ticket-asset-invalid' })
+    expect(String(over.error)).toContain('4 bytes')
+    expect(await world.store.listTicketAssets(repo, 'AUT-1')).toEqual([])
+    expect(world.source.comments).toEqual([])
   })
 
   test('tickets.create matches the create route', async () => {
@@ -1274,6 +1438,22 @@ describe('agent tool registry contract', () => {
       ['tickets.block', { repo, id: 'AUT-1', blockerIds: [] }],
       ['tickets.update', { repo, id: 'AUT-1' }],
       ['notes.write', { repo }],
+      ...['@@@', 'AAA', 'AA=A'].map((contentBase64): [string, unknown] => [
+        'tickets.asset.attach',
+        {
+          repo,
+          id: 'AUT-1',
+          kind: 'design',
+          name: 'x',
+          layout: 'file',
+          entries: [{ type: 'file', path: 'x', contentBase64 }],
+        },
+      ]),
+      [
+        'tickets.asset.attach',
+        { repo, id: 'AUT-1', kind: 'design', name: 'x', layout: 'zip', entries: [] },
+      ],
+      ['tickets.asset.get', { repo, id: 'AUT-1', kind: 'design', name: 'x', rev: -1 }],
     ]
     const buildsBefore = (await world.store.getEvents('demo')).length
     const ticketsBefore = world.source.updates.length + world.source.blockerAdds.length
@@ -1319,6 +1499,15 @@ describe('agent tool registry contract', () => {
       'tickets.unblock': { repo, id: 'AUT-1', blockerIds: ['AUT-2'] },
       'tickets.move': { repo, id: 'AUT-2', state: 'Todo' },
       'tickets.start': { repo, id: 'AUT-2' },
+      'tickets.asset.attach': {
+        repo,
+        id: 'AUT-1',
+        kind: 'design',
+        name: 'x',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'x', contentBase64: '' }],
+      },
+      'tickets.asset.remove': { repo, id: 'AUT-1', kind: 'design', name: 'reference' },
       'notes.write': { repo, document: 'notes' },
       // Sandbox tools (absent from this registry without a backend) are
       // excluded by name so the unknown-tool refusal above is not hit first.
@@ -1345,8 +1534,15 @@ describe('agent tool registry contract', () => {
       'tickets.state.create': { repo, name: 'icebox' },
       'tickets.list': { repo },
       'tickets.get': { repo, id: 'AUT-1' },
+      'tickets.asset.get': { repo, id: 'AUT-1', kind: 'design', name: 'reference' },
       'notes.read': { repo },
     }
+    await world.store.putTicketAsset(repo, 'AUT-1', {
+      kind: 'design',
+      name: 'reference',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'reference', content: new Uint8Array([1]) }],
+    })
     for (const name of reads) {
       const outcome = await registry.call(name, readInputs[name]).then(
         () => 'ok',

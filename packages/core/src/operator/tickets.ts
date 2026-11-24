@@ -34,6 +34,7 @@ import type {
 import type { BuildStore } from '../store/types'
 import { ticketLifecycle, type TicketMoveRole } from '../ports/tickets/lifecycle'
 import { effectiveConfig } from './query'
+import { listOperatorTicketAssets, type OperatorTicketAsset } from './ticket-asset-list'
 
 export interface OperatorTicketContext {
   repo: string
@@ -81,6 +82,10 @@ export interface OperatorTicketDetail {
   blockers: DependencyState[]
   build: OperatorTicketBuild | null
 }
+
+/** `tickets.get` and the ticket detail route: the detail plus the ticket's
+ * current assets, listed as `ab ticket show --json` lists them. */
+export type OperatorTicketView = OperatorTicketDetail & { assets: OperatorTicketAsset[] }
 
 function contextFor(config: Config, repo: string): OperatorTicketContext {
   const tickets = config.tickets
@@ -241,7 +246,7 @@ export async function getOperatorTicket(opts: {
   repo: string
   backend: OperatorTicketBackend
   id: string
-}): Promise<OperatorTicketDetail> {
+}): Promise<OperatorTicketView> {
   const { source, context } = await openOperatorTickets(opts)
   const ticket = await requireTicket(source, opts.id)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
@@ -255,6 +260,8 @@ export async function getOperatorTicket(opts: {
       source,
       context.tickets.source,
     ),
+    // Keyed by the id as given, as `ab ticket show` keys it.
+    assets: await listOperatorTicketAssets(opts.store, source, opts.repo, opts.id),
   }
 }
 

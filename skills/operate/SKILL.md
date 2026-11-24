@@ -518,7 +518,8 @@ that does the job, and say what you are doing before you do it:
   `revision` (`{origin: "body" | "ticket", body}`, destructive — it replaces the
   spec), or both, exactly as `ab reopen` does. Feedback returns to implement; a
   revision restarts from plan; consent is revoked and the PR is kept.
-- `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
+- `tickets.list`, `tickets.get` — read the ticket queue and one ticket, with
+  its current assets. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
   from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
@@ -541,6 +542,9 @@ that does the job, and say what you are doing before you do it:
   intake is off, as `ab start` does, with optional `priority` (`manual` by
   default, `urgent` or `normal`, chosen as for `ab start`); `cancel: true`
   withdraws a pending request. The outcome arrives as `ticket.start-settled` in `repository.events`.
+- `tickets.asset.attach`, `tickets.asset.get`, `tickets.asset.remove` — attach,
+  read and remove ticket assets with base64 bytes, as `ab ticket attach`,
+  `ab ticket asset get` and `ab ticket asset rm` do. `remove` is destructive.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
   human-readable notes about this repository's operation. Write what the
   next operator or human will need; explicitly read it before acting on
