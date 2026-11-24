@@ -105,7 +105,9 @@ export {
   getOperatorTicket,
   listOperatorTickets,
   mutateOperatorTicket,
+  searchOperatorTickets,
 } from './tickets'
+export { TicketSearchCursorInvalid, TicketSearchUnsupported } from '../ports/tickets/search'
 export { cancelTicketStart, controlTicketStart, requestTicketStart } from './ticket-start'
 export type { TicketStartCancelled, TicketStartRequested } from './ticket-start'
 export type { OperatorSandboxService } from './sandbox'

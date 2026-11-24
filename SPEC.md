@@ -100,6 +100,7 @@ Interfaces to the world, each with swappable adapters:
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
 
 Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
+Ticket sources may optionally provide `search(query)`: title/body term matching with state/label filters, returning compact hits and an opaque cursor. Callers refuse sources without it and never fall back to listing.
 Integration-tree sources may optionally provide `listTargeting(nodeId)`, every ticket targeting one node in every state, equal to the exhaustive listing filtered by target. Integration observation uses it when present, otherwise `listAll`.
 
 #### 3.2.1 In-process adapter plugins
@@ -2035,14 +2036,15 @@ implementer:  ab context   (findings.json now materialized) → …
 ### 8.8 Outer-loop namespace
 
 Human/pre-build ticket grooming uses one configured-source namespace
-(`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
+(`ab ticket create|update|block|unblock|list|search|show|move`, plus the ticket-asset
 forms below). Migration adds `ab ticket export <dir>` and
 `ab ticket import <dir> [--states <state,…>]`,
 plus `ab ticket migration record <dir>`
 (see [Ticket source migration](#ticket-source-migration)). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
 mutation path. The CRUD subcommands accept `--json` and then writes exactly one
-bare value: `list` emits `Ticket[]`; every other form emits the complete
+bare value: `list` emits `Ticket[]`; `search` emits
+`{tickets, cursor?, diagnostics}`; every other form emits the complete
 created, read, or post-mutation `Ticket`. Human-readable confirmations are not
 a data format and callers must not parse ids from them.
 

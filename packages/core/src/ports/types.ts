@@ -136,6 +136,41 @@ export interface TicketPageListing extends TicketListing {
   total: number
 }
 
+/** One `TicketSource.search` request. */
+export interface TicketSearchQuery {
+  /** Nonblank free text; every whitespace-separated term must occur
+   * (case-insensitively) in the title or body. Provider-backed sources may apply
+   * their own word matching. */
+  text: string
+  /** Only tickets in this state, resolved as `listReady` resolves it. Absent = every state. */
+  state?: string
+  /** Only tickets carrying every named label. */
+  labels?: string[]
+  /** Positive page size. Callers pass it already bounded. */
+  limit: number
+  /** Opaque continuation from a previous page of the same text and filters. */
+  cursor?: string
+}
+
+/** A compact search match: answered from the search read itself, never by a
+ * follow-up read per hit. */
+export interface TicketSearchHit {
+  id: string
+  title: string
+  state?: string
+  labels: string[]
+  kind: TicketKind
+  target?: string
+}
+
+export interface TicketSearchPage {
+  tickets: TicketSearchHit[]
+  /** Next page's cursor; absent on the last page. */
+  cursor?: string
+  /** Same meaning as TicketListing.diagnostics (records excluded as invalid). */
+  diagnostics: string[]
+}
+
 /** A partial source scan. Diagnostics name source records that were excluded
  * from eligibility; infrastructure failures and source-wide invariants still
  * reject `listReady` rather than appearing here. */
@@ -396,6 +431,17 @@ export interface TicketSource {
    * and failures match listReady; a failure must not trigger a full-read fallback.
    * listReady and listAll remain exhaustive. */
   listPage?(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing>
+  /** Optional text search over every lifecycle state (or `query.state`).
+   * A ticket matches when every whitespace-separated term of `query.text`
+   * occurs, case-insensitively, in its title or body (each term may hit either
+   * field); provider-backed sources may apply their provider's word matching.
+   * `labels` are ANDed. Ordering is source-defined and stable across pages;
+   * `cursor` is opaque, and a malformed or foreign one rejects with
+   * `TicketSearchCursorInvalid`. Hits come from the search read itself — no
+   * follow-up read per result. A failure never falls back to `listAll`.
+   * Sources that cannot search omit the method; callers then refuse with
+   * `TicketSearchUnsupported` before any read. */
+  search?(query: TicketSearchQuery): Promise<TicketSearchPage>
   get(id: string): Promise<Ticket | null>
   /** Claim-before-launch (§12): acquires nonterminal work and returns true.
    * Returns false for an unknown, already-claimed/contested, or terminal ticket.

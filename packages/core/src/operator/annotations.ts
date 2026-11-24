@@ -175,6 +175,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: true,
     approval: 'never',
   },
+  'tickets.search': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
   'tickets.get': {
     readOnlyHint: true,
     destructiveHint: false,

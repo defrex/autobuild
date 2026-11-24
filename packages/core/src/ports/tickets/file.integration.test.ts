@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -485,6 +485,57 @@ describe('FileTicketSource', () => {
   })
 
   // ── listReady filtering ────────────────────────────────────────────────────
+
+  test('search does one tracker scan and no per-result reads', async () => {
+    await seedTicket('file-1', { state: 'ready', body: 'needle one' })
+    await seedTicket('file-2', { state: 'done', body: 'NEEDLE two' })
+    await seedTicket('file-3', { state: 'triage', body: 'needle three' })
+    await seedTicket('file-4', { state: 'ready', body: 'haystack' })
+    await seedTicket('file-5', { state: 'icebox', body: 'haystack' })
+    const tickets = source()
+    // Private TS methods are ordinary prototype methods, so they can be spied.
+    const internals = tickets as unknown as {
+      scan(): Promise<unknown>
+      loadAt(found: unknown): Promise<unknown>
+      locate(id: string): Promise<unknown>
+    }
+    const spies = {
+      scan: spyOn(internals, 'scan'),
+      loadAt: spyOn(internals, 'loadAt'),
+      locate: spyOn(internals, 'locate'),
+      get: spyOn(tickets, 'get'),
+      fetch: spyOn(globalThis, 'fetch'),
+    }
+    try {
+      const first = await tickets.search({ text: 'needle', limit: 2 })
+      expect(first.tickets).toHaveLength(2)
+      expect(first.cursor).toBeDefined()
+      expect(spies.scan).toHaveBeenCalledTimes(1)
+      expect(spies.loadAt).toHaveBeenCalledTimes(5)
+      expect(spies.locate).not.toHaveBeenCalled()
+      expect(spies.get).not.toHaveBeenCalled()
+      expect(spies.fetch).not.toHaveBeenCalled()
+
+      for (const spy of Object.values(spies)) spy.mockClear()
+      const rest = await tickets.search({ text: 'needle', limit: 2, cursor: first.cursor! })
+      expect(rest.cursor).toBeUndefined()
+      expect([...first.tickets, ...rest.tickets].map((hit) => hit.id).sort()).toEqual([
+        'file-1',
+        'file-2',
+        'file-3',
+      ])
+      expect(spies.scan).toHaveBeenCalledTimes(1)
+    } finally {
+      for (const spy of Object.values(spies)) spy.mockRestore()
+    }
+
+    expect((await tickets.search({ text: 'needle', state: 'READY', limit: 10 })).tickets).toEqual([
+      { id: 'file-1', title: 'Ticket file-1', state: 'ready', labels: [], kind: 'work' },
+    ])
+    await expect(tickets.search({ text: 'needle', state: 'Backlog', limit: 10 })).rejects.toThrow(
+      'unknown state "Backlog"',
+    )
+  })
 
   test('listReady requires every requested label and matches state', async () => {
     await seedTicket('file-1', {

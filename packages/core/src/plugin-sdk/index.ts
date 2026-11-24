@@ -168,6 +168,7 @@ export {
   withoutUnsupportedPriority,
   urgentFirst,
 } from '../ports/tickets/priority'
+export { TicketSearchCursorInvalid, TicketSearchUnsupported } from '../ports/tickets/search'
 export {
   TicketAssigneesUnsupported,
   refuseUnsupportedAssignees,
