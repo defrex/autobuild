@@ -6248,151 +6248,160 @@ describe('Dispatcher lease sweep', () => {
         expect(h.launches).toHaveLength(lease === 'live' ? 0 : 1)
       })
 
-  for (const operation of ['restack', 'reconcile'] as const)
-    for (const exhausted of [false, true])
-      for (const command of ['abort', 'pause', 'resume'] as const)
-        test(`${operation} ${exhausted ? 'exhaustion' : 'backoff'} permits swept runner to acknowledge ${command}`, async () => {
-          const runnerToml = '[roles.default]\nruntime = "scripted"\n'
-          const h = harness({
-            toml: runnerToml,
-            onLaunch: async (slug, store) => {
-              const { BuildRunner } = await import('./build-runner')
-              const { ScriptedAgentRunner } = await import('../ports/runner/fake')
-              const runner = new BuildRunner({
-                store: store.scopeBuild(slug),
-                config: parseConfig(withReadyState(runnerToml)),
-                runtimes: {
-                  scripted: {
-                    runner: new ScriptedAgentRunner({
-                      script: async () => {
-                        throw new Error('control acknowledgement must not start an agent')
-                      },
-                    }),
-                    servesModels: [],
+  // Pairwise cover of operation × retry state × command. The sweep derives the
+  // retry intent from the operation and skips the publication retry gate
+  // whenever a command is pending; only command × exhausted reaches the
+  // acknowledged status, so no path combines operation with command kind.
+  for (const [operation, exhausted, command] of [
+    ['restack', false, 'abort'],
+    ['reconcile', true, 'abort'],
+    ['restack', true, 'pause'],
+    ['reconcile', false, 'pause'],
+    ['restack', false, 'resume'],
+    ['reconcile', true, 'resume'],
+  ] as const)
+    test(`${operation} ${exhausted ? 'exhaustion' : 'backoff'} permits swept runner to acknowledge ${command}`, async () => {
+      const runnerToml = '[roles.default]\nruntime = "scripted"\n'
+      const h = harness({
+        toml: runnerToml,
+        onLaunch: async (slug, store) => {
+          const { BuildRunner } = await import('./build-runner')
+          const { ScriptedAgentRunner } = await import('../ports/runner/fake')
+          const runner = new BuildRunner({
+            store: store.scopeBuild(slug),
+            config: parseConfig(withReadyState(runnerToml)),
+            runtimes: {
+              scripted: {
+                runner: new ScriptedAgentRunner({
+                  script: async () => {
+                    throw new Error('control acknowledgement must not start an agent')
                   },
-                },
-                workspacePath: `/ws/ab/${slug}`,
-                branch: `ab/${slug}`,
-                slug,
-                exec: async () => {
-                  throw new Error('control acknowledgement must not execute Git')
-                },
-                forge: h.forge,
-                ids: sequentialIds(),
-                clock: h.clock,
-                instance: 'replacement',
-                host: 'test',
-              })
-              expect(await runner.step()).toEqual({ kind: 'acknowledge', command })
+                }),
+                servesModels: [],
+              },
             },
-          })
-          const slug = await seedBuild(h)
-          const {
-            trigger: _trigger,
-            cycle: _cycle,
-            observation: _observation,
-            message: _message,
-            ...rewrite
-          } = {
-            ...leafTransaction,
+            workspacePath: `/ws/ab/${slug}`,
             branch: `ab/${slug}`,
-          }
-          if (operation === 'restack') {
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'restack.prepared',
-              payload: { ...leafTransaction, branch: `ab/${slug}` },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'restack.publish-intended',
-              payload: { ...leafTransaction, branch: `ab/${slug}`, headSha: 'e'.repeat(40) },
-            })
-          } else {
-            const transaction = { ...rewrite, attempt: 1 }
-            const artifact = { kind: 'reconcile-notes', rev: 0 }
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.started',
-              payload: { attempt: 1, baseSha: transaction.targetBase },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.prepared',
-              payload: transaction,
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'reconcile.publish-intended',
-              payload: { ...transaction, headSha: 'e'.repeat(40), conflicted: true, artifact },
-            })
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.requested',
-              payload: {
-                operation,
-                branch: transaction.branch,
-                sha: 'e'.repeat(40),
-                artifact,
-                rewrite: { ...transaction, conflicted: true },
-              },
-            })
-          }
-          if (command === 'resume')
-            await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
-          const retry = { operation, rewriteId: rewrite.id, round: 1, anchor: 0, error: 'HTTP 503' }
-          if (exhausted)
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.retry-exhausted',
-              payload: { ...retry, failure: 7 },
-            })
-          else
-            await h.store.append(slug, {
-              actor: KERNEL,
-              type: 'publication.retry-scheduled',
-              payload: {
-                ...retry,
-                failure: 1,
-                retryAt: new Date(h.clock().getTime() + 300_000).toISOString(),
-              },
-            })
-          await h.store.claimLease(slug, 'old-runner', 1000)
-          h.clock.advance(2000)
-          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
-          expect(h.launches).toEqual([])
-          await h.store.append(slug, {
-            actor: humanActor('operator'),
-            type: `build.${command}-requested`,
-            payload: {},
+            slug,
+            exec: async () => {
+              throw new Error('control acknowledgement must not execute Git')
+            },
+            forge: h.forge,
+            ids: sequentialIds(),
+            clock: h.clock,
+            instance: 'replacement',
+            host: 'test',
           })
-          expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
-          expect(h.launches).toEqual([slug])
-          const events = await h.store.getEvents(slug)
-          const state = reduceBuild(events)
-          expect(state.pendingCommands).toEqual([])
-          expect(state.status).toBe(
-            command === 'abort'
-              ? 'aborted'
-              : command === 'pause'
-                ? 'paused'
-                : exhausted
-                  ? 'blocked'
-                  : 'running',
-          )
-          expect(
-            events.some(
-              (event) => event.type === 'escalation.answered' || event.type === 'phase.failed',
-            ),
-          ).toBe(false)
-          expect(
-            events.filter(
-              (event) =>
-                event.type === 'publication.retry-scheduled' ||
-                event.type === 'publication.retry-exhausted',
-            ),
-          ).toHaveLength(1)
+          expect(await runner.step()).toEqual({ kind: 'acknowledge', command })
+        },
+      })
+      const slug = await seedBuild(h)
+      const {
+        trigger: _trigger,
+        cycle: _cycle,
+        observation: _observation,
+        message: _message,
+        ...rewrite
+      } = {
+        ...leafTransaction,
+        branch: `ab/${slug}`,
+      }
+      if (operation === 'restack') {
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.prepared',
+          payload: { ...leafTransaction, branch: `ab/${slug}` },
         })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'restack.publish-intended',
+          payload: { ...leafTransaction, branch: `ab/${slug}`, headSha: 'e'.repeat(40) },
+        })
+      } else {
+        const transaction = { ...rewrite, attempt: 1 }
+        const artifact = { kind: 'reconcile-notes', rev: 0 }
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.started',
+          payload: { attempt: 1, baseSha: transaction.targetBase },
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.prepared',
+          payload: transaction,
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'reconcile.publish-intended',
+          payload: { ...transaction, headSha: 'e'.repeat(40), conflicted: true, artifact },
+        })
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.requested',
+          payload: {
+            operation,
+            branch: transaction.branch,
+            sha: 'e'.repeat(40),
+            artifact,
+            rewrite: { ...transaction, conflicted: true },
+          },
+        })
+      }
+      if (command === 'resume')
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      const retry = { operation, rewriteId: rewrite.id, round: 1, anchor: 0, error: 'HTTP 503' }
+      if (exhausted)
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.retry-exhausted',
+          payload: { ...retry, failure: 7 },
+        })
+      else
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'publication.retry-scheduled',
+          payload: {
+            ...retry,
+            failure: 1,
+            retryAt: new Date(h.clock().getTime() + 300_000).toISOString(),
+          },
+        })
+      await h.store.claimLease(slug, 'old-runner', 1000)
+      h.clock.advance(2000)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+      expect(h.launches).toEqual([])
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: `build.${command}-requested`,
+        payload: {},
+      })
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+      expect(h.launches).toEqual([slug])
+      const events = await h.store.getEvents(slug)
+      const state = reduceBuild(events)
+      expect(state.pendingCommands).toEqual([])
+      expect(state.status).toBe(
+        command === 'abort'
+          ? 'aborted'
+          : command === 'pause'
+            ? 'paused'
+            : exhausted
+              ? 'blocked'
+              : 'running',
+      )
+      expect(
+        events.some(
+          (event) => event.type === 'escalation.answered' || event.type === 'phase.failed',
+        ),
+      ).toBe(false)
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'publication.retry-scheduled' ||
+            event.type === 'publication.retry-exhausted',
+        ),
+      ).toHaveLength(1)
+    })
 
   test('orphan recovery with a lost workspace records provisioning failure and exhaustion', async () => {
     const provider: WorkspaceProvider = {
@@ -6785,27 +6794,20 @@ describe('Dispatcher lease sweep', () => {
     expect(released?.payload).toMatchObject({ reason: 'blocked' })
   })
 
-  test('expired lease + running: relaunch', async () => {
-    const h = harness()
-    const slug = await seedBuild(h)
-    await h.store.claimLease(slug, 'runner-1', 1000)
-    h.clock.advance(2000)
-
-    const report = await h.dispatcher.tick()
-    expect(report).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
-  })
-
-  test('healthy lease: not swept', async () => {
+  test('running build: a healthy lease is not swept; once it expires, relaunch', async () => {
     const h = harness()
     const slug = await seedBuild(h)
     await h.store.claimLease(slug, 'runner-1', 60_000)
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.launches).toEqual([])
+
+    h.clock.advance(61_000)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
   })
 
-  test('blocked build: not swept even with an expired lease', async () => {
+  test('blocked build: not swept even with an expired lease, until an abort is pending (D2, §14)', async () => {
     const h = harness()
     const slug = await seedBuild(h)
     await h.store.append(slug, {
@@ -6818,6 +6820,15 @@ describe('Dispatcher lease sweep', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.launches).toEqual([])
+
+    // A pending abort is swept so the abort is acknowledged.
+    await h.store.append(slug, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'wrong approach' },
+    })
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
   })
 
   test('a confirmed relaunch bypasses absent-lease grace, while a held execution still excludes launch', async () => {
@@ -6886,24 +6897,6 @@ describe('Dispatcher lease sweep', () => {
       type: 'build.resume-requested',
       payload: {},
     })
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
-  })
-
-  test('blocked build with a pending abort: swept so the abort is acknowledged (D2, §14)', async () => {
-    const h = harness()
-    const slug = await seedBuild(h)
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: { id: 'e_1', phase: 'plan', source: 'agent', question: 'spec unclear' },
-    })
-    await h.store.append(slug, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'wrong approach' },
-    })
-
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
     expect(h.launches).toEqual([slug])
   })
