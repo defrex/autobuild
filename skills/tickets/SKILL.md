@@ -148,6 +148,24 @@ blocker is recorded; still verify with `ab ticket show --json`, since a partial
 failure leaves it in triage. Do not use the local
 file tracker's default state as an assumption about another configured source.
 
+## Ticket assets
+
+Files or folders attached to a ticket, such as a design export or reference
+screenshots. Each CLI form has an operator tool for connected agents:
+
+| CLI | Operator tool |
+|---|---|
+| `ab ticket attach <id> <kind> <path> [--name <name>]` | `tickets.asset.attach` with `layout` (`file` or `tree`) and base64 `entries` |
+| `ab ticket show <id>` | `tickets.get`, whose `assets` lists the current ones |
+| `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]` | `tickets.asset.get`, with optional `rev` |
+| `ab ticket asset rm <id> <kind> <name>` | `tickets.asset.remove` (destructive) |
+
+Both forms share the rules: each attach makes a new revision, earlier ones stay
+retrievable, the store's size limit applies, and attach and remove leave a note
+on the ticket. A build freezes the assets it claims, so changes afterward do not
+reach a running build. Tool inputs, receipts and failures are in the
+[operator API](../ab-guide/references/operator-api.md#ticket-assets).
+
 ## Edit content or blockers
 
 Use the configured TicketSource rather than hand-editing frontmatter/body:
