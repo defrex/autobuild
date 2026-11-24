@@ -257,91 +257,6 @@ describe('HarvestRunner', () => {
     ).toBe(false)
   })
 
-  test('revise continues one producer session and starts a fresh reviewer each round', async () => {
-    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-revise-'))
-    roots.push(workspace)
-    const store = new MemoryBuildStore({ clock: steppingClock() })
-    const tickets = new FakeTicketSource()
-    const ids = sequentialIds()
-    let reviewRound = 0
-    const scripted = new ScriptedAgentRunner({
-      script: async ({ opts, turn }) => {
-        const env = resolveHarvestCliEnv(opts.env)
-        const deps = { store, env, workspacePath: workspace, ids }
-        await buildHarvestContext(deps)
-        if (opts.skill === 'ab-harvest') {
-          if (turn === 2) {
-            expect(
-              JSON.parse(await readFile(join(workspace, '.ab', 'findings.json'), 'utf8')),
-            ).toHaveLength(1)
-          }
-          const observations = JSON.parse(
-            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
-          ) as Array<{ occurrence: { build: string; seq: number } }>
-          const file = join(workspace, '.ab', `proposals-${turn}.json`)
-          await writeFile(
-            file,
-            JSON.stringify({
-              proposals: [
-                {
-                  action: 'create',
-                  title: turn === 1 ? 'Initial title' : 'Reviewed title',
-                  whatWhy: 'The observation describes an actionable defect.',
-                  acceptanceCriteria: ['The defect no longer occurs.'],
-                  outOfScope: ['Unrelated cleanup.'],
-                  observations: observations.map((item) => item.occurrence),
-                },
-              ],
-            }),
-          )
-          await submitHarvestProposals(deps, file)
-        } else {
-          reviewRound += 1
-          const notes = join(workspace, '.ab', `review-${reviewRound}.md`)
-          await writeFile(notes, reviewRound === 1 ? 'revise' : 'approve')
-          if (reviewRound === 1) {
-            const findings = join(workspace, '.ab', 'review-findings.json')
-            await writeFile(
-              findings,
-              JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
-            )
-            await submitHarvestVerdict(deps, {
-              verdict: 'revise',
-              notes,
-              findings,
-            })
-          } else {
-            await submitHarvestVerdict(deps, { verdict: 'approve', notes })
-          }
-        }
-        return defaultTurnResult('done')
-      },
-    })
-    await seedObservation(store, 'one', 'first')
-    const result = await new HarvestRunner({
-      store,
-      tickets,
-      config: config(1),
-      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
-      repo: '/repo',
-      workspacePath: workspace,
-      ids,
-      uuids: randomUuids(),
-      clock: steppingClock(),
-      instance: 'instance',
-      opts: { heartbeatMs: 100_000 },
-    }).run()
-    expect(result.outcome).toBe('completed')
-    const journals = [...scripted.sessions.values()]
-    const producers = journals.filter((session) => session.opts.skill === 'ab-harvest')
-    const reviewers = journals.filter((session) => session.opts.skill === 'ab-harvest-review')
-    expect(producers).toHaveLength(1)
-    expect(producers[0]?.turns).toHaveLength(2)
-    expect(reviewers).toHaveLength(2)
-    expect(reviewers.every((session) => session.turns.length === 1)).toBe(true)
-    expect((await tickets.get('fake-1'))?.title).toBe('Reviewed title')
-  })
-
   test('below threshold is idle; threshold runs reviewed workflow, files Triage, and K new observations retrigger', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-runner-'))
     roots.push(workspace)
@@ -3007,6 +2922,11 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
         const ctx = { store, env, workspacePath: workspace, ids }
         await buildHarvestContext(ctx)
         if (opts.skill === 'ab-harvest') {
+          if (turn === 2) {
+            expect(
+              JSON.parse(await readFile(join(workspace, '.ab', 'findings.json'), 'utf8')),
+            ).toHaveLength(1)
+          }
           const observations = JSON.parse(
             await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
           ) as Array<{ occurrence: { build: string; seq: number } }>
@@ -3077,6 +2997,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     const producers = journals.filter((session) => session.opts.skill === 'ab-harvest')
     expect(producers).toHaveLength(1)
     expect(producers[0]?.turns).toHaveLength(2)
+    const reviewers = journals.filter((session) => session.opts.skill === 'ab-harvest-review')
+    expect(reviewers).toHaveLength(2)
+    expect(reviewers.every((session) => session.turns.length === 1)).toBe(true)
+    expect((await tickets.get('fake-1'))?.title).toBe('Reviewed title')
     expect(emitters).toHaveLength(4)
     expect(emitters.every((emitter) => emitter !== undefined)).toBe(true)
     // The continued (round-2) turn observed a DIFFERENT emitter than round 1.
@@ -3178,6 +3102,9 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       expect(event.payload.stream).toBeUndefined()
     }
     expect(await store.listStreams({ kind: 'repo', repo: '/repo' })).toHaveLength(0)
+    for (const journal of scripted.sessions.values()) {
+      expect(journal.opts.stream).toBeUndefined()
+    }
   })
 
   test('a store whose stream appends always fail lets the run complete with one diagnostic per bracket and aborted closes', async () => {
