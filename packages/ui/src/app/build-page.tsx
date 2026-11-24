@@ -1,4 +1,11 @@
-import type { WebBuildRow, WebFinishedRow, WebFrame } from '../../../core/src/web/protocol'
+import { useState } from 'react'
+import type {
+  WebBuildRow,
+  WebBuildTimeline,
+  WebFinishedRow,
+  WebFrame,
+} from '../../../core/src/web/protocol'
+import { Gantt, GanttSkeleton } from '../charts/gantt'
 import {
   AttentionLine,
   BuildRow,
@@ -9,6 +16,8 @@ import {
 import { WordAction } from '../components/controls'
 import { SignOff, StateWord } from '../components/display'
 import { type FlowBlock, StableFlow } from '../components/motion'
+import { ganttTimeline, timelineUrl } from './analytics-model'
+import type { ApiRequest, ApiState } from './fetch'
 import type { PageProps } from './overview'
 import { completedText, finishedRowModel, liveRowModel } from './rows'
 
@@ -146,40 +155,107 @@ function finishedBlocks(row: WebFinishedRow): FlowBlock[] {
   ]
 }
 
+/** The build page's timeline read: refetched whenever the frame's change
+ * position moves, whether or not the frame lists the build. */
+export function buildPageFetch(frame: WebFrame | undefined, slug: string): ApiRequest {
+  return { url: timelineUrl(slug), key: frame?.position }
+}
+
+export type TimelineState = Pick<ApiState<WebBuildTimeline>, 'data' | 'error'>
+
+/** The timeline section, last on the page so its arrival or growth moves
+ * nothing below it. */
+function timelineBlocks(
+  timeline: TimelineState | undefined,
+  now: number,
+  expanded: { value: string[]; set: (next: string[]) => void } | undefined,
+): FlowBlock[] {
+  const heading: FlowBlock = { key: 'h:timeline', node: <SectionHeading title="Timeline" /> }
+  const row = timeline?.data?.row
+  if (row === undefined && timeline?.error !== undefined)
+    return [heading, { key: 'timeline', node: <EmptySentence>{timeline.error}</EmptySentence> }]
+  if (row === undefined) return [heading, { key: 'timeline', node: <GanttSkeleton rows={1} /> }]
+  return [
+    heading,
+    {
+      key: 'timeline',
+      node: (
+        <div data-flow-slot="">
+          <Gantt
+            builds={[ganttTimeline(row)]}
+            now={now}
+            axis="clock"
+            label="This build's timeline"
+            defaultExpanded={[row.slug]}
+            {...(expanded !== undefined
+              ? { expanded: expanded.value, onExpandedChange: expanded.set }
+              : {})}
+          />
+        </div>
+      ),
+    },
+  ]
+}
+
 /**
  * One build's page: its header row, its attention as sign-off regions, its
- * facts and its ticket. The build is found among the frame's active, queued
- * and recently finished rows, which are exactly the rows that link here.
+ * facts, its ticket and its timeline. The build is found among the frame's
+ * active, queued and recently finished rows, which are exactly the rows that
+ * link here; any other build still shows its timeline.
  */
 export function buildPageBlocks({
   frame,
   slug,
   now,
+  timeline,
+  expanded,
 }: {
   frame: WebFrame
   slug: string
   now: number
+  timeline?: TimelineState
+  expanded?: { value: string[]; set: (next: string[]) => void }
 }): FlowBlock[] {
   const found = find(frame, slug)
-  if (found === undefined)
-    return [
-      {
-        key: 'missing',
-        node: (
-          <p data-app="line">
-            <span>This build is not active, queued or among the recently finished builds. </span>
-            <WordAction href="/">Back to the Overview</WordAction>
-          </p>
-        ),
-      },
-    ]
-  return found.kind === 'live' ? liveBlocks(found.row, now) : finishedBlocks(found.row)
+  const page: FlowBlock[] =
+    found === undefined
+      ? [
+          {
+            key: 'missing',
+            node: (
+              <p data-app="line">
+                <span>
+                  This build is not active, queued or among the recently finished builds.{' '}
+                </span>
+                <WordAction href="/">Back to the Overview</WordAction>
+              </p>
+            ),
+          },
+        ]
+      : found.kind === 'live'
+        ? liveBlocks(found.row, now)
+        : finishedBlocks(found.row)
+  return [...page, ...timelineBlocks(timeline, now, expanded)]
 }
 
-export function BuildPage({ frame, slug, now, seq, onSettled }: PageProps & { slug: string }) {
+export function BuildPage({
+  frame,
+  slug,
+  now,
+  seq,
+  onSettled,
+  timeline,
+}: PageProps & { slug: string; timeline?: TimelineState }) {
+  const [expanded, setExpanded] = useState<string[]>([slug])
   return (
     <StableFlow
-      blocks={buildPageBlocks({ frame, slug, now })}
+      blocks={buildPageBlocks({
+        frame,
+        slug,
+        now,
+        ...(timeline !== undefined ? { timeline } : {}),
+        expanded: { value: expanded, set: setExpanded },
+      })}
       seq={seq}
       {...(onSettled !== undefined ? { onSettled } : {})}
     />

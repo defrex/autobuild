@@ -152,6 +152,12 @@ a:hover {
   color: var(--teal);
   text-decoration-color: currentColor;
 }
+/* A reserved action that cannot act yet keeps its place, quietly. */
+[data-ansi="word-action"][aria-disabled="true"] {
+  color: var(--slack);
+  text-decoration: none;
+  pointer-events: none;
+}
 
 /* ── Fields ──────────────────────────────────────────── */
 
@@ -680,18 +686,33 @@ a:hover {
 /* ── Gantt ───────────────────────────────────────────── */
 
 [data-ansi="gantt"] {
+  /* One collapsed row's height, before its rule. */
+  --gantt-row: 28px;
   margin: 0;
 }
 [data-ansi="gantt"] [data-slot="waterfall"] {
   display: grid;
   grid-template-columns: minmax(12rem, 20rem) 1fr;
+  align-content: start;
 }
 [data-ansi="gantt"] :where([data-slot="waterfall-header-row"], [data-slot="waterfall-row"]) {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
   align-items: center;
-  min-height: 28px;
+  min-height: var(--gantt-row);
+}
+/* A reserved chart holds its header and that many collapsed rows, each with
+   its rule, whatever the page holds; only expanding a row grows it. */
+[data-ansi="gantt"][data-reserve]
+:where([data-slot="waterfall"], [data-ansi="gantt-skeleton-grid"]) {
+  min-block-size: calc((var(--gantt-reserve-rows) + 1) * (var(--gantt-row) + var(--stroke-rule)));
+}
+[data-ansi="gantt-empty"] {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(var(--gantt-row) + var(--stroke-rule));
+  z-index: 1;
 }
 [data-ansi="gantt"] [data-slot="waterfall-header-row"] {
   border-bottom: var(--stroke-rule) solid var(--rule);
@@ -846,15 +867,19 @@ a:hover {
 
 /* ── Gantt skeleton ──────────────────────────────────── */
 
+[data-ansi="gantt-skeleton-grid"] {
+  display: grid;
+  align-content: start;
+}
 [data-ansi="gantt-skeleton-grid"] > div {
   display: grid;
   grid-template-columns: minmax(12rem, 20rem) 1fr;
   align-items: center;
-  min-height: 28px;
+  min-height: var(--gantt-row);
   border-bottom: var(--stroke-rule) solid color-mix(in srgb, var(--rule) 60%, transparent);
 }
 [data-ansi="gantt-skeleton-grid"] > [data-ansi="gantt-skeleton-head"] {
-  min-height: 24px;
+  min-height: var(--gantt-row);
 }
 [data-ansi="gantt-skeleton-bar"] {
   display: block;

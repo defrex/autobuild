@@ -10,7 +10,7 @@ import {
   type WaterfallData,
   visibleWaterfallRows,
 } from '@ui-sdk/react/waterfall'
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Placeholder } from '../components/display'
 import { usePresence } from '../components/motion'
 import { type SegmentCategory, segmentStyle } from '../tokens'
@@ -31,7 +31,21 @@ interface Props {
   axis: GanttAxis
   label: string
   defaultExpanded?: string[]
+  /** Controlled expansion: a page that re-renders the chart (a live flow's
+   * measuring pass) keeps one expansion across every copy. */
+  expanded?: string[]
+  onExpandedChange?: (expanded: string[]) => void
+  /** Collapsed rows of height the chart always holds, so a sparse page moves
+   * nothing below it. */
+  reserveRows?: number
+  /** Shown inside the reserved area when there are no builds. */
+  empty?: ReactNode
 }
+
+const segmentName = (segment: Segment) => segment.step ?? segmentLabel[segment.category]
+
+const reserve = (rows: number | undefined) =>
+  rows === undefined ? undefined : ({ '--gantt-reserve-rows': String(rows) } as CSSProperties)
 
 const segmentValue = (slug: string, index: number) => `${slug}/${index}`
 const COLLAPSE_MS = 180
@@ -77,8 +91,20 @@ function useCollapsing(expanded: string[]) {
   return closing.filter((v) => !expanded.includes(v))
 }
 
-export function Gantt({ builds, now, axis, label, defaultExpanded = [] }: Props) {
-  const [expanded, setExpanded] = useState<string[]>(defaultExpanded)
+export function Gantt({
+  builds,
+  now,
+  axis,
+  label,
+  defaultExpanded = [],
+  expanded: controlled,
+  onExpandedChange,
+  reserveRows,
+  empty,
+}: Props) {
+  const [own, setOwn] = useState<string[]>(defaultExpanded)
+  const expanded = controlled ?? own
+  const setExpanded = onExpandedChange ?? setOwn
   const closing = useCollapsing(expanded)
   const figure = useRef<HTMLElement>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
@@ -103,12 +129,14 @@ export function Gantt({ builds, now, axis, label, defaultExpanded = [] }: Props)
         duration: end - start,
         children: b.segments.map((s, i) => ({
           value: segmentValue(b.slug, i),
-          label: segmentLabel[s.category],
+          label: segmentName(s),
           start: s.start - zero,
           duration: segmentEnd(s, now) - s.start,
         })),
       }
     })
+    // An empty page still draws an axis over a one-hour span.
+    if (items.length === 0) return { items, range: [0, 3600_000] as [number, number], origin }
     return { items, range: [lo, hi] as [number, number], origin }
   }, [builds, now, axis])
 
@@ -136,7 +164,13 @@ export function Gantt({ builds, now, axis, label, defaultExpanded = [] }: Props)
   const shown = detail ?? last.current
 
   return (
-    <figure data-ansi="gantt" ref={figure}>
+    <figure
+      data-ansi="gantt"
+      ref={figure}
+      data-reserve={reserveRows !== undefined ? '' : undefined}
+      style={reserve(reserveRows)}
+    >
+      {builds.length === 0 && empty !== undefined && <div data-ansi="gantt-empty">{empty}</div>}
       <Waterfall
         aria-label={label}
         items={items}
@@ -201,7 +235,7 @@ export function Gantt({ builds, now, axis, label, defaultExpanded = [] }: Props)
               data-exiting={closing.includes(parent) ? '' : undefined}
             >
               <WaterfallRowHeader>
-                <span data-ansi="segment-name">{segmentLabel[segment.category]}</span>
+                <span data-ansi="segment-name">{segmentName(segment)}</span>
                 {segment.round !== undefined && <span data-ansi="round"> r{segment.round}</span>}
                 <span data-ansi="elapsed">
                   {' '}
@@ -261,7 +295,7 @@ export function SegmentPopover({
           data-fill={segmentStyle[segment.category].fill}
         />
         <span data-ansi="machine">
-          {segmentLabel[segment.category]}
+          {segmentName(segment)}
           {segment.round !== undefined && ` round ${segment.round}`}
         </span>
       </p>
@@ -279,9 +313,14 @@ export function SegmentPopover({
 }
 
 /** The chart's geometry for a known number of rows. */
-export function GanttSkeleton({ rows }: { rows: number }) {
+export function GanttSkeleton({ rows, reserveRows }: { rows: number; reserveRows?: number }) {
   return (
-    <figure data-ansi="gantt" data-skeleton="">
+    <figure
+      data-ansi="gantt"
+      data-skeleton=""
+      data-reserve={reserveRows !== undefined ? '' : undefined}
+      style={reserve(reserveRows)}
+    >
       <div data-ansi="gantt-skeleton-grid">
         <div data-ansi="gantt-skeleton-head">
           <Placeholder width="5ch" />
