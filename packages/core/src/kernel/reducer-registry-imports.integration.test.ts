@@ -137,13 +137,12 @@ describe('reducer registry import boundary', () => {
   })
 
   test('build-runner and the registry load in either order in a fresh process', async () => {
+    const value = REDUCERS.publishedBranchHeadValue!.reducer
     const expected = {
-      identity: REDUCERS.publishedBranchHeadValue.reducer.identity,
-      version: REDUCERS.publishedBranchHeadValue.reducer.version,
-      empty: REDUCERS.publishedBranchHeadValue.reducer.finish(
-        REDUCERS.publishedBranchHeadValue.reducer.initial(),
-      ),
-      headVersion: REDUCERS.publishedBranchHead.reducer.version,
+      identity: value.identity,
+      version: value.version,
+      empty: value.finish(value.initial()),
+      headVersion: REDUCERS.publishedBranchHead!.reducer.version,
     }
     const env: Record<string, string> = {}
     for (const [key, value] of Object.entries(process.env)) {
