@@ -1,6 +1,6 @@
 import type { WebModelHub } from './hub'
 import { renderPage } from './page'
-import { WEB_EVENTS, type WebAssetManifest } from './protocol'
+import { PAGE_FRAME_WAIT_MS, WEB_EVENTS, type WebAssetManifest } from './protocol'
 
 /** The comment line that keeps an idle event stream open through proxies. */
 export const HEARTBEAT_MS = 15_000
@@ -15,6 +15,11 @@ const realHeartbeat: HeartbeatTimer = {
   clear: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
 }
 
+const realTimeout: HeartbeatTimer = {
+  set: (callback, ms) => setTimeout(callback, ms),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+}
+
 export interface WebHandlerOptions {
   hub: WebModelHub
   repositoryLabel: string
@@ -25,6 +30,9 @@ export interface WebHandlerOptions {
   allowedHosts: ReadonlySet<string> | 'any'
   nonce?: () => string
   heartbeat?: HeartbeatTimer
+  /** How long a page request waits for the hub's first frame, and the timer
+   * that bounds it. Defaults to `PAGE_FRAME_WAIT_MS` on real timers. */
+  pageWait?: { ms: number; timer: HeartbeatTimer }
 }
 
 /** The slice of Bun's server the handler uses. */
@@ -109,6 +117,7 @@ function text(status: number, body: string, extra: HeadersInit = {}): Response {
 export function createWebHandler(opts: WebHandlerOptions): WebHandler {
   const nonce = opts.nonce ?? mintNonce
   const heartbeat = opts.heartbeat ?? realHeartbeat
+  const pageWait = opts.pageWait ?? { ms: PAGE_FRAME_WAIT_MS, timer: realTimeout }
   const assets = new Map(opts.manifest.files.map((file) => [file.path, file.type]))
 
   return (request, server) => {
@@ -140,17 +149,55 @@ export function createWebHandler(opts: WebHandlerOptions): WebHandler {
     }
 
     const minted = nonce()
-    return new Response(
-      head
-        ? null
-        : renderPage({
-            nonce: minted,
-            repositoryLabel: opts.repositoryLabel,
-            manifest: opts.manifest,
-          }),
-      { headers: pageHeaders(minted) },
-    )
+    if (head) return new Response(null, { headers: pageHeaders(minted) })
+    const page = (frame: string | undefined) =>
+      new Response(
+        renderPage({
+          nonce: minted,
+          repositoryLabel: opts.repositoryLabel,
+          manifest: opts.manifest,
+          ...(frame !== undefined ? { frame } : {}),
+        }),
+        { headers: pageHeaders(minted) },
+      )
+    const held = opts.hub.current
+    if (held !== undefined) return page(held)
+    return firstFrame(opts.hub, pageWait, request.signal).then(page)
   }
+}
+
+/**
+ * The hub's first frame, for a page request that arrives before it has one.
+ * Subscribing joins or starts the hub's one shared read, the same read the
+ * page's event stream starts a moment later. The hub delivers a frame for
+ * every finished read, data or its failure notice, so the wait ends at that
+ * frame; the bound covers only a hung read, and an aborted request stops
+ * waiting. Every path unsubscribes.
+ */
+function firstFrame(
+  hub: WebModelHub,
+  wait: { ms: number; timer: HeartbeatTimer },
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    let settled = false
+    let unsubscribe: (() => void) | undefined
+    let timer: unknown
+    const finish = (frame: string | undefined) => {
+      if (settled) return
+      settled = true
+      unsubscribe?.()
+      if (timer !== undefined) wait.timer.clear(timer)
+      signal.removeEventListener('abort', abort)
+      resolve(frame)
+    }
+    const abort = () => finish(undefined)
+    signal.addEventListener('abort', abort)
+    unsubscribe = hub.subscribe((json) => finish(json))
+    if (settled) unsubscribe()
+    else timer = wait.timer.set(() => finish(undefined), wait.ms)
+  })
 }
 
 function eventStream(
