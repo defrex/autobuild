@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 // The registry loads first: it fills the identity graph and settles import order.
 import { REDUCERS } from './reducer-registry'
-import { setupStreakReducer } from '../processes/build-runner'
+import { setupStreakReducer } from './setup-streak'
 import {
   readReducerValue,
   type ReducerValueStorage,
