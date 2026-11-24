@@ -47,6 +47,7 @@ import type { Via } from '../events/envelope'
 import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { TicketOperationError } from '../ports/tickets/operations'
+import { TicketSearchCursorInvalid, TicketSearchUnsupported } from '../ports/tickets/search'
 import { controlTicketStart } from './ticket-start'
 import {
   attachOperatorTicketAsset,
@@ -99,6 +100,7 @@ import {
   createOperatorTicketState,
   getOperatorTicket,
   listOperatorTickets,
+  searchOperatorTickets,
   mutateOperatorTicket,
   type OperatorTicketBackend,
 } from './tickets'
@@ -555,6 +557,33 @@ const ticketsListInput = z.strictObject({
     .describe(
       'Dispatch order, urgent tickets first and then the source order (the default), or newest filed first regardless of urgency.',
     ),
+})
+
+const ticketsSearchInput = z.strictObject({
+  repo: repoField,
+  query: z
+    .string()
+    .regex(/\S/, 'query must contain a nonblank word')
+    .describe(
+      'Words to find in ticket titles and bodies; every word must appear, case-insensitively.',
+    ),
+  state: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Only tickets in this provider state; omitted searches every state, including completed and rejected tickets.',
+    ),
+  labels: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Only tickets carrying every named label.'),
+  limit: z.number().int().min(1).max(100).optional().describe('Page size; default 20.'),
+  cursor: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('The `cursor` from the previous page of the same search.'),
 })
 
 const ticketsCreateInput = ticketCreateRequestSchema.extend({ repo: repoField })
@@ -1207,6 +1236,25 @@ export const TOOLS: readonly ToolEntry[] = [
     },
   ),
   defineTool(
+    'tickets.search',
+    'Search the repository’s tickets by title and body text across every state, to find duplicates before filing. Sources without search refuse; nothing falls back to listing.',
+    ticketsSearchInput,
+    '{tickets, cursor?, diagnostics}: matches as {id, title, state, labels, kind, target?} in source order; cursor continues the search and is absent on the last page.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof ticketsSearchInput>
+      return searchOperatorTickets({
+        store: ctx.store,
+        repo: input.repo,
+        backend: ticketsOf(ctx),
+        query: input.query,
+        ...(input.state !== undefined ? { state: input.state } : {}),
+        ...(input.labels !== undefined ? { labels: input.labels } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+      })
+    },
+  ),
+  defineTool(
     'tickets.get',
     'Show one ticket with its hosted comments, blockers, any related build and its current assets.',
     ticketDetailInput,
@@ -1581,6 +1629,18 @@ function mapDomainError(error: unknown): RegistryError {
       kind: 'validation',
       error: error.message,
       code: 'ticket-asset-invalid',
+    })
+  if (error instanceof TicketSearchUnsupported)
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: 'search-unsupported',
+    })
+  if (error instanceof TicketSearchCursorInvalid)
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: 'search-cursor-invalid',
     })
   if (error instanceof TicketOperationError) {
     return new RegistryError('domain', error.message, {

@@ -402,8 +402,9 @@ For feature sets you file yourself, consult the shared
 explicitly choose root or a node, evaluate the repository's effective merge
 policy, and explain the merge flow to the human. Ask when intent is unclear.
 
-`ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
-move tickets; the `ab-tickets` skill covers the tracker's details. A ticket
+`ab ticket create|update|block|unblock|list|search|show|move|states` file, find,
+edit, and move tickets; the `ab-tickets` skill covers the tracker's details.
+Run `ab ticket search` for duplicates before filing. A ticket
 filed from a forge issue carries it with `--issues N` (`closes`), or
 `--issues N:refs` when the work only partly addresses it. Moving a
 ticket into the ready state sends it to dispatch — do that only when the
@@ -521,6 +522,10 @@ that does the job, and say what you are doing before you do it:
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket, with
   its current assets. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
+- `tickets.search` — search ticket titles and bodies across every state, with
+  optional `state`, `labels`, `limit` and `cursor`. Use it to check for
+  duplicates before `tickets.create`. A source without search refuses with
+  `code: "search-unsupported"`, naming the source.
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
   from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
   the default) or `{issue, intent: "refs"}` when the work only partly
