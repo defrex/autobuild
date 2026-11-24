@@ -8,6 +8,18 @@ const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'),
 const ticketGuides = [tickets] as const
 
 describe('ticket grooming skill guidance', () => {
+  test('spec and tickets tell authors to search for duplicates before filing', () => {
+    const create = tickets.indexOf('## Create a ticket')
+    const search = tickets.indexOf('ab ticket search "', create)
+    expect(search).toBeGreaterThan(create)
+    expect(search).toBeLessThan(tickets.indexOf('ab ticket create "', create))
+    expect(tickets).toContain('`tickets.search`')
+    const specSearch = spec.indexOf('ab ticket search "<key words>"')
+    expect(specSearch).toBeGreaterThan(-1)
+    expect(specSearch).toBeLessThan(spec.indexOf('Then create\nthe ticket'))
+    expect(spec).toContain('Run the same duplicate search for each planned ticket')
+  })
+
   test('spec syncs an accepted body and dependencies through exact CLI forms', () => {
     expect(spec).toContain('ab ticket update <ticket> --body spec.md')
     expect(spec).toContain('ab ticket block <ticket> <blocker-id>')
