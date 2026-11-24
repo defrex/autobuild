@@ -1092,3 +1092,67 @@ test('explicit harvest history seeks matching events across a gap outside the re
     await client.close()
   }
 })
+
+test('feed and page routes answer journal-less repositories with one store read and reject bad arguments', async () => {
+  const backing = new MemoryBuildStore()
+  await backing.createBuild({ slug: 'feed-only', repo: 'org/repo' })
+  const calls: string[] = []
+  const store = new Proxy(backing, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        calls.push(String(key))
+        return Reflect.apply(value, target, args)
+      }
+    },
+  })
+  const server = createStoreServer({ store })
+  const get = (path: string) =>
+    server.fetch(
+      new Request(`http://store${path}`, {
+        headers: {
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+      }),
+    )
+  const changed = await get('/repos/org%2Frepo/changed-builds?since=0')
+  expect(changed.status).toBe(200)
+  expect(await changed.json()).toEqual({
+    position: '1',
+    builds: [{ slug: 'feed-only', position: '1' }],
+  })
+  expect(calls).toEqual(['listBuildsChangedSince'])
+  calls.length = 0
+  const page = await get('/repos/org%2Frepo/build-page?limit=1')
+  expect(page.status).toBe(200)
+  expect(await page.json()).toMatchObject({ builds: [{ slug: 'feed-only' }], next: null })
+  expect(calls).toEqual(['listBuildsPage'])
+  calls.length = 0
+  expect(await (await get('/repos/unknown/changed-builds?since=0')).json()).toEqual({
+    position: '0',
+    builds: [],
+  })
+  expect(await (await get('/repos/unknown/build-page')).json()).toEqual({
+    builds: [],
+    next: null,
+  })
+  expect(await backing.getRepo('org/repo')).toBeNull()
+  expect(await backing.getRepo('unknown')).toBeNull()
+  calls.length = 0
+  for (const path of [
+    '/repos/org%2Frepo/changed-builds',
+    '/repos/org%2Frepo/changed-builds?since=01',
+    '/repos/org%2Frepo/changed-builds?since=-1',
+    '/repos/org%2Frepo/build-page?limit=0',
+    '/repos/org%2Frepo/build-page?limit=101',
+    '/repos/org%2Frepo/build-page?limit=x',
+    '/repos/org%2Frepo/build-page?cursor=!',
+  ]) {
+    const response = await get(path)
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ kind: 'validation' })
+  }
+  expect(calls.filter((call) => call !== 'listBuildsPage')).toEqual([])
+})

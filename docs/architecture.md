@@ -1389,6 +1389,13 @@ backfills the table once, when its bootstrap or migration creates it. Like the
 counter DDL, it sits outside the guarded core schema and must be migrated before
 a hosted rollout serves `open-builds`; until then the route fails rather than
 listing every build.
+
+Positions are ordered. `packages/core/src/store/build-feed.ts` holds the shared
+changed-builds feed and paged-listing vocabulary (`listBuildsChangedSince`,
+`listBuildsPage`, cursor and position codecs). Each build's latest position
+lives in `build_change_positions`, written by the same trigger that advances
+the counter (memory: a one-node-per-build linked list); its first creation
+backfills existing builds once at a bumped head.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
