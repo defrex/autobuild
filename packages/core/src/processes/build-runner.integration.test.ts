@@ -981,7 +981,9 @@ describe('attach', () => {
       's_rerun_1',
       's_rerun_2',
     ])
-    expect(ended.every((event) => event.payload.outcome === 'reclaimed')).toBe(true)
+    expect(
+      ended.every((event) => 'outcome' in event.payload && event.payload.outcome === 'reclaimed'),
+    ).toBe(true)
     expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual([
       's_rerun_3',
     ])
@@ -2494,41 +2496,78 @@ describe('session memory (§10)', () => {
     expect(journals.every((journal) => journal.messages.length === 0)).toBe(true)
   })
 
-  test('implement r2 continues the SAME producer session; the message names the findings and .ab/', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
+  test('implement r2 continues the SAME producer session with re-issued ambient auth; reviewer rounds are fresh (§10, D8)', async () => {
+    // Regression: the runner used to leave the continued turn on round 1's
+    // start env, so the real CLI resolved round=1 and its terminal was
+    // rejected as a D5 second call — §10 continuation was dead in production.
+    const seen: Array<{ phase: string; session: string }> = []
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = reviseThenApproveHandlers(store)
+        const implement = table.implement!
+        table.implement = (ctx) => {
+          seen.push({
+            phase: ctx.opts.env.AB_PHASE ?? '',
+            session: sessionOf(ctx),
+          })
+          return implement(ctx)
+        }
+        return table
+      },
+    })
     const state = await h.br.run()
     expect(state.status).toBe('running') // ran through to awaiting-pr
 
+    // ONE runner session, two rounds; the continuation names the findings.
     const implementJournals = [...h.runner.sessions.values()].filter(
       (j) => j.opts.skill === 'ab-implement',
     )
-    expect(implementJournals.length).toBe(1) // ONE runner session, two rounds
+    expect(implementJournals.length).toBe(1)
     const journal = implementJournals[0]!
     expect(journal.turns.length).toBe(2)
     expect(journal.messages.length).toBe(1)
     expect(journal.messages[0]).toContain('f_1')
     expect(journal.messages[0]).toContain('$AB_CONTEXT_DIR/findings.json')
-  })
 
-  test('reviewer rounds are FRESH sessions (fresh skeptic)', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
+    // Reviewer rounds are FRESH sessions (fresh skeptic).
     const reviewJournals = [...h.runner.sessions.values()].filter(
       (j) => j.opts.skill === 'ab-code-review',
     )
     expect(reviewJournals.length).toBe(2)
     expect(reviewJournals.every((j) => j.turns.length === 1)).toBe(true)
     expect(reviewJournals[0]!.session.id).not.toBe(reviewJournals[1]!.session.id)
-  })
 
-  test('implement.started r2 carries the findings feedback (§15.3)', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
     const events = await h.store.getEvents(SLUG)
-    const starts = ofType(events, 'implement.started')
-    expect(starts.length).toBe(2)
-    expect(starts[0]!.payload).toEqual({ round: 1 })
-    expect(starts[1]!.payload).toEqual({ round: 2, feedback: { findings: ['f_1'] } })
+    expect(ofType(events, 'implement.started').map((e) => e.payload)).toEqual([
+      { round: 1 },
+      { round: 2, feedback: { findings: ['f_1'] } },
+    ])
+
+    // Each producer round gets its own session bracket, all closed with transcripts.
+    const implementSessions = ofType(events, 'session.started').filter(
+      (e) => e.payload.role === 'implement',
+    )
+    expect(implementSessions.map((e) => e.payload.round)).toEqual([1, 2])
+    const brackets = implementSessions.map((e) => e.payload.session)
+    expect(new Set(brackets).size).toBe(2)
+    for (const bracket of brackets) {
+      const ended = ofType(events, 'session.ended').find((e) => e.payload.session === bracket)
+      expect(ended).toBeDefined()
+      expect(completedSessionEnd(ended!).transcript.kind).toBe('transcript')
+    }
+
+    // The continued turn re-issues the new round in AB_PHASE and the new
+    // bracket in AB_SESSION.
+    expect(seen).toEqual([
+      { phase: 'implement@1', session: brackets[0]! },
+      { phase: 'implement@2', session: brackets[1]! },
+    ])
+    // The refreshed AB_SESSION stamps the terminals: each round's completion
+    // carries its OWN bracket's identity (§15.3), not round 1's.
+    const completions = ofType(events, 'implement.completed').map((e) =>
+      e.actor.kind === 'agent' ? e.actor.session : e.actor.kind,
+    )
+    expect(completions).toEqual(brackets)
   })
 
   test('producer guidance survives a crash after its carrier start and before session launch', async () => {
@@ -2725,44 +2764,6 @@ describe('session memory (§10)', () => {
     ).toHaveLength(3)
   })
 
-  test('a continued turn re-issues ambient auth (D8): the new round in AB_PHASE, the new bracket in AB_SESSION', async () => {
-    // Regression: the runner used to leave the continued turn on round 1's
-    // start env, so the real CLI resolved round=1 and its terminal was
-    // rejected as a D5 second call — §10 continuation was dead in production.
-    const seen: Array<{ phase: string; session: string }> = []
-    const h = await makeHarness({
-      handlers: (store) => {
-        const table = reviseThenApproveHandlers(store)
-        const implement = table.implement!
-        table.implement = (ctx) => {
-          seen.push({
-            phase: ctx.opts.env.AB_PHASE ?? '',
-            session: sessionOf(ctx),
-          })
-          return implement(ctx)
-        }
-        return table
-      },
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('running')
-
-    const events = await h.store.getEvents(SLUG)
-    const brackets = ofType(events, 'session.started')
-      .filter((e) => e.payload.role === 'implement')
-      .map((e) => e.payload.session)
-    expect(seen).toEqual([
-      { phase: 'implement@1', session: brackets[0]! },
-      { phase: 'implement@2', session: brackets[1]! },
-    ])
-    // The refreshed AB_SESSION stamps the terminals: each round's completion
-    // carries its OWN bracket's identity (§15.3), not round 1's.
-    const completions = ofType(events, 'implement.completed').map((e) =>
-      e.actor.kind === 'agent' ? e.actor.session : e.actor.kind,
-    )
-    expect(completions).toEqual(brackets)
-  })
-
   test("`ab escalate` from a continued round stamps the refreshed AB_SESSION, so it IS the turn's terminal (§8.4)", async () => {
     // Regression: with the stale start env, the continued round's escalation
     // carried round 1's session id, executeSession's terminal check missed
@@ -2803,22 +2804,6 @@ describe('session memory (§10)', () => {
       role: 'implement',
       session: r2.payload.session,
     })
-  })
-
-  test('each producer round gets its own session bracket, both closed with transcripts', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const implementSessions = ofType(events, 'session.started').filter(
-      (e) => e.payload.role === 'implement',
-    )
-    expect(implementSessions.length).toBe(2)
-    expect(implementSessions[0]!.payload.session).not.toBe(implementSessions[1]!.payload.session)
-    expect(implementSessions.map((e) => e.payload.round)).toEqual([1, 2])
-    const endedSessions = new Set(ofType(events, 'session.ended').map((e) => e.payload.session))
-    for (const started of implementSessions) {
-      expect(endedSessions.has(started.payload.session)).toBe(true)
-    }
   })
 
   test('after a phase.failed the producer session is dropped: next attempt is start, not continue (D5)', async () => {
@@ -3105,52 +3090,58 @@ model = "m-plan"
 alternates = [{ runtime = "pi", model = "kimi-alt" }]
 `
 
-  test('an eligible primary failure substitutes in-order inside one attempt with durable attribution', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        const happyPlan = table.plan!
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('primary quota exhausted', true, '', 'exhaustion')
-            : happyPlan(ctx)
-        return table
-      },
-    })
-
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const starts = events.filter((event) => event.type === 'session.started')
-    const planStarts = starts.filter(
-      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
-    )
-    expect(planStarts).toHaveLength(2)
-    expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
-    expect(planStarts[1]?.payload).toMatchObject({
-      runner: 'pi',
-      model: 'kimi-alt',
-      substitution: {
-        failed: {
-          index: 0,
-          runner: 'scripted',
-          model: 'm-plan',
-          error: 'primary quota exhausted',
-          cause: 'exhaustion',
+  for (const [label, error, cause, missing] of [
+    ['exhaustion', 'primary quota exhausted', 'exhaustion', undefined],
+    ['missing executable', 'executable "codex" was not found', 'configuration', true],
+  ] as const)
+    test(`an eligible primary failure (${label}) substitutes in-order inside one attempt with durable attribution`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          const happyPlan = table.plan!
+          table.plan = (ctx) =>
+            ctx.opts.model === 'm-plan'
+              ? failedTurnResult(error, true, '', cause, missing)
+              : happyPlan(ctx)
+          return table
         },
-        selectedIndex: 1,
-      },
+      })
+
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      const starts = events.filter((event) => event.type === 'session.started')
+      const planStarts = starts.filter(
+        (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(2)
+      expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
+      expect(planStarts[1]?.payload).toMatchObject({
+        runner: 'pi',
+        model: 'kimi-alt',
+        substitution: {
+          failed: {
+            index: 0,
+            runner: 'scripted',
+            model: 'm-plan',
+            error,
+            cause,
+          },
+          selectedIndex: 1,
+        },
+      })
+      expect(
+        events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+      ).toHaveLength(0)
+      const planCompleted = events.find((event) => event.type === 'plan.completed')
+      expect(planCompleted?.actor).toMatchObject({
+        kind: 'agent',
+        session: planStarts[1]?.payload.session,
+      })
+      expect(starts[2]?.payload.runner).toBe('scripted')
+      const primary = [...h.runner.sessions.values()].find((j) => j.opts.model === 'm-plan')
+      expect(primary?.ended).toBe(true)
     })
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(0)
-    const planCompleted = events.find((event) => event.type === 'plan.completed')
-    expect(planCompleted?.actor).toMatchObject({
-      kind: 'agent',
-      session: planStarts[1]?.payload.session,
-    })
-    expect(starts[2]?.payload.runner).toBe('scripted')
-  })
 
   test('a failed producer continuation falls back fresh and the following round resets to primary', async () => {
     const continuationConfig = `
@@ -3387,165 +3378,93 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     })
   })
 
-  test('a completed turn with no typed terminal does not engage alternates', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => defaultTurnResult('agent omitted its terminal')
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const starts = ofType(events, 'session.started').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(starts).toHaveLength(2)
-    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(2)
-  })
-
-  test('an exhausted chain writes one phase failure and escalation names every target', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('primary overloaded', false, '', 'availability')
-            : failedTurnResult('alternate quota exhausted', true, '', 'exhaustion')
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const failures = events.filter(
-      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
-    )
-    expect(failures).toHaveLength(1)
-    expect(failures[0]?.payload).toMatchObject({
-      attempt: 1,
-      error: 'alternate quota exhausted',
-      willRetry: false,
-      providerAttempts: [
+  for (const chain of [
+    {
+      name: 'an exhausted chain',
+      primaryError: 'primary overloaded',
+      alternateError: 'alternate quota exhausted',
+      primary: () => failedTurnResult('primary overloaded', false, '', 'availability'),
+      alternate: () => failedTurnResult('alternate quota exhausted', true, '', 'exhaustion'),
+      attempts: [
         { index: 0, runner: 'scripted', error: 'primary overloaded' },
         { index: 1, runner: 'pi', error: 'alternate quota exhausted' },
       ],
-    })
-    const escalation = ofType(events, 'escalation.raised').find(
-      (event) => event.payload.source === 'policy',
-    )
-    expect(escalation?.payload.question).toContain('primary overloaded')
-    expect(escalation?.payload.question).toContain('alternate quota exhausted')
-  })
-
-  test('a missing primary CLI is skipped; the alternate completes with no phase.failed', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        const happyPlan = table.plan!
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('executable "codex" was not found', true, '', 'configuration', true)
-            : happyPlan(ctx)
-        return table
-      },
-    })
-
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(0)
-    const planStarts = ofType(events, 'session.started').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(planStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi'])
-    const primary = [...h.runner.sessions.values()].find((j) => j.opts.model === 'm-plan')
-    expect(primary?.ended).toBe(true)
-  })
-
-  test('every target missing emits one non-retried configuration failure naming the last', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = (ctx) =>
-          failedTurnResult(
-            `executable "${ctx.opts.model === 'm-plan' ? 'codex' : 'pi'}" was not found`,
-            true,
-            '',
-            'configuration',
-            true,
-          )
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const failures = ofType(events, 'phase.failed').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(failures).toHaveLength(1)
-    expect(failures[0]?.payload).toMatchObject({
-      error: 'executable "pi" was not found',
-      willRetry: false,
-      providerAttempts: [
+    },
+    {
+      // Every target missing emits one non-retried configuration failure
+      // naming the last.
+      name: 'a chain with every target missing',
+      primaryError: 'executable "codex" was not found',
+      alternateError: 'executable "pi" was not found',
+      primary: () =>
+        failedTurnResult('executable "codex" was not found', true, '', 'configuration', true),
+      alternate: () =>
+        failedTurnResult('executable "pi" was not found', true, '', 'configuration', true),
+      attempts: [
         { index: 0, error: 'executable "codex" was not found', cause: 'configuration' },
         { index: 1, error: 'executable "pi" was not found', cause: 'configuration' },
       ],
-    })
-  })
+    },
+  ])
+    test(`${chain.name} writes one non-retried phase failure and escalation names every target`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          table.plan = (ctx) => (ctx.opts.model === 'm-plan' ? chain.primary() : chain.alternate())
+          return table
+        },
+      })
 
-  test('a non-missing configuration failure bypasses a declared alternate', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => failedTurnResult('requires Pi 0.81 or newer', true, '', 'configuration')
-        return table
-      },
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      const failures = events.filter(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+      )
+      expect(failures).toHaveLength(1)
+      expect(failures[0]?.payload).toMatchObject({
+        attempt: 1,
+        error: chain.alternateError,
+        willRetry: false,
+        providerAttempts: chain.attempts,
+      })
+      const escalation = ofType(events, 'escalation.raised').find(
+        (event) => event.payload.source === 'policy',
+      )
+      expect(escalation?.payload.question).toContain(chain.primaryError)
+      expect(escalation?.payload.question).toContain(chain.alternateError)
     })
 
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(
-      ofType(events, 'session.started').filter((event) => event.payload.phase === 'plan'),
-    ).toHaveLength(1)
-  })
+  for (const [cause, error] of [
+    ['credentials', 'invalid API key'],
+    ['configuration', 'requires Pi 0.81 or newer'],
+  ] as const)
+    test(`a ${cause} rejection bypasses a declared alternate and parks immediately`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          table.plan = () => failedTurnResult(error, true, '', cause)
+          return table
+        },
+      })
 
-  test('credential rejection bypasses a declared alternate and parks immediately', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => failedTurnResult('invalid API key', true, '', 'credentials')
-        return table
-      },
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      const planStarts = events.filter(
+        (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(1)
+      const failed = events.find(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+      )
+      expect(failed?.payload).toMatchObject({
+        error,
+        willRetry: false,
+        providerAttempts: [{ index: 0, error, cause }],
+      })
     })
 
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const planStarts = events.filter(
-      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
-    )
-    expect(planStarts).toHaveLength(1)
-    const failed = events.find(
-      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
-    )
-    expect(failed?.payload).toMatchObject({
-      error: 'invalid API key',
-      willRetry: false,
-      providerAttempts: [{ index: 0, error: 'invalid API key', cause: 'credentials' }],
-    })
-  })
   test('AUT-28 quota rejection fails attempt 1 verbatim, deposits the transcript, and escalates without attempt 2', async () => {
     let calls = 0
     const h = await makeHarness({
@@ -3657,6 +3576,9 @@ describe('phase-session budget', () => {
       }),
     }
     const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
       runtimeRunner: stuck,
       runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
     })
@@ -3673,6 +3595,20 @@ describe('phase-session budget', () => {
       'phase session budget expired after 3600 seconds',
       'phase session budget expired after 3600 seconds',
     ])
+
+    // Both expired brackets' streams closed aborted (best-effort background
+    // release; poll for the writer's cadence).
+    const deadline = Date.now() + 2_000
+    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    while (streams.length < 2 && Date.now() < deadline) {
+      await Bun.sleep(25)
+      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    }
+    expect(streams).toHaveLength(2)
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('aborted')
+    }
   })
 
   test('operator abort keeps the deadline armed for an abort-ignoring start and skips alternates', async () => {
@@ -4262,40 +4198,13 @@ describe('no-terminal retry policy (D5)', () => {
     })
   }
 
-  test('a silent session fails the phase; the transcript and session.ended still merge', async () => {
+  test('a silent session fails the phase without engaging alternates; the second failure exhausts maxPhaseAttempts and run exits blocked', async () => {
     const h = await makeHarness({
-      handlers: () => ({ plan: () => defaultTurnResult('rambled and exited') }),
-    })
-    await h.br.attach()
-    await h.br.step()
-
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-4).map((e) => e.type)).toEqual([
-      'plan.started',
-      'session.started',
-      'session.ended',
-      'phase.failed',
-    ])
-    const failed = ofType(events, 'phase.failed')[0]!
-    expect(failed.payload).toEqual({
-      phase: 'plan',
-      round: 1,
-      attempt: 1,
-      error: 'no-terminal',
-      willRetry: true,
-    })
-    const ended = ofType(events, 'session.ended')[0]!
-    const transcript = await h.store.getArtifact(
-      SLUG,
-      'transcript',
-      completedSessionEnd(ended).transcript.rev,
-    )
-    expect(transcript).not.toBeNull()
-    expect(transcript!.meta.metadata.phase).toBe('plan')
-  })
-
-  test('the second failure exhausts maxPhaseAttempts: policy escalation, no third session, run exits blocked', async () => {
-    const h = await makeHarness({
+      // A completed turn with no typed terminal does not engage alternates.
+      configToml: CONFIG_TOML.replace(
+        'plan = { runtime = "scripted", model = "m-plan" }',
+        'plan = { runtime = "scripted", model = "m-plan", alternates = [{ runtime = "pi", model = "kimi-alt" }] }',
+      ),
       handlers: () => ({ plan: () => defaultTurnResult('rambled again') }),
     })
     const state = await h.br.run()
@@ -4320,11 +4229,36 @@ describe('no-terminal retry policy (D5)', () => {
     expect(h.runner.sessions.size).toBe(2) // never a third session
 
     const events = await h.store.getEvents(SLUG)
+    const starts = ofType(events, 'session.started')
+    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
     const failed = ofType(events, 'phase.failed')
     expect(failed.map((e) => [e.payload.attempt, e.payload.willRetry])).toEqual([
       [1, true],
       [2, false],
     ])
+    expect(failed[0]!.payload).toEqual({
+      phase: 'plan',
+      round: 1,
+      attempt: 1,
+      error: 'no-terminal',
+      willRetry: true,
+      providerAttempts: [
+        {
+          index: 0,
+          runner: 'scripted',
+          model: 'm-plan',
+          session: starts[0]!.payload.session,
+          error: 'no-terminal',
+        },
+      ],
+    })
+    // The failed session's transcript and session.ended still merge.
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      completedSessionEnd(ofType(events, 'session.ended')[0]!).transcript.rev,
+    )
+    expect(transcript!.meta.metadata.phase).toBe('plan')
     const escalation = ofType(events, 'escalation.raised')[0]!
     expect(escalation.actor).toEqual({ kind: 'kernel' })
     expect(escalation.payload.source).toBe('policy')
@@ -4395,70 +4329,58 @@ describe('no-terminal retry policy (D5)', () => {
 // ── Crash-gap repair (§8.5) ──────────────────────────────────────────────────
 
 describe('crash-gap repair', () => {
-  test('an escalate verdict without its escalation.raised is repaired by the kernel; run exits blocked', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'code-review': async (ctx) => {
-          // Simulates the CLI dying between the verdict and its escalation.
-          await reviewVerdict(
-            store,
-            ctx,
-            'code-review',
-            'escalate',
-            [],
-            'auth approach conflicts with the spec',
-          )
-          return defaultTurnResult('escalated')
-        },
-      }),
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
+  for (const cliRaised of [false, true])
+    test(`an escalate verdict ${cliRaised ? 'with' : 'without'} its escalation.raised gets exactly one raise; run exits blocked`, async () => {
+      const h = await makeHarness({
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'code-review': async (ctx) => {
+            // Without the raise: simulates the CLI dying between the verdict
+            // and its escalation, so the kernel repairs it.
+            await reviewVerdict(
+              store,
+              ctx,
+              'code-review',
+              'escalate',
+              [],
+              'auth approach conflicts with the spec',
+            )
+            if (cliRaised)
+              await store.append(SLUG, {
+                actor: agentActor('code-review', sessionOf(ctx)),
+                type: 'escalation.raised',
+                payload: {
+                  id: 'esc_agent',
+                  phase: 'code-review',
+                  round: roundOf(ctx),
+                  source: 'agent',
+                  question: 'auth approach conflicts with the spec',
+                },
+              })
+            return defaultTurnResult('escalated')
+          },
+        }),
+      })
+      const state = await h.br.run()
+      expect(state.status).toBe('blocked')
 
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-5).map((e) => e.type)).toEqual([
-      'code-review.started',
-      'session.started',
-      'code-review.verdict',
-      'escalation.raised',
-      'session.ended',
-    ])
-    const escalation = ofType(events, 'escalation.raised')[0]!
-    expect(escalation.actor).toEqual({ kind: 'kernel' })
-    expect(escalation.payload.source).toBe('agent')
-    expect(escalation.payload.phase).toBe('code-review')
-    expect(escalation.payload.round).toBe(1)
-    expect(escalation.payload.question).toBe('auth approach conflicts with the spec')
-  })
-
-  test('no duplicate raise when the CLI already appended the escalation', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'code-review': async (ctx) => {
-          await reviewVerdict(store, ctx, 'code-review', 'escalate', [], 'which auth approach?')
-          await store.append(SLUG, {
-            actor: agentActor('code-review', sessionOf(ctx)),
-            type: 'escalation.raised',
-            payload: {
-              id: 'esc_agent',
-              phase: 'code-review',
-              round: roundOf(ctx),
-              source: 'agent',
-              question: 'which auth approach?',
-            },
-          })
-          return defaultTurnResult('escalated')
-        },
-      }),
+      const events = await h.store.getEvents(SLUG)
+      expect(events.slice(-5).map((e) => e.type)).toEqual([
+        'code-review.started',
+        'session.started',
+        'code-review.verdict',
+        'escalation.raised',
+        'session.ended',
+      ])
+      expect(ofType(events, 'escalation.raised')).toHaveLength(1)
+      const escalation = ofType(events, 'escalation.raised')[0]!
+      if (cliRaised) expect(escalation.payload.id).toBe('esc_agent')
+      else expect(escalation.actor).toEqual({ kind: 'kernel' })
+      expect(escalation.payload.source).toBe('agent')
+      expect(escalation.payload.phase).toBe('code-review')
+      expect(escalation.payload.round).toBe(1)
+      expect(escalation.payload.question).toBe('auth approach conflicts with the spec')
     })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'escalation.raised').length).toBe(1)
-    expect(ofType(events, 'escalation.raised')[0]!.payload.id).toBe('esc_agent')
-  })
 })
 
 // ── Deterministic checks (§8.2) ──────────────────────────────────────────────
@@ -5393,45 +5315,6 @@ describe('session streams: capability boundary and failure containment', () => {
 })
 
 describe('session streams: close outcomes per exit path', () => {
-  test('a budget-expired bracket closes its stream aborted', async () => {
-    const timers = new ManualSessionBudgetScheduler()
-    const stuck: AgentRunner = {
-      name: 'stuck',
-      start: () => new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {}),
-      continue: () => new Promise<AgentTurnResult>(() => {}),
-      end: async () => ({
-        content: '',
-        metadata: { runner: 'stuck', usage: { inputTokens: 0, outputTokens: 0, turns: 0 } },
-      }),
-    }
-    const h = await makeHarness({
-      registrationExtras: {
-        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
-      },
-      runtimeRunner: stuck,
-      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
-    })
-
-    const run = h.br.run()
-    await timers.expireNext()
-    await timers.expireNext()
-    expect((await run).status).toBe('blocked')
-
-    // Both expired brackets' streams closed aborted (best-effort background
-    // release; poll for the writer's cadence).
-    const deadline = Date.now() + 2_000
-    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
-    while (streams.length < 2 && Date.now() < deadline) {
-      await Bun.sleep(25)
-      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
-    }
-    expect(streams).toHaveLength(2)
-    for (const record of streams) {
-      expect(record.status).toBe('closed')
-      expect(record.outcome).toBe('aborted')
-    }
-  })
-
   test('an operator-aborted bracket that settles keeps its transcript deposit and closes aborted', async () => {
     const h = await makeHarness({
       registrationExtras: {
