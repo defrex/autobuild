@@ -19,7 +19,7 @@ import type {
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
-import { createHostedStoreService } from '../service'
+import { createHostedStoreService, type HostedStoreServiceOptions } from '../service'
 import { createWebAuth, type WebAuth } from '../web/auth'
 import { parseWebAuthEnv } from '../web/config'
 import { createMcpEndpoint } from '../web/mcp'
@@ -72,30 +72,52 @@ export function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: nu
 }
 
 /** The hosted service with a real (memory) store behind the authenticated
- * protocol; the MCP endpoint delegates to it in-process. */
+ * protocol; the MCP endpoint delegates to it in-process and advertises the
+ * service's served table, as production does. `serviceEnv` replaces the env
+ * handed to the hosted service only (default `env`); Better Auth and the MCP
+ * endpoint config always use `env`. */
 export function buildApp(
   env: Record<string, string>,
   auth: WebAuth,
   access: HumanAccess = testAccess(env, testProjects([REPO])),
+  options: {
+    serviceEnv?: Record<string, string>
+    projects?: string[]
+  } & Pick<
+    HostedStoreServiceOptions,
+    'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError'
+  > = {},
 ): {
   app: App
   backing: MemoryBuildStore
+  service: ReturnType<typeof createHostedStoreService>
 } {
   const backing = new MemoryBuildStore()
   const config = parseWebAuthEnv(env)
+  const projects = options.projects ?? [REPO]
   const service = createHostedStoreService({
     openTicketPolicy: async () => new MemoryTicketPolicyStore(),
-    openProjectRegistry: async () => testProjects([REPO]),
-    env,
+    openProjectRegistry: async () => testProjects(projects),
+    env: options.serviceEnv ?? env,
     openStore: async () => backing,
+    ...(options.composeOperatorSandbox !== undefined
+      ? { composeOperatorSandbox: options.composeOperatorSandbox }
+      : {}),
+    ...(options.issueDispatcherCredential !== undefined
+      ? { issueDispatcherCredential: options.issueDispatcherCredential }
+      : {}),
+    ...(options.reportInternalError !== undefined
+      ? { reportInternalError: options.reportInternalError }
+      : {}),
   })
   const endpoint = createMcpEndpoint({
     access,
-    projects: testProjects(['https://github.com/owner/repo']),
+    projects: testProjects(projects),
     config,
     auth,
     storeSecret: env.AB_STORE_SECRET!,
     delegate: (request) => service.fetch(request),
+    entries: service.operatorTools,
   })
   const app: App = async (request) => {
     const url = new URL(request.url)
@@ -110,7 +132,7 @@ export function buildApp(
     if (url.pathname === '/mcp') return endpoint.fetch(request)
     return Response.json({ error: `no route: ${request.method} ${url.pathname}` }, { status: 404 })
   }
-  return { app, backing }
+  return { app, backing, service }
 }
 
 export function rewrite(request: Request, pathname: string): Request {
