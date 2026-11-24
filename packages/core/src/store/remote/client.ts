@@ -1079,6 +1079,18 @@ export class RemoteBuildStore implements BuildStore {
     }
     if (response.status === 404 || response.status === 405)
       fail(undefined, 'server does not serve rollups')
+    if (response.status === 400) {
+      // The request passed local validation, so a server-side validation
+      // refusal is a capability gap: an older server without this rollup.
+      const refusal = errorBodySchema.safeParse(
+        await response
+          .clone()
+          .json()
+          .catch(() => null),
+      )
+      if (refusal.success && refusal.data.kind === 'validation')
+        fail(undefined, `server does not serve rollup "${parsed.reducer}": ${refusal.data.error}`)
+    }
     if (!response.ok) throw await this.toError(response)
     let body: unknown
     try {

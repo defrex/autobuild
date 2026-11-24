@@ -10,7 +10,8 @@
  * every process sharing the store, the engine asks the changed-builds feed for
  * builds changed since the saved position, reads each changed build's saved
  * build-reducer value (a delta read), subtracts the contribution it absorbed
- * from that build last time, adds the new one, and commits the accumulator,
+ * from that build last time, adds the new one (contributed with the build's
+ * slug), and commits the accumulator,
  * the feed's snapshot head and every changed absorbed contribution together,
  * conditional on the row it read. A first computation (no valid row) starts
  * from the empty accumulator at position 0, so the feed lists every build once.
@@ -260,7 +261,7 @@ export async function readRollupValue(
         const values = await Promise.all(batch.map((slug) => advance.buildValue(slug, request)))
         for (const [index, slug] of batch.entries()) {
           const value = values[index] ?? null
-          const next = value === null ? null : def.contribute(value.value, resolved.args, now)
+          const next = value === null ? null : def.contribute(value.value, resolved.args, now, slug)
           const prior = previous.get(slug)
           if (prior !== undefined) def.subtract(acc, prior)
           if (next !== null) {
