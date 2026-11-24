@@ -999,6 +999,11 @@ test('fresh clients read the canonical rollup in one request with zero backing e
     await store.append(slug, { actor: { kind: 'kernel' }, type: 'build.paused', payload: {} })
     await store.append(slug, { actor: { kind: 'kernel' }, type: 'build.resumed', payload: {} })
   }
+  await store.append('rollup-a', {
+    actor: { kind: 'dispatcher' },
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
   let rows = 0
   const states = Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
   for (const state of states.values())
@@ -1019,14 +1024,44 @@ test('fresh clients read the canonical rollup in one request with zero backing e
     requests.push(new URL(request.url).pathname)
     return server.fetch(request)
   }) as typeof fetch
-  await rollupRemoteReadBudget({
-    backing: store,
-    fresh: () => new RemoteBuildStore({ url: 'https://test', token, fetchFn }),
-    repo: 'repo',
-    reset: () => {
-      rows = 0
-    },
-    eventRows: () => rows,
-    requests: () => requests,
-  })
+  for (const request of [undefined, { reducer: 'buildRoster' }])
+    await rollupRemoteReadBudget({
+      backing: store,
+      fresh: () => new RemoteBuildStore({ url: 'https://test', token, fetchFn }),
+      repo: 'repo',
+      reset: () => {
+        rows = 0
+      },
+      eventRows: () => rows,
+      requests: () => requests,
+      ...(request ? { request } : {}),
+    })
+})
+
+test('an older server without the roster rollup is a typed failure, never a replay', async () => {
+  const store = new MemoryBuildStore()
+  await store.createBuild({ slug: 'roster-old', repo: 'repo' })
+  const server = createStoreServer({ store, secret })
+  const requests: string[] = []
+  // A pre-roster server knows the route but not the rollup: its own
+  // validation refuses the name, exactly as this one refuses an unknown name.
+  const fetchFn = (async (url, init) => {
+    const request = new Request(url, init)
+    const path = new URL(request.url).pathname
+    requests.push(path)
+    if (!path.endsWith('/rollup-values')) return server.fetch(request)
+    const body = (await request.json()) as { reducer: string }
+    return server.fetch(
+      new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: JSON.stringify({ ...body, reducer: `${body.reducer}FromTheFuture` }),
+      }),
+    )
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+  await expect(
+    client.getReducerValue({ kind: 'rollup', repo: 'repo' }, { reducer: 'buildRoster' }),
+  ).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
+  expect(requests).toEqual(['/repos/repo/rollup-values'])
 })

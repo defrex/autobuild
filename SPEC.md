@@ -1618,8 +1618,8 @@ three parts:
 
 1. **A build reducer**: a registered build-scope named value, saved per build
    and advanced by delta like any other.
-2. **A contribution function**: pure, from that build's finished value to its
-   share of the rollup.
+2. **A contribution function**: pure, from that build's slug and finished
+   value to its share of the rollup.
 3. **A rollup**: a repository accumulator with `add` and `subtract`. Its value
    is the sum of the contributions of every build it has absorbed.
 
@@ -1681,7 +1681,8 @@ both. An unknown repository answers the empty value and creates nothing.
 `POST /repos/:repo/rollup-values` and never rebuilds the value from events, the
 feed or build values. Rollups have no released projection catalog, so a client
 requires the server's version to equal its own: a different version, an absent
-route or a value outside the rollup's schema fails with
+route, an older server's `400 validation` refusal of a rollup name it does not
+know, or a value outside the rollup's schema fails with
 `ReducerValueIncompatibilityError`. A rollup revision therefore makes older
 clients fail with that typed error until they upgrade.
 
@@ -1713,6 +1714,33 @@ histograms per step and UTC day.
   p99Ms, totalMs}]}`, with `cursor: 0`. Steps run in pipeline order (phases,
   `verify:*` by name, finalize, reconcile, then waits) and zero-count steps are
   omitted. Its size grows with steps, not with retained history.
+
+#### `buildRoster`
+
+The roster folds every build's `buildRosterEntry` (§15.5) into the
+repository's live builds and its most recently finished ones.
+
+- **Contribution:** a finished build (its build-reducer status is `done` or
+  `aborted`) contributes `{slug, kind, outcome, completedAt}`, where `outcome`
+  is `merged`, `closed` (any other `build.completed` outcome) or `aborted`, and
+  `completedAt` is the latest terminal event's timestamp. Any other build
+  contributes `{slug, kind, createdAt}`. The terminal rule is the build
+  reducer's: `build.completed` and `build.aborted` overwrite each other in log
+  order, latest wins, and nothing else clears them.
+- **History:** the accumulator keeps every live entry and the newest 50
+  finished entries, newest completion first (slug breaks ties). A completion
+  beyond the cap prunes the oldest. A build that leaves the history, by
+  becoming live again or by an older completion being pruned, is not replaced:
+  the history never back-fills from older builds, so after many such moves
+  without new completions the answer can show fewer than 10 finished builds.
+- **Arguments:** none, so each repository has one roster key.
+- **Answer:** `{position, live: [{slug, kind, createdAt?}], finished: [{slug,
+  kind, outcome, completedAt}]}`, with `cursor: 0`. `live` lists every live
+  build, oldest `createdAt` first (missing first), then by slug; `finished`
+  holds up to 10 of the retained entries, newest first.
+- **Cost:** a read with nothing changed is the two constant reads, and the
+  saved row is O(live builds + 50) bytes however many builds the repository
+  has ever had.
 
 ## 8. The `ab` CLI
 
@@ -5366,6 +5394,14 @@ intervals pair.
 A **step** is a category; durations are per step. Waits are steps too and may
 overlap phases: an escalation raised during implement counts in both.
 Uncovered time between segments is idle and is not a segment.
+
+#### Build roster entry
+
+`buildRosterEntry` is a registered build-scope value for the `buildRoster`
+rollup (§7.7): the build's `kind` (from `build.created`, default `work`), its
+`createdAt` (the first event's timestamp) and, once terminal, `finished:
+{outcome, completedAt}`. It applies the build reducer's terminal rule, so
+`finished` is present exactly when the build's status is `done` or `aborted`.
 
 ### 15.6 Walkthroughs
 
