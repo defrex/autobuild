@@ -286,7 +286,8 @@ registered build reducer, a pure invertible contribution, an accumulator with
 `cli/dashboard/timeline.ts`'s `buildTimeline` segments into the log-scale
 histograms of `store/histogram.ts`. `kernel/build-roster.ts` is the second:
 its `buildRosterEntry` build reducer feeds `buildRoster`, the live builds plus
-a capped history of the newest finished ones. `store/rollups.ts` is the one engine every
+a capped history of the newest finished ones, which `ab web`'s overview starts
+from. `store/rollups.ts` is the one engine every
 adapter runs over a narrow `RollupStorage` port: fast path on an unchanged
 change position, otherwise an advance by the changed-builds feed, serialized
 per key and committed atomically with each build's absorbed contribution in
@@ -1395,6 +1396,11 @@ clock-dependent step timers. Its only value import is `cells.ts`.
 header, dispatcher-mode, attention-list, finished-row and overview text. The
 terminal renderer paints those values, and `web/protocol.ts` aliases the same
 types for the web frame, so a term changes in one place.
+`web/overview-source.ts` builds `ab web`'s overview from `buildRoster` and the
+changed-builds feed, through the poll cache's shared row and header helpers
+(`readRowEnrichment`, `projectRowWithEnrichment`, `repositoryDashboardHeader`
+in `cli/dashboard/poll.ts`), so the terminal and the web project rows the same
+way.
 
 The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
 increment `repo_change_positions` transactionally through triggers on build,
