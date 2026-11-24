@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-27T18:36:57.531876+00:00",
+  "generatedAt": "2026-11-23T23:19:58.811Z",
   "title": "Design System: Autobuild ANSI",
   "extensions": {
     "colorMeta": {
@@ -338,6 +338,174 @@
           "oklch(72% 0.0785 268.90)",
           "oklch(84% 0.0785 268.90)",
           "oklch(95% 0.0785 268.90)"
+        ]
+      },
+      "light-chart-plan": {
+        "role": "secondary",
+        "displayName": "Light chart plan",
+        "tonalRamp": [
+          "oklch(15% 0.1998 286.57)",
+          "oklch(26% 0.1998 286.57)",
+          "oklch(38% 0.1998 286.57)",
+          "oklch(49% 0.1998 286.57)",
+          "oklch(61% 0.1998 286.57)",
+          "oklch(72% 0.1998 286.57)",
+          "oklch(84% 0.1998 286.57)",
+          "oklch(95% 0.1998 286.57)"
+        ]
+      },
+      "light-chart-implement": {
+        "role": "secondary",
+        "displayName": "Light chart implement",
+        "tonalRamp": [
+          "oklch(15% 0.1875 348.53)",
+          "oklch(26% 0.1875 348.53)",
+          "oklch(38% 0.1875 348.53)",
+          "oklch(49% 0.1875 348.53)",
+          "oklch(61% 0.1875 348.53)",
+          "oklch(72% 0.1875 348.53)",
+          "oklch(84% 0.1875 348.53)",
+          "oklch(95% 0.1875 348.53)"
+        ]
+      },
+      "light-chart-verify": {
+        "role": "secondary",
+        "displayName": "Light chart verify",
+        "tonalRamp": [
+          "oklch(15% 0.1321 128.26)",
+          "oklch(26% 0.1321 128.26)",
+          "oklch(38% 0.1321 128.26)",
+          "oklch(49% 0.1321 128.26)",
+          "oklch(61% 0.1321 128.26)",
+          "oklch(72% 0.1321 128.26)",
+          "oklch(84% 0.1321 128.26)",
+          "oklch(95% 0.1321 128.26)"
+        ]
+      },
+      "light-chart-land": {
+        "role": "secondary",
+        "displayName": "Light chart land",
+        "tonalRamp": [
+          "oklch(15% 0.1075 239.72)",
+          "oklch(26% 0.1075 239.72)",
+          "oklch(38% 0.1075 239.72)",
+          "oklch(49% 0.1075 239.72)",
+          "oklch(61% 0.1075 239.72)",
+          "oklch(72% 0.1075 239.72)",
+          "oklch(84% 0.1075 239.72)",
+          "oklch(95% 0.1075 239.72)"
+        ]
+      },
+      "light-chart-wait": {
+        "role": "secondary",
+        "displayName": "Light chart wait",
+        "tonalRamp": [
+          "oklch(15% 0.0160 264.46)",
+          "oklch(26% 0.0160 264.46)",
+          "oklch(38% 0.0160 264.46)",
+          "oklch(49% 0.0160 264.46)",
+          "oklch(61% 0.0160 264.46)",
+          "oklch(72% 0.0160 264.46)",
+          "oklch(84% 0.0160 264.46)",
+          "oklch(95% 0.0160 264.46)"
+        ]
+      },
+      "light-chart-wait-strong": {
+        "role": "secondary",
+        "displayName": "Light chart wait strong",
+        "tonalRamp": [
+          "oklch(15% 0.0144 269.29)",
+          "oklch(26% 0.0144 269.29)",
+          "oklch(38% 0.0144 269.29)",
+          "oklch(49% 0.0144 269.29)",
+          "oklch(61% 0.0144 269.29)",
+          "oklch(72% 0.0144 269.29)",
+          "oklch(84% 0.0144 269.29)",
+          "oklch(95% 0.0144 269.29)"
+        ]
+      },
+      "dark-chart-plan": {
+        "role": "secondary",
+        "displayName": "Dark chart plan",
+        "tonalRamp": [
+          "oklch(15% 0.1611 289.43)",
+          "oklch(26% 0.1611 289.43)",
+          "oklch(38% 0.1611 289.43)",
+          "oklch(49% 0.1611 289.43)",
+          "oklch(61% 0.1611 289.43)",
+          "oklch(72% 0.1611 289.43)",
+          "oklch(84% 0.1611 289.43)",
+          "oklch(95% 0.1611 289.43)"
+        ]
+      },
+      "dark-chart-implement": {
+        "role": "secondary",
+        "displayName": "Dark chart implement",
+        "tonalRamp": [
+          "oklch(15% 0.1538 351.60)",
+          "oklch(26% 0.1538 351.60)",
+          "oklch(38% 0.1538 351.60)",
+          "oklch(49% 0.1538 351.60)",
+          "oklch(61% 0.1538 351.60)",
+          "oklch(72% 0.1538 351.60)",
+          "oklch(84% 0.1538 351.60)",
+          "oklch(95% 0.1538 351.60)"
+        ]
+      },
+      "dark-chart-verify": {
+        "role": "secondary",
+        "displayName": "Dark chart verify",
+        "tonalRamp": [
+          "oklch(15% 0.1365 124.60)",
+          "oklch(26% 0.1365 124.60)",
+          "oklch(38% 0.1365 124.60)",
+          "oklch(49% 0.1365 124.60)",
+          "oklch(61% 0.1365 124.60)",
+          "oklch(72% 0.1365 124.60)",
+          "oklch(84% 0.1365 124.60)",
+          "oklch(95% 0.1365 124.60)"
+        ]
+      },
+      "dark-chart-land": {
+        "role": "secondary",
+        "displayName": "Dark chart land",
+        "tonalRamp": [
+          "oklch(15% 0.1077 242.86)",
+          "oklch(26% 0.1077 242.86)",
+          "oklch(38% 0.1077 242.86)",
+          "oklch(49% 0.1077 242.86)",
+          "oklch(61% 0.1077 242.86)",
+          "oklch(72% 0.1077 242.86)",
+          "oklch(84% 0.1077 242.86)",
+          "oklch(95% 0.1077 242.86)"
+        ]
+      },
+      "dark-chart-wait": {
+        "role": "secondary",
+        "displayName": "Dark chart wait",
+        "tonalRamp": [
+          "oklch(15% 0.0200 264.40)",
+          "oklch(26% 0.0200 264.40)",
+          "oklch(38% 0.0200 264.40)",
+          "oklch(49% 0.0200 264.40)",
+          "oklch(61% 0.0200 264.40)",
+          "oklch(72% 0.0200 264.40)",
+          "oklch(84% 0.0200 264.40)",
+          "oklch(95% 0.0200 264.40)"
+        ]
+      },
+      "dark-chart-wait-strong": {
+        "role": "secondary",
+        "displayName": "Dark chart wait strong",
+        "tonalRamp": [
+          "oklch(15% 0.0120 264.50)",
+          "oklch(26% 0.0120 264.50)",
+          "oklch(38% 0.0120 264.50)",
+          "oklch(49% 0.0120 264.50)",
+          "oklch(61% 0.0120 264.50)",
+          "oklch(72% 0.0120 264.50)",
+          "oklch(84% 0.0120 264.50)",
+          "oklch(95% 0.0120 264.50)"
         ]
       }
     },
