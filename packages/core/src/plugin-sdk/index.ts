@@ -276,5 +276,24 @@ export type {
   ReducerValueStorage,
   ValueCacheRow,
 } from '../store/reducer-values'
+export {
+  KeyedMutex,
+  ROLLUP_LEASE_MS,
+  ROLLUP_LEASE_WAIT_MS,
+  ROLLUP_RENEW_BATCH,
+  RollupLeaseLostError,
+  RollupLeaseTimeoutError,
+  readRollupValue,
+  resolveRollupValue,
+  rollupEntry,
+} from '../store/rollups'
+export type {
+  ResolvedRollup,
+  RollupAdvance,
+  RollupReads,
+  RollupRow,
+  RollupStorage,
+} from '../store/rollups'
+export type { ReducerValueScope, RollupScope } from '../store/snapshots'
 
 export { resumeAgent } from '../ports/runner/native-session'

@@ -267,7 +267,7 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       return Promise.reject(new BuildScopeError(scope, 'getRepoHighWater', repo))
     },
     async getReducerValue(
-      target: SnapshotScope,
+      target: import('./snapshots').ReducerValueScope,
       request: ReducerValueRequest,
     ): Promise<ReducerValue> {
       if (target.kind !== 'build') {
