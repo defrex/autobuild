@@ -220,7 +220,11 @@ export class MemoryBuildStore implements BuildStore {
   private readonly snapshots = new Map<string, ReducerSnapshot>()
   /** `[repo, ticketId, kind, name]` → rows in revision order. A removal is a
    * tombstone row (`removed`, empty manifest) taking the next revision. */
-  private readonly ticketAssets = new Map<string, { meta: TicketAssetMeta; removed: boolean }[]>()
+  /** Ticket assets keyed `[repo, ticketId]` → `[kind, name]` → revisions, oldest first. */
+  private readonly ticketAssets = new Map<
+    string,
+    Map<string, { meta: TicketAssetMeta; removed: boolean }[]>
+  >()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -1263,6 +1267,42 @@ export class MemoryBuildStore implements BuildStore {
     )
   }
 
+  private assetRows(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    create: true,
+  ): { meta: TicketAssetMeta; removed: boolean }[]
+  private assetRows(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): { meta: TicketAssetMeta; removed: boolean }[] | undefined
+  private assetRows(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    create = false,
+  ): { meta: TicketAssetMeta; removed: boolean }[] | undefined {
+    const ticketKey = JSON.stringify([repo, ticketId])
+    const nameKey = JSON.stringify([kind, name])
+    let names = this.ticketAssets.get(ticketKey)
+    if (!names) {
+      if (!create) return undefined
+      names = new Map()
+      this.ticketAssets.set(ticketKey, names)
+    }
+    let rows = names.get(nameKey)
+    if (!rows && create) {
+      rows = []
+      names.set(nameKey, rows)
+    }
+    return rows
+  }
+
   async ticketAssetLimits(_repo: string): Promise<TicketAssetLimits> {
     return { ...DEFAULT_TICKET_ASSET_LIMITS }
   }
@@ -1274,8 +1314,7 @@ export class MemoryBuildStore implements BuildStore {
   ): Promise<TicketAssetMeta> {
     const size = validateTicketAssetInput(asset)
     const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
-    const key = JSON.stringify([repo, ticketId, asset.kind, asset.name])
-    const rows = this.ticketAssets.get(key) ?? []
+    const rows = this.assetRows(repo, ticketId, asset.kind, asset.name, true)
     const meta: TicketAssetMeta = {
       repo,
       ticketId,
@@ -1288,7 +1327,6 @@ export class MemoryBuildStore implements BuildStore {
       createdAt: this.now(),
     }
     rows.push({ meta, removed: false })
-    this.ticketAssets.set(key, rows)
     return structuredClone(meta)
   }
 
@@ -1299,7 +1337,7 @@ export class MemoryBuildStore implements BuildStore {
     name: string,
     rev?: number,
   ): Promise<TicketAsset | null> {
-    const rows = this.ticketAssets.get(JSON.stringify([repo, ticketId, kind, name]))
+    const rows = this.assetRows(repo, ticketId, kind, name)
     const row =
       rev === undefined ? rows?.at(-1) : rows?.find((candidate) => candidate.meta.revision === rev)
     if (!row || row.removed) return null
@@ -1321,9 +1359,8 @@ export class MemoryBuildStore implements BuildStore {
     opts?: { revisions?: boolean },
   ): Promise<TicketAssetSummary[]> {
     const out: TicketAssetSummary[] = []
-    for (const rows of this.ticketAssets.values()) {
-      const first = rows[0]
-      if (!first || first.meta.repo !== repo || first.meta.ticketId !== ticketId) continue
+    const names = this.ticketAssets.get(JSON.stringify([repo, ticketId]))
+    for (const rows of names?.values() ?? []) {
       if (opts?.revisions) {
         for (const row of rows) if (!row.removed) out.push(summarizeTicketAsset(row.meta))
       } else {
@@ -1343,7 +1380,7 @@ export class MemoryBuildStore implements BuildStore {
     kind: string,
     name: string,
   ): Promise<TicketAssetMeta | null> {
-    const rows = this.ticketAssets.get(JSON.stringify([repo, ticketId, kind, name]))
+    const rows = this.assetRows(repo, ticketId, kind, name)
     const latest = rows?.at(-1)
     if (!rows || !latest || latest.removed) return null
     rows.push({

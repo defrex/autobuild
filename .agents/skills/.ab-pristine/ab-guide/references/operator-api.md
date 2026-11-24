@@ -90,7 +90,7 @@ raw session-event append. External operator harnesses own agent execution.
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
 | `GET …/tickets?state=S&label=L&limit=N&offset=K&order=O` | `{states,tickets,diagnostics,criteria,triageState,readyState,doneState,total}`. The three lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. `limit` (0–200) returns one page, after skipping `offset`, in `order` `oldest` (the default: dispatch order, urgent tickets first, then the source order) or `newest` (newest filed first, regardless of urgency; see paging below); `total` counts every match before paging. |
 | `GET …/tickets/states` | Full state metadata `{name,tickets,about?}[]`, including empty states (`tickets.states` in MCP). |
-| `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
+| `GET …/tickets/{id}` | `{ticket,blockers,build,assets}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. `assets` lists the current ticket assets as `{kind,name,revision,size,layout,fileCount}`, as `ab ticket show --json` does. |
 
 For artifact reads, an absent `rev` selects the latest revision. A supplied value
 must match `[0-9]+` (one or more ASCII base-10 digits) and represent an integer
@@ -536,6 +536,33 @@ or `inactive`. Merged or closed PRs, leaves still running, conflicted or
 blocked (use `builds.answer`) are refused with `not-reopenable`; a pending abort
 or discard is refused with `abort-pending` or `discard-pending`. Ownership is
 enforced. The tool has no HTTP route.
+
+### Ticket assets
+
+Three tools carry the `ab ticket attach`, `ab ticket asset get` and
+`ab ticket asset rm` surface; `tickets.get` lists the current assets. Bytes
+cross the wire as strict, padded standard base64 (`""` is an empty file).
+
+| Tool | Input | Receipt |
+|---|---|---|
+| `tickets.asset.attach` | `{repo, id, kind, name, layout, entries}`; `layout` is `file` (exactly one file entry) or `tree` (a folder, possibly empty); each entry is `{type:"file", path, contentBase64}` or `{type:"dir", path}` | `{asset, replaced, activeBuilds, noteError?}`: `asset` is the stored revision's metadata as `ab ticket attach --json` prints it |
+| `tickets.asset.get` | `{repo, id, kind, name, rev?}`; without `rev`, the latest revision | `{asset, entries}`: entries in manifest order, each `{type:"file", path, size, contentBase64}` or `{type:"dir", path}` |
+| `tickets.asset.remove` | `{repo, id, kind, name}` | `{removed, activeBuilds, noteError?}`: the metadata of the revision that was current |
+
+- **Same rules as the CLI.** Each attach stores a new revision; earlier
+  revisions, including those of a removed asset, stay readable by `rev`. The
+  store's limits apply (25 MiB of file bytes by default).
+- **Failures.** A naming, path, layout or size violation is `validation` with
+  code `ticket-asset-invalid`, and stores nothing. An unknown ticket, a missing
+  asset or revision, or removing an asset with no current revision is
+  `not-found`.
+- **Notes.** Attach and remove leave a note on the ticket after the store
+  write. A failed note does not fail the call: the receipt carries `noteError`,
+  and retrying an attach would store another revision.
+- **Active builds.** `activeBuilds` names the ticket's running builds; each
+  keeps the assets it froze at the claim.
+- Attach and remove require an attributed identity; `tickets.asset.remove` is
+  annotated destructive. The tools have no HTTP route.
 
 ### Node restack request
 

@@ -254,8 +254,12 @@ Attach the folder (or a single file) to the ticket as a `design` asset:
 ab ticket attach <id> design <path> [--name <name>]
 ```
 
+A connected agent without the CLI uses `tickets.asset.attach` with the file
+bytes as base64 `entries` (`layout: "tree"` for a folder, `"file"` for one file).
+
 The ticket must exist first. For a new ticket, create it in a non-ready
-staging state, attach, and check with `ab ticket show <id>`. Then place it
+staging state, attach, and check with `ab ticket show <id>` (or `tickets.get`,
+whose `assets` lists it). Then place it
 where the human asked: if the intended destination is ready, move it there
 last, so a build cannot claim it before its assets exist; otherwise leave it
 in its destination (or the configured create state) and do not promote it. Attaching the same

@@ -2738,6 +2738,48 @@ export async function seedPreparationHistory(
   })
 }
 
+/** Meter the memory adapter's private ticket-asset storage: `outerScans`
+ * counts iterations of the all-tickets map (any listing that walks other
+ * tickets or repositories), and `revisionRowsVisited` counts revision rows
+ * read from per-name history arrays (a head read is one; a history walk is
+ * every row). Install after seeding: arrays created later are not metered. */
+export function memoryTicketAssetReadCounter(store: import('../store/memory').MemoryBuildStore) {
+  const tickets = Reflect.get(store, 'ticketAssets') as Map<string, Map<string, unknown[]>>
+  let outerScans = 0
+  let revisionRowsVisited = 0
+  for (const key of ['values', 'entries', 'keys', 'forEach', Symbol.iterator] as const) {
+    const original = (tickets[key] as (...args: unknown[]) => unknown).bind(tickets)
+    Object.defineProperty(tickets, key, {
+      configurable: true,
+      value: (...args: unknown[]) => {
+        outerScans++
+        return original(...args)
+      },
+    })
+  }
+  for (const names of Map.prototype.values.call(tickets) as IterableIterator<
+    Map<string, unknown[]>
+  >)
+    for (const [name, rows] of [...names])
+      names.set(
+        name,
+        new Proxy(rows, {
+          get(target, key, receiver) {
+            if (typeof key === 'string' && /^\d+$/.test(key)) revisionRowsVisited++
+            return Reflect.get(target, key, receiver)
+          },
+        }),
+      )
+  return {
+    get outerScans() {
+      return outerScans
+    },
+    get revisionRowsVisited() {
+      return revisionRowsVisited
+    },
+  }
+}
+
 /** Count the memory adapter's private reducer-storage event slices, in addition
  * to public history reads. This deliberately observes storage, not a selector. */
 export function memoryRepositoryReadCounter(
@@ -3499,11 +3541,43 @@ export async function operatorTicketAssociationBudget() {
   const legacy = 'ticket-12345678-1234-1234-1234-123456789abc'
   const missing = 'ticket-87654321-4321-4321-4321-cba987654321'
   const config = parseConfig('[tickets]\nsource="hosted"\nteamKey="AUT"\nreadyState="Todo"')
-  for (const size of [1, 200]) {
-    for (const withLegacy of [false, true]) {
+  const putFile = (
+    store: InstanceType<typeof MemoryBuildStore>,
+    r: string,
+    id: string,
+    name: string,
+  ) =>
+    store.putTicketAsset(r, id, {
+      kind: 'design',
+      name,
+      layout: 'file',
+      entries: [{ type: 'file', path: name, content: new TextEncoder().encode(name) }],
+    })
+  for (const [size, withLegacy, history, unrelated] of [1, 200].flatMap((size) =>
+    [false, true].flatMap((withLegacy) =>
+      [1, 100].flatMap((history) =>
+        [0, 100].map((unrelated) => [size, withLegacy, history, unrelated] as const),
+      ),
+    ),
+  )) {
+    {
       let tick = 0
       const store = new MemoryBuildStore({ clock: () => new Date(++tick * 1000) })
       await store.ensureRepo(repo)
+      // The ticket's own asset history: a live name and a tombstoned one.
+      let live: import('../store/ticket-assets').TicketAssetMeta | undefined
+      for (let i = 0; i < history; i++) {
+        live = await putFile(store, repo, 'AUT-1', 'live')
+        await putFile(store, repo, 'AUT-1', 'gone')
+      }
+      await store.removeTicketAsset(repo, 'AUT-1', 'design', 'gone')
+      // Unrelated assets: other tickets here, and other repositories.
+      for (let i = 0; i < unrelated; i++)
+        for (const [r, id] of [
+          [repo, `AUT-${i + 2}`],
+          [`${repo}-other-${i}`, 'AUT-1'],
+        ] as const)
+          for (let revision = 0; revision < 3; revision++) await putFile(store, r, id, 'other')
       for (let i = 0; i < size; i++)
         await store.createBuild({
           slug: `canonical-${i}`,
@@ -3572,6 +3646,7 @@ export async function operatorTicketAssociationBudget() {
           sourceFor: () => source,
           statesFor: () => ['Triage', 'Todo'],
         }
+        const assetReads = memoryTicketAssetReadCounter(store)
         const detail =
           operation === 'get'
             ? await getOperatorTicket({
@@ -3601,6 +3676,22 @@ export async function operatorTicketAssociationBudget() {
           operation === 'get' ? 1 : operation === 'update' ? 3 : 2,
         )
         expect(eventReads).toBe(0)
+        // The current-asset listing reads one head per name of this ticket,
+        // whatever its history or the other tickets and repositories hold.
+        expect(assetReads.outerScans).toBe(0)
+        if (operation === 'get') {
+          expect((detail as import('../operator/tickets').OperatorTicketView).assets).toEqual([
+            {
+              kind: 'design',
+              name: 'live',
+              revision: live!.revision,
+              size: 4,
+              layout: 'file',
+              fileCount: 1,
+            },
+          ])
+          expect(assetReads.revisionRowsVisited).toBe(2)
+        } else expect(assetReads.revisionRowsVisited).toBe(0)
       }
     }
   }

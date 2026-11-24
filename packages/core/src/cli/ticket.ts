@@ -1,5 +1,10 @@
 import { recordTicketMigration, readTicketMigrations } from '../kernel/ticket-migrations'
 import { readTicketTree } from '../operator/tickets'
+import {
+  activeTicketBuilds,
+  assetTicketId,
+  projectTicketAssets,
+} from '../operator/ticket-asset-list'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
@@ -7,7 +12,7 @@ import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-lin
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
 import { creationAssignees, parseAssigneesFlag } from '../ports/tickets/assignees'
 import { creationLabels } from '../ports/tickets/labels'
-import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
+import { rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import {
   formatObjective,
@@ -573,14 +578,7 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
                 },
               }
             : {}),
-          assets: assets.map(({ kind, name, revision, size, layout, fileCount }) => ({
-            kind,
-            name,
-            revision,
-            size,
-            layout,
-            fileCount,
-          })),
+          assets: projectTicketAssets(assets),
         },
         null,
         2,
@@ -664,14 +662,8 @@ function withTicketStore<T>(
   )
 }
 
-/** The id ticket assets are keyed by. GitHub accepts `123` and `#123` for one
- * issue, and the dispatcher reads assets by `ref.id`, so both spellings key by
- * the issue number. Other sources key by the id as given. */
-export function assetTicketId(source: string, id: string): string {
-  if (source !== 'github') return id
-  const number = parseIssueId(id)
-  return number === null ? id : String(number)
-}
+/** The id ticket assets are keyed by; shared with the operator tools. */
+export { assetTicketId }
 
 function withTicketAssets<T>(
   opts: TicketCommandOpts,
@@ -718,23 +710,6 @@ export async function unfinishedBuildTickets(
   return refs
 }
 
-/** Slugs of this repo's non-terminal builds for the ticket. A build freezes its
- * ticket assets at the claim (SPEC §6.3), so a change to them does not reach
- * it. The notice is advisory: a failed lookup yields none and never blocks. */
-async function activeBuildsFor(store: BuildStore, repo: string, id: string): Promise<string[]> {
-  try {
-    const active: string[] = []
-    for (const record of await store.listBuilds()) {
-      if (record.repo !== repo || record.ticket?.id !== id) continue
-      const { status } = (await readBuildFacts(store, record.slug)).value.state
-      if (status !== 'done' && status !== 'aborted') active.push(record.slug)
-    }
-    return active
-  } catch {
-    return []
-  }
-}
-
 function warnActiveBuilds(
   opts: { stderr?: (line: string) => void; id: string },
   slugs: string[],
@@ -763,7 +738,7 @@ export async function abTicketAttach(given: TicketAttachOpts): Promise<void> {
     const live = await store.listTicketAssets(repo, opts.id)
     const replacing = live.some((asset) => asset.kind === opts.kind && asset.name === name)
     const meta = await store.putTicketAsset(repo, opts.id, input)
-    return { meta, replacing, active: await activeBuildsFor(buildStore, repo, opts.id) }
+    return { meta, replacing, active: await activeTicketBuilds(buildStore, repo, opts.id) }
   })
   const { meta } = stored
   warnActiveBuilds(opts, stored.active)
@@ -836,7 +811,7 @@ export async function abTicketAssetRm(given: TicketAssetRmOpts): Promise<void> {
     source,
     async ({ store, buildStore, repo }) => ({
       removed: await store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
-      active: await activeBuildsFor(buildStore, repo, opts.id),
+      active: await activeTicketBuilds(buildStore, repo, opts.id),
     }),
   )
   if (removed === null) {
