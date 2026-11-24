@@ -1,4 +1,5 @@
 ---
+# Generated from packages/ui/src/tokens.ts by bun run ui:tokens. Do not edit.
 name: Autobuild ANSI
 description: State colors on two calm grounds, with readable human language.
 colors:
@@ -26,6 +27,18 @@ colors:
   dark-red: "#f07777"
   dark-red-wash: "#2a1719"
   dark-select: "#2c3a66"
+  light-chart-plan: "#6a4fd8"
+  light-chart-implement: "#c43d8c"
+  light-chart-verify: "#5a7f1a"
+  light-chart-land: "#2f7fb0"
+  light-chart-wait: "#8a8f99"
+  light-chart-wait-strong: "#3a3d45"
+  dark-chart-plan: "#8f7bea"
+  dark-chart-implement: "#d9689f"
+  dark-chart-verify: "#7f9f36"
+  dark-chart-land: "#4b93c8"
+  dark-chart-wait: "#6b717d"
+  dark-chart-wait-strong: "#c4c8d0"
 typography:
   body:
     fontFamily: "Atkinson Hyperlegible Next, system-ui, sans-serif"
@@ -50,9 +63,12 @@ typography:
 rounded:
   square: "0"
 spacing:
-  small: "8px"
-  medium: "16px"
-  large: "24px"
+  xs: "4px"
+  sm: "8px"
+  md: "16px"
+  lg: "24px"
+  xl: "40px"
+  xxl: "64px"
 components:
   button:
     rounded: "{rounded.square}"
@@ -70,7 +86,7 @@ components:
 
 ANSI keeps the terminal’s functional color and precise machine values while giving people readable titles and plain-language help. The visual register is calm, direct and practical: glance, find the state that needs attention, act on one row, leave.
 
-Both grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app and the dispatcher web UI, not the terminal dashboard or marketing website. Its tokens are typed source in `packages/ui/src/tokens.ts`, and the catalog built by `bun run ui:catalog` shows every token, component and chart on both grounds.
+Both grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app and the dispatcher web UI, not the terminal dashboard or marketing website. Its tokens are typed source in `packages/ui/src/tokens.ts`; this file's front matter is generated from it by `bun run ui:tokens`, and the catalog built by `bun run ui:catalog` shows every token, component and chart on both grounds.
 
 **Key Characteristics:**
 - Two calm grounds with state-specific inks.
