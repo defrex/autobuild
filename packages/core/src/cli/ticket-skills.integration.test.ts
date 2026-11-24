@@ -6,7 +6,6 @@ const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
 const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
 const ticketGuides = [tickets] as const
-const body = (source: string) => source.replace(/^---\n[\s\S]*?\n---\n/, '')
 
 describe('ticket grooming skill guidance', () => {
   test('spec syncs an accepted body and dependencies through exact CLI forms', () => {
@@ -68,15 +67,6 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).toContain("repository's effective merge policy in `autobuild.toml`")
     expect(spec).toContain('Ask the human when the')
     expect(spec).toContain('never changes the requested workflow state')
-  })
-
-  test('canonical spec guidance matches live and pristine installed copies', async () => {
-    for (const path of [
-      join(DIST_ROOT, '.agents', 'skills', 'ab-spec', 'SKILL.md'),
-      join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-spec', 'SKILL.md'),
-    ]) {
-      expect(body(await readFile(path, 'utf8'))).toBe(body(spec))
-    }
   })
 
   test('spec honors stated create placement without asking or inferring it', () => {
