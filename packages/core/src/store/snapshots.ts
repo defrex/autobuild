@@ -17,6 +17,16 @@ import type { BuildStore } from './types'
 
 export type SnapshotScope = { kind: 'build'; slug: string } | { kind: 'repo'; repo: string }
 
+/** A repository rollup (SPEC §7.7): a derived value over every build of one
+ * repository. Only `getReducerValue` answers it; snapshot APIs never do. */
+export type RollupScope = { kind: 'rollup'; repo: string }
+/** Every scope `getReducerValue` answers. */
+export type ReducerValueScope = SnapshotScope | RollupScope
+
+export function rollupScopeKey(scope: RollupScope): string {
+  return `rollup:${scope.repo}`
+}
+
 export interface ReducerSnapshot {
   /** The reducer version that wrote `state`; a reader on another version
    * ignores the snapshot. */

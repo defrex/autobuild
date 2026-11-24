@@ -33,8 +33,8 @@ import type {
 } from '../events/sessions'
 export type { SessionEventEnvelope }
 import type { TicketRef } from '../ontology'
-import type { ReducerSnapshot, SnapshotScope } from './snapshots'
-export type { ReducerSnapshot, SnapshotScope }
+import type { ReducerSnapshot, ReducerValueScope, RollupScope, SnapshotScope } from './snapshots'
+export type { ReducerSnapshot, ReducerValueScope, RollupScope, SnapshotScope }
 import type {
   TicketAsset,
   TicketAssetInput,
@@ -561,8 +561,16 @@ export interface BuildStore extends BoundedEventReads {
    * never an `ensureRepo` side effect. */
   getRepoHighWater(repo: string): Promise<number>
   /** A named JSON answer reduced from the authoritative log. Checkpoints are
-   * maintained privately by the adapter and cannot be supplied by callers. */
-  getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue>
+   * maintained privately by the adapter and cannot be supplied by callers.
+   *
+   * A `{kind: 'rollup', repo}` scope names a derived reducer (SPEC §7.7,
+   * `ROLLUPS` in `kernel/reducer-registry.ts`): the adapter advances it by
+   * the builds changed since its saved change position, serialized per key
+   * and committed atomically, and answers `cursor: 0` with the reflected
+   * position inside the value. `request.read` carries its read-time
+   * arguments; named reducers reject them. An unknown repository answers the
+   * empty value and creates nothing. */
+  getReducerValue(scope: ReducerValueScope, request: ReducerValueRequest): Promise<ReducerValue>
   /** The stored reducer snapshot for a scope (a build log or a repository
    * journal), a cache beside the log and never an authority. `null` when
    * absent, when the stored version differs from `version`, when the stored

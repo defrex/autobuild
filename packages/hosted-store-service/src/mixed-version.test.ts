@@ -990,3 +990,43 @@ test('a server one ledger revision ahead keeps seeds typed, values canonical and
   expect(calls.filter((call) => call.startsWith('GET') && call.endsWith('/events'))).toEqual([])
   expect(calls.every((call) => !call.includes('/events'))).toBe(true)
 })
+
+test('fresh clients read the canonical rollup in one request with zero backing event rows', async () => {
+  const { rollupRemoteReadBudget } = await import('@defrex/autobuild/testing')
+  const store = new MemoryBuildStore()
+  for (const slug of ['rollup-a', 'rollup-b', 'rollup-c']) {
+    await store.createBuild({ slug, repo: 'repo' })
+    await store.append(slug, { actor: { kind: 'kernel' }, type: 'build.paused', payload: {} })
+    await store.append(slug, { actor: { kind: 'kernel' }, type: 'build.resumed', payload: {} })
+  }
+  let rows = 0
+  const states = Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
+  for (const state of states.values())
+    for (const method of ['slice', 'filter'] as const) {
+      const original = state.events[method].bind(state.events)
+      Object.defineProperty(state.events, method, {
+        value: (...args: unknown[]) => {
+          const result = Reflect.apply(original, state.events, args) as unknown[]
+          rows += result.length
+          return result
+        },
+      })
+    }
+  const server = createStoreServer({ store, secret })
+  const requests: string[] = []
+  const fetchFn = (async (url, init) => {
+    const request = new Request(url, init)
+    requests.push(new URL(request.url).pathname)
+    return server.fetch(request)
+  }) as typeof fetch
+  await rollupRemoteReadBudget({
+    backing: store,
+    fresh: () => new RemoteBuildStore({ url: 'https://test', token, fetchFn }),
+    repo: 'repo',
+    reset: () => {
+      rows = 0
+    },
+    eventRows: () => rows,
+    requests: () => requests,
+  })
+})

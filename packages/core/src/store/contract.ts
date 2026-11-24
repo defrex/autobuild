@@ -6,7 +6,10 @@ import { AUTOBUILD_VERSION } from './remote/version'
 import { sameParentRejection } from '../kernel/node-restack-state'
 import { readBuildFacts, readBuildSelector, readRepositoryFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
-import { resolveReducerValue } from './reducer-values'
+import { resolveReducerValue, type JsonValue } from './reducer-values'
+import { resolveRollupValue } from './rollups'
+import { buildTimelineReducer } from '../cli/dashboard/timeline'
+import { stepDurationsRollup, type StepDurationsValue } from '../kernel/step-durations'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
 import { MemoryBuildStore } from './memory'
 import { BuildFeedValidationError, compareChangePositions } from './build-feed'
@@ -1852,6 +1855,173 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             await expect(store.listBuildsChangedSince('feed/repo', position)).rejects.toThrow(
               BuildFeedValidationError,
             )
+        })
+      })
+    })
+
+    describe('rollup values (derived reducers, SPEC §7.7)', () => {
+      const repo = 'rollup/repo'
+      const scope = { kind: 'rollup', repo } as const
+      const request = {
+        reducer: 'stepDurations',
+        args: { outcome: 'all' },
+        read: { window: 'all' },
+      }
+      const plan = async (
+        store: BuildStore,
+        slug: string,
+        round: number,
+        clock: Clock & { advance(ms: number): void },
+      ) => {
+        await store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round } })
+        clock.advance(90_000)
+        await store.append(slug, {
+          actor: agentActor('plan', 's'),
+          type: 'plan.completed',
+          payload: { round, artifact: { kind: 'plan', rev: 0 } },
+        })
+      }
+      const expected = async (
+        store: BuildStore,
+        slugs: string[],
+        now: Date,
+        args: Record<string, unknown> = request.args,
+      ): Promise<JsonValue> => {
+        const resolvedArgs = stepDurationsRollup.args.parse(args)
+        const acc = stepDurationsRollup.initial()
+        for (const slug of slugs) {
+          const contribution = stepDurationsRollup.contribute(
+            buildTimelineReducer.reduce(await store.getEvents(slug)),
+            resolvedArgs,
+            now,
+          )
+          if (contribution) stepDurationsRollup.add(acc, contribution)
+        }
+        return stepDurationsRollup.finish(
+          acc,
+          { window: 'all' },
+          now,
+          await store.getRepoChangePosition(repo),
+        ) as unknown as JsonValue
+      }
+
+      test('answers the fold of every build timeline and advances after appends', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          for (const slug of ['rollup-a', 'rollup-b']) {
+            await store.createBuild({ slug, repo })
+            await plan(store, slug, 1, clock)
+          }
+          const first = await store.getReducerValue(scope, request)
+          expect(first.version).toBe(stepDurationsRollup.version)
+          expect(first.cursor).toBe(0)
+          expect(first.value).toEqual(await expected(store, ['rollup-a', 'rollup-b'], clock()))
+          await plan(store, 'rollup-b', 2, clock)
+          await store.append('rollup-a', { actor: KERNEL, type: 'build.paused', payload: {} })
+          clock.advance(30_000)
+          await store.append('rollup-a', { actor: KERNEL, type: 'build.resumed', payload: {} })
+          const next = await store.getReducerValue(scope, request)
+          expect(next.value).toEqual(await expected(store, ['rollup-a', 'rollup-b'], clock()))
+          expect(next.value).not.toEqual(first.value)
+          // Idle: the same answer again.
+          expect((await store.getReducerValue(scope, request)).value).toEqual(next.value)
+        })
+      })
+
+      test("a reopened build's contribution is replaced, not added", async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const merged = { reducer: 'stepDurations', read: { window: 'all' } }
+          await store.createBuild({ slug: 'rollup-reopen', repo })
+          await plan(store, 'rollup-reopen', 1, clock)
+          const done = {
+            actor: DISPATCHER,
+            type: 'build.completed' as const,
+            payload: { outcome: 'merged' as const },
+          }
+          await store.append('rollup-reopen', done)
+          await store.getReducerValue(scope, merged)
+          await store.append('rollup-reopen', {
+            actor: humanActor('op'),
+            type: 'build.reopened',
+            payload: { feedback: 'again' },
+          })
+          await plan(store, 'rollup-reopen', 2, clock)
+          await store.append('rollup-reopen', done)
+          const answer = (await store.getReducerValue(scope, merged))
+            .value as unknown as StepDurationsValue
+          expect(answer.steps).toEqual([
+            expect.objectContaining({ step: 'plan', count: 2, totalMs: 180_000 }),
+          ])
+          expect(answer as unknown).toEqual(await expected(store, ['rollup-reopen'], clock(), {}))
+        })
+      })
+
+      test('concurrent readers agree and count each build once', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const slugs = ['rollup-c1', 'rollup-c2', 'rollup-c3']
+          for (const slug of slugs) {
+            await store.createBuild({ slug, repo })
+            await plan(store, slug, 1, clock)
+          }
+          const answers = await Promise.all(
+            Array.from({ length: 4 }, () => store.getReducerValue(scope, request)),
+          )
+          const want = await expected(store, slugs, clock())
+          for (const answer of answers) expect(answer.value).toEqual(want)
+          await plan(store, 'rollup-c2', 2, clock)
+          const again = await Promise.all(
+            Array.from({ length: 4 }, () => store.getReducerValue(scope, request)),
+          )
+          const next = await expected(store, slugs, clock())
+          for (const answer of again) expect(answer.value).toEqual(next)
+        })
+      })
+
+      test('an unknown repository answers the empty value and creates nothing', async () => {
+        await withStore(factory, { clock: manualClock(CONTRACT_T0) }, async (store) => {
+          const answer = await store.getReducerValue(
+            { kind: 'rollup', repo: 'rollup/nobody' },
+            { reducer: 'stepDurations' },
+          )
+          expect(answer.cursor).toBe(0)
+          expect(answer.value).toEqual({ position: '0', window: '7d', steps: [] })
+          expect(await store.getRepo('rollup/nobody')).toBeNull()
+          await expect(store.getReducerValue(scope, { reducer: 'unknownRollup' })).rejects.toThrow()
+        })
+      })
+
+      test('scoped handles reject the rollup scope; rollup rows are private', async () => {
+        await withStore(factory, { clock: manualClock(CONTRACT_T0) }, async (store) => {
+          await store.createBuild({ slug: 'rollup-scoped', repo })
+          await expect(
+            store.scopeBuild('rollup-scoped').getReducerValue(scope, request),
+          ).rejects.toThrow()
+          await expect(
+            store.scopeSession('rollup-session').getReducerValue(scope, request),
+          ).rejects.toThrow()
+          await store.getReducerValue(scope, request)
+          const { key, contributionKey } = resolveRollupValue(repo, request)
+          // A journal-less repository answers no snapshot before any name check.
+          await store.ensureRepo(repo)
+          await expect(
+            store.getReducerSnapshot({ kind: 'repo', repo }, key, stepDurationsRollup.version),
+          ).rejects.toThrow()
+          await expect(
+            store.getReducerSnapshot(
+              { kind: 'build', slug: 'rollup-scoped' },
+              contributionKey,
+              stepDurationsRollup.version,
+            ),
+          ).rejects.toThrow()
+          await expect(
+            store.putReducerSnapshot({ kind: 'build', slug: 'rollup-scoped' }, contributionKey, {
+              version: stepDurationsRollup.version,
+              cursor: 0,
+              state: {},
+            }),
+          ).rejects.toThrow()
         })
       })
     })
