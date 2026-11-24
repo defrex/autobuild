@@ -914,6 +914,25 @@ describe('agent tool registry contract', () => {
     expect(await world.store.listTicketAssets(repo, 'AUT-404')).toEqual([])
   })
 
+  test('the attach schema accepts base64 up to the default 25 MiB asset limit', () => {
+    const schema = TOOLS.find((tool) => tool.name === 'tickets.asset.attach')!.inputSchema
+    const input = (contentBase64: string) => ({
+      repo,
+      id: 'AUT-1',
+      kind: 'design',
+      name: 'big.bin',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'big.bin', contentBase64 }],
+    })
+    const full = Buffer.alloc(25 * 1024 * 1024, 0xa5).toString('base64')
+    for (const contentBase64 of [Buffer.alloc(7_500_000).toString('base64'), full])
+      expect(schema.safeParse(input(contentBase64)).success).toBe(true)
+    // A stray character deep inside a large payload is still refused.
+    expect(
+      schema.safeParse(input(`${full.slice(0, 4_000_000)}*${full.slice(4_000_001)}`)).success,
+    ).toBe(false)
+  })
+
   test('asset validation failures are typed, not internal', async () => {
     const world = await seedWorld()
     const tool = toolFor(world)

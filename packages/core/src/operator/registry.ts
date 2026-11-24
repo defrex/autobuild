@@ -260,13 +260,30 @@ const buildDetailInput = z.strictObject({ repo: repoField, slug: slugField })
 
 const ticketDetailInput = z.strictObject({ repo: repoField, id: ticketIdField })
 
-// Strict standard base64: Buffer.from would silently drop anything else.
+/** Strict, padded standard base64: whole 4-character groups of the standard
+ * alphabet, `=` only as one or two trailing pad characters. Buffer.from would
+ * silently drop anything else. A linear scan, not a regex: a repeated-group
+ * pattern exhausts the regex engine on multi-megabyte payloads. */
+function isPaddedBase64(value: string): boolean {
+  if (value.length % 4 !== 0) return false
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  for (let i = 0; i < value.length - padding; i++) {
+    const c = value.charCodeAt(i)
+    const ok =
+      (c >= 65 && c <= 90) || // A-Z
+      (c >= 97 && c <= 122) || // a-z
+      (c >= 48 && c <= 57) || // 0-9
+      c === 43 || // +
+      c === 47 // /
+    if (!ok) return false
+  }
+  return true
+}
+
 const contentBase64Field = z
   .string()
   .max(Math.ceil(TICKET_ASSET_MAX_BYTES / 3) * 4)
-  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, {
-    message: 'contentBase64 must be padded standard base64',
-  })
+  .refine(isPaddedBase64, { message: 'contentBase64 must be padded standard base64' })
   .describe('The file’s exact bytes, standard padded base64 ("" for an empty file).')
 const assetKindField = z
   .string()
