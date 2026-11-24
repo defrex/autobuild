@@ -49,16 +49,17 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # refuses a TMPDIR inside the worktree, so it joins the independent suites.
 # All deterministic checks precede agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
-# ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
-# .ab/docs-verify-report.md are distinct. Browser profiles and website HTTP
-# ports are allocated per invocation.
+# ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames, ui-web's
+# .ab/ui-web-frames and docs' .ab/docs-verify-report.md are distinct. Browser
+# profiles and website HTTP ports are allocated per invocation; ui-web keeps
+# its browser profiles in a per-invocation OS temporary directory.
 # Leave failFast unset: RFC 0004 §8 favors collecting independent sibling
 # reports here; cheap gates already run before the long suites.
 steps = [
   ["lint", "types"],
   ["unit", "build", "integration", "app-load"],
   "ui-tui",
-  ["ui-app", "ui-website", "docs"],
+  ["ui-app", "ui-website", "ui-web", "docs"],
 ]
 
 [verify.lint]
@@ -148,6 +149,18 @@ paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture
 kind = "agent"
 skill = "verify-ui-website"
 paths = ["packages/website/**", "docs/**", "design/website/**", "tools/website-capture*", ".agents/skills/verify-ui-website/SKILL.md"]
+
+# Visual and layout-shift evidence for the Autobuild ANSI design system and
+# the `ab web` UI: the catalog and every web page over the scripted fixtures,
+# both grounds at desktop and phone widths. The capture fails a page whose
+# cumulative layout shift exceeds 0.002, the catalog's measured start-up
+# baseline; the skill judges the frames against DESIGN.md and attaches them on
+# a pass. Only the two UI trees select it: a change to the capture script or
+# skill alone skips it (run `bun run capture:ui-web` by hand).
+[verify.ui-web]
+kind = "agent"
+skill = "verify-ui-web"
+paths = ["packages/ui/**", "packages/core/src/web/**"]
 
 # Semantic documentation coverage for this repository's product surfaces.
 [verify.docs]
