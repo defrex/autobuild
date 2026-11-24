@@ -1,5 +1,12 @@
 import { enrichIntegrationRows } from './integration-row'
-import type { CapacityBuild } from '../../kernel/dispatch-capacity'
+import {
+  dispatchCapacity,
+  startClaimDemand,
+  urgentClaimDemand,
+  type CapacityBuild,
+} from '../../kernel/dispatch-capacity'
+import type { DispatchStatus } from '../../kernel/dispatch-status'
+import { migrationIdentity } from '../../kernel/ticket-migrations'
 import {
   openBuildWorkspaceReducer,
   provisionMarkerReducer,
@@ -23,11 +30,17 @@ import type {
   StreamRecord,
   StreamScope,
 } from '../../store/types'
-import { readBuildFacts } from '../../store/reduced-reads'
+import {
+  readBuildFacts,
+  type CurrentBuildFacts,
+  type RepositoryReadFacts,
+} from '../../store/reduced-reads'
+import { dispatchWarningLines } from './header'
 import {
   projectBuild,
   projectBuildFromFacts,
   type DashboardBuild,
+  type DashboardHeader,
   type DashboardRowFacts,
 } from './model'
 
@@ -91,10 +104,162 @@ interface ReducedEntry {
 
 type PollEntry = LiveEntry | TerminalEntry | ReducedEntry
 
-function isTerminal(state: BuildState): boolean {
-  // `build.aborted` acknowledges cancellation but begins the checkpointed
-  // cleanup saga. Keep polling until its final `build.completed` fact.
+/** A build the dashboard no longer shows. `build.aborted` acknowledges
+ * cancellation but begins the checkpointed cleanup saga, so an aborted build
+ * stays visible until its final `build.completed` fact. */
+export function isDashboardTerminal(state: BuildState): boolean {
   return state.status === 'done'
+}
+
+/** One build's capacity facts from its saved `buildReadFacts` value. */
+export function capacityBuildFromFacts(
+  record: BuildRecord,
+  value: CurrentBuildFacts,
+): Required<CapacityBuild> {
+  return {
+    record,
+    state: value.state,
+    workspace: value.workspace !== null,
+    provisioning: value.provisionMarker !== undefined,
+    restackDue: landingRestackDue(value.state, value.log),
+  }
+}
+
+/** The display-only reads that decorate one row: authoritative stream
+ * records (SPEC §9) and the pinned effective-config artifact (SPEC §16.1). */
+export interface RowEnrichment {
+  streams: StreamRecord[] | undefined
+  artifact: { revision?: number; pipelineSource?: PipelineSourceMeta; config?: Config } | undefined
+}
+
+/** Read one build's row enrichment, when the reader exposes the stream and
+ * artifact primitives. Every failure is display-only: an absent enrichment
+ * degrades to the pairing-derived status and the live config. */
+export async function readRowEnrichment(
+  reader: Pick<DashboardBuildReader, 'listStreams' | 'getArtifact'>,
+  slug: string,
+  pin?: BuildState['verify']['configPin'],
+): Promise<RowEnrichment> {
+  const [streams, artifact] = await Promise.all([
+    readStreams(reader, slug),
+    readEffectiveConfig(reader, slug, pin),
+  ])
+  return { streams, artifact }
+}
+
+async function readStreams(
+  reader: Pick<DashboardBuildReader, 'listStreams'>,
+  slug: string,
+): Promise<StreamRecord[] | undefined> {
+  if (reader.listStreams === undefined) return undefined
+  try {
+    return await reader.listStreams({ kind: 'build', build: slug })
+  } catch {
+    return undefined
+  }
+}
+
+/** The metadata projection plus the artifact's parsed content. A malformed
+ * artifact still yields its metadata (config absent). */
+async function readEffectiveConfig(
+  reader: Pick<DashboardBuildReader, 'getArtifact'>,
+  slug: string,
+  pin?: BuildState['verify']['configPin'],
+): Promise<RowEnrichment['artifact']> {
+  const getArtifact = reader.getArtifact
+  if (getArtifact === undefined) return undefined
+  try {
+    const artifact = await getArtifact.call(
+      reader,
+      slug,
+      pin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      pin?.artifact.rev,
+    )
+    if (artifact === null) return undefined
+    let config: Config | undefined
+    try {
+      config = parseEffectiveBuildConfig(artifact)
+    } catch {
+      config = undefined
+    }
+    return { ...parseBuildConfigMetadata(artifact), config }
+  } catch {
+    return undefined
+  }
+}
+
+/** Project one build row against its PINNED pipeline (SPEC §16.1) and
+ * attach the effective-config metadata. The row's verify/finalize steps and
+ * next-action must describe the pipeline the build actually runs — the
+ * artifact's build-owned sections — never the dispatcher's live base-branch
+ * snapshot, which a pinned build may never execute. Deployment-owned
+ * sections (roles/policy) still come from the live snapshot, so a reload
+ * that reaches the build is reflected. A build with no artifact yet (queued
+ * or pre-pin) projects from the live config, the pre-pin behavior. Pure. */
+export function projectRowWithEnrichment(
+  record: BuildRecord,
+  state: BuildState,
+  events: AbEvent[],
+  config: Config,
+  { streams, artifact }: RowEnrichment,
+  facts?: DashboardRowFacts,
+): DashboardBuild | null {
+  const pinnedConfig =
+    artifact?.config !== undefined ? composeBuildConfig(artifact.config, config) : undefined
+  const build = facts
+    ? projectBuildFromFacts(record, state, facts, config, streams, pinnedConfig)
+    : projectBuild(record, state, config, events, streams, pinnedConfig)
+  if (build !== null && artifact !== undefined) {
+    if (artifact.revision !== undefined) build.effectiveConfigRev = artifact.revision
+    if (artifact.pipelineSource !== undefined) build.pipelineSource = artifact.pipelineSource
+  }
+  return build
+}
+
+/**
+ * The dashboard header for one repository frame: the queue and capacity
+ * terms every frontend shows. `states` are the visible builds' reductions;
+ * acknowledged aborts and integration nodes do not count as active.
+ */
+export function repositoryDashboardHeader(input: {
+  repo: string
+  status: DispatchStatus
+  config: Config
+  repositoryFacts: RepositoryReadFacts
+  capacityBuilds: readonly CapacityBuild[]
+  states: Iterable<BuildState>
+  now: Date
+  triage?: number
+  standby?: string
+}): DashboardHeader {
+  const { status, config, repositoryFacts } = input
+  const warningLines = dispatchWarningLines(status)
+  return {
+    repo: input.repo,
+    ...(input.standby !== undefined ? { standby: input.standby } : {}),
+    queued: status.queued ?? 0,
+    activeCount: [...input.states].filter(
+      (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
+    ).length,
+    capacity: config.capacity,
+    capacityProjection: dispatchCapacity(
+      input.capacityBuilds,
+      config.capacity,
+      input.now,
+      migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
+      {
+        urgentClaims: urgentClaimDemand(repositoryFacts),
+        openPrs: {
+          policy: config.policy,
+          engaged: repositoryFacts.openPrBackpressure !== undefined,
+        },
+        startRequests: startClaimDemand(repositoryFacts),
+      },
+    ),
+    ...(input.triage !== undefined ? { triage: input.triage } : {}),
+    ...(status.availableUpgrade !== undefined ? { availableUpgrade: status.availableUpgrade } : {}),
+    ...(warningLines.length > 0 ? { warningLines } : {}),
+  }
 }
 
 /**
@@ -146,63 +311,11 @@ export class DashboardBuildPollCache {
     private config: Config,
   ) {}
 
-  /** Authoritative stream records for one build, when the reader supports
-   * the stream primitive (SPEC §9). Failures are display-only: an absent
-   * enrichment degrades to the pairing-derived status. */
-  private async readStreams(slug: string): Promise<StreamRecord[] | undefined> {
-    if (this.reader.listStreams === undefined) return undefined
-    try {
-      return await this.reader.listStreams({ kind: 'build', build: slug })
-    } catch {
-      return undefined
-    }
-  }
-
   /** True only while no later refresh has committed. */
   isCurrent(snapshot: DashboardPollSnapshot): boolean {
     return snapshot.revision === this.committedRevision
   }
 
-  /** Effective-config artifact facts for one build (SPEC §16.1), when the
-   * reader exposes the artifact primitive: the metadata projection plus the
-   * artifact's parsed content. A malformed artifact still yields its metadata
-   * (config absent); all failures are display-only. */
-  private async readEffectiveConfig(
-    slug: string,
-    pin?: BuildState['verify']['configPin'],
-  ): Promise<
-    { revision?: number; pipelineSource?: PipelineSourceMeta; config?: Config } | undefined
-  > {
-    const getArtifact = this.reader.getArtifact
-    if (getArtifact === undefined) return undefined
-    try {
-      const artifact = await getArtifact.call(
-        this.reader,
-        slug,
-        pin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-        pin?.artifact.rev,
-      )
-      if (artifact === null) return undefined
-      let config: Config | undefined
-      try {
-        config = parseEffectiveBuildConfig(artifact)
-      } catch {
-        config = undefined
-      }
-      return { ...parseBuildConfigMetadata(artifact), config }
-    } catch {
-      return undefined
-    }
-  }
-
-  /** Project one build row against its PINNED pipeline (SPEC §16.1) and
-   * attach the effective-config metadata. The row's verify/finalize steps and
-   * next-action must describe the pipeline the build actually runs — the
-   * artifact's build-owned sections — never the dispatcher's live base-branch
-   * snapshot, which a pinned build may never execute. Deployment-owned
-   * sections (roles/policy) still come from the live snapshot, so a reload
-   * that reaches the build is reflected. A build with no artifact yet (queued
-   * or pre-pin) projects from the live config, the pre-pin behavior. */
   private async projectRow(
     record: BuildRecord,
     state: BuildState,
@@ -210,20 +323,8 @@ export class DashboardBuildPollCache {
     config: Config,
     facts?: DashboardRowFacts,
   ): Promise<DashboardBuild | null> {
-    const [streams, artifact] = await Promise.all([
-      this.readStreams(record.slug),
-      this.readEffectiveConfig(record.slug, state.verify.configPin),
-    ])
-    const pinnedConfig =
-      artifact?.config !== undefined ? composeBuildConfig(artifact.config, config) : undefined
-    const build = facts
-      ? projectBuildFromFacts(record, state, facts, config, streams, pinnedConfig)
-      : projectBuild(record, state, config, events, streams, pinnedConfig)
-    if (build !== null && artifact !== undefined) {
-      if (artifact.revision !== undefined) build.effectiveConfigRev = artifact.revision
-      if (artifact.pipelineSource !== undefined) build.pipelineSource = artifact.pipelineSource
-    }
-    return build
+    const enrichment = await readRowEnrichment(this.reader, record.slug, state.verify.configPin)
+    return projectRowWithEnrichment(record, state, events, config, enrichment, facts)
   }
 
   refresh(
@@ -262,17 +363,18 @@ export class DashboardBuildPollCache {
           { getReducerValue: this.reader.getReducerValue.bind(this.reader) },
           record.slug,
         )
-        if (isTerminal(value.state)) {
+        if (isDashboardTerminal(value.state)) {
           next.set(record.slug, { kind: 'terminal', record })
         } else {
+          const capacity = capacityBuildFromFacts(record, value)
           next.set(record.slug, {
             kind: 'reduced',
             cursor,
             record,
             state: value.state,
-            workspace: value.workspace !== null,
-            provisioning: value.provisionMarker !== undefined,
-            restackDue: landingRestackDue(value.state, value.log),
+            workspace: capacity.workspace,
+            provisioning: capacity.provisioning,
+            restackDue: capacity.restackDue,
             build:
               current?.kind === 'reduced' &&
               current.cursor === cursor &&
@@ -310,7 +412,7 @@ export class DashboardBuildPollCache {
       const events = current === undefined ? delta : [...current.events, ...delta]
       const acc = buildReducer.advance(current?.acc ?? buildReducer.initial(), delta)
       const state = buildReducer.finish(acc)
-      if (isTerminal(state)) {
+      if (isDashboardTerminal(state)) {
         next.set(record.slug, { kind: 'terminal', record })
         continue
       }
