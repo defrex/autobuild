@@ -9,6 +9,7 @@ import {
 import { scanCadenceWriteSchema } from '@defrex/autobuild/remote-store'
 import {
   BuildFeedValidationError,
+  parseBuildPageFilterParams,
   parseBuildPageLimitParam,
   parseChangePosition,
 } from '@defrex/autobuild/remote-store'
@@ -1821,12 +1822,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         if (segments[2] === 'build-page')
           return json(
             200,
-            await buildFeedRead(() => {
+            await buildFeedRead(async () => {
               const cursor = url.searchParams.get('cursor')
-              return store.listBuildsPage(repo, {
+              const filters = parseBuildPageFilterParams(url.searchParams)
+              const page = await store.listBuildsPage(repo, {
                 limit: parseBuildPageLimitParam(url.searchParams.get('limit')),
                 ...(cursor === null ? {} : { cursor }),
+                ...filters,
               })
+              // The echo tells a client this server applied the filters.
+              return Object.keys(filters).length === 0 ? page : { ...page, filters }
             }),
           )
       }
