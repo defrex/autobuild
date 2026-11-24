@@ -87,6 +87,7 @@ import {
 } from './requests'
 import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
 import type { OperatorSandboxService } from './sandbox'
+import { SandboxUnavailableError } from './sandbox-resolver'
 import {
   prepareOperatorTicketAssets,
   listOperatorTicketStates,
@@ -115,6 +116,11 @@ export interface ToolContext {
   via?: Via
   /** The operator-sandbox backend; required only by the sandbox tools. */
   sandbox?: OperatorSandboxService
+  /** Lazy per-call backend resolution (the hosted mode): invoked only by a
+   * sandbox handler, and only when `sandbox` is absent. It may throw
+   * `SandboxUnavailableError`, which maps to a typed `sandbox-<reason>`
+   * refusal. */
+  sandboxFor?: () => Promise<OperatorSandboxService>
 }
 
 /** The failure body shape the operator API emits, mapped one-to-one so a tool
@@ -204,15 +210,15 @@ function ticketsOf(ctx: ToolContext): OperatorTicketBackend {
   return ctx.tickets
 }
 
-/** The sandbox tools need the backend; same refusal shape as `ticketsOf`. */
-function sandboxOf(ctx: ToolContext): OperatorSandboxService {
-  if (ctx.sandbox === undefined) {
-    throw new RouteRefusalError({
-      kind: 'conflict',
-      error: 'operator sandbox backend is not configured',
-    })
-  }
-  return ctx.sandbox
+/** The sandbox tools need the backend: the static one, else the call's lazy
+ * resolution; otherwise the same refusal shape as `ticketsOf`. */
+async function sandboxOf(ctx: ToolContext): Promise<OperatorSandboxService> {
+  if (ctx.sandbox !== undefined) return ctx.sandbox
+  if (ctx.sandboxFor !== undefined) return ctx.sandboxFor()
+  throw new RouteRefusalError({
+    kind: 'conflict',
+    error: 'operator sandbox backend is not configured',
+  })
 }
 
 /** Extend every member of a request-union schema with shared routing fields
@@ -1312,7 +1318,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{exitCode, stdout, stderr}: the command’s exit status and truncated output streams.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxExecInput>
-      return sandboxOf(ctx).exec(attributed(ctx), input)
+      return (await sandboxOf(ctx)).exec(attributed(ctx), input)
     },
   ),
   defineTool(
@@ -1322,7 +1328,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{commandId}: the id to pass to sandbox.wait.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxStartInput>
-      return sandboxOf(ctx).start(attributed(ctx), input)
+      return (await sandboxOf(ctx)).start(attributed(ctx), input)
     },
   ),
   defineTool(
@@ -1332,7 +1338,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{state, exitCode?, stdout?, stderr?}: the command state; once exited, its exit code and truncated output streams; while running, the streamed output so far when the provider reports it (Vercel reports output only after exit).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxWaitInput>
-      return sandboxOf(ctx).wait(attributed(ctx), input)
+      return (await sandboxOf(ctx)).wait(attributed(ctx), input)
     },
   ),
   defineTool(
@@ -1342,7 +1348,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{encoding, content}: the file bytes — "utf8" when they decode as UTF-8, else "base64".',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxReadFileInput>
-      const bytes = await sandboxOf(ctx).readFile(attributed(ctx), input)
+      const bytes = await (await sandboxOf(ctx)).readFile(attributed(ctx), input)
       const decoded = new TextDecoder('utf-8').decode(bytes)
       if (!decoded.includes('\uFFFD')) {
         return { encoding: 'utf8', content: decoded }
@@ -1357,7 +1363,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{path}: the written path, confirming the durable write.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxWriteFileInput>
-      await sandboxOf(ctx).writeFile(attributed(ctx), input)
+      await (await sandboxOf(ctx)).writeFile(attributed(ctx), input)
       return { path: input.path }
     },
   ),
@@ -1368,7 +1374,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{ok: true}: the environment was released and re-provisioned from the current base head.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxResetInput>
-      await sandboxOf(ctx).reset(attributed(ctx), input)
+      await (await sandboxOf(ctx)).reset(attributed(ctx), input)
       return { ok: true as const }
     },
   ),
@@ -1379,7 +1385,7 @@ export const TOOLS: readonly ToolEntry[] = [
     '{branch, sha, pr: {number, url, headSha}}: the publication branch, the published commit, and the opened or updated pull request.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxPublishInput>
-      return sandboxOf(ctx).publish(attributed(ctx), {
+      return (await sandboxOf(ctx)).publish(attributed(ctx), {
         repo: input.repo,
         title: input.title,
         ...(input.body !== undefined ? { body: input.body } : {}),
@@ -1395,10 +1401,16 @@ export const TOOLS: readonly ToolEntry[] = [
 export interface RegistryOptions {
   store: BuildStore
   tickets?: OperatorTicketBackend
-  /** The operator-sandbox backend; when absent the sandbox tools are
-   * neither advertised nor callable (the compatibility case). When present
-   * but `canPublish` is false, only `sandbox.publish` is filtered. */
+  /** The operator-sandbox backend; when absent (and `sandboxResolution` is
+   * absent) the sandbox tools are neither advertised nor callable (the
+   * compatibility case). When present but `canPublish` is false, only
+   * `sandbox.publish` is filtered. */
   sandbox?: OperatorSandboxService
+  /** The hosted mode: a declared sandbox capability with no backend yet. The
+   * sandbox tools are served per `operatorToolTable(sandboxResolution)`, and
+   * each call's backend arrives through `ToolContext.sandboxFor`. When both
+   * this and `sandbox` are given, `sandbox` wins. */
+  sandboxResolution?: { canPublish: boolean }
   clock?: Clock
   /** Constrain every call to this repository identity (the `ab mcp --repo` flag). */
   allowedRepo?: string
@@ -1467,6 +1479,13 @@ function mapDomainError(error: unknown): RegistryError {
       progress: error.progress,
     })
   }
+  if (error instanceof SandboxUnavailableError) {
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: `sandbox-${error.reason}`,
+    })
+  }
   if (error instanceof SandboxOperationError) {
     return new RegistryError('domain', error.message, {
       kind: 'refusal',
@@ -1492,25 +1511,27 @@ function mapDomainError(error: unknown): RegistryError {
   )
 }
 
+const sandboxToolNames: ReadonlySet<string> = new Set(
+  Object.keys(OPERATOR_TOOL_ANNOTATIONS).filter((name) => name.startsWith('sandbox.')),
+)
+
+/** The served table for a sandbox capability — the one filter rule both
+ * advertisement and dispatch use. Without a capability every sandbox tool is
+ * filtered; with one that cannot publish (no forge or no provider publication
+ * capability), only `sandbox.publish` is filtered. */
+export function operatorToolTable(sandbox?: { canPublish: boolean }): readonly ToolEntry[] {
+  if (sandbox === undefined) return TOOLS.filter((tool) => !sandboxToolNames.has(tool.name))
+  if (sandbox.canPublish === false) return TOOLS.filter((tool) => tool.name !== 'sandbox.publish')
+  return TOOLS
+}
+
 /** Bind the closed table to an opened store (and optional ticket and sandbox
  * backends). The returned registry is the in-process binding; every other
  * binding is generated from `entries`. Advertisement and dispatch share ONE
  * table: a filtered tool is neither advertised nor served. */
 export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
-  const sandboxToolNames = new Set(
-    Object.keys(OPERATOR_TOOL_ANNOTATIONS).filter((name) => name.startsWith('sandbox.')),
-  )
-  // Without a sandbox backend every sandbox tool is filtered; with a backend
-  // that cannot publish (no forge or no provider publication capability),
-  // only `sandbox.publish` is filtered. Filtered tools are absent from
-  // `entries` AND from `call()` dispatch.
-  const filtered = new Set<string>()
-  if (options.sandbox === undefined) {
-    for (const name of sandboxToolNames) filtered.add(name)
-  } else if (options.sandbox.canPublish === false) {
-    filtered.add('sandbox.publish')
-  }
-  const table = filtered.size === 0 ? TOOLS : TOOLS.filter((tool) => !filtered.has(tool.name))
+  // Filtered tools are absent from `entries` AND from `call()` dispatch.
+  const table = operatorToolTable(options.sandbox ?? options.sandboxResolution)
   return {
     entries: table,
     async call(name, input, partial = {}) {
@@ -1555,6 +1576,7 @@ export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
         store: partial.store ?? options.store,
         ...(tickets !== undefined ? { tickets } : {}),
         ...(sandbox !== undefined ? { sandbox } : {}),
+        ...(partial.sandboxFor !== undefined ? { sandboxFor: partial.sandboxFor } : {}),
         clock: partial.clock ?? options.clock ?? systemClock,
         ...(identity !== undefined ? { identity } : {}),
         ...(partial.via !== undefined ? { via: partial.via } : {}),
