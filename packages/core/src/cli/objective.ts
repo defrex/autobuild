@@ -134,7 +134,7 @@ export function renderObjective(view: ObjectiveView): string[] {
     ...progress.unmeasuredMerges.map((merge) => `  ${unmeasuredMergeText(merge)}`),
     ...progress.pendingCleanups.map((cleanup) => `  ${pendingCleanupText(cleanup)}`),
     `  plateau: ${progress.plateau}`,
-    `  elapsed: ${progress.elapsedHours.toFixed(1)} hours`,
+    `  active: ${progress.elapsedHours.toFixed(1)} hours${progress.settling ? ' (settling: attempt runs before the stop are still being accounted)' : ''}`,
     `  stop eligible: ${
       eligible.length === 0
         ? 'none'
