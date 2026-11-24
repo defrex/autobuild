@@ -78,7 +78,7 @@ bun ab web
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
 - `--port`, `--host` and `--json` work as for `ab web` and require `--web`; `--json` changes only the URL announcement line.
-- A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation.
+- A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation: stdout carries only the URL line, and warnings and diagnostics stay on stderr.
 - Adds no store reads: it shows what the dispatcher's own refresh reads. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
 - Binds before the repository lease; a taken port fails dispatch before it claims anything.
 - The URL keeps working across automatic runtime upgrades and is printed once. Ctrl-C closes it. `--once` is refused.

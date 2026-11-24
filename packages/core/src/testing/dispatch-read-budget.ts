@@ -1184,6 +1184,7 @@ steps = []
       async ({ store, repo, start, join: joinTabs }) => {
         const stop = new AbortController()
         let ticks = 0
+        const stdout: string[] = []
         await abDispatch({
           targetRepo: directory,
           repo,
@@ -1196,7 +1197,7 @@ steps = []
                   stderr: '',
                   exitCode: 0,
                 },
-          stdout: () => {},
+          stdout: (line) => stdout.push(line),
           stderr: () => {},
           once: false,
           plain: true,
@@ -1232,6 +1233,14 @@ steps = []
           }),
         })
         expect(ticks).toBe(3)
+        // Under --web the URL line is the plain kernel's only stdout; without
+        // it the line-oriented presentation still prints.
+        if (start) {
+          expect(stdout).toHaveLength(1)
+          expect(JSON.parse(stdout[0] ?? '{}').url).toBe('http://127.0.0.1:1/')
+        } else {
+          expect(stdout.some((line) => line.includes('watching'))).toBe(true)
+        }
       },
     )
   } finally {

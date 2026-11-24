@@ -3913,14 +3913,21 @@ class DispatchLoop {
     this.paint()
   }
 
+  /** Plain/non-TTY `--web`: the web UI is the only presentation, so routine
+   * line-oriented stdout is suppressed. Warnings and diagnostics stay on
+   * stderr. */
+  private get webPresents(): boolean {
+    return !this.dashboard && this.opts.web !== undefined
+  }
+
   private say(line: string): void {
-    if (this.presentationReleased) return
+    if (this.presentationReleased || this.webPresents) return
     if (!this.dashboard && this.opts.silent !== true) this.opts.stdout(line)
   }
 
   /** Routine acknowledgement: line-oriented stdout, dashboard-silent. */
   private announce(line: string): void {
-    if (!this.dashboard) this.opts.stdout(line)
+    if (!this.dashboard && !this.webPresents) this.opts.stdout(line)
   }
 
   private hooks: HookSupervisor | undefined
@@ -4005,11 +4012,14 @@ class DispatchLoop {
     else if (this.opts.silent !== true) this.opts.stderr(line)
   }
 
-  /** Failure-severity dashboard notice whose historical plain sink is stdout. */
+  /** Failure-severity dashboard notice whose historical plain sink is stdout;
+   * under `--web` it moves to stderr so stdout carries only the URL. */
   private failureNotice(line: string): void {
     if (this.presentationReleased) return
     if (this.dashboard) this.setWarning(line)
-    else if (this.opts.silent !== true) this.opts.stdout(line)
+    else if (this.opts.silent === true) return
+    else if (this.webPresents) this.opts.stderr(line)
+    else this.opts.stdout(line)
   }
 
   /** Routine diagnostic whose historical line-oriented sink is stderr. */
@@ -4149,7 +4159,7 @@ class DispatchLoop {
     if (reportedDiagnostic) return true
     // A tick that did something is worth a plain line. Interactive mode
     // suppresses both action counts and the every-10s idle noise.
-    if (!this.dashboard && printIdle) {
+    if (!this.dashboard && !this.webPresents && printIdle) {
       this.opts.stdout('tick: idle')
       return true
     }
