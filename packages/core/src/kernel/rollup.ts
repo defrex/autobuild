@@ -4,7 +4,7 @@
  *
  * A rollup is three parts: the build reducer (`buildReducer`, a registered
  * build-scope named value), a pure contribution function from that build's
- * finished value to its share of the rollup, and a repository accumulator
+ * slug and finished value to its share of the rollup, and a repository accumulator
  * with `add` and `subtract`. Contributions must be invertible, so a build that
  * changes again (a new closed segment, a reopen) has its previously absorbed
  * contribution subtracted before its new one is added.
@@ -40,8 +40,9 @@ export interface RollupDefinition<
    * answer outside it. */
   readonly valueSchema: z.ZodType
   initial(): Acc
-  /** One build's share, or `null` for none. Pure. */
-  contribute(buildValue: unknown, args: Args, now: Date): C | null
+  /** One build's share, or `null` for none. Pure. `slug` is the build's, for
+   * contributions that must name their build. */
+  contribute(buildValue: unknown, args: Args, now: Date, slug: string): C | null
   /** Fold a contribution into `acc` in place. */
   add(acc: Acc, contribution: C): void
   /** Remove a previously added contribution from `acc` in place. */

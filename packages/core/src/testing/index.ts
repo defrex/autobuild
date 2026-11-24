@@ -81,6 +81,7 @@ export {
 
 export {
   buildFeedReadBudget,
+  buildRosterReadBudget,
   rollupReadBudget,
   rollupRemoteReadBudget,
   type RollupReadCost,

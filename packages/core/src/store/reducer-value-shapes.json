@@ -248,21 +248,25 @@
       "acc": "2291",
       "value": "2299"
     },
+    "buildRosterEntry": {
+      "acc": "2300",
+      "value": "2305"
+    },
     "autoMergeDefault": {
       "acc": "857",
       "value": "857"
     },
     "pinnedAssets": {
-      "acc": "2300",
-      "value": "2302"
+      "acc": "2308",
+      "value": "2310"
     },
     "forgeHealthValue": {
       "acc": "844",
-      "value": "2303"
+      "value": "2311"
     },
     "dispatchPlacement": {
-      "acc": "2304",
-      "value": "2306"
+      "acc": "2312",
+      "value": "2314"
     }
   },
   "schemas": {
@@ -34422,26 +34426,102 @@
     "2300": {
       "kind": "object",
       "props": {
-        "pins": {
+        "kind": {
           "type": "2301",
           "optional": false
+        },
+        "createdAt": {
+          "type": "4",
+          "optional": true
+        },
+        "terminal": {
+          "type": "2302",
+          "optional": true
         }
       }
     },
     "2301": {
-      "kind": "array",
-      "items": "1056"
+      "kind": "union",
+      "items": ["898", "899"]
     },
     "2302": {
+      "kind": "union",
+      "items": ["5", "2303"]
+    },
+    "2303": {
       "kind": "object",
       "props": {
-        "pins": {
-          "type": "2301",
+        "outcome": {
+          "type": "2304",
+          "optional": false
+        },
+        "at": {
+          "type": "2",
           "optional": false
         }
       }
     },
-    "2303": {
+    "2304": {
+      "kind": "union",
+      "items": ["1014", "799", "188"]
+    },
+    "2305": {
+      "kind": "object",
+      "props": {
+        "kind": {
+          "type": "2301",
+          "optional": false
+        },
+        "createdAt": {
+          "type": "4",
+          "optional": true
+        },
+        "finished": {
+          "type": "2306",
+          "optional": true
+        }
+      }
+    },
+    "2306": {
+      "kind": "union",
+      "items": ["5", "2307"]
+    },
+    "2307": {
+      "kind": "object",
+      "props": {
+        "outcome": {
+          "type": "2304",
+          "optional": false
+        },
+        "completedAt": {
+          "type": "2",
+          "optional": false
+        }
+      }
+    },
+    "2308": {
+      "kind": "object",
+      "props": {
+        "pins": {
+          "type": "2309",
+          "optional": false
+        }
+      }
+    },
+    "2309": {
+      "kind": "array",
+      "items": "1056"
+    },
+    "2310": {
+      "kind": "object",
+      "props": {
+        "pins": {
+          "type": "2309",
+          "optional": false
+        }
+      }
+    },
+    "2311": {
       "kind": "object",
       "props": {
         "value": {
@@ -34450,28 +34530,28 @@
         }
       }
     },
-    "2304": {
+    "2312": {
       "kind": "object",
       "props": {
         "placement": {
-          "type": "2305",
+          "type": "2313",
           "optional": false
         }
       }
     },
-    "2305": {
+    "2313": {
       "kind": "union",
       "items": ["62", "751", "752"]
     },
-    "2306": {
+    "2314": {
       "kind": "union",
-      "items": ["2307", "2309"]
+      "items": ["2315", "2317"]
     },
-    "2307": {
+    "2315": {
       "kind": "object",
       "props": {
         "status": {
-          "type": "2308",
+          "type": "2316",
           "optional": false
         },
         "placement": {
@@ -34480,11 +34560,11 @@
         }
       }
     },
-    "2308": {
+    "2316": {
       "kind": "literal",
       "value": "known"
     },
-    "2309": {
+    "2317": {
       "kind": "object",
       "props": {
         "status": {
@@ -34492,20 +34572,20 @@
           "optional": false
         },
         "reason": {
-          "type": "2310",
+          "type": "2318",
           "optional": false
         }
       }
     },
-    "2310": {
+    "2318": {
       "kind": "union",
-      "items": ["2311", "2312"]
+      "items": ["2319", "2320"]
     },
-    "2311": {
+    "2319": {
       "kind": "literal",
       "value": "unrecorded"
     },
-    "2312": {
+    "2320": {
       "kind": "literal",
       "value": "unsupported-capability"
     }
