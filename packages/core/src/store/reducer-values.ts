@@ -16,6 +16,9 @@ export const reducerValueRequestSchema = z
   .object({
     reducer: z.string().min(1).max(64),
     args: z.record(z.string(), z.json()).optional(),
+    /** Read-time arguments: they shape a rollup's finished value without
+     * creating a key (SPEC §7.7). Named reducers reject them. */
+    read: z.record(z.string(), z.json()).optional(),
   })
   .strict()
 export type ReducerValueRequest = z.infer<typeof reducerValueRequestSchema>
@@ -44,7 +47,7 @@ export interface ValueCatalogEntry {
   create(args: any): IncrementalReducer<any, any, any>
 }
 
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
   if (value !== null && typeof value === 'object')
     return `{${Object.entries(value)
@@ -60,6 +63,8 @@ export function resolveReducerValue(
   catalogIdentity = READ_CATALOG_IDENTITY,
 ) {
   const request = reducerValueRequestSchema.parse(input)
+  if (request.read !== undefined)
+    throw new Error(`reducer "${request.reducer}" takes no read-time arguments`)
   const registration = Object.hasOwn(REDUCERS, request.reducer)
     ? REDUCERS[request.reducer]
     : undefined

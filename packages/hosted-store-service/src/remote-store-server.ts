@@ -33,6 +33,7 @@ import {
   reducerValueForClient,
   reducerValueRequestSchema,
   resolveReducerValue,
+  resolveRollupValue,
 } from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import {
@@ -580,8 +581,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     requireProject(value, repo!)
     const valueRead =
       req.method === 'POST' &&
-      new URL(req.url).pathname.endsWith('/reducer-values') &&
-      (kind === 'build' || kind === 'repo')
+      ((new URL(req.url).pathname.endsWith('/reducer-values') &&
+        (kind === 'build' || kind === 'repo')) ||
+        // A rollup read is a read, not a delegated write.
+        (new URL(req.url).pathname.endsWith('/rollup-values') && kind === 'repo'))
     if (value.kind === 'delegated' && req.method !== 'GET' && !valueRead) {
       const grant = value.delegation
       if (kind === 'build') {
@@ -924,6 +927,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return snapshotRoute(req, url, { kind: 'repo', repo }, segments[1]!)
     }
     if (rest === 'reducer-values') return valueRoute(req, { kind: 'repo', repo })
+    if (rest === 'rollup-values') return rollupRoute(req, repo)
     if (req.method === 'GET' && rest === 'stream-seed')
       return streamSeedRoute(req, url, { kind: 'repo', repo })
     if (req.method === 'GET' && rest === 'harvest-history') {
@@ -1306,6 +1310,27 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         throw new Error(`unknown repo "${scope.repo}"`)
       throw error
     }
+  }
+
+  /** `POST /repos/:repo/rollup-values` (SPEC §7.7): the canonical rollup
+   * answer, advanced on the server. The body is a `reducer-values` request
+   * whose `read` record carries read-time arguments. Rollups have no released
+   * projection catalog: a client on another rollup version raises its typed
+   * incompatibility. An unknown repository answers the empty value. */
+  async function rollupRoute(req: Request, repo: string): Promise<Response> {
+    if (req.method !== 'POST')
+      return fail(404, 'not-found', `no route: ${req.method} rollup-values`)
+    const text = await req.text()
+    if (utf8.encode(text).length > 4096)
+      throw new RequestError(413, 'validation', 'rollup request exceeds 4 KiB')
+    let body: ReturnType<typeof reducerValueRequestSchema.parse>
+    try {
+      body = reducerValueRequestSchema.parse(JSON.parse(text))
+      resolveRollupValue(repo, body)
+    } catch (error) {
+      throw new RequestError(400, 'validation', String(error))
+    }
+    return reducerValueResponse(await store.getReducerValue({ kind: 'rollup', repo }, body))
   }
 
   /** A body ceiling for one snapshot: generous for a long build's accumulator,
@@ -1848,6 +1873,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         'POST lease/release',
         'POST streams',
         'POST reducer-values',
+        'POST rollup-values',
       ].includes(`${req.method} ${rest}`)
       if (!storeGated) {
         const record = await store.getRepo(repo)

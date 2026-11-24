@@ -1751,3 +1751,71 @@ describe('changed-builds feed and paged listing compatibility', () => {
     expect(calls).toBe(0)
   })
 })
+
+describe('rollup values (SPEC §7.7)', () => {
+  const scope = { kind: 'rollup', repo: 'org/repo' } as const
+  const request = { reducer: 'stepDurations', read: { window: '30d' } }
+  const canonical = async () => {
+    const { stepDurationsRollup } = await import('../../kernel/step-durations')
+    return {
+      version: stepDurationsRollup.version,
+      cursor: 0,
+      value: { position: '7', window: '30d', steps: [] },
+    }
+  }
+  const client = (respond: () => Response) => {
+    const urls: string[] = []
+    const store = new RemoteBuildStore({
+      url: 'http://store.test',
+      fetchFn: (async (url: string | URL | Request, init?: RequestInit) => {
+        urls.push(`${init?.method ?? 'GET'} ${new URL(String(url)).pathname}`)
+        return respond()
+      }) as unknown as typeof fetch,
+    })
+    return { store, urls }
+  }
+
+  test('one POST answers the canonical value', async () => {
+    const body = await canonical()
+    const { store, urls } = client(() => Response.json(body))
+    expect(await store.getReducerValue(scope, request)).toEqual(body)
+    expect(urls).toEqual(['POST /repos/org%2Frepo/rollup-values'])
+  })
+
+  for (const [name, respond] of [
+    [
+      'an absent route',
+      async () => Response.json({ kind: 'not-found', error: 'no route' }, { status: 404 }),
+    ],
+    ['a disallowed method', async () => new Response(null, { status: 405 })],
+    ['a different version', async () => Response.json({ ...(await canonical()), version: 999 })],
+    [
+      'an unrepresentable value',
+      async () => Response.json({ ...(await canonical()), value: { steps: 1 } }),
+    ],
+    ['an invalid envelope', async () => Response.json({ value: {} })],
+    ['a non-JSON body', async () => new Response('<html>', { status: 200 })],
+  ] as const)
+    test(`${name} is a typed incompatibility and makes no other request`, async () => {
+      const { ReducerValueIncompatibilityError } = await import('./compatibility')
+      const response = await respond()
+      const { store, urls } = client(() => response)
+      const failure = await store.getReducerValue(scope, request).catch((caught: unknown) => caught)
+      expect(failure).toBeInstanceOf(ReducerValueIncompatibilityError)
+      expect((failure as InstanceType<typeof ReducerValueIncompatibilityError>).scope).toEqual(
+        scope,
+      )
+      expect(urls).toEqual(['POST /repos/org%2Frepo/rollup-values'])
+    })
+
+  test('invalid requests reject before any request', async () => {
+    const { store, urls } = client(() => Response.json({}))
+    await expect(store.getReducerValue(scope, { reducer: 'nope' })).rejects.toThrow(
+      'unknown rollup',
+    )
+    await expect(
+      store.getReducerValue(scope, { reducer: 'stepDurations', read: { window: '1y' } }),
+    ).rejects.toThrow()
+    expect(urls).toEqual([])
+  })
+})

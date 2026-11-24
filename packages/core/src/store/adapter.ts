@@ -136,7 +136,26 @@ export {
   snapshotScopeKey,
   snapshotSupersedes,
 } from './snapshots'
-export type { ReducerSnapshot, SnapshotScope } from './snapshots'
+export type { ReducerSnapshot, ReducerValueScope, RollupScope, SnapshotScope } from './snapshots'
+export { rollupScopeKey } from './snapshots'
+export {
+  KeyedMutex,
+  ROLLUP_LEASE_MS,
+  ROLLUP_LEASE_WAIT_MS,
+  ROLLUP_RENEW_BATCH,
+  RollupLeaseLostError,
+  RollupLeaseTimeoutError,
+  readRollupValue,
+  resolveRollupValue,
+  rollupEntry,
+} from './rollups'
+export type {
+  ResolvedRollup,
+  RollupAdvance,
+  RollupReads,
+  RollupRow,
+  RollupStorage,
+} from './rollups'
 
 export {
   readReducerValue,

@@ -1153,7 +1153,7 @@ first by creation (slug descending breaks ties), with records identical to
 not depend on the repository's build count. Limits run from 1 to 100 (default
 25). Malformed positions, cursors and limits reject. Unknown repositories answer
 empty without creating state. Scoped build and session handles reject both
-methods. Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
+methods. The feed is what derived reducers advance by (§7.7). Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
 conformance suite):
 
 1. **Local** — one self-contained state tree at `<main-repo>/.autobuild/` by
@@ -1607,6 +1607,110 @@ re-arm without `--since`, reconcile status, and acknowledge the unavailable gap.
 Explicit harvest history uses reverse indexed filtered pages rather than a
 journal replay. See `docs/remote-store-protocol.md` for the wire contract,
 initial migration bootstrap and generation-retirement recovery.
+
+### 7.7 Derived reducers
+
+A derived reducer answers a question across builds, such as P90 plan time over
+the last week, without reading every build's history on every request. It has
+three parts:
+
+1. **A build reducer**: a registered build-scope named value, saved per build
+   and advanced by delta like any other.
+2. **A contribution function**: pure, from that build's finished value to its
+   share of the rollup.
+3. **A rollup**: a repository accumulator with `add` and `subtract`. Its value
+   is the sum of the contributions of every build it has absorbed.
+
+**Contributions must be invertible.** When a build changes again (a new closed
+segment, a reopen), the rollup subtracts the contribution it absorbed from that
+build last time and adds the new one. Counts, sums and histograms invert;
+minimum and maximum are expressed through histograms.
+
+**Scope and arguments.** A rollup is requested through `getReducerValue` with
+the scope `{kind: 'rollup', repo}`. Rollups live in `ROLLUPS` beside
+`REDUCERS` in the registry and version through the revision ledger; a rollup's
+version adds its build reducer's, so a build-reducer revision changes the
+rollup's key too. Key arguments (`args`) are parsed with their defaults before
+hashing, so each distinct combination is its own rollup with its own
+accumulator. Read-time arguments (`read`) shape only the finished value and
+never create a key; named reducers reject a request that carries them.
+
+**Advance.** The saved rollup holds its accumulator and the repository change
+position it reflects.
+
+- A read whose saved position equals the repository head, and whose
+  accumulator holds nothing retention drops, returns the saved value: two
+  constant reads, no event rows and no feed query.
+- Otherwise the reader asks `listBuildsChangedSince` for builds changed since
+  the saved position, reads each changed build's saved build-reducer value,
+  reads that build's **absorbed contribution** for this rollup key, subtracts
+  old and adds new. It commits the accumulator, the feed's snapshot head and
+  every changed absorbed contribution together.
+- An answer with no changed builds but a moved head (repository events and
+  creations move the position too) saves only the position.
+- A saved value holding an expired day is pruned and saved at the same
+  position, with no feed query and no event read.
+
+Every advance is serialized per rollup key, across store instances and
+processes, from the re-read of the saved row through the commit, and the
+commit is conditional on the row the advance read. Two readers never count a
+build twice; a reader whose commit loses returns the winner's value. Memory
+serializes with a per-key mutex, SQLite with a lease row every instance
+contends on (expiry by the store clock, renewal after every 16 build reads,
+commit conditioned on still holding it), and Postgres with one transaction
+holding a transaction-scoped advisory lock on which every query of the advance
+runs.
+
+**First computation.** With no valid saved row (a new key, a version change, a
+corrupt row, or a saved position above the head, which means the repository was
+reset) the rollup starts empty at position `0`, so the feed lists every build
+once; existing absorbed contributions for the key are overwritten, never
+subtracted. A build whose build-reducer value is already saved costs one value
+read; otherwise its log is reduced once and saved. That is the once-per-key
+reduction: serialized, saved durably, and never repeated.
+
+**Storage.** Rollup rows and absorbed contributions sit in the private
+`value.` namespace of the reduced-value storage: the rollup row under the
+rollup scope at `value.rollup.v1.<digest>`, each absorbed contribution under its
+build's scope at `value.absorbed.v1.<digest>`. The public snapshot API refuses
+both. An unknown repository answers the empty value and creates nothing.
+
+**Remote.** The server's rollup value is canonical. A client sends one
+`POST /repos/:repo/rollup-values` and never rebuilds the value from events, the
+feed or build values. Rollups have no released projection catalog, so a client
+requires the server's version to equal its own: a different version, an absent
+route or a value outside the rollup's schema fails with
+`ReducerValueIncompatibilityError`. A rollup revision therefore makes older
+clients fail with that typed error until they upgrade.
+
+#### `stepDurations`
+
+The first rollup folds every build's `buildTimeline` (§15.5) into duration
+histograms per step and UTC day.
+
+- **Contribution:** each closed segment adds its `durationMs` to the histogram
+  for its step on the UTC day it ended. Open and abandoned segments add
+  nothing. A merged segment adds its occurrence count at the bucket of its mean
+  occurrence, so count and total stay exact.
+- **Histogram:** bucket `i` covers `[1000·1.1^i, 1000·1.1^(i+1))` ms, 140
+  buckets from 1 second to about 7 days; shorter and longer durations clamp to
+  the end buckets. Buckets are sparse and each keeps a count and an exact sum.
+  Percentiles use nearest rank and the geometric midpoint of the bucket, within
+  5% of exact; the clamping end buckets answer their mean.
+- **Key arguments:** `outcome` is `merged` (default; the latest
+  `build.completed` outcome is `merged`) or `all`. `kind` is `leaf` (default;
+  any build whose kind is not `node`), `node` or `all`.
+- **Read-time argument:** `window` is `24h`, `7d` (default), `30d` or `all`. A
+  window selects every UTC day it overlaps.
+- **Retention:** days before the UTC day 400 days ago are dropped, at
+  contribution time and from the accumulator; a later reopen subtracts nothing
+  for a dropped day. The saved row is bounded by 400 days × steps × 140
+  buckets, a few megabytes for a busy repository, read only on explicit
+  requests.
+- **Answer:** `{position, window, steps: [{step, count, meanMs, p50Ms, p90Ms,
+  p99Ms, totalMs}]}`, with `cursor: 0`. Steps run in pipeline order (phases,
+  `verify:*` by name, finalize, reconcile, then waits) and zero-count steps are
+  omitted. Its size grows with steps, not with retained history.
 
 ## 8. The `ab` CLI
 
@@ -5200,6 +5304,47 @@ presentation inputs. No decision ever consults a snapshot in place of the
 append-only log. Separate reducers
 derive dispatcher settings and harvest state from the repository journal; each
 ignores the other's facts.
+
+#### Build timeline: segments and steps
+
+`buildTimeline` is a registered build-scope value: the build's **segments** of
+phase and wait time, for Gantt rows and the `stepDurations` rollup (§7.7).
+Phase segments pair the same start and terminal events the dashboard's phase
+intervals pair.
+
+| Category | Opens | Closes |
+|---|---|---|
+| `plan`, `plan-review`, `implement`, `code-review` | `*.started` | `plan.completed`, `*.verdict`, `implement.completed` |
+| `verify:<step>` | `verify.started` | `verify.completed`, `verify.cancelled` |
+| `finalize`, `reconcile` | `*.started` | `*.completed` |
+| `queued` | `build.created` | first `execution.started`; never reopens |
+| `escalated` | first `escalation.raised` while none is open | the `escalation.answered` that leaves no raised escalation unanswered |
+| `paused` | `build.paused` | `build.resumed` |
+| `ticket-wait` | `wait.entered` | `wait.ended`, or `escalation.answered` for the wait's escalation |
+| `awaiting-merge` | `pr.opened` or `finalize.completed`, whichever first | `pr.merged`, `pr.closed`, `build.completed`, `build.aborted` |
+
+- A phase start while that category is open replaces the open start; the
+  replaced attempt leaves no segment. A wait opening while its category is open
+  is ignored, so waits never lose time.
+- Each segment carries `category`, `start`, `end` (absent while open),
+  `durationMs`, the `opened` and `closed` events (`{type, seq}`), `round` or
+  `attempt` from the opening payload, `state` (`open`, `closed` or
+  `abandoned`) and, when merged, `merged`.
+- At `build.completed` or `build.aborted`, every other open segment closes as
+  `abandoned` at the terminal event: the row stops growing, and abandoned
+  segments contribute nothing to step durations.
+- The value also carries the build's `kind` (`work` or `node`), its `outcome`
+  (the latest `build.completed` outcome, cleared by `build.reopened`) and
+  `createdAt`. Segments are ordered by opening seq.
+- **Cap.** At most 200 closed segments. Past it, the earliest segment that has
+  a later segment of the same category and state absorbs that segment: it keeps
+  its own start, takes the later end and close, adds the durations and counts
+  the merged occurrences. The list is bounded by max(200, distinct
+  category-state pairs), so a retry loop cannot grow it without limit.
+
+A **step** is a category; durations are per step. Waits are steps too and may
+overlap phases: an escalation raised during implement counts in both.
+Uncovered time between segments is idle and is not a segment.
 
 ### 15.6 Walkthroughs
 
