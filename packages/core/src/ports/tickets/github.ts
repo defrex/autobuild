@@ -14,13 +14,18 @@
  *
  * Cost (CLAUDE.md "Store read cost is a correctness property", applied to
  * GitHub budget): the source holds no BuildStore handle. Recurring reads
- * (the ready listing, candidates' blockers, reopen checks and parent issues,
- * dependency reads, `get`, the label registry, and `listTargeting`'s node,
- * sub-issue and child reads) are conditional through a durable validator
- * store, so an unchanged repository answers a tick with 304s. Counts are one
- * fresh, bounded GraphQL request per call and are never cached. Explicit
- * history reads (export snapshots and comment history), the keyed-create scan, the claim read and every
- * write store nothing.
+ * (the ready listing, each hydrated ticket's dependency list, reopen checks
+ * and parent issues, dependency reads, `get`, the label registry, and
+ * `listTargeting`'s node, sub-issue and child reads) are conditional through
+ * a durable validator store, so an unchanged repository answers a tick with
+ * 304s. Those reads never trust a zero dependency summary, which lags the
+ * edges by seconds; broad unremembered listings (`listAll`, non-ready
+ * `listReady`) and export do, so they can omit a blocker recorded seconds
+ * earlier, and never feed a claim. Counts are one fresh, bounded GraphQL
+ * request per call and are never cached. Explicit history reads (export
+ * snapshots and comment history), the keyed-create scan, the claim's issue
+ * and dependency reads (one each per claim attempt, plus a page per further
+ * 100 blockers) and every write store nothing.
  * A `readyAssignee` narrows the ready read itself
  * (its `assignee` query parameter); `"me"` costs one `GET /user` per
  * dispatcher start, sent by `prepareReadyAssignee` before the loop and never

@@ -3023,7 +3023,13 @@ state, or a fixed `not-planned` state, never ready and never resolving a
 blocker, when no rejected role is configured. Reopening an issue on GitHub
 returns it to triage, and the adapter strips a stale pre-reopen state label the
 first time it reads the issue. Blockers are GitHub's native issue dependencies,
-and a blocker in another repository never resolves. Assets live in the
+and a blocker in another repository never resolves. Because GitHub's
+dependency summary lags the edges, reads that feed a claim decision read the
+dependency list, and claim re-reads it fresh, refusing without a write any
+unresolved blocker the dispatcher's dependency check did not evaluate; the
+dispatcher counts that ticket as dependency-blocked for the tick. A create into
+the ready state with blockers opens in triage and moves to ready only after
+every blocker is recorded. Assets live in the
 BuildStore, with notes posted as issue comments, and `get` carries no comment
 history; export and import read it explicitly. A ticket's own issue is an implicit `closes` link. A node is an issue
 with the exact `node` label, and a ticket targets a node by being a sub-issue
