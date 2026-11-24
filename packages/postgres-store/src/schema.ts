@@ -2054,6 +2054,7 @@ export async function migratePostgres(
         WHERE key IN ('triageState', 'readyState', 'claimedState', 'doneState', 'createState', 'proposalState')
         ON CONFLICT DO NOTHING`
       await ensureTicketStateCounts(tx as SQL)
+      await ensureOpenBuilds(tx as SQL)
       const authRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
       const authMarker = authRows[0]
@@ -2169,6 +2170,69 @@ async function ensureTicketStateCounts(tx: SQL): Promise<void> {
   if (row?.fresh)
     await tx`INSERT INTO ab_ticket_state_counts (repo, state, tickets)
       SELECT repo, state, count(*) FROM ab_tickets GROUP BY repo, state`
+}
+
+/** The open-build set behind `listOpenBuilds`: one row per build whose latest
+ * terminal fact is not `build.completed`. Additive and outside the core
+ * lockstep marker, like REPO_CHANGE_DDL: older server binaries keep working,
+ * and because the set is maintained by database triggers inside the
+ * appending statement's transaction, their writes keep it exact too. A build
+ * insert adds the build, `build.completed` removes it, and `build.aborted` or
+ * `build.reopened` re-derive it. The event-type filter lives inside the
+ * function, not in a trigger WHEN clause, so the trigger never pins the
+ * `events.type` column definition. */
+export const OPEN_BUILDS_DDL = `
+CREATE TABLE IF NOT EXISTS open_builds (
+  slug text PRIMARY KEY REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS open_builds_repo_slug ON open_builds (repo, slug);
+CREATE OR REPLACE FUNCTION ab_open_build_inserted() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO open_builds(slug, repo) VALUES (NEW.slug, NEW.repo) ON CONFLICT DO NOTHING;
+ RETURN NULL;
+END $$;
+CREATE OR REPLACE FUNCTION ab_open_build_terminal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.type = 'build.completed' THEN
+  DELETE FROM open_builds WHERE slug = NEW.build;
+ ELSIF NEW.type IN ('build.aborted', 'build.reopened') THEN
+  INSERT INTO open_builds(slug, repo)
+  SELECT b.slug, b.repo FROM builds b WHERE b.slug = NEW.build AND NOT EXISTS (
+   SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = NEW.build
+    AND c.seq > COALESCE((SELECT MAX(a.seq) FROM events a
+     WHERE a.type = 'build.aborted' AND a.build = NEW.build), 0))
+  ON CONFLICT DO NOTHING;
+ END IF;
+ RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS builds_open_insert ON builds;
+CREATE TRIGGER builds_open_insert AFTER INSERT ON builds
+FOR EACH ROW EXECUTE FUNCTION ab_open_build_inserted();
+DROP TRIGGER IF EXISTS events_open_terminal ON events;
+CREATE TRIGGER events_open_terminal AFTER INSERT ON events
+FOR EACH ROW EXECUTE FUNCTION ab_open_build_terminal();
+`
+
+/** The one-off backfill of an existing database's open builds. It runs only
+ * when the migration creates `open_builds`; no read path ever backfills. */
+export const OPEN_BUILDS_BACKFILL = `INSERT INTO open_builds(slug, repo)
+ SELECT b.slug, b.repo FROM builds b WHERE NOT EXISTS (
+  SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = b.slug
+   AND c.seq > COALESCE((SELECT MAX(a.seq) FROM events a
+    WHERE a.type = 'build.aborted' AND a.build = b.slug), 0))
+ ON CONFLICT DO NOTHING`
+
+/** Creates the open-build set, backfilling it only when the table is new.
+ * The migration transaction holds the advisory lock, and `CREATE TRIGGER`
+ * blocks build and event writes until commit, so no append lands between
+ * the backfill and the triggers. */
+async function ensureOpenBuilds(tx: SQL): Promise<void> {
+  const [row] = (await tx`SELECT to_regclass('open_builds') IS NULL AS fresh`) as {
+    fresh: boolean
+  }[]
+  await tx.unsafe(OPEN_BUILDS_DDL)
+  if (row?.fresh) await tx.unsafe(OPEN_BUILDS_BACKFILL)
 }
 
 /** Additive invalidation plumbing; independent of the core lockstep marker. */

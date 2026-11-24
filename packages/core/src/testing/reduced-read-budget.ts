@@ -7787,3 +7787,202 @@ export async function ticketStartReadBudget(): Promise<{
   for (const calls of tiers.get(100)!) expect(calls).toEqual({})
   return baseline
 }
+
+/** Count the build records and digest entries callers receive from a memory
+ * store: record entries from `listBuilds`, `listBuildsForRepo`, a found
+ * `getBuild` and `listOpenBuilds`; digest entries from `getRepoBuildDigests`,
+ * `listOpenBuilds` and outer `buildDigest` reductions. Calls the adapter
+ * makes to itself are not counted. */
+function memoryListingEntryCounter(store: import('../store/memory').MemoryBuildStore) {
+  const inside = new AsyncLocalStorage<true>()
+  let records = 0
+  let digests = 0
+  const restore: (() => void)[] = []
+  const wrap = (name: string, count: (result: unknown, args: unknown[]) => void) => {
+    const original = Reflect.get(store, name) as (...args: unknown[]) => Promise<unknown>
+    Reflect.set(store, name, async (...args: unknown[]) => {
+      if (inside.getStore()) return original.apply(store, args)
+      const result = await inside.run(true, () => original.apply(store, args))
+      count(result, args)
+      return result
+    })
+    restore.push(() => Reflect.deleteProperty(store, name))
+  }
+  wrap('listBuilds', (result) => (records += (result as unknown[]).length))
+  wrap('listBuildsForRepo', (result) => (records += (result as unknown[]).length))
+  wrap('getBuild', (result) => (records += result === null ? 0 : 1))
+  wrap('listOpenBuilds', (result) => {
+    records += (result as unknown[]).length
+    digests += (result as unknown[]).length
+  })
+  wrap('getRepoBuildDigests', (result) => (digests += (result as Map<string, unknown>).size))
+  wrap('getReducerValue', (_result, args) => {
+    if ((args[1] as { reducer: string }).reducer === 'buildDigest') digests++
+  })
+  return {
+    get vector() {
+      return { records, digests }
+    },
+    reset() {
+      records = 0
+      digests = 0
+    },
+    restore() {
+      for (const undo of restore) undo()
+    },
+  }
+}
+
+/** Operator reads that list active work — `builds.list` active and queued,
+ * `merges.list`, the dashboard snapshot and `repository.status` with its
+ * held-config capacity — receive the same record and digest entries at 1 and
+ * 30 settled builds and at 100 and 100,000 events, each through a fresh
+ * store handle (the stand-in for a fresh process), and read zero event rows
+ * while nothing changes (#1230). Returns the per-surface entry vectors. */
+export async function openBuildListingReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { listOperatorLandings } = await import('../operator/landings')
+  const { readRepositoryCapacity } = await import('../cli/repository-status')
+  const repo = 'open-listing-budget'
+  const now = new Date(1000)
+  const created = (slug: string) => ({
+    actor: DISPATCHER,
+    type: 'build.created' as const,
+    payload: { ticket: { source: 'file', id: slug }, repo, baseBranch: 'main' },
+  })
+  const seed = async (settled: number, padding: number) => {
+    const store = new MemoryBuildStore({ clock: () => now })
+    await store.ensureRepo(repo)
+    const config = parseConfig(
+      '[tickets]\nsource="file"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+    )
+    const { verify: _verify, finalize: _finalize, ...root } = config
+    const artifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'budget-run',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    await store.claimRepoLease(repo, 'budget-run', 3_600_000)
+    await seedRepoFiller(store, repo, padding)
+    // Open builds: queued, settled awaiting consent, aborted in cleanup.
+    await store.createBuild({ slug: 'open-queued', repo, created: created('open-queued') })
+    await store.createBuild({
+      slug: 'open-consent',
+      repo,
+      branch: 'branch/open-consent',
+      created: created('open-consent'),
+    })
+    await store.append('open-consent', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner', host: 'host' },
+    })
+    await store.append('open-consent', {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'local',
+        ref: 'local',
+        path: '/workspace',
+        branch: 'branch/open-consent',
+        base: { source: 'local', remoteError: 'offline', sha: 'base' },
+      },
+    })
+    const finalized = await store.append('open-consent', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+    })
+    await store.append('open-consent', {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: { head: 'head', parent: 'base', cycle: String(finalized.seq) },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    await store.createBuild({ slug: 'open-aborted', repo, created: created('open-aborted') })
+    await store.append('open-aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+    for (let i = 0; i < settled; i++) {
+      const slug = `settled-${i}`
+      await store.createBuild({ slug, repo, created: created(slug) })
+      if (i === 0) await seedBuildFiller(store, slug, padding, INERT_BUILD_FILLER)
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+    return { store, artifact: (await store.getRepoArtifact(repo, artifact.kind))! }
+  }
+  const surfaces = {
+    active: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'active', now }),
+    queued: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'queued', now }),
+    landings: (store: BuildStore) => listOperatorLandings({ store, repo }),
+    dashboard: (store: BuildStore) => getOperatorDashboard({ store, repo, clock: () => now }),
+    status: (store: BuildStore) => getRepositoryStatus(store, repo, now),
+    history: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'all', now }),
+  }
+  let baseline: Record<string, { records: number; digests: number }> | undefined
+  const history = new Map<number, number>()
+  for (const settled of [1, 30])
+    for (const padding of [100, 100_000]) {
+      const { store, artifact } = await seed(settled, padding)
+      const facts = (await readRepositoryFacts(store, repo)).value
+      const capacity = (target: BuildStore) =>
+        readRepositoryCapacity(target, repo, facts, artifact, now)
+      const all = { ...surfaces, capacity }
+      // Warm-up: every once-per-key reduction happens here. The seeded
+      // surfaces answer real work, so the counted reads are meaningful.
+      for (const run of Object.values(all)) await run(store)
+      expect((await surfaces.landings(store)).map((entry) => entry.slug)).toEqual(['open-consent'])
+      expect(
+        (await surfaces.dashboard(store)).model.builds.map((build) => build.slug).sort(),
+      ).toEqual(['open-aborted', 'open-consent', 'open-queued'])
+      expect((await surfaces.status(store)).capacity).toBeDefined()
+      const rows = memoryRepositoryReadCounter(store, repo)
+      const entries = memoryListingEntryCounter(store)
+      const vectors: Record<string, { records: number; digests: number }> = {}
+      try {
+        for (const [name, run] of Object.entries(all)) {
+          // A fresh handle shares no store-identity-keyed cache.
+          const fresh = new Proxy(store, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              return typeof value === 'function' ? value.bind(target) : value
+            },
+          })
+          rows.reset()
+          entries.reset()
+          await run(fresh)
+          expect({ name, rows: rows.rows, buildRows: rows.buildRows }).toEqual({
+            name,
+            rows: 0,
+            buildRows: 0,
+          })
+          if (name === 'history') history.set(settled, entries.vector.records)
+          else vectors[name] = entries.vector
+        }
+      } finally {
+        entries.restore()
+      }
+      if (baseline) expect(vectors).toEqual(baseline)
+      baseline = vectors
+    }
+  // The counter bites: the explicit history listing grows with settled builds.
+  expect(history.get(30)).toBeGreaterThan(history.get(1)!)
+  return baseline!
+}
