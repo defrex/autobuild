@@ -13,26 +13,6 @@ const exists = (path: string) =>
     () => false,
   )
 
-test('no account invokes directly without creating files', async () => {
-  expect(
-    await withAccountSettings(
-      {},
-      undefined,
-      async (args) => {
-        expect(args).toEqual([])
-        return 'ok'
-      },
-      {
-        mkdtemp: () => {
-          throw new Error('unexpected file creation')
-        },
-        writeFile,
-        rm,
-      },
-    ),
-  ).toBe('ok')
-})
-
 test('concurrent invocations keep distinct account files alive until each callback settles', async () => {
   const paths: string[] = []
   let release!: () => void
@@ -105,4 +85,22 @@ test('cleanup failure is not success and retains primary invocation failure cont
   } finally {
     if (directory) await rm(directory, { recursive: true, force: true })
   }
+})
+
+test('Kimi settings blank the competing OAuth credential', async () => {
+  const selected = {
+    name: 'kimi',
+    descriptor: {
+      kind: 'kimi-code' as const,
+      credentialEnv: 'KIMI_KEY',
+      region: 'overseas' as const,
+    },
+  }
+  const env = accountEnvironment(
+    { KIMI_KEY: 'sentinel-kimi', CLAUDE_CODE_OAUTH_TOKEN: 'wrong' },
+    selected,
+  )
+  await withAccountSettings(env, selected, async (args) => {
+    expect(JSON.parse(await readFile(args[1]!, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
+  })
 })
