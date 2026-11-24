@@ -110,3 +110,34 @@ shot. Probes record disclosure ARIA, synchronized active section markers,
 expected section from viewport position, sidebar visibility and sticky top
 geometry, and code-well containment. Every docs width checks document overflow.
 The report and inventory retain these measurements alongside each PNG.
+
+## Landing paint and capture recovery
+
+Landing measurement and screenshots use a real-time CDP navigation, preserving
+normal/reduced motion and exact iframe widths. Readiness awaits used fonts,
+image settlement/decoding, figure acknowledgements and two animation frames after
+layout. The real-time runner bounds readiness; unavailable fonts may use the
+existing fallback. Neither font readiness nor animation frames proves compositor
+completeness.
+
+Every landing screenshot is decoded before tiling. Rendered text ranges in the
+header, hero, section headings, diagrams and footer supply foreground/background
+colors and coordinates. Only populated, sufficiently contrasted rectangles are
+checked; blank section spacing is excluded. At least 0.5% foreground coverage,
+with a permissive antialiasing tolerance, detects missing text without requiring
+reference font byte equality. Tiny segment-edge slivers are excluded. Missing
+DOM anchors remain page/probe errors. Dimensions and missing foreground are
+capture errors. Per-attempt `*-paint-*.json` diagnostics retain coordinates,
+coverage and failures. Two fresh-profile attempts are allowed; rejected PNGs
+are removed and exhaustion publishes no complete inventory.
+
+A `classification: capture-error` report or visually suspicious missing pixels
+requires one complete capture rerun, preserving both reports. A successful rerun
+still requires all visual and provenance checks. Never pass incomplete evidence;
+if it remains unavailable, attach nothing and use `ab escalate` with report
+references, not a site-defect verdict. When the manifest range changes none of a
+page's inputs, never fail the build for missing or blank pixels on that page:
+rerun once, then escalate if evidence is still incomplete. The manifest range attributes
+defects only; it never changes applicability or permits skip. Real defects with
+valid evidence still fail, including on changed pages. Missing Chromium retains
+its explicit setup-failure verdict.
