@@ -30,6 +30,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+import type { BuildPage, ChangedBuilds } from './types'
 import type {
   TicketAsset,
   TicketAssetInput,
@@ -121,6 +122,12 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     },
     getRepoChangePosition(repo: string): Promise<string> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoChangePosition', repo))
+    },
+    listBuildsChangedSince(repo: string): Promise<ChangedBuilds> {
+      return Promise.reject(new SessionScopeError(scope, 'listBuildsChangedSince', repo))
+    },
+    listBuildsPage(repo: string): Promise<BuildPage> {
+      return Promise.reject(new SessionScopeError(scope, 'listBuildsPage', repo))
     },
     listBuilds(): Promise<BuildRecord[]> {
       return Promise.reject(new SessionScopeError(scope, 'listBuilds'))

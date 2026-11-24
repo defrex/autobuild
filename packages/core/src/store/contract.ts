@@ -15,6 +15,8 @@ import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
 import { MemoryBuildStore } from './memory'
 import { summarizeTicketAsset } from './ticket-assets'
+
+import { BuildFeedValidationError, compareChangePositions } from './build-feed'
 /**
  * Reusable contract suites for the BuildStore seam (SPEC §7). The in-memory
  * adapter's behavior *is* the contract; every adapter — SQLite (§7.2.1),
@@ -1795,25 +1797,49 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             const value = await store.getRepoChangePosition(repo)
             expect(value).toMatch(/^(0|[1-9][0-9]*)$/)
             expect(BigInt(value)).toBeGreaterThan(previous)
+            expect(compareChangePositions(value, String(previous))).toBe(1)
             previous = BigInt(value)
           }
-          const stable = async () =>
+          // A build write also moves that build's latest position to the head;
+          // a repository-only write leaves the feed empty.
+          const buildAdvanced = async () => {
+            const before = String(previous)
+            await advanced()
+            expect(await store.listBuildsChangedSince(repo, before)).toEqual({
+              position: String(previous),
+              builds: [{ slug: 'position-build', position: String(previous) }],
+            })
+          }
+          const repoAdvanced = async () => {
+            const before = String(previous)
+            await advanced()
+            expect(await store.listBuildsChangedSince(repo, before)).toEqual({
+              position: String(previous),
+              builds: [],
+            })
+          }
+          const stable = async () => {
             expect(await store.getRepoChangePosition(repo)).toBe(String(previous))
+            expect(await store.listBuildsChangedSince(repo, String(previous))).toEqual({
+              position: String(previous),
+              builds: [],
+            })
+          }
           await store.createBuild({ slug: 'position-build', repo })
-          await advanced()
+          await buildAdvanced()
           expect(await store.getRepo(repo)).toBeNull()
           await store.append('position-build', {
             actor: KERNEL,
             type: 'build.aborted',
             payload: {},
           })
-          await advanced()
+          await buildAdvanced()
           await store.appendWithArtifacts(
             'position-build',
             [{ kind: 'notes', content: 'ok' }],
             () => ({ actor: KERNEL, type: 'build.aborted', payload: {} }),
           )
-          await advanced()
+          await buildAdvanced()
           expect(
             await store.appendIfCurrent('position-build', 0, {
               actor: KERNEL,
@@ -1827,7 +1853,14 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             type: 'build.aborted',
             payload: {},
           })
-          await advanced()
+          await buildAdvanced()
+          await store.appendWithArtifactsIfCurrent(
+            'position-build',
+            3,
+            [{ kind: 'notes', content: 'again' }],
+            () => ({ actor: KERNEL, type: 'build.aborted', payload: {} }),
+          )
+          await buildAdvanced()
           await expect(
             store.append('position-build', {
               actor: KERNEL,
@@ -1844,11 +1877,11 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             payload: { enabled: true },
           }
           await store.appendRepo(repo, event)
-          await advanced()
+          await repoAdvanced()
           await store.appendRepoWithArtifacts(repo, [{ kind: 'notes', content: 'ok' }], () => event)
-          await advanced()
+          await repoAdvanced()
           await store.claimRepoLease(repo, 'one', 1000)
-          await advanced()
+          await repoAdvanced()
           await store.claimRepoLease(repo, 'one', 1000)
           await store.heartbeatRepo(repo, 'one')
           expect(await store.claimRepoLease(repo, 'two', 1000)).toBe(false)
@@ -1857,7 +1890,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           clock.advance(1001)
           await stable()
           await store.claimRepoLease(repo, 'two', 1000)
-          await advanced()
+          await repoAdvanced()
           await store.beginRepoTick(repo, 'two')
           await stable()
           await store.finishRepoTick(repo, 'two', { outcome: 'failed', error: 'test' }, [
@@ -1868,9 +1901,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               payload: { run: 'two', error: 'test' },
             },
           ])
-          await advanced()
+          await repoAdvanced()
           await store.releaseRepoLease(repo, 'two')
-          await advanced()
+          await repoAdvanced()
           await store.createBuild({ slug: 'position-foreign', repo: 'foreign' })
           await store.ensureRepo('foreign')
           await store.appendRepo('foreign', event)
@@ -1880,6 +1913,165 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.close()
           await cleanup?.()
         }
+      })
+    })
+
+    describe('changed-builds feed', () => {
+      test('reports each changed build once at its latest position, ascending, repository isolated', async () => {
+        await withStore(factory, { clock: manualClock(CONTRACT_T0) }, async (store) => {
+          const repo = 'feed/repo'
+          expect(await store.listBuildsChangedSince(repo, '0')).toEqual({
+            position: '0',
+            builds: [],
+          })
+          expect(await store.getRepo(repo)).toBeNull()
+          expect(await store.getRepoChangePosition(repo)).toBe('0')
+
+          await store.createBuild({ slug: 'feed-a', repo })
+          await store.createBuild({ slug: 'feed-b', repo })
+          await store.createBuild({ slug: 'feed-foreign', repo: 'feed/other' })
+          const p0 = await store.getRepoChangePosition(repo)
+          const all = await store.listBuildsChangedSince(repo, '0')
+          expect(all.position).toBe(p0)
+          expect(all.builds.map((build) => build.slug)).toEqual(['feed-a', 'feed-b'])
+          expect(all.builds.at(-1)!.position).toBe(p0)
+
+          await store.append('feed-a', { actor: KERNEL, type: 'build.aborted', payload: {} })
+          const afterAppend = await store.listBuildsChangedSince(repo, p0)
+          expect(afterAppend.builds).toEqual([{ slug: 'feed-a', position: afterAppend.position }])
+          expect(compareChangePositions(afterAppend.position, p0)).toBe(1)
+          expect(afterAppend.position).toBe(await store.getRepoChangePosition(repo))
+
+          // At the head: nothing, and the same head.
+          expect(await store.listBuildsChangedSince(repo, afterAppend.position)).toEqual({
+            position: afterAppend.position,
+            builds: [],
+          })
+
+          await store.createBuild({ slug: 'feed-c', repo })
+          const afterCreate = await store.listBuildsChangedSince(repo, afterAppend.position)
+          expect(afterCreate.builds).toEqual([{ slug: 'feed-c', position: afterCreate.position }])
+
+          // Changed twice: once, at the latest position, after a later build.
+          await store.append('feed-b', { actor: KERNEL, type: 'build.aborted', payload: {} })
+          await store.append('feed-a', { actor: KERNEL, type: 'build.aborted', payload: {} })
+          await store.append('feed-b', { actor: KERNEL, type: 'build.aborted', payload: {} })
+          const twice = await store.listBuildsChangedSince(repo, afterCreate.position)
+          expect(twice.builds.map((build) => build.slug)).toEqual(['feed-a', 'feed-b'])
+          expect(twice.builds.at(-1)!.position).toBe(twice.position)
+          const positions = twice.builds.map((build) => build.position)
+          expect(compareChangePositions(positions[0]!, positions[1]!)).toBe(-1)
+          const full = await store.listBuildsChangedSince(repo, '0')
+          expect(full.builds.map((build) => build.slug)).toEqual(['feed-c', 'feed-a', 'feed-b'])
+          for (let i = 1; i < full.builds.length; i++)
+            expect(
+              compareChangePositions(full.builds[i - 1]!.position, full.builds[i]!.position),
+            ).toBe(-1)
+
+          // Repository events and holder changes advance only the head.
+          await store.ensureRepo(repo)
+          const beforeRepoWrites = await store.getRepoChangePosition(repo)
+          await store.appendRepo(repo, {
+            actor: humanActor('operator'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+          await store.claimRepoLease(repo, 'holder', 1000)
+          const repoOnly = await store.listBuildsChangedSince(repo, beforeRepoWrites)
+          expect(compareChangePositions(repoOnly.position, beforeRepoWrites)).toBe(1)
+          expect(repoOnly.builds).toEqual([])
+
+          // Another repository's builds never appear; its feed is its own.
+          expect(
+            (await store.listBuildsChangedSince('feed/other', '0')).builds.map((b) => b.slug),
+          ).toEqual(['feed-foreign'])
+
+          // An argument above the head answers no builds.
+          expect((await store.listBuildsChangedSince(repo, '9223372036854775807')).builds).toEqual(
+            [],
+          )
+        })
+      })
+
+      test('rejects non-canonical positions', async () => {
+        await withStore(factory, undefined, async (store) => {
+          for (const position of ['01', '-1', 'x', '', '1.0', '9223372036854775808'])
+            await expect(store.listBuildsChangedSince('feed/repo', position)).rejects.toThrow(
+              BuildFeedValidationError,
+            )
+        })
+      })
+    })
+
+    describe('paged build listing', () => {
+      test('walks newest first with a slug tiebreak, stable across later creations', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const repo = 'page/repo'
+          expect(await store.listBuildsPage(repo)).toEqual({ builds: [], next: null })
+          expect(await store.getRepo(repo)).toBeNull()
+          await store.createBuild({ slug: 'page-a', repo })
+          clock.advance(1)
+          await store.createBuild({ slug: 'page-b', repo })
+          clock.advance(1)
+          await store.createBuild({ slug: 'page-d', repo })
+          await store.createBuild({ slug: 'page-c', repo })
+          clock.advance(1)
+          await store.createBuild({ slug: 'page-e', repo })
+          await store.createBuild({ slug: 'page-other', repo: 'page/other' })
+          clock.advance(1)
+
+          const first = await store.listBuildsPage(repo, { limit: 2 })
+          expect(first.builds.map((build) => build.slug)).toEqual(['page-e', 'page-d'])
+          expect(first.next).not.toBeNull()
+          // A build created after page 1 neither repeats nor drops later rows.
+          await store.createBuild({ slug: 'page-f', repo })
+          const second = await store.listBuildsPage(repo, { limit: 2, cursor: first.next! })
+          expect(second.builds.map((build) => build.slug)).toEqual(['page-c', 'page-b'])
+          const third = await store.listBuildsPage(repo, { limit: 2, cursor: second.next! })
+          expect(third.builds.map((build) => build.slug)).toEqual(['page-a'])
+          expect(third.next).toBeNull()
+
+          const walked: import('./types').BuildRecord[] = []
+          let cursor: string | undefined
+          do {
+            const page: import('./types').BuildPage = await store.listBuildsPage(repo, {
+              limit: 2,
+              ...(cursor === undefined ? {} : { cursor }),
+            })
+            walked.push(...page.builds)
+            cursor = page.next ?? undefined
+          } while (cursor !== undefined)
+          expect(walked).toEqual((await store.listBuildsForRepo(repo)).reverse())
+
+          const whole = await store.listBuildsPage(repo)
+          expect(whole.builds.map((build) => build.slug)).toEqual([
+            'page-f',
+            'page-e',
+            'page-d',
+            'page-c',
+            'page-b',
+            'page-a',
+          ])
+          expect(whole.next).toBeNull()
+          expect((await store.listBuildsPage(repo, { limit: 6 })).next).toBeNull()
+          expect((await store.listBuildsPage(repo, { limit: 5 })).next).not.toBeNull()
+        })
+      })
+
+      test('rejects a malformed cursor or an out-of-range limit', async () => {
+        await withStore(factory, undefined, async (store) => {
+          for (const opts of [
+            { limit: 0 },
+            { limit: 101 },
+            { limit: 1.5 },
+            { cursor: 'not a cursor' },
+            { cursor: 'e30' },
+          ])
+            await expect(store.listBuildsPage('page/repo', opts)).rejects.toThrow(
+              BuildFeedValidationError,
+            )
+        })
       })
     })
 

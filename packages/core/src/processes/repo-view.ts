@@ -66,6 +66,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from '../store/types'
+import type { BuildPage, BuildPageOptions, ChangedBuilds } from '../store/types'
 
 /** The write committed; only the subsequent local projection refresh failed. */
 export class CommittedRefreshError<T = unknown> extends Error {
@@ -286,6 +287,14 @@ export class RepoViewStore implements BuildStore {
   }
   getRepoChangePosition(repo: string): Promise<string> {
     return this.backing.getRepoChangePosition(repo)
+  }
+
+  listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+    return this.backing.listBuildsChangedSince(repo, position)
+  }
+
+  listBuildsPage(repo: string, opts?: BuildPageOptions): Promise<BuildPage> {
+    return this.backing.listBuildsPage(repo, opts)
   }
 
   listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
