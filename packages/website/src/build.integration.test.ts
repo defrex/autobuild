@@ -1,8 +1,13 @@
-import { afterAll, describe, expect, test } from 'bun:test'
+import { beforeAll, afterAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
+
+let defaultFiles: Awaited<ReturnType<typeof buildFiles>>
+beforeAll(async () => {
+  defaultFiles = Object.freeze(await buildFiles())
+})
 import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
 
 const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
@@ -44,7 +49,7 @@ describe('static site', () => {
   })
 
   test('copy matches the design reference word for word', async () => {
-    const { 'index.html': html } = await buildFiles()
+    const { 'index.html': html } = defaultFiles
     const updatedReference = (await readFile(REFERENCE, 'utf8'))
       .replaceAll('bun add -g @defrex/autobuild', INSTALL_COMMAND)
       .replaceAll('>ab init<', '>bun ab init<')
@@ -64,7 +69,7 @@ describe('static site', () => {
   })
 
   test('four figures are static drawings with capture IDs and no motion', async () => {
-    const { 'index.html': html, 'site.js': js } = await buildFiles()
+    const { 'index.html': html, 'site.js': js } = defaultFiles
     for (const id of ['pipeline', 'dispatcher', 'intake', 'integration-tree']) {
       expect(html.match(new RegExp(`data-capture-figure="${id}"`, 'g'))).toHaveLength(1)
     }
@@ -76,7 +81,7 @@ describe('static site', () => {
   })
 
   test('the hero leads into the getting-started commands, then Documentation and a ghost GitHub', async () => {
-    const { 'index.html': html } = await buildFiles()
+    const { 'index.html': html } = defaultFiles
     const first = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
     expect(first).toMatch(
       /<\/div><\/div><div class="actions links"><a class="btn" href="\/docs\/">Documentation<\/a><a class="btn ghost" href="[^"]+">GitHub<\/a><\/div>$/,
@@ -93,7 +98,7 @@ describe('static site', () => {
   })
 
   test('sections carry no inline docs links', async () => {
-    const { 'index.html': html } = await buildFiles()
+    const { 'index.html': html } = defaultFiles
     expect(html.slice(html.indexOf('<main'))).not.toMatch(/<p><a href="\/docs\//)
     for (const path of ['builds', 'dispatcher', 'integration', 'seams', 'tickets']) {
       expect(html).not.toContain(`href="/docs/${path}/"`)
@@ -101,7 +106,7 @@ describe('static site', () => {
   })
 
   test('structure: one h1, h2 per section, initial seam state, links', async () => {
-    const { 'index.html': html } = await buildFiles()
+    const { 'index.html': html } = defaultFiles
     expect(html.match(/<h1[ >]/g)).toHaveLength(1)
     expect(html.match(/<h2[ >]/g)).toHaveLength(html.match(/<section[ >]/g)!.length - 1)
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
@@ -115,7 +120,7 @@ describe('static site', () => {
   })
 
   test('sections are separated by space alone and the page closes on GitHub', async () => {
-    const { 'index.html': html, 'site.css': css } = await buildFiles()
+    const { 'index.html': html, 'site.css': css } = defaultFiles
     expect(html.slice(html.indexOf('<main'))).not.toContain('site-rule')
     expect(html).not.toContain('inside one build-runner')
     expect(html).not.toContain('setup.md')
@@ -130,7 +135,7 @@ describe('static site', () => {
 
   test('each drawn figure has a desktop and a portrait form with one description', async () => {
     // The integration figure is preformatted terminal text that scrolls instead.
-    const { 'index.html': html, 'site.css': css } = await buildFiles()
+    const { 'index.html': html, 'site.css': css } = defaultFiles
     expect(html.match(/class="scroll desk-only"/g)).toHaveLength(3)
     expect(html.match(/class="phone-only"/g)).toHaveLength(3)
     const desk = [...html.matchAll(/class="scroll desk-only"[^>]*aria-label="([^"]+)"/g)].map(
@@ -151,7 +156,7 @@ describe('static site', () => {
   })
 
   test('a shared link previews with the headline, the lead, and the card image', async () => {
-    const { 'index.html': html, 'og.png': png } = await buildFiles()
+    const { 'index.html': html, 'og.png': png } = defaultFiles
     const head = html.slice(0, html.indexOf('<body'))
     const meta = (selector: string): string | undefined =>
       new RegExp(`<meta (?:property|name)="${selector}" content="([^"]*)">`).exec(head)?.[1]
@@ -173,7 +178,7 @@ describe('static site', () => {
   })
 
   test('no resources beyond its own files and the webfont', async () => {
-    const { 'index.html': html, 'site.js': js } = await buildFiles()
+    const { 'index.html': html, 'site.js': js } = defaultFiles
     const hosts = [...html.matchAll(/(?:src|href)="(https?:\/\/[^"]+)"/g)].map(
       (m) => new URL((m[1] ?? '').replace(/&amp;/g, '&')).host,
     )
@@ -184,7 +189,7 @@ describe('static site', () => {
   })
 
   test('styles keep to the flat grid', async () => {
-    const { 'site.css': css } = await buildFiles()
+    const { 'site.css': css } = defaultFiles
     expect(css).not.toMatch(/box-shadow|gradient|text-shadow|italic/)
     expect(css).not.toMatch(/border-radius\s*:\s*[^0;\s]/)
     for (const m of css.matchAll(/font-weight\s*:\s*(\d+)/g))
@@ -194,7 +199,7 @@ describe('static site', () => {
 
 describe('knob motion', () => {
   test('the knob glides in 250ms or less and is still under reduced motion', async () => {
-    const { 'site.css': css, 'index.html': html } = await buildFiles()
+    const { 'site.css': css, 'index.html': html } = defaultFiles
     const rule = css.match(/\.knob\s*{([^}]*)}/)?.[1] ?? ''
     const ms = Number(rule.match(/transition:\s*left\s+(\d+)ms/)?.[1])
     expect(ms).toBeGreaterThan(0)
