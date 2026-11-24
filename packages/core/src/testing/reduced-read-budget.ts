@@ -8283,3 +8283,137 @@ export async function operatorSandboxListingReadBudget(opts: { revisions: number
   }
   return { callVector: counter.vector(), rows, listed }
 }
+
+/** What one measured feed or page read cost: the store calls, log rows and
+ * returned bytes `measureStoreReads` saw, plus the feed-index or creation-order
+ * entries the memory store visited to answer. */
+export interface BuildFeedReadCost {
+  calls: Record<string, number>
+  rows: number
+  repoRows: number
+  bytes: number
+  examined: number
+}
+
+/**
+ * The changed-builds feed and the paged build listing cost what their answer
+ * costs (RFC 0007 §8.4): the same at 100 and 10,000 builds, the same whether a
+ * changed build saw 100 writes or 10,000, and never an event row. The memory
+ * store's visited-entry counter stands in for the SQL adapters' index range
+ * scans. Returns each axis's measured costs by size.
+ */
+export async function buildFeedReadBudget(): Promise<{
+  builds: Record<number, { idle: BuildFeedReadCost; oneChange: BuildFeedReadCost }>
+  repeated: Record<number, BuildFeedReadCost>
+  paging: Record<number, { first: BuildFeedReadCost; second: BuildFeedReadCost }>
+}> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  type Store = import('../store/memory').MemoryBuildStore
+  const repo = 'feed-budget/repo'
+  const slug = (i: number) => `feed-${String(i).padStart(5, '0')}`
+  const event = { actor: KERNEL, type: 'build.aborted' as const, payload: {} }
+  const fresh = async (count: number) => {
+    const store = new MemoryBuildStore({ clock: () => new Date('2026-11-23T00:00:00.000Z') })
+    for (let i = 0; i < count; i++) await store.createBuild({ slug: slug(i), repo })
+    return store
+  }
+  const measure = async <T>(
+    store: Store,
+    read: () => Promise<T>,
+  ): Promise<{ result: T; cost: BuildFeedReadCost }> => {
+    const feedReads = Reflect.get(store, 'feedReads') as { examined: number }
+    feedReads.examined = 0
+    let result: T | undefined
+    const metrics = await measureStoreReads(store, async () => {
+      result = await read()
+    })
+    return {
+      result: result as T,
+      cost: {
+        calls: metrics.calls,
+        rows: metrics.rows,
+        repoRows: metrics.repoRows,
+        bytes: metrics.bytes,
+        examined: feedReads.examined,
+      },
+    }
+  }
+  const sizes = [100, 10_000] as const
+  const builds: Record<number, { idle: BuildFeedReadCost; oneChange: BuildFeedReadCost }> = {}
+  const repeated: Record<number, BuildFeedReadCost> = {}
+  const paging: Record<number, { first: BuildFeedReadCost; second: BuildFeedReadCost }> = {}
+
+  for (const n of sizes) {
+    const store = await fresh(n)
+    const head = await store.getRepoChangePosition(repo)
+    // Idle: nothing after the head reads no rows and visits at most one entry.
+    const idle = await measure(store, () => store.listBuildsChangedSince(repo, head))
+    expect(idle.result).toEqual({ position: head, builds: [] })
+    // One change: exactly that build, visiting it and the entry that stops the walk.
+    const changed = slug(n / 2)
+    await store.append(changed, event)
+    const oneChange = await measure(store, () => store.listBuildsChangedSince(repo, head))
+    expect(oneChange.result.builds).toEqual([
+      { slug: changed, position: oneChange.result.position },
+    ])
+    builds[n] = { idle: idle.cost, oneChange: oneChange.cost }
+
+    // Paging: two newest-first pages through `next`.
+    const first = await measure(store, () => store.listBuildsPage(repo))
+    expect(first.result.builds.map((build) => build.slug)).toEqual(
+      Array.from({ length: 25 }, (_, i) => slug(n - 1 - i)),
+    )
+    const second = await measure(store, () =>
+      store.listBuildsPage(repo, { cursor: first.result.next! }),
+    )
+    expect(second.result.builds.map((build) => build.slug)).toEqual(
+      Array.from({ length: 25 }, (_, i) => slug(n - 26 - i)),
+    )
+    paging[n] = { first: first.cost, second: second.cost }
+  }
+
+  for (const m of sizes) {
+    // Repeated changes to one build: one entry per build, never a growing log.
+    const store = await fresh(10)
+    const since = await store.getRepoChangePosition(repo)
+    for (let i = 0; i < m; i++) await store.append(slug(3), event)
+    const feed = await measure(store, () => store.listBuildsChangedSince(repo, since))
+    expect(feed.result).toEqual({
+      position: await store.getRepoChangePosition(repo),
+      builds: [{ slug: slug(3), position: await store.getRepoChangePosition(repo) }],
+    })
+    repeated[m] = feed.cost
+  }
+
+  const [small, large] = sizes
+  for (const n of sizes) {
+    const { idle, oneChange } = builds[n]!
+    for (const cost of [idle, oneChange]) {
+      expect(cost.calls).toEqual({ listBuildsChangedSince: 1 })
+      expect(cost.rows).toBe(0)
+      expect(cost.repoRows).toBe(0)
+      expect(cost.bytes).toBeLessThanOrEqual(256)
+    }
+    expect(idle.examined).toBeLessThanOrEqual(1)
+    expect(oneChange.examined).toBe(2)
+    for (const cost of [paging[n]!.first, paging[n]!.second]) {
+      expect(cost.rows).toBe(0)
+      expect(cost.repoRows).toBe(0)
+      expect(cost.examined).toBeLessThanOrEqual(26)
+    }
+    expect(repeated[n]!.rows).toBe(0)
+    expect(repeated[n]!.examined).toBe(2)
+    expect(repeated[n]!.calls).toEqual({ listBuildsChangedSince: 1 })
+  }
+  const shape = ({ calls, rows, repoRows, examined }: BuildFeedReadCost) => ({
+    calls,
+    rows,
+    repoRows,
+    examined,
+  })
+  expect(shape(builds[large]!.idle)).toEqual(shape(builds[small]!.idle))
+  expect(shape(builds[large]!.oneChange)).toEqual(shape(builds[small]!.oneChange))
+  expect(shape(repeated[large]!)).toEqual(shape(repeated[small]!))
+  expect(paging[large]).toEqual(paging[small]!)
+  return { builds, repeated, paging }
+}
