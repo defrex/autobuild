@@ -3,6 +3,7 @@ import { abWeb } from '../cli/web'
 import { runCli } from '../cli/main'
 import type { WebModelHub } from './hub'
 import type { Exec } from '../ports/workspace/git-worktree'
+import { DISPATCHER } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 
@@ -35,9 +36,17 @@ function recordingStore() {
   return { store, proxy, calls, writes }
 }
 
-async function serve(argv: { json?: boolean; host?: string; port?: number } = {}) {
+async function serve(
+  argv: {
+    json?: boolean
+    host?: string
+    port?: number
+    seed?: (store: MemoryBuildStore) => Promise<void>
+  } = {},
+) {
   const recorded = recordingStore()
   await recorded.store.ensureRepo(REPO)
+  await argv.seed?.(recorded.store)
   const out: string[] = []
   const err: string[] = []
   const controller = new AbortController()
@@ -167,8 +176,27 @@ test('an occupied --port fails clearly with a nonzero exit', async () => {
   }
 })
 
+/** A dispatcher run with a recorded config and one live build. */
+async function configuredWithBuild(store: MemoryBuildStore) {
+  const config = await store.putRepoArtifact(REPO, {
+    kind: 'config',
+    content: JSON.stringify({ capacity: 2, tickets: { source: 'file', readyState: 'ready' } }),
+  })
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'run-1',
+      pid: 1,
+      roleWarnings: [],
+      effectiveConfig: { kind: config.kind, rev: config.revision },
+    },
+  })
+  await store.createBuild({ slug: 'served-build', repo: REPO })
+}
+
 test('the event stream pushes a model frame and releases its subscriber on disconnect', async () => {
-  const web = await serve()
+  const web = await serve({ seed: configuredWithBuild })
   try {
     const controller = new AbortController()
     const response = await fetch(new URL('/events', web.url), { signal: controller.signal })
@@ -179,6 +207,8 @@ test('the event stream pushes a model frame and releases its subscriber on disco
     expect(text.startsWith('event: model\ndata: ')).toBe(true)
     const frame = JSON.parse(text.split('\n')[1]!.slice('data: '.length))
     expect(frame.repository.repo).toBe(REPO)
+    const rows = [...frame.overview.active, ...frame.overview.queued]
+    expect(rows.map((row: { slug: string }) => row.slug)).toEqual(['served-build'])
     expect(web.hub.subscribers).toBe(1)
     controller.abort()
     for (let i = 0; i < 100 && web.hub.subscribers > 0; i++) await Bun.sleep(10)
