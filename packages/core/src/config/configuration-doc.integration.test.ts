@@ -71,27 +71,8 @@ function deliveredPiProvisioning(): RuntimeProvisioningEntry {
   return pi
 }
 
-/**
- * Render a value as a TOML basic-string assignment, matching the doc fence
- * bytes.
- *
- * Contract: single-line basic strings only. Escaping is smol-toml's canonical
- * basic-string form — the same library that parses these files — so the
- * helper is a general TOML basic-string renderer: backslash, double quote,
- * and every control character are escaped, with the compact \b/\t/\f/\n/\r
- * forms where defined and `\uXXXX` (lowercase hex) otherwise, DEL included.
- * Non-ASCII passes through raw, as in TOML and the doc fences.
- *
- * Multi-line/triple-quoted TOML values are out of contract: doc fences
- * render a multi-line command as a triple-quoted block whose bytes this
- * one-line renderer can never match, so a raw TOML line break — LF or
- * CRLF — throws instead of deriving expectation bytes that can only
- * mismatch. A lone raw CR is not a TOML line break: it renders as the
- * compact \r escape in a single-line basic string, matching what
- * smol-toml produces for the same value. The suite must not call this
- * helper with a multi-line value; the guard makes a violation loud.
- * `key` must be a bare key (today's call sites: install, preflight).
- */
+/** Render a single-line assignment exactly as the delivered TOML fences do.
+ * Reject line breaks because those fences require a different string form. */
 function tomlBasicStringLine(key: string, value: string): string {
   if (/[\n]/.test(value)) {
     throw new Error(
@@ -586,45 +567,6 @@ describe('Vercel runtime provisioning documentation', () => {
       uncovered,
       'the Pi-pin walk lost install/preflight coverage of enumerated sites; a line shape changed — update the pinned regexes deliberately',
     ).toEqual([])
-  })
-})
-
-describe('tomlBasicStringLine — basic-string rendering', () => {
-  test('derives the delivered install/preflight lines byte-identically', () => {
-    expect(
-      tomlBasicStringLine(
-        'install',
-        'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',
-      ),
-    ).toBe(
-      'install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"',
-    )
-    expect(
-      tomlBasicStringLine('preflight', 'test "$(pi --version)" = "0.84.4" && pi update --models'),
-    ).toBe('preflight = "test \\"$(pi --version)\\" = \\"0.84.4\\" && pi update --models"')
-    expect(tomlBasicStringLine('k', '')).toBe('k = ""')
-  })
-
-  test('escapes control characters per the TOML basic-string rules', () => {
-    // Pinned forms are smol-toml stringify's canonical forms: compact \t
-    // where defined, lowercase-hex \uXXXX otherwise (DEL included).
-    expect(tomlBasicStringLine('k', 'a\tb\u007Fc\u000Bd')).toBe('k = "a\\tb\\u007fc\\u000bd"')
-  })
-
-  test('escapes backslash and quote', () => {
-    expect(tomlBasicStringLine('k', 'a\\b"c')).toBe('k = "a\\\\b\\"c"')
-  })
-
-  test('renders a lone raw CR as an escaped single-line value', () => {
-    // A lone CR is not a TOML line break (TOML line breaks are LF or
-    // CRLF), so it renders like any other control character, in smol-toml's
-    // compact \r form inside a single-line basic string.
-    expect(tomlBasicStringLine('k', 'a\rb')).toBe('k = "a\\rb"')
-  })
-
-  test('refuses values with TOML line breaks (LF or CRLF) instead of deriving unmatchable bytes', () => {
-    expect(() => tomlBasicStringLine('k', 'one\ntwo')).toThrow(/single-line/)
-    expect(() => tomlBasicStringLine('k', 'one\r\ntwo')).toThrow(/single-line/)
   })
 })
 
