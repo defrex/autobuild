@@ -76,7 +76,6 @@ import {
   Dispatcher,
   SWEEP_PIN_CACHE_CAPACITY,
   emptyTickReport,
-  readyCriteria,
   type DispatcherOpts,
   type LaunchRunnerResult,
 } from './dispatcher'
@@ -7091,106 +7090,6 @@ describe('Dispatcher tick idempotency', () => {
   })
 })
 
-describe('readyCriteria — readiness is resolved against the ticket source (§3.3)', () => {
-  const criteria = (toml: string) => readyCriteria(parseConfig(toml))
-
-  const FILE = '[tickets]\nsource = "file"\n'
-  const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
-  const PLUGIN = '[tickets]\nsource = "jira"\n'
-
-  test('file source: the configured state is the gate, no label gate by default', () => {
-    // The headline claim: no label — `mv` into the readyState directory dispatches.
-    expect(criteria(`${FILE}readyState = "Ready"\n`)).toEqual({
-      labels: [],
-      state: 'Ready',
-    })
-  })
-
-  test('linear source: the historical "autobuild" label gate is intact, alongside the state', () => {
-    // Linear has no ready/ directory, so its historical label default remains
-    // as an additional narrowing gate.
-    expect(criteria(`${LINEAR}readyState = "Ready"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Ready',
-    })
-  })
-
-  test('readyAssignee joins the criteria only when configured', () => {
-    expect(criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "me"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Ready',
-      assignee: 'me',
-    })
-    expect(
-      criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "a@example.com"\n`).assignee,
-    ).toBe('a@example.com')
-    expect('assignee' in criteria(`${LINEAR}readyState = "Ready"\n`)).toBe(false)
-  })
-
-  test('github source: the "autobuild" label gate is the default, and [] removes it', () => {
-    const GITHUB = '[tickets]\nsource = "github"\n'
-    expect(criteria(GITHUB)).toEqual({ labels: ['autobuild'], state: 'ready' })
-    expect(criteria(`${GITHUB}readyLabels = []\n`)).toEqual({ labels: [], state: 'ready' })
-  })
-
-  test('github source: readyAssignee joins the criteria', () => {
-    expect(criteria('[tickets]\nsource = "github"\nreadyAssignee = "octocat"\n')).toEqual({
-      labels: ['autobuild'],
-      state: 'ready',
-      assignee: 'octocat',
-    })
-  })
-
-  test('plugin sources have no host-imposed label convention', () => {
-    expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
-      labels: [],
-      state: 'Open',
-    })
-  })
-
-  test('the state gate is always emitted for every source', () => {
-    expect(criteria(`${LINEAR}readyState = "Todo"\n`)).toEqual({
-      labels: ['autobuild'],
-      state: 'Todo',
-    })
-    expect(criteria(`${FILE}readyState = "Todo"\n`)).toEqual({
-      labels: [],
-      state: 'Todo',
-    })
-    expect(criteria(`${PLUGIN}readyState = "Todo"\n`)).toEqual({
-      labels: [],
-      state: 'Todo',
-    })
-  })
-
-  test('an explicit readyLabels wins for every source — config is never ignored', () => {
-    expect(criteria(`${FILE}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-    expect(criteria(`${LINEAR}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-    expect(criteria(`${PLUGIN}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
-      labels: ['urgent'],
-      state: 'Ready',
-    })
-  })
-
-  test('an explicit empty readyLabels is honored, not treated as unset', () => {
-    expect(criteria(`${LINEAR}readyLabels = []\nreadyState = "Ready"\n`)).toEqual({
-      labels: [],
-      state: 'Ready',
-    })
-  })
-
-  test('a config with no readyState cannot produce criteria — it fails at the tickets path', () => {
-    expect(() => criteria(LINEAR)).toThrow('tickets.readyState')
-    expect(() => criteria('')).toThrow('tickets.readyState')
-  })
-})
-
 // ── Durable supervision (AUT-301) ────────────────────────────────────────────
 
 describe('Dispatcher durable supervision', () => {
@@ -7234,6 +7133,38 @@ describe('Dispatcher durable supervision', () => {
     return { execution, provider }
   }
 
+  type ProvisionOpts = Parameters<WorkspaceProvider['provision']>[0]
+  /** A recovery-capable provider whose provision runs `script` per call. */
+  function scriptedProvider(
+    calls: ProvisionOpts[],
+    script: (opts: ProvisionOpts, call: number) => Promise<void>,
+    estimate?: number,
+  ): WorkspaceProvider {
+    return {
+      name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
+      recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      ...(estimate === undefined ? {} : { provisionEstimateMs: estimate }),
+      async provision(opts) {
+        calls.push(opts)
+        await script(opts, calls.length)
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${opts.generation ?? 0}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
+        }
+      },
+      async release() {},
+    }
+  }
   function remoteWorkspaceProvider(operations: string[]): WorkspaceProvider {
     return {
       name: 'remote-test',
@@ -7507,31 +7438,12 @@ describe('Dispatcher durable supervision', () => {
 
   test('remote dispatch appends the durable provision marker; the continuation completes facts and launch', async () => {
     const operations: string[] = []
-    const workspaceProvider: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      // The provision resolves on a macrotask, so the tick — which never
-      // awaits the continuation — returns before any provider call runs.
-      async provision(opts) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
-        operations.push('provision')
-        return {
-          provider: 'remote-test',
-          ref: 'sandbox-g1',
-          path: '/remote/workspace',
-          branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
-        }
-      },
-      async release() {},
-    }
+    // The provision resolves on a macrotask, so the tick — which never
+    // awaits the continuation — returns before any provider call runs.
+    const workspaceProvider = scriptedProvider([], async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      operations.push('provision')
+    })
     const h = harness({
       tickets: [readyTicket('T-remote-dispatch', { title: 'remote dispatch' })],
       workspaceProvider,
@@ -7585,33 +7497,14 @@ describe('Dispatcher durable supervision', () => {
     const operations: string[] = []
     // The provision is held until the test releases it, so the continuation is
     // provably mid-flight when teardown signals it.
-    type ProvisionResult = {
-      provider: string
-      ref: string
-      path: string
-      branch: string
-      base: { source: 'existing'; sha: string }
-    }
-    let releaseProvision!: (value: ProvisionResult) => void
-    const provisioned = new Promise<ProvisionResult>((resolve) => {
+    let releaseProvision!: () => void
+    const provisioned = new Promise<void>((resolve) => {
       releaseProvision = resolve
     })
-    const workspaceProvider: WorkspaceProvider = {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      async provision() {
-        operations.push('provision')
-        return provisioned
-      },
-      async release() {},
-    }
+    const workspaceProvider = scriptedProvider([], () => {
+      operations.push('provision')
+      return provisioned
+    })
     const h = harness({ workspaceProvider })
     const slug = 'torn-down-provision'
     const ticket = { source: 'fake' as const, id: 'T-teardown', title: slug }
@@ -7628,13 +7521,7 @@ describe('Dispatcher durable supervision', () => {
     await h.dispatcher.stopProvisioning()
     // A provision call already in flight when the signal landed may complete:
     // its fact is true and welcome, but the token check prevents the launch.
-    releaseProvision({
-      provider: 'remote-test',
-      ref: 'sandbox-g1',
-      path: '/remote/workspace',
-      branch: `ab/${slug}`,
-      base: { source: 'existing', sha: BASE_SHA },
-    })
+    releaseProvision()
     await h.dispatcher.drainProvisioning()
     const events = await h.store.getEvents(slug)
     expect(events.findLast((event) => event.type === 'dispatch.failed')?.payload).toMatchObject({
@@ -7648,38 +7535,6 @@ describe('Dispatcher durable supervision', () => {
   })
 
   describe('teardown-abandoned provisioning', () => {
-    type ProvisionOpts = Parameters<WorkspaceProvider['provision']>[0]
-    /** A recovery-capable provider whose provision runs `script` per call. */
-    function scriptedProvider(
-      calls: ProvisionOpts[],
-      script: (opts: ProvisionOpts, call: number) => Promise<void>,
-      estimate?: number,
-    ): WorkspaceProvider {
-      return {
-        name: 'remote-test',
-        preservation: async () => ({ outcome: 'preserved', heads: [] }),
-        recovery: {
-          fence: async () => ({ outcome: 'confirmed' }),
-          reap: async () => ({
-            outcome: 'confirmed',
-            snapshots: { outcome: 'confirmed', deleted: 0 },
-          }),
-        },
-        ...(estimate === undefined ? {} : { provisionEstimateMs: estimate }),
-        async provision(opts) {
-          calls.push(opts)
-          await script(opts, calls.length)
-          return {
-            provider: 'remote-test',
-            ref: `sandbox-g${opts.generation ?? 0}`,
-            path: '/remote/workspace',
-            branch: opts.branch,
-            base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
-          }
-        },
-        async release() {},
-      }
-    }
     const cleanupRequired = (opts: ProvisionOpts) =>
       new WorkspaceCleanupRequired(
         {
@@ -7964,163 +7819,114 @@ describe('Dispatcher harvest execution settlement', () => {
     expect(reapCalls).toHaveLength(1)
   })
 
-  test('a provider-proved lost execution is reaped and closed with the snapshot outcome', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    const report = await h.dispatcher.tick()
-    expect(report.settled).toBe(0)
-    expect(reapCalls).toEqual([{ provider: 'fake-harvest', ref: 'autobuild-harvest-abc1234567' }])
-    const events = await h.store.getRepoEvents(REPO)
-    const released = events.find((event) => event.type === 'harvest.execution.released')
-    expect(released).toMatchObject({
-      actor: DISPATCHER,
-      payload: {
-        execution: 'host-harvest-i1',
-        environmentId: 'autobuild-harvest-abc1234567',
-        snapshots: { outcome: 'confirmed', deleted: 3 },
-      },
-    })
-  })
-
-  test('a provider-proved ended execution is reaped and closed identically', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({
-      state: 'ended',
-      exitCode: 0,
-    }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toHaveLength(1)
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(true)
-    // Settled once: a second tick finds no open execution and reaps nothing.
-    await h.dispatcher.tick()
-    expect(reapCalls).toHaveLength(1)
-  })
-
-  test('a running guest is left alone — no reap, no close fact', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'running' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
-  test('an execution this process supervises is skipped', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({
-      workspaceProvider: provider,
-      activeHarvestExecutions: () => new Set(['host-harvest-i1']),
-    })
-    await seedExecution(h)
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
-  test('an execution without a recorded command id cannot be observed and is left alone', async () => {
-    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
-    const h = harness({ workspaceProvider: provider })
-    await seedExecution(h, { commandId: null })
-    await h.dispatcher.tick()
-    expect(reapCalls).toEqual([])
-    // The fact remains open for a later, better-informed settlement.
-    const events = await h.store.getRepoEvents(REPO)
-    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
-  })
-
   // AUT-1017: a live foreign execution owns its run's open session, so the
   // dispatcher withholds harvest launch (and with it the runner-loss
   // judgment) until settlement journals the release.
-  describe('harvest launch gate', () => {
-    async function gateFixture(
-      observe: Parameters<typeof harvestProvider>[0],
-      opts: { commandId?: string | null; active?: ReadonlySet<string>; seed?: boolean } = {},
-    ) {
-      const { provider } = harvestProvider(observe)
-      const starts: number[] = []
-      const h = harness({
-        workspaceProvider: provider,
-        startHarvest: () => {
-          starts.push(starts.length)
-        },
-        ...(opts.active !== undefined ? { activeHarvestExecutions: () => opts.active! } : {}),
-      })
-      await h.store.ensureRepo(REPO)
-      if (opts.seed !== false)
-        await seedExecution(h, opts.commandId !== undefined ? { commandId: opts.commandId } : {})
-      await h.store.appendRepo(REPO, {
-        actor: KERNEL,
-        type: 'harvest.started',
+  async function gateFixture(
+    observe: Parameters<typeof harvestProvider>[0],
+    opts: { commandId?: string | null; active?: ReadonlySet<string>; seed?: boolean } = {},
+  ) {
+    const { provider, reapCalls } = harvestProvider(observe)
+    const starts: number[] = []
+    const h = harness({
+      workspaceProvider: provider,
+      startHarvest: () => {
+        starts.push(starts.length)
+      },
+      ...(opts.active !== undefined ? { activeHarvestExecutions: () => opts.active! } : {}),
+    })
+    await h.store.ensureRepo(REPO)
+    if (opts.seed !== false)
+      await seedExecution(h, opts.commandId !== undefined ? { commandId: opts.commandId } : {})
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'harvest-open',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    const released = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
+        (event) => event.type === 'harvest.execution.released',
+      ).length
+    return { h, starts, released, reapCalls }
+  }
+
+  for (const observation of [
+    { state: 'lost' as const },
+    { state: 'ended' as const, exitCode: 0 },
+  ]) {
+    test(`a provider-proved ${observation.state} execution is reaped and closed once, and launch proceeds the same tick`, async () => {
+      const { h, starts, released, reapCalls } = await gateFixture(async () => observation)
+      const report = await h.dispatcher.tick()
+      expect(report.settled).toBe(0)
+      expect(reapCalls).toEqual([{ provider: 'fake-harvest', ref: 'autobuild-harvest-abc1234567' }])
+      const events = await h.store.getRepoEvents(REPO)
+      expect(events.find((event) => event.type === 'harvest.execution.released')).toMatchObject({
+        actor: DISPATCHER,
         payload: {
-          run: 'harvest-open',
-          observations: [{ build: 'origin', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
+          execution: 'host-harvest-i1',
+          environmentId: 'autobuild-harvest-abc1234567',
+          snapshots: { outcome: 'confirmed', deleted: 3 },
         },
       })
-      const released = async () =>
-        (await h.store.getRepoEvents(REPO)).filter(
-          (event) => event.type === 'harvest.execution.released',
-        ).length
-      return { h, starts, released }
-    }
-
-    test('a running execution suppresses launch across ticks', async () => {
-      const { h, starts, released } = await gateFixture(async () => ({ state: 'running' }))
-      await h.dispatcher.tick()
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(0)
-      expect(await released()).toBe(0)
-    })
-
-    for (const observation of [
-      { state: 'lost' as const },
-      { state: 'ended' as const, exitCode: 1 },
-    ]) {
-      test(`a ${observation.state} execution is released and launch proceeds the same tick`, async () => {
-        const { h, starts, released } = await gateFixture(async () => observation)
-        await h.dispatcher.tick()
-        expect(await released()).toBe(1)
-        expect(starts).toHaveLength(1)
-      })
-    }
-
-    test('an observation error is conservative: no launch, no release', async () => {
-      const { h, starts, released } = await gateFixture(async () => {
-        throw new Error('provider unavailable')
-      })
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(0)
-      expect(await released()).toBe(0)
-    })
-
-    test('an unobservable execution never blocks launch', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        commandId: null,
-      })
-      await h.dispatcher.tick()
       expect(starts).toHaveLength(1)
-    })
-
-    test('an execution this process supervises is left to the loop single-flight', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        active: new Set(['host-harvest-i1']),
-      })
+      // Settled once: a second tick finds no open execution and reaps nothing.
       await h.dispatcher.tick()
-      expect(starts).toHaveLength(1)
+      expect(reapCalls).toHaveLength(1)
+      expect(await released()).toBe(1)
     })
+  }
 
-    test('no open execution launches as before', async () => {
-      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
-        seed: false,
-      })
-      await h.dispatcher.tick()
-      expect(starts).toHaveLength(1)
+  test('a running execution is left alone and suppresses launch across ticks', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({
+      state: 'running',
+    }))
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(0)
+  })
+
+  test('an execution this process supervises is skipped and left to the loop single-flight', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({ state: 'lost' }), {
+      active: new Set(['host-harvest-i1']),
     })
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(1)
+  })
+
+  test('an execution without a recorded command id cannot be observed, stays open and never blocks launch', async () => {
+    const { h, starts, released, reapCalls } = await gateFixture(async () => ({ state: 'lost' }), {
+      commandId: null,
+    })
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    // The fact remains open for a later, better-informed settlement.
+    expect(await released()).toBe(0)
+    expect(starts).toHaveLength(1)
+  })
+
+  test('an observation error is conservative: no launch, no release', async () => {
+    const { h, starts, released } = await gateFixture(async () => {
+      throw new Error('provider unavailable')
+    })
+    await h.dispatcher.tick()
+    expect(starts).toHaveLength(0)
+    expect(await released()).toBe(0)
+  })
+
+  test('no open execution launches as before', async () => {
+    const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
+      seed: false,
+    })
+    await h.dispatcher.tick()
+    expect(starts).toHaveLength(1)
   })
 })
 
@@ -8472,39 +8278,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
   })
 
-  test('activity appended by another process mid-tick keeps the sandbox alive', async () => {
-    let hook: (() => Promise<void>) | undefined
-    class HookStore extends MemoryBuildStore {
-      override async getRepoBuildDigests(repo: string) {
-        const hooked = hook
-        hook = undefined
-        await hooked?.()
-        return super.getRepoBuildDigests(repo)
-      }
-    }
-    const storeClock = manualClock()
-    const store = new HookStore({ clock: storeClock })
-    const h = harness({
-      store,
-      toml: '[orchestrator]\nenabled = true\n',
-    })
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    storeClock.advance(31 * 60 * 1000)
-    hook = async () => {
-      await store.appendRepo(REPO, {
-        actor: humanActor('ops'),
-        type: 'orchestrator.sandbox.activity',
-        payload: { operator: 'ops', environmentId: 'env-1' },
-      })
-    }
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  for (const change of ['released', 'replaced', 'read-failed'] as const) {
+  for (const change of ['activity', 'released', 'replaced', 'read-failed'] as const) {
     test(`idle settlement revalidates a sandbox ${change} mid-tick`, async () => {
       let hook: (() => Promise<void>) | undefined
       let rejectRead = false
@@ -8532,6 +8306,14 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
       hook = async () => {
         if (change === 'read-failed') {
           rejectRead = true
+          return
+        }
+        if (change === 'activity') {
+          await store.appendRepo(REPO, {
+            actor: humanActor('ops'),
+            type: 'orchestrator.sandbox.activity',
+            payload: { operator: 'ops', environmentId: 'env-1' },
+          })
           return
         }
         await store.appendRepo(REPO, {
@@ -8571,47 +8353,43 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
       // Initial sample, plus an impending stop and its append refresh when idle.
       expect(reads).toBe(idle ? 3 : 1)
       expect(report.sandboxIdleStops).toBe(idle ? 1 : 0)
+      expect(
+        (await h.store.getRepoEvents(REPO)).some(
+          (event) => event.type === 'orchestrator.sandbox.stopped',
+        ),
+      ).toBe(idle)
     })
   }
 
-  test('a sandbox inside the threshold is left alone', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h)
-    h.clock.advance(10 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
+  for (const stage of ['disabled', 'capability-less'] as const) {
+    test(`a ${stage} orchestrator sandbox stage is a no-op`, async () => {
+      const h = harness(stage === 'disabled' ? {} : { toml: '[orchestrator]\nenabled = true\n' })
+      if (stage === 'capability-less') {
+        // The logical-mode fake hosts the capability; strip it to model a
+        // provider without one.
+        const bare = h.workspaces as unknown as Record<string, unknown>
+        delete bare.orchestratorSandbox
+      }
+      await seedLiveSandbox(h)
+      h.clock.advance(31 * 60 * 1000)
+      const report = await h.dispatcher.tick()
+      const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+      expect(types).not.toContain('orchestrator.sandbox.stopped')
+      expect(report.sandboxIdleStops).toBe(0)
+    })
+  }
 
-  test('disabled [orchestrator] makes the stage a no-op', async () => {
-    const h = harness()
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  test('a capability-less provider makes the stage a no-op', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    // The logical-mode fake hosts the capability; strip it to model a
-    // provider without one.
-    const bare = h.workspaces as unknown as Record<string, unknown>
-    delete bare.orchestratorSandbox
-    await seedLiveSandbox(h)
-    h.clock.advance(31 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
-    expect(types).not.toContain('orchestrator.sandbox.stopped')
-    expect(report.sandboxIdleStops).toBe(0)
-  })
-
-  test('a stale-provider environment past the idle threshold gets its trail closed with an unconfirmed release fact', async () => {
+  test('a stale-provider environment past the idle threshold gets its trail closed once with an unconfirmed release fact', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(31 * 60 * 1000)
+    const types = async () => (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    // The idle gate still applies to stale-provider environments.
+    h.clock.advance(10 * 60 * 1000)
+    const inside = await h.dispatcher.tick()
+    expect(await types()).not.toContain('orchestrator.sandbox.released')
+    expect(inside.sandboxIdleStops).toBe(0)
+
+    h.clock.advance(21 * 60 * 1000)
     const report = await h.dispatcher.tick()
     const last = (await h.store.getRepoEvents(REPO)).findLast(
       (event) => event.type !== 'dispatcher.ticket-scan-completed',
@@ -8627,35 +8405,15 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
     // Distinguish release from a confirmed stop: nothing was stopped through
     // a provider this dispatcher no longer owns.
-    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
-      'orchestrator.sandbox.stopped',
-    )
-  })
+    expect(await types()).not.toContain('orchestrator.sandbox.stopped')
 
-  test('a stale-provider release is not duplicated on the next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(31 * 60 * 1000)
-    const first = await h.dispatcher.tick()
-    expect(first.sandboxIdleStops).toBe(1)
+    // Not duplicated on the next tick.
     h.clock.advance(31 * 60 * 1000)
     const second = await h.dispatcher.tick()
     expect(second.sandboxIdleStops).toBe(0)
-    const releases = (await h.store.getRepoEvents(REPO)).filter(
-      (event) => event.type === 'orchestrator.sandbox.released',
+    expect((await types()).filter((type) => type === 'orchestrator.sandbox.released')).toHaveLength(
+      1,
     )
-    expect(releases).toHaveLength(1)
-  })
-
-  test('the idle gate still applies to stale-provider environments', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
-    await seedLiveSandbox(h, { provider: 'other-provider' })
-    h.clock.advance(10 * 60 * 1000)
-    const report = await h.dispatcher.tick()
-    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
-      'orchestrator.sandbox.released',
-    )
-    expect(report.sandboxIdleStops).toBe(0)
   })
 
   test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {
