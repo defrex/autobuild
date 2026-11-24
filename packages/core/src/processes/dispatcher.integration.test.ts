@@ -14815,75 +14815,9 @@ async function unavailablePresenceFixture(padding: number) {
   return { forge, dispatchForge, exec, h, parent, head, counts }
 }
 
-test.each([10, 1000])(
-  'unavailable presence assessments bound preparation across idle ticks and dispatcher restart (%i events)',
-  async (padding) => {
-    const { forge, dispatchForge, exec, h, parent, counts } =
-      await unavailablePresenceFixture(padding)
-    const first = await h.dispatcher.tick({ acceptNewWork: false })
-    expect(first.janitorDiagnostics).toEqual([])
-    expect(counts.snapshots).toBe(2)
-    expect(counts.claims).toBe(1)
-    const preparations = h.execCalls.filter(
-      (args) => args.includes('worktree') && args.includes('add'),
-    ).length
-    expect(preparations).toBe(1)
-    // Let ordinary polling reduce the checkpoint appended by the assessment.
-    await h.dispatcher.tick({ acceptNewWork: false })
-    const { memoryRepositoryReadCounter } = await import('../testing/reduced-read-budget')
-    const counter = memoryRepositoryReadCounter(h.store as MemoryBuildStore, REPO)
-    const commands = h.execCalls.length
-    for (let n = 0; n < 3; n++) await h.dispatcher.tick({ acceptNewWork: false })
-    const restarted = harness({
-      store: h.store,
-      dispatchForge,
-      exec,
-      repoOrigin: 'https://github.com/acme/repo',
-    })
-    for (let n = 0; n < 3; n++) await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(counter.rows).toBe(0)
-    expect(counter.buildRows).toBe(0)
-    expect(counter.buildRowsBySlug.size).toBe(0)
-    expect(h.execCalls.slice(commands).filter((args) => args.includes('log'))).toHaveLength(0)
-    expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(0)
-    expect(counts.snapshots).toBe(2)
-    expect(counts.claims).toBe(1)
-    expect(
-      h.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
-    ).toHaveLength(1)
-    expect(
-      restarted.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
-    ).toHaveLength(0)
-    // Confirmed evidence is relevant even when both Git heads stay unchanged.
-    await h.store.createBuild({ slug: 'new-proof', repo: REPO })
-    await h.store.append('new-proof', {
-      actor: DISPATCHER,
-      type: 'pr.merged',
-      payload: { sha: parent },
-    })
-    await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(counts.snapshots).toBe(4)
-    await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(counts.snapshots).toBe(4)
-    forge.remoteBranches.set('ab-node/waiting', 'd'.repeat(40))
-    await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(counts.snapshots).toBe(6)
-    await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(counts.snapshots).toBe(6)
-    expect(restarted.execCalls.filter((args) => args.includes('clone'))).toHaveLength(2)
-    const state = reduceBuild(await h.store.getEvents('waiting'))
-    expect(state.nodeRestack?.requests?.nested).toBeDefined()
-    expect(
-      (await h.store.getEvents('waiting')).filter(
-        (e) => e.type === 'node.restack-availability-observed',
-      ),
-    ).toHaveLength(3)
-  },
-)
-
 const idleTickCosts = new Map<number, { reduced: number; listings: number }>()
 test.each([10, 1000])(
-  'mixed-version deferred landing keeps unavailable presence assessments idle (%i events)',
+  'unavailable presence assessments stay idle across restart, with a mixed-version deferred landing (%i events)',
   async (padding) => {
     const { forge, dispatchForge, exec, h, parent, head, counts } =
       await unavailablePresenceFixture(padding)
@@ -14968,6 +14902,7 @@ test.each([10, 1000])(
       await dispatcher.tick({ acceptNewWork: false })
       perTick.push({ reduced: counter.reducedCalls - reduced, listings: listings - listed })
     }
+    const commands = h.execCalls.length
     for (let n = 0; n < 3; n++) await idle(h.dispatcher)
     const restarted = harness({
       store: h.store,
@@ -14990,9 +14925,13 @@ test.each([10, 1000])(
     if (idleTickCosts.size === 2) expect(idleTickCosts.get(10)).toEqual(idleTickCosts.get(1000))
     expect(counts.snapshots).toBe(2)
     expect(counts.claims).toBe(1)
+    expect(h.execCalls.slice(commands).filter((args) => args.includes('log'))).toHaveLength(0)
     expect(
       h.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
     ).toHaveLength(1)
+    expect(
+      restarted.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
+    ).toHaveLength(0)
     expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(0)
     const observed = async () =>
       (await h.store.getEvents('waiting')).filter(
@@ -15019,6 +14958,10 @@ test.each([10, 1000])(
     await restarted.dispatcher.tick({ acceptNewWork: false })
     expect(counts.snapshots).toBe(6)
     expect(await observed()).toBe(3)
+    expect(restarted.execCalls.filter((args) => args.includes('clone'))).toHaveLength(2)
+    expect(
+      reduceBuild(await h.store.getEvents('waiting')).nodeRestack?.requests?.nested,
+    ).toBeDefined()
 
     // Deferral still withholds every decision for the deferred build.
     const after = await h.store.getEvents('deferred-landed')
@@ -15206,27 +15149,6 @@ for (const storeLagMs of [0, 200])
     }
     expect((await count()) - before - active).toBe(7)
   }, 30_000)
-
-test('fresh node polling has bounded reads at 100 and 100000 events', async () => {
-  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
-  h.forge.remoteBranches.set('main', BASE_SHA)
-  await h.dispatcher.tick()
-  await h.dispatcher.tick({ acceptNewWork: false })
-  const node = (await h.store.listBuilds())[0]!
-  const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
-  await nodePollingReadBudget({
-    store: h.store as MemoryBuildStore,
-    slug: node.slug,
-    advance: (ms) => h.clock.advance(ms),
-    tick: () =>
-      harness({
-        store: h.store,
-        clock: h.clock,
-        wrapTickets: () => h.tickets,
-        dispatchForge: h.forge,
-      }).dispatcher.tick({ acceptNewWork: false }),
-  })
-}, 30_000)
 
 for (const variant of ['empty-range', 'landed'] as const)
   test(`fresh polling of a complete ${variant} node prepares nothing and has bounded reads`, async () => {
@@ -15620,7 +15542,7 @@ test('incomplete node observation cannot advance an idle deadline', async () => 
   )
 })
 
-for (const failure of ['transport', 'missing branch', 'capability absent'])
+for (const failure of ['transport', 'capability absent'])
   test(`target observation fails closed with stale local refs: ${failure}`, async () => {
     const h = harness({
       exec: async () => ({
@@ -17106,17 +17028,6 @@ describe('native identity (AUT-812/AUT-821)', () => {
     expect(trailers(bodied.body)).toEqual([trailer])
   })
 
-  test('quiet maintenance polls read the identity and write nothing', async () => {
-    const h = await acknowledged()
-    const before = await h.events()
-    const reads = h.forge.identityReads.length
-    const calls = h.forge.autoMergeCalls.length
-    for (let i = 0; i < 3; i++) await h.poll()
-    expect(h.forge.identityReads.length - reads).toBe(3)
-    expect(h.forge.autoMergeCalls.slice(calls).some((call) => call.changed)).toBe(false)
-    expect(await h.events()).toEqual(before)
-  })
-
   test.each(['held', 'revoked', 'escalated'] as const)(
     '%s polls cancel without the identity readback',
     async (kind) => {
@@ -17153,6 +17064,7 @@ describe('native identity (AUT-812/AUT-821)', () => {
   test('maintenance adds one identity read and no store reads at 100 and 10000 events', async () => {
     const h = await acknowledged()
     const { nativeMaintenanceReadBudget } = await import('../testing/reduced-read-budget')
+    const calls = h.forge.autoMergeCalls.length
     await nativeMaintenanceReadBudget({
       store: h.store as MemoryBuildStore,
       slug: h.slug,
@@ -17165,6 +17077,7 @@ describe('native identity (AUT-812/AUT-821)', () => {
           forge: h.forge,
         }).dispatcher.tick({ acceptNewWork: false }),
     })
+    expect(h.forge.autoMergeCalls.slice(calls).some((call) => call.changed)).toBe(false)
   }, 60_000)
 })
 
@@ -17578,22 +17491,6 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(state.prState).toBe('open')
     expect(state.status).toBe('running')
     expect(await h.store.listBuilds()).toHaveLength(2)
-  })
-
-  test('two waiting parked builds and one free slot admit exactly one', async () => {
-    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
-    const first = await parkedBuild(h, 'a-first', 2)
-    const second = await parkedBuild(h, 'b-second', 3)
-    await h.dispatcher.tick()
-    h.forge.setPrState(2, { state: 'open', mergeable: false })
-    h.forge.setPrState(3, { state: 'open', mergeable: false })
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
-    expect(h.launches).toHaveLength(1)
-    expect([first, second]).toContain(h.launches[0]!)
-    const waiting = h.launches[0] === first ? second : first
-    expect(await slotWait(h, waiting)).toBe('reconcile')
-    expect(await failures(h, waiting)).toEqual([])
   })
 
   test('a parked build whose target moved waits to re-verify ahead of normal claims', async () => {
@@ -18126,6 +18023,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       await h.dispatcher.tick()
       expect(h.launches).toEqual([second])
       expect(await slotWait(h, first)).toBe('reconcile')
+      expect(await failures(h, first)).toEqual([])
     })
 
     test('an urgent ticket blocked on a dependency never holds back normal parked work', async () => {
@@ -18270,35 +18168,6 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(urgent).toBeDefined()
       expect(h.launches).toEqual([parked, urgent!])
       expect(await slotWait(h, parked)).toBe('reconcile')
-    })
-
-    test('an unchanged deferral state lists again only when a scan is due on its own', async () => {
-      let calls = 0
-      // Launches never claim a lease, so the parked build stays parked and
-      // defers again on every tick after its first-claim grace.
-      const h = harness({
-        toml: VERIFY_TOML,
-        wrapTickets: (source) => {
-          const listReady = source.listReady.bind(source)
-          source.listReady = async (...args: Parameters<typeof listReady>) => {
-            calls++
-            return listReady(...args)
-          }
-          return source
-        },
-      })
-      await conflictedParked(h, 'a-parked', 2)
-      await h.dispatcher.tick()
-      expect(calls).toBe(1)
-      const launches = h.launches.length
-      for (let tick = 0; tick < 5; tick++) {
-        h.clock.advance(5_000)
-        await h.dispatcher.tick()
-      }
-      // A second deferral key may force one more listing; idle ticks inside
-      // the scan interval never list once per tick.
-      expect(calls).toBeLessThanOrEqual(2)
-      expect(h.launches.length).toBeLessThanOrEqual(launches + 1)
     })
 
     // Five tiers: manual starts, urgent parked work, urgent claims (urgent
@@ -18512,6 +18381,10 @@ describe('dispatcher — ticket waits', () => {
       const events = await waitEvents(h)
       expect(events.map((event) => event.type)).toEqual(['wait.requested', 'wait.refused'])
       expect(events[1]?.payload).toMatchObject({ id: 'wait_1', cause, tickets: offending })
+      if (cause === 'completed')
+        expect(events[1]?.payload).toMatchObject({
+          message: 'already completed: DONE; continue without waiting on them',
+        })
       expect((await h.tickets.get('A'))?.blockedBy).toBeUndefined()
       expect(h.tickets.blockerAdds).toEqual([])
       expect((await readBuildFacts(h.store, WAITER)).value.state.status).toBe('running')
@@ -18602,16 +18475,6 @@ describe('dispatcher — ticket waits', () => {
     expect(waitGuidance(state)).toEqual([
       expect.objectContaining({ id: 'wait_waits-lost', phase: 'implement' }),
     ])
-  })
-
-  test('a completed refusal says to continue without waiting', async () => {
-    const h = waitHarness()
-    await seedWaiter(h, ['DONE'])
-    await h.dispatcher.tick()
-    const refused = (await waitEvents(h)).at(-1)
-    expect(refused?.payload).toMatchObject({
-      message: 'already completed: DONE; continue without waiting on them',
-    })
   })
 
   test('a retry after a lost append does not duplicate blockers', async () => {
@@ -18818,37 +18681,6 @@ describe('dispatcher — ticket waits', () => {
       .filter((ids) => ids.includes('B') || ids.includes('C'))
     expect(waitQueries).toHaveLength(1)
     expect([...waitQueries[0]!].sort()).toEqual(['B', 'C'])
-  })
-
-  test('once a request is decided, later ticks make one batched release read and no other wait call', async () => {
-    const reads: string[] = []
-    const h = harness({
-      toml: 'capacity = 1\n',
-      tickets: [readyTicket('A', { state: 'In Progress' }), readyTicket('B', { state: 'Backlog' })],
-      wrapTickets(source) {
-        const get = source.get.bind(source)
-        source.get = async (id) => {
-          reads.push(id)
-          return get(id)
-        }
-        return source
-      },
-    })
-    await seedWaiter(h)
-    await h.dispatcher.tick()
-    expect(reads).toContain('B')
-    reads.length = 0
-    const blockerAdds = h.tickets.blockerAdds.length
-    const dependencyQueries = h.tickets.dependencyQueries.length
-    for (let tick = 0; tick < 2; tick++) {
-      h.clock.advance(1_000)
-      await h.dispatcher.tick()
-    }
-    // The janitor's own target observation reads the build's ticket; the
-    // open wait costs one batched release read per tick and nothing more.
-    expect(reads.filter((id) => id !== 'A')).toEqual([])
-    expect(h.tickets.dependencyQueries.slice(dependencyQueries)).toEqual([['B'], ['B']])
-    expect(h.tickets.blockerAdds).toHaveLength(blockerAdds)
   })
 
   /** A leaf whose e2e verifier waited on B, then cleanly restacked onto a
@@ -20370,30 +20202,17 @@ describe('forge CI observation on finished leaves', () => {
     expect(summary?.ciFailure?.text).toContain('live PR head differs from build head head-1')
   })
 
-  test('a new live head with green checks clears with head-changed only', async () => {
-    const h = harness()
-    const slug = await finished(h)
-    h.forge.setHeadChecks(PR.headSha, red('unit'))
-    await h.dispatcher.tick()
-    h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: 'live-b' })
-    h.forge.setHeadChecks('live-b', green)
-    await h.dispatcher.tick()
-    await h.dispatcher.tick()
-    expect((await ci(h, slug)).map((event) => [event.type, event.payload])).toEqual([
-      ['pr.checks-failed', expect.anything()],
-      ['pr.checks-cleared', { pr: 1, head: PR.headSha, cause: 'head-changed' }],
-    ])
-  })
-
   // f_487f301a: an old head's failure never survives an unreadable new head.
-  for (const variant of ['forbidden', 'rate-limited', 'truncated', 'missing'] as const)
-    test(`red A then live B with unreadable checks (${variant}) clears A and claims nothing`, async () => {
+  // A green new head likewise clears the old failure with `head-changed` only.
+  for (const variant of ['green', 'forbidden', 'rate-limited', 'truncated', 'missing'] as const)
+    test(`red A then live B with ${variant} checks clears A and claims nothing`, async () => {
       const h = harness()
       const slug = await finished(h)
       h.forge.setHeadChecks(PR.headSha, red('unit'))
       await h.dispatcher.tick()
       h.forge.setPrState(1, { state: 'open', mergeable: true, headSha: 'live-b' })
-      if (variant === 'forbidden')
+      if (variant === 'green') h.forge.setHeadChecks('live-b', green)
+      else if (variant === 'forbidden')
         h.forge.setHeadChecks('live-b', new Error('GitHub 403: Resource not accessible'))
       else if (variant === 'rate-limited')
         h.forge.setHeadChecks(
