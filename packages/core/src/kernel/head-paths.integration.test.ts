@@ -113,61 +113,86 @@ async function conflictedReplay(env?: Record<string, string>) {
   return { ...repo, base, change, onto, head }
 }
 
-for (const mergeBaseOption of [true, false]) {
-  const label = mergeBaseOption ? 'merge-tree' : 'temporary worktree'
-  describe(`reconcile resolution (${label})`, () => {
-    test('counts resolved and extra files, not clean destination arrivals', async () => {
-      const { cwd, base, change, onto, head } = await conflictedReplay()
+describe('reconcile resolution', () => {
+  test('counts resolved and extra files, not clean destination arrivals', async () => {
+    const { cwd, git, base, change, onto, head } = await conflictedReplay()
+    for (const mergeBaseOption of [true, false]) {
       expect(
         await computeResolutionPaths(spawnExec, cwd, [{ change, parent: base, onto, head }], {
           mergeBaseOption,
         }),
+        mergeBaseOption ? 'merge-tree' : 'temporary worktree',
       ).toEqual(['a.txt', 'c.txt'])
+    }
+    // Leave a conflicted cherry-pick in progress in the caller's worktree.
+    await git('checkout', '-q', '--detach', onto)
+    await spawnExec(['git', 'cherry-pick', change], { cwd })
+    const snapshot = async () => ({
+      head: await git('rev-parse', 'HEAD'),
+      status: await git('status', '--porcelain'),
+      pick: await git('rev-parse', '--verify', 'CHERRY_PICK_HEAD'),
+      worktrees: await git('worktree', 'list', '--porcelain'),
     })
+    const before = await snapshot()
+    expect(before.pick).toBe(change)
+    expect(
+      await computeResolutionPaths(spawnExec, cwd, [{ change, parent: base, onto, head }], {
+        mergeBaseOption: false,
+      }),
+    ).toEqual(['a.txt', 'c.txt'])
+    expect(await snapshot()).toEqual(before)
+    expect(
+      before.worktrees.split('\n').filter((line) => line.startsWith('worktree ')),
+    ).toHaveLength(1)
+  })
 
-    test('a clean replay without edits resolves nothing', async () => {
-      const { cwd, git, write, commit } = await repository()
-      await write('a.txt', '1\n')
-      await write('b.txt', '1\n')
-      const base = await commit('base')
-      await git('checkout', '-q', '-b', 'change')
-      await write('b.txt', 'change\n')
-      const change = await commit('change')
-      await git('checkout', '-q', 'main')
-      await write('a.txt', 'destination\n')
-      const onto = await commit('destination')
-      await git('checkout', '-q', '--detach', onto)
-      await git('cherry-pick', change)
-      const head = await git('rev-parse', 'HEAD')
+  test('a clean replay without edits resolves nothing', async () => {
+    const { cwd, git, write, commit } = await repository()
+    await write('a.txt', '1\n')
+    await write('b.txt', '1\n')
+    const base = await commit('base')
+    await git('checkout', '-q', '-b', 'change')
+    await write('b.txt', 'change\n')
+    const change = await commit('change')
+    await git('checkout', '-q', 'main')
+    await write('a.txt', 'destination\n')
+    const onto = await commit('destination')
+    await git('checkout', '-q', '--detach', onto)
+    await git('cherry-pick', change)
+    const head = await git('rev-parse', 'HEAD')
+    for (const mergeBaseOption of [true, false]) {
       expect(
         await computeResolutionPaths(spawnExec, cwd, [{ change, parent: base, onto, head }], {
           mergeBaseOption,
         }),
+        mergeBaseOption ? 'merge-tree' : 'temporary worktree',
       ).toEqual([])
-    })
+    }
+  })
 
-    test('a merge-commit change replays against its mainline parent', async () => {
-      const { cwd, git, write, commit } = await repository()
-      await write('a.txt', '1\n')
-      await write('c.txt', '1\n')
-      await commit('base')
-      await git('checkout', '-q', '-b', 'mainline')
-      await write('d.txt', 'mainline\n')
-      await commit('mainline')
-      await git('checkout', '-q', '-b', 'side', 'main')
-      await write('e.txt', 'side\n')
-      await commit('side')
-      await git('checkout', '-q', 'mainline')
-      await git('merge', '-q', '--no-ff', '--no-edit', 'side')
-      const change = await git('rev-parse', 'HEAD')
-      await git('checkout', '-q', 'main')
-      await write('a.txt', 'destination\n')
-      const onto = await commit('destination')
-      await git('checkout', '-q', '--detach', onto)
-      await git('cherry-pick', '-m', '1', change)
-      await write('c.txt', 'resolver edit\n')
-      await git('commit', '-q', '--amend', '-a', '--no-edit')
-      const head = await git('rev-parse', 'HEAD')
+  test('a merge-commit change replays against its mainline parent', async () => {
+    const { cwd, git, write, commit } = await repository()
+    await write('a.txt', '1\n')
+    await write('c.txt', '1\n')
+    await commit('base')
+    await git('checkout', '-q', '-b', 'mainline')
+    await write('d.txt', 'mainline\n')
+    await commit('mainline')
+    await git('checkout', '-q', '-b', 'side', 'main')
+    await write('e.txt', 'side\n')
+    await commit('side')
+    await git('checkout', '-q', 'mainline')
+    await git('merge', '-q', '--no-ff', '--no-edit', 'side')
+    const change = await git('rev-parse', 'HEAD')
+    await git('checkout', '-q', 'main')
+    await write('a.txt', 'destination\n')
+    const onto = await commit('destination')
+    await git('checkout', '-q', '--detach', onto)
+    await git('cherry-pick', '-m', '1', change)
+    await write('c.txt', 'resolver edit\n')
+    await git('commit', '-q', '--amend', '-a', '--no-edit')
+    const head = await git('rev-parse', 'HEAD')
+    for (const mergeBaseOption of [true, false]) {
       expect(
         await computeResolutionPaths(
           spawnExec,
@@ -175,33 +200,10 @@ for (const mergeBaseOption of [true, false]) {
           [{ change, parent: `${change}^1`, mainline: 1, onto, head }],
           { mergeBaseOption },
         ),
+        mergeBaseOption ? 'merge-tree' : 'temporary worktree',
       ).toEqual(['c.txt'])
-    })
+    }
   })
-}
-
-test('the worktree fallback leaves the caller worktree and registry untouched', async () => {
-  const { cwd, git, base, change, onto, head } = await conflictedReplay()
-  // Leave a conflicted cherry-pick in progress in the caller's worktree.
-  await git('checkout', '-q', '--detach', onto)
-  await spawnExec(['git', 'cherry-pick', change], { cwd })
-  const snapshot = async () => ({
-    head: await git('rev-parse', 'HEAD'),
-    status: await git('status', '--porcelain'),
-    pick: await git('rev-parse', '--verify', 'CHERRY_PICK_HEAD'),
-    worktrees: await git('worktree', 'list', '--porcelain'),
-  })
-  const before = await snapshot()
-  expect(before.pick).toBe(change)
-  expect(
-    await computeResolutionPaths(spawnExec, cwd, [{ change, parent: base, onto, head }], {
-      mergeBaseOption: false,
-    }),
-  ).toEqual(['a.txt', 'c.txt'])
-  expect(await snapshot()).toEqual(before)
-  expect(before.worktrees.split('\n').filter((line) => line.startsWith('worktree '))).toHaveLength(
-    1,
-  )
 })
 
 describe('a global rerere.autoupdate does not change the outcome', () => {
@@ -219,13 +221,15 @@ describe('a global rerere.autoupdate does not change the outcome', () => {
     return replay
   }
 
-  for (const mergeBaseOption of [true, false])
-    test(`${mergeBaseOption ? 'merge-tree' : 'temporary worktree'} replay ignores recorded resolutions`, async () => {
-      const { cwd, exec, base, change, onto, head } = await hostile()
+  test('both replay algorithms ignore recorded resolutions', async () => {
+    const { cwd, exec, base, change, onto, head } = await hostile()
+    for (const mergeBaseOption of [true, false]) {
       expect(
         await computeResolutionPaths(exec, cwd, [{ change, parent: base, onto, head }], {
           mergeBaseOption,
         }),
+        mergeBaseOption ? 'merge-tree' : 'temporary worktree',
       ).toEqual(['a.txt', 'c.txt'])
-    })
+    }
+  })
 })
