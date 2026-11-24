@@ -807,6 +807,7 @@ function measuringNode(slug: string): CapacityBuild {
       acceptedAt: now.toISOString(),
     },
     openedAt: now.toISOString(),
+    clock: { activeMs: 0, spans: [], open: {}, builds: {} },
     objective,
     revision: 1,
     revisedFields: [],
@@ -840,8 +841,9 @@ test('a node due its starting measurement requests verification and occupies whi
 })
 
 describe('the optimization proposer', () => {
-  /** An opened optimization node with an open request of `room`. */
-  function proposerNode(slug: string, room = 2, started = false): CapacityBuild {
+  /** An opened optimization node with an open request of `room`, after
+   * `hours` of an attempt run on its active-hours clock. */
+  function proposerNode(slug: string, room = 2, started = false, hours = 0): CapacityBuild {
     const log = new OptimizationLogBuilder(slug)
       .push({
         actor: DISPATCHER,
@@ -856,7 +858,12 @@ describe('the optimization proposer', () => {
       .accept(commandObjective(), 1)
       .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
       .baseline(1, 50, 1)
-      .request('r1', room)
+    if (hours > 0)
+      log.wait(hours * 60).activity([
+        ['attempt-x', 1, 'started', 'run', hours * 60],
+        ['attempt-x', 2, 'ended', 'run', 0],
+      ])
+    log.request('r1', room)
     if (started)
       log
         .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
@@ -886,7 +893,11 @@ describe('the optimization proposer', () => {
     }
     expect(slotRequest(deposited, when)).toBeUndefined()
     expect(slotRequest(proposerNode('opt', 5), when)).toBeUndefined()
-    expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBeUndefined()
+    // Idle hours never spend the budget; 24 active hours do.
+    expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBe('propose')
+    expect(
+      slotRequest(proposerNode('opt', 2, false, 24), new Date('2026-11-18T01:00:00Z')),
+    ).toBeUndefined()
     // A started session was admitted and resumes after a shrink.
     expect(slotRequest(proposerNode('opt', 2, true), when)).toBe('propose')
   })
