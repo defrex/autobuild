@@ -1765,6 +1765,14 @@ describe('rollup values (SPEC §7.7)', () => {
       async () => Response.json({ kind: 'not-found', error: 'no route' }, { status: 404 }),
     ],
     ['a disallowed method', async () => new Response(null, { status: 405 })],
+    [
+      'an older server refusing the rollup name',
+      async () =>
+        Response.json(
+          { kind: 'validation', error: 'unknown rollup "buildRoster"' },
+          { status: 400 },
+        ),
+    ],
     ['a different version', async () => Response.json({ ...(await canonical()), version: 999 })],
     [
       'an unrepresentable value',
@@ -1784,6 +1792,37 @@ describe('rollup values (SPEC §7.7)', () => {
       )
       expect(urls).toEqual(['POST /repos/org%2Frepo/rollup-values'])
     })
+
+  test('the roster is one POST answering the canonical value', async () => {
+    const { buildRosterRollup } = await import('../../kernel/build-roster')
+    const body = {
+      version: buildRosterRollup.version,
+      cursor: 0,
+      value: {
+        position: '3',
+        live: [{ slug: 'b', kind: 'work', createdAt: '2026-11-24T00:00:00.000Z' }],
+        finished: [
+          { slug: 'a', kind: 'node', outcome: 'aborted', completedAt: '2026-11-23T00:00:00.000Z' },
+        ],
+      },
+    }
+    const { store, urls } = client(() => Response.json(body))
+    expect(await store.getReducerValue(scope, { reducer: 'buildRoster' })).toEqual(body)
+    expect(urls).toEqual(['POST /repos/org%2Frepo/rollup-values'])
+  })
+
+  test('other refusals keep their own errors', async () => {
+    const { ReducerValueIncompatibilityError } = await import('./compatibility')
+    const refused = (status: number, kind: string) =>
+      client(() => Response.json({ kind, error: 'no' }, { status }))
+        .store.getReducerValue(scope, request)
+        .catch((caught: unknown) => caught)
+    expect(await refused(401, 'auth')).toBeInstanceOf(AuthError)
+    for (const failure of [await refused(400, 'conflict'), await refused(500, 'internal')]) {
+      expect(failure).toBeInstanceOf(Error)
+      expect(failure).not.toBeInstanceOf(ReducerValueIncompatibilityError)
+    }
+  })
 
   test('invalid requests reject before any request', async () => {
     const { store, urls } = client(() => Response.json({}))
