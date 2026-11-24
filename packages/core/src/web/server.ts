@@ -25,9 +25,9 @@ export function webServerUrl(hostname: string, port: number): string {
 }
 
 export class WebPortInUseError extends Error {
-  constructor(hostname: string, port: number) {
+  constructor(hostname: string, port: number, command = 'ab web') {
     super(
-      `ab web: port ${port} is already in use on ${hostname}; choose another --port, or omit it for a free port`,
+      `${command}: port ${port} is already in use on ${hostname}; choose another --port, or omit it for a free port`,
     )
     this.name = 'WebPortInUseError'
   }
@@ -38,8 +38,11 @@ export async function startWebServer(
     Partial<Pick<WebHandlerOptions, 'manifest' | 'readAsset'>> & {
       hostname: string
       port: number
+      /** The command named in errors; default `ab web`. */
+      command?: string
     },
 ): Promise<StartedWebServer> {
+  const command = opts.command ?? 'ab web'
   const handler = createWebHandler({
     ...opts,
     manifest: opts.manifest ?? (await loadWebManifest()),
@@ -56,7 +59,7 @@ export async function startWebServer(
       reusePort: false,
       fetch: (request, bun) => handler(request, bun),
       error: () =>
-        new Response('ab web: internal error', {
+        new Response(`${command}: internal error`, {
           status: 500,
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         }),
@@ -65,7 +68,7 @@ export async function startWebServer(
     const code = (error as { code?: unknown }).code
     const message = error instanceof Error ? error.message : String(error)
     if (code === 'EADDRINUSE' || /EADDRINUSE|address already in use|in use/i.test(message))
-      throw new WebPortInUseError(opts.hostname, opts.port)
+      throw new WebPortInUseError(opts.hostname, opts.port, command)
     throw error
   }
   const port = server.port ?? opts.port
@@ -75,3 +78,5 @@ export async function startWebServer(
     stop: () => server.stop(true),
   }
 }
+
+export type WebServerStarter = typeof startWebServer

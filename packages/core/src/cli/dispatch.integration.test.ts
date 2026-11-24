@@ -13167,6 +13167,47 @@ test('startup journal failures fail dispatch instead of claiming forge notices w
     await fx.cleanup()
   }
 })
+test('--web on a taken port fails before wiring, the lease or any startup append', async () => {
+  const { WebPortInUseError } = await import('../web/server')
+  const fx = await makeFixture([], {})
+  const taken = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    reusePort: false,
+    fetch: () => new Response(),
+  })
+  try {
+    let wired = false
+    await expect(
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        plain: true,
+        stdout: () => {},
+        stderr: () => {},
+        web: { port: taken.port!, json: false },
+        wire: () => {
+          wired = true
+          return fx.wire()
+        },
+      }),
+    ).rejects.toThrow(WebPortInUseError)
+    expect(wired).toBe(false)
+    const record = await fx.store.getRepo(fx.origin)
+    expect(record?.lease).toBeUndefined()
+    if (record !== null)
+      expect(
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'dispatcher.run-started',
+        ),
+      ).toBe(false)
+  } finally {
+    await taken.stop(true)
+    await fx.cleanup()
+  }
+})
+
 test('multiple watch ticks and refreshes inspect and publish each hard requirement only once', async () => {
   const { hardReadinessKeys, readinessChecks } = await import('../ports/forge/readiness')
   const fx = await makeFixture([], {})

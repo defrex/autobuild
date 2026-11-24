@@ -306,8 +306,8 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab harvest status',
       },
       {
-        argv: ['dispatch', '--json'],
-        flag: '--json',
+        argv: ['dispatch', '--notes', 'notes.md'],
+        flag: '--notes',
         usage: 'usage: ab dispatch',
       },
     ]
