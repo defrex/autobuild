@@ -246,47 +246,44 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
     }
   })
 
-  test('explicit stop with no descendants does not wait for the stop timeout', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-build-tree-stop-empty-'))
-    const entrypoint = join(tmp, 'child.ts')
-    await writeFile(entrypoint, 'await Bun.sleep(60_000)\n')
+  test('with no descendants, neither an explicit stop nor a natural exit waits for the stop timeout', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-build-tree-empty-'))
+    const sleeper = join(tmp, 'sleeper.ts')
+    const empty = join(tmp, 'empty.ts')
+    await writeFile(sleeper, 'await Bun.sleep(60_000)\n')
+    await writeFile(empty, '')
     let leaderPid: number | undefined
     try {
-      const execution = new LocalBuildExecution({ entrypoint, stopTimeoutMs: 2_000 })
-      const handle = await execution.start({
+      const stopped = await new LocalBuildExecution({
+        entrypoint: sleeper,
+        stopTimeoutMs: 2_000,
+      }).start({
         slug: 'stop-empty',
         storeRef: '/store',
         instance: 'i-stop-empty',
         workspaceRef: '/workspace/stop-empty',
       })
-      leaderPid = handle.pid
+      leaderPid = stopped.pid
       await waitFor(() => alive(leaderPid!))
-      const started = Date.now()
-      await handle.stop()
-      expect(Date.now() - started).toBeLessThan(1_000)
+      const stopStarted = Date.now()
+      await stopped.stop()
+      expect(Date.now() - stopStarted).toBeLessThan(1_000)
       expect(await alive(leaderPid!)).toBe(false)
-    } finally {
-      forceCleanup(leaderPid)
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
 
-  test('a natural exit with no descendants does not wait for the stop timeout', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-build-tree-empty-'))
-    const entrypoint = join(tmp, 'child.ts')
-    await writeFile(entrypoint, '')
-    try {
-      const execution = new LocalBuildExecution({ entrypoint, stopTimeoutMs: 2_000 })
-      const started = Date.now()
-      const handle = await execution.start({
+      const exitStarted = Date.now()
+      const exited = await new LocalBuildExecution({
+        entrypoint: empty,
+        stopTimeoutMs: 2_000,
+      }).start({
         slug: 'empty',
         storeRef: '/store',
         instance: 'i-empty',
         workspaceRef: '/workspace/empty',
       })
-      expect(await handle.completion).toEqual({ exitCode: 0 })
-      expect(Date.now() - started).toBeLessThan(1_000)
+      expect(await exited.completion).toEqual({ exitCode: 0 })
+      expect(Date.now() - exitStarted).toBeLessThan(1_000)
     } finally {
+      forceCleanup(leaderPid)
       await rm(tmp, { recursive: true, force: true })
     }
   })

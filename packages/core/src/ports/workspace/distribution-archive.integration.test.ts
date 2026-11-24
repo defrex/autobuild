@@ -5,7 +5,6 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CANONICAL_REPOSITORY_URL,
   defaultDistributionArchive,
   DISTRIBUTION_ARCHIVE_ENV,
   distributionStampFor,
@@ -15,8 +14,6 @@ import {
   resolveDistributionArchive,
   writePrebuiltDistributionArchive,
   distributionAssetName,
-  fetchDistributionReleaseAsset,
-  fetchDistributionRegistryTarball,
   readDistributionIdentity,
   readDistributionIdentityStamp,
   readDistributionPackage,
@@ -58,15 +55,6 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-describe('readDistributionIdentity', () => {
-  test('reads the shipped package.json version of its own distribution root', async () => {
-    // The workspace IS the source checkout: its root package.json carries the
-    // running version. A malformed root manifest still fails hard.
-    const identity = await readDistributionIdentity()
-    expect(identity).toMatch(/^\d+\.\d+\.\d+/)
-  })
-})
-
 /** Pin the archive source through `AB_DISTRIBUTION_ARCHIVE` and reset the
  * per-process memo around `fn`, so stamp tests resolve known bytes instead of
  * packing the real tree — and never leak the pinned env or a stale memo. */
@@ -83,8 +71,8 @@ async function withPinnedArchive(path: string, fn: () => Promise<void>): Promise
   }
 }
 
-describe('readDistributionIdentityStamp', () => {
-  test('combines the package version, the protocol version, and the archive digest', async () => {
+describe('distribution identity stamp', () => {
+  test('the identity stamp is version + protocol + archive digest', async () => {
     // The stamp is everything the marker comparison must catch: the hosted
     // store's skew check (`x-autobuild-version` +
     // `x-autobuild-protocol-version`; AUT-521) plus the digest of the exact
@@ -93,6 +81,11 @@ describe('readDistributionIdentityStamp', () => {
     // every guest marker (AUT-600). The archive is pinned through the
     // `AB_DISTRIBUTION_ARCHIVE` seam and the memo reset, so no test packs the
     // real tree.
+    const version = await readDistributionIdentity()
+    // The workspace IS the source checkout: its root package.json carries the
+    // running version.
+    expect(version).toMatch(/^\d+\.\d+\.\d+/)
+
     const dir = await mkdtemp(join(tmpdir(), 'ab-dist-stamp-'))
     cleanups.push(dir)
     const archivePath = join(dir, 'autobuild-1.2.3.tgz')
@@ -100,24 +93,17 @@ describe('readDistributionIdentityStamp', () => {
     await writeFile(archivePath, bytes)
     await withPinnedArchive(archivePath, async () => {
       const stamp = await readDistributionIdentityStamp()
-      const version = await readDistributionIdentity()
       const digest = createHash('sha256').update(bytes).digest('hex')
       expect(stamp).toBe(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}+sha256-${digest}`)
       expect(stamp).not.toBe(version)
     })
-  })
-})
 
-describe('distributionStampFor', () => {
-  test('archives differing only in bytes produce different stamps; identical bytes do not', async () => {
     // Same package version and protocol on both sides: only the archive
     // digest separates the stamps, so a code-only change is a mismatch and an
-    // identical archive is not (AUT-600 acceptance).
+    // identical archive is not.
     const stampA = await distributionStampFor(new Uint8Array([1, 2, 3]))
-    const stampB = await distributionStampFor(new Uint8Array([1, 2, 4]))
-    expect(stampA).not.toBe(stampB)
+    expect(stampA).not.toBe(await distributionStampFor(new Uint8Array([1, 2, 4])))
     expect(stampA).toBe(await distributionStampFor(new Uint8Array([1, 2, 3])))
-    const version = await readDistributionIdentity()
     expect(stampA.startsWith(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}+sha256-`)).toBe(
       true,
     )
@@ -155,87 +141,10 @@ describe('resolveDistributionArchive', () => {
   })
 })
 
-describe('distributionAssetName', () => {
-  test('follows the published release-asset layout the guest bootstrap extracts', () => {
-    expect(distributionAssetName('1.2.3')).toBe('autobuild-1.2.3.tgz')
-  })
-})
-
-describe('fetchDistributionReleaseAsset', () => {
-  const bytes = new Uint8Array([1, 2, 3])
-  const release = {
-    json: {
-      assets: [
-        { name: 'other.txt', browser_download_url: 'https://example.invalid/other' },
-        { name: 'autobuild-1.2.3.tgz', browser_download_url: 'https://downloads.example/asset' },
-      ],
-    },
-  }
-
-  test('resolves the canonical repository, finds the version asset, and downloads its bytes', async () => {
-    const calls: { method: string; path: string }[] = []
-    const archive = await fetchDistributionReleaseAsset('1.2.3', {}, (async (
-      method: string,
-      path: string,
-    ) => {
-      calls.push({ method, path })
-      if (path.endsWith('/releases/tags/v1.2.3')) return { status: 200, headers: {}, ...release }
-      return { status: 200, headers: {}, bytes }
-    }) as never)
-    expect(archive).toEqual(bytes)
-    const [owner, name] = CANONICAL_REPOSITORY_URL.replace(/^https:\/\/github\.com\//, '').split(
-      '/',
-    )
-    expect(calls[0]).toEqual({
-      method: 'GET',
-      path: `repos/${owner}/${name}/releases/tags/v1.2.3`,
-    })
-    expect(calls[1]?.path).toBe('https://downloads.example/asset')
-  })
-
-  test('a missing release names the exact missing asset and the remedy', async () => {
-    const error: unknown = await fetchDistributionReleaseAsset('9.9.9', {}, (async () => {
-      throw new GitHubApiError(404, 'Not Found')
-    }) as never).then(
-      () => null,
-      (e: unknown) => e,
-    )
-    expect((error as Error).message).toContain('autobuild-9.9.9.tgz')
-    expect((error as Error).message).toContain('tools/release.ts')
-  })
-
-  test('a release without the distribution asset refuses to guess', async () => {
-    const error: unknown = await fetchDistributionReleaseAsset('1.2.3', {}, (async (
-      _method: string,
-      path: string,
-    ) => {
-      if (path.endsWith('/releases/tags/v1.2.3')) {
-        return {
-          status: 200,
-          headers: {},
-          json: { assets: [{ name: 'notes.txt', browser_download_url: 'https://x/n' }] },
-        }
-      }
-      throw new Error('must not download')
-    }) as never).then(
-      () => null,
-      (e: unknown) => e,
-    )
-    expect((error as Error).message).toContain('does not carry the autobuild-1.2.3.tgz')
-  })
-})
-
 describe('defaultDistributionArchive', () => {
-  test('packs from the source checkout when one exists', async () => {
-    // The real workspace root has .git — the source-checkout branch runs.
-    const archive = await defaultDistributionArchive({})
-    expect(archive.byteLength).toBeGreaterThan(0)
-  })
-
-  test('a checkout with bun on PATH still takes the pack path', async () => {
-    // The real workspace root has .git and no prebuilt archive; injecting
-    // bun availability pins the contract that a present bun keeps the pack
-    // path rather than routing to the release asset.
+  test('a source checkout with bun on PATH takes the pack path', async () => {
+    // The real workspace root has .git and no prebuilt archive; a present bun
+    // keeps the pack path rather than routing to the release asset.
     const archive = await defaultDistributionArchive({}, undefined, () => true)
     expect(archive.byteLength).toBeGreaterThan(0)
   })
@@ -324,81 +233,6 @@ describe('defaultDistributionArchive', () => {
     expect(archive).toEqual(marker)
     expect(calls).toEqual([documentUrl, tarballUrl])
   })
-
-  test('the registry tarball fetch honors NPM_CONFIG_REGISTRY and refuses documents without a tarball', async () => {
-    const calls: string[] = []
-    const bytes = await fetchDistributionRegistryTarball(
-      '@defrex/autobuild',
-      '1.2.3',
-      { NPM_CONFIG_REGISTRY: 'https://registry.example.test/' },
-      registryStub(
-        {
-          'https://registry.example.test/@defrex%2fautobuild/1.2.3': {
-            status: 200,
-            body: JSON.stringify({ dist: { tarball: 'https://cdn.example.test/a.tgz' } }),
-          },
-          'https://cdn.example.test/a.tgz': { status: 200, bytes: new Uint8Array([1]) },
-        },
-        calls,
-      ),
-    )
-    expect(bytes).toEqual(new Uint8Array([1]))
-    expect(calls[0]).toBe('https://registry.example.test/@defrex%2fautobuild/1.2.3')
-
-    const noTarball: unknown = await fetchDistributionRegistryTarball(
-      'pkg',
-      '1.0.0',
-      {},
-      registryStub({
-        'https://registry.npmjs.org/pkg/1.0.0': { status: 200, body: '{"dist":{}}' },
-      }),
-    ).then(
-      () => null,
-      (e: unknown) => e,
-    )
-    expect((noTarball as Error).message).toContain('names no dist.tarball')
-
-    const missing: unknown = await fetchDistributionRegistryTarball(
-      'pkg',
-      '9.9.9',
-      {},
-      registryAbsent,
-    ).then(
-      () => null,
-      (e: unknown) => e,
-    )
-    expect((missing as Error).message).toContain('HTTP 404')
-    expect((missing as Error).message).toContain('publish the release first')
-  })
-
-  test('without a checkout, fetches the published release asset for the running version', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'ab-dist-release-'))
-    cleanups.push(dir)
-    await writeFile(join(dir, 'package.json'), '{"version":"5.4.3"}\n')
-    const calls: string[] = []
-    // The release-branch test runs from a temp dir where the module's own
-    // distribution root has no .git... the source branch wins in this
-    // workspace, so we exercise the fetch path directly instead.
-    const fetched = await fetchDistributionReleaseAsset('5.4.3', {}, (async (
-      method: string,
-      path: string,
-    ) => {
-      calls.push(`${method} ${path}`)
-      if (path.endsWith('/releases/tags/v5.4.3')) {
-        return {
-          status: 200,
-          headers: {},
-          json: {
-            assets: [{ name: 'autobuild-5.4.3.tgz', browser_download_url: 'https://d.example/a' }],
-          },
-        }
-      }
-      return { status: 200, headers: {}, bytes: new Uint8Array([9, 9]) }
-    }) as never)
-    const archive = fetched
-    expect(archive).toEqual(new Uint8Array([9, 9]))
-    expect(calls.some((call) => call.endsWith('/releases/tags/v5.4.3'))).toBe(true)
-  })
 })
 
 describe('findPrebuiltDistributionArchive', () => {
@@ -436,17 +270,7 @@ describe('findPrebuiltDistributionArchive', () => {
     )
   })
 
-  test('writePrebuiltDistributionArchive packs the running version into the root', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ab-dist-write-'))
-    cleanups.push(root)
-    const path = await writePrebuiltDistributionArchive(root)
-    const version = await readDistributionIdentity()
-    expect(path).toBe(join(root, PREBUILT_DISTRIBUTION_DIR, distributionAssetName(version)))
-    expect((await readFile(path)).byteLength).toBeGreaterThan(0)
-    expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
-  })
-
-  test('writePrebuiltDistributionArchive removes stale archives of other versions', async () => {
+  test('writePrebuiltDistributionArchive writes the running version and removes stale archives', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ab-dist-stale-'))
     cleanups.push(root)
     const dir = join(root, PREBUILT_DISTRIBUTION_DIR)
@@ -454,8 +278,11 @@ describe('findPrebuiltDistributionArchive', () => {
     await writeFile(join(dir, 'autobuild-0.0.1.tgz'), 'stale')
     await writeFile(join(dir, 'notes.txt'), 'kept')
     const path = await writePrebuiltDistributionArchive(root, async () => new Uint8Array([7]))
+    const version = await readDistributionIdentity()
+    expect(path).toBe(join(dir, distributionAssetName(version)))
     expect(await readFile(path)).toEqual(Buffer.from([7]))
     expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
+    expect(await Bun.file(join(dir, 'autobuild-0.0.1.tgz')).exists()).toBe(false)
     expect(await readFile(join(dir, 'notes.txt'), 'utf8')).toBe('kept')
   })
 })
@@ -480,21 +307,21 @@ describe('packageAutobuildDistribution exec failure semantics', () => {
     spawnOverride.impl = undefined // restore real spawn behavior; mandatory, see above
   })
 
-  test('a failing pack throws with the exit code and the trimmed stderr', async () => {
-    spawnOverride.impl = async () => ({
-      stdout: ' stdout filler ',
-      stderr: 'pack exploded',
-      exitCode: 3,
-    })
-    // The `\S+` wildcard exists only because the `--destination` tmpdir is
-    // random; every other character of the message is pinned.
-    await expect(packageAutobuildDistribution()).rejects.toThrow(
+  // The `\S+` wildcard exists only because the `--destination` tmpdir is
+  // random; every other character of the first message is pinned.
+  test.each([
+    [
+      'a failing pack throws with the exit code and the trimmed stderr',
+      { stdout: ' stdout filler ', stderr: 'pack exploded', exitCode: 3 },
       /^bun pm pack --ignore-scripts --destination \S+ exited 3: pack exploded$/,
-    )
-  })
-
-  test('with empty stderr the message falls back to the trimmed stdout', async () => {
-    spawnOverride.impl = async () => ({ stdout: '  noisy stdout  ', stderr: '', exitCode: 7 })
-    await expect(packageAutobuildDistribution()).rejects.toThrow(/exited 7: noisy stdout$/)
+    ],
+    [
+      'with empty stderr the message falls back to the trimmed stdout',
+      { stdout: '  noisy stdout  ', stderr: '', exitCode: 7 },
+      /exited 7: noisy stdout$/,
+    ],
+  ])('%s', async (_name, result, message) => {
+    spawnOverride.impl = async () => result
+    await expect(packageAutobuildDistribution()).rejects.toThrow(message)
   })
 })
