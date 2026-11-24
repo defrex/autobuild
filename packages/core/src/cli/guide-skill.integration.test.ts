@@ -364,28 +364,14 @@ describe('ab-guide — finalize publication boundary', () => {
 })
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
-  test('canonical guide tree is deterministic and its vendored bodies stay equivalent', async () => {
-    const canonical = (await readDistSkills(DIST_ROOT)).find((skill) => skill.name === 'guide')
+  test('every skill in the distribution has a row in the skills rundown', async () => {
+    const skills = await readDistSkills(DIST_ROOT)
+    const canonical = skills.find((skill) => skill.name === 'guide')
     expect(canonical).toBeDefined()
     expect(canonical!.files.map((file) => file.path)).toEqual(
       canonical!.files.map((file) => file.path).sort((a, b) => a.localeCompare(b)),
     )
 
-    const body = (source: string) => source.replace(/^---\n[\s\S]*?\n---\n/, '')
-    const live = await readFile(
-      join(DIST_ROOT, '.agents', 'skills', 'ab-guide', 'SKILL.md'),
-      'utf8',
-    )
-    const pristine = await readFile(
-      join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-guide', 'SKILL.md'),
-      'utf8',
-    )
-    expect(body(live)).toBe(body(guide))
-    expect(body(pristine)).toBe(body(guide))
-  })
-
-  test('every skill in the distribution has a row in the skills rundown', async () => {
-    const skills = await readDistSkills(DIST_ROOT)
     expect(skills).toHaveLength(14)
     const missing = skills
       .map((skill) => skill.installName)

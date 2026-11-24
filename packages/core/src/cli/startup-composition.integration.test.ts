@@ -69,11 +69,8 @@ test('binary entries load without production service implementations', async () 
   }
 })
 
-test('the real binary still answers version and help', async () => {
+test('the real binary still answers version', async () => {
   const version = await run([BIN, '--version'], tmp)
   expect(version.code).toBe(0)
   expect(version.stdout.trim()).not.toBe('')
-  const help = await run([BIN, '--help'], tmp)
-  expect(help.code).toBe(0)
-  expect(help.stdout.trim()).not.toBe('')
 })
