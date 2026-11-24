@@ -413,7 +413,9 @@ The dispatcher claims urgent ready tickets before normal ones, each in source
 order, and ahead of normal builds waiting for a slot to re-verify, reconcile or
 resume. To expedite a ticket, such as a fix for a stuck build, mark it urgent
 with `--priority urgent` on create or update; never move other ready tickets
-out of ready to make room. A claimed ticket's priority becomes its build's.
+out of ready to make room. A claimed ticket's priority becomes its build's,
+except that an optimization node's attempts claim at the node's current
+priority; a claimed attempt keeps its own.
 To expedite a build that already exists — a waiting reconcile or re-verify
 that now blocks other work — run `ab priority <slug> urgent` (MCP:
 `builds.control` with action `priority` and `priority: "urgent"`); `normal`
