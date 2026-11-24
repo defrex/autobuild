@@ -432,6 +432,45 @@ generated markers is maintained by hand. Defaults below are parser input default
 resolver inheritance is described separately. Nested required fields are required
 when their containing table or array entry is supplied.
 
+## Operator preference
+
+<!-- configuration-reference:operator -->
+
+#### `operator`
+
+**TOML key:** `operator`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Local only: set in .autobuild/local.toml; rejected in autobuild.toml.
+
+**Description:** Local-only dispatcher ownership preference; set in .autobuild/local.toml.
+
+**Constraints:** None beyond the input type.
+
+#### `operator.dispatcher`
+
+**TOML key:** `operator.dispatcher`
+
+- **Type:** `"human" | "agent"`
+- **Default:** `Unset; ask who should run it.`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+- **Local override:** Local only: set in .autobuild/local.toml; rejected in autobuild.toml.
+
+**Description:** Who runs the dispatcher when none is running. Repository instructions take precedence.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/operator -->
+
+`[operator]` is local-only, even when empty. Read or set the optional ownership
+choice with `ab operator dispatcher [human|agent] [--json]`. Unset has no default;
+repository instructions take precedence. Changes are hot and never start or stop
+a dispatcher. See [dispatcher ownership](dispatcher.md#dispatcher-ownership).
+
 ## Local overrides (`.autobuild/local.toml`)
 
 Some settings are personal: how many builds one machine runs, which model
@@ -440,7 +479,8 @@ subscriptions a person holds, which notifications they want. Put those in
 
 - **Location:** `.autobuild/local.toml` beside `autobuild.toml` in the checkout.
   `ab init` adds `.autobuild/` to `.gitignore`, so the file is never committed.
-  Edit it by hand; it uses the same TOML spelling as `autobuild.toml`.
+  Edit overrides by hand, or use `ab operator dispatcher [human|agent] [--json]`
+  for ownership; saving may normalize TOML formatting.
 - **Readers:** every `ab` command that reads configuration from that checkout,
   including a checkout-mode `ab dispatch`. Build worktrees never contain the
   file, so scoped phase commands are unaffected. Origin-mode and hosted

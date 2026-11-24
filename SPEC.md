@@ -2207,7 +2207,11 @@ the runner records it. Inside a judge session `ab` is the judge-only launcher,
 which runs these two commands and refuses every other.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
-projection of the repository journal's dispatcher controls: ticket intake, the
+projection of the repository journal's dispatcher controls. Its shared
+`dispatcherRunning` boolean is true for a holder, expired holder or unfinished
+handoff naming a draining predecessor, even with an empty drain map. It uses
+existing projections and adds no reads; only durable retirement clears evidence.
+The controls include: ticket intake, the
 repository-wide pause, and the harvest gate, plus pending and recently settled
 single-ticket start requests with their priority (`ticketStarts`, present when either is nonempty). It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
@@ -6108,8 +6112,8 @@ and arrays replace whole) before schema validation, so defaults and
 cross-validation run on the merged input and an invalid local value gets the
 committed file's message naming the local file. Every root key carries an
 exhaustive local-override classification. Only `capacity`,
-`ticketScanIntervalSeconds`, `[upgrade]`, `[hooks]`, `[roles]` and `[accounts]`
-are local; every other key, including the build-owned sections, is
+`ticketScanIntervalSeconds`, `[upgrade]`, `[hooks]`, `[roles]`, `[accounts]` and
+`[operator]` are local; every other key, including the build-owned sections, is
 committed-only, and a local file that sets one is a rejected candidate under the
 rules above. The dispatcher reads both files as one candidate with the same
 hot/restart treatment per field. It records the dotted settings it took from the
@@ -6117,6 +6121,25 @@ local file as `localOverrides` in the metadata of its effective-config artifact,
 which `ab repository status` reports. Build-owned sections still come from the
 build's own branch, and origin-mode and hosted dispatchers never read a local
 file.
+
+**Local dispatcher ownership preference.**
+
+`[operator] dispatcher = "human" | "agent"` is optional with no default and is
+local-only: committed input rejects even an empty `[operator]` with advice to use
+`.autobuild/local.toml`. Effective configuration and artifacts accept it. Changes
+are hot and do not command a dispatcher. `ab operator dispatcher [human|agent]
+[--json]` reads or saves only that preference, without a store or event write;
+phase authority cannot save it. Saving validates existing and candidate config,
+preserves other settings semantically and atomically replaces the local file.
+
+Operator agents check fresh `dispatcherRunning` and never start while it is true
+or unknown. With none running they honor repository instructions and the saved
+preference, or ask and offer to save it. Human ownership means instructions and
+waiting; agent ownership uses `ab dispatch --web --plain --json` under managed
+background lifetime and shares the URL. Only a dispatcher this session started
+may be stopped, on request, with a clean drain. Another session's process cannot
+be adopted, restarted or killed. `ab web` is always permitted as a read-only
+surface, including while dispatch runs.
 
 Merge policy is an ordered `[[merge]]` array. Each rule requires
 `mode = "auto" | "consent"` and may match `into = "root" | "node" | <node-ticket-id>`,

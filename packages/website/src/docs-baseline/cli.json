@@ -4,10 +4,11 @@
   "title": "CLI",
   "group": "reference",
   "description": "Every command, grouped by your responsibilities and your operator agent’s.",
-  "textHash": "fda295fde36bcc02f8c54bc6c4a4bfcf8132752096727d55a3a3fad8ca1a952c",
+  "textHash": "49669c01782d3178ea130782a9aa6381591aa398c9d1eb1080d87187f58ba22c",
   "headings": [
     "For you",
-    "For your operator agent"
+    "For your operator agent",
+    "Dispatcher ownership"
   ],
   "code": []
 }

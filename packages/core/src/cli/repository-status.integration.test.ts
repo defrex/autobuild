@@ -78,6 +78,7 @@ describe('ab repository status', () => {
 
     expect(JSON.parse(opts.output.join('\n'))).toEqual({
       repo: REPO,
+      dispatcherRunning: false,
       intake: true,
       paused: false,
       defaultAutoMerge: false,
@@ -114,6 +115,7 @@ describe('ab repository status', () => {
 
       expect(JSON.parse(opts.output.join('\n'))).toEqual({
         repo: REPO,
+        dispatcherRunning: false,
         intake: false,
         paused,
         defaultAutoMerge: true,
