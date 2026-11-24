@@ -1380,7 +1380,11 @@ clock-dependent step timers. Its only value import is `cells.ts`.
 `cli/dashboard/row-text.ts` projects the model into plain-data row, harvest,
 header, dispatcher-mode, attention-list, finished-row and overview text. The
 terminal renderer paints those values, and `web/protocol.ts` aliases the same
-types for the web frame, so a term changes in one place.
+types for the web frame, so a term changes in one place. The `ab web` pages in
+`packages/ui/src/app/` render the frame's projection values, import
+`vocabulary.ts` by value only for step timers, use the page's embedded frame as
+a masked skeleton, and apply each frame through `StableFlow`'s layout
+transactions.
 
 The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
 increment `repo_change_positions` transactionally through triggers on build,

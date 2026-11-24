@@ -4414,6 +4414,18 @@ terms: status, phase, attention, waits, step timers, finished outcomes, the
 dispatcher mode and the attention list. The terminal dashboard renders the
 same values.
 
+The UI has two pages. The overview at `/` shows the dispatcher mode, capacity,
+the attention list, and the active, queued and recently finished build rows.
+The build page at `/builds/<slug>` shows one build's header, ticket, phase,
+steps and attention. Both render the frame's shared projection values and
+update from the event stream. The page HTML carries the hub's current frame as
+a layout hint, which the page renders masked as its loading skeleton, never as
+facts. A page request reads nothing while the hub holds a frame; otherwise it
+waits for the hub's one shared read to deliver its first frame, data or a
+failure notice, bounded at 10 s. Live changes never move on-screen content:
+reserved slots take timer ticks and step changes, and any other change fades
+out, relayouts and fades back in from its first changed block.
+
 `ab dispatch --web` serves the same server from the dispatcher process, in
 push mode: the hub owns no refresh loop and adds no store reads. It shows the
 repository facts that a refresh the dispatcher already makes has read: the
