@@ -66,7 +66,7 @@ test('an optimization node carries its objective progress on every status surfac
   expect(segments).toEqual([
     'objective not measured · threshold 40',
     'attempts 0 accepted · 0 rejected · 0 running',
-    'budget 0/60 attempts · 0.0/24 hours',
+    'budget 0/60 attempts · 0.0/24 active hours',
   ])
   const plain = summarize(record, (await node(false)).events, now)
   const table = renderSummaries([summary, plain], now, '')

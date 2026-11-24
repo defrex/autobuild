@@ -178,6 +178,16 @@ export async function readOptimizationLedger(store: Reader, slug: string) {
   )
 }
 
+/** One build's execution facts no optimization node has acknowledged: a
+ * served value holding only those facts, never the build's log. */
+export async function readExecutionIntervals(store: Reader, slug: string) {
+  return readValue<import('../kernel/execution-intervals').ExecutionIntervalsValue>(
+    store,
+    { kind: 'build', slug },
+    'executionIntervals',
+  )
+}
+
 export async function readRepositoryAttention(store: Reader, repo: string) {
   return readValue<import('../kernel/repository-attention').RepositoryAttentionState>(
     store,
