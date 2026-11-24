@@ -113,12 +113,14 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
         stderr: () => {},
         ...(sourceFactory !== undefined ? { sourceFactory } : {}),
       })
+      const result = JSON.parse(text) as { revision: string; priority: string }
       output.push(
         JSON.parse(text, (key, value: unknown) => (key === 'source' ? '<source>' : value)),
       )
+      return result
     }
 
-    await invoke([
+    const created = await invoke([
       'create',
       'Parity ticket',
       '--body',
@@ -129,6 +131,39 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       '824,820:refs',
       '--json',
     ])
+    expect(created.priority).toBe('normal')
+    const id = 'fake-1'
+    const urgent = await invoke(['update', id, '--priority', 'urgent', '--json'])
+    expect(urgent.priority).toBe('urgent')
+    expect(urgent.revision).not.toBe(created.revision)
+    expect((await invoke(['show', id, '--json'])).priority).toBe('urgent')
+    expect((await backend.get(id))?.priority).toBe('urgent')
+
+    await expect(
+      invoke([
+        'update',
+        id,
+        '--priority',
+        'normal',
+        '--expected-revision',
+        created.revision,
+        '--json',
+      ]),
+    ).rejects.toThrow('revision')
+    expect((await invoke(['show', id, '--json'])).priority).toBe('urgent')
+    const cleared = await invoke([
+      'update',
+      id,
+      '--priority',
+      'normal',
+      '--expected-revision',
+      urgent.revision,
+      '--json',
+    ])
+    expect(cleared.priority).toBe('normal')
+    expect(cleared.revision).not.toBe(urgent.revision)
+    expect((await backend.get(id))?.priority).toBeUndefined()
+
     await invoke([
       'update',
       'fake-1',
@@ -182,6 +217,7 @@ test('all ab ticket subcommands have hosted/direct parity through normal config 
       '/tickets/policy',
       '/tickets/create',
       '/tickets/update',
+      '/tickets/mutate-if-revision',
       '/tickets/get',
       '/tickets/dependency-states',
       '/tickets/add-blocker',
@@ -297,82 +333,6 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     await rm(repo, { recursive: true, force: true })
   }
 }, 10_000)
-
-test('ab ticket update --priority urgent round-trips through the hosted source', async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-priority-cli-'))
-  const backend = new FakeTicketSource()
-  const project = await ticketProject(repo, 'priority-secret')
-  const service = createHostedStoreService({
-    ...project,
-    env: {
-      AB_STORE_SECRET: 'priority-secret',
-      AB_POSTGRES_URL: 'postgres://unused/injected',
-      AB_BLOB_BACKEND: 's3',
-      AB_S3_BUCKET: 'unused',
-      AB_S3_REGION: 'unused',
-      AB_S3_ACCESS_KEY_ID: 'unused',
-      AB_S3_SECRET_ACCESS_KEY: 'unused',
-    },
-    sourceFor: () => backend,
-  })
-  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
-  try {
-    await writeFile(
-      join(repo, 'autobuild.toml'),
-      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n',
-    )
-    const bodyFile = join(repo, 'body.md')
-    await writeFile(bodyFile, 'Body\n')
-    const invoke = async (args: string[]) => {
-      let text = ''
-      await abTicket(args, {
-        targetRepo: repo,
-        env: { AB_STORE: server.url.href, AB_TOKEN: project.token },
-        stdout: (line) => {
-          text += line
-        },
-        stderr: () => {},
-      })
-      return JSON.parse(text) as { ref: { id: string }; revision: string; priority: string }
-    }
-    const created = await invoke(['create', 'Hotfix', '--body', bodyFile, '--json'])
-    expect(created.priority).toBe('normal')
-    const id = created.ref.id
-    const urgent = await invoke(['update', id, '--priority', 'urgent', '--json'])
-    expect(urgent.priority).toBe('urgent')
-    expect(urgent.revision).not.toBe(created.revision)
-    expect((await invoke(['show', id, '--json'])).priority).toBe('urgent')
-    expect((await backend.get(id))?.priority).toBe('urgent')
-
-    await expect(
-      invoke([
-        'update',
-        id,
-        '--priority',
-        'normal',
-        '--expected-revision',
-        created.revision,
-        '--json',
-      ]),
-    ).rejects.toThrow('revision')
-    expect((await invoke(['show', id, '--json'])).priority).toBe('urgent')
-    const cleared = await invoke([
-      'update',
-      id,
-      '--priority',
-      'normal',
-      '--expected-revision',
-      urgent.revision,
-      '--json',
-    ])
-    expect(cleared.priority).toBe('normal')
-    expect(cleared.revision).not.toBe(urgent.revision)
-    expect((await backend.get(id))?.priority).toBeUndefined()
-  } finally {
-    server.stop(true)
-    await rm(repo, { recursive: true, force: true })
-  }
-})
 
 test('CLI lists and creates hosted states with purpose and duplicate refusal', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-states-cli-'))

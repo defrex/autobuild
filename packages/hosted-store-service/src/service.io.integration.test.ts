@@ -372,7 +372,7 @@ describe('hosted store service', () => {
     })
   })
 
-  test('bounded history routes reach the store server instead of the unclassified 404', async () => {
+  test('history and snapshot GET routes reach the store; unsupported snapshot DELETE is refused', async () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
@@ -401,22 +401,6 @@ describe('hosted store service', () => {
       expect(body.error ?? '').not.toContain('no route')
     }
     expect(opens).toBeGreaterThan(0)
-  })
-
-  test('snapshot routes classify as store routes for GET and PUT only', async () => {
-    const backing = new MemoryBuildStore({ clock })
-    let opens = 0
-    const service = createHostedStoreService({
-      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
-      issueDispatcherCredential: async () => 'abp_1_fixture',
-      openProjectRegistry: async () => testProjects([repo, 'acme/repo', 'acme/never']),
-      env,
-      clock,
-      openStore: async () => {
-        opens++
-        return backing
-      },
-    })
     // Reducer snapshots: served inside the existence gates, so an unknown
     // build or repository answers the store server's own 404 (persistence
     // opened); any other method is the generic unclassified 404.
