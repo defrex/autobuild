@@ -8,7 +8,7 @@ function scopedProvider(options: ConstructorParameters<typeof VercelSandboxProvi
 }
 
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
@@ -22,7 +22,6 @@ import {
   readDistributionIdentity,
 } from './distribution-archive'
 import { spawnExec, type Exec } from './git-worktree'
-import { installPackedDistribution } from '../../testing/packed-install'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 import {
@@ -513,36 +512,7 @@ function harness(
 }
 
 describe('VercelSandboxProvider', () => {
-  test('packs, extracts, and production-installs the real distribution without lifecycle scripts', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-package-'))
-    const archivePath = join(tmp, 'autobuild.tgz')
-    const extracted = join(tmp, 'autobuild')
-    try {
-      await writeFile(archivePath, await packageAutobuildDistribution())
-      // The root `files` array excludes test files with a negated glob; the
-      // packer stages the positive entries and `bun pm pack` applies the
-      // negation from the staged manifest, so the packed distribution must not
-      // carry test files.
-      const listing = await spawnExec(['tar', '-tzf', archivePath], { cwd: tmp })
-      expect(listing).toMatchObject({ exitCode: 0, stderr: '' })
-      expect(listing.stdout.split('\n').some((entry) => entry.endsWith('.test.ts'))).toBe(false)
-      await mkdir(extracted)
-      const unpacked = await spawnExec(
-        ['tar', '-xzf', archivePath, '--strip-components=1', '-C', extracted],
-        { cwd: tmp },
-      )
-      expect(unpacked).toMatchObject({ exitCode: 0, stderr: '' })
-      const installed = await installPackedDistribution(
-        ['--production', '--ignore-scripts'],
-        extracted,
-      )
-      expect(installed.stderr).not.toContain('husky')
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  }, 600_000)
-
-  test('the packed distribution carries only the files set and never the web app', async () => {
+  test('the packed distribution carries only the files set, no tests, and never the web app', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-package-members-'))
     const archivePath = join(tmp, 'autobuild.tgz')
     try {
@@ -550,6 +520,10 @@ describe('VercelSandboxProvider', () => {
       const listing = await spawnExec(['tar', '-tzf', archivePath], { cwd: tmp })
       expect(listing).toMatchObject({ exitCode: 0, stderr: '' })
       const members = listing.stdout.split('\n').filter((entry) => entry.length > 0)
+      // The root `files` array excludes test files with a negated glob; the
+      // packer stages the positive entries and `bun pm pack` applies the
+      // negation from the staged manifest.
+      expect(members.some((entry) => entry.endsWith('.test.ts'))).toBe(false)
 
       // The operator web app lives in the hosted store service package
       // (AUT-409). The root `files` list has never carried it; pin the
@@ -814,16 +788,20 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
   })
 
-  test('reinstalls the distribution on a reused sandbox whose marker version is older', async () => {
+  test.each([
+    // The resumed guest predates the current distribution (e.g. legacy 0.6.0
+    // guest vs an upgraded dispatcher's 1.2.3).
+    ['an older marker version', '0.6.0'],
+    // A guest provisioned before the marker existed.
+    ['no version marker (legacy)', undefined],
+  ])('reinstalls the distribution on a reused sandbox with %s', async (_name, staleMarker) => {
     const h = harness()
     const first = await h.provider.provision({
       repo: '/repo',
       baseBranch: 'main',
       branch: 'ab/remote-build',
     })
-    // The resumed guest predates the current distribution (e.g. legacy 0.6.0
-    // guest vs an upgraded dispatcher's 1.2.3).
-    h.sandbox.distributionVersion = '0.6.0'
+    h.sandbox.distributionVersion = staleMarker
     const commandsBefore = h.sandbox.commands.length
     const writesBefore = h.sandbox.writes.length
 
@@ -851,44 +829,7 @@ describe('VercelSandboxProvider', () => {
     ])
     expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
     // No declared provisioning and no runtime work re-ran for the refresh.
-    expect(h.sandbox.commands.slice(commandsBefore).some((command) => command.sudo === true)).toBe(
-      false,
-    )
-  })
-
-  test('reinstalls the distribution on a legacy reused sandbox without a version marker', async () => {
-    const h = harness()
-    const first = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // Model a guest provisioned before the marker existed.
-    h.sandbox.distributionVersion = undefined
-    const commandsBefore = h.sandbox.commands.length
-
-    const reused = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-
-    expect(reused.ref).toBe(first.ref)
-    expect(h.creates).toBe(1)
-    expect(h.sandbox.deletes).toBe(0)
-    expect(h.sandbox.writes).toHaveLength(2)
-    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
-      'test',
-      'git',
-      'cat',
-      VERCEL_BUN_EXECUTABLE,
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
+    expect(refreshed.some((command) => command.sudo === true)).toBe(false)
   })
 
   test('a failed distribution refresh retains the reused sandbox and launches no execution', async () => {
@@ -917,7 +858,7 @@ describe('VercelSandboxProvider', () => {
     ).rejects.toThrow(/requires dispatcher-authorized cleanup/)
   })
 
-  test('fresh provisioning records the resolved version and a readback mismatch retains the sandbox', async () => {
+  test('a fresh-provision marker readback mismatch retains the sandbox', async () => {
     const mismatch = harness({ markerReadback: 'corrupted' })
     await expect(
       mismatch.provider.provision({
@@ -931,210 +872,30 @@ describe('VercelSandboxProvider', () => {
     expect(mismatch.sandbox.deletes).toBe(0)
     expect(mismatch.sandbox.provisioned).toBe(false)
     expect(mismatch.sandbox.commands.some((command) => command.detached === true)).toBe(false)
-
-    const h = harness()
-    await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    expect(h.sandbox.distributionVersion).toBe('1.2.3')
   })
 
-  test('fresh provisioning without the identity seam records the default-computed stamp', async () => {
-    // obs_8266d6a3 pin (provision site): every sibling test injects the
-    // `distributionIdentity` seam, so the provider's DEFAULT identity
-    // resolution — `identityStamp()` falling through to
-    // `distributionStampFor(archiveBytes())` — never runs for them. This test
-    // constructs the provider without the seam; the written marker must equal
-    // the full stamp recomputed independently over the exact archive bytes the
-    // harness injects. Wiring the default to bare `readDistributionIdentity()`
-    // (dropping the protocol and digest terms) writes the bare version here
-    // and fails both assertions.
+  test('without the identity seam provisioning records the default stamp and a restart refreshes a bare-version marker', async () => {
+    // obs_8266d6a3 pin (provision and start / build-restart sites): every
+    // sibling test injects the `distributionIdentity` seam, so the provider's
+    // DEFAULT identity resolution — `identityStamp()` falling through to
+    // `distributionStampFor(archiveBytes())` — never runs for them. Wiring the
+    // default to bare `readDistributionIdentity()` (dropping the protocol and
+    // digest terms) writes the bare version at provision and, at restart,
+    // matches the bare-version marker so no refresh runs.
     const h = harness({ defaultIdentityStamp: true })
-    await h.provider.provision({
+    const provisioned = await h.provider.provision({
       repo: '/repo',
       baseBranch: 'main',
       branch: 'ab/remote-build',
     })
+    const defaultStamp = await distributionStampFor(new Uint8Array([1, 2, 3]))
     const marker = h.sandbox.distributionVersion
-    expect(marker).toBe(await distributionStampFor(new Uint8Array([1, 2, 3])))
-    // Shape assertions document the intent and sharpen the failure: the
-    // marker is not the bare version and carries the full
-    // `<version>+protocol<N>+sha256-<64 hex>` stamp shape.
+    expect(marker).toBe(defaultStamp)
     expect(marker).not.toBe(await readDistributionIdentity())
     expect(marker).toMatch(
       new RegExp(`\\+protocol${REMOTE_STORE_PROTOCOL_VERSION}\\+sha256-[0-9a-f]{64}$`),
     )
-  })
-
-  test('restart after a protocol-only bump reinstalls before the runner starts (AUT-521 regression)', async () => {
-    const h = harness()
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // The 2026-09-24 incident: the deployed dispatcher bumped
-    // REMOTE_STORE_PROTOCOL_VERSION 2→3 without a package version bump, so
-    // every guest's marker — then a bare version — still matched and no path
-    // refreshed them; their store handshakes 409ed and the builds stranded. A
-    // legacy bare-version marker is exactly the pre-bump shape here.
-    h.distributionIdentity = '1.2.3+protocol3'
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-protocol-bump',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    // The refresh sequence strictly precedes the detached runner launch, with
-    // Bun's pin check before the reinstall that runs with it.
-    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect((restart[0] as { args?: string[] }).args).toEqual(['--version'])
-    // The marker now carries the full identity stamp.
-    expect(h.sandbox.distributionVersion).toBe('1.2.3+protocol3')
-    // Exactly one new write — the archive into /tmp — never the workspace.
-    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
-    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
-    // No git command and no workspace-cwd command before the runner: the
-    // checkout and its unpushed commits are untouched by the refresh.
-    for (const command of restart.slice(0, runner)) {
-      expect(command.cmd).not.toBe('git')
-      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
-    }
-  })
-
-  test('restart after a version-only bump reinstalls before the runner starts', async () => {
-    const h = harness()
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // A release cut without a protocol change: the full stamp differs.
-    h.distributionIdentity = '2.0.0+protocol3'
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-version-bump',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
-    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
-    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
-    for (const command of restart.slice(0, runner)) {
-      expect(command.cmd).not.toBe('git')
-      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
-    }
-  })
-
-  test('restart after a version-only bump on a current-protocol marker reinstalls before the runner starts', async () => {
-    // obs_6981ba1d pin: the sibling version-only test provisions the bare
-    // seam value '1.2.3', so its pre-restart marker has the same legacy shape
-    // as the protocol-only test. This test isolates a PURE version-only
-    // change: the provisioned marker already carries the current protocol
-    // (full `<version>+protocol<N>` stamp on both sides, differing only in
-    // the version component) — the case AUT-540 specifies a refresh for.
-    const h = harness()
-    h.distributionIdentity = '1.2.3+protocol3'
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // The provisioned marker carries the current protocol — what isolates
-    // this case from the sibling tests.
-    expect(h.sandbox.distributionVersion).toBe('1.2.3+protocol3')
-    // Version-only bump: same protocol, no digest component on either side.
-    h.distributionIdentity = '2.0.0+protocol3'
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-version-bump-current-protocol',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    // The refresh sequence strictly precedes the detached runner launch, with
-    // Bun's pin check before the reinstall that runs with it.
-    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect((restart[0] as { args?: string[] }).args).toEqual(['--version'])
-    // The marker now carries the bumped version on the current protocol.
-    expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
-    // Exactly one new write — the archive into /tmp — never the workspace.
-    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
-    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
-    // No git command and no workspace-cwd command before the runner: the
-    // checkout and its unpushed commits are untouched by the refresh.
-    for (const command of restart.slice(0, runner)) {
-      expect(command.cmd).not.toBe('git')
-      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
-    }
-  })
-
-  test('restart without the identity seam refreshes a bare-version marker to the default stamp', async () => {
-    // obs_8266d6a3 pin (start / build-restart site): without the seam the
-    // restart path must resolve the identity via the default
-    // `distributionStampFor(archiveBytes())` and refresh any guest whose
-    // marker disagrees. The stale marker is the bare running version — the
-    // pre-AUT-521 legacy shape AND the exact value a wiring degraded to bare
-    // `readDistributionIdentity()` would recompute — so under that regression
-    // the comparison matches, no refresh runs, and both assertions fail.
-    const h = harness({ defaultIdentityStamp: true })
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // Provision wrote the full default stamp; model the legacy bare-version
-    // guest marker.
+    // Model the legacy bare-version guest marker (pre-AUT-521 shape).
     h.sandbox.distributionVersion = await readDistributionIdentity()
     const commandsBefore = h.sandbox.commands.length
 
@@ -1149,8 +910,6 @@ describe('VercelSandboxProvider', () => {
     const restart = h.sandbox.commands.slice(commandsBefore)
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
-    // The refresh ran strictly before the detached runner (Bun's pin check
-    // precedes the reinstall).
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
       VERCEL_BUN_EXECUTABLE,
       'cat',
@@ -1160,20 +919,110 @@ describe('VercelSandboxProvider', () => {
       'sh',
       'cat',
     ])
-    // The marker was rewritten to the independently recomputed full stamp —
-    // not the bare version a degraded wiring would produce.
-    expect(h.sandbox.distributionVersion).toBe(
-      await distributionStampFor(new Uint8Array([1, 2, 3])),
-    )
+    expect(h.sandbox.distributionVersion).toBe(defaultStamp)
   })
 
-  test('restart with an unchanged identity stamp reinstalls nothing', async () => {
+  test.each([
+    {
+      // AUT-521, the 2026-09-24 incident: a protocol bump without a package
+      // version bump left every bare-version guest marker matching.
+      name: 'a protocol-only bump',
+      identity: '1.2.3+protocol3',
+    },
+    { name: 'a version-only bump', identity: '2.0.0+protocol3' },
+    {
+      // obs_6981ba1d: a PURE version-only change, the provisioned marker
+      // already carrying the current protocol (AUT-540).
+      name: 'a version-only bump on a current-protocol marker',
+      provisionedIdentity: '1.2.3+protocol3',
+      identity: '2.0.0+protocol3',
+    },
+    {
+      // AUT-600, the 2026-09-24 13:46 UTC incident: a code-only deploy with
+      // version and protocol unchanged left every pre-digest marker matching.
+      name: 'a code-only deploy (same version and protocol, new archive digest)',
+      staleMarker: '1.2.3+protocol3',
+      identity: `1.2.3+protocol3+sha256-${'a'.repeat(64)}`,
+    },
+  ])(
+    'restart after $name reinstalls the distribution before the runner starts',
+    async (row: {
+      name: string
+      provisionedIdentity?: string
+      staleMarker?: string
+      identity: string
+    }) => {
+      const h = harness()
+      if (row.provisionedIdentity !== undefined) h.distributionIdentity = row.provisionedIdentity
+      const provisioned = await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      })
+      if (row.provisionedIdentity !== undefined)
+        expect(h.sandbox.distributionVersion).toBe(row.provisionedIdentity)
+      if (row.staleMarker !== undefined) h.sandbox.distributionVersion = row.staleMarker
+      h.distributionIdentity = row.identity
+      const commandsBefore = h.sandbox.commands.length
+      const writesBefore = h.sandbox.writes.length
+
+      const execution = await h.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-stale-marker',
+        workspaceRef: provisioned.ref,
+      })
+      expect(await execution.completion).toEqual({ exitCode: 0 })
+
+      const restart = h.sandbox.commands.slice(commandsBefore)
+      const runner = restart.findIndex((command) => command.detached === true)
+      expect(runner).toBeGreaterThan(0)
+      // The refresh sequence strictly precedes the detached runner launch, with
+      // Bun's pin check before the reinstall that runs with it.
+      expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+        VERCEL_BUN_EXECUTABLE,
+        'cat',
+        'mkdir',
+        'tar',
+        VERCEL_BUN_EXECUTABLE,
+        'sh',
+        'cat',
+      ])
+      expect((restart[0] as { args?: string[] }).args).toEqual(['--version'])
+      expect(h.sandbox.distributionVersion).toBe(row.identity)
+      // Exactly one new write — the archive into /tmp — never the workspace.
+      expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+      expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+      // No git command and no command with or naming the workspace before the
+      // runner: the checkout and its unpushed commits are untouched.
+      for (const command of restart.slice(0, runner)) {
+        expect(command.cmd).not.toBe('git')
+        expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
+        expect(JSON.stringify(command)).not.toContain(VERCEL_WORKSPACE_PATH)
+      }
+    },
+  )
+
+  test.each([
+    { name: 'an unchanged bare identity stamp' },
+    {
+      // An identical archive must not reinstall: the guest marker carries the
+      // full current stamp, digest included.
+      name: 'a marker equal to the full digest stamp',
+      stamp: `1.2.3+protocol3+sha256-${'b'.repeat(64)}`,
+    },
+  ])('restart with $name reinstalls nothing', async (row: { name: string; stamp?: string }) => {
     const h = harness()
     const provisioned = await h.provider.provision({
       repo: '/repo',
       baseBranch: 'main',
       branch: 'ab/remote-build',
     })
+    if (row.stamp !== undefined) {
+      h.sandbox.distributionVersion = row.stamp
+      h.distributionIdentity = row.stamp
+    }
+    const markerBefore = h.sandbox.distributionVersion
     const commandsBefore = h.sandbox.commands.length
     const writesBefore = h.sandbox.writes.length
 
@@ -1189,129 +1038,13 @@ describe('VercelSandboxProvider', () => {
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
     // Bun's pin check, then one marker read (the comparison itself) — no
-    // archive fetch, no writes, no reinstall.
-    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-    ])
-    expect(h.sandbox.writes).toHaveLength(writesBefore)
-  })
-
-  test('restart after a code-only deploy (same version and protocol, new archive digest) reinstalls (AUT-600)', async () => {
-    const h = harness()
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // The 2026-09-24 13:46 UTC incident: the deploy changed guest-visible code
-    // with version 0.8.0 and protocol 3 unchanged, so every guest marker —
-    // then the pre-digest `<version>+protocol<N>` shape — still matched and
-    // the builds stranded. A legacy pre-digest marker is exactly that shape.
-    h.sandbox.distributionVersion = '1.2.3+protocol3'
-    h.distributionIdentity = `1.2.3+protocol3+sha256-${'a'.repeat(64)}`
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-code-only-deploy',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    // The refresh sequence strictly precedes the detached runner launch: the
-    // archive is installed and the marker rewritten before any guest code runs.
-    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect(h.sandbox.distributionVersion).toBe(`1.2.3+protocol3+sha256-${'a'.repeat(64)}`)
-    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
-    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
-  })
-
-  test('restart with a marker equal to the full digest stamp reinstalls nothing', async () => {
-    const h = harness()
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // An identical archive must not reinstall: the guest marker carries the
-    // full current stamp, digest included, so the comparison matches.
-    const fullStamp = `1.2.3+protocol3+sha256-${'b'.repeat(64)}`
-    h.sandbox.distributionVersion = fullStamp
-    h.distributionIdentity = fullStamp
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-identical-archive',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    // Bun's pin check, then one marker read (the comparison itself) — no
     // archive fetch, no writes, no tar, no reinstall.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
       VERCEL_BUN_EXECUTABLE,
       'cat',
     ])
     expect(h.sandbox.writes).toHaveLength(writesBefore)
-    expect(h.sandbox.distributionVersion).toBe(fullStamp)
-  })
-
-  test('a digest-mismatch refresh never touches the workspace checkout (AUT-600)', async () => {
-    const h = harness()
-    const provisioned = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.distributionVersion = '1.2.3+protocol3'
-    h.distributionIdentity = `1.2.3+protocol3+sha256-${'c'.repeat(64)}`
-    const commandsBefore = h.sandbox.commands.length
-    const writesBefore = h.sandbox.writes.length
-
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-refresh-workspace-safety',
-      workspaceRef: provisioned.ref,
-    })
-    expect(await execution.completion).toEqual({ exitCode: 0 })
-
-    // The refresh window runs from the first marker read to the runner launch.
-    // FakeSandbox models no git state, so the assertion is on the command
-    // surface: no command executes with a workspace cwd or references the
-    // workspace path — the checkout and its unpushed commits are untouched.
-    const restart = h.sandbox.commands.slice(commandsBefore)
-    const runner = restart.findIndex((command) => command.detached === true)
-    expect(runner).toBeGreaterThan(0)
-    for (const command of restart.slice(0, runner)) {
-      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
-      expect(JSON.stringify(command)).not.toContain(VERCEL_WORKSPACE_PATH)
-    }
-    // The only new write is the archive into /tmp; the install lands under
-    // /opt/autobuild (mkdir) and the marker readback is a cat, never a write
-    // under the workspace.
-    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
-    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+    expect(h.sandbox.distributionVersion).toBe(markerBefore)
   })
 
   test('retains provisioning output and remediation while deleting an unready sandbox', async () => {
@@ -1443,7 +1176,7 @@ describe('VercelSandboxProvider', () => {
     expect(workspace.base).toEqual({ source: 'existing', sha: remoteHead })
   })
 
-  test('deletes a partial setup so the next provisioning pass rematerializes cleanly', async () => {
+  test('retains a partial setup as cleanup-required, and the next provisioning pass rematerializes cleanly', async () => {
     const first = new FakeSandbox()
     first.failSetupCommand = 'tar'
     const second = new FakeSandbox()
@@ -1485,9 +1218,14 @@ describe('VercelSandboxProvider', () => {
       packageArchive: async () => new Uint8Array([1, 2, 3]),
     })
 
-    await expect(
-      provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
-    ).rejects.toThrow(/tar exited 1/)
+    const rejection = provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The setup diagnostics are retained and no destructive cleanup runs.
+    await expect(rejection).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+    await expect(rejection).rejects.toThrow(/tar exited 1/)
     expect(first.deletes).toBe(0)
     expect(first.provisioned).toBe(false)
     // Recovery cleanup stops before deleting and confirming absence.
@@ -1523,29 +1261,6 @@ describe('VercelSandboxProvider', () => {
     ])
   })
 
-  test('retains setup diagnostics without attempting destructive cleanup', async () => {
-    const h = harness()
-    const cleanupError = new Error('sandbox delete failed')
-    h.sandbox.failSetupCommand = 'tar'
-    h.sandbox.deleteFailure = cleanupError
-
-    let rejection: unknown
-    try {
-      await h.provider.provision({
-        repo: '/repo',
-        baseBranch: 'main',
-        branch: 'ab/remote-build',
-      })
-    } catch (error) {
-      rejection = error
-    }
-
-    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
-    expect((rejection as Error).message).toContain('tar exited 1')
-    expect(h.sandbox.deletes).toBe(0)
-    expect(h.sandbox.provisioned).toBe(false)
-  })
-
   test('reports Bun provisioning failure, deletes the partial sandbox, and never marks or launches it', async () => {
     const h = harness()
     h.sandbox.failCommand = (command) => command.cmd === 'npm'
@@ -1557,53 +1272,6 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.provisioned).toBe(false)
     expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
-  })
-
-  test('discards an existing named sandbox without the completed setup marker', async () => {
-    const incomplete = new FakeSandbox()
-    const replacement = new FakeSandbox()
-    let created = false
-    const provider = scopedProvider({
-      config: {
-        image: 'vercel/sandbox/universal:latest',
-        vcpus: 4,
-        timeoutSeconds: 2700,
-        failoverRegions: [],
-        environmentVariables: [],
-      },
-      env: { GITHUB_TOKEN: 'forge-secret' },
-      storeRef: 'https://store.example.test',
-      storeToken: 'scoped-store-token',
-      delegateCredential: async () => 'delegated-store-token',
-      repo: '/repo',
-      facade: {
-        get: async () => incomplete,
-        create: async () => {
-          created = true
-          return replacement
-        },
-        listSnapshots: async () => [],
-        deleteSnapshot: async () => {},
-      },
-      exec: async (cmd) => {
-        const ref = cmd.at(-1)
-        if (cmd.includes('get-url'))
-          return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
-        return {
-          stdout: ref === 'refs/heads/main' ? `${SHA}\t${ref}\n` : '',
-          stderr: '',
-          exitCode: 0,
-        }
-      },
-      packageArchive: async () => new Uint8Array([1]),
-    })
-
-    await expect(
-      provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
-    ).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
-    expect(incomplete.deletes).toBe(0)
-    expect(created).toBe(false)
-    expect(replacement.provisioned).toBe(false)
   })
 
   describe('finishing a teardown-abandoned attempt', () => {
@@ -1683,6 +1351,10 @@ describe('VercelSandboxProvider', () => {
       await expect(h.restart().provision(request)).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
       expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
       expect(h.sandbox.stops).toBe(0)
+      // Neither deleted nor replaced: no second create, nothing provisioned.
+      expect(h.sandbox.deletes).toBe(0)
+      expect(h.creates).toBe(1)
+      expect(h.sandbox.provisioned).toBe(false)
     })
 
     test('an absent sandbox is simply created under the same generation', async () => {
@@ -1758,26 +1430,6 @@ describe('VercelSandboxProvider', () => {
     const detached = commands.findIndex((command) => command.detached === true)
     expect((commands[detached - 2]!.args as string[])[1]).toBe('pi --version 0.84.4')
     expect((commands[detached - 1]!.args as string[])[1]).toBe('plugin --version 1.2.3')
-  })
-
-  test('a repeated runtime preflight failure prevents the detached child', async () => {
-    const h = harness({ provisionRuntimes: true })
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.failCommand = (command) =>
-      command.cmd === 'sh' && (command.args as string[])[1] === 'pi --version 0.84.4'
-    await expect(
-      h.provider.buildExecution.start({
-        slug: 'remote-build',
-        storeRef: 'https://store.example.test',
-        instance: 'i-failed-runtime-preflight',
-        workspaceRef: workspace.ref,
-      }),
-    ).rejects.toThrow(/runtime "pi" preflight failed.*role "implement" primary/)
-    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
   test('runner preflight reads runtime references updated after provisioning', async () => {
@@ -1890,23 +1542,13 @@ describe('VercelSandboxProvider', () => {
     expect(message).toContain('runtime "plugin" preflight failed')
     expect(message).toContain('role "plan" alternate[0]')
     expect(message).toContain('workspace.config.runtimeProvisioning.plugin.preflight')
-    expect(h.sandbox.provisioned).toBe(false)
-    expect(h.sandbox.deletes).toBe(0)
-    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
-    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
-  })
-
-  test('runtime failure names the route and field, creates no marker, and deletes the sandbox', async () => {
-    const h = harness({ provisionRuntimes: true })
-    h.sandbox.failCommand = (command) =>
-      command.cmd === 'sh' && (command.args as string[])[1] === 'plugin --version 1.2.3'
-    await expect(
-      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
-    ).rejects.toThrow(
+    // The route and field are named in order on the failure's first line.
+    expect(message).toMatch(
       /runtime "plugin" preflight failed.*role "plan" alternate\[0\].*runtimeProvisioning\.plugin\.preflight/,
     )
     expect(h.sandbox.provisioned).toBe(false)
     expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
@@ -2070,101 +1712,21 @@ describe('VercelSandboxProvider', () => {
     })
     const identity = execution.identity!
     expect(identity.commandId).toBeDefined()
+    // The harness facade carries no session expiry: observation is unbounded.
+    expect(h.sandbox.sessionExpiresAt).toBeUndefined()
     const waitsAtLaunch = h.sandbox.waitCalls
 
     // A null exit code from the lookup proves nothing: the observation issues
     // its bounded wait, which times out against a guest that never exits, and
     // only then concludes running.
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
-      state: 'running',
-    })
-    expect(h.sandbox.getCommandCalls).toBe(1)
-    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
-
-    // A wait that observes the guest's true exit is a proved end carrying
-    // that code — even though the lookup itself still reported none.
-    h.sandbox.detachedExits.set(identity.commandId!, 7)
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
-      state: 'ended',
-      exitCode: 7,
-    })
-    expect(h.sandbox.getCommandCalls).toBe(2)
-    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
-
-    // The resolved wait is recorded provider state: the lookup alone now
-    // reports the exit, so a repeat observation needs no further wait.
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
-      state: 'ended',
-      exitCode: 7,
-    })
-    expect(h.sandbox.getCommandCalls).toBe(3)
-    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
-  })
-
-  test('a guest that exits while detached is recognized on the first observation and by the lookup alone afterwards', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    // The launching invocation detached while the guest was still running.
-    h.sandbox.detachedWait = () => new Promise(() => undefined)
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-detached-exit',
-      workspaceRef: workspace.ref,
-    })
-    const identity = execution.identity!
-    const waitsAtLaunch = h.sandbox.waitCalls
-
-    // The guest exits afterwards: the true outcome exists but no client has
-    // waited, so the plain lookup still reports no exit code.
-    h.sandbox.detachedExits.set(identity.commandId!, 0)
-    expect(h.sandbox.detachedCommands.get(identity.commandId!)).toEqual({ exitCode: null })
-
-    // The first observation's bounded wait observes the exit and settles it
-    // as a proved end.
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
-      state: 'ended',
-      exitCode: 0,
-    })
-    expect(h.sandbox.getCommandCalls).toBe(1)
-    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
-
-    // From now on the lookup reports the exit and no wait is needed.
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
-      state: 'ended',
-      exitCode: 0,
-    })
-    expect(h.sandbox.getCommandCalls).toBe(2)
-    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
-  })
-
-  test('a genuinely running guest stays running: the bounded wait times out quickly and repeatably', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.detachedWait = () => new Promise(() => undefined)
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-observe-running',
-      workspaceRef: workspace.ref,
-    })
-    const identity = execution.identity!
-    const waitsAtLaunch = h.sandbox.waitCalls
-
     const started = Date.now()
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
       state: 'running',
     })
     // One observation never approaches the tick's operation timeout (30 s).
     expect(Date.now() - started).toBeLessThan(1000)
+    expect(h.sandbox.getCommandCalls).toBe(1)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
 
     // The next tick's observation repeats the bounded attempt unchanged.
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
@@ -2172,34 +1734,30 @@ describe('VercelSandboxProvider', () => {
     })
     expect(h.sandbox.getCommandCalls).toBe(2)
     expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
+
+    // The guest exits while detached: the true outcome exists but no client
+    // has waited, so the plain lookup still reports no exit code. A wait that
+    // observes it is a proved end carrying that code.
+    h.sandbox.detachedExits.set(identity.commandId!, 7)
+    expect(h.sandbox.detachedCommands.get(identity.commandId!)).toEqual({ exitCode: null })
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 7,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(3)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 3)
+
+    // The resolved wait is recorded provider state: the lookup alone now
+    // reports the exit, so a repeat observation needs no further wait.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 7,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(4)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 3)
   })
 
-  test('a bounded wait that finds the sandbox gone reads as lost', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.detachedWait = () => new Promise(() => undefined)
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-observe-vanished',
-      workspaceRef: workspace.ref,
-    })
-    const identity = execution.identity!
-    // The environment vanishes between the command lookup and the wait: the
-    // wait rejects with the provider's not-found shape.
-    h.sandbox.detachedWait = async () => {
-      throw Object.assign(new Error('Status code 404 is not ok: sandbox not found'), {
-        response: { status: 404 },
-      })
-    }
-    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
-  })
-
-  test('observes lost executions: stopped session, a resumed session 404, and an absent sandbox', async () => {
+  test('observes lost executions: stopped session, a wait that finds the sandbox gone, a resumed session 404, and an absent sandbox', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
       repo: '/repo',
@@ -2221,6 +1779,15 @@ describe('VercelSandboxProvider', () => {
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
     expect(h.sandbox.getCommandCalls).toBe(0)
     h.sandbox.sessionStatus = 'running'
+
+    // The environment vanishes between the command lookup and the bounded
+    // wait: the wait rejects with the provider's not-found shape.
+    h.sandbox.detachedWait = async () => {
+      throw Object.assign(new Error('Status code 404 is not ok: sandbox not found'), {
+        response: { status: 404 },
+      })
+    }
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
 
     // A command the current (resumed) session no longer knows 404s: lost.
     h.sandbox.detachedCommands.delete(identity.commandId!)
@@ -2334,27 +1901,6 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.getCommandCalls).toBe(1)
   })
 
-  test('observe keeps the unbounded behavior when the facade carries no session expiry', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.detachedWait = () => new Promise(() => undefined)
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-observe-no-expiry',
-      workspaceRef: workspace.ref,
-    })
-    expect(h.sandbox.sessionExpiresAt).toBeUndefined()
-    await expect(h.provider.buildExecution.observe!(execution.identity!)).resolves.toEqual({
-      state: 'running',
-    })
-    expect(h.sandbox.getCommandCalls).toBe(1)
-  })
-
   test('an execution without a recorded command id cannot be re-observed', async () => {
     const h = harness()
     await expect(
@@ -2441,35 +1987,60 @@ describe('VercelSandboxProvider', () => {
     await expect(execution.completion).rejects.toThrow('404')
   })
 
-  test('fails preflight closed when provisioned Bun is missing and does not start a child', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.failCommand = (command) =>
-      command.cmd === VERCEL_BUN_EXECUTABLE &&
-      (command.args as string[] | undefined)?.[0] === '--version'
-    const commandsBefore = h.sandbox.commands.length
-
-    const rejection = await h.provider.buildExecution
-      .start({
-        slug: 'remote-build',
-        storeRef: 'https://store.example.test',
-        instance: 'i-missing-bun',
-        workspaceRef: workspace.ref,
+  test.each([
+    {
+      name: 'is missing',
+      breakBun: (sandbox: FakeSandbox) => {
+        sandbox.failCommand = (command) =>
+          command.cmd === VERCEL_BUN_EXECUTABLE &&
+          (command.args as string[] | undefined)?.[0] === '--version'
+      },
+      messages: [/found no version \(pin 1\.4\.4\).*release and reprovision/],
+    },
+    {
+      name: 'cannot reach the pin',
+      breakBun: (sandbox: FakeSandbox) => {
+        sandbox.bunVersion = '1.4.0'
+        sandbox.bunInstallVersion = '1.4.0'
+      },
+      messages: [
+        /found 1\.4\.0 \(pin 1\.4\.4\)/,
+        /reports 1\.4\.0 but the pin is 1\.4\.4/,
+        /release and reprovision/,
+      ],
+    },
+  ])(
+    'a reused sandbox whose Bun $name fails preflight closed and is never launched, now or later',
+    async ({ breakBun, messages }) => {
+      const h = harness()
+      const workspace = await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
       })
-      .catch((error: unknown) => error)
-    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
-    expect((rejection as Error).message).toMatch(
-      /found no version \(pin 1\.4\.4\).*release and reprovision/,
-    )
-    // The pin refresh was attempted before giving up.
-    const since = h.sandbox.commands.slice(commandsBefore)
-    expect(since.some((command) => command.cmd === 'npm')).toBe(true)
-    expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
-  })
+      breakBun(h.sandbox)
+      const commandsBefore = h.sandbox.commands.length
+      const start = () =>
+        h.provider.buildExecution
+          .start({
+            slug: 'remote-build',
+            storeRef: 'https://store.example.test',
+            instance: 'i-broken-bun',
+            workspaceRef: workspace.ref,
+          })
+          .catch((error: unknown) => error)
+
+      const rejection = await start()
+      expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
+      for (const message of messages) expect((rejection as Error).message).toMatch(message)
+      // The pin refresh was attempted before giving up.
+      const since = h.sandbox.commands.slice(commandsBefore)
+      expect(since.some((command) => command.cmd === 'npm')).toBe(true)
+      // A later preflight compares exactly, so the failed upgrade is not accepted.
+      expect(await start()).toBeInstanceOf(WorkspaceCleanupRequired)
+      expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
+    },
+  )
 
   test('a fresh sandbox installs and verifies Bun at the pin', async () => {
     expect(VERCEL_BUN_VERSION).toBe('1.4.4')
@@ -2569,35 +2140,6 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.bunVersion).toBe(VERCEL_BUN_VERSION)
   })
 
-  test('a reused sandbox that cannot reach the Bun pin is never launched, now or later', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.bunVersion = '1.4.0'
-    h.sandbox.bunInstallVersion = '1.4.0'
-    const start = () =>
-      h.provider.buildExecution
-        .start({
-          slug: 'remote-build',
-          storeRef: 'https://store.example.test',
-          instance: 'i-stuck-bun',
-          workspaceRef: workspace.ref,
-        })
-        .catch((error: unknown) => error)
-
-    const rejection = await start()
-    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
-    expect((rejection as Error).message).toContain('found 1.4.0 (pin 1.4.4)')
-    expect((rejection as Error).message).toContain('reports 1.4.0 but the pin is 1.4.4')
-    expect((rejection as Error).message).toContain('release and reprovision')
-    // A later preflight compares exactly, so the failed upgrade is not accepted.
-    expect(await start()).toBeInstanceOf(WorkspaceCleanupRequired)
-    expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
-  })
-
   test('a transient environment stop failure does not poison future starts or release', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
@@ -2645,41 +2187,7 @@ describe('VercelSandboxProvider', () => {
     expect(aborted.sandbox.deletes).toBe(1)
   })
 
-  test('reap rejects unknown deletion, then safely retries and becomes an absence no-op', async () => {
-    const h = harness()
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    h.sandbox.remainAfterDelete = true
-    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(
-      /still exists after delete acknowledgement/,
-    )
-    h.sandbox.remainAfterDelete = false
-    // The rejected reap already purged before its delete was refused; the
-    // absent re-applies stay empty no-ops.
-    expect(await h.provider.recovery.reap(workspace)).toEqual({
-      outcome: 'absent',
-      snapshots: { outcome: 'confirmed', deleted: 0 },
-    })
-    expect(await h.provider.recovery.reap(workspace)).toEqual({
-      outcome: 'absent',
-      snapshots: { outcome: 'confirmed', deleted: 0 },
-    })
-  })
-
-  test('creation binds the one-snapshot retention bound', async () => {
-    const h = harness()
-    await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    expect(h.createInput?.keepLastSnapshots).toEqual({ count: 1, deleteEvicted: true })
-  })
-
-  test('creation maps snapshotExpirationSeconds to SDK milliseconds and omits it when unset', async () => {
+  test('creation binds one-snapshot retention and maps snapshotExpirationSeconds to SDK milliseconds, omitting it when unset', async () => {
     const set = harness({ snapshotExpirationSeconds: 86_400 })
     await set.provider.provision({
       repo: '/repo',
@@ -2687,6 +2195,8 @@ describe('VercelSandboxProvider', () => {
       branch: 'ab/remote-build',
     })
     expect(set.createInput?.snapshotExpiration).toBe(86_400_000)
+    // Creation always binds the one-snapshot retention bound.
+    expect(set.createInput?.keepLastSnapshots).toEqual({ count: 1, deleteEvicted: true })
 
     const unset = harness()
     await unset.provider.provision({
@@ -2732,7 +2242,7 @@ describe('VercelSandboxProvider', () => {
     ])
   })
 
-  test('reap on an absent environment still purges its leftover snapshots', async () => {
+  test('reap rejects unknown deletion, then on the absent environment still purges its leftover snapshots and becomes a no-op', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
       repo: '/repo',
@@ -2760,6 +2270,11 @@ describe('VercelSandboxProvider', () => {
     // Authorized cleanup also clears a possible stale name reservation.
     expect(h.sandbox.deletes).toBe(2)
     expect(h.sandbox.snapshots).toEqual([])
+    // A further reap is an absence no-op with nothing left to purge.
+    expect(await h.provider.recovery.reap(workspace)).toEqual({
+      outcome: 'absent',
+      snapshots: { outcome: 'confirmed', deleted: 0 },
+    })
   })
 
   test('a snapshot purge failure rejects reap as retryable and a retry completes', async () => {
@@ -3046,26 +2561,6 @@ describe('VercelSandboxProvider', () => {
     expect(mismatch.sandbox.policies).toHaveLength(2)
   })
 
-  test('forbids publication while an environment execution remains live', async () => {
-    const h = harness()
-    h.sandbox.detachedWait = () => new Promise(() => undefined)
-    const workspace = await h.provider.provision({
-      repo: '/repo',
-      baseBranch: 'main',
-      branch: 'ab/remote-build',
-    })
-    const execution = await h.provider.buildExecution.start({
-      slug: 'remote-build',
-      storeRef: 'https://store.example.test',
-      instance: 'i-live',
-      workspaceRef: workspace.ref,
-    })
-    await expect(
-      h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
-    ).rejects.toThrow(/teardown is confirmed/)
-    await execution.stop()
-  })
-
   test('fails closed for local Stores and missing scoped authority', () => {
     expect(
       () =>
@@ -3151,7 +2646,7 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
     }
   }
 
-  test('provisions from the injected origin and remote branch heads with no host exec', async () => {
+  test('provisions from the injected origin and remote branch heads with no host exec, preferring an existing build branch', async () => {
     const h = originHarness({ remoteBranches: { main: BASE_SHA } })
     const workspace = await h.provider.provision({
       repo: '/not/a/checkout',
@@ -3163,16 +2658,15 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
     // The sandbox source pins the injected origin's https spelling.
     expect(h.createInput().source.url).toBe('https://github.com/acme/app.git')
     expect(h.createInput().source.revision).toBe(BASE_SHA)
-  })
 
-  test('reuses an existing build branch head before falling back to the base branch', async () => {
-    const h = originHarness({ remoteBranches: { main: BASE_SHA, 'ab/remote-build': SHA } })
-    const workspace = await h.provider.provision({
+    // An existing build branch head wins over the base branch.
+    const existing = originHarness({ remoteBranches: { main: BASE_SHA, 'ab/remote-build': SHA } })
+    const reused = await existing.provider.provision({
       repo: '/not/a/checkout',
       baseBranch: 'main',
       branch: 'ab/remote-build',
     })
-    expect(workspace.base).toEqual({ source: 'existing', sha: SHA })
+    expect(reused.base).toEqual({ source: 'existing', sha: SHA })
   })
 
   test('the full publish path, including its post-push verification, runs without host git', async () => {
@@ -3259,6 +2753,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
     )
     expect(labels.lastIndexOf('touch')).toBeGreaterThan(labels.indexOf('npm'))
     expect(h.sandbox.provisioned).toBe(true)
+    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
     // Runtime runtimes were INSTALLED on the fresh path (not preflight only).
     const runtimeInstalls = commands.filter(
       (command) =>
@@ -3415,14 +2910,8 @@ describe('VercelSandboxProvider harvestExecution', () => {
     )
   })
 
-  test('harvest reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
-    // obs_8266d6a3 pin (startHarvestExecution / harvest-reuse site): without
-    // the injected seam the reuse path must resolve the identity via the
-    // default `distributionStampFor(archiveBytes())` and refresh a stale
-    // marker. The stale value is the bare running version — the exact value a
-    // wiring degraded to bare `readDistributionIdentity()` would recompute —
-    // so under that regression no refresh runs and the assertions fail.
-    const h = harness({ defaultIdentityStamp: true })
+  test('harvest reuse refreshes a stale distribution marker before launch', async () => {
+    const h = harness()
     const first = await h.provider.harvestExecution.start({
       storeRef: 'https://store.example.test',
       repo: ORIGIN,
@@ -3430,12 +2919,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
       baseBranch: 'main',
     })
     expect(await first.completion).toEqual({ exitCode: 0 })
-    // The fresh provision wrote the full default stamp over the injected
-    // archive bytes; model a stale guest by degrading the marker to the bare
-    // version.
-    const fullStamp = await distributionStampFor(new Uint8Array([1, 2, 3]))
-    expect(h.sandbox.distributionVersion).toBe(fullStamp)
-    h.sandbox.distributionVersion = await readDistributionIdentity()
+    h.sandbox.distributionVersion = '0.0.1'
     const commandsBefore = h.sandbox.commands.length
     const writesBefore = h.sandbox.writes.length
 
@@ -3464,10 +2948,10 @@ describe('VercelSandboxProvider harvestExecution', () => {
       VERCEL_BUN_EXECUTABLE,
     ])
     // Exactly one new write — the archive into /tmp — and the marker was
-    // refreshed to the independently recomputed full stamp.
+    // refreshed to the current identity.
     expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
     expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
-    expect(h.sandbox.distributionVersion).toBe(fullStamp)
+    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
   })
 
   test('deletes and recreates an unmarked leftover harvest environment', async () => {
@@ -3511,7 +2995,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(await first.completion).toEqual({ exitCode: 0 })
   })
 
-  test('observe maps provider state to running, ended, lost, and refuses missing command ids', async () => {
+  test('observe is wired to provider state: running, then ended with the exit code', async () => {
     const h = harness()
     // One resolver per issued wait, in call order: the launch supervision
     // long-poll first, then the observation path's bounded wait.
@@ -3535,33 +3019,10 @@ describe('VercelSandboxProvider harvestExecution', () => {
       state: 'ended',
       exitCode: 3,
     })
-    // A command the session no longer knows is lost.
-    expect(
-      await h.provider.harvestExecution.observe!({ ...identity, commandId: 'cmd-missing' }),
-    ).toEqual({ state: 'lost' })
-    // A stopped session is lost.
-    h.sandbox.sessionStatus = 'stopped'
-    expect(await h.provider.harvestExecution.observe!(identity)).toEqual({ state: 'lost' })
-    // An identity without a command id is refused, never silently skipped.
-    await expect(
-      h.provider.harvestExecution.observe!({ provider: 'vercel-sandbox', workspaceRef: 'x' }),
-    ).rejects.toThrow(/no recorded command id/)
     // The first wait belongs to the launch supervision; the observation's
     // own wait already timed out against the never-exiting guest.
     resolvers[0]!({ exitCode: 0 })
     await execution.completion
-  })
-
-  test('observe reports lost when the harvest environment is gone', async () => {
-    const h = harness({ facadeGet: async () => null })
-    expect(
-      await h.provider.harvestExecution.observe!({
-        provider: 'vercel-sandbox',
-        workspaceRef: HARVEST_NAME,
-        environmentId: HARVEST_NAME,
-        commandId: 'cmd-1',
-      }),
-    ).toEqual({ state: 'lost' })
   })
 
   test('a missing remote base branch refuses to provision', async () => {
@@ -3655,8 +3116,8 @@ describe('operator sandbox capability', () => {
     expect(h.creates).toBe(0)
   })
 
-  test('fresh provision runs the build chain from the base head, then the setup command', async () => {
-    const h = harness({ setupCommand: 'echo setup-ran' })
+  test('fresh provision runs the build chain from the base head with runtime provisioning, then the setup command', async () => {
+    const h = harness({ provisionRuntimes: true, setupCommand: 'echo setup-ran' })
     const identity = await h.provider.orchestratorSandbox.ensure({
       repo: '/repo',
       operator: OPERATOR,
@@ -3687,16 +3148,45 @@ describe('operator sandbox capability', () => {
     const setupIndex = h.sandbox.commands.indexOf(setup!)
     expect(setupIndex).toBeLessThan(marker)
     expect(h.sandbox.provisioned).toBe(true)
+
+    const shStrings = h.sandbox.commands.map(
+      (command): string =>
+        ((command.args as string[] | undefined)?.[1] as string | undefined) ??
+        (command.cmd as string),
+    )
+    const indexOf = (needle: string): number => {
+      const found = shStrings.findIndex((value: string) => value.includes(needle))
+      expect(found).toBeGreaterThanOrEqual(0)
+      return found
+    }
+    // The build chain's order (runtimes sorted by name): each runtime's
+    // install then preflight, all before the repository setup command.
+    const piInstall = indexOf('install-pi@0.84.4')
+    const piPreflight = indexOf('pi --version 0.84.4')
+    const pluginInstall = indexOf('install-plugin@abc123')
+    const pluginPreflight = indexOf('plugin --version 1.2.3')
+    expect(piInstall).toBeLessThan(piPreflight)
+    expect(piPreflight).toBeLessThan(pluginInstall)
+    expect(pluginInstall).toBeLessThan(pluginPreflight)
+    expect(pluginPreflight).toBeLessThan(setupIndex)
+    // The one env rule: build-workspace forwarded variables (the harness's
+    // ANTHROPIC_API_KEY) never enter a sandbox guest command — a runtime
+    // provisioning command needing one must have it added to
+    // [orchestrator].sandbox.environmentVariables instead.
+    const runtimeCommand = h.sandbox.commands[piInstall]!
+    expect(runtimeCommand.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
     expectCredentialFree(h.sandbox.commands)
   })
 
-  test('reuse re-checks the marker only, and a stale distribution is refreshed', async () => {
+  test('reuse re-checks the marker only, omits baseSha, and a stale distribution is refreshed', async () => {
     const h = harness()
-    await h.provider.orchestratorSandbox.ensure({
+    const fresh = await h.provider.orchestratorSandbox.ensure({
       repo: '/repo',
       operator: OPERATOR,
       baseBranch: 'main',
     })
+    // baseSha rides on the fresh provision only.
+    expect(fresh.baseSha).toBe(SHA)
     const commandCount = h.sandbox.commands.length
     const resumed = await h.provider.orchestratorSandbox.ensure({
       repo: '/repo',
@@ -3714,6 +3204,7 @@ describe('operator sandbox capability', () => {
       },
     ])
     expect(resumed.sessionId).toBe('session-1')
+    expect(resumed.baseSha).toBeUndefined()
 
     // A reused environment whose marker disagrees is refreshed in place.
     h.sandbox.distributionVersion = '0.0.1'
@@ -3724,8 +3215,17 @@ describe('operator sandbox capability', () => {
       baseBranch: 'main',
     })
     expect(h.creates).toBe(1)
-    expect(h.sandbox.distributionVersion).toBe('1.2.3')
-    expect(h.sandbox.commands.length).toBeGreaterThan(refreshCommands)
+    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
+    expect(h.sandbox.commands.slice(refreshCommands).map((command) => command.cmd)).toEqual([
+      'test',
+      VERCEL_BUN_EXECUTABLE,
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
   })
 
   test('a reused operator sandbox reporting Bun 1.4.0 is brought to the pin before it is returned', async () => {
@@ -3771,66 +3271,6 @@ describe('operator sandbox capability', () => {
     expect(rejection).toBeInstanceOf(SandboxOperationError)
     expect((rejection as Error).message).toContain('found 1.4.0 (pin 1.4.4)')
     expect(h.sandbox.deletes).toBe(deletesBefore + 1)
-  })
-
-  test('operator sandbox reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
-    // obs_8266d6a3 pin (ensureOperatorSandbox / operator-reuse site): without
-    // the injected seam the reuse path must resolve the identity via the
-    // default `distributionStampFor(archiveBytes())` and refresh a stale
-    // marker. The stale value is the bare running version — the exact value a
-    // wiring degraded to bare `readDistributionIdentity()` would recompute —
-    // so under that regression no refresh runs and the assertions fail.
-    const h = harness({ defaultIdentityStamp: true })
-    await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    // The fresh provision wrote the full default stamp over the injected
-    // archive bytes; model a stale guest by degrading the marker to the bare
-    // version.
-    const fullStamp = await distributionStampFor(new Uint8Array([1, 2, 3]))
-    expect(h.sandbox.distributionVersion).toBe(fullStamp)
-    h.sandbox.distributionVersion = await readDistributionIdentity()
-    const commandsBefore = h.sandbox.commands.length
-
-    await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    expect(h.creates).toBe(1)
-    // The stale marker was read, the refresh ran, and the marker was
-    // rewritten to the independently recomputed full stamp — not the bare
-    // version a degraded wiring would produce (which would equal the stale
-    // marker and suppress the refresh entirely).
-    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
-      'test',
-      VERCEL_BUN_EXECUTABLE,
-      'cat',
-      'mkdir',
-      'tar',
-      VERCEL_BUN_EXECUTABLE,
-      'sh',
-      'cat',
-    ])
-    expect(h.sandbox.distributionVersion).toBe(fullStamp)
-  })
-
-  test('baseSha rides on the fresh provision and is omitted on reuse', async () => {
-    const h = harness()
-    const fresh = await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    expect(fresh.baseSha).toBe(SHA)
-    const reused = await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    expect(reused.baseSha).toBeUndefined()
   })
 
   test('sandboxPublication is the same object as publication on a freshly constructed provider', async () => {
@@ -3953,7 +3393,7 @@ describe('operator sandbox capability', () => {
     expect(finished).toMatchObject({ state: 'exited', exitCode: 3 })
   })
 
-  test('readFile reads through the byte-preserving base64 channel; writeFile routes through writeFiles', async () => {
+  test('readFile round-trips arbitrary binary through the rooted base64 channel; writeFile routes through writeFiles', async () => {
     const h = harness()
     const identity = await h.provider.orchestratorSandbox.ensure({
       repo: '/repo',
@@ -3961,10 +3401,13 @@ describe('operator sandbox capability', () => {
       baseBranch: 'main',
     })
     h.sandbox.detachedWait = async () => ({ exitCode: 0 })
-    const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'src/demo.txt')
-    expect(new TextDecoder().decode(bytes)).toBe('')
+    // Bytes a string stdout channel would mangle.
+    const binary = new Uint8Array([0, 1, 2, 0x0a, 0x22, 0xff, 0xfe, 0x80])
+    h.sandbox.fileContent = binary
+    const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'src/blob.bin')
+    expect([...bytes]).toEqual([...binary])
     const read = [...h.sandbox.commands].reverse().find((command) => command.cmd === 'base64')
-    expect((read!.args as string[])[0]).toBe(`${VERCEL_WORKSPACE_PATH}/src/demo.txt`)
+    expect((read!.args as string[])[0]).toBe(`${VERCEL_WORKSPACE_PATH}/src/blob.bin`)
     expectCredentialFree([read!])
 
     await h.provider.orchestratorSandbox.writeFile(identity, 'out.txt', new Uint8Array([1, 2]))
@@ -3972,57 +3415,6 @@ describe('operator sandbox capability', () => {
       path: `${VERCEL_WORKSPACE_PATH}/out.txt`,
       content: new Uint8Array([1, 2]),
     })
-  })
-
-  test('readFile preserves arbitrary binary that a string stdout channel would mangle', async () => {
-    const h = harness()
-    const identity = await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    h.sandbox.detachedWait = async () => ({ exitCode: 0 })
-    const binary = new Uint8Array([0, 1, 2, 0x0a, 0x22, 0xff, 0xfe, 0x80])
-    h.sandbox.fileContent = binary
-    const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'blob.bin')
-    expect([...bytes]).toEqual([...binary])
-  })
-
-  test('fresh provision runs the runtime-provisioning chain the build path receives', async () => {
-    const h = harness({ provisionRuntimes: true, setupCommand: 'echo setup-ran' })
-    await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    const shStrings = h.sandbox.commands.map(
-      (command): string =>
-        ((command.args as string[] | undefined)?.[1] as string | undefined) ??
-        (command.cmd as string),
-    )
-    const indexOf = (needle: string): number => {
-      const found = shStrings.findIndex((value: string) => value.includes(needle))
-      expect(found).toBeGreaterThanOrEqual(0)
-      return found
-    }
-    // The build chain's order (runtimes sorted by name): each runtime's
-    // install then preflight, all before the repository setup command.
-    const piInstall = indexOf('install-pi@0.84.4')
-    const piPreflight = indexOf('pi --version 0.84.4')
-    const pluginInstall = indexOf('install-plugin@abc123')
-    const pluginPreflight = indexOf('plugin --version 1.2.3')
-    const setup = indexOf('echo setup-ran')
-    expect(piInstall).toBeLessThan(piPreflight)
-    expect(piPreflight).toBeLessThan(pluginInstall)
-    expect(pluginInstall).toBeLessThan(pluginPreflight)
-    expect(pluginPreflight).toBeLessThan(setup)
-    // The one env rule: build-workspace forwarded variables (the harness's
-    // ANTHROPIC_API_KEY) never enter a sandbox guest command — a runtime
-    // provisioning command needing one must have it added to
-    // [orchestrator].sandbox.environmentVariables instead.
-    const runtimeCommand = h.sandbox.commands[piInstall]!
-    expect(runtimeCommand.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
-    expectCredentialFree(h.sandbox.commands)
   })
 
   test('stop ends the session and keeps the sandbox; absent is reported honestly', async () => {
@@ -4119,35 +3511,30 @@ describe('validateVercelSandbox execOrThrow failure semantics', () => {
     baseBranch: 'main',
   }
 
-  test('a failing exec throws with the exit code and the trimmed stderr', async () => {
-    // Deliberately not keyed to a specific argv: this pins the helper's
-    // formatting, not the call order. If a future edit inserts an earlier exec
-    // call, this test fails loudly and gets re-pinned — that is the
-    // drift-detection working.
-    const exec: Exec = async () => ({
-      stdout: ' stdout filler ',
-      stderr: 'fatal: not a git repository',
-      exitCode: 2,
-    })
+  // Deliberately not keyed to a specific argv: this pins the helper's
+  // formatting, not the call order. If a future edit inserts an earlier exec
+  // call, this test fails loudly and gets re-pinned — that is the
+  // drift-detection working.
+  test.each([
+    [
+      'a failing exec throws with the exit code and the trimmed stderr',
+      { stdout: ' stdout filler ', stderr: 'fatal: not a git repository', exitCode: 2 },
+      'git remote get-url origin exited 2: fatal: not a git repository',
+    ],
+    [
+      'with empty stderr the message falls back to the trimmed stdout',
+      { stdout: '  noisy stdout  ', stderr: '', exitCode: 7 },
+      'git remote get-url origin exited 7: noisy stdout',
+    ],
+  ])('%s', async (_name, result, message) => {
+    const exec: Exec = async () => result
     const error = await validateVercelSandbox({ ...baseOptions, exec }).then(
       () => undefined,
       (e: unknown) => e,
     )
     expect(error).toBeInstanceOf(Error)
     // Exact equality against the current first execOrThrow call site.
-    expect((error as Error).message).toBe(
-      'git remote get-url origin exited 2: fatal: not a git repository',
-    )
-  })
-
-  test('with empty stderr the message falls back to the trimmed stdout', async () => {
-    const exec: Exec = async () => ({ stdout: '  noisy stdout  ', stderr: '', exitCode: 7 })
-    const error = await validateVercelSandbox({ ...baseOptions, exec }).then(
-      () => undefined,
-      (e: unknown) => e,
-    )
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe('git remote get-url origin exited 7: noisy stdout')
+    expect((error as Error).message).toBe(message)
   })
 })
 
@@ -4547,13 +3934,19 @@ describe('refused guest archive pushes', () => {
       (command) => command.cmd === 'git' && (command.args as string[])[0] === 'push',
     )
 
-  test('recovery without a fallback reports the candidate available after a refused archive push', async () => {
-    const { h, workspace } = await fenced()
-    const refs = scriptGuestRemote(h, { refuseArchive: true })
-    // Archive refs are best effort: the settlement rewrite retains it.
-    expect(await recover(h, workspace.ref)).toBe(true)
-    expect(refs.has(archiveRef)).toBe(false)
-  })
+  test.each([
+    ['without a fallback', undefined],
+    ['with an acknowledged fallback the readback cannot confirm', async () => {}],
+  ])(
+    'recovery %s reports the candidate available after a refused archive push, with no archive',
+    async (_name, refusedArchive) => {
+      const { h, workspace } = await fenced({ refusedArchive })
+      const refs = scriptGuestRemote(h, { refuseArchive: true })
+      // Archive refs are best effort: the settlement rewrite retains it.
+      expect(await recover(h, workspace.ref)).toBe(true)
+      expect(refs.has(archiveRef)).toBe(false)
+    },
+  )
 
   test('recovery publishes through git without calling the fallback', async () => {
     const calls: string[][] = []
@@ -4615,13 +4008,6 @@ describe('refused guest archive pushes', () => {
     fail = false
     expect(await recover(h, workspace.ref)).toBe(true)
     expect(refs.get(archiveRef)).toBe(SHA)
-  })
-
-  test('an acknowledged fallback the readback cannot confirm is no archive, but recovery proceeds', async () => {
-    const { h, workspace } = await fenced({ refusedArchive: async () => {} })
-    const refs = scriptGuestRemote(h, { refuseArchive: true })
-    expect(await recover(h, workspace.ref)).toBe(true)
-    expect(refs.has(archiveRef)).toBe(false)
   })
 
   test('preservation archives through the fallback after a refused push', async () => {
