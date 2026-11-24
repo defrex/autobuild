@@ -550,25 +550,16 @@ if (testUrl) {
           cursor: 1,
           state: { a: 1 },
         })
+        await migratePostgres(database.url)
+        await migratePostgres(database.url)
+        expect(await store.getReducerSnapshot(scope, 'build', 1)).toEqual({
+          version: 1,
+          cursor: 1,
+          state: { a: 1 },
+        })
       } finally {
         await store.close()
         await raw.close()
-        await database.cleanup()
-      }
-    })
-
-    test('the migration is idempotent and leaves stored snapshots untouched', async () => {
-      const database = await isolatedDatabase()
-      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
-      try {
-        await store.createBuild(sampleBuildInput('snap-live'))
-        await store.append('snap-live', sampleEventWrite('one'))
-        await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 1, state: [1, 2] })
-        await migratePostgres(database.url)
-        await migratePostgres(database.url)
-        expect((await store.getReducerSnapshot(scope, 'build', 1))?.state).toEqual([1, 2])
-      } finally {
-        await store.close()
         await database.cleanup()
       }
     })
