@@ -1408,7 +1408,18 @@ changed-builds feed and paged-listing vocabulary (`listBuildsChangedSince`,
 `listBuildsPage`, cursor and position codecs). Each build's latest position
 lives in `build_change_positions`, written by the same trigger that advances
 the counter (memory: a one-node-per-build linked list); its first creation
-backfills existing builds once at a bumped head.
+backfills existing builds once at a bumped head. The paged listing's filters
+read `build_listing_facts`: one row per build holding `created_at`, a mirror of
+`updated_at`, `node` and `merged`, kept by triggers in the writing transaction
+(a build insert seeds it, `build.created` sets `node`, `build.completed` sets
+`merged`, `build.reopened` clears it, and each `builds.updated_at` change is
+copied). Seven indexes, one per filter class (kind, merged, kind and merged,
+plus all builds for update order) and order (creation or update), with partial
+`merged` indexes, make every filtered page one backward range scan. The memory
+adapter keeps the same classes as sorted slug lists, moved in the step that
+writes the fact or `updatedAt`. Its first creation backfills existing builds
+once from their latest relevant events. The PostgreSQL DDL is additive, like
+the counter's, and must be migrated before the service rollout.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
