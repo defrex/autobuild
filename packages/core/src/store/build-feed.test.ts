@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildFeedReadBudget } from '../testing/reduced-read-budget'
+import { buildFeedReadBudget, filteredBuildPageReadBudget } from '../testing/reduced-read-budget'
 import {
   BUILD_PAGE_DEFAULT_LIMIT,
   BUILD_PAGE_MAX_LIMIT,
@@ -99,4 +99,8 @@ describe('build page arguments', () => {
 
 test('feed and page reads cost the same at 100 and 10,000 builds or writes', async () => {
   await buildFeedReadBudget()
+}, 60_000)
+
+test('every filtered page costs its page size at 100 and 100,000 builds', async () => {
+  await filteredBuildPageReadBudget()
 }, 60_000)
