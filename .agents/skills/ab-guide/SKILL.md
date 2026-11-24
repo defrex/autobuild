@@ -2247,6 +2247,13 @@ provider-specific API/MCP calls:
   no filters it uses exactly dispatch's configured ready state and source-aware
   default labels. If either filter is present, only explicitly supplied
   criteria apply; every requested label must match.
+- `ab ticket search <query> [--state <state>] [--labels a,b] [--limit <n>] [--cursor <cursor>] [--json]`
+  finds tickets whose title or body contains every query word,
+  case-insensitively, in every state unless `--state` is given; check it for
+  duplicates before `create`. `--limit` (default 20, at most 100) sizes a page
+  and `--cursor` continues from the previous page's cursor. `--json` emits
+  `{tickets, cursor?, diagnostics}`, identical to MCP `tickets.search`. Sources
+  without search exit nonzero naming themselves and list nothing.
 - `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
   labeled metadata and the body verbatim, so it can read a stored spec back.
 - `ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--json]`
