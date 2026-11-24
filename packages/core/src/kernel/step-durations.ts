@@ -125,6 +125,16 @@ export function stepOrder(steps: Iterable<string>): string[] {
   return [...steps].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
 }
 
+/** The record at `key`, created empty when absent. */
+function slot<T extends object>(record: Record<string, T>, key: string): T {
+  let value = record[key]
+  if (value === undefined) {
+    value = {} as T
+    record[key] = value
+  }
+  return value
+}
+
 function passes(timeline: BuildTimeline, args: StepDurationArgs): boolean {
   if (args.outcome === 'merged' && timeline.outcome !== 'merged') return false
   if (args.kind === 'leaf' && timeline.kind === 'node') return false
@@ -143,8 +153,7 @@ function contribute(value: unknown, args: StepDurationArgs, now: Date): DayHisto
     const day = utcDay(segment.end)
     if (day < cutoff) continue
     const count = segment.merged ?? 1
-    const steps = (days[day] ??= {})
-    const hist = (steps[segment.category] ??= {})
+    const hist = slot(slot(days, day), segment.category)
     // A merged segment records its occurrences at their mean's bucket, so
     // count and total stay exact.
     addCell(hist, bucketOf(segment.durationMs / count), count, segment.durationMs)
@@ -154,8 +163,8 @@ function contribute(value: unknown, args: StepDurationArgs, now: Date): DayHisto
 
 function add(acc: StepDurationsAcc, contribution: DayHistograms): void {
   for (const [day, steps] of Object.entries(contribution)) {
-    const into = (acc.days[day] ??= {})
-    for (const [step, hist] of Object.entries(steps)) mergeInto((into[step] ??= {}), hist)
+    const into = slot(acc.days, day)
+    for (const [step, hist] of Object.entries(steps)) mergeInto(slot(into, step), hist)
   }
 }
 
@@ -203,7 +212,7 @@ function finish(
   const merged: Record<string, Histogram> = {}
   for (const [day, steps] of Object.entries(acc.days)) {
     if (day < from) continue
-    for (const [step, hist] of Object.entries(steps)) mergeInto((merged[step] ??= {}), hist)
+    for (const [step, hist] of Object.entries(steps)) mergeInto(slot(merged, step), hist)
   }
   const steps: StepDurationStat[] = []
   for (const step of stepOrder(Object.keys(merged))) {
