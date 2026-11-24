@@ -131,8 +131,8 @@ Relative, absolute, and `file:` specifiers resolve from the repository root
 whose config is being read; in a scoped build CLI process, that is the
 immutable build worktree. Bare package specifiers and package export maps
 resolve first from the consuming repository's main checkout, so they use that
-repository's installed dependencies and remain available when a local store
-places linked worktrees outside the checkout's package ancestry; a package the
+repository's installed dependencies and remain available although linked
+worktrees sit outside the checkout's package ancestry; a package the
 repository lacks then resolves from the Autobuild installation the CLI runs
 from as a fallback. Install extensions as repository development dependencies
 with `bun add -d --exact @defrex/autobuild-<extension>`. A
@@ -1139,11 +1139,20 @@ it. Two implementations of one contract (`packages/core/src/store/contract.ts` i
 conformance suite):
 
 1. **Local** — one self-contained state tree at `<main-repo>/.autobuild/` by
-   default: database, content-addressed blobs, Git worktrees, and the file
-   ticket source's default directory. The main checkout is derived from Git's
+   default: database, content-addressed blobs, and the file ticket source's
+   default directory. Build Git worktrees go to a destination outside the
+   checkout's package ancestry: the state tree's own `worktrees/` when it
+   resolves outside the checkout, else a per-checkout root under the host state
+   home (`$XDG_STATE_HOME`, default `~/.local/state`). The destination is
+   validated on real paths before each fresh provision: it must not resolve
+   inside the checkout, and no directory from it up to `/` may hold
+   `node_modules`. When none qualifies, fresh provisioning fails explicitly per
+   build and dispatch shows a startup notice; recorded workspaces still resume
+   and release, and registrations at the legacy in-checkout `worktrees/` are
+   adopted in place. The main checkout is derived from Git's
    repository/worktree topology, so a command run inside a linked worktree
-   resolves the same state. There is no home-directory fallback or
-   machine-global state. Store selection is uniform: explicit `--store` >
+   resolves the same state. Store state has no home-directory fallback or
+   machine-global location. Store selection is uniform: explicit `--store` >
    nonempty `AB_STORE` > repository default. When a phase or Harvest CLI
    process reopens this store, a handle wrapper derives exact build-or-repository
    authority and agent-event session attribution from its validated ambient

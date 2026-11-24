@@ -37,7 +37,7 @@ History lives in `.autobuild/`. To move it, pass a filesystem path or set a nonb
 bun ab builds --store /srv/autobuild/project-store
 ```
 
-Keep the database and blob directory together, durable and writable by the dispatcher identity.
+Keep the database and blob directory together, durable and writable by the dispatcher identity. Build worktrees follow a store outside the checkout; otherwise they live under `$XDG_STATE_HOME/autobuild/worktrees/` (default `~/.local/state/…`).
 
 ### Remote HTTP client and protocol
 

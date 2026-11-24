@@ -16,8 +16,13 @@ import type { RuntimeReferencesSource } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
-  /** Selected local scratch root. Remote stores pass the repository default. */
+  /** The state tree's own worktree directory. Remote stores pass the
+   * repository default. */
   worktreeRoot: string
+  /** Builtin-only: the per-checkout build worktree root outside the
+   * checkout's package ancestry, chosen when `worktreeRoot` resolves inside
+   * the checkout. Plugin factories never receive it. */
+  isolatedWorktreeRoot?: string
   /** Absolute repository root supplied to plugin factories. */
   repoRoot: string
   env: Record<string, string | undefined>

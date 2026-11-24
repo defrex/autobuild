@@ -4,10 +4,11 @@
   "title": "Troubleshooting",
   "group": "reference",
   "description": "Diagnose configuration, idle dispatch, authentication, stalled builds, and project selection.",
-  "textHash": "121f01be82c9bee2d978c389412886f1cfd8d81d3688eed07fd6b76363265e3a",
+  "textHash": "53d7d7eb266ef3a28c8150c664e1b6b86c2f0fab87fa8629cfbe66b51a38bd4a",
   "headings": [
     "Invalid configuration",
     "tick: idle with expected work",
+    "Worktree destination not isolated",
     "Authentication failures",
     "Stuck or wedged builds",
     "Remote project access"
