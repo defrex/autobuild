@@ -12,7 +12,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { rethrowAuthorityLapse } from '../cli/repo-lease'
-import { ForgeTreeUnlistable } from '../ports/forge-failure'
+import { isForgeTreeUnlistable } from '../ports/forge-failure'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { gitBlobOid, matchesGitBlobOid } from '../ports/forge/git-blob'
 import type { Forge, ForgeTreeEntry } from '../ports/types'
@@ -240,7 +240,7 @@ export class AgentContextCapture {
     try {
       entries = await forge.readTree(head)
     } catch (error) {
-      if (!(error instanceof ForgeTreeUnlistable)) throw error
+      if (!isForgeTreeUnlistable(error)) throw error
       const diagnostic: AgentContextDiagnostic = {
         kind: 'tree-unlistable',
         commit: head,
