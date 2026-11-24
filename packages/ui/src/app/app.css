@@ -8,9 +8,18 @@
 [data-app="main"] {
   padding-top: var(--space-sm);
 }
-[data-app="summary"] > p {
-  margin: var(--space-sm) 0;
+/* A scrollbar appearing never narrows the page. */
+html {
+  scrollbar-gutter: stable;
+}
+[data-app="line"] {
+  margin: 0;
+  padding: var(--space-sm) 0;
   max-width: var(--measure);
+}
+/* The build page's sign-off regions sit between ruled blocks. */
+[data-ansi="flow-block"] > [data-ansi="sign-off"] {
+  margin: var(--space-md) 0 0;
 }
 
 @media (max-width: 719px) {
