@@ -20050,8 +20050,41 @@ describe('optimization proposer read budget', () => {
         }
         // Idle: an expired hours budget, full concurrency, stopped, and a long
         // settled history.
-        await node('idle-expired', commandObjective({ budget: { maxHours: 1 } }))
+        // Its opening measurement ran two active hours.
+        await node('idle-expired', null)
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'optimization.objective-accepted',
+          payload: {
+            objective: commandObjective({ budget: { maxHours: 1 } }),
+            revision: 1,
+            harnessPin: BASE_SHA,
+            specRev: 0,
+          },
+        })
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'fake', workspaceRef: '/ws/idle-expired', instance: 'measure' },
+        })
         clock.advance(2 * 3_600_000)
+        await store.append('idle-expired', {
+          actor: KERNEL,
+          type: 'optimization.baseline-measured',
+          payload: {
+            revision: 1,
+            head: BASE_SHA,
+            harnessPin: BASE_SHA,
+            samples: 5,
+            median: 50,
+            spread: 1,
+          },
+        })
+        await store.append('idle-expired', {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance: 'measure', workspaceRef: '/ws/idle-expired', outcome: 'completed' },
+        })
         await node('idle-full', commandObjective({ proposer: { concurrency: 1 } }))
         await request('idle-full', 1)
         await store.append('idle-full', {
@@ -20445,5 +20478,557 @@ describe('forge CI observation on finished leaves', () => {
       await listOperatorBuilds({ store: h.store, repo: REPO, scope: 'active', now: h.clock() })
     ).find((entry) => entry.slug === slug)
     expect(summary?.ciFailure).toBeUndefined()
+  })
+})
+
+// #1069: attempts claim at their node's priority; the hours budget counts
+// active hours, an exact union of execution intervals.
+describe('optimization active hours and attempt priority', () => {
+  const NODE = 'node-build'
+  const PIN = 'a'.repeat(40)
+  const day = (time: string) => `2026-07-16T${time}:00.000Z`
+  const objective = (budget: { maxAttempts?: number; maxHours?: number }, concurrency = 2) => ({
+    purpose: 'faster search',
+    metric: {
+      kind: 'command' as const,
+      command: 'bun bench.ts',
+      direction: 'minimize' as const,
+      samples: 3,
+      harness: ['bench/**'],
+    },
+    target: { epsilon: { absolute: 2 } },
+    budget,
+    stop: { mode: 'drain' as const },
+    proposer: { concurrency },
+  })
+
+  async function openNode(
+    h: Harness,
+    opts: {
+      budget?: { maxAttempts?: number; maxHours?: number }
+      concurrency?: number
+      priority?: 'urgent'
+    } = {},
+  ): Promise<void> {
+    h.forge.seedBranch(`ab-node/${NODE}`, PIN)
+    h.tickets.add(readyTicket('NODE', { kind: 'node', state: 'In Progress', title: 'node' }))
+    const ticket = { source: 'fake', id: 'NODE', title: 'node' }
+    await h.store.createBuild({ slug: NODE, repo: REPO, ticket, branch: `ab-node/${NODE}` })
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket,
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+        ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+      },
+    })
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.objective-accepted',
+      payload: {
+        objective: objective(opts.budget ?? { maxHours: 100 }, opts.concurrency),
+        revision: 1,
+        harnessPin: PIN,
+        specRev: 0,
+      },
+    })
+    await h.store.append(NODE, { actor: DISPATCHER, type: 'node.opened', payload: { sha: PIN } })
+    await h.store.append(NODE, {
+      actor: KERNEL,
+      type: 'optimization.baseline-measured',
+      payload: { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+    })
+  }
+
+  async function propose(h: Harness, ids: string[], tickets = ids.map((id) => `T-${id}`)) {
+    await h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'optimization.attempts-proposed',
+      payload: {
+        request: `r-${ids.join('-')}`,
+        proposals: ids.map((id, index) => ({
+          id,
+          ticket: { source: 'fake', id: tickets[index]! },
+          title: id,
+          strategy: id,
+        })),
+      },
+    })
+  }
+
+  /** An attempt's build, claimed and targeting the node. */
+  const attemptBuild = (h: Harness, id: string) =>
+    seedBuild(h, { slug: `attempt-${id}`, ticketId: `T-${id}`, baseBranch: `ab-node/${NODE}` })
+
+  async function run(h: Harness, slug: string, instance: string, from: string, to?: string) {
+    h.clock.set(day(from))
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'fake', workspaceRef: `/ws/${slug}`, instance },
+    })
+    if (to === undefined) return
+    h.clock.set(day(to))
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance, workspaceRef: `/ws/${slug}`, outcome: 'completed' },
+    })
+  }
+
+  /** One tick at `time`, in a fresh dispatcher over the same store. */
+  async function tickAt(h: Harness, time: string, acceptNewWork = false) {
+    h.clock.set(day(time))
+    return harness({
+      store: h.store,
+      clock: h.clock,
+      wrapTickets: () => h.tickets,
+      dispatchForge: h.forge,
+    }).dispatcher.tick({ acceptNewWork })
+  }
+
+  const nodeState = async (h: Harness) => (await readBuildFacts(h.store, NODE)).value.state
+  const hours = async (h: Harness, time?: string) => {
+    const { optimizationElapsedHours } = await import('../kernel/optimization')
+    return optimizationElapsedHours(
+      (await nodeState(h)).optimization!,
+      new Date(time !== undefined ? day(time) : h.clock().toISOString()),
+    )
+  }
+  const settle = (h: Harness, id: string, outcome: 'declined' | 'stopped' = 'declined') =>
+    h.store.append(NODE, {
+      actor: DISPATCHER,
+      type: 'attempt.settled',
+      payload: {
+        attempt: {
+          proposal: id,
+          ticket: { source: 'fake', id: `T-${id}` },
+          build: `attempt-${id}`,
+        },
+        outcome,
+      },
+    })
+
+  describe('attempt claim tier', () => {
+    const createdPriority = async (h: Harness, ticket: string) => {
+      const slug = (await h.store.listBuilds()).find((record) => record.ticket?.id === ticket)?.slug
+      return slug === undefined
+        ? undefined
+        : ((await readBuildFacts(h.store, slug)).value.state.priority ?? 'normal')
+    }
+
+    for (const capability of [true, false])
+      test(`an urgent node's attempt is claimed before an older normal ticket${capability ? '' : ' on a source without priority'}`, async () => {
+        const h = harness({
+          toml: 'capacity = 1\n',
+          ...(capability
+            ? {}
+            : {
+                wrapTickets: (source: FakeTicketSource) =>
+                  new Proxy(source, {
+                    get: (target, key, receiver) =>
+                      key === 'priority' ? false : Reflect.get(target, key, receiver),
+                  }),
+              }),
+        })
+        h.clock.set(day('09:00'))
+        await openNode(h, { priority: 'urgent', concurrency: 1 })
+        h.tickets.add(readyTicket('OLD'))
+        h.tickets.add(readyTicket('T-a', { target: 'NODE' }))
+        await propose(h, ['a'])
+        await h.dispatcher.tick()
+        expect(await createdPriority(h, 'T-a')).toBe('urgent')
+        expect(await createdPriority(h, 'OLD')).toBeUndefined()
+      })
+
+    test("a normal node's attempt keeps the source's order", async () => {
+      const h = harness({ toml: 'capacity = 1\n' })
+      h.clock.set(day('09:00'))
+      await openNode(h, { concurrency: 1 })
+      h.tickets.add(readyTicket('OLD'))
+      h.tickets.add(readyTicket('T-a', { target: 'NODE' }))
+      await propose(h, ['a'])
+      await h.dispatcher.tick()
+      expect(await createdPriority(h, 'OLD')).toBe('normal')
+      expect(await createdPriority(h, 'T-a')).toBeUndefined()
+    })
+
+    test('a node priority change reaches attempts claimed afterwards only', async () => {
+      const h = harness({ toml: 'capacity = 4\n' })
+      h.clock.set(day('09:00'))
+      await openNode(h, { concurrency: 4 })
+      h.tickets.add(readyTicket('T-a', { target: 'NODE' }))
+      await propose(h, ['a'])
+      await h.dispatcher.tick()
+      expect(await createdPriority(h, 'T-a')).toBe('normal')
+      await h.store.append(NODE, {
+        actor: humanActor('operator'),
+        type: 'build.priority-set',
+        payload: { priority: 'urgent' },
+      })
+      h.tickets.add(readyTicket('T-b', { target: 'NODE' }))
+      await propose(h, ['b'])
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(await createdPriority(h, 'T-b')).toBe('urgent')
+      expect(await createdPriority(h, 'T-a')).toBe('normal')
+    })
+
+    test('at full capacity an urgent attempt waits as urgent demand and preempts nothing', async () => {
+      const h = harness({ toml: 'capacity = 1\n' })
+      h.clock.set(day('09:00'))
+      await seedBuild(h, { slug: 'slot-holder', ticketId: 'HOLD' })
+      await h.store.claimLease('slot-holder', 'runner-hold', 365 * 24 * 60 * 60_000)
+      await openNode(h, { priority: 'urgent', concurrency: 1 })
+      h.tickets.add(readyTicket('T-a', { target: 'NODE' }))
+      await propose(h, ['a'])
+      await h.dispatcher.tick()
+      expect(await createdPriority(h, 'T-a')).toBeUndefined()
+      const scan = (await h.store.getRepoEvents!(REPO)).findLast(
+        (event) => event.type === 'dispatcher.ticket-scan-completed',
+      )
+      expect(scan?.payload).toMatchObject({ urgentWaiting: 1 })
+      const holder = await h.store.getEvents('slot-holder')
+      expect(holder.some((event) => event.type === 'build.abort-requested')).toBe(false)
+    })
+  })
+
+  describe('active hours', () => {
+    test('queued and parked time is never charged; running time is', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a'])
+      // Queued for capacity: no build, hours of ticks.
+      for (const time of ['09:00', '11:00', '13:00', '15:00']) await tickAt(h, time)
+      expect(await hours(h)).toBe(0)
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '15:30')
+      await tickAt(h, '16:00')
+      expect(await hours(h)).toBe(0.5)
+      // An escalation parks it: the runner ends its execution.
+      h.clock.set(day('16:30'))
+      await h.store.append('attempt-a', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'i1', workspaceRef: '/ws/attempt-a', outcome: 'completed' },
+      })
+      await h.store.append('attempt-a', {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'esc-1', phase: 'plan', source: 'agent', question: 'which?' },
+      })
+      for (const time of ['17:00', '19:00', '21:00']) await tickAt(h, time)
+      expect(await hours(h)).toBe(1)
+    })
+
+    test('a run that starts and ends between two ticks is charged exactly', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await tickAt(h, '09:00')
+      await run(h, 'attempt-a', 'i1', '10:00', '10:40')
+      await tickAt(h, '13:00')
+      expect(await hours(h)).toBeCloseTo(40 / 60, 10)
+      // The acknowledgment let the build's value drop what the node recorded.
+      const { readExecutionIntervals } = await import('../store/reduced-reads')
+      expect((await readExecutionIntervals(h.store, 'attempt-a')).value).toMatchObject({
+        count: 2,
+        acknowledged: 2,
+        facts: [],
+      })
+      await tickAt(h, '14:00')
+      expect(await hours(h)).toBeCloseTo(40 / 60, 10)
+    })
+
+    test('runs during dispatcher downtime are all charged by a fresh dispatcher', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00', '10:30')
+      await run(h, 'attempt-a', 'i2', '11:00', '11:20')
+      await tickAt(h, '15:00')
+      expect(await hours(h)).toBeCloseTo(50 / 60, 10)
+    })
+
+    test('overlapping attempt runs are counted once', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a', 'b'])
+      await attemptBuild(h, 'a')
+      await attemptBuild(h, 'b')
+      await run(h, 'attempt-a', 'i1', '10:00')
+      await run(h, 'attempt-b', 'j1', '10:30')
+      h.clock.set(day('11:00'))
+      await h.store.append('attempt-a', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'i1', workspaceRef: '/ws/attempt-a', outcome: 'completed' },
+      })
+      h.clock.set(day('11:30'))
+      await h.store.append('attempt-b', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'j1', workspaceRef: '/ws/attempt-b', outcome: 'completed' },
+      })
+      await tickAt(h, '12:00')
+      expect(await hours(h)).toBe(1.5)
+    })
+
+    test('an attempt that settles before the next tick is charged to its real end', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a', 'b'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00')
+      await tickAt(h, '10:05')
+      h.clock.set(day('11:00'))
+      await h.store.append('attempt-a', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'i1', workspaceRef: '/ws/attempt-a', outcome: 'completed' },
+      })
+      h.clock.set(day('11:01'))
+      await settle(h, 'a')
+      // Never observed before its settlement: tracked through it.
+      await attemptBuild(h, 'b')
+      await run(h, 'attempt-b', 'j1', '12:00', '12:30')
+      h.clock.set(day('12:31'))
+      await settle(h, 'b')
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({
+        'attempt-a': 1,
+        'attempt-b': 0,
+      })
+      await tickAt(h, '15:00')
+      expect(await hours(h)).toBe(1.5)
+      // Both builds are fully accounted and no attempt runs on them: released.
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({})
+      await tickAt(h, '16:00')
+      expect(await hours(h)).toBe(1.5)
+    })
+
+    test("a fresh node's first attempt that settles before any observation is charged", async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      // The first pass starts the node's clock before it can file an attempt.
+      await tickAt(h, '08:01')
+      const started = (await h.store.getEvents(NODE)).filter(
+        (event) => event.type === 'optimization.activity-recorded',
+      )
+      expect(started.map((event) => event.payload)).toEqual([
+        { facts: [], accounted: {}, watermark: day('08:00'), starts: true },
+      ])
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00', '10:40')
+      // Declined while no dispatcher observed it.
+      h.clock.set(day('10:41'))
+      await settle(h, 'a')
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({ 'attempt-a': 0 })
+      await tickAt(h, '13:00')
+      expect(await hours(h)).toBeCloseTo(40 / 60, 10)
+      expect((await nodeState(h)).optimization!.clock.builds).toEqual({})
+    })
+
+    test('the hours budget stops the node on active hours only', async () => {
+      const h = harness()
+      h.clock.set(day('00:00'))
+      await openNode(h, { budget: { maxHours: 1 } })
+      await propose(h, ['a', 'b'])
+      for (const time of ['02:00', '06:00', '10:00']) await tickAt(h, time)
+      expect((await nodeState(h)).optimization!.stopped).toBeUndefined()
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00')
+      await tickAt(h, '10:05')
+      await tickAt(h, '10:59')
+      expect((await nodeState(h)).optimization!.stopped).toBeUndefined()
+      await tickAt(h, '11:00')
+      expect((await nodeState(h)).optimization!.stopped).toMatchObject({ cause: 'budget' })
+      // The next pass settles the clock at the stop.
+      await tickAt(h, '11:05')
+      const clock = (await nodeState(h)).optimization!.clock
+      expect(clock).toMatchObject({ settled: true, stoppedAt: day('11:00') })
+      expect(await hours(h, '23:00')).toBe(1)
+    })
+  })
+
+  test('the activity pass has bounded reads at 100 and 100000 node events', async () => {
+    const h = harness()
+    h.clock.set(day('08:00'))
+    await openNode(h, { concurrency: 1 })
+    await propose(h, ['a'])
+    const attempt = await attemptBuild(h, 'a')
+    await tickAt(h, '08:01')
+    await tickAt(h, '08:02')
+    let instance = 0
+    const append = (type: 'execution.started' | 'execution.ended') => async () => {
+      if (type === 'execution.started') instance += 1
+      await h.store.append(attempt, {
+        actor: DISPATCHER,
+        type,
+        payload:
+          type === 'execution.started'
+            ? { provider: 'fake', workspaceRef: `/ws/${attempt}`, instance: `i${instance}` }
+            : { instance: `i${instance}`, workspaceRef: `/ws/${attempt}`, outcome: 'completed' },
+      } as EventWrite)
+    }
+    const activity = {
+      build: attempt,
+      start: append('execution.started'),
+      end: append('execution.ended'),
+      between: async () => {
+        await append('execution.started')()
+        await append('execution.ended')()
+      },
+      pad: async (count: number) => {
+        const polling = (await readBuildFacts(h.store, NODE)).value.state.nodePolling!
+        for (let index = 0; index < count; index++)
+          await h.store.append(attempt, {
+            actor: DISPATCHER,
+            type: 'node.poll-checked',
+            payload: {
+              activityKey: polling.activityKey,
+              unchangedSince: polling.unchangedSince,
+              nodeIdleAfterSeconds: polling.nodeIdleAfterSeconds,
+              nodeIdlePollSeconds: polling.nodeIdlePollSeconds,
+            },
+          })
+      },
+    }
+    // The attempt has run and been padded before either length is measured,
+    // so both lengths start from the same shape.
+    await activity.between()
+    await activity.pad(1)
+    await tickAt(h, '08:03')
+    const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+    await nodePollingReadBudget({
+      store: h.store as MemoryBuildStore,
+      slug: NODE,
+      advance: (ms) => h.clock.advance(ms),
+      tick: () =>
+        harness({
+          store: h.store,
+          clock: h.clock,
+          wrapTickets: () => h.tickets,
+          dispatchForge: h.forge,
+        }).dispatcher.tick({ acceptNewWork: false }),
+      activity,
+    })
+    // Every run was charged, and nothing else.
+    expect(await hours(h)).toBeGreaterThan(0)
+  }, 300_000)
+
+  describe('stop settlement', () => {
+    const operatorStop = async (h: Harness, time: string) => {
+      const { stopObjective } = await import('../operator/optimization')
+      h.clock.set(day(time))
+      await stopObjective({ store: h.store, repo: REPO, slug: NODE, user: 'ada' })
+    }
+
+    test('an attempt that ended before an operator stop is charged to its end, not the stop', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00')
+      await tickAt(h, '10:05')
+      h.clock.set(day('11:00'))
+      await h.store.append('attempt-a', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'i1', workspaceRef: '/ws/attempt-a', outcome: 'completed' },
+      })
+      await operatorStop(h, '15:00')
+      // Already constant before the settlement: the open run ends at the stop.
+      expect(await hours(h, '15:00')).toBe(5)
+      expect(await hours(h, '23:00')).toBe(5)
+      const { objectiveSummary } = await import('../cli/dashboard/objective-row')
+      expect(objectiveSummary(await nodeState(h), new Date(day('23:00')))?.settling).toBe(true)
+      await tickAt(h, '15:05')
+      expect((await nodeState(h)).optimization!.clock.settled).toBe(true)
+      expect(await hours(h, '15:05')).toBe(1)
+      // Never changes again, across ticks and a later run.
+      await run(h, 'attempt-a', 'i2', '16:00', '17:00')
+      for (const time of ['18:00', '20:00']) await tickAt(h, time)
+      expect(await hours(h)).toBe(1)
+      // Every surface reports the same frozen value.
+      const { objectiveView } = await import('../operator/optimization')
+      const state = await nodeState(h)
+      const later = new Date(day('23:59'))
+      expect(objectiveView(NODE, state.optimization!, later).progress.elapsedHours).toBe(1)
+      expect(objectiveView(NODE, state.optimization!, later).progress.settling).toBeUndefined()
+      expect(objectiveSummary(state, later)).toMatchObject({ elapsedHours: 1 })
+      expect(objectiveSummary(state, later)?.settling).toBeUndefined()
+    })
+
+    test('a run entirely between the last pass and an operator stop is fully counted', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['a', 'b'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '10:00', '11:00')
+      await tickAt(h, '11:30')
+      expect(await hours(h)).toBe(1)
+      await attemptBuild(h, 'b')
+      await run(h, 'attempt-b', 'j1', '12:00', '13:00')
+      await operatorStop(h, '15:00')
+      expect(await hours(h)).toBe(1)
+      await tickAt(h, '15:05')
+      expect(await hours(h)).toBe(2)
+    })
+
+    test('a run straddling the stop is clipped there; facts after it are ignored', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h)
+      await propose(h, ['c'])
+      await attemptBuild(h, 'c')
+      await run(h, 'attempt-c', 'k1', '14:00')
+      await tickAt(h, '14:05')
+      await operatorStop(h, '15:00')
+      h.clock.set(day('16:00'))
+      await h.store.append('attempt-c', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance: 'k1', workspaceRef: '/ws/attempt-c', outcome: 'completed' },
+      })
+      await run(h, 'attempt-c', 'k2', '16:10', '16:50')
+      await tickAt(h, '17:00')
+      expect((await nodeState(h)).optimization!.clock.settled).toBe(true)
+      expect(await hours(h)).toBe(1)
+    })
+
+    test('an exhausted stop settles the same way', async () => {
+      const h = harness()
+      h.clock.set(day('08:00'))
+      await openNode(h, { concurrency: 4 })
+      await propose(h, ['a'])
+      await attemptBuild(h, 'a')
+      await run(h, 'attempt-a', 'i1', '09:00')
+      await tickAt(h, '09:05')
+      for (const request of ['e1', 'e2'])
+        await h.store.append(NODE, {
+          actor: DISPATCHER,
+          type: 'optimization.attempts-proposed',
+          payload: { request, proposals: [], reason: 'nothing left' },
+        })
+      await tickAt(h, '10:00')
+      expect((await nodeState(h)).optimization!.stopped).toMatchObject({ cause: 'exhausted' })
+      await tickAt(h, '10:05')
+      expect((await nodeState(h)).optimization!.clock.settled).toBe(true)
+      expect(await hours(h, '23:00')).toBe(1)
+    })
   })
 })

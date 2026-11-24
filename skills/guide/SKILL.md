@@ -22,7 +22,7 @@ Idle nodes consume no runner capacity and empty nodes have no PR.
 - [Nodes, targets and the operating model](references/integration-tree.md)
 - [Merge policy, examples and forge requirements](references/merge-policy.md)
 - [Restacking, identity and recovery](references/restacking.md)
-- [Optimization nodes](references/optimization-nodes.md): when to use one, a run end to end, grooming the objective, the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, the proposer phase, and the landing gate and attempt settlement, stopping and completion.
+- [Optimization nodes](references/optimization-nodes.md): when to use one, a run end to end, grooming the objective, the `autobuild-objective` marker, objective schema, refusals, paired harness-pinned measurement and the noise check, revisions, derived progress, the proposer phase, attempt priority, and the landing gate and attempt settlement, active hours, stopping and completion.
 - [Migration from 0.x](references/migration-1.0.md)
 - [Moving ticket sources](references/ticket-migration.md): recorded migrations preserve in-flight build continuity.
 
@@ -95,7 +95,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   urgent start requests and urgent tickets, then normal waiting work, then
   normal start requests and normal tickets; a build takes its ticket's priority at
   claim, and `ab priority <slug> urgent|normal` changes an active build's
-  priority. Priority orders free slots only.
+  priority. An optimization node's attempts claim at the node's current
+  priority instead, so `ab priority <node> urgent` speeds up its attempts
+  claimed afterwards. Priority orders free slots only.
   `capacity` counts builds running work: a build that finished its pipeline
   holds no slot while it waits for a merge decision, though it keeps its
   workspace until it merges or closes. Priority never preempts a running build.
@@ -220,6 +222,12 @@ ready, within the groomed budget, and each must pass the ratchet before it
 lands. The marker rules and the objective schema are in
 [optimization nodes](references/optimization-nodes.md).
 
+To groom an optimization node, follow
+the [grooming guidance](references/optimization-nodes.md#grooming-an-optimization-node):
+measure the evidence, threshold and ε where builds run, and choose a budget
+whose `maxHours` counts [active hours](references/optimization-nodes.md#active-hours),
+the time attempts, the proposer and measurements actually run.
+
 **Optimization attempts.** A child is an attempt when its ticket came from one
 of the node's recorded proposals; it runs the ordinary work grammar. In every
 phase of an attempt, `ab context` writes a derived `objective.md` and a manifest
@@ -232,7 +240,8 @@ skips review, verification and measurement, completes the build
 `closed-unmerged`, and the dispatcher settles the attempt `declined` on the
 node with the reason as the ledger note. A branch that an earlier implement
 round published is deleted by the node before the ticket moves to rejected.
-The flag is refused outside an attempt's implement phase. See
+The flag is refused outside an attempt's implement phase. An attempt claims
+at its node's current priority; nothing is reserved for it. See
 [attempts](references/optimization-nodes.md#attempts).
 
 **Judge panels.** A panel objective is measured by a panel of judge sessions
@@ -2278,7 +2287,9 @@ issue links refuses any write naming them, names itself, and writes nothing.
 work, each class in source order, and ahead of normal builds waiting for a
 slot; blockers and every other gate still apply, and it never preempts a
 running build. The claimed build keeps that priority; `ab priority <slug>
-urgent|normal` changes an existing build's priority without touching its ticket. `--priority normal` (the default)
+urgent|normal` changes an existing build's priority without touching its ticket.
+An optimization attempt ignores its ticket's priority and claims at its node's
+current priority. `--priority normal` (the default)
 removes urgency. The file, hosted and Linear sources store priority (Linear as
 its native Urgent; `normal` clears only Urgent and leaves other Linear priorities
 alone); plugin sources without the capability read every ticket as normal,
@@ -2738,7 +2749,7 @@ to the build's event log and apply the same write-time checks.
 | Stop an optimization node | `ab objective <node> --stop [--drain\|--abort] [--json] [--store <ref>]` | CLI/tool request (`optimization.stop`). Without a flag the objective's stop mode applies (abort by default). Final, and not merge consent. | `optimization.stopped`; dispatcher `build.abort-requested` per aborted attempt, then `attempt.settled` |
 | Settle an unmeasured merge | `ab objective <node> --settle-unmeasured <proposal\|build> --policy release-unmeasured [--note <text>] [--json] [--store <ref>]` | CLI/tool request (`optimization.settle-unmeasured`). Only for an attempt listed as an unmeasured merge; releases its slot once, never as accepted. | `attempt.settled {outcome: merged-unmeasured}` |
 | Hold merge | `ab hold <slug> [--reason <text>] [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested` (optional `reason`), then `landing.command-acknowledged` after native cancellation |
-| Set build priority | `ab priority <slug> urgent\|normal [--store <ref>]` | CLI/tool request (`builds.control` action `priority`); changes only the build's slot-admission order, never its ticket, and never preempts running work. A build priority is only `urgent` or `normal`; `ab start`'s `manual` tier is admission-only. | `build.priority-set` |
+| Set build priority | `ab priority <slug> urgent\|normal [--store <ref>]` | CLI/tool request (`builds.control` action `priority`); changes only the build's slot-admission order, never its ticket, and never preempts running work. On an optimization node it also sets the tier its attempts claim in afterwards. A build priority is only `urgent` or `normal`; `ab start`'s `manual` tier is admission-only. | `build.priority-set` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
