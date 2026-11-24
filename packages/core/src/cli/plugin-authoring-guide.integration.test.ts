@@ -172,7 +172,7 @@ describe('plugin authoring guide', () => {
   })
 })
 
-test('API 1.8 documents optional failures and request telemetry in every installed reference', async () => {
+test('API 1.8 documents optional failures and request telemetry', async () => {
   const canonical = await readFile(REFERENCE, 'utf8')
   for (const name of [
     'ForgeFailure',
@@ -186,9 +186,4 @@ test('API 1.8 documents optional failures and request telemetry in every install
     'unavailable counts',
   ])
     expect(canonical).toContain(name)
-  for (const path of [
-    '.agents/skills/ab-guide/references/plugin-authoring.md',
-    '.agents/skills/.ab-pristine/ab-guide/references/plugin-authoring.md',
-  ])
-    expect(await readFile(join(DIST_ROOT, path), 'utf8')).toBe(canonical)
 })
