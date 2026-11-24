@@ -181,6 +181,7 @@ describe('FileTicketSource', () => {
 
     await tickets.transition('file-1', 'Done')
 
+    expect(seeded).not.toContain('blockedBy')
     expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(seeded)
     expect(await readdir(join(dir, 'ready'))).toEqual([])
     expect((await tickets.get('file-1'))?.state).toBe('done')
@@ -554,9 +555,10 @@ describe('FileTicketSource', () => {
 
   // ── Comments ───────────────────────────────────────────────────────────────
 
-  test('the spec in the body survives a comment append byte-exactly (§6.3, §13)', async () => {
+  test('comments preserve spec bytes, clock order and transition bytes', async () => {
     await seedTicket('file-1', { body: SPEC_BODY })
-    const tickets = source()
+    const clock = manualClock('2026-07-15T12:00:00.000Z')
+    const tickets = source({ clock })
 
     const before = await readFile(path('ready', 'file-1'), 'utf8')
     await tickets.comment('file-1', 'Spec imported as rev 0.')
@@ -569,34 +571,16 @@ describe('FileTicketSource', () => {
     expect((await tickets.get('file-1'))?.body).toBe(
       `${SPEC_BODY}\n## Comment (2026-07-15T12:00:00.000Z)\n\nSpec imported as rev 0.\n`,
     )
-  })
-
-  test('two comments stack below the spec, each stamped by the injected clock', async () => {
-    await seedTicket('file-1')
-    const clock = manualClock('2026-07-15T12:00:00.000Z')
-    const tickets = source({ clock })
-
-    await tickets.comment('file-1', 'first')
     clock.advance(60_000)
     await tickets.comment('file-1', 'second')
-
-    const body = (await tickets.get('file-1'))?.body ?? ''
-    const firstAt = body.indexOf('## Comment (2026-07-15T12:00:00.000Z)')
-    const secondAt = body.indexOf('## Comment (2026-07-15T12:01:00.000Z)')
-    expect(firstAt).toBeGreaterThan(-1)
-    expect(secondAt).toBeGreaterThan(firstAt)
-    expect(body.startsWith(SPEC_BODY)).toBe(true)
-  })
-
-  test('a comment survives a later transition byte-exactly', async () => {
-    await seedTicket('file-1', { state: 'ready' })
-    const tickets = source()
-
-    await tickets.comment('file-1', 'Build started.')
-    const before = await readFile(path('ready', 'file-1'), 'utf8')
+    // The whole body: the first comment survives the second append, in order.
+    expect((await tickets.get('file-1'))?.body).toBe(
+      `${SPEC_BODY}\n## Comment (2026-07-15T12:00:00.000Z)\n\nSpec imported as rev 0.\n` +
+        '\n## Comment (2026-07-15T12:01:00.000Z)\n\nsecond\n',
+    )
+    const commented = await readFile(path('ready', 'file-1'), 'utf8')
     await tickets.transition('file-1', 'Done')
-
-    expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(before)
+    expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(commented)
   })
 
   test('comment on an unknown ticket throws', async () => {
@@ -614,9 +598,11 @@ describe('FileTicketSource', () => {
     expect(got?.title).toBe('x')
   })
 
-  test('create omits labels from the frontmatter when there are none', async () => {
+  test('plain create omits labels and blockedBy from the frontmatter', async () => {
     const created = await source().create({ title: 'A', body: 'a' })
-    expect(await readFile(path('triage', created.ref.id), 'utf8')).not.toContain('labels')
+    const written = await readFile(path('triage', created.ref.id), 'utf8')
+    expect(written).not.toContain('labels')
+    expect(written).not.toContain('blockedBy')
   })
 
   test('a stray state key in frontmatter is an error naming the file', async () => {
@@ -847,25 +833,19 @@ describe('FileTicketSource', () => {
 
   // ── Dependencies (§13) ─────────────────────────────────────────────────────
 
-  test('blockedBy round-trips through TOML frontmatter', async () => {
-    await seedTicket('file-1', { blockedBy: ['file-2', 'file-3'] })
-    const tickets = source()
-
-    expect((await tickets.get('file-1'))?.blockedBy).toEqual(['file-2', 'file-3'])
-  })
-
   test('create records blockedBy in the frontmatter and reports it back', async () => {
     const tickets = source()
 
     const created = await tickets.create({
       title: 'Dependent',
       body: 'body',
-      blockedBy: ['file-9'],
+      blockedBy: ['file-9', 'file-10'],
     })
 
-    expect(created.blockedBy).toEqual(['file-9'])
+    expect(created.blockedBy).toEqual(['file-9', 'file-10'])
     const written = await readFile(path('triage', created.ref.id), 'utf8')
-    expect(written).toContain('blockedBy = [ "file-9" ]')
+    expect(written).toContain('blockedBy = [ "file-9", "file-10" ]')
+    expect((await source().get(created.ref.id))?.blockedBy).toEqual(['file-9', 'file-10'])
   })
 
   test('a ticket without blockedBy is valid and reports no dependencies', async () => {
@@ -878,32 +858,6 @@ describe('FileTicketSource', () => {
     expect(await tickets.dependencyStates(['file-1'])).toEqual([
       { id: 'file-1', exists: true, resolved: false, state: 'ready', blockedBy: [] },
     ])
-  })
-
-  /** The churn guard: a file that never declared blockers must not sprout
-   * `blockedBy = []`, or every existing ticket rewrites. A transition is a
-   * rename, so the content must arrive at the new state byte-identically —
-   * this pins that the dependency field added no rewrite path of its own. */
-  test('a file without blockedBy survives a transition byte-identically', async () => {
-    const original = await seedTicket('file-1', {
-      state: 'Ready',
-      labels: ['autobuild'],
-    })
-    const tickets = source()
-
-    await tickets.transition('file-1', 'Doing')
-    const after = await readFile(path('doing', 'file-1'), 'utf8')
-
-    expect(after).toBe(original)
-    expect(after).not.toContain('blockedBy')
-  })
-
-  test('create without blockedBy writes no blockedBy key', async () => {
-    const tickets = source()
-    const created = await tickets.create({ title: 'Plain', body: 'body' })
-
-    const written = await readFile(path('triage', created.ref.id), 'utf8')
-    expect(written).not.toContain('blockedBy')
   })
 
   test('dependencyStates: only the done state resolves; every other state blocks', async () => {
@@ -1031,27 +985,29 @@ describe('state discovery and creation', () => {
     expect(withAbout.state.about).toBe('Merged work')
   })
 
-  test.each([
-    '',
-    'a'.repeat(41),
-    '1icebox',
-    '-icebox',
-    'Icebox2',
-    'ice_box',
-    'ice box',
-    '../escape',
-    'a/b',
-  ])('rejects the invalid name %p and creates nothing', async (name) => {
+  test('rejects invalid names and creates nothing', async () => {
     const tickets = source()
-    await expect(tickets.addState(name)).rejects.toThrow(
-      'one to forty characters of lowercase letters, digits, and hyphens, starting with a letter',
-    )
-    expect((await tickets.listStates()).map((s) => s.name)).toEqual([
-      'triage',
-      'ready',
-      'doing',
-      'done',
-    ])
+    for (const name of [
+      '',
+      'a'.repeat(41),
+      '1icebox',
+      '-icebox',
+      'Icebox2',
+      'ice_box',
+      'ice box',
+      '../escape',
+      'a/b',
+    ]) {
+      await expect(tickets.addState(name)).rejects.toThrow(
+        'one to forty characters of lowercase letters, digits, and hyphens, starting with a letter',
+      )
+      expect((await tickets.listStates()).map((s) => s.name)).toEqual([
+        'triage',
+        'ready',
+        'doing',
+        'done',
+      ])
+    }
   })
 
   test('accepts a forty-character name', async () => {
