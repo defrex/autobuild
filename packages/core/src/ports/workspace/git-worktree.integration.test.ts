@@ -6,12 +6,18 @@ import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-d
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
-import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
+import {
+  GitWorktreeProvider,
+  WorktreeIsolationError,
+  spawnExec,
+  worktreeIsolationNotice,
+  type Exec,
+} from './git-worktree'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -1547,5 +1553,115 @@ describe('local worktree restoration from forge archives (#916)', () => {
     await expect(h.restore('local')).rejects.toThrow(
       `workspace restoration archive ref ${h.ref} is missing from the local repository`,
     )
+  })
+})
+
+describe('GitWorktreeProvider placement and isolation (#1096)', () => {
+  let tmp: string
+  let repo: string
+  /** The legacy state-tree root inside the checkout. */
+  let legacyRoot: string
+
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'ab-git-worktree-isolation-'))
+    repo = join(tmp, 'repo')
+    legacyRoot = join(repo, '.autobuild', 'worktrees')
+    await initRepo(repo)
+  })
+
+  const provisionOf = (provider: GitWorktreeProvider, branch: string) =>
+    provider.provision({ repo, baseBranch: 'main', branch })
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => {
+        throw new Error('expected provisioning to fail')
+      },
+      (error: unknown) => error as WorktreeIsolationError,
+    )
+  const registrations = async () =>
+    (await run(['git', 'worktree', 'list', '--porcelain'], repo)).split('\n\n').length
+
+  test('an in-checkout destination is refused before anything is created; the notice never rejects', async () => {
+    const isolatedRoot = join(repo, '.state', 'autobuild', 'worktrees', 'k')
+    const provider = new GitWorktreeProvider({ root: legacyRoot, isolatedRoot })
+    const error = await failure(provisionOf(provider, 'ab/in-checkout'))
+    expect(error).toBeInstanceOf(WorktreeIsolationError)
+    expect(error.root).toBe(isolatedRoot)
+    expect(error.message).toContain('XDG_STATE_HOME')
+    expect(await registrations()).toBe(1)
+    expect(existsSync(legacyRoot)).toBe(false)
+    expect(existsSync(isolatedRoot)).toBe(false)
+
+    const notice = await worktreeIsolationNotice(provider, repo)
+    expect(notice).toContain(error.message)
+    expect(notice).toContain('builds already in a worktree continue')
+    const valid = new GitWorktreeProvider({ root: legacyRoot, isolatedRoot: join(tmp, 'xdg', 'k') })
+    expect(await worktreeIsolationNotice(valid, repo)).toBeUndefined()
+  })
+
+  test('a store symlinked into the checkout is placed on real paths', async () => {
+    await mkdir(join(repo, '.autobuild'), { recursive: true })
+    await symlink(join(repo, '.autobuild'), join(tmp, 'state-link'))
+    const root = join(tmp, 'state-link', 'worktrees')
+    const isolatedRoot = join(tmp, 'xdg', 'autobuild', 'worktrees', 'k')
+    const handle = await provisionOf(new GitWorktreeProvider({ root, isolatedRoot }), 'ab/link')
+    expect(handle.path).toBe(join(await realpath(isolatedRoot), 'ab-link'))
+    expect(relative(await realpath(repo), handle.path)).toStartWith('..')
+
+    const error = await failure(provisionOf(new GitWorktreeProvider({ root }), 'ab/link-bare'))
+    expect(error).toBeInstanceOf(WorktreeIsolationError)
+  })
+
+  test('a node_modules above the destination is refused, and rechecked on every provision', async () => {
+    const home = join(tmp, 'home')
+    await mkdir(join(home, 'node_modules'), { recursive: true })
+    const isolatedRoot = join(home, '.local', 'state', 'autobuild', 'worktrees', 'k')
+    const provider = new GitWorktreeProvider({ root: legacyRoot, isolatedRoot })
+    const error = await failure(provisionOf(provider, 'ab/ancestor'))
+    expect(error).toBeInstanceOf(WorktreeIsolationError)
+    expect(error.ancestor).toBe(await realpath(home))
+
+    await rm(join(home, 'node_modules'), { recursive: true })
+    const handle = await provisionOf(provider, 'ab/ancestor')
+    expect(handle.path).toBe(join(await realpath(isolatedRoot), 'ab-ancestor'))
+  })
+
+  test('a legacy in-checkout registration is adopted in place, released, and never recreated there', async () => {
+    const branch = 'ab/legacy'
+    await run(['git', 'worktree', 'add', '-q', '-b', branch, join(legacyRoot, 'ab-legacy')], repo)
+    const legacyPath = join(await realpath(legacyRoot), 'ab-legacy')
+    await writeFile(join(legacyPath, 'probe.txt'), 'kept\n')
+    const isolatedRoot = join(tmp, 'xdg', 'k')
+    // Adoption is exempt from the check, even with an invalid destination.
+    for (const candidate of [isolatedRoot, join(repo, '.state', 'k')]) {
+      const handle = await provisionOf(
+        new GitWorktreeProvider({ root: legacyRoot, isolatedRoot: candidate }),
+        branch,
+      )
+      expect(handle.path).toBe(legacyPath)
+      expect(handle.base.source).toBe('existing')
+      expect(readFileSync(join(legacyPath, 'probe.txt'), 'utf8')).toBe('kept\n')
+    }
+    expect(existsSync(join(repo, '.state'))).toBe(false)
+
+    const restarted = new GitWorktreeProvider({ root: legacyRoot, isolatedRoot })
+    await restarted.release({ provider: 'git-worktree', ref: legacyPath, path: legacyPath, branch })
+    expect(existsSync(legacyPath)).toBe(false)
+    expect(await registrations()).toBe(1)
+    const next = await provisionOf(restarted, branch)
+    expect(next.path).toBe(join(await realpath(isolatedRoot), 'ab-legacy'))
+  })
+
+  test('a detached legacy registration at the branch tip is reattached in place', async () => {
+    const branch = 'ab/legacy-detached'
+    const path = join(legacyRoot, 'ab-legacy-detached')
+    await run(['git', 'worktree', 'add', '-q', '-b', branch, path], repo)
+    await run(['git', 'checkout', '-q', '--detach', 'HEAD'], path)
+    const handle = await provisionOf(
+      new GitWorktreeProvider({ root: legacyRoot, isolatedRoot: join(tmp, 'xdg', 'k') }),
+      branch,
+    )
+    expect(handle.path).toBe(await realpath(path))
+    expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], handle.path)).toBe(branch)
   })
 })

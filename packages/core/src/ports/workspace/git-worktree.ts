@@ -8,10 +8,10 @@ import { publishBranch, remoteBranchHead, refreshBranchCache } from '../forge/gi
  * resume-after-sandbox-death (§15.6-C) a re-run, not a special path
  * (constitution #2).
  */
-import { mkdir, realpath } from 'node:fs/promises'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFile as fsReadFile, rm, stat, writeFile as fsWriteFile } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import {
   SandboxOperationError,
@@ -76,6 +76,82 @@ export class GitError extends Error {
   }
 }
 
+/**
+ * No build worktree destination is isolated from the checkout's packages:
+ * the chosen root resolves inside the checkout, or a directory from the root
+ * up to `/` holds a `node_modules` entry that Node and Bun resolution would
+ * walk into. The message names the offending path and the remedy.
+ */
+export class WorktreeIsolationError extends Error {
+  constructor(
+    /** The chosen build worktree root, as configured. */
+    readonly root: string,
+    /** The canonical checkout the provider provisions from. */
+    readonly checkout: string,
+    /** The canonical directory holding `node_modules`, when that is the fault. */
+    readonly ancestor?: string,
+  ) {
+    super(
+      (ancestor !== undefined
+        ? `build worktree root ${root} is not isolated: ${join(ancestor, 'node_modules')} lies above it, so package resolution in a worktree would reach packages the build does not own`
+        : `build worktree root ${root} resolves inside the checkout ${checkout}, so package resolution in a worktree would reach the checkout's node_modules`) +
+        `; set XDG_STATE_HOME to an absolute directory outside ${checkout} with no node_modules above it, or select a local store outside the checkout`,
+    )
+    this.name = 'WorktreeIsolationError'
+  }
+}
+
+/** A startup notice for a host where new build worktrees cannot be
+ * provisioned, or `undefined` when the destination is isolated. Never a gate:
+ * builds already in a worktree keep running and release. Errors other than
+ * `WorktreeIsolationError` are genuine IO faults and propagate. */
+export async function worktreeIsolationNotice(
+  provider: GitWorktreeProvider,
+  checkout: string,
+): Promise<string | undefined> {
+  try {
+    await provider.assertIsolatedRoot(checkout)
+    return undefined
+  } catch (error) {
+    if (!(error instanceof WorktreeIsolationError)) throw error
+    return `new build worktrees cannot be provisioned: ${error.message}; builds already in a worktree continue`
+  }
+}
+
+function isInside(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir.endsWith(sep) ? dir : dir + sep)
+}
+
+function missing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/** The realpath of the nearest existing ancestor joined with the remaining
+ * segments: a canonical answer for a path that may not exist yet, without
+ * creating anything. */
+async function canonicalize(path: string): Promise<string> {
+  const absolute = resolve(path)
+  const rest: string[] = []
+  for (let current = absolute; ; current = dirname(current)) {
+    try {
+      return join(await realpath(current), ...rest)
+    } catch (error) {
+      if (!missing(error)) throw error
+    }
+    if (dirname(current) === current) return absolute
+    rest.unshift(basename(current))
+  }
+}
+
+/** Where a provisioning repository's build worktrees go. `legacy` is the
+ * in-checkout state-tree root that existing registrations are adopted from. */
+interface WorktreeLayout {
+  checkoutReal: string
+  chosen: string
+  legacy?: string
+}
+
 /** `ab/build-123` → `ab-build-123` — one subdir per branch under the root. */
 function sanitizeBranch(branch: string): string {
   const cleaned = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '')
@@ -90,7 +166,7 @@ interface WorktreeEntry {
 }
 
 interface WorktreeSelection {
-  /** Requested branch attached inside this provider's root. */
+  /** Requested branch attached inside the chosen or legacy root. */
   attached?: WorktreeEntry
   /** Detached registration at the requested branch's deterministic path. */
   detached?: WorktreeEntry
@@ -122,21 +198,33 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   readonly orchestratorSandbox: OperatorSandboxExecution
   readonly sandboxPublication: WorkspacePublication
   private readonly root: string
+  private readonly isolatedRoot: string | undefined
   private readonly sandboxRoot: string
   private readonly setupCommand: string | undefined
   private readonly sandboxEnvironmentVariables: readonly string[]
   private readonly sandboxEnvSource: Record<string, string | undefined>
-  /** Canonicalized (symlink-free) root, resolved lazily — git reports
-   * worktree paths canonicalized, so comparisons must be too. */
-  private rootReal: string | null = null
+  /** Placement per canonical provisioning repository. Paths are compared
+   * canonicalized (symlink-free) because git reports worktree paths that way;
+   * the isolation check itself is never cached. */
+  private readonly layouts = new Map<string, WorktreeLayout>()
   private readonly exec: Exec
   /** worktree path → repo it was provisioned from, so `release` can find the
    * repo without re-deriving it. Rebuilt lazily after a restart (release of a
    * still-on-disk worktree rediscovers the repo via git-common-dir). */
   private readonly repos = new Map<string, string>()
 
+  /**
+   * `root` is the state tree's own worktree directory. When it resolves
+   * inside the provisioning checkout and `isolatedRoot` is set, build
+   * worktrees go to `isolatedRoot` and `root` becomes the legacy root whose
+   * existing registrations are still adopted in place. Either way the chosen
+   * root is validated before any worktree is created or reused there.
+   */
   constructor(opts: {
     root: string
+    /** Build worktree root outside the checkout's package ancestry, used
+     * when `root` resolves inside the checkout. */
+    isolatedRoot?: string
     exec?: Exec
     /** Test-only override of the exit-stamp drain grace
      * (`DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS`); production behavior is
@@ -155,6 +243,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     envSource?: Record<string, string | undefined>
   }) {
     this.root = resolve(opts.root)
+    this.isolatedRoot = opts.isolatedRoot === undefined ? undefined : resolve(opts.isolatedRoot)
     this.sandboxRoot = resolve(opts.sandboxRoot ?? join(opts.root, '..', 'orchestrator-sandboxes'))
     this.setupCommand = opts.setupCommand
     this.sandboxEnvironmentVariables = opts.sandboxEnvironmentVariables ?? []
@@ -179,12 +268,45 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
   }
 
-  private async realRoot(): Promise<string> {
-    if (!this.rootReal) {
-      await mkdir(this.root, { recursive: true })
-      this.rootReal = await realpath(this.root)
+  private async layout(repo: string): Promise<WorktreeLayout> {
+    const checkoutReal = await realpath(repo)
+    const cached = this.layouts.get(checkoutReal)
+    if (cached) return cached
+    const root = await canonicalize(this.root)
+    const layout: WorktreeLayout =
+      this.isolatedRoot !== undefined && isInside(root, checkoutReal)
+        ? { checkoutReal, chosen: this.isolatedRoot, legacy: root }
+        : { checkoutReal, chosen: this.root }
+    this.layouts.set(checkoutReal, layout)
+    return layout
+  }
+
+  /**
+   * Validate the build worktree root chosen for `repo` and return its real
+   * path, creating it. Throws `WorktreeIsolationError` when it resolves
+   * inside the checkout or any directory from it up to `/` holds a
+   * `node_modules` entry; a worktree's own `node_modules` lies below the root,
+   * so the build owns it. Not cached: a `node_modules` that appears later is
+   * noticed on the next provision.
+   */
+  async assertIsolatedRoot(repo: string): Promise<string> {
+    const { checkoutReal, chosen } = await this.layout(repo)
+    const canonical = await canonicalize(chosen)
+    if (isInside(canonical, checkoutReal)) throw new WorktreeIsolationError(chosen, checkoutReal)
+    for (let dir = canonical; ; dir = dirname(dir)) {
+      try {
+        await lstat(join(dir, 'node_modules'))
+        throw new WorktreeIsolationError(chosen, checkoutReal, dir)
+      } catch (error) {
+        if (error instanceof WorktreeIsolationError || !missing(error)) throw error
+      }
+      if (dirname(dir) === dir) break
     }
-    return this.rootReal
+    await mkdir(chosen, { recursive: true })
+    const real = await realpath(chosen)
+    // A symlink created between the check and mkdir must not slip through.
+    if (isInside(real, checkoutReal)) throw new WorktreeIsolationError(chosen, checkoutReal)
+    return real
   }
 
   /** Runs git against `dir` via `-C` so a nonexistent dir surfaces as git's
@@ -366,9 +488,25 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     // re-provision after a hand-cleaned sandbox still succeeds.
     await this.gitOrThrow(repo, ['worktree', 'prune'])
 
-    const rootDir = await this.realRoot()
-    const worktreePath = join(rootDir, sanitizeBranch(branch))
-    const worktrees = await this.findWorktrees(repo, branch, rootDir, worktreePath)
+    const layout = await this.layout(repo)
+    const leaf = sanitizeBranch(branch)
+    const chosenDir = await canonicalize(layout.chosen)
+    let worktreePath = join(chosenDir, leaf)
+    const roots = layout.legacy !== undefined ? [chosenDir, layout.legacy] : [chosenDir]
+    const worktrees = await this.findWorktrees(
+      repo,
+      branch,
+      roots,
+      roots.map((root) => join(root, leaf)),
+    )
+    // A registration that already exists at the legacy in-checkout root is
+    // adopted in place without the isolation check, so builds provisioned
+    // before worktrees moved resume, clean up and release. Nothing new is
+    // ever created there.
+    const legacy = layout.legacy
+    const adopted = worktrees.attached ?? worktrees.detached
+    const exempt = legacy !== undefined && adopted?.path.startsWith(legacy + sep) === true
+    if (!exempt) worktreePath = join(await this.assertIsolatedRoot(repo), leaf)
     if (worktrees.attached) {
       // Idempotent provision (constitution #2): the registered worktree — at
       // the branch's current tip — is the resume point, not a fresh checkout.
@@ -513,14 +651,14 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   }
 
   /** Discover only registrations relevant to the requested branch. Attached
-   * reuse stays root-scoped (and therefore excludes the main checkout); a
-   * detached registration is recoverable only at this branch's exact,
-   * deterministic provider-owned path. */
+   * reuse stays scoped to the chosen and legacy roots (and therefore excludes
+   * the main checkout); a detached registration is recoverable only at this
+   * branch's exact, deterministic provider-owned path under either root. */
   private async findWorktrees(
     repo: string,
     branch: string,
-    rootDir: string,
-    worktreePath: string,
+    rootDirs: readonly string[],
+    worktreePaths: readonly string[],
   ): Promise<WorktreeSelection> {
     const list = await this.gitOrThrow(repo, ['worktree', 'list', '--porcelain'])
     const entries = parseWorktreeList(list.stdout).map((entry) => ({
@@ -529,9 +667,12 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }))
     return {
       attached: entries.find(
-        (entry) => entry.branch === branch && entry.path.startsWith(rootDir + sep),
+        (entry) =>
+          entry.branch === branch && rootDirs.some((root) => entry.path.startsWith(root + sep)),
       ),
-      detached: entries.find((entry) => entry.detached && entry.path === worktreePath),
+      detached: worktreePaths
+        .map((path) => entries.find((entry) => entry.detached && entry.path === path))
+        .find((entry) => entry !== undefined),
       branchAttached: entries.some((entry) => entry.branch === branch),
     }
   }
