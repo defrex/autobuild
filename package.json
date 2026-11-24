@@ -139,12 +139,14 @@
     "docs:baseline": "bun packages/website/src/docs-baseline.ts",
     "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/reducer-value-shapes.ts --check && bun tools/configuration-reference.ts --check && bun tools/docs-reference-sync.ts && bun tools/docs-integrity-check.ts && bun tools/skill-docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/website-hero.ts --check && bun tools/package-boundary-check.ts && bun tools/publish-dependencies-check.ts",
     "check:build": "bun tools/workspace-manifest-check.ts && bun tools/bin-mode-check.ts && bun tools/publish-contents-check.ts && bun tools/publish-imports-check.ts",
-    "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
+    "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql' '!packages/core/src/web/assets/*'",
     "prepare": "husky",
     "test": "bun tools/test-temp-leaks.ts unit",
     "test:integration": "bun tools/test-temp-leaks.ts integration",
     "typecheck": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit",
-    "ui:catalog": "bun packages/ui/scripts/catalog.ts"
+    "ui:catalog": "bun packages/ui/scripts/catalog.ts",
+    "ui:tokens": "bun packages/ui/scripts/tokens.ts",
+    "ui:web": "bun packages/ui/scripts/web.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "4.0.82",

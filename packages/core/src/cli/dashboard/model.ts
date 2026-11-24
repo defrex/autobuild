@@ -1,11 +1,11 @@
-import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { workTargetDistance } from './target-distance'
 import { openTicketWait, waitingOnLine } from '../../kernel/ticket-wait'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { openPrBackpressureReducer } from '../../kernel/open-pr-backpressure-state'
-import { projectRollback, type DashboardRollback } from './rollback'
-import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
-import { enrichDrainingRow, projectHandoffs, type DashboardHandoff } from './handoff'
+import type { DashboardRollback } from './rollback'
+import type { DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
+import { enrichDrainingRow, type DashboardHandoff } from './handoff'
+import { projectRepositoryHeader } from './header'
 import { projectIntegrationDetail, type IntegrationDetail } from './integration-detail'
 import {
   projectIntegrationRow,
@@ -107,7 +107,6 @@ import {
   type PhaseTiming,
 } from './facts'
 import type { BuildRecord, StreamRecord } from '../../store/types'
-import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
 import type { TranscriptPresentation } from './transcript'
 import type { UIMessage } from 'ai'
@@ -1502,52 +1501,40 @@ export function buildDashboardFromProjected(
   // Filtered frontend feeds omit operational facts; use the durable reduced read there.
   upgrades?: DispatchUpgradeState,
 ): DashboardModel {
-  const upgradeState =
-    upgrades ??
-    (Array.isArray(repositoryEvents)
-      ? dispatchUpgradeReducer.reduce(repositoryEvents)
-      : repositoryEvents.upgrades)
-  const upgrade = projectHandoffs(upgradeState)
-  const rollback = projectRollback(upgradeState)
+  const { header: repository, draining } = projectRepositoryHeader(
+    header,
+    repositoryEvents,
+    upgrades,
+  )
   const builds = decorateSlotWaits(
-    enrichIntegrationRows(projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining))),
+    enrichIntegrationRows(projectedBuilds.map((row) => enrichDrainingRow(row, draining))),
     header.capacityProjection,
   ).sort((a, b) => a.slug.localeCompare(b.slug))
-  const missingAccounts = Array.isArray(repositoryEvents)
-    ? repositoryReadFactsReducer.reduce(repositoryEvents).missingAccounts
-    : repositoryEvents.missingAccounts
-  const warningLines = [
-    ...(header.warningLines ?? []),
-    ...Object.values(missingAccounts).map(
-      (account) => `Missing credentials: ${account.remedy} [${account.source}]`,
-    ),
-  ]
-  const harvestProjection = projectRepositoryHarvest(repositoryEvents)
-  const settings = Array.isArray(repositoryEvents)
-    ? reduceDispatchSettings(repositoryEvents)
-    : repositoryEvents.settings
+  // Member order matches the terminal model's historical literal.
   return {
-    repo: header.repo,
-    ...(rollback ? { rollback } : {}),
-    ...(upgrade.handoffs.length ? { handoffs: upgrade.handoffs } : {}),
-    ...(header.triage !== undefined ? { triage: header.triage } : {}),
-    queued: header.queued,
+    repo: repository.repo,
+    ...(repository.rollback ? { rollback: repository.rollback } : {}),
+    ...(repository.handoffs ? { handoffs: repository.handoffs } : {}),
+    ...(repository.triage !== undefined ? { triage: repository.triage } : {}),
+    queued: repository.queued,
     active: {
       current: header.capacityProjection?.occupied ?? header.activeCount,
       limit: header.capacityProjection?.effective ?? header.capacity,
     },
     ...(header.capacityProjection ? { capacity: header.capacityProjection } : {}),
-    drained: !settings.intake,
-    repositoryPaused: settings.paused,
-    defaultAutoMerge: settings.defaultAutoMerge,
-    harvestPaused: harvestProjection.harvestPaused,
+    drained: repository.drained,
+    repositoryPaused: repository.repositoryPaused,
+    defaultAutoMerge: repository.defaultAutoMerge,
+    harvestPaused: repository.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
-    ...(header.standby !== undefined ? { standby: header.standby } : {}),
-    ...(header.availableUpgrade !== undefined ? { availableUpgrade: header.availableUpgrade } : {}),
-    ...(warningLines.length > 0 ? { warningLines } : {}),
+    ...(repository.standby !== undefined ? { standby: repository.standby } : {}),
+    ...(repository.availableUpgrade !== undefined
+      ? { availableUpgrade: repository.availableUpgrade }
+      : {}),
+    ...(repository.warningLines !== undefined ? { warningLines: repository.warningLines } : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
-    ...(harvestProjection.harvest !== undefined ? { harvest: harvestProjection.harvest } : {}),
+    ...(repository.harvest !== undefined ? { harvest: repository.harvest } : {}),
   }
 }
 
