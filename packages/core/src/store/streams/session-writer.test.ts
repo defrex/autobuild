@@ -1,8 +1,7 @@
 /**
  * The session-stream batching writer: cadence and ordering, batch splitting
  * at the store ceiling, retry-then-defunct on persistent append failure,
- * truncation parts, and idempotent first-outcome-wins close. Real timers
- * with a short flush cadence.
+ * truncation parts, and idempotent first-outcome-wins close under injected scheduling.
  */
 import { describe, expect, test } from 'bun:test'
 import type { StreamChunk, StreamOutcome, StreamPart, StreamRecord, StreamScope } from './types'
@@ -73,9 +72,8 @@ function manualScheduler(): {
     },
     async tick() {
       flush?.()
-      // Let pending promise chains settle.
-      await Bun.sleep(0)
-      await Bun.sleep(0)
+      // Only settle already-created chains; never start another flush to probe a retry.
+      for (let i = 0; i < 20; i++) await Promise.resolve()
     },
   }
 }
@@ -124,35 +122,6 @@ describe('createSessionStreamSink', () => {
     await sink.open('session:s1')
     await sink.close('completed')
     expect(() => sink.append([{ type: 'start' }])).not.toThrow()
-  })
-
-  test('close flushes pending parts before closing', async () => {
-    const fake = fakeStore()
-    const timer = manualScheduler()
-    const sink = createSessionStreamSink({
-      store: fake.store,
-      scope: SCOPE,
-      schedule: timer.schedule,
-    })
-    await sink.open('session:s1')
-    sink.append([{ type: 'start', messageId: 'm' }, { type: 'finish' }])
-    await sink.close('completed')
-    expect(fake.chunks).toHaveLength(1)
-    expect(fake.closed).toEqual(['completed'])
-  })
-
-  test('close is idempotent with first outcome winning', async () => {
-    const fake = fakeStore()
-    const timer = manualScheduler()
-    const sink = createSessionStreamSink({
-      store: fake.store,
-      scope: SCOPE,
-      schedule: timer.schedule,
-    })
-    await sink.open('session:s1')
-    await sink.close('completed')
-    await sink.close('aborted')
-    expect(fake.closed).toEqual(['completed'])
   })
 
   test('an append failure retries on the next tick and delivers the parts', async () => {
@@ -281,13 +250,24 @@ describe('createSessionStreamSink', () => {
     let inAppends = 0
     let maxConcurrent = 0
     const delivered: string[] = []
+    let entered!: () => void
+    let release!: () => void
+    const firstEntered = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const fake = fakeStore()
     const realAppend = fake.store.appendStreamParts.bind(fake.store)
     const realClose = fake.store.closeStream.bind(fake.store)
     fake.store.appendStreamParts = async (streamId, parts) => {
       inAppends += 1
       maxConcurrent = Math.max(maxConcurrent, inAppends)
-      await Bun.sleep(2)
+      if (delivered.length === 0) {
+        entered()
+        await gate
+      }
       inAppends -= 1
       delivered.push(...parts.map((p) => p.type))
       return realAppend(streamId, parts)
@@ -310,13 +290,18 @@ describe('createSessionStreamSink', () => {
       { type: 'text-delta', id: 't', delta: 'a' },
     ])
     const draining = timer.tick()
+    await firstEntered
     // Parts appended while the first drain is still in flight.
     sink.append([
       { type: 'text-delta', id: 't', delta: 'b' },
       { type: 'text-end', id: 't' },
     ])
-    await draining
-    await sink.close('completed')
+    const flushed = sink.flush()
+    const closing = sink.close('completed')
+    expect(delivered).toEqual([])
+    expect(fake.closed).toEqual([])
+    release()
+    await Promise.all([draining, flushed, closing])
     // Single-flight: appends never overlapped, order is the append order,
     // and everything landed before the stream closed.
     expect(maxConcurrent).toBe(1)
@@ -408,6 +393,17 @@ describe('createSessionStreamSink', () => {
 
   test('flush awaits the drain without closing; close still flushes first', async () => {
     const fake = fakeStore()
+    const order: string[] = []
+    const append = fake.store.appendStreamParts.bind(fake.store)
+    const close = fake.store.closeStream.bind(fake.store)
+    fake.store.appendStreamParts = async (id, parts) => {
+      order.push(...parts.map((part) => part.type))
+      return append(id, parts)
+    }
+    fake.store.closeStream = async (id, outcome) => {
+      order.push('CLOSED')
+      return close(id, outcome)
+    }
     const timer = manualScheduler()
     const sink = createSessionStreamSink({
       store: fake.store,
@@ -422,10 +418,12 @@ describe('createSessionStreamSink', () => {
     expect(fake.chunks).toHaveLength(1)
     expect(fake.closed).toEqual([])
     sink.append([{ type: 'finish' }])
-    await sink.flush()
-    expect(fake.chunks).toHaveLength(2)
     await sink.close('completed')
+    await sink.close('aborted')
+    expect(fake.chunks).toHaveLength(2)
+    expect(fake.chunks[1]!.parts).toEqual([{ type: 'finish' }])
     expect(fake.closed).toEqual(['completed'])
+    expect(order).toEqual(['start', 'text-delta', 'finish', 'CLOSED'])
 
     // flush before any bind is a no-op.
     const unbound = createSessionStreamSink({

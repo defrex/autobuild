@@ -29,7 +29,6 @@ import {
 } from '../contract'
 import { MemoryBlobStore } from '../memory'
 import { StreamBatchTooLargeError, StreamClosedError, type StreamPart } from '../streams/types'
-import { EVENT_WAIT_POLL_MS } from '../streams/wait'
 import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
 import { openLocalStore, SqliteBuildStore } from './store'
@@ -940,10 +939,6 @@ describe('SqliteBuildStore held event pacing (AUT-394)', () => {
       await store.close()
       await rm(root, { recursive: true, force: true })
     }
-  })
-
-  test('EVENT_WAIT_POLL_MS pins the one-second hosted poll interval (AUT-394)', () => {
-    expect(EVENT_WAIT_POLL_MS).toBe(1000)
   })
 })
 

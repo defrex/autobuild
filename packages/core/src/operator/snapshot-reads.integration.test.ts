@@ -1,11 +1,11 @@
 import { resolveReducerValue } from '../store/reducer-values'
 /**
  * The operator read paths run on the snapshot-backed repository view (AUT-650):
- * within one serving process a poll reads no build event rows at idle and exactly the
- * newly appended rows after new events, whatever the number of concurrent
- * pollers; across serving processes each reads the same delta at most once; and
+ * polls use canonical reducer values without reading public build event APIs,
+ * including concurrent pollers across separate serving handles; and
  * every response equals the one a full replay (no snapshots) produces. Each
- * pass reloads the bounded journal; that tail is no longer snapshotted.
+ * handle counts public event APIs; canonical reducer internals have separate
+ * read-budget coverage.
  */
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
@@ -191,59 +191,31 @@ async function pollAll(store: BuildStore) {
 }
 
 describe('operator reads from snapshots (AUT-650)', () => {
-  test('every route restores build state and reloads the bounded journal', async () => {
-    const backing = new MemoryBuildStore({ clock })
-    await seed(backing)
-    const process = instrument(backing)
-    await pollAll(process.store) // warm: cold replay, snapshots persisted
-
-    process.reset()
-    await pollAll(process.store)
-    expect(process.buildRows()).toBe(0)
-    expect(process.journalRows()).toBe(0)
-
-    const _m = await appendNew(backing, 3, 2)
-    process.reset()
-    await pollAll(process.store)
-    expect(process.buildRows()).toBe(0)
-
-    process.reset()
-    await pollAll(process.store)
-    expect(process.buildRows()).toBe(0)
-  })
-
-  test('each route alone pays only its own delta, whichever route polls first', async () => {
+  test('every route uses canonical state at idle and after changes, whichever polls first', async () => {
     for (const first of ['dashboard', 'status', 'harvest', 'list'] as const) {
       const backing = new MemoryBuildStore({ clock })
       await seed(backing)
       const process = instrument(backing)
       await pollAll(process.store)
-      const _m = await appendNew(backing, 2, 2)
-      process.reset()
       const routes = {
         dashboard: () => getOperatorDashboard({ store: process.store, repo: REPO, clock }),
         status: () => getRepositoryStatus(process.store, REPO, now),
         harvest: () => getHarvestStatus(process.store, REPO),
         list: () => listOperatorBuilds({ store: process.store, repo: REPO, scope: 'all', now }),
       }
+      process.reset()
+      await routes[first]()
+      expect(process.buildRows()).toBe(0)
+      expect(process.journalRows()).toBe(0)
+      await appendNew(backing, 2, 2)
+      process.reset()
       await routes[first]()
       await pollAll(process.store)
       expect(process.buildRows()).toBe(0)
+      process.reset()
+      await routes[first]()
+      expect(process.buildRows()).toBe(0)
     }
-  })
-
-  test('concurrent pollers in one process cost the new rows once, not once each', async () => {
-    const backing = new MemoryBuildStore({ clock })
-    await seed(backing)
-    const process = instrument(backing)
-    await pollAll(process.store)
-    const _m = await appendNew(backing, 4, 3)
-    process.reset()
-    const results = await Promise.all(Array.from({ length: 5 }, () => pollAll(process.store)))
-    // Up to two passes serve the burst (the running one and the trailing one);
-    // the delta is read once because the first pass persists what it folded.
-    expect(process.buildRows()).toBe(0)
-    for (const result of results) expect(result).toEqual(results[0]!)
   })
 
   test('requests arriving mid-pass join one trailing pass restored from the first pass’s snapshot', async () => {
@@ -275,8 +247,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     process.gate.hold = undefined
     release()
     await Promise.all([first, ...joiners])
-    // Pass 1 read the m new rows and persisted them; the trailing pass
-    // restored from that snapshot and read none: m rows, never 5·m.
+    // Both passes use canonical values rather than replaying public event rows.
     expect(process.buildRows()).toBe(0)
     expect(process.lookups()).toBeGreaterThan(parked)
   })
@@ -307,7 +278,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     expect(latest.updatedAt >= stale.updatedAt).toBe(true)
   })
 
-  test('P serving processes read new build rows at most P times, never build history', async () => {
+  test('concurrent pollers across serving processes share canonical responses without build history', async () => {
     const backing = new MemoryBuildStore({ clock })
     await seed(backing)
     const a = instrument(backing)
@@ -316,10 +287,19 @@ describe('operator reads from snapshots (AUT-650)', () => {
     const m = await appendNew(backing, 3, 2)
     a.reset()
     b.reset()
-    await Promise.all([pollAll(a.store), pollAll(b.store)])
+    const results = await Promise.all(
+      [a, b].flatMap((handle) => Array.from({ length: 2 }, () => pollAll(handle.store))),
+    )
+    for (const result of results) expect(result).toEqual(results[0]!)
+    expect(a.buildRows()).toBe(0)
+    expect(b.buildRows()).toBe(0)
     expect(a.buildRows()).toBeLessThanOrEqual(m)
     expect(b.buildRows()).toBeLessThanOrEqual(m)
     expect(a.buildRows() + b.buildRows()).toBeLessThanOrEqual(2 * m)
+    a.reset()
+    b.reset()
+    await Promise.all([pollAll(a.store), pollAll(b.store)])
+    expect(a.buildRows() + b.buildRows()).toBe(0)
     a.reset()
     b.reset()
     await Promise.all([pollAll(a.store), pollAll(b.store)])
