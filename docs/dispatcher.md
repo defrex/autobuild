@@ -38,8 +38,9 @@ intake and harvest gates, harvest resume/acknowledgement, queued discard and
 confirmed abort. Navigation and session inspection work as usual. These record
 operator intent for the dispatcher to execute. No current control needs a local
 dispatcher. Startup intake flags and `--repository` are rejected; use a local
-checkout with its configured Store or `--store`. Operator agents still must not
-run `ab dispatch`, including `--viewer`.
+checkout with its configured Store or `--store`. Operator agents follow the
+[dispatcher ownership boundaries](#dispatcher-ownership) for startup and process
+management; `ab web` is always available for read-only viewing.
 
 ## Ready work becomes a build
 

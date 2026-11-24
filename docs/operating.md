@@ -10,8 +10,8 @@ order: 6
 
 Your operator agent keeps work moving through `ab` or MCP. Under your instructions it writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers bounded escalations, pauses or aborts work, and authorizes merge.
 
-- **You own** goals, scope, tradeoffs and authority, and you run the dispatcher and upgrades.
-- **The agent never** starts, stops or restarts dispatch; it reports dispatcher trouble to you.
+- **You own** goals, scope, tradeoffs, authority and upgrades. Dispatcher ownership is a local preference, subject to repository instructions.
+- **The agent checks** fresh running status before startup and follows your saved preference, or asks who should run the dispatcher and offers to save the answer. With agent ownership it starts `ab dispatch --web --plain --json` and gives you the URL. It cleanly stops only a dispatcher this session started, only on request; it never adopts, restarts, kills or manages another session's dispatcher. See [dispatcher ownership](dispatcher.md#dispatcher-ownership).
 - **Autobuild doesn't** host or start the agent. There's no orchestrator setup step.
 
 ## Choose a harness
