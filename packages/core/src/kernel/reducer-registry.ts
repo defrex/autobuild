@@ -65,6 +65,7 @@ import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openTickReducer } from '../processes/tick-state'
 import { dashboardFactsReducer } from '../cli/dashboard/facts'
+import { buildTimelineReducer } from '../cli/dashboard/timeline'
 import { buildDigestReducer, type DigestEventRow } from '../store/digest'
 import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-state-events'
 import { sessionReducer } from '../store/session-reducer'
@@ -200,6 +201,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     reducer: dashboardFactsReducer,
     covers: ['phaseIntervals', 'projectSessions'],
   },
+  buildTimeline: { reducer: buildTimelineReducer, covers: [] },
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },
   forgeHealthValue: { reducer: optionalValue(forgeHealthReducer), covers: [] },
