@@ -1361,3 +1361,183 @@ test('repository tail enforces its window before selecting and honors through', 
     await store.close()
   }
 })
+
+describe('SqliteBuildStore rollup serialization (SPEC §7.7)', () => {
+  const repo = 'rollup/sqlite'
+  const scope = { kind: 'rollup', repo } as const
+  const request = { reducer: 'stepDurations', args: { outcome: 'all' }, read: { window: 'all' } }
+
+  async function seed(store: SqliteBuildStore, count: number) {
+    const { agentActor, KERNEL } = await import('../../events/envelope')
+    for (let i = 0; i < count; i++) {
+      const slug = `rollup-${i}`
+      await store.createBuild({ slug, repo })
+      await store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+      await store.append(slug, {
+        actor: agentActor('plan', 's'),
+        type: 'plan.completed',
+        payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+      })
+    }
+  }
+
+  /** Count build-event rows each instance's private database returns, by build. */
+  function countEventRows(stores: SqliteBuildStore[]): Map<string, number> {
+    const rows = new Map<string, number>()
+    const wrapped = new WeakSet<object>()
+    for (const store of stores) {
+      const sqlite = Reflect.get(store, 'sqlite') as Database
+      const query = sqlite.query.bind(sqlite)
+      Reflect.set(sqlite, 'query', (text: string) => {
+        const statement = query(text)
+        if (/FROM events WHERE build=\?1 AND seq>\?2/.test(text) && !wrapped.has(statement)) {
+          wrapped.add(statement)
+          const all = statement.all.bind(statement)
+          Reflect.set(statement, 'all', (...args: unknown[]) => {
+            const result = all(...(args as [])) as { build: string }[]
+            for (const row of result) rows.set(row.build, (rows.get(row.build) ?? 0) + 1)
+            return result
+          })
+        }
+        return statement
+      })
+    }
+    return rows
+  }
+
+  const leaseState = (database: Database, key: string) =>
+    (
+      database
+        .query(
+          "SELECT state FROM reducer_snapshots WHERE scope_kind='rollup-lease' AND scope_key=?1 AND reducer=?2",
+        )
+        .get(repo, key) as { state: string } | null
+    )?.state
+
+  test('cold readers on two instances read each build log once and agree', async () => {
+    const root = await freshRoot()
+    const clock = manualClock(CONTRACT_T0)
+    const first = openLocalStore(root, { clock })
+    const second = openLocalStore(root, { clock })
+    try {
+      await seed(first, 4)
+      const rows = countEventRows([first, second])
+      // Hold the first instance's lease across a real wait, so the second
+      // instance contends on the lease row rather than finding a saved row.
+      const read = first.getReducerValue.bind(first)
+      Reflect.set(first, 'getReducerValue', async (...args: Parameters<typeof read>) => {
+        if (args[0].kind === 'build') await Bun.sleep(30)
+        return read(...args)
+      })
+      const feedFrom: string[] = []
+      const feed = second.listBuildsChangedSince.bind(second)
+      Reflect.set(second, 'listBuildsChangedSince', (target: string, since: string) => {
+        feedFrom.push(since)
+        return feed(target, since)
+      })
+      const answers = await Promise.all([
+        first.getReducerValue(scope, request),
+        Bun.sleep(5).then(() => second.getReducerValue(scope, request)),
+      ])
+      expect(answers[0]!.value).toEqual(answers[1]!.value)
+      const plan = (answers[0]!.value as { steps: { step: string; count: number }[] }).steps
+      expect(plan).toEqual([expect.objectContaining({ step: 'plan', count: 4 })])
+      // The second instance waited on the lease, then found the rollup current.
+      expect(feedFrom).toEqual([])
+      expect(Object.fromEntries(rows)).toEqual({
+        'rollup-0': 2,
+        'rollup-1': 2,
+        'rollup-2': 2,
+        'rollup-3': 2,
+      })
+    } finally {
+      await first.close()
+      await second.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("a crashed holder's lease is taken over once it expires by the store clock", async () => {
+    const root = await freshRoot()
+    const clock = manualClock(CONTRACT_T0)
+    const store = openLocalStore(root, { clock })
+    try {
+      await seed(store, 2)
+      const { resolveRollupValue } = await import('../rollups')
+      const { key } = resolveRollupValue(repo, request)
+      const database = Reflect.get(store, 'sqlite') as Database
+      database
+        .query(
+          "INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at) VALUES ('rollup-lease', ?1, ?2, 1, 0, ?3, ?4)",
+        )
+        .run(
+          repo,
+          key,
+          JSON.stringify({ holder: 'crashed', expiresAt: clock().getTime() + 5_000 }),
+          CONTRACT_T0,
+        )
+      let settled = false
+      const pending = store.getReducerValue(scope, request).finally(() => {
+        settled = true
+      })
+      await Bun.sleep(60)
+      expect(settled).toBe(false)
+      clock.advance(10_000)
+      const answer = await pending
+      expect((answer.value as { steps: unknown[] }).steps).toHaveLength(1)
+      // Released after the advance.
+      expect(leaseState(database, key)).toBeUndefined()
+    } finally {
+      await store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  for (const [name, builds] of [
+    ['commit', 2],
+    ['renewal', 17],
+  ] as const)
+    test(`a holder whose lease was taken over fails at ${name} and changes nothing`, async () => {
+      const root = await freshRoot()
+      const clock = manualClock(CONTRACT_T0)
+      const store = openLocalStore(root, { clock })
+      try {
+        await seed(store, builds)
+        const { resolveRollupValue, RollupLeaseLostError } = await import('../rollups')
+        const { key } = resolveRollupValue(repo, request)
+        const database = Reflect.get(store, 'sqlite') as Database
+        const thief = JSON.stringify({ holder: 'thief', expiresAt: clock().getTime() + 600_000 })
+        const read = store.getReducerValue.bind(store)
+        let stolen = false
+        Reflect.set(store, 'getReducerValue', async (...args: Parameters<typeof read>) => {
+          if (args[0].kind === 'build' && !stolen) {
+            stolen = true
+            database
+              .query(
+                "UPDATE reducer_snapshots SET state=?3 WHERE scope_kind='rollup-lease' AND scope_key=?1 AND reducer=?2",
+              )
+              .run(repo, key, thief)
+          }
+          return read(...args)
+        })
+        const failure = await store.getReducerValue(scope, request).catch((error: unknown) => error)
+        expect(failure).toBeInstanceOf(Error)
+        if (name === 'renewal') expect(failure).toBeInstanceOf(RollupLeaseLostError)
+        const rollupRows = database
+          .query("SELECT COUNT(*) AS n FROM reducer_snapshots WHERE scope_kind='rollup'")
+          .get() as { n: number }
+        expect(rollupRows.n).toBe(0)
+        const absorbed = database
+          .query(
+            "SELECT COUNT(*) AS n FROM reducer_snapshots WHERE scope_kind='build' AND reducer LIKE 'value.absorbed.%'",
+          )
+          .get() as { n: number }
+        expect(absorbed.n).toBe(0)
+        // The thief's lease is untouched by the failed holder's release.
+        expect(leaseState(database, key)).toBe(thief)
+      } finally {
+        await store.close()
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+})
