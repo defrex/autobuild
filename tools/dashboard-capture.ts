@@ -356,7 +356,7 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       '1 rejected',
       '2 running',
       'budget 4/60 attempts',
-      '6.0/24 hours',
+      '5.0/24 active hours',
     ],
   },
   {
@@ -366,7 +366,14 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 60,
     optimizationNode: true,
     detail: { slug: OPTIMIZATION_NODE_SLUG, scroll: 0 },
-    requires: ['Objective', '50 → 44', '(minimize)', 'threshold 35', '2 running', '6.0/24 hours'],
+    requires: [
+      'Objective',
+      '50 → 44',
+      '(minimize)',
+      'threshold 35',
+      '2 running',
+      '5.0/24 active hours',
+    ],
   },
 
   {
