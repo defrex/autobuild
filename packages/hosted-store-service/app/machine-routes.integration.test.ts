@@ -14,11 +14,13 @@ describe('machine route mounts', () => {
     expect(roots).toEqual(STORE_ROOTS)
   })
 
-  for (const root of STORE_ROOTS) {
-    test(`/${root} forwards every method to the hosted service`, async () => {
+  test('every mounted root forwards every method to the hosted service', async () => {
+    for (const root of STORE_ROOTS) {
       const source = await Bun.file(join(import.meta.dir, root, '[[...path]]', 'route.ts')).text()
-      expect(source).toContain("from '../../machine'")
-      expect(source).toContain('export { DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT }')
-    })
-  }
+      expect(source, `/${root}`).toContain("from '../../machine'")
+      expect(source, `/${root}`).toContain(
+        'export { DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT }',
+      )
+    }
+  })
 })

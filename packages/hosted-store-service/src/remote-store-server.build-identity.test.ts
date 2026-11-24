@@ -86,14 +86,10 @@ test('project node creation keeps the ab-node/ namespace after slug rewriting', 
   expect(byBranch.branch).toBe(`ab-node/${byBranch.slug}`)
 })
 
-test('a branch that conflicts with the build.created kind is refused before any write', async () => {
+test('a branch outside the two server namespaces, or conflicting with the build.created kind, is refused before any write', async () => {
   const { rejected } = await harness()
   await rejected({ slug: 'x', branch: 'ab/x', created: created('node') })
   await rejected({ slug: 'x', branch: 'ab-node/x', created: created() })
-})
-
-test('client branches outside the two server namespaces for the requested slug are refused', async () => {
-  const { rejected } = await harness()
   for (const branch of ['refs/heads/main', 'main', 'ab/other', 'ab-node/x/../y', 'feature/x'])
     await rejected({ slug: 'x', branch })
 })
@@ -125,20 +121,6 @@ test('retries keep the requested namespace on every allocation', async () => {
   const second = await create(body)
   expect(second.slug).not.toBe(first.slug)
   expect(second.branch).toBe(`ab-node/${second.slug}`)
-})
-
-test('owner-admin exact-slug creation stores the client branch verbatim', async () => {
-  const { server } = await harness()
-  const ownerAdmin = mintToken('secret', {
-    version: 1,
-    ownerAdmin: { user: 'owner' },
-    exp: Date.now() + 60000,
-  })
-  const response = await server.fetch(
-    request('/builds', ownerAdmin, { slug: 'n', repo: A, branch: 'ab-node/n' }),
-  )
-  expect(response.status).toBe(201)
-  expect(await response.json()).toMatchObject({ slug: 'n', branch: 'ab-node/n' })
 })
 
 test('keyed project creation lands once at the derived slug in the requested namespace', async () => {
@@ -180,19 +162,24 @@ test('an invalid creation key is refused before any write', async () => {
     await rejected({ slug: 'x', creationKey })
 })
 
-test('owner-admin exact-slug creation ignores a creation key', async () => {
+test('owner-admin exact-slug creation stores the client branch verbatim and ignores a creation key', async () => {
   const { server, backing } = await harness()
   const ownerAdmin = mintToken('secret', {
     version: 1,
     ownerAdmin: { user: 'owner' },
     exp: Date.now() + 60000,
   })
-  const response = await server.fetch(
-    request('/builds', ownerAdmin, { slug: 'n', repo: A, creationKey: 'prep_1' }),
+  const branched = await server.fetch(
+    request('/builds', ownerAdmin, { slug: 'n', repo: A, branch: 'ab-node/n' }),
   )
-  expect(response.status).toBe(201)
-  expect(await response.json()).toMatchObject({ slug: 'n' })
-  expect((await backing.listBuilds()).map((record) => record.slug)).toEqual(['n'])
+  expect(branched.status).toBe(201)
+  expect(await branched.json()).toMatchObject({ slug: 'n', branch: 'ab-node/n' })
+  const keyed = await server.fetch(
+    request('/builds', ownerAdmin, { slug: 'm', repo: A, creationKey: 'prep_1' }),
+  )
+  expect(keyed.status).toBe(201)
+  expect(await keyed.json()).toMatchObject({ slug: 'm' })
+  expect((await backing.listBuilds()).map((record) => record.slug).sort()).toEqual(['m', 'n'])
 })
 
 test('health advertises keyed build creation', async () => {
