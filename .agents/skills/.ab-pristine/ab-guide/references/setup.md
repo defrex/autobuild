@@ -111,7 +111,7 @@ allowlist entry; their real credentials remain on the dispatcher host.
 
 Keep package-level and checkout-level bootstrap in an idempotent
 `[commands].setup`. It runs after system provisioning and must remain safe to
-rerun on attachment. Do not repeatedly install OS packages there. Expose only
+rerun on attachment and after every restack onto a new base. Do not repeatedly install OS packages there. Expose only
 required runtime credentials through
 `[workspace.config].environmentVariables`, keep generated caches disposable,
 and lock dependencies in the repository. A browser-capable repository should
