@@ -34,6 +34,15 @@ export type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 
 export * from './compatibility'
 
+// The changed-builds feed and paged build listing: argument parsing the
+// server shares with every adapter, and the client's typed capability error.
+export {
+  BuildFeedUnsupportedError,
+  BuildFeedValidationError,
+  parseBuildPageLimitParam,
+  parseChangePosition,
+} from '../build-feed'
+
 export { creationBuildSlug, projectBuildSlugBase } from '../../kernel/build-creation'
 
 export { delegateCredential } from './credentials'

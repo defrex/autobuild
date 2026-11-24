@@ -205,6 +205,11 @@ const storeResourceRoutes = new Set([
   // unknown repo.
   'GET open-builds',
   'GET change-position',
+  // The changed-builds feed and paged build listing (#1079): served before
+  // the repo-existence gate like `change-position`, so a journal-less repo
+  // answers an empty feed or page rather than this service's generic 404.
+  'GET changed-builds',
+  'GET build-page',
   'GET placement',
   'GET builds',
   // The bounded repository-journal read (AUT-489); unlike build-digests this
