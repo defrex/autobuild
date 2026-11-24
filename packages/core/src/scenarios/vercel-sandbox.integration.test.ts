@@ -1344,22 +1344,27 @@ test.each(['orphaned', 'normal'] as const)(
   },
 )
 
-/** AUT-1086 regression: a provision that times out leaves a named VM with no
- * marker and no checkout. Every git or agent command in it fails exactly as
- * observed. Release must record the loss, delete the VM by name and reach a
- * fresh next-generation provision without any tick ending abnormally. */
-test('a half-provisioned sandbox is released and replaced without stopping the dispatcher', async () => {
-  const path = await mkdtemp(join(tmpdir(), 'ab-vercel-half-provisioned-'))
-  const toml =
-    '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nmaxInfrastructureAttempts = 2\nmaxDispatchAttempts = 10\n'
+const output = (exitCode: number, stdout = '', stderr = '') => ({
+  exitCode,
+  stdout: async () => stdout,
+  stderr: async () => stderr,
+})
+
+async function partialSandboxFixture(opts: {
+  slug: string
+  maxInfrastructureAttempts: number
+  partial: VercelSandboxHandle['runCommand']
+}) {
+  const path = await mkdtemp(join(tmpdir(), `ab-vercel-${opts.slug}-`))
+  const toml = `[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nmaxInfrastructureAttempts = ${opts.maxInfrastructureAttempts}\nmaxDispatchAttempts = 10\n`
   const config = parseConfig(toml)
   const clock = manualClock()
   const store = new MemoryBuildStore({ clock })
-  const slug = 'half-provisioned'
+  const slug = opts.slug
   const branch = `ab/${slug}`
   const forge = new FakeForge({ headSha: SHA })
   forge.seedBranch('main', BASE)
-  const ticket = { source: 'fake', id: 'T-1', title: 'Half provisioned' }
+  const ticket = { source: 'fake', id: 'T-1', title: opts.slug }
   await store.createBuild({ slug, repo: path, branch, ticket })
   await store.append(slug, {
     actor: DISPATCHER,
@@ -1377,30 +1382,17 @@ test('a half-provisioned sandbox is released and replaced without stopping the d
     payload: { branch: 'main', sha: BASE },
   })
   const tickets = new FakeTicketSource([])
-  await tickets.create({ title: 'Half provisioned', body: '', labels: [] }, { requestedId: 'T-1' })
+  await tickets.create({ title: opts.slug, body: '', labels: [] }, { requestedId: 'T-1' })
 
-  const chdir = `chdir ${VERCEL_WORKSPACE_PATH}: no such file or directory`
-  const bun = 'fork/exec /opt/autobuild-runtime/node_modules/.bin/bun: no such file or directory'
-  const detached: string[] = []
   const deleted: string[] = []
   const created: string[] = []
   const sandboxes = new Map<string, VercelSandboxHandle>()
-  /** A VM whose provisioning stopped before the checkout was moved into place. */
-  const halfProvisioned = (name: string): VercelSandboxHandle => ({
+  const handle = (name: string, run: VercelSandboxHandle['runCommand']): VercelSandboxHandle => ({
     name,
     getCommand: async () => {
       throw new Error('no commands were started')
     },
-    runCommand: async (params) => {
-      if (params.detached === true) {
-        detached.push(name)
-        throw new Error(bun)
-      }
-      if (params.cwd === VERCEL_WORKSPACE_PATH) throw new Error(chdir)
-      // Neither the provisioned marker nor the checkout exists.
-      if (params.cmd === 'test') return { exitCode: 1 }
-      return { exitCode: 0 }
-    },
+    runCommand: run,
     writeFiles: async () => {},
     stop: async () => undefined,
     delete: async () => {
@@ -1408,13 +1400,40 @@ test('a half-provisioned sandbox is released and replaced without stopping the d
     },
     update: async () => {},
   })
+  /** A provision that completes: markers persist and Bun reports the pin. */
+  const healthy = (name: string) => {
+    let provisioned = false
+    let distribution: string | undefined
+    let head = BASE
+    return handle(name, async (params) => {
+      const args = params.args ?? []
+      if (params.cmd === VERCEL_BUN_EXECUTABLE && args[0] === '--version')
+        return output(0, `${VERCEL_BUN_VERSION}\n`)
+      if (params.cmd === 'test') return output(provisioned ? 0 : 1)
+      if (params.cmd === 'touch') provisioned = true
+      if (params.cmd === 'git' && args[0] === 'checkout' && args[1] === '-B') head = args[3]!
+      if (params.cmd === 'git' && args[0] === 'rev-parse' && args.includes('HEAD^{commit}'))
+        return output(0, `${head}\n${head}\n`)
+      if (params.cmd === 'cat' && args[0] === VERCEL_DISTRIBUTION_VERSION_MARKER)
+        return distribution === undefined ? output(1) : output(0, distribution)
+      if (params.cmd === 'sh' && args[4] === VERCEL_DISTRIBUTION_VERSION_MARKER)
+        distribution = args[3]
+      if (params.cmd === 'git' && args.includes('--unset-all')) return output(5)
+      return output(0)
+    })
+  }
   const facade: VercelSandboxFacade = {
     get: async (name) => sandboxes.get(name) ?? null,
     create: async (input) => {
       created.push(input.name)
-      // The VM is registered, then the provider's provision call times out.
-      sandboxes.set(input.name, halfProvisioned(input.name))
-      throw new Error('provision timed out')
+      if (input.name.includes('-g0-')) {
+        // The VM is registered, then the invocation ends mid-provision.
+        sandboxes.set(input.name, handle(input.name, opts.partial))
+        throw new Error('provision timed out')
+      }
+      const sandbox = healthy(input.name)
+      sandboxes.set(input.name, sandbox)
+      return sandbox
     },
     deleteByName: async (name) => {
       deleted.push(name)
@@ -1427,6 +1446,7 @@ test('a half-provisioned sandbox is released and replaced without stopping the d
     if (cmd.includes('get-url'))
       return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
     if (cmd.includes('ls-remote')) {
+      // The build branch was never published, so the recorded base applies.
       const ref = cmd.at(-1)
       return {
         stdout: ref === 'refs/heads/main' ? `${BASE}\t${ref}\n` : '',
@@ -1475,6 +1495,31 @@ test('a half-provisioned sandbox is released and replaced without stopping the d
     await dispatcher.drainProvisioning()
     clock.advance(10 * 60_000)
   }
+  return { path, config, store, slug, provider, created, deleted, launchedInto, tick }
+}
+
+/** AUT-1086 regression: a provision that times out leaves a named VM with no
+ * marker and no checkout. Every git or agent command in it fails exactly as
+ * observed. Release must record the loss, delete the VM by name and reach a
+ * fresh next-generation provision without any tick ending abnormally. */
+test('a half-provisioned sandbox is released and replaced without stopping the dispatcher', async () => {
+  const chdir = `chdir ${VERCEL_WORKSPACE_PATH}: no such file or directory`
+  const bun = 'fork/exec /opt/autobuild-runtime/node_modules/.bin/bun: no such file or directory'
+  const detached: string[] = []
+  const { path, config, store, slug, provider, created, deleted, launchedInto, tick } =
+    await partialSandboxFixture({
+      slug: 'half-provisioned',
+      maxInfrastructureAttempts: 2,
+      partial: async (params) => {
+        if (params.detached === true) {
+          detached.push('partial')
+          throw new Error(bun)
+        }
+        if (params.cwd === VERCEL_WORKSPACE_PATH) throw new Error(chdir)
+        if (params.cmd === 'test') return { exitCode: 1 }
+        return { exitCode: 0 }
+      },
+    })
   const types = async () => (await store.getEvents(slug)).map((event) => event.type)
 
   // 1. Provision times out, leaving g0 without a marker or checkout.
@@ -1544,61 +1589,10 @@ test('a half-provisioned sandbox is released and replaced without stopping the d
 })
 
 test('a half-provisioned sandbox whose clone lacks the base is released without escalation', async () => {
-  const path = await mkdtemp(join(tmpdir(), 'ab-vercel-half-cloned-'))
-  const toml =
-    '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nmaxInfrastructureAttempts = 3\nmaxDispatchAttempts = 10\n'
-  const config = parseConfig(toml)
-  const clock = manualClock()
-  const store = new MemoryBuildStore({ clock })
-  const slug = 'half-cloned'
-  const branch = `ab/${slug}`
-  const forge = new FakeForge({ headSha: SHA })
-  forge.seedBranch('main', BASE)
-  const ticket = { source: 'fake', id: 'T-1', title: 'Half cloned' }
-  await store.createBuild({ slug, repo: path, branch, ticket })
-  await store.append(slug, {
-    actor: DISPATCHER,
-    type: 'build.created',
-    payload: { repo: path, baseBranch: 'main', ticket },
-  })
-  await store.append(slug, {
-    actor: DISPATCHER,
-    type: 'spec.imported',
-    payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
-  })
-  await store.append(slug, {
-    actor: DISPATCHER,
-    type: 'target.moved',
-    payload: { branch: 'main', sha: BASE },
-  })
-  const tickets = new FakeTicketSource([])
-  await tickets.create({ title: 'Half cloned', body: '', labels: [] }, { requestedId: 'T-1' })
-
-  const output = (exitCode: number, stdout = '', stderr = '') => ({
-    exitCode,
-    stdout: async () => stdout,
-    stderr: async () => stderr,
-  })
-  const deleted: string[] = []
-  const created: string[] = []
-  const sandboxes = new Map<string, VercelSandboxHandle>()
-  const handle = (name: string, run: VercelSandboxHandle['runCommand']): VercelSandboxHandle => ({
-    name,
-    getCommand: async () => {
-      throw new Error('no commands were started')
-    },
-    runCommand: run,
-    writeFiles: async () => {},
-    stop: async () => undefined,
-    delete: async () => {
-      sandboxes.delete(name)
-    },
-    update: async () => {},
-  })
-  /** The checkout is in place, but the interrupted clone never received the
-   * base object, and no provisioned marker was written. */
-  const halfCloned = (name: string) =>
-    handle(name, async (params) => {
+  const { store, slug, created, deleted, tick } = await partialSandboxFixture({
+    slug: 'half-cloned',
+    maxInfrastructureAttempts: 3,
+    partial: async (params) => {
       if (params.detached === true) throw new Error('a half-cloned VM never executes')
       const args = params.args ?? []
       if (params.cmd === 'test') return output(args[0] === '-e' ? 0 : 1)
@@ -1608,92 +1602,7 @@ test('a half-provisioned sandbox whose clone lacks the base is released without 
         return output(128, '', 'fatal: Needed a single revision\n')
       if (params.cmd === 'git' && args[0] === 'rev-parse') return output(1)
       return output(0)
-    })
-  /** A provision that completes: markers persist and Bun reports the pin. */
-  const healthy = (name: string) => {
-    let provisioned = false
-    let distribution: string | undefined
-    let head = BASE
-    return handle(name, async (params) => {
-      const args = params.args ?? []
-      if (params.cmd === VERCEL_BUN_EXECUTABLE && args[0] === '--version')
-        return output(0, `${VERCEL_BUN_VERSION}\n`)
-      if (params.cmd === 'test') return output(provisioned ? 0 : 1)
-      if (params.cmd === 'touch') provisioned = true
-      if (params.cmd === 'git' && args[0] === 'checkout' && args[1] === '-B') head = args[3]!
-      if (params.cmd === 'git' && args[0] === 'rev-parse' && args.includes('HEAD^{commit}'))
-        return output(0, `${head}\n${head}\n`)
-      if (params.cmd === 'cat' && args[0] === VERCEL_DISTRIBUTION_VERSION_MARKER)
-        return distribution === undefined ? output(1) : output(0, distribution)
-      if (params.cmd === 'sh' && args[4] === VERCEL_DISTRIBUTION_VERSION_MARKER)
-        distribution = args[3]
-      if (params.cmd === 'git' && args.includes('--unset-all')) return output(5)
-      return output(0)
-    })
-  }
-  const facade: VercelSandboxFacade = {
-    get: async (name) => sandboxes.get(name) ?? null,
-    create: async (input) => {
-      created.push(input.name)
-      if (input.name.includes('-g0-')) {
-        // The VM is registered, then the invocation ends mid-provision.
-        sandboxes.set(input.name, halfCloned(input.name))
-        throw new Error('provision timed out')
-      }
-      const sandbox = healthy(input.name)
-      sandboxes.set(input.name, sandbox)
-      return sandbox
     },
-    deleteByName: async (name) => {
-      deleted.push(name)
-      return sandboxes.delete(name) ? 'confirmed' : 'absent'
-    },
-    listSnapshots: async () => [],
-    deleteSnapshot: async () => {},
-  }
-  const exec: Exec = async (cmd) => {
-    if (cmd.includes('get-url'))
-      return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
-    if (cmd.includes('ls-remote')) {
-      // The build branch was never published, so the recorded base applies.
-      const ref = cmd.at(-1)
-      return {
-        stdout: ref === 'refs/heads/main' ? `${BASE}\t${ref}\n` : '',
-        stderr: '',
-        exitCode: 0,
-      }
-    }
-    return { stdout: '', stderr: '', exitCode: 0 }
-  }
-  const provider = new VercelSandboxProvider({
-    config: {
-      image: 'vercel/sandbox/universal:latest',
-      vcpus: 4,
-      timeoutSeconds: 2700,
-      failoverRegions: [],
-      environmentVariables: [],
-    },
-    env: { GITHUB_TOKEN: 'publication-secret' },
-    storeRef: 'https://store.example.test',
-    storeToken: 'scoped-token',
-    delegateCredential: async () => 'delegated-token',
-    repo: path,
-    facade,
-    exec,
-    observeWaitMs: 25,
-    packageArchive: async () => new Uint8Array([1]),
-  })
-  const dispatcher = new Dispatcher({
-    store,
-    config,
-    clock,
-    repo: path,
-    ids: sequentialIds(),
-    forge,
-    exec,
-    tickets,
-    workspaces: provider,
-    launchRunner: async () => 'scheduled',
   })
   const provisioned = async () =>
     (await store.getEvents(slug)).find(
@@ -1701,9 +1610,7 @@ test('a half-provisioned sandbox whose clone lacks the base is released without 
     )
 
   for (let n = 0; n < 8 && !(await provisioned()); n++) {
-    await dispatcher.tick({ acceptNewWork: false })
-    await dispatcher.drainProvisioning()
-    clock.advance(10 * 60_000)
+    await tick()
   }
 
   const g0 = created[0]!
