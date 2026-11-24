@@ -126,11 +126,13 @@ This register leaves the landing page and its reference images unchanged.
 
 ### Copy as Markdown (2026-10-20)
 
-Every docs title shares a row with a native Copy as Markdown button: ink 2px
-outline, ground fill, square corners, bold 14/20 label, minimum 40px height.
-Below 720px it sits beneath the title with a 16px gap and minimum 44px height.
-The title group retains 24px before the lead paragraph. Hover uses live and
-pressed uses reverse video; the shared focus outline applies. Success reads
+Every docs title shares a row with a native Copy as Markdown button in the
+ghost style (2026-10-23, superseding the original ink outline): a transparent
+2px border that stays withheld on hover, no fill, square corners, bold 14/20
+label in slack, minimum 40px height. Below 720px it sits beneath the title with
+a 16px gap and minimum 44px height. The title group retains 24px before the
+lead paragraph. Hover turns the label live and pressed uses reverse video; the
+shared focus outline applies. Success reads
 Copied for two seconds; failure reads Copy failed until the next attempt.
 A separate visually hidden polite atomic status announces both outcomes.
 Only the article is serialized, preserving formatting and canonical links;
