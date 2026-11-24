@@ -99,7 +99,9 @@ test('checkout and origin-mode capture of one commit are byte-identical', async 
   ])
   expect(record.imports.map((entry) => entry.path)).toEqual(['docs/more.md', 'docs/rules.md'])
   const references = record.skills[0]!.files
-  expect(references.find((file) => file.path === 'references/bom.md')?.text).toBe('�# bom\n')
+  expect(references.find((file) => file.path === 'references/bom.md')?.text).toBe(
+    `${String.fromCharCode(0xfeff)}# bom\n`,
+  )
   expect(references.find((file) => file.path === 'references/latin1.txt')?.base64).toBe(
     Buffer.from(LATIN1).toString('base64'),
   )

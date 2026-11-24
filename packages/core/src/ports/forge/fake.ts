@@ -276,8 +276,9 @@ export class FakeForge implements Forge {
   readonly files = new Map<string, string>()
   readonly commitMessages = new Map<string, string>()
   readonly buildSlugs = new Map<number, string>()
-  /** Seedable tree reads: listings by commit, blob bytes by id, and commits
-   * whose listing throws `ForgeTreeUnlistable` naming a directory. */
+  /** Seedable tree reads: listings by commit (unseeded commits list empty),
+   * blob bytes by id, and commits whose listing throws `ForgeTreeUnlistable`
+   * naming a directory. */
   readonly trees = new Map<string, ForgeTreeEntry[]>()
   readonly blobs = new Map<string, Uint8Array>()
   readonly unlistable = new Map<string, string>()
@@ -745,9 +746,8 @@ export class FakeForge implements Forge {
     this.treeReads.push(commit)
     const directory = this.unlistable.get(commit)
     if (directory !== undefined) throw new ForgeTreeUnlistable(directory)
-    const entries = this.trees.get(commit)
-    if (entries === undefined) throw new Error(`FakeForge: unknown tree ${commit}`)
-    return structuredClone(entries)
+    // An unseeded commit is a repository with no agent context.
+    return structuredClone(this.trees.get(commit) ?? [])
   }
 
   async readBlob(oid: string): Promise<Uint8Array> {

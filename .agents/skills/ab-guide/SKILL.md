@@ -2152,9 +2152,10 @@ base commit and captures:
 | `agent-context-head` | Pointer: last base head handled, input fingerprint, standing diagnostic | When the base head changes |
 | `agent-context-cache.<i>` | Blob bytes an interrupted capture already fetched | Only when an invocation deadline cuts a capture short |
 
-An unchanged base head costs one head read per tick, one small pointer read per
-fresh process, and no tree, blob, record or event reads. Readers take the
-latest `agent-context` revision only.
+Each process reads the base head at most once a minute, always on its first
+tick. An unchanged head then costs one small pointer read per fresh process and
+no tree, blob, record or event reads. Readers take the latest `agent-context`
+revision only.
 
 Two bounds apply, and each has a typed tick-report diagnostic that `ab
 dispatch` prints:
@@ -2164,9 +2165,9 @@ dispatch` prints:
 
 Both name the bound and the largest contributors. They, and `tree-unlistable`
 (the forge cannot list one directory completely), keep the last good revision
-and are reported once per base head. `capture-failed` retries every tick and is
-reported once per distinct failure; `unavailable` means the forge cannot read
-trees.
+and are reported once per base head. `capture-failed` is retried after five
+minutes, or as soon as the base head moves, and reported once per distinct
+failure; `unavailable` means the forge cannot read trees.
 
 All three kinds are retention-managed like the dispatcher config artifacts: the
 newest 200 revisions of each kind survive (`AB_ARTIFACT_RETENTION_MAX_REVISIONS`

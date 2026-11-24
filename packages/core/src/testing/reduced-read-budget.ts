@@ -7726,7 +7726,10 @@ export async function agentContextReadBudget(): Promise<void> {
       'AGENTS.md': 'agents',
     })
     forge.remoteBranches.set('main', head)
-    const warm = new AgentContextCapture({ store, repo, forge })
+    // Every run is past the head-poll interval: the head is really read.
+    let elapsed = 0
+    const paced = () => (elapsed += 60_000)
+    const warm = new AgentContextCapture({ store, repo, forge, elapsed: paced })
     expect(await warm.run({ baseBranch: 'main' })).toEqual([])
     const forgeReads = () => [forge.treeReads.length, forge.blobReads.length]
     const before = forgeReads()
@@ -7735,7 +7738,9 @@ export async function agentContextReadBudget(): Promise<void> {
     })
     const freshTick = await measureStoreReads(store, async () => {
       expect(
-        await new AgentContextCapture({ store, repo, forge }).run({ baseBranch: 'main' }),
+        await new AgentContextCapture({ store, repo, forge, elapsed: paced }).run({
+          baseBranch: 'main',
+        }),
       ).toEqual([])
     })
     expect(forgeReads()).toEqual(before)

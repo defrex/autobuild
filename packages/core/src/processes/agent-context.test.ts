@@ -14,6 +14,7 @@ import {
 import { AGENT_CONTEXT_CACHE_KIND_PREFIX } from '../store/retention'
 import { MemoryBuildStore } from '../store/memory'
 import {
+  AGENT_CONTEXT_HEAD_POLL_MS,
   AGENT_CONTEXT_RETRY_MS,
   AgentContextCapture,
   type AgentContextBounds,
@@ -46,9 +47,11 @@ async function world(opts: { maxRevisions?: number; msPerBlob?: number } = {}) {
     now += opts.msPerBlob ?? 0
     return readBlob(oid)
   }
+  // A new head lands at least one head-poll interval later.
   const at = (n: number, files: Record<string, FakeTreeFile>) => {
     forge.seedTree(head(n), files)
     forge.remoteBranches.set('main', head(n))
+    now += AGENT_CONTEXT_HEAD_POLL_MS
   }
   const capture = (bounds?: Partial<AgentContextBounds>) =>
     new AgentContextCapture({
@@ -56,6 +59,7 @@ async function world(opts: { maxRevisions?: number; msPerBlob?: number } = {}) {
       repo: REPO,
       forge,
       now: () => now,
+      elapsed: () => now,
       ...(bounds ? { bounds } : {}),
     })
   const revisions = async (kind = AGENT_CONTEXT_ARTIFACT) =>
@@ -192,13 +196,18 @@ describe('capture', () => {
     expect(await capture.run({ baseBranch: 'main' })).toEqual([
       { kind: 'tree-unlistable', commit: head(1), directory: 'vendor' },
     ])
+    w.clock.advance(AGENT_CONTEXT_HEAD_POLL_MS)
     expect(await capture.run({ baseBranch: 'main' })).toEqual([])
     expect(w.forge.treeReads).toEqual([head(1)])
 
-    w.forge.remoteBranches.set('main', head(2))
+    w.at(2, SKILLS)
+    const readBlob = w.forge.readBlob
+    w.forge.readBlob = async () => {
+      throw new Error('blob read refused')
+    }
     const [failed] = await capture.run({ baseBranch: 'main' })
     expect(failed).toMatchObject({ kind: 'capture-failed', commit: head(2) })
-    w.forge.seedTree(head(2), SKILLS)
+    w.forge.readBlob = readBlob
     // Retried at the same head only after the backoff: no per-tick reads.
     expect(await capture.run({ baseBranch: 'main' })).toEqual([])
     expect(w.forge.treeReads).toEqual([head(1), head(2)])

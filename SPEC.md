@@ -3023,9 +3023,10 @@ content for one commit.
   fingerprint and any standing diagnostic. `agent-context-cache.<i>` slots hold
   blob bytes an interrupted capture already fetched, so a later invocation
   resumes rather than refetching. All three are retention-managed.
-- **Cost.** An unchanged base head costs the head read and, once per process,
-  the pointer read. Nothing else is read, and no repository event is read or
-  written. A head change reads the tree; only a changed input fingerprint reads
+- **Cost.** Each process reads the base head at most once a minute, always on
+  its first tick. An unchanged head then costs one pointer read per process.
+  Nothing else is read, and no repository event is read or written. A failed
+  capture is retried after five minutes, or as soon as the head moves. A head change reads the tree; only a changed input fingerprint reads
   the latest record and the blobs it lacks. Readers take the latest revision
   only.
 - **Bounds.** The encoded record may not exceed 2.25 MiB (`oversize`), and the

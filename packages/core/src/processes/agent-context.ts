@@ -4,8 +4,8 @@
  * (`store/agent-context.ts`), read through the forge in both checkout and
  * origin mode so both produce the same record for the same commit.
  *
- * Recurring cost: one base-head read per tick, and one ~1 KiB pointer read
- * per process. While the head is unchanged nothing else is read. A head
+ * Recurring cost: one base-head read per minute per process (and on its
+ * first tick), and one ~1 KiB pointer read per process. While the head is unchanged nothing else is read. A head
  * change reads the tree; a change to the context fingerprint additionally
  * reads the latest record (to reuse its blobs) and fetches only new blobs.
  * No repository events are read or written.
@@ -53,6 +53,10 @@ const LARGEST = 5
 /** A failed capture is retried at the same head after this long, and at
  * once when the head moves, so a persistent failure costs no per-tick reads. */
 export const AGENT_CONTEXT_RETRY_MS = 5 * 60_000
+/** A process reads the base head at most this often (always on its first
+ * run), so idle ticks make no forge request, and no guarded-forge health
+ * read, for the context. */
+export const AGENT_CONTEXT_HEAD_POLL_MS = 60_000
 
 export interface AgentContextBounds {
   maxBytes: number
@@ -98,25 +102,32 @@ export class AgentContextCapture {
   private readonly store: Store
   private readonly repo: string
   private readonly forge: Forge
+  /** The dispatch clock, read only to honor `deadlineAt`. */
   private readonly now: () => number
+  /** Monotonic process time pacing head polls and failure retries. */
+  private readonly elapsed: () => number
   private readonly bounds: AgentContextBounds
   /** Last pointer this process read or wrote; `null` when none exists. This
    * dispatcher is the pointer's only writer while it holds the repository. */
   private pointer: AgentContextPointer | null | undefined
   private unavailableReported = false
   private lastFailure: { message: string; head?: string; at: number } | undefined
+  private headReadAt: number | undefined
 
   constructor(opts: {
     store: Store
     repo: string
     forge: Forge
     now?: () => number
+    /** Pacing clock in ms; defaults to monotonic process time. */
+    elapsed?: () => number
     bounds?: Partial<AgentContextBounds>
   }) {
     this.store = opts.store
     this.repo = opts.repo
     this.forge = opts.forge
     this.now = opts.now ?? (() => Date.now())
+    this.elapsed = opts.elapsed ?? (() => performance.now())
     this.bounds = {
       maxBytes: opts.bounds?.maxBytes ?? AGENT_CONTEXT_MAX_BYTES,
       maxRawBytes: opts.bounds?.maxRawBytes ?? AGENT_CONTEXT_MAX_RAW_BYTES,
@@ -138,11 +149,17 @@ export class AgentContextCapture {
         },
       ]
     }
+    if (
+      this.headReadAt !== undefined &&
+      this.elapsed() - this.headReadAt < AGENT_CONTEXT_HEAD_POLL_MS
+    )
+      return []
+    this.headReadAt = this.elapsed()
     let head: string | undefined
     try {
       head = await forge.remoteBranchSha(opts.baseBranch)
       const failed = this.lastFailure
-      if (failed?.head === head && this.now() - failed.at < AGENT_CONTEXT_RETRY_MS) return []
+      if (failed?.head === head && this.elapsed() - failed.at < AGENT_CONTEXT_RETRY_MS) return []
       const diagnostics = await this.capture(head, opts)
       this.lastFailure = undefined
       return diagnostics
@@ -151,7 +168,11 @@ export class AgentContextCapture {
       if (error instanceof ForgeRequestDeferred) return []
       const text = message(error)
       const repeated = this.lastFailure?.message === text
-      this.lastFailure = { message: text, ...(head !== undefined ? { head } : {}), at: this.now() }
+      this.lastFailure = {
+        message: text,
+        ...(head !== undefined ? { head } : {}),
+        at: this.elapsed(),
+      }
       // Reported once per distinct failure.
       if (repeated) return []
       return [
