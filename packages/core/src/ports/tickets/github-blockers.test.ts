@@ -34,6 +34,15 @@ function setup() {
 
 const ready = (github: FakeGitHubIssues) => github.fileIssue({ labels: ['autobuild:ready'] })
 
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise
+  } catch (error) {
+    return error as Error
+  }
+  throw new Error('expected a rejection')
+}
+
 describe('github blockers behind a lagging dependency summary', () => {
   test('reads, the ready listing and dependency states report a just-recorded blocker', async () => {
     const { github, tickets } = setup()
@@ -71,9 +80,7 @@ describe('github blockers behind a lagging dependency summary', () => {
     github.staleDependencySummary = true
     github.uiAddDependency(issue, blocker)
     github.resetRequests()
-    const refused = await tickets
-      .claim(String(issue), { blockedBy: [] })
-      .catch((error: unknown) => error)
+    const refused = await rejection(tickets.claim(String(issue), { blockedBy: [] }))
     expect(refused).toBeInstanceOf(TicketClaimBlockedError)
     expect((refused as TicketClaimBlockedError).blockers).toEqual([String(blocker)])
     expect(github.writes()).toEqual([])
@@ -138,9 +145,9 @@ describe('github create with blockers into the ready state', () => {
       if (method !== 'POST' || !path.endsWith('/dependencies/blocked_by')) return false
       return ++posts === 2
     })
-    const failure = await tickets
-      .create({ title: 'Dependent', body: 'Body.', blockedBy: [a, b] })
-      .catch((error: unknown) => error as Error)
+    const failure = await rejection(
+      tickets.create({ title: 'Dependent', body: 'Body.', blockedBy: [a, b] }),
+    )
     expect(failure.message).toContain('was created at')
     expect(failure.message).toContain(`Blockers recorded: "${a}"`)
     expect(failure.message).toContain(`Blockers not recorded: "${b}"`)
@@ -159,9 +166,9 @@ describe('github create with blockers into the ready state', () => {
       { message: 'API rate limit exceeded' },
       (method, path) => method === 'POST' && path.endsWith('/dependencies/blocked_by'),
     )
-    const failure = await tickets
-      .create({ title: 'Dependent', body: 'Body.', blockedBy: [a] })
-      .catch((error: unknown) => error as Error)
+    const failure = await rejection(
+      tickets.create({ title: 'Dependent', body: 'Body.', blockedBy: [a] }),
+    )
     expect(failure.message).toContain('was created at')
     expect(failure.message).toContain('left in triage instead of ready')
   })
@@ -177,7 +184,7 @@ describe('github create with blockers into the ready state', () => {
       if (method !== 'POST' || !path.endsWith('/dependencies/blocked_by')) return false
       return ++posts === 2
     })
-    const failure = await tickets.create(draft, key).catch((error: unknown) => error as Error)
+    const failure = await rejection(tickets.create(draft, key))
     expect(failure.message).toContain('already exists')
     const ticket = await tickets.create(draft, key)
     expect(ticket).toMatchObject({ state: 'ready', blockedBy: [a, b] })

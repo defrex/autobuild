@@ -57,6 +57,7 @@ import {
   ForgeFailure,
   NoCommitsBetweenBranchesError,
   TicketClaimBlockedError,
+  type TicketClaimOptions,
   TicketSourceRateLimitError,
   WorkspaceCleanupRequired,
 } from '../ports/types'
@@ -1617,10 +1618,10 @@ releaseId = 42
     const h = harness({ tickets: [readyTicket('T-1')] })
     const claim = h.tickets.claim.bind(h.tickets)
     const seen: unknown[] = []
-    h.tickets.claim = async (id, opts) => {
+    h.tickets.claim = async (id: string, opts?: TicketClaimOptions) => {
       seen.push(opts)
       if (seen.length === 1) throw new TicketClaimBlockedError('fake', id, ['T-9'])
-      return claim(id, opts)
+      return claim(id)
     }
 
     const blocked = await h.dispatcher.tick()
