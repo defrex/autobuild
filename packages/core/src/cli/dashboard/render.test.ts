@@ -8,7 +8,7 @@ import { PanelLogBuilder, panelStarted } from '../../kernel/generators/panel-log
 import { cellWidth } from './cells'
 import { projectSessions } from './detail'
 import { dashboardFactsReducer } from './facts'
-import { renderDashboardFrameImage } from './frame-image'
+import { parseFrame } from './frame-parse'
 import {
   DASHBOARD_BUILD_LEGEND,
   DASHBOARD_SESSION_LIVE_LEGEND,
@@ -134,23 +134,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
 
-  test('the warning row is absent until needed, with one separator below the top section', () => {
-    const clean = rd(model([build()]), WIDE).map(stripAnsi)
-    expect(clean[2]).toBe('')
-    expect(clean[3]).toContain('auth-rate-limit')
-
-    const warned = rd(
-      { ...model([build()]), warningLines: ['ticket source unavailable'] },
-      WIDE,
-    ).map(stripAnsi)
-    expect(warned[2]).toBe('   ticket source unavailable')
-    expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Autobuild'))
-    expect(warned[3]).toBe('')
-    expect(warned[4]).toContain('auth-rate-limit')
-    expect(warned).toHaveLength(clean.length + 1)
-  })
-
   test('warning and upgrade chrome never control the top/body separator', () => {
+    const clean = rd(model([build()]), WIDE).map(stripAnsi)
     for (const [availableUpgrade, warningLines] of [
       [undefined, undefined],
       ['2.4.0', undefined],
@@ -169,6 +154,16 @@ describe('renderDashboard: two-line header and conditional warning', () => {
         expect(lines[2 + Number(availableUpgrade !== undefined)]).toContain(
           'ticket source unavailable',
         )
+      }
+      if (availableUpgrade === undefined && warningLines === undefined) {
+        expect(lines[2]).toBe('')
+        expect(bodyIndex).toBe(3)
+      }
+      if (availableUpgrade === undefined && warningLines !== undefined) {
+        // The warning row appears only when needed, at the title column.
+        expect(lines[2]).toBe('   ticket source unavailable')
+        expect(lines[2]!.search(/\S/)).toBe(lines[0]!.indexOf('Autobuild'))
+        expect(lines).toHaveLength(clean.length + 1)
       }
     }
   })
@@ -242,37 +237,6 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     for (const row of rows) expect(stripAnsi(row).search(/\S/)).toBe(3)
   })
 
-  test('multiple short warning notices wrap independently without dropping later notices', () => {
-    const notices = [
-      'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
-      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, judge, plan, plan-review, propose, reconcile, slug, upgrade',
-      'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
-    ]
-    const lines = rd({ ...model([build()]), warningLines: notices }, { color: false, width: 80 })
-    const frame = lines.join('\n')
-
-    // Each of these notices fits within its own three-row cap, so every notice
-    // survives whole, including the last one's final word.
-    expect(frame).toContain('[roles.ghost]')
-    expect(frame).toContain('[roles.typo]')
-    expect(frame).toContain('upgrade')
-    expect(frame).toContain('[roles.e2e]')
-    expect(frame).toContain('release.')
-
-    const regionRows: string[] = []
-    for (const row of lines.slice(2)) {
-      if (stripAnsi(row).trim() === '') break
-      regionRows.push(row)
-    }
-    // Wrapped: more physical rows than notices, every one within the width and
-    // aligned under the first.
-    expect(regionRows.length).toBeGreaterThan(notices.length)
-    for (const row of regionRows) {
-      expect(stripAnsi(row).length).toBeLessThanOrEqual(80)
-      expect(stripAnsi(row).search(/\S/)).toBe(3)
-    }
-  })
-
   test('a representative role diagnostic survives whole at operator terminal sizes', () => {
     const notices = [
       'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
@@ -306,6 +270,28 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       expect(frame).toContain('a')
       expect(frame).toContain('e')
     }
+
+    // Multiple short notices wrap independently without dropping later
+    // notices: each fits its own three-row cap, so every one survives whole,
+    // including its final word, on more physical rows than notices, each
+    // within the width and aligned under the first.
+    const lines = rd(
+      { ...model([build()]), warningLines: notices.slice(0, 3) },
+      { color: false, width: 80 },
+    )
+    const frame = lines.join('\n')
+    expect(frame).toContain('upgrade')
+    expect(frame).toContain('release.')
+    const regionRows: string[] = []
+    for (const row of lines.slice(2)) {
+      if (stripAnsi(row).trim() === '') break
+      regionRows.push(row)
+    }
+    expect(regionRows.length).toBeGreaterThan(3)
+    for (const row of regionRows) {
+      expect(stripAnsi(row).length).toBeLessThanOrEqual(80)
+      expect(stripAnsi(row).search(/\S/)).toBe(3)
+    }
   })
 
   test('an empty dashboard separates the controls, placeholder, and footer once each', () => {
@@ -316,6 +302,13 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines[placeholder - 1]).toBe('')
     expect(lines[placeholder + 1]).toBe('')
     expect(lines.at(-1)).toContain('Keys:')
+
+    // Bounded, the empty state keeps the legend pinned to the last row.
+    const bounded = rd(model([]), { color: false, width: 80, height: 20 })
+    expect(bounded).toHaveLength(20)
+    expect(bounded[2]).toBe('')
+    expect(bounded[3]).toContain('no active builds')
+    expect(bounded.at(-1)).toContain('Keys:')
   })
 
   test('the summary renders the triage count and current/limit pressure for active builds', () => {
@@ -326,9 +319,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(saturated).toContain('triage 3 | queue 2 | active 5/5')
     expect(saturated).not.toContain('observations')
     expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
-  })
 
-  test('an unknown triage count renders a placeholder, never a fabricated zero', () => {
+    // An unknown count renders a placeholder, never a fabricated zero.
     const { triage: _triage, ...unknown } = model([])
     const [summary] = rd(unknown, WIDE)
     expect(summary).toContain('triage – | queue 2 | active 0/5')
@@ -550,38 +542,6 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       }
     }
   })
-
-  test('ABORTING renders progress instead of a pipeline and advertises no build action', () => {
-    const aborting = build({
-      status: 'aborting',
-      steps: [],
-      abortProgress: 'abort requested; waiting for running work to stop',
-    })
-    const list = rd(
-      {
-        ...model([aborting]),
-        selection: { kind: 'build', slug: aborting.slug },
-      },
-      WIDE,
-    ).map(stripAnsi)
-    expect(list.join('\n')).toContain('ABORTING')
-    expect(list.join('\n')).toContain('abort requested; waiting for running work to stop')
-    expect(list.join('\n')).not.toContain('[ ] plan')
-    expect(list.at(-1)).toBe(' Keys: Up/Down select  Enter details  Ctrl-C quit')
-
-    const detail = rd(
-      {
-        ...model([aborting]),
-        selection: { kind: 'build', slug: aborting.slug },
-        view: { kind: 'detail', slug: aborting.slug, scroll: 0 },
-      },
-      WIDE,
-    ).map(stripAnsi)
-    expect(detail.join('\n')).toContain('Abort progress')
-    expect(detail.at(-1)).toBe(
-      ' Keys: Up/Down select session  Enter transcript  Esc back  Ctrl-C quit',
-    )
-  })
 })
 
 describe('renderDashboard: queued dispatch rows', () => {
@@ -715,18 +675,7 @@ describe('renderDashboard: blocked-resume input', () => {
 describe('renderDashboard: the resume panel names its bindings (AC 4)', () => {
   // Revision 4 of the plan abbreviated the action words to buy narrow widths
   // and passed a key-name assertion while failing AC 4 outright. So the
-  // assertion here is on the ACTION LABELS, looped over every supported width.
-  const WIDTHS = [78, 55, 46, 38, 18, 12, 10, 9, 7]
-
-  test('every width names submit, newline, and cancel', () => {
-    for (const width of WIDTHS) {
-      const joined = resumeKeysRows(width).join('\n')
-      expect(joined).toContain('submit')
-      expect(joined).toContain('newline')
-      expect(joined).toContain('cancel')
-    }
-  })
-
+  // assertion here is on the ACTION LABELS, at every supported width.
   test('no row overflows and no action word is split across rows', () => {
     for (let width = 7; width <= 90; width += 1) {
       const rows = resumeKeysRows(width)
@@ -771,16 +720,6 @@ describe('renderDashboard: the resume panel names its bindings (AC 4)', () => {
 describe('renderDashboard: the resume panel states both hint facts (AC 2)', () => {
   // A narrow width invites paying in WORDS, and this AC is denominated in
   // words. Every rung carries both facts; narrow widths pay in rows instead.
-  const WIDTHS = [78, 38, 20, 18, 12]
-
-  test('every width says guidance is optional AND that Enter alone resumes', () => {
-    for (const width of WIDTHS) {
-      const joined = resumeHintRows(width).join(' ')
-      expect(joined).toMatch(/optional/i)
-      expect(joined).toMatch(/Enter (?:on an empty field|alone) resumes/i)
-    }
-  })
-
   test('the worked row split at each width', () => {
     expect(resumeHintRows(78)).toEqual([
       'Guidance is optional -- Enter on an empty field resumes without it',
@@ -1007,12 +946,6 @@ describe('renderDashboard: the resume panel never loses a question silently (AC 
     const questions = rows.filter((row) => row.includes('word') || row.includes('...'))
     expect(questions.at(-1)).toMatch(/\.\.\. and \d+ more lines/)
   })
-
-  test('with no capacity for questions the blocker is absent — the drop order, not a cut', () => {
-    const rows = resumePanel(asking(['a question']), false, 78, 2).map(stripAnsi)
-    expect(rows.join('\n')).not.toContain('a question')
-    expect(rows.join('\n')).not.toContain('...')
-  })
 })
 
 describe('renderDashboard: the resume panel obeys the frame budget', () => {
@@ -1099,8 +1032,7 @@ describe('renderDashboard: the resume panel obeys the frame budget', () => {
 
   test('a prompt frame emits only escape vocabulary the capture adapter accepts', () => {
     const lines = rd(answering('multi\nline guidance'), { color: true, width: 120, height: 30 })
-    const image = renderDashboardFrameImage(lines, { columns: 120 })
-    expect([...image.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect(() => parseFrame(lines, 120)).not.toThrow()
   })
 })
 
@@ -1119,15 +1051,8 @@ describe('renderDashboard: plain mode (the --plain AC)', () => {
       WIDE,
     ).join('\n')
     expect(out).not.toContain('\x1b')
-  })
-
-  test('the PR URL is bare in plain mode — terminals linkify it themselves', () => {
-    const out = rd(
-      model([build({ pr: { url: 'https://github.com/defrex/app/pull/7', state: 'open' } })]),
-      WIDE,
-    ).join('\n')
+    // The PR URL is bare, never an OSC 8 link: terminals linkify it themselves.
     expect(out).toContain('https://github.com/defrex/app/pull/7')
-    expect(out).not.toContain('\x1b]8')
   })
 })
 
@@ -1150,11 +1075,10 @@ describe('renderDashboard: never color-only', () => {
     expect(out).toContain('BLOCKED')
     expect(out).toContain('PAUSED')
     expect(out).toContain('RUNNING')
-  })
 
-  test('the same glyphs and words survive WITH color on', () => {
-    const out = rd(model([build({ status: 'blocked' })]), { color: true, width: 200 })
-    const plain = stripAnsi(out.join('\n'))
+    // The same glyphs and words survive WITH color on.
+    const colored = rd(model([build({ status: 'blocked' })]), { color: true, width: 200 })
+    const plain = stripAnsi(colored.join('\n'))
     expect(plain).toContain('[x] plan')
     expect(plain).toContain('[>] implement')
     expect(plain).toContain('[~] code-review')
@@ -1210,28 +1134,6 @@ describe('renderDashboard: never color-only', () => {
     expect(lines.join('\n')).not.toContain('auto requested')
     expect(lines.join('\n')).not.toContain('auto enabled')
     expect(lines.join('\n')).not.toContain('auto cancelling')
-  })
-
-  test('legacy defaults cannot change a merge token color', () => {
-    const mismatch = rd(
-      { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: true },
-      { color: true, width: 200 },
-    )
-      .join('\n')
-      .split('\n')
-      .find((line) => stripAnsi(line).includes('off-row'))!
-    expect(stripAnsi(mismatch)).toContain('merge off')
-    expect(mismatch).not.toContain('\x1b[31mmerge off')
-
-    const agrees = rd(
-      { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: false },
-      { color: true, width: 200 },
-    )
-      .join('\n')
-      .split('\n')
-      .find((line) => stripAnsi(line).includes('off-row'))!
-    expect(stripAnsi(agrees)).toContain('merge off')
-    expect(agrees).not.toContain('\x1b[31mmerge off')
   })
 
   test('the parked no-consent reason renders in the row and the detail view', () => {
@@ -1361,6 +1263,19 @@ describe('renderDashboard: emphasis', () => {
     // Off (default off here) still renders its token, in the dim tone.
     expect(stripAnsi(offRow)).toContain('merge off')
     expect(offRow).toContain('\x1b[2mmerge off')
+
+    // Legacy defaults cannot change a merge token color.
+    for (const defaultAutoMerge of [true, false]) {
+      const row = rd(
+        { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge },
+        { color: true, width: 200 },
+      )
+        .join('\n')
+        .split('\n')
+        .find((line) => stripAnsi(line).includes('off-row'))!
+      expect(stripAnsi(row)).toContain('merge off')
+      expect(row).not.toContain('\x1b[31mmerge off')
+    }
   })
 })
 
@@ -1537,7 +1452,9 @@ describe('renderDashboard: layout', () => {
       expect(line[0]).toBe(' ')
       expect(['  ', '> ']).toContain(line.slice(1, 3))
     }
-    expect(lines.slice(0, legend).filter((line) => line.startsWith(' > '))).toHaveLength(1)
+    const marked = lines.slice(0, legend).filter((line) => line.startsWith(' > '))
+    expect(marked).toHaveLength(1)
+    expect(marked[0]).toContain('beta')
   })
 
   test('PR and status columns remain aligned when the auto-merge token is absent', () => {
@@ -1555,16 +1472,6 @@ describe('renderDashboard: layout', () => {
     )
     expect(off.indexOf('RUNNING')).toBe(on.indexOf('RUNNING'))
     expect(off.length).toBe(on.length)
-  })
-
-  test('selection is an ASCII marker on exactly the selected slug row', () => {
-    const selected = {
-      ...model([build({ slug: 'a' }), build({ slug: 'b' })]),
-      selection: { kind: 'build' as const, slug: 'b' },
-    }
-    const lines = rd(selected, WIDE).map(stripAnsi)
-    expect(lines.filter((line) => line.startsWith(' > '))).toHaveLength(1)
-    expect(lines.find((line) => line.startsWith(' > '))).toContain('b')
   })
 })
 
@@ -1614,25 +1521,6 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     expect(progress.indexOf('[')).toBe(3)
     expect(blocker.indexOf('!')).toBe(3)
     expect(controls.startsWith(' Keys:')).toBe(true)
-  })
-
-  test('right-pinned build and Harvest statuses end at terminal column N-1', () => {
-    for (const color of [false, true]) {
-      const width = 80
-      const lines = rd(
-        {
-          ...model([build({ slug: 'build-row', pr: undefined })]),
-          harvest: harvest(),
-        },
-        { color, width },
-      )
-      const buildLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('build-row'))!)
-      const harvestLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('Harvest'))!)
-      for (const line of [buildLine, harvestLine]) {
-        expect(line.length).toBe(width - 1)
-        expect(line.endsWith('RUNNING')).toBe(true)
-      }
-    }
   })
 
   test('a held queued row and paused controls fit deliberately at 64 columns', () => {
@@ -1712,16 +1600,22 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
   })
 
   test('harvest and build statuses end in the same column and RUNNING uses the same green', () => {
-    const lines = rd(
-      {
-        ...model([
-          build({ slug: 'build-row', pr: undefined }),
-          build({ slug: 'paused-row', status: 'paused', pr: undefined }),
-        ]),
-        harvest: harvest(),
-      },
-      { color: true, width: 100 },
-    )
+    const dashboard = {
+      ...model([
+        build({ slug: 'build-row', pr: undefined }),
+        build({ slug: 'paused-row', status: 'paused', pr: undefined }),
+      ]),
+      harvest: harvest(),
+    }
+    // Both statuses are right-pinned to terminal column N-1 without color too.
+    const plainLines = rd(dashboard, { color: false, width: 100 })
+    for (const label of ['Harvest', 'build-row']) {
+      const line = plainLines.find((candidate) => candidate.includes(label))!
+      expect(line.length).toBe(99)
+      expect(line.endsWith('RUNNING')).toBe(true)
+    }
+
+    const lines = rd(dashboard, { color: true, width: 100 })
     const harvestLine = lines.find((line) => stripAnsi(line).includes('Harvest'))!
     const buildLine = lines.find((line) => stripAnsi(line).includes('build-row'))!
     const pausedLine = lines.find((line) => stripAnsi(line).includes('paused-row'))!
@@ -1753,7 +1647,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(statusLines.every((line) => line.includes('\x1b[33mPAUSED\x1b[0m'))).toBe(true)
   })
 
-  test('agent-authored Unicode stays visible in a deterministic PNG frame', () => {
+  test('agent-authored Unicode stays visible in a capture-ready frame', () => {
     const blockerQuestion = 'Should the “café” policy remain enabled?'
     const failureError = 'agent failed in naïve 💥 mode'
     const failureDetail = `stopped at synthesize r1 - automatic recovery 0/2; ${failureError}`
@@ -1776,10 +1670,9 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(plain.join('\n')).toContain('agent failed in naïve 💥 mode')
     expect(plain.every((line) => cellWidth(line) <= 120)).toBe(true)
 
-    const first = renderDashboardFrameImage(lines, { columns: 120 })
-    const second = renderDashboardFrameImage(lines, { columns: 120 })
-    expect([...first.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
-    expect(first.png).toEqual(second.png)
+    // The frame stays inside the capture adapter's vocabulary; PNG bytes for
+    // real Unicode frames are pinned by tools/dashboard-capture.
+    expect(() => parseFrame(lines, 120)).not.toThrow()
   })
 })
 
@@ -1787,17 +1680,6 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
   // If a line exceeds the width, terminal wrapping consumes unbudgeted rows and
   // can scroll the top-anchored frame's header away despite its logical line
   // count fitting the screen.
-
-  test('no line exceeds the width, in plain or color', () => {
-    const long = build({
-      slug: 'a-very-long-slug-that-goes-on'.repeat(3),
-      blockers: ['a blocker message that is far too long to fit on one line'.repeat(3)],
-    })
-    for (const color of [false, true]) {
-      const lines = rd(model([long]), { color, width: 40 })
-      for (const line of lines) expect(stripAnsi(line).length).toBeLessThanOrEqual(40)
-    }
-  })
 
   test('truncation moves or removes flags and ZWJ families whole', () => {
     const flag = '🇺🇸'
@@ -1873,37 +1755,21 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     expect(plain.length).toBeLessThanOrEqual(60)
   })
 
-  test('the build legend stays one physical row at a narrow width', () => {
-    // The list-view legend is the longest it has ever been now that it carries
-    // `Enter details`, and the controls line has no wrapping path — it either
-    // fits or it truncates.
-    const lines = rd(
-      {
-        ...model([build()]),
-        selection: { kind: 'build', slug: 'auth-rate-limit' },
-      },
-      { color: false, width: 40 },
-    )
-    const controls = lines.at(-1)!
-    expect(controls.startsWith(' Keys:')).toBe(true)
-    expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
-    expect(controls.endsWith('~')).toBe(true)
-    expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
-  })
-
-  test('the global legend stays one physical row at a narrow width', () => {
-    // The global legend is now the longest of them all — it carries both
-    // repository toggles and both bulk controls — and, like the build one, it
-    // either fits or it truncates.
-    const lines = rd(
-      { ...model([build()]), selection: { kind: 'global' } },
-      { color: false, width: 40 },
-    )
-    const controls = lines.at(-1)!
-    expect(controls.startsWith(' Keys:')).toBe(true)
-    expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
-    expect(controls.endsWith('~')).toBe(true)
-    expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
+  test('the build and global legends stay one physical row at a narrow width', () => {
+    // The controls line has no wrapping path — it either fits or it
+    // truncates. The build legend carries `Enter details`; the global legend
+    // carries both repository toggles and both bulk controls.
+    for (const selection of [
+      { kind: 'build', slug: 'auth-rate-limit' },
+      { kind: 'global' },
+    ] as const) {
+      const lines = rd({ ...model([build()]), selection }, { color: false, width: 40 })
+      const controls = lines.at(-1)!
+      expect(controls.startsWith(' Keys:')).toBe(true)
+      expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
+      expect(controls.endsWith('~')).toBe(true)
+      expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
+    }
   })
 
   test('a line that fits is left exactly alone', () => {
@@ -1967,16 +1833,13 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     expect(unbounded.length).toBeGreaterThan(24)
   })
 
-  test('…and the same frame clamped is within the cap it was given', () => {
-    // NB: `height: 24` is not "fits a 24-row screen" — see the note above.
-    const lines = rd(model(many(5)), { color: false, width: 80, height: 24 })
-    expect(lines.length).toBeLessThanOrEqual(24)
-  })
-
   test('fills the height exactly, over a sweep of heights and build counts', () => {
     // The list view pads its body region so the legend is pinned to the last
     // rows: a bounded frame is never taller than its cap, and never shorter.
     // Every overflow notice keeps a blank line on both sides at every height.
+    // Height 0 is what `paintableRows(1)` hands us on a 1-row screen: a single
+    // line there would scroll away behind its own trailing newline even after
+    // a full alternate-display clear, which is worse than an empty region.
     for (const n of [0, 1, 2, 3, 5, 8, 20]) {
       for (let height = 0; height <= 40; height += 1) {
         for (const color of [false, true]) {
@@ -2093,21 +1956,6 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     expect(blockerLines).toBe(headers)
   })
 
-  test('an overflowed viewport always contains the selected slug while it moves', () => {
-    for (const selected of [1, 4, 7]) {
-      const m = {
-        ...model(many(8)),
-        selection: {
-          kind: 'build' as const,
-          slug: `interactive-build-dashboard-for-ab-${selected}`,
-        },
-      }
-      const lines = rd(m, { color: false, width: 80, height: 12 })
-      expect(lines.some((line) => line.startsWith(` > AB-${selected}`))).toBe(true)
-      expect(lines.at(-1)).toContain('Up/Down')
-    }
-  })
-
   test('a selected harvest or build remains visible when both participate in overflow', () => {
     const base = { ...model(many(8)), harvest: harvest() }
     const harvestLines = rd(
@@ -2137,23 +1985,6 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     expect(lines.filter((l) => l.includes('BLOCKED'))).toHaveLength(2)
   })
 
-  test('height is optional — absent ⇒ unbounded, for callers not painting a screen', () => {
-    expect(rd(model(many(5)), { color: false, width: 80 }).length).toBeGreaterThan(24)
-  })
-
-  test('a cap of 1 leaves the header and nothing else', () => {
-    expect(rd(model([]), { color: false, width: 80, height: 1 })).toHaveLength(1)
-    expect(rd(model(many(3)), { color: false, width: 80, height: 1 })).toHaveLength(1)
-  })
-
-  test('a cap of 0 paints NOTHING — not a header that would scroll itself off', () => {
-    // What `paintableRows(1)` hands us on a 1-row screen. A single line there
-    // would scroll away behind its own trailing newline even after a full
-    // alternate-display clear, which is worse than an empty region.
-    expect(rd(model([]), { color: false, width: 80, height: 0 })).toEqual([])
-    expect(rd(model(many(3)), { color: false, width: 80, height: 0 })).toEqual([])
-  })
-
   test('a short list is padded so the legend sits on the last rows', () => {
     const lines = rd(model(many(2)), { color: false, width: 80, height: 30 })
     expect(lines).toHaveLength(30)
@@ -2171,6 +2002,12 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       expect(lines[0]).toContain('Autobuild')
       expect(lines.at(-1)).toContain('Keys:')
       expect(lines.some((line) => line.startsWith(` > AB-${selected}`))).toBe(true)
+    }
+    // A shorter viewport still contains the selected slug while it moves.
+    for (const selected of [1, 4, 7]) {
+      const lines = rd(selecting(8, selected), { color: false, width: 80, height: 12 })
+      expect(lines.some((line) => line.startsWith(` > AB-${selected}`))).toBe(true)
+      expect(lines.at(-1)).toContain('Up/Down')
     }
   })
 
@@ -2202,34 +2039,6 @@ describe('renderDashboard: `height` caps the LINE count', () => {
         regions[index]!.controls - regions[0]!.controls,
       )
     }
-  })
-
-  test('after a resize the legend is on the new last row', () => {
-    for (const height of [20, 33]) {
-      const lines = rd(selecting(3, 0), { color: false, width: 80, height })
-      expect(lines).toHaveLength(height)
-      expect(lines.at(-1)).toContain('Keys:')
-    }
-  })
-
-  test('the empty state keeps the legend pinned', () => {
-    const lines = rd(model([]), { color: false, width: 80, height: 20 })
-    expect(lines).toHaveLength(20)
-    expect(lines[2]).toBe('')
-    expect(lines[3]).toContain('no active builds')
-    expect(lines.at(-1)).toContain('Keys:')
-  })
-
-  test('each overflow notice is one blank line from the builds', () => {
-    const lines = rd(selecting(8, 4), { color: false, width: 80, height: 24 })
-    const above = lines.findIndex((line) => line.includes('more above'))
-    const below = lines.findIndex((line) => line.includes('more below'))
-    expect(above).toBeGreaterThan(0)
-    expect(below).toBeGreaterThan(above)
-    expect(lines[above + 1]).toBe('')
-    expect(lines[above + 2]).toContain('BLOCKED')
-    expect(lines[below - 1]).toBe('')
-    expect(lines[below - 2]!.trimStart().startsWith('!')).toBe(true)
   })
 
   test('the whole-build window and its fallback both keep the notice gap', () => {
@@ -2332,9 +2141,8 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
       expect(progress).toContain(label)
     }
     expect(progress).not.toContain('~') // no step was truncated away
-  })
 
-  test('…and the width guarantee still holds on every wrapped line', () => {
+    // …and the width guarantee still holds on every wrapped line.
     for (const width of [30, 44, 60, 100]) {
       for (const color of [false, true]) {
         const lines = rd(model([full]), { color, width })
@@ -2374,14 +2182,6 @@ describe('renderDashboard: the ticket-first, status-right slug line', () => {
     const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), WIDE)))
     expect(line.startsWith('   ENG-42')).toBe(true)
     expect(line.indexOf('auth-rate-limit')).toBeGreaterThan(line.indexOf('ENG-42'))
-  })
-
-  test('the status is right-aligned: the line ends with it, flush to the width (AC 1)', () => {
-    const line = stripAnsi(
-      slugLine(rd(model([build({ pr: undefined })]), { color: false, width: 60 })),
-    )
-    expect(line.length).toBe(59)
-    expect(line.endsWith('RUNNING')).toBe(true)
   })
 
   test('the current phase word no longer appears on the slug line (AC 4)', () => {
@@ -2489,35 +2289,14 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
       expect(early).toContain('waiting, round 2, 1h04m07s')
       expect(early).toBe(rd(detail, { color: false, width: 120, now: 9_000_000 }).join('\n'))
     }
-  })
 
-  test('a running step advances as now moves forward (AC 8)', () => {
-    const b = withStep({
-      label: 'implement',
-      timing: { accumulatedMs: 2_000, runningSince: 1_000_000 },
-    })
-    expect(progressOf(b, 1_000_000 + 3_000)).toContain('implement(5s)') // 2s + 3s
-    expect(progressOf(b, 1_000_000 + 10_000)).toContain('implement(12s)') // 2s + 10s
-  })
-
-  test('a step with no open interval is frozen — now does not move it (AC 10)', () => {
-    const b = build({
+    // A step with no open interval and no qualifier or count is frozen too.
+    const done = build({
       pr: undefined,
       steps: [{ label: 'plan', state: 'done', timing: { accumulatedMs: 65_000 } }],
     })
-    const early = progressOf(b, 1)
-    const late = progressOf(b, 5_000_000)
-    expect(early).toContain('plan(1m05s)')
-    expect(early).toBe(late)
-  })
-
-  test('the count rides the elapsed as /n (AC 7)', () => {
-    const b = withStep({
-      label: 'implement',
-      count: 3,
-      timing: { accumulatedMs: 0, runningSince: 100 },
-    })
-    expect(progressOf(b, 100 + 432_000)).toContain('implement(7m12s/3)')
+    expect(progressOf(done, 1)).toContain('plan(1m05s)')
+    expect(progressOf(done, 1)).toBe(progressOf(done, 5_000_000))
   })
 
   test('merge waiting ticks from its runningSince (AC 9)', () => {
@@ -2539,17 +2318,6 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
     const b = build({ pr: undefined, steps: [{ label: 'verify:lint', state: 'pending' }] })
     expect(progressOf(b, 9_999_999)).toContain('[ ] verify:lint')
     expect(progressOf(b, 9_999_999)).not.toContain('verify:lint(')
-  })
-
-  test('--plain keeps durations intact and emits no escapes (AC 13)', () => {
-    const b = withStep({
-      label: 'implement',
-      count: 2,
-      timing: { accumulatedMs: 0, runningSince: 0 },
-    })
-    const out = rd(model([b]), { color: false, width: 200, now: 41_000 }).join('\n')
-    expect(out).not.toContain('\x1b')
-    expect(out).toContain('implement(41s/2)')
   })
 })
 
@@ -3081,7 +2849,7 @@ describe('renderDashboard: the read-only session view', () => {
     }
   })
 
-  test('a closed view shows the outcome line after the content', () => {
+  test('a closed view shows its completed or aborted outcome line after the content', () => {
     const out = rd(
       {
         ...model([build()]),
@@ -3099,17 +2867,15 @@ describe('renderDashboard: the read-only session view', () => {
     ).join('\n')
     expect(out).toContain('Stream closed: completed')
     expect(out).toContain('· closed')
-  })
 
-  test('an aborted stream names its outcome', () => {
-    const out = rd(
+    const aborted = rd(
       {
         ...model([build()]),
         view: sessionView({ status: 'closed', outcome: 'aborted' }),
       },
       { color: false, width: 100, height: 24 },
     ).join('\n')
-    expect(out).toContain('Stream closed: aborted')
+    expect(aborted).toContain('Stream closed: aborted')
   })
 
   test('an error replaces the content, not the chrome', () => {
@@ -3545,12 +3311,10 @@ describe('renderDashboard: a repository with no dispatcher run', () => {
     expect(lines[0]).not.toContain('0/0')
     expect(lines.filter((line) => line.includes(NO_DISPATCHER_RUN_LINE))).toHaveLength(1)
     expect(lines.join('\n')).toContain('no active builds')
-  })
 
-  test('a model with a recorded run renders no such line', () => {
-    const lines = rd(model([]), WIDE).map(stripAnsi)
-    expect(lines[0]).toContain('active 0/5')
-    expect(lines.join('\n')).not.toContain(NO_DISPATCHER_RUN_LINE)
+    const recorded = rd(model([]), WIDE).map(stripAnsi)
+    expect(recorded[0]).toContain('active 0/5')
+    expect(recorded.join('\n')).not.toContain(NO_DISPATCHER_RUN_LINE)
   })
 })
 

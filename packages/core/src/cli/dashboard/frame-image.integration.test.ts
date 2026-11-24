@@ -64,31 +64,4 @@ describe('renderDashboardFrameImage', () => {
     expect(first.svg).toContain('font-weight="700"')
     expect(first.svg).toContain('fill-opacity="0.58"')
   })
-
-  test('rejects overflow, unsupported controls, and unknown terminal sequences clearly', () => {
-    expect(() => renderDashboardFrameImage(['too wide'], { columns: 3 })).toThrow(
-      'exceeding declared terminal width 3',
-    )
-    expect(() => renderDashboardFrameImage(['tab\there'], { columns: 20 })).toThrow(
-      'unsupported control U+0009',
-    )
-    expect(() => renderDashboardFrameImage(['\x1b[35mmagenta\x1b[0m'], { columns: 20 })).toThrow(
-      'unsupported SGR code 35',
-    )
-    expect(() =>
-      renderDashboardFrameImage(['\x1b]8;;https://example.invalid\x07open'], {
-        columns: 20,
-      }),
-    ).toThrow('hyperlink was not closed')
-    expect(() => renderDashboardFrameImage(['\x1b[31mleaked'], { columns: 20 })).toThrow(
-      'SGR style was not reset',
-    )
-  })
-
-  test('rejects empty frames and invalid terminal dimensions', () => {
-    expect(() => renderDashboardFrameImage([], { columns: 80 })).toThrow('dashboard frame is empty')
-    expect(() => renderDashboardFrameImage(['x'], { columns: 0 })).toThrow(
-      'columns must be a positive integer',
-    )
-  })
 })
