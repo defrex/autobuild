@@ -4,7 +4,7 @@
   "title": "Working with your operator agent",
   "group": "guides",
   "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
-  "textHash": "156065be051f770e08225b294de9806502d155a259f02698c2954045a46dc4e8",
+  "textHash": "5aabfe242147011e6669e26769656db267655d4cf17de08c53939d75aa218a3a",
   "headings": [
     "Choose a harness",
     "Give the agent memory",
