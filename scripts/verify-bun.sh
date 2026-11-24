@@ -36,8 +36,37 @@ selected="$prefix/node_modules/.bin/bun"
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then
     npm install --prefix "$prefix" --no-save "bun@$required_version"
   fi
+  # npm 12 blocks dependency install scripts that no allowScripts policy
+  # covers, which leaves bun.exe as a placeholder that exits 1. Run the
+  # postinstall that placeholder prescribes. This also repairs a cache an
+  # earlier blocked install left behind.
+  postinstall="$prefix/node_modules/bun/install.js"
+  if [[ -x "$selected" && -f "$postinstall" ]] \
+    && [[ $("$selected" --version 2>/dev/null) != "$required_version" ]]; then
+    (cd "$(dirname "$postinstall")" && node install.js)
+  fi
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then
     echo 'verify Bun installation has the wrong version' >&2
+    exit 1
+  fi
+  # npm installs the pinned Bun as bun/bin/bun.exe behind the .bin/bun link,
+  # and Bun reports the resolved bun.exe as process.execPath. Name it bun
+  # there too, as every other Bun install does, so a tool directory derived
+  # from process.execPath holds a bun.
+  target=$selected
+  hops=0
+  while [[ -L "$target" ]]; do
+    hops=$((hops + 1))
+    if (( hops > 40 )); then echo 'verify Bun link does not resolve' >&2; exit 1; fi
+    link=$(readlink "$target")
+    case $link in /*) target=$link ;; *) target=$(dirname "$target")/$link ;; esac
+  done
+  sibling="$(dirname "$target")/bun"
+  if [[ ! -x "$sibling" ]]; then
+    ln -sfn "$(basename "$target")" "$sibling"
+  fi
+  if [[ $("$sibling" --version) != "$required_version" ]]; then
+    echo 'verify Bun is not reachable as bun beside its executable' >&2
     exit 1
   fi
 )
