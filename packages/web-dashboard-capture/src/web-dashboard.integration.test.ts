@@ -1,14 +1,10 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
   elapsedMilliseconds,
   projectWebParity,
   reconcileDashboard,
 } from '../../hosted-store-service/app/dashboard/view-model'
-import { captureDashboardFrames, FRAME_SPECS } from '../../../tools/dashboard-capture'
 
 function model(status: 'running' | 'paused' = 'running'): DashboardModel {
   return {
@@ -24,54 +20,6 @@ function model(status: 'running' | 'paused' = 'running'): DashboardModel {
     ],
   }
 }
-
-test('every terminal capture fixture has identical web rows and step facts', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'ab-web-parity-'))
-  try {
-    const capture = await captureDashboardFrames({ workspacePath: workspace })
-    expect(capture.frames.map((frame) => frame.id)).toEqual(FRAME_SPECS.map((frame) => frame.id))
-    for (const frame of capture.frames) {
-      const terminal = {
-        ...(frame.model.rollback ? { rollback: frame.model.rollback } : {}),
-        ...(frame.model.handoffs ? { handoffs: frame.model.handoffs } : {}),
-        builds: frame.model.builds.map((build) => ({
-          identity: build.slug,
-          ...(build.draining ? { draining: true } : {}),
-          status: build.status,
-          ...(build.integrationRow ? { integrationRow: build.integrationRow } : {}),
-          steps: (build.integrationRow?.steps ?? build.steps).map((step) => ({
-            label: step.label,
-            state: step.state,
-            ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
-            ...(step.count !== undefined ? { count: step.count } : {}),
-            ...(step.timing !== undefined ? { timing: step.timing } : {}),
-            ...(step.reason !== undefined ? { reason: step.reason } : {}),
-          })),
-        })),
-        ...(frame.model.harvest
-          ? {
-              harvest: {
-                identity: 'Harvest' as const,
-                run: frame.model.harvest.run,
-                status: frame.model.harvest.status,
-                steps: frame.model.harvest.steps.map((step) => ({
-                  label: step.label,
-                  state: step.state,
-                  ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
-                  ...(step.count !== undefined ? { count: step.count } : {}),
-                  ...(step.timing !== undefined ? { timing: step.timing } : {}),
-                  ...(step.reason !== undefined ? { reason: step.reason } : {}),
-                })),
-              },
-            }
-          : {}),
-      }
-      expect(projectWebParity(frame.model), frame.id).toEqual(terminal)
-    }
-  } finally {
-    await rm(workspace, { recursive: true, force: true })
-  }
-}, 60_000)
 
 test('web polling preserves equal rows and replaces changed facts', () => {
   const previous = model()

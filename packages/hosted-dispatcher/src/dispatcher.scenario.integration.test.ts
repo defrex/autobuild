@@ -895,7 +895,10 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     ticketBackend.listReady = async () => ({ tickets: [], diagnostics: [] })
     try {
       const idleRepo = 'https://github.com/acme/one'
-      for (let tick = 0; tick < 100; tick++) {
+      // A few real-kernel invocations prove the credential lifecycle end to
+      // end; dispatcher.integration.test.ts "100 fresh idle invocations keep
+      // live credentials and stored rows bounded" proves the bound at 100.
+      for (let tick = 0; tick < 3; tick++) {
         const idle = createDispatcherEndpoint({
           syncPlacement: async () => {},
           openSecrets: emptySecrets,

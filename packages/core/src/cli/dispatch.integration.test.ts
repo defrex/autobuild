@@ -98,6 +98,7 @@ import { assembleUIMessageDocument } from '../store/streams/assemble'
 import type { HarvestExecution, HarvestExecutionStart } from '../ports/workspace/harvest-execution'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock, steppingClock } from '../testing/fixed'
+import { FakeRefreshScheduler } from '../testing/refresh-scheduler'
 import {
   CONFORMING_BODY,
   GIT_ID,
@@ -5736,6 +5737,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       payload: {},
     })
     const term = fakeTerminal()
+    // The next idle poll is 5 s away on test time, not wall time.
+    const time = new FakeRefreshScheduler()
     const pollGate = deferred()
     const pollStarted = deferred()
     const sleepStarted = deferred()
@@ -5781,11 +5784,13 @@ describe('abDispatch --once with an interactive terminal', () => {
         wire: fx.wire,
         terminal: term,
         input,
+        refreshScheduler: time,
       })
 
       await sleepStarted.promise
       await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
       gateNextPoll = true
+      await time.advance(5_001)
       await pollStarted.promise
 
       stop.abort()
@@ -5821,6 +5826,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       payload: {},
     })
     const term = fakeTerminal()
+    // The next idle poll is 5 s away on test time, not wall time.
+    const time = new FakeRefreshScheduler()
     const pollGate = deferred()
     const pollStarted = deferred()
     const sleepStarted = deferred()
@@ -5866,6 +5873,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         wire: fx.wire,
         terminal: term,
         input,
+        refreshScheduler: time,
       })
       const outcome = run.then(
         () => undefined,
@@ -5875,6 +5883,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       await sleepStarted.promise
       await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
       gateNextPoll = true
+      await time.advance(5_001)
       await pollStarted.promise
 
       sleepGate.reject(dispatchError)
@@ -6683,6 +6692,9 @@ describe('abDispatch interactive keyboard controls', () => {
           latestDashboardFrame(termA).includes('intake ON') &&
           latestDashboardFrame(termB).includes('intake ON'),
       )
+      // A keystroke on B keeps its dashboard on the interactive cadence, so
+      // it reads A's writes from the store without a 5 s idle poll.
+      inputB.text('')
 
       inputA.press('intake')
       await waitFor(async () =>
@@ -9816,6 +9828,7 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
     const term = fakeTerminal()
     const input = fakeInput()
     const counted = countingStore(fx.store)
+    const time = new FakeRefreshScheduler()
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
@@ -9828,12 +9841,17 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
         wire: wired(fx, counted.store),
         terminal: term,
         input,
+        refreshScheduler: time,
       })
-      // A live dashboard frame proves renderOnce ran at least once; the sleep
-      // then allows idle discovery (up to five seconds) and live refreshes.
+      // A live dashboard frame proves renderOnce ran at least once; stepping
+      // the refresh clock then releases idle discovery (up to five seconds)
+      // and live refreshes without waiting them out.
       await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
       const framesAfterFirst = term.frames.length
-      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 10_000)
+      await waitFor(async () => {
+        await time.advance(1_000)
+        return term.frames.length >= framesAfterFirst + 10
+      }, 10_000)
 
       // Every repository read the frames issued was bounded: no from-zero
       // full-journal read at all. The helper's probe + subset pair is what
@@ -13147,6 +13165,9 @@ for (const network of [false, true]) {
         }
       },
     })
+    // Presentation refresh runs on test time: the unfocused idle cadence is
+    // 5 s, which the test advances instead of waiting out.
+    const time = new FakeRefreshScheduler()
     const running = abDispatch({
       targetRepo: fx.checkout,
       env: {},
@@ -13157,6 +13178,7 @@ for (const network of [false, true]) {
       wire: () => ({ ...fx.wire(), store }),
       terminal: term,
       signal: stop.signal,
+      refreshScheduler: time,
       input: {
         start(_handler, hooks) {
           focus = hooks!.onFocus!
@@ -13168,10 +13190,13 @@ for (const network of [false, true]) {
       await waitFor(() => term.all().includes('Autobuild'))
       focus(false)
       positions = 0
-      await new Promise((resolve) => setTimeout(resolve, 750))
+      await time.advance(750)
+      // Let any read the advance released reach the store.
+      await new Promise((resolve) => setTimeout(resolve, 100))
       if (network) expect(positions).toBe(0)
       else expect(positions).toBeGreaterThan(0)
-      await waitFor(() => positions > 0, 6000)
+      await time.advance(5_000)
+      await waitFor(() => positions > 0)
       const before = positions
       focus(true)
       await waitFor(() => positions > before)

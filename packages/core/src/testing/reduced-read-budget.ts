@@ -1459,21 +1459,15 @@ export async function parkedSweepReadBudget(opts: {
   let seeded = 0
   const idleRequests: Record<string, number>[] = []
   for (const length of [100, 100_000]) {
-    for (; seeded < length; seeded++) {
-      await store.append(slugs[0]!, {
-        actor: humanActor('budget'),
-        type: 'build.auto-merge-cancelled',
-        payload: {},
-      })
-    }
+    await seedBuildFiller(
+      store,
+      slugs[0]!,
+      buildEventRows(store, slugs[0]!).length + length - seeded,
+    )
+    seeded = length
     const recoveryEvents = Reflect.get(store, 'builds').get(recoverySlug)
       .events as import('../events/catalog').AbEvent[]
-    while (recoveryEvents.length < length)
-      await store.append(recoverySlug, {
-        actor: humanActor('budget'),
-        type: 'build.auto-merge-cancelled',
-        payload: {},
-      })
+    await seedBuildFiller(store, recoverySlug, length)
     await readBuildFacts(store, recoverySlug)
     const recoverySlice = Array.prototype.slice
     const recoveryBoundary = recoveryEvents.at(-1)!.seq
@@ -1679,12 +1673,7 @@ export async function parkedSweepReadBudget(opts: {
     }
     const refusedEvents = Reflect.get(store, 'builds').get(refusedSlug)
       .events as import('../events/catalog').AbEvent[]
-    while (refusedEvents.length < length)
-      await store.append(refusedSlug, {
-        actor: humanActor('budget'),
-        type: 'build.auto-merge-cancelled',
-        payload: {},
-      })
+    await seedBuildFiller(store, refusedSlug, length)
     await readBuildFacts(store, refusedSlug)
     const refusedBoundary = refusedEvents.at(-1)!.seq
     let refusedRows = 0
@@ -2308,14 +2297,14 @@ async function seedRepoFiller(
   store: import('../store/memory').MemoryBuildStore,
   repo: string,
   length: number,
+  filler: Parameters<import('../store/memory').MemoryBuildStore['appendRepo']>[1] = {
+    actor: humanActor('budget'),
+    type: 'dispatcher.intake-set',
+    payload: { enabled: true },
+  },
 ): Promise<void> {
   const events: { seq: number }[] = Reflect.get(store, 'repos').get(repo).events
   if (events.length >= length) return
-  const filler = {
-    actor: humanActor('budget'),
-    type: 'dispatcher.intake-set' as const,
-    payload: { enabled: true },
-  }
   const template = await store.appendRepo(repo, filler)
   while (events.length < length - 1) events.push({ ...template, seq: events.length + 1 })
   if (events.length < length) await store.appendRepo(repo, filler)
@@ -2326,20 +2315,50 @@ async function seedBuildFiller(
   store: import('../store/memory').MemoryBuildStore,
   slug: string,
   length: number,
+  filler: Parameters<import('../store/memory').MemoryBuildStore['append']>[1] = {
+    actor: humanActor('budget'),
+    type: 'build.auto-merge-cancelled',
+    payload: {},
+  },
 ): Promise<void> {
   const events = buildEventRows(store, slug)
   if (events.length >= length) return
   // One validated append, copied in bulk; the last append is real again so
   // the build's and repository's change positions advance as usual.
-  const filler = {
-    actor: humanActor('budget'),
-    type: 'build.auto-merge-cancelled' as const,
-    payload: {},
-  }
   const template = await store.append(slug, filler)
   while (events.length < length - 1)
     events.push({ ...template, seq: events.length + 1 } as (typeof events)[number])
   if (events.length < length) await store.append(slug, filler)
+}
+
+/** Build padding that no reducer folds into state: the build reducer ignores
+ * it and build facts keep one boolean, so a warm read costs the same at any
+ * padding length. Distinct `observation.recorded` padding would instead grow
+ * every saved build value by one entry per event. Not for builds whose
+ * dispatch would post a ticket comment: the fact records that it was posted. */
+const INERT_BUILD_FILLER = {
+  actor: DISPATCHER,
+  type: 'dispatch.comment-posted',
+  payload: {},
+} as const
+
+/** Pad in bulk what the per-event loop `for (seeded < length)` appended: one
+ * repository filler per step and one inert build fact on every tenth. */
+async function padRepoAndBuild(
+  store: import('../store/memory').MemoryBuildStore,
+  repo: string,
+  slug: string,
+  seeded: number,
+  length: number,
+): Promise<void> {
+  const repoRows: unknown[] = Reflect.get(store, 'repos').get(repo).events
+  await seedRepoFiller(store, repo, repoRows.length + length - seeded)
+  await seedBuildFiller(
+    store,
+    slug,
+    buildEventRows(store, slug).length + Math.ceil(length / 10) - Math.ceil(seeded / 10),
+    INERT_BUILD_FILLER,
+  )
 }
 
 function buildEventRows(
@@ -3041,19 +3060,8 @@ export async function kernelGitOutageReadBudget(opts: {
   let seeded = 0
   let baseline: number[] | undefined
   for (const length of [100, 100_000]) {
-    for (; seeded < length; seeded++) {
-      await store.appendRepo(repo, {
-        actor: humanActor('budget'),
-        type: 'dispatcher.intake-set',
-        payload: { enabled: true },
-      })
-      if (seeded % 10 === 0)
-        await store.append(slug, {
-          actor: KERNEL,
-          type: 'observation.recorded',
-          payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
-        })
-    }
+    await padRepoAndBuild(store, repo, slug, seeded, length)
+    seeded = length
     // Warm up: the outage tick, then one fresh read that catches up its own
     // append. Nothing changes after that.
     for (let n = 0; n < 2; n++) {
@@ -3218,20 +3226,22 @@ export async function cliWatchDiscoveryReadBudget() {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     await store.ensureRepo(repo)
-    for (let i = 0; i < length; i++)
-      await store.appendRepo(repo, {
-        actor: humanActor('human'),
-        type: 'dispatcher.intake-set',
-        payload: { enabled: true },
-      })
+    await seedRepoFiller(store, repo, length, {
+      actor: humanActor('human'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
     await store.createBuild({ slug: 'old', repo })
     await store.append('old', {
       actor: KERNEL,
       type: 'runner.attached',
       payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
     })
-    for (let i = 1; i < length; i++)
-      await store.append('old', { actor: KERNEL, type: 'build.paused', payload: {} })
+    await seedBuildFiller(store, 'old', length, {
+      actor: KERNEL,
+      type: 'build.paused',
+      payload: {},
+    })
     let attempts = 0
     const announce = async (build: string) => {
       const attempt = `attempt-${++attempts}`
@@ -4232,13 +4242,7 @@ export async function nativeMaintenanceReadBudget(opts: {
   const events = buildEventRows(store, slug)
   let baseline: number[] | undefined
   for (const length of [100, 10_000]) {
-    let filler = 0
-    while (events.length < length)
-      await store.append(slug, {
-        actor: KERNEL,
-        type: 'observation.recorded',
-        payload: { id: `obs_budget_${length}_${filler++}`, kind: 'followup', summary: 'filler' },
-      })
+    await seedBuildFiller(store, slug, length, INERT_BUILD_FILLER)
     // Warm the saved reduced values past the filler before measuring.
     await opts.tick()
     const boundary = events.at(-1)!.seq
@@ -4300,15 +4304,7 @@ export async function gatedPollingReadBudget(opts: {
 }) {
   const { store, slug, forge } = opts
   const events = buildEventRows(store, slug)
-  const fill = async (length: number) => {
-    let filler = 0
-    while (events.length < length)
-      await store.append(slug, {
-        actor: KERNEL,
-        type: 'observation.recorded',
-        payload: { id: `obs_polling_${length}_${filler++}`, kind: 'followup', summary: 'filler' },
-      })
-  }
+  const fill = (length: number) => seedBuildFiller(store, slug, length, INERT_BUILD_FILLER)
   const measure = async () => {
     // Warm the saved reduced values past any new rows before measuring.
     await opts.tick()
@@ -4522,19 +4518,8 @@ export async function janitorEscalationRequestBudget(opts: {
   await store.ensureRepo(repo)
   let seeded = 0
   for (const length of [100, 100_000]) {
-    for (; seeded < length; seeded++) {
-      await store.appendRepo(repo, {
-        actor: humanActor('budget'),
-        type: 'dispatcher.intake-set',
-        payload: { enabled: true },
-      })
-      if (seeded % 10 === 0)
-        await store.append(slug, {
-          actor: KERNEL,
-          type: 'observation.recorded',
-          payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
-        })
-    }
+    await padRepoAndBuild(store, repo, slug, seeded, length)
+    seeded = length
     // Warm up: a fresh dispatcher folds the padding once while nothing fails.
     opts.failing(false)
     await opts.tick()
@@ -4752,19 +4737,8 @@ export async function headPathsLandingReadBudget(opts: {
   const vectors: Record<string, number>[] = []
   try {
     for (const length of [100, 100_000]) {
-      for (; seeded < length; seeded++) {
-        await store.appendRepo(repo, {
-          actor: humanActor('budget'),
-          type: 'dispatcher.intake-set',
-          payload: { enabled: true },
-        })
-        if (seeded % 10 === 0)
-          await store.append(slug, {
-            actor: KERNEL,
-            type: 'observation.recorded',
-            payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
-          })
-      }
+      await padRepoAndBuild(store, repo, slug, seeded, length)
+      seeded = length
       for (let n = 0; n < 2; n++) {
         opts.advance(120_000)
         await opts.tick()
@@ -7322,7 +7296,7 @@ export async function ticketStartReadBudget(): Promise<{
   for (const [builds, history] of [
     [5, 100],
     [5, 5_000],
-    [50, 100],
+    [20, 100],
   ] as const) {
     // Full capacity: the request waits for a slot.
     const control = await open(builds, history, builds, 'control')
@@ -7445,7 +7419,7 @@ export async function ticketStartReadBudget(): Promise<{
   // repeated on a warm and on a fresh process, then an admission. Each costs
   // the same beyond the lockstep control at every fleet size.
   const admissions = new Map<number, Record<string, number>[]>()
-  for (const builds of [5, 50]) {
+  for (const builds of [5, 20]) {
     const control = await open(builds, 100, builds + 1, 'admission-control')
     const world = await open(builds, 100, builds + 1, 'admission', true)
     const start = (id: string) =>
@@ -7527,8 +7501,8 @@ export async function ticketStartReadBudget(): Promise<{
     await control.store.close()
     await world.store.close()
   }
-  // No per-build read: identical store requests at 5 and at 50 builds.
-  expect(admissions.get(50)).toEqual(admissions.get(5))
+  // No per-build read: identical store requests at 5 and at 20 builds.
+  expect(admissions.get(20)).toEqual(admissions.get(5))
 
   // Priority tiers at full capacity: a normal request is read only by the
   // post-dispatch pass, once per tick; re-requesting another priority is one

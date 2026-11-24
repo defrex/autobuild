@@ -10,6 +10,8 @@ import {
   discoverFrames,
   chromiumBinary,
   injectProbe,
+  type CaptureSegment,
+  type CaptureTile,
   type Probe,
   parseProbe,
   probeProblems,
@@ -17,6 +19,7 @@ import {
   SEGMENT_HEIGHT,
   segmentId,
   segmentRanges,
+  segmentTiles,
   serveSite,
   tileId,
   WEBSITE_FRAMES,
@@ -401,11 +404,14 @@ window.__websiteCapture = { sequence: { duration: 100, async seek(timeMs, {still
       ],
       ['overflow', '<div style="width:2000px">wide</div>', 'sideways'],
     ]) {
+      // The broken markup sits on docs/index.html; one width of it suffices.
       const broken = fixtureFiles(extra)
       await expect(
         capture({
           files: broken,
-          frames: discoverFrames(broken).filter((f) => f.kind === 'docs'),
+          frames: discoverFrames(broken).filter(
+            (f) => f.kind === 'docs' && f.page === 'docs/index.html' && f.width === 390,
+          ),
           outputDir: `${dir}-${name}`,
         }),
       ).rejects.toThrow(error)
@@ -909,59 +915,79 @@ describe('frame tiling under the artifact ceiling', () => {
         (f) => f.kind === 'docs' && f.page === 'docs/index.html',
       )
       expect(frames.map((f) => f.width)).toEqual([1440, 390])
-      for (const [name, maxFrameBytes] of [
-        ['website-segments', undefined],
-        ['website-segment-tiles', 40_000],
-      ] as const) {
-        const dir = scratchDir(name)
-        await capture({ files, frames, outputDir: dir, includeMotionSamples: false, maxFrameBytes })
-        const inventory = await Bun.file(join(dir, 'inventory.json')).json()
-        const report = await Bun.file(join(dir, 'verify-report.md')).text()
-        expect(inventory).toHaveLength(2)
-        for (const entry of inventory) {
-          expect(entry.height).toBe(40_000)
-          expect(entry.segments).toHaveLength(3)
-          let top = 0
-          for (const [i, segment] of entry.segments.entries()) {
-            expect(segment.id).toBe(segmentId(entry.frame.id, i + 1, 3))
-            expect(segment.top).toBe(top)
-            top += segment.height
-            expect(report).toContain(`\`${segment.id}\``)
+      const dir = scratchDir('website-segments')
+      await capture({ files, frames, outputDir: dir, includeMotionSamples: false })
+      const inventory = await Bun.file(join(dir, 'inventory.json')).json()
+      const report = await Bun.file(join(dir, 'verify-report.md')).text()
+      expect(inventory).toHaveLength(2)
+      /** Every tile is contiguous, inside its own segment, and every page row
+       * shows its own block: nothing is missing, repeated or shifted. */
+      const expectTiles = async (
+        entry: { frame: { id: string; width: number }; segments: CaptureSegment[] },
+        tiles: readonly (CaptureTile & { bytes?: Uint8Array })[],
+        tileReport: string,
+        maxFrameBytes: number,
+      ) => {
+        let rows = 0
+        for (const [i, tile] of tiles.entries()) {
+          expect(tile.index).toBe(i + 1)
+          expect(tile.count).toBe(tiles.length)
+          expect(tile.id).toBe(tileId(entry.frame.id, i + 1, tiles.length))
+          expect(tile.top).toBe(rows)
+          const owner = entry.segments[tile.segment! - 1]!
+          expect(tile.top).toBeGreaterThanOrEqual(owner.top)
+          expect(tile.top + tile.height).toBeLessThanOrEqual(owner.top + owner.height)
+          expect(tileReport).toContain(`\`${tile.id}\``)
+          const bytes = tile.bytes ?? (await Bun.file(join(dir, `${tile.id}.png`)).bytes())
+          expect(bytes.byteLength).toBeLessThanOrEqual(maxFrameBytes)
+          const image = decodePng(bytes)
+          expect(image.width).toBe(entry.frame.width)
+          expect(image.height).toBe(tile.height)
+          for (let y = 0; y < tile.height; y++) {
+            const page = tile.top + y
+            if (page % 100 !== 0 && page % 100 !== 99 && y !== 0 && y !== tile.height - 1) continue
+            const pixel = [...image.rows[y]!.subarray(0, 3)]
+            expect([page, ...pixel]).toEqual([page, ...blockColour(Math.floor(page / 100))])
           }
-          expect(top).toBe(40_000)
-          if (maxFrameBytes) expect(entry.tiles.length).toBeGreaterThan(3)
-          else expect(entry.tiles).toHaveLength(3)
-          let rows = 0
-          for (const [i, tile] of entry.tiles.entries()) {
-            expect(tile.index).toBe(i + 1)
-            expect(tile.count).toBe(entry.tiles.length)
-            expect(tile.id).toBe(tileId(entry.frame.id, i + 1, entry.tiles.length))
-            expect(tile.top).toBe(rows)
-            const owner = entry.segments[tile.segment - 1]
-            expect(tile.top).toBeGreaterThanOrEqual(owner.top)
-            expect(tile.top + tile.height).toBeLessThanOrEqual(owner.top + owner.height)
-            expect(report).toContain(`\`${tile.id}\``)
-            const image = decodePng(await Bun.file(join(dir, `${tile.id}.png`)).bytes())
-            expect(image.width).toBe(entry.frame.width)
-            expect(image.height).toBe(tile.height)
-            // Every page row shows its own block: nothing is missing, repeated or shifted.
-            for (let y = 0; y < tile.height; y++) {
-              const page = tile.top + y
-              if (page % 100 !== 0 && page % 100 !== 99 && y !== 0 && y !== tile.height - 1)
-                continue
-              const pixel = [...image.rows[y]!.subarray(0, 3)]
-              expect([page, ...pixel]).toEqual([page, ...blockColour(Math.floor(page / 100))])
-            }
-            rows += tile.height
-          }
-          expect(rows).toBe(40_000)
+          rows += tile.height
         }
-        const pngs = (await readdir(dir)).filter((n) => n.endsWith('.png'))
-        expect(pngs.some((n) => n.includes('-segment-'))).toBe(false)
-        for (const entry of inventory) expect(pngs).not.toContain(`${entry.frame.id}.png`)
-        for (const name of pngs)
-          expect((await stat(join(dir, name))).size).toBeLessThanOrEqual(maxFrameBytes ?? 2_621_440)
+        expect(rows).toBe(40_000)
       }
+      for (const entry of inventory) {
+        expect(entry.height).toBe(40_000)
+        expect(entry.segments).toHaveLength(3)
+        let top = 0
+        for (const [i, segment] of entry.segments.entries()) {
+          expect(segment.id).toBe(segmentId(entry.frame.id, i + 1, 3))
+          expect(segment.top).toBe(top)
+          top += segment.height
+          expect(report).toContain(`\`${segment.id}\``)
+        }
+        expect(top).toBe(40_000)
+        // Under the default limit each segment is one tile, as shot.
+        expect(entry.tiles).toHaveLength(3)
+        await expectTiles(entry, entry.tiles, report, 2_621_440)
+        // A small limit cuts those same segment shots into more, still
+        // contiguous tiles, and the report lists every one.
+        const shots = await Promise.all(
+          entry.segments.map(async (segment: CaptureSegment, i: number) => ({
+            ...segment,
+            bytes: await Bun.file(join(dir, `${entry.tiles[i].id}.png`)).bytes(),
+          })),
+        )
+        const tiled = segmentTiles(entry.frame.id, shots, 40_000)
+        expect(tiled.length).toBeGreaterThan(3)
+        const tiledReport = renderReport(
+          [{ ...entry, tiles: tiled.map(({ bytes: _bytes, ...tile }) => tile) }],
+          40_000,
+        )
+        await expectTiles(entry, tiled, tiledReport, 40_000)
+      }
+      const pngs = (await readdir(dir)).filter((n) => n.endsWith('.png'))
+      expect(pngs.some((n) => n.includes('-segment-'))).toBe(false)
+      for (const entry of inventory) expect(pngs).not.toContain(`${entry.frame.id}.png`)
+      for (const name of pngs)
+        expect((await stat(join(dir, name))).size).toBeLessThanOrEqual(2_621_440)
     },
     360_000,
   )

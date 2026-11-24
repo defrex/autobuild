@@ -268,8 +268,15 @@ async function expectIdleReadBudget(h: E2eHarness, slug: string) {
   for (const prior of [100, 100_000]) {
     const { checkedAt: _checkedAt, ...payload } = (await readBuildFacts(h.store, slug)).value.state
       .nodePolling!
-    for (let length = logs(h).get(slug)!.events.length; length < prior; length++)
-      await h.store.append(slug, { actor: DISPATCHER, type: 'node.poll-checked', payload })
+    // One validated append copied in bulk; the last append is real again so
+    // the build's and repository's change positions advance as usual.
+    const events = logs(h).get(slug)!.events
+    if (events.length < prior) {
+      const padding = { actor: DISPATCHER, type: 'node.poll-checked', payload } as const
+      const template = await h.store.append(slug, padding)
+      while (events.length < prior - 1) events.push({ ...template, seq: events.length + 1 })
+      if (events.length < prior) await h.store.append(slug, padding)
+    }
     expect(logs(h).get(slug)!.events.length).toBeGreaterThanOrEqual(prior)
     // Saved reduced values advance over the padding once, and the settling
     // pass past the quiet period ends on a due check, so the next minute is

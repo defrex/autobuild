@@ -1,5 +1,5 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, jest, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -241,20 +241,26 @@ await handle.completion
   }
 })
 
-test('shutdown waits for persistence without a deadline and retains the first signal', async () => {
-  const exits: number[] = []
-  const terminal = new BuildChildExitCoordinator({
-    groupId: 123,
-    launchReaper: () => 1,
-    exit: (code) => exits.push(code),
-  })
-  const shutdown = new BuildChildShutdown(terminal)
-  shutdown.request(130)
-  shutdown.request(143)
-  expect(shutdown.signal.aborted).toBe(true)
-  await Bun.sleep(5100)
-  expect(exits).toEqual([])
-  shutdown.finish(0)
-  shutdown.finish(1)
-  expect(exits).toEqual([130])
-}, 10000)
+test('shutdown waits for persistence without a deadline and retains the first signal', () => {
+  // A minute of fake time passes any deadline shutdown ever had (4 s).
+  jest.useFakeTimers()
+  try {
+    const exits: number[] = []
+    const terminal = new BuildChildExitCoordinator({
+      groupId: 123,
+      launchReaper: () => 1,
+      exit: (code) => exits.push(code),
+    })
+    const shutdown = new BuildChildShutdown(terminal)
+    shutdown.request(130)
+    shutdown.request(143)
+    expect(shutdown.signal.aborted).toBe(true)
+    jest.advanceTimersByTime(60_000)
+    expect(exits).toEqual([])
+    shutdown.finish(0)
+    shutdown.finish(1)
+    expect(exits).toEqual([130])
+  } finally {
+    jest.useRealTimers()
+  }
+})
