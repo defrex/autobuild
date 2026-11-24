@@ -151,7 +151,9 @@ exits nonzero on failure. Then:
    `bun ab dispatch`, then open their coding agent at the repository root with
    `ab-operate` loaded to specify, create and groom the first ticket. Check operator
    presence before taking the role; an existing operator picks up ready work.
-   The setup agent must not start dispatch itself.
+   For dispatcher startup after setup, follow `ab-operate` ownership boundaries: check
+   fresh `dispatcherRunning`, honor repository instructions and the saved local
+   preference, or ask who should run it when unset.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.

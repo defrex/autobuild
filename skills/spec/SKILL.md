@@ -306,8 +306,9 @@ This is the default, not a requirement:
   facility, or no operator surface), say so and leave operation to the human.
 
 Operating follows the `ab-operate` skill's rules, including its boundaries:
-never start, stop, or restart a dispatcher. If no dispatcher holds the
-repository, report that rather than waiting on builds that cannot start.
+inspect `dispatcherRunning` before starting and follow the saved local ownership
+preference or ask when unset. Repository instructions take precedence; never
+manage another session's dispatcher.
 
 ## Rules
 

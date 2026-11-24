@@ -244,6 +244,8 @@ export function reloadBehavior(path: string): string {
 /** Whether a field may be set in `.autobuild/local.toml`, from its root key. */
 export function localOverrideBehavior(path: string): string {
   const root = path.split(/[.[]/, 1)[0]!
+  if (root === 'operator')
+    return 'Local only: set in .autobuild/local.toml; rejected in autobuild.toml.'
   const classification = Object.hasOwn(LOCAL_OVERRIDE_CLASSIFICATION, root)
     ? LOCAL_OVERRIDE_CLASSIFICATION[root as keyof typeof LOCAL_OVERRIDE_CLASSIFICATION]
     : undefined
