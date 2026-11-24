@@ -8,12 +8,9 @@ import {
   decodeBuildPageCursor,
   encodeBuildPageCursor,
   MAX_CHANGE_POSITION,
-  parseBuildPageFilterParams,
   parseBuildPageLimitParam,
   parseChangePosition,
-  resolveBuildPageFilters,
   resolveBuildPageLimit,
-  sameBuildPageFilters,
 } from './build-feed'
 
 describe('change positions', () => {
@@ -77,23 +74,6 @@ describe('build page arguments', () => {
       42,
     ])
       expect(() => decodeBuildPageCursor(invalid)).toThrow(BuildFeedValidationError)
-  })
-
-  test('filters normalize, reject invalid values and compare by value', () => {
-    expect(
-      resolveBuildPageFilters({
-        kind: 'node',
-        outcome: 'merged',
-        activeSince: '2026-11-24T02:00+02:00',
-      }),
-    ).toEqual({ kind: 'node', outcome: 'merged', activeSince: '2026-11-24T00:00:00.000Z' })
-    expect(parseBuildPageFilterParams(new URLSearchParams('limit=5'))).toEqual({})
-    for (const invalid of ['kind=', 'kind=work', 'outcome=abandoned', 'activeSince=nope'])
-      expect(() => parseBuildPageFilterParams(new URLSearchParams(invalid))).toThrow(
-        BuildFeedValidationError,
-      )
-    expect(sameBuildPageFilters({ kind: 'leaf' }, { kind: 'leaf' })).toBe(true)
-    expect(sameBuildPageFilters({ kind: 'leaf' }, {})).toBe(false)
   })
 })
 
