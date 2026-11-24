@@ -128,6 +128,7 @@
     "capture:web-dashboard": "bun packages/web-dashboard-capture/src/web-dashboard-capture.tsx",
     "check:app-load": "bun packages/web-dashboard-capture/src/client-load.ts && AB_APP_LOAD_BROWSER_TEST=1 bun test packages/web-dashboard-capture/src/client-load.browser.integration.test.ts",
     "capture:website": "bun tools/website-capture.ts",
+    "capture:ui-web": "bun tools/ui-web-capture.ts",
     "website:dev": "bun packages/website/src/dev.ts",
     "website:build": "bun packages/website/src/build.ts",
     "capture:readme-headline": "bun tools/readme-headline.ts",
