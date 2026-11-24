@@ -151,7 +151,7 @@ function endpoint(
       overrides.delegate ??
       (async (_input: string | URL | Request, _init?: RequestInit) => Response.json({ ok: true })),
     now: clock,
-    ...(overrides.entries !== undefined ? { entries: overrides.entries } : {}),
+    entries: overrides.entries ?? TOOLS,
   })
 }
 
@@ -308,6 +308,45 @@ describe('hosted MCP endpoint tool binding', () => {
       setting: 'intake',
       enabled: false,
     })
+  })
+
+  test('a delegated tool call carries the inbound OIDC header and nothing else', async () => {
+    const delegated: Request[] = []
+    const endpoint_ = endpoint(fakeAuth(), {
+      delegate: async (input, init) => {
+        delegated.push(new Request(input, init))
+        return Response.json({ ok: true })
+      },
+    })
+    const call = (headers: Record<string, string>) =>
+      endpoint_.fetch(
+        new Request('https://operator.example/mcp', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            authorization: 'Bearer any',
+            cookie: 'session=canary',
+            ...headers,
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 4,
+            method: 'tools/call',
+            params: {
+              name: 'repository.status',
+              arguments: { repo: 'https://github.com/owner/repo' },
+            },
+          }),
+        }),
+      )
+    expect((await call({ 'x-vercel-oidc-token': 'oidc-canary' })).status).toBe(200)
+    expect((await call({})).status).toBe(200)
+    expect(delegated.map((request) => request.headers.get('x-vercel-oidc-token'))).toEqual([
+      'oidc-canary',
+      null,
+    ])
+    expect(delegated[0]!.headers.get('cookie')).toBeNull()
   })
 
   test('an unserved repository is refused before delegation', async () => {

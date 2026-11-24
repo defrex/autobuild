@@ -96,6 +96,7 @@ export function mcpEndpoint() {
     auth: webAuth(),
     storeSecret: process.env.AB_STORE_SECRET?.trim() ?? '',
     delegate: (request) => hostedService().fetch(request),
+    entries: hostedService().operatorTools,
   })
   return mcp
 }
