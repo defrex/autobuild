@@ -1575,10 +1575,12 @@ The two remote clients get client-only coverage in core itself, against an
 injected `fetchFn` with responses built from the protocol's wire schemas.
 `HostedTicketSource` (`ports/tickets/remote.test.ts`) is in-memory unit
 coverage that runs in `bun run test`. `RemoteBuildStore`
-(`store/remote/client.integration.test.ts`, which also pins scoped-token
-minting/verification) is integration coverage. The full over-the-wire seam
+(`store/remote/client.test.ts`, which also pins scoped-token
+minting/verification) is also in-memory unit coverage running in `bun run test`.
+Its remaining timed subscription paging test lives in
+`store/remote/client.integration.test.ts`. The full over-the-wire seam
 suites (client → HTTP → server) live in `packages/hosted-store-service`
-(`*.seam.integration.test.ts`) and run with the `RemoteBuildStore` client tests
+(`*.seam.integration.test.ts`) and run alongside that timed subscription test
 in `bun run test:integration`.
 
 To run the Linear contract manually against a destructive scratch target:
