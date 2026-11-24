@@ -3,7 +3,11 @@ import { buildTimelineReducer } from '../cli/dashboard/timeline'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { stepDurationsRollup, type StepDurationsValue } from '../kernel/step-durations'
 import { manualClock } from '../testing/fixed'
-import { measureStoreReads, rollupReadBudget } from '../testing/reduced-read-budget'
+import {
+  buildRosterReadBudget,
+  measureStoreReads,
+  rollupReadBudget,
+} from '../testing/reduced-read-budget'
 import { MemoryBuildStore } from './memory'
 import {
   readRollupValue,
@@ -70,6 +74,7 @@ describe('rollup engine', () => {
         buildTimelineReducer.reduce(await store.getEvents(slug)),
         args,
         clock(),
+        slug,
       )
       if (c) stepDurationsRollup.add(acc, c)
     }
@@ -302,5 +307,9 @@ describe('rollup engine', () => {
 
   test('rollup reads cost what changed, flat from 100 to 10,000 builds', async () => {
     await rollupReadBudget()
+  }, 180_000)
+
+  test('roster reads cost O(live builds + 50), flat from 100 to 100,000 builds', async () => {
+    await buildRosterReadBudget()
   }, 180_000)
 })
