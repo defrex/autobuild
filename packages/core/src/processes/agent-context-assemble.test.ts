@@ -149,6 +149,26 @@ describe('@path imports', () => {
     expect(record.imports.find((entry) => entry.path === 'b/rules.md')!.text).toBe('rules for b')
   })
 
+  test('an alias of an instruction file in another directory resolves its own imports', () => {
+    const { record, dependencies } = assemble({
+      'AGENTS.md': '@a/common.md @CLAUDE.md',
+      'CLAUDE.md': '@rules.md',
+      'a/common.md': { symlink: '../CLAUDE.md' },
+      'rules.md': 'root rules',
+      'a/rules.md': 'alias rules',
+    })
+    expect(record.instructions.map((entry) => [entry.paths, entry.imports])).toEqual([
+      [['AGENTS.md'], ['CLAUDE.md', 'a/common.md']],
+      [['CLAUDE.md'], ['rules.md']],
+    ])
+    expect(record.imports.map((entry) => [entry.path, entry.importedBy, entry.imports])).toEqual([
+      ['a/common.md', ['AGENTS.md'], ['a/rules.md']],
+      ['a/rules.md', ['a/common.md'], []],
+      ['rules.md', ['CLAUDE.md'], []],
+    ])
+    expect(dependencies).toContain('a/rules.md')
+  })
+
   test('cycles terminate and mentions, code, emails and outside paths are not imports', () => {
     const mentions = Array.from({ length: 2000 }, (_, i) => `@person${i}`).join(' ')
     const { record, dependencies } = assemble({

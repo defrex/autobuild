@@ -434,16 +434,20 @@ function selectImports(
   assembly: Assembly,
   instructions: readonly InstructionSelection[],
 ): ImportSelection[] {
+  // Every entry, instruction or import, is keyed by (resolved file, real
+  // directory its imports resolve from). Two aliases of one file in different
+  // directories resolve their own relative imports differently, so each is
+  // traversed; an alias of an instruction file from another directory is an
+  // import entry of its own for the same reason. The key set is finite (real
+  // blobs × real directories), so cycles and looping directory links still
+  // terminate.
+  const traversalKey = (realPath: string, directory: string) => `${realPath}\0${directory}`
   const instructionAt = new Map<string, string>()
-  for (const instruction of instructions) {
-    instructionAt.set(instruction.realPath, instruction.paths[0]!)
-    for (const path of instruction.paths) instructionAt.set(path, instruction.paths[0]!)
-  }
-  // One entry per (resolved file, real directory its imports resolve from).
-  // Two aliases of one file in different directories resolve their own
-  // relative imports differently, so each is traversed; the key set is finite
-  // (real blobs × real directories), so cycles and looping directory links
-  // still terminate.
+  for (const instruction of instructions)
+    instructionAt.set(
+      traversalKey(instruction.realPath, instruction.directory),
+      instruction.paths[0]!,
+    )
   const byKey = new Map<string, ImportSelection>()
   const queue: { id: string; directory: string; file: FileSelection; imports: Set<string> }[] =
     instructions.map((instruction) => ({
@@ -468,14 +472,14 @@ function selectImports(
       }
       const resolved = assembly.resolve(path)
       if (resolved.kind !== 'blob') continue
-      const instruction = instructionAt.get(path) ?? instructionAt.get(resolved.path)
+      const parent = assembly.resolve(dirname(path))
+      if (parent.kind !== 'tree') continue
+      const key = traversalKey(resolved.path, parent.path)
+      const instruction = instructionAt.get(key)
       if (instruction !== undefined) {
         if (instruction !== importer.id) importer.imports.add(instruction)
         continue
       }
-      const parent = assembly.resolve(dirname(path))
-      if (parent.kind !== 'tree') continue
-      const key = `${resolved.path}\0${parent.path}`
       const existing = byKey.get(key)
       if (existing) {
         existing.importedBy.add(importer.id)
