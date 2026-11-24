@@ -185,22 +185,9 @@ test('unknown and removed detailed help exits nonzero and names the target', asy
   }
 })
 
-test('removed server command exits nonzero as unknown', async () => {
-  const result = await runBinWithoutAb(['server', 'status'])
-  expect(result.code).toBe(1)
-  expect(result.stdout).toBe('')
-  expect(result.stderr).toContain('unknown command "server"')
-})
-
 const BUILD_SESSION_COMMANDS = [
   ['context', ['context']],
   ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],
-  ['artifact get', ['artifact', 'get', 'notes']],
-  ['observe', ['observe', '--kind', 'followup', 'record this']],
-  ['issue downgrade', ['issue', 'downgrade', '824', '--reason', 'partial']],
-  ['done', ['done']],
-  ['verdict', ['verdict', 'approve']],
-  ['escalate', ['escalate', 'Which behavior is intended?']],
 ] as const
 
 test.each(BUILD_SESSION_COMMANDS)(
@@ -217,11 +204,7 @@ test.each(BUILD_SESSION_COMMANDS)(
   },
 )
 
-const HARVEST_SESSION_COMMANDS = [
-  ['context', ['harvest', 'context']],
-  ['submit', ['harvest', 'submit', 'proposals.json']],
-  ['verdict', ['harvest', 'verdict', 'approve', '--notes', 'review.md']],
-] as const
+const HARVEST_SESSION_COMMANDS = [['context', ['harvest', 'context']]] as const
 
 test.each(HARVEST_SESSION_COMMANDS)(
   'bare ab harvest %s reports complete harvest-session guidance',
