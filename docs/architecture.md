@@ -999,9 +999,12 @@ injects that same token.
 local scratch root and removes it on construction failure or asynchronous,
 idempotent `dispose()`. Explicit caller scratch remains caller-owned. Disposal
 cleans local composition resources, independently of durable remote sandbox
-`release`. The operator archive handler disposes a backend acquired through
-`sandboxFor` after each request, including failure; a static backend retains its
-caller's lifetime. Distribution packing likewise protects both temporary roots
+`release`. The hosted service's `OperatorSandboxResolver`
+(`packages/core/src/operator/sandbox-resolver.ts`) owns every backend it
+composes: it caches one per repository, effective-config revision and
+credential key, and disposes a superseded one on replacement. The operator
+archive handler reuses that cached backend and no longer disposes per request;
+a static backend retains its caller's lifetime. Distribution packing likewise protects both temporary roots
 from allocation onward and awaits both cleanup attempts before returning bytes
 or reporting failure.
 
@@ -1403,8 +1406,11 @@ proven per tool by `operator/registry.contract.test.ts`. Every binding is genera
 from the table and never widens beyond the operator services: the shipped one is
 `packages/core/src/cli/mcp.ts` (`ab mcp`, a stdio MCP server over the registry that
 fails closed inside a phase, exactly as repository-wide `ab builds` does); the
-hosted HTTP and MCP transports register from the same table. Checked-in
-risk classes live in `operator/annotations.ts` (SPEC §8.9).
+hosted HTTP and MCP transports register from the same table. The hosted MCP
+binding registers the service's `operatorTools`, computed by the same
+`operatorToolTable` the operator server dispatches through, so advertisement
+equals dispatch. Checked-in risk classes live in `operator/annotations.ts`
+(SPEC §8.9).
 
 **Init and upgrade.** `packages/core/src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then

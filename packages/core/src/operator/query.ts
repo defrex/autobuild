@@ -544,33 +544,46 @@ export class OrchestratorConfigError extends Error {
   }
 }
 
-/** Resolve the sandbox gate from the latest effective config; absent/disabled returns null. */
-export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
+/** The sandbox gate's answer for one repository: its latest deposited
+ * effective config when that config enables `[orchestrator]`, else the
+ * reason the gate is closed. */
+export type OrchestratorGate =
+  | { enabled: true; config: Config; revision: number }
+  | { enabled: false; reason: 'no-effective-config' | 'orchestrator-disabled' }
+
+/** Read the sandbox gate from the repository's LATEST deposited effective
+ * config. Bounded: one repository read plus the latest artifact row and its
+ * blob, never a listing of every revision. Throws `OrchestratorConfigError`
+ * when the latest deposit is unreadable or invalid. */
+export async function readOrchestratorGate(
+  store: BuildStore,
+  repo: string,
+): Promise<OrchestratorGate> {
   // A repository the store has no record for has no deposited artifact and
   // no dispatcher history: sandbox tools are disabled there.
-  if ((await store.getRepo(repo)) === null) return null
-  const artifacts = await store.listRepoArtifacts(repo, DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
-  if (artifacts.length === 0) return null
-  const latest = [...artifacts].sort((a, b) => b.revision - a.revision)[0]!
-  const artifact = await store.getRepoArtifact(repo, latest.kind, latest.revision)
-  if (artifact === null) {
-    throw new OrchestratorConfigError(
-      `effective config ${latest.kind}@${latest.revision} is not retrievable`,
-    )
-  }
+  if ((await store.getRepo(repo)) === null) return { enabled: false, reason: 'no-effective-config' }
+  const artifact = await store.getRepoArtifact(repo, DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
+  if (artifact === null) return { enabled: false, reason: 'no-effective-config' }
+  const label = `${artifact.meta.kind}@${artifact.meta.revision}`
   let raw: unknown
   try {
     raw = JSON.parse(new TextDecoder().decode(artifact.content))
   } catch {
-    throw new OrchestratorConfigError(
-      `effective config ${latest.kind}@${latest.revision} is not valid JSON`,
-    )
+    throw new OrchestratorConfigError(`effective config ${label} is not valid JSON`)
   }
   const parsed = configSchema.safeParse(normalizeEffectiveConfigArtifact(raw))
   if (!parsed.success) {
     throw new OrchestratorConfigError(
-      `effective config ${latest.kind}@${latest.revision} is invalid: ${parsed.error.message}`,
+      `effective config ${label} is invalid: ${parsed.error.message}`,
     )
   }
-  return parsed.data.orchestrator.enabled ? parsed.data : null
+  return parsed.data.orchestrator.enabled
+    ? { enabled: true, config: parsed.data, revision: artifact.meta.revision }
+    : { enabled: false, reason: 'orchestrator-disabled' }
+}
+
+/** Resolve the sandbox gate from the latest effective config; absent/disabled returns null. */
+export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
+  const gate = await readOrchestratorGate(store, repo)
+  return gate.enabled ? gate.config : null
 }

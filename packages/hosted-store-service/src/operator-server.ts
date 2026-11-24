@@ -61,8 +61,10 @@ import {
   setRepositorySetting,
   controlTicketStart,
   settingRequestSchema,
+  type OperatorSandboxResolver,
   type OperatorSandboxService,
   type OperatorTicketBackend,
+  type ToolEntry,
   TicketOperationError,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
@@ -101,21 +103,19 @@ export interface OperatorServerOptions {
   clock?: Clock
   /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
   ticketBackend?: OperatorTicketBackend
-  /** Operator-sandbox backend (AUT-340): archiving an operator's last open
-   * session for a repository releases their sandbox environment. The hosted
-   * service does not pass one directly — it supplies `sandboxFor` (below).
-   * When both are present `sandboxFor` wins. */
+  /** Static operator-sandbox backend (AUT-340), consulted only by the
+   * session-archive route: archiving an operator's last open session for a
+   * repository releases their sandbox environment. It is never fed into the
+   * tool registry. When `sandboxResolver` is present it wins. */
   sandbox?: OperatorSandboxService
-  /** Per-request sandbox-backend resolution (AUT-584): the deployment's own
-   * composition closure (the service owns the env, secret, and public origin
-   * it needs). Resolved per archive request with the request's credentials;
-   * `undefined` (disabled, unresolvable, or contained construction failure)
-   * degrades only — no release, and the archive still succeeds. When set,
-   * this wins over the static `sandbox` option. */
-  sandboxFor?: (
-    repo: string,
-    credentials?: OperatorRequestCredentials,
-  ) => Promise<OperatorSandboxService | undefined>
+  /** Per-call sandbox resolution (#1219): the deployment's gate and backend
+   * cache. When set, the registry serves the `sandbox.*` tools for its
+   * `canPublish` capability and each tool call resolves its backend with the
+   * request's credentials; a closed gate refuses with a typed
+   * `sandbox-<reason>` code. The archive route resolves through it too, and
+   * a refusal there only degrades — no release, and the archive still
+   * succeeds. The resolver owns every backend's lifetime. */
+  sandboxResolver?: Pick<OperatorSandboxResolver, 'canPublish' | 'resolve'>
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -170,6 +170,8 @@ async function body<T>(req: Request, schema: ZodType<T>): Promise<T> {
 
 export function createOperatorServer(opts: OperatorServerOptions): {
   fetch(req: Request): Promise<Response>
+  /** The table the tools route dispatches — what a binding must advertise. */
+  tools: readonly ToolEntry[]
 } {
   const clock = opts.clock ?? systemClock
   // The registry executes over the same store and ticket backend the typed
@@ -179,7 +181,11 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     store: opts.store,
     clock,
     ...(opts.ticketBackend !== undefined ? { tickets: opts.ticketBackend } : {}),
+    ...(opts.sandboxResolver !== undefined
+      ? { sandboxResolution: { canPublish: opts.sandboxResolver.canPublish } }
+      : {}),
   })
+  const sandboxResolver = opts.sandboxResolver
 
   function identity(req: Request): void {
     const app = req.headers.get(AUTOBUILD_VERSION_HEADER)
@@ -252,6 +258,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       try {
         const result = await registry.call(tool, input, {
           identity: user,
+          ...(sandboxResolver !== undefined
+            ? { sandboxFor: () => sandboxResolver.resolve(repo, requestCredentials(req)) }
+            : {}),
           ...(('via' in scope ? scope.via : undefined) !== undefined
             ? { via: 'via' in scope ? scope.via : undefined }
             : {}),
@@ -533,14 +542,13 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         return json(200, { ok: true })
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {
-        const sandbox = opts.sandboxFor
-          ? await opts.sandboxFor(repo, requestCredentials(req))
+        // A closed gate is expected here and composition failures are
+        // already reported inside the resolver: the release degrades to the
+        // dispatcher's idle settlement and the archive still succeeds.
+        const sandbox = sandboxResolver
+          ? await sandboxResolver.resolve(repo, requestCredentials(req)).catch(() => undefined)
           : opts.sandbox
-        try {
-          await archiveOperatorSession(opts.store, repo, sid, user, sandbox)
-        } finally {
-          if (opts.sandboxFor) await sandbox?.dispose?.()
-        }
+        await archiveOperatorSession(opts.store, repo, sid, user, sandbox)
         return json(200, { ok: true })
       }
       if (
@@ -721,6 +729,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
   }
 
   return {
+    tools: registry.entries,
     fetch(req: Request): Promise<Response> {
       return withRepositoryReads(async () => {
         try {

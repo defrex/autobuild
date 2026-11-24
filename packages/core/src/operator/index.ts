@@ -56,6 +56,8 @@ export {
   OperatorQueryError,
   OrchestratorConfigError,
   orchestratorConfig,
+  readOrchestratorGate,
+  type OrchestratorGate,
 } from './query'
 export type { OrchestratorConfig } from '../config/schema'
 export { randomIds } from '../ids'
@@ -65,6 +67,7 @@ export {
   TOOLS,
   attributed,
   buildRegistry,
+  operatorToolTable,
   RegistryError,
 } from './registry'
 export type {
@@ -102,6 +105,14 @@ export {
 export { cancelTicketStart, controlTicketStart, requestTicketStart } from './ticket-start'
 export type { TicketStartCancelled, TicketStartRequested } from './ticket-start'
 export type { OperatorSandboxService } from './sandbox'
+export {
+  createOperatorSandboxResolver,
+  SandboxUnavailableError,
+  type OperatorSandboxResolver,
+  type OperatorSandboxResolverOptions,
+  type SandboxRequestCredentials,
+  type SandboxUnavailableReason,
+} from './sandbox-resolver'
 export * from './presentation'
 
 /**
