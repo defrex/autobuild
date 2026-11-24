@@ -165,3 +165,7 @@
   position: relative;
   height: 112px;
 }
+/* Paired grounds stay side by side at every width. */
+[data-catalog="grounds"][data-paired] {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}

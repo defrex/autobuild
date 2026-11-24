@@ -104,7 +104,7 @@ async function raw(url: string, lines: string[]): Promise<string> {
   return promise
 }
 
-test('ab web --json prints exactly one URL line and serves the page without store reads', async () => {
+test('ab web --json prints exactly one URL line and serves the page; only a first page with no frame reads, and only the frame source', async () => {
   const web = await serve()
   try {
     expect(web.out).toHaveLength(1)
@@ -116,7 +116,18 @@ test('ab web --json prints exactly one URL line and serves the page without stor
     expect(page.status).toBe(200)
     const csp = page.headers.get('content-security-policy')!
     const nonce = /'nonce-([^']+)'/.exec(csp)![1]!
-    expect(await page.text()).toContain(`<meta property="csp-nonce" nonce="${nonce}">`)
+    const html = await page.text()
+    expect(html).toContain(`<meta property="csp-nonce" nonce="${nonce}">`)
+    expect(html).toContain('<meta name="ab-frame" content="')
+    // The first page joins the hub's one frame read: reads only, as the
+    // frame source's read-only guard allows them.
+    for (const name of web.calls) {
+      expect(name).toMatch(READ)
+      expect(name).not.toMatch(/lease|presence|append|put|ensure/i)
+    }
+    await web.hub.join()
+    web.calls.length = 0
+    expect((await fetch(web.url)).status).toBe(200)
     const asset = await fetch(new URL('/assets/app.js', web.url))
     expect(asset.status).toBe(200)
     expect((await asset.arrayBuffer()).byteLength).toBeGreaterThan(1000)

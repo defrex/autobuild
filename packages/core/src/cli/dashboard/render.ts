@@ -52,7 +52,14 @@ import {
   reviewRoundCeilingText,
   type RowAttention,
 } from './row-text'
-import { statusText, stepLine, stepTone, viewerLabel, type DashboardTone } from './vocabulary'
+import {
+  PROGRESS_VERIFIED,
+  statusText,
+  stepLine,
+  stepTone,
+  viewerLabel,
+  type DashboardTone,
+} from './vocabulary'
 
 export { formatDuration } from './vocabulary'
 
@@ -371,7 +378,11 @@ function renderBuild(
     const { bar, counts } = integrationProgress(text.progress, color)
     lines.push(
       ...packLines(
-        [bar, ...counts, ...(text.progress.verified ? [paint('· verified', 'green', color)] : [])],
+        [
+          bar,
+          ...counts,
+          ...(text.progress.verified ? [paint(`· ${PROGRESS_VERIFIED}`, 'green', color)] : []),
+        ],
         width,
         '  ',
       ),
