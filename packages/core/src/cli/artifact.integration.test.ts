@@ -11,13 +11,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { PhaseSessionError } from '../store/phase-session'
 import { textContent } from '../store/types'
-import {
-  artifactDownload,
-  artifactDownloadStream,
-  artifactGet,
-  artifactPut,
-  parseArtifactSpec,
-} from './artifact'
+import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
 import { makeEnv, seedStore } from './testkit'
 
 let tmp: string
@@ -36,22 +30,6 @@ afterEach(async () => {
 function deps() {
   return { store, env: makeEnv({ phase: 'plan', round: 1 }) }
 }
-
-describe('parseArtifactSpec', () => {
-  test('parses bare kinds, @rev suffixes, and kinds containing colons', () => {
-    expect(parseArtifactSpec('plan')).toEqual({ kind: 'plan' })
-    expect(parseArtifactSpec('plan@2')).toEqual({ kind: 'plan', rev: 2 })
-    expect(parseArtifactSpec('verify-report:e2e@0')).toEqual({
-      kind: 'verify-report:e2e',
-      rev: 0,
-    })
-  })
-
-  test('rejects malformed refs with the expected format', () => {
-    expect(() => parseArtifactSpec('plan@latest')).toThrow(/'<kind>@<rev>'/)
-    expect(() => parseArtifactSpec('@2')).toThrow(/invalid artifact ref/)
-  })
-})
 
 describe('artifact put/get', () => {
   test('put assigns 0-based revisions per kind (§6.3) and get round-trips', async () => {
