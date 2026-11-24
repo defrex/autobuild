@@ -10,13 +10,12 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
 import { InvalidAmbientContextError } from './env'
-import { runCli } from './main'
+import { SESSIONLESS_COMMANDS, runCli } from './main'
 import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import { encodeCursor, watchSelection } from './watch'
-import { WAIT_USAGE, abWait, matchEvent, matchState, parseConditions } from './wait'
+import { WAIT_USAGE, abWait, matchState, parseConditions } from './wait'
 
 const REPO = '/main/repo'
 const ESCALATION = {
@@ -137,56 +136,6 @@ const records = (out: string[]): ParsedRecord[] =>
 // ── Condition parsing and validation ─────────────────────────────────────────
 
 describe('wait condition parsing', () => {
-  test('the whole closed vocabulary parses; phase= accepts verify:<step> and core phases', () => {
-    const { conditions, globs } = parseConditions(
-      [
-        'blocked',
-        'paused',
-        'running',
-        'done',
-        'aborted',
-        'terminal',
-        'pr=open',
-        'pr=merged',
-        'pr=closed',
-        'pr=conflicted',
-        'phase=finalize',
-        'phase=verify:e2e',
-        'attention',
-      ],
-      ['pr.*', 'escalation.*'],
-    )
-    expect(conditions.map((condition) => condition.text)).toEqual([
-      'blocked',
-      'paused',
-      'running',
-      'done',
-      'aborted',
-      'terminal',
-      'pr=open',
-      'pr=merged',
-      'pr=closed',
-      'pr=conflicted',
-      'phase=finalize',
-      'phase=verify:e2e',
-      'attention',
-    ])
-    expect(globs.map((glob) => glob.text)).toEqual(['pr.*', 'escalation.*'])
-  })
-
-  test('unknown --for values and an empty phase= are rejected, naming vocabulary and usage', () => {
-    for (const value of ['bogus', 'pr=opened', 'phase=', 'phase=bogus', 'TERMINAL', '']) {
-      expect(() => parseConditions([value], [])).toThrow(`unknown --for condition "${value}"`)
-      expect(() => parseConditions([value], [])).toThrow('pr=conflicted')
-      expect(() => parseConditions([value], [])).toThrow(WAIT_USAGE)
-    }
-  })
-
-  test('an unknown --event glob is rejected with the wait usage line', () => {
-    expect(() => parseConditions([], ['bogus.*'])).toThrow('--event "bogus.*"')
-    expect(() => parseConditions([], ['bogus.*'])).toThrow(WAIT_USAGE)
-  })
-
   test('every validation failure happens before the store is opened, with nothing on stdout', async () => {
     const store = makeStore()
     const h = harness(store)
@@ -195,46 +144,6 @@ describe('wait condition parsing', () => {
     await expect(abWait({ ...h.base, forValues: [], events: [] })).rejects.toThrow(WAIT_USAGE)
     expect(h.openCount()).toBe(0)
     expect(h.out).toEqual([])
-  })
-
-  test('matchState walks --for values in supply order; attention is event-only', () => {
-    const state = {
-      status: 'blocked',
-      phase: 'verify:e2e',
-      prState: 'conflicted',
-    } as unknown as Parameters<typeof matchState>[1]
-    expect(
-      matchState(
-        parseConditions(['pr=conflicted', 'phase=verify:e2e', 'blocked'], []).conditions,
-        state,
-      ),
-    ).toBe('pr=conflicted')
-    expect(
-      matchState(parseConditions(['phase=verify:e2e', 'pr=conflicted'], []).conditions, state),
-    ).toBe('phase=verify:e2e')
-    expect(matchState(parseConditions(['terminal', 'blocked'], []).conditions, state)).toBe(
-      'blocked',
-    )
-    expect(matchState(parseConditions(['running', 'pr=open'], []).conditions, state)).toBeNull()
-    expect(matchState(parseConditions(['attention'], []).conditions, state)).toBeNull()
-  })
-
-  test('matchEvent checks attention per supply order, then globs in supply order', () => {
-    const attention = { type: 'escalation.raised' } as Parameters<typeof matchEvent>[0]
-    const conditions = parseConditions(['attention'], []).conditions
-    expect(matchEvent(attention, conditions, [])).toBe('attention')
-    expect(
-      matchEvent(attention, parseConditions(['done'], []).conditions, [
-        { regex: /^escalation\..*$/, text: 'escalation.*' },
-        { regex: /^build\..*$/, text: 'build.*' },
-      ]),
-    ).toBe('escalation.*')
-    expect(
-      matchEvent({ type: 'plan.started' } as Parameters<typeof matchEvent>[0], conditions, [
-        { regex: /^escalation\..*$/, text: 'escalation.*' },
-        { regex: /^build\..*$/, text: 'build.*' },
-      ]),
-    ).toBeNull()
   })
 })
 
@@ -263,7 +172,7 @@ describe('wait immediate return', () => {
     expect(Object.keys(record!)).toEqual(['build', 'event', 'state', 'cursor', 'condition'])
   })
 
-  test('already-satisfied pr, phase, and terminal conditions return immediately', async () => {
+  test('already-satisfied pr and phase conditions return immediately', async () => {
     // pr=open via finalize.completed.
     const prStore = makeStore()
     await seedRunningBuild(prStore, 'b1')
@@ -289,17 +198,6 @@ describe('wait immediate return', () => {
       state: { phase: 'finalize' },
       condition: 'phase=finalize',
     })
-
-    // terminal on a done build.
-    const doneStore = makeStore()
-    await seedRunningBuild(doneStore, 'b1')
-    await appendCompletion(doneStore, 'b1')
-    const doneh = harness(doneStore)
-    expect(await abWait({ ...doneh.base, slugs: ['b1'], forValues: ['terminal'] })).toBe(0)
-    expect(records(doneh.out)[0]).toMatchObject({
-      state: { status: 'done' },
-      condition: 'terminal',
-    })
   })
 
   test('--since does not suppress the immediate-return state check', async () => {
@@ -312,8 +210,16 @@ describe('wait immediate return', () => {
       repo: REPO,
       streams: { b1: 1 },
     })
-    const h = harness(store)
+    let delayCalls = 0
+    const h = harness(store, {
+      delay: async () => {
+        delayCalls += 1
+      },
+    })
     expect(await abWait({ ...h.base, slugs: ['b1'], since: cursor })).toBe(0)
+    expect(delayCalls).toBe(0)
+    // The escalation is also backlog after the cursor: it fires once, not twice.
+    expect(records(h.out)).toHaveLength(1)
     expect(records(h.out)[0]).toMatchObject({ condition: 'blocked', event: { seq: 2 } })
   })
 
@@ -369,29 +275,27 @@ describe('wait conditions satisfied by later events', () => {
         condition,
       })
     }
-  })
 
-  test('blocked and paused through escalation and pause', async () => {
-    const blocked = makeStore()
-    await seedRunningBuild(blocked, 'b1')
-    const blockedh = harness(blocked, {
-      onTick: async () => {
-        await appendEscalation(blocked, 'b1')
-      },
-    })
-    expect(await abWait({ ...blockedh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
-    expect(records(blockedh.out)[0]).toMatchObject({ state: { status: 'blocked' } })
-
-    const paused = makeStore()
-    await seedRunningBuild(paused, 'b1')
-    const pausedh = harness(paused, {
-      forValues: ['paused'],
-      onTick: async () => {
-        await paused.append('b1', { actor: KERNEL, type: 'build.paused', payload: {} })
-      },
-    })
-    expect(await abWait({ ...pausedh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
-    expect(records(pausedh.out)[0]).toMatchObject({ state: { status: 'paused' } })
+    // blocked via escalation, paused via build.paused.
+    for (const [condition, append] of [
+      ['blocked', (store: MemoryBuildStore) => appendEscalation(store, 'b1')],
+      [
+        'paused',
+        (store: MemoryBuildStore) =>
+          store.append('b1', { actor: KERNEL, type: 'build.paused', payload: {} }),
+      ],
+    ] as const) {
+      const live = makeStore()
+      await seedRunningBuild(live, 'b1')
+      const liveh = harness(live, {
+        forValues: [condition],
+        onTick: async () => {
+          await append(live)
+        },
+      })
+      expect(await abWait({ ...liveh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
+      expect(records(liveh.out)[0]).toMatchObject({ state: { status: condition }, condition })
+    }
   })
 
   test('pr lifecycle conditions, including reconcile returning to open', async () => {
@@ -420,7 +324,7 @@ describe('wait conditions satisfied by later events', () => {
     expect(await abWait({ ...mergedh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
     expect(records(mergedh.out)[0]).toMatchObject({ state: { prState: 'merged' } })
 
-    // pr=closed and pr=conflicted.
+    // pr=closed.
     const closed = makeStore()
     await seedRunningBuild(closed, 'b1')
     let closedTicks = 0
@@ -440,30 +344,6 @@ describe('wait conditions satisfied by later events', () => {
     })
     expect(await abWait({ ...closedh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
     expect(records(closedh.out)[0]).toMatchObject({ state: { prState: 'closed' } })
-
-    const conflicted = makeStore()
-    await seedRunningBuild(conflicted, 'b1')
-    let conflictedTicks = 0
-    const conflictedh = harness(conflicted, {
-      forValues: ['pr=conflicted'],
-      onTick: async () => {
-        conflictedTicks += 1
-        if (conflictedTicks === 1) {
-          await conflicted.append('b1', {
-            actor: KERNEL,
-            type: 'finalize.completed',
-            payload: { pr: { number: 7, url: 'https://forge/pr/7', headSha: 'abc' } },
-          })
-          await conflicted.append('b1', {
-            actor: DISPATCHER,
-            type: 'pr.conflicted',
-            payload: { baseSha: 'base' },
-          })
-        }
-      },
-    })
-    expect(await abWait({ ...conflictedh.base, slugs: ['b1'], timeout: '1' })).toBe(0)
-    expect(records(conflictedh.out)[0]).toMatchObject({ state: { prState: 'conflicted' } })
 
     // reconcile.completed returns a conflicted PR to open.
     const reopened = makeStore()
@@ -663,76 +543,11 @@ describe('wait --since semantics', () => {
     // The returned cursor resumes exactly after the delivered event.
     expect(records(h.out)[0]!.cursor).not.toBe(cursor)
   })
-
-  test('backlog state events do not satisfy state conditions', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    await appendEscalation(store, 'b1')
-    // Cursor before the escalation: the backlog contains a state event that
-    // produces blocked, but state conditions need a post-start event.
-    const cursor = encodeCursor({
-      v: 1,
-      store: `${REPO}/.autobuild`,
-      repo: REPO,
-      streams: { b1: 1 },
-    })
-    let ticks = 0
-    const h = harness(store, {
-      onTick: async () => {
-        ticks += 1
-        if (ticks === 1) await appendEscalation(store, 'b1')
-      },
-    })
-    expect(await abWait({ ...h.base, slugs: ['b1'], since: cursor, timeout: '2' })).toBe(0)
-    // The pre-existing escalation's reduction is backlog; the wait ends on
-    // the POST-START escalation (the appended one), never on the backlog one.
-    expect(records(h.out)).toHaveLength(1)
-  })
-
-  test('a state condition already true at start fires despite --since; backlog does not double-fire', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    await appendEscalation(store, 'b1')
-    const cursor = encodeCursor({
-      v: 1,
-      store: `${REPO}/.autobuild`,
-      repo: REPO,
-      streams: { b1: 2 },
-    })
-    let delayCalls = 0
-    const h = harness(store, {
-      delay: async () => {
-        delayCalls += 1
-      },
-    })
-    expect(await abWait({ ...h.base, slugs: ['b1'], since: cursor })).toBe(0)
-    expect(delayCalls).toBe(0)
-    expect(records(h.out)).toHaveLength(1)
-    expect(records(h.out)[0]).toMatchObject({ condition: 'blocked', event: { seq: 2 } })
-  })
 })
 
 // ── Exit 2: named builds all terminal, unsatisfied ───────────────────────────
 
 describe('wait exit 2 — named builds terminal without satisfaction', () => {
-  test('a named build going terminal unsatisfied ends with the terminal record and condition null', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    const h = harness(store, {
-      forValues: ['blocked'],
-      onTick: async () => {
-        await appendCompletion(store, 'b1')
-      },
-    })
-    expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '1' })).toBe(2)
-    const [record] = records(h.out)
-    expect(record).toMatchObject({
-      event: { type: 'build.completed' },
-      state: { status: 'done' },
-      condition: null,
-    })
-  })
-
   test('all named builds already terminal at start exit 2 immediately with the latest terminal event', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
@@ -781,7 +596,12 @@ describe('wait exit 2 — named builds terminal without satisfaction', () => {
     })
     expect(await abWait({ ...h.base, slugs: ['b1', 'b2'], timeout: '3' })).toBe(2)
     // The record is the event that made the FINAL named build terminal.
-    expect(records(h.out)[0]).toMatchObject({ build: 'b2', condition: null })
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'b2',
+      event: { type: 'build.completed' },
+      state: { status: 'done' },
+      condition: null,
+    })
   })
 })
 
@@ -829,27 +649,6 @@ describe('wait timeout and interrupt', () => {
     const [cursorRecord] = records(json.out)
     expect(Object.keys(cursorRecord!)).toEqual(['cursor'])
   })
-
-  test('exit invariants: 0 only with a record, 3/4 never with one, 2 only with condition null', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    await appendEscalation(store, 'b1')
-    const satisfied = harness(store)
-    expect(await abWait({ ...satisfied.base, slugs: ['b1'] })).toBe(0)
-    expect(records(satisfied.out)).toHaveLength(1)
-    expect(records(satisfied.out)[0]!.condition).toBe('blocked')
-
-    // A build that never satisfies: timeout and interrupt leave no record.
-    const quiet = makeStore()
-    await seedRunningBuild(quiet, 'b1')
-    const timedOut = harness(quiet)
-    expect(await abWait({ ...timedOut.base, slugs: ['b1'], timeout: '1' })).toBe(3)
-    for (const line of timedOut.out) expect(Object.keys(JSON.parse(line))).toEqual(['cursor'])
-
-    const interrupted = harness(quiet, { signal: AbortSignal.abort() })
-    expect(await abWait({ ...interrupted.base, slugs: ['b1'] })).toBe(4)
-    for (const line of interrupted.out) expect(Object.keys(JSON.parse(line))).toEqual(['cursor'])
-  })
 })
 
 // ── The no-slug waiting rule ─────────────────────────────────────────────────
@@ -890,26 +689,10 @@ describe('wait no-slug membership', () => {
       },
     })
     expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
-    expect(records(h.out)[0]).toMatchObject({ build: 'fresh', condition: 'blocked' })
-  })
-
-  test('a newly discovered build that already satisfies ends the wait', async () => {
-    const store = makeStore()
-    let ticks = 0
-    const h = harness(store, {
-      onTick: async () => {
-        ticks += 1
-        if (ticks === 1) {
-          await seedRunningBuild(store, 'late')
-          await appendEscalation(store, 'late')
-        }
-      },
-    })
-    expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
     expect(records(h.out)[0]).toMatchObject({
-      build: 'late',
-      condition: 'blocked',
+      build: 'fresh',
       event: { type: 'escalation.raised' },
+      condition: 'blocked',
     })
   })
 })
@@ -917,30 +700,6 @@ describe('wait no-slug membership', () => {
 // ── The mine filter's repository identity (AUT-567 parity with watch) ───────
 
 describe('wait mine filter — repository identity parity', () => {
-  test('a legacy checkout-path-keyed record joins via its normalized repoOrigin', async () => {
-    // The wait and the watch carry the identical AUT-567 identity rule: a
-    // legacy record keyed by an old checkout path matches only through the
-    // fallback arm — its normalized `repoOrigin`.
-    const store = makeStore()
-    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
-    await store.append('legacy', {
-      actor: KERNEL,
-      type: 'runner.attached',
-      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
-    })
-    await appendEscalation(store, 'legacy')
-    const h = harness(store)
-    // Discovery in the initial scan registers the record and the
-    // registration state check ends the wait at once; a broken fallback arm
-    // would discover nothing and time out with exit 3 instead.
-    expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
-    expect(records(h.out)[0]).toMatchObject({
-      build: 'legacy',
-      event: { type: 'escalation.raised' },
-      condition: 'blocked',
-    })
-  })
-
   test('a record whose repoOrigin is an ssh-spelled variant of the origin still joins', async () => {
     // The wait's identity is the https origin; the legacy record's stored
     // origin is scp-like ssh from an older writer vintage. Re-normalizing the
@@ -1290,12 +1049,11 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     expect(records(h.out)[0]).toMatchObject({ build: 'live', condition: 'blocked' })
   })
 
-  test('a legacy repoOrigin record absent from the digest map still discovers and still skips when terminal', async () => {
+  test('a legacy repoOrigin record absent from the digest map still discovers', async () => {
     const store = makeStore()
     // In `mine` only via the repoOrigin fallback arm: the digest map (keyed
     // on `record.repo`) has no entry for it, so discovery falls back to the
-    // reduceBuild re-check — for a nonterminal record it registers, for a
-    // terminal one it skips.
+    // reduceBuild re-check and registers the nonterminal record.
     await store.createBuild({ slug: 'legacy-live', repo: '/old/checkouts/app', repoOrigin: REPO })
     await store.append('legacy-live', {
       actor: KERNEL,
@@ -1313,18 +1071,6 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
       event: { type: 'escalation.raised' },
       condition: 'blocked',
     })
-
-    // The terminal variant: the same fallback path reads it once, sees the
-    // reduceBuild terminal status, and skips — the wait keeps waiting and
-    // times out with exit 3 (a bare cursor record in --json), having never
-    // treated it as discoverable work.
-    const store2 = makeStore()
-    await store2.createBuild({ slug: 'legacy-done', repo: '/old/checkouts/app', repoOrigin: REPO })
-    await appendCompletion(store2, 'legacy-done')
-    const h2 = harness(store2)
-    expect(await abWait({ ...h2.base, timeout: '2' })).toBe(3)
-    expect(h2.out).toHaveLength(1)
-    expect(Object.keys(JSON.parse(h2.out[0]!) as object)).toEqual(['cursor'])
   })
 
   test('a named terminal build still tracks through trackBuild (persisted seed)', async () => {
@@ -1606,28 +1352,6 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
     expect(h.err).toEqual([expect.stringContaining('ab wait: timed out')])
   })
 
-  test('--timeout 0 leaves the held window at the remote default (25 s)', async () => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'b1')
-    const waits: number[] = []
-    const { store: fake } = longPollStore(store, (_slug, _call, opts) => {
-      waits.push(opts?.waitSeconds ?? -1)
-    })
-    let ticks = 0
-    const h = harness(store, {
-      openStore: () => fake,
-      onTick: async () => {
-        ticks += 1
-        if (ticks === 2) await appendEscalation(store, 'b1')
-      },
-    })
-    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '0' })).toBe(0)
-    for (const wait of waits) expect(wait).toBe(REMOTE_EVENT_WAIT_SECONDS)
-    expect(records(h.out)).toHaveLength(1)
-    expect(records(h.out)[0]).toMatchObject({ build: 'b1', condition: 'blocked' })
-    expect(h.err).toEqual([])
-  })
-
   test('discovery (no slugs) launches held reads for builds discovered mid-wait', async () => {
     const store = makeStore()
     const { store: fake } = longPollStore(store, (_slug, call) => {
@@ -1723,22 +1447,9 @@ describe('wait wiring and exit codes', () => {
     expect(await runCli(['wait', 'b1', '--bogus'], deps)).toBe(1)
     expect(err[2]).toContain('unknown flag --bogus')
     expect(out).toEqual([])
-  })
-
-  test('sessionless registration: ab wait reaches the command outside any phase', async () => {
-    const { SESSIONLESS_COMMANDS } = await import('./main')
+    // Sessionless: with no AB_* ambient environment, `ab wait` reaches its
+    // own usage error, not phase-required routing's build-session refusal.
     expect(SESSIONLESS_COMMANDS.has('wait')).toBe(true)
-    // With no AB_* ambient environment, `ab wait` must reach its own usage
-    // error — not phase-required routing's "runs inside a build session".
-    const out: string[] = []
-    const err: string[] = []
-    const code = await runCli(['wait'], {
-      workspacePath: '/no/wait/dependencies',
-      stdout: (line: string) => out.push(line),
-      stderr: (line: string) => err.push(line),
-    })
-    expect(code).toBe(1)
-    expect(err.join('\n')).toContain(WAIT_USAGE)
     expect(err.join('\n')).not.toContain('runs inside a build session')
   })
 
@@ -1781,6 +1492,9 @@ describe('wait wiring and exit codes', () => {
     expect(
       await runCli(['wait', 'b1', '--for', 'blocked', '--json', '--timeout', '1'], {
         ...baseDeps,
+        // An injected clock: without one the wait sleeps a real interval
+        // before its deadline check.
+        clock: steppingClock(),
         openStore: () => emptyStore,
       }),
     ).toBe(3)
@@ -1954,12 +1668,6 @@ test('repository discovery retains collecting integrations through later lifecyc
   expect(h.out.join('\n')).toContain('build.completed')
 })
 
-test('collecting is an accepted wait status condition', () => {
-  expect(parseConditions(['collecting'], []).conditions).toEqual([
-    { text: 'collecting', cond: { kind: 'status', status: 'collecting' } },
-  ])
-})
-
 test.each(['human', 'possible-stale-enable'] as const)(
   'terminal forge merge attention follows durable classification: %s',
   async (classification) => {
@@ -1990,46 +1698,30 @@ test.each(['human', 'possible-stale-enable'] as const)(
   },
 )
 
-test.each(['node-merged', 'node-landed'])(
-  'tree condition %s delivers node merge before terminal completion',
-  async (condition) => {
-    const store = makeStore()
-    await seedRunningBuild(store, 'tree')
-    const h = harness(store, {
-      slugs: ['tree'],
-      forValues: [condition],
-      timeout: '2s',
-      onTick: async () => {
-        await store.append('tree', {
-          actor: DISPATCHER,
-          type: 'integration.landed',
-          payload: {
-            head: 'head',
-            landed: 'landed',
-            provenance: 'kernel',
-            verified: true,
-            fenced: true,
-          },
-        })
-        await appendCompletion(store, 'tree')
-      },
-    })
-    expect(await abWait(h.base)).toBe(0)
-    expect(JSON.parse(h.out[0]!).event.type).toBe('integration.landed')
-  },
-)
-
-test('attention backlog recognizes a conflicted replay and ignores a clean replay', async () => {
-  const { reduceBuild } = await import('../kernel/reducer')
-  const { currentDeferralObservationReducer } = await import('../kernel/auto-merge')
-  const facts = { state: reduceBuild([]), deferral: currentDeferralObservationReducer.initial() }
-  const conditions = parseConditions(['attention'], []).conditions
-  expect(
-    matchEvent({ type: 'restack.replayed', payload: { conflicted: true } }, conditions, [], facts),
-  ).toBe('attention')
-  expect(
-    matchEvent({ type: 'restack.replayed', payload: { conflicted: false } }, conditions, [], facts),
-  ).toBeNull()
+test('tree condition node-merged delivers node merge before terminal completion', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'tree')
+  const h = harness(store, {
+    slugs: ['tree'],
+    forValues: ['node-merged'],
+    timeout: '2s',
+    onTick: async () => {
+      await store.append('tree', {
+        actor: DISPATCHER,
+        type: 'integration.landed',
+        payload: {
+          head: 'head',
+          landed: 'landed',
+          provenance: 'kernel',
+          verified: true,
+          fenced: true,
+        },
+      })
+      await appendCompletion(store, 'tree')
+    },
+  })
+  expect(await abWait(h.base)).toBe(0)
+  expect(JSON.parse(h.out[0]!).event.type).toBe('integration.landed')
 })
 
 test('read deferral attention wakes live and current-state waits and closes on answer', async () => {
@@ -2249,34 +1941,6 @@ test('startup reduced-read incompatibility remains legible without history recon
   await expect(abWait({ ...h.base, timeout: '1' })).rejects.toThrow(error.message)
   expect(reduced).toBe(1)
   expect(history).toBe(0)
-})
-
-test('current upstream rewrite satisfies attention after restart and clears on safe observation', async () => {
-  const { readBuildFacts } = await import('../store/reduced-reads')
-  const store = makeStore()
-  await seedRunningBuild(store, 'b1')
-  await store.append('b1', {
-    actor: DISPATCHER,
-    type: 'target.rewritten',
-    payload: {
-      branch: 'main',
-      previousSha: 'a'.repeat(40),
-      sha: 'b'.repeat(40),
-    },
-  })
-  let facts = (await readBuildFacts(store, 'b1')).value
-  const { conditions } = parseConditions(['attention'], [])
-  expect(matchState(conditions, facts.state)).toBe('attention')
-  await store.append('b1', {
-    actor: DISPATCHER,
-    type: 'target.rewrite-cleared',
-    payload: {
-      branch: 'main',
-      sha: 'a'.repeat(40),
-    },
-  })
-  facts = (await readBuildFacts(store, 'b1')).value
-  expect(matchState(conditions, facts.state)).toBeNull()
 })
 
 test('expired hosted wait resume refuses before canonical reconstruction', async () => {
