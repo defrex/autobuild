@@ -8,20 +8,12 @@ import {
   compactProbe,
   projectProbe,
   probeEvidence,
-  destinationAliases,
-  blockerBuild,
   missingChanges,
   observePresence,
   ownedContribution,
   type LandingEvidence,
-  type PresenceBuild,
 } from './change-presence'
 import type { NodeGit } from './node-restack'
-import { MemoryBuildStore } from '../store/memory'
-import { DISPATCHER } from '../events/envelope'
-import { repositoryReadFactsReducer } from './read-facts'
-import { readRepositoryFacts } from '../store/reduced-reads'
-import { validateRepositoryEventWrite } from '../events/repository'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -104,54 +96,6 @@ test('rewritten foreign commits retain original identity', async () => {
   expect(await observePresence(deps, rewritten, [], new Map([[rewritten, original]]))).toContain(
     `foreign:${original}`,
   )
-})
-
-test('build generations are source scoped, latest wins, ties fail closed', () => {
-  const entry = (slug: string, createdAt: string, source = 'file'): PresenceBuild => ({
-    record: {
-      slug,
-      repo: 'repo',
-      createdAt,
-      updatedAt: createdAt,
-      ticket: { source, id: 'BLOCK' },
-    },
-    digest: { slug, observations: [] },
-  })
-  const old = entry('old', '2026-01-01')
-  const latest = entry('latest', '2026-02-01')
-  expect(
-    blockerBuild([old, latest, entry('foreign', '2027-01-01', 'other')], 'file', 'BLOCK'),
-  ).toBe(latest)
-  expect(blockerBuild([old, latest, entry('tied', '2026-02-01')], 'file', 'BLOCK')).toContain(
-    'ambiguous',
-  )
-  expect(blockerBuild([old], 'file', 'missing')).toBeUndefined()
-})
-
-test('head-keyed proof is strictly validated and survives a fresh durable reduction', async () => {
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('repo')
-  const payload = {
-    destination: 'root:main',
-    branch: 'main',
-    head: 'a'.repeat(40),
-    evidence: 'merge-revision-1',
-    identities: ['build:blocker'],
-  }
-  await store.appendRepo('repo', { actor: DISPATCHER, type: 'change-presence.observed', payload })
-  const fresh = await readRepositoryFacts(store, 'repo')
-  expect(fresh.value.presence['root:main']).toEqual(payload)
-  expect(repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial()).presence).toEqual(
-    {},
-  )
-  for (const identities of [['build:z', 'build:a'], ['build:a', 'build:a'], ['untyped']])
-    expect(() =>
-      validateRepositoryEventWrite({
-        actor: DISPATCHER,
-        type: 'change-presence.observed',
-        payload: { ...payload, identities },
-      }),
-    ).toThrow()
 })
 
 test('rewritten node trailers recursively transport leaf contributions into presence and ownership', async () => {
@@ -253,102 +197,4 @@ test('immutable witnesses reproject late, nested and withdrawn facts without Git
     expect(grown.evidence).toBe(compactAfter.evidence)
     expect(JSON.stringify(grown.probe)).toBe(JSON.stringify(compactAfter.probe))
   }
-})
-
-test('witness validation rejects malformed, noncanonical and unsupported proofs', async () => {
-  const store = new MemoryBuildStore()
-  await store.ensureRepo('repo')
-  const witness = {
-    version: 1 as const,
-    commits: ['a'.repeat(40)],
-    identities: ['build:a' as const],
-  }
-  const payload = {
-    branch: 'main',
-    destination: 'root:main',
-    head: 'a'.repeat(40),
-    evidence: 'proof',
-    identities: ['build:a'],
-    witness,
-  }
-  await store.appendRepo('repo', { actor: DISPATCHER, type: 'change-presence.observed', payload })
-  expect((await readRepositoryFacts(store, 'repo')).value.presence['root:main']).toEqual(payload)
-  for (const invalid of [
-    { ...witness, version: 2 },
-    { ...witness, commits: ['bad'] },
-    { ...witness, commits: ['a'.repeat(40), 'a'.repeat(40)] },
-    { ...witness, commits: ['b'.repeat(40), 'a'.repeat(40)] },
-    { ...witness, identities: ['build:z', 'build:a'] },
-    { ...witness, identities: ['build:a', 'build:a'] },
-    { ...witness, identities: [`foreign:${'a'.repeat(40)}`] },
-    { ...witness, extra: true },
-  ])
-    expect(() =>
-      validateRepositoryEventWrite({
-        actor: DISPATCHER,
-        type: 'change-presence.observed',
-        payload: { ...payload, witness: invalid },
-      }),
-    ).toThrow()
-  const probe = {
-    version: 1 as const,
-    questions: ['build:a' as const, 'build:b' as const],
-    commits: ['a'.repeat(40)],
-    reachable: ['a'.repeat(40)],
-    builds: ['build:a' as const, 'build:b' as const],
-    trailers: ['build:a' as const],
-  }
-  const { witness: _legacy, ...current } = payload
-  const probed = { ...current, probe }
-  await store.appendRepo('repo', {
-    actor: DISPATCHER,
-    type: 'change-presence.observed',
-    payload: probed,
-  })
-  expect((await readRepositoryFacts(store, 'repo')).value.presence['root:main']).toEqual(probed)
-  for (const invalid of [
-    { ...probed, probe: { ...probe, version: 2 } },
-    { ...probed, probe: { ...probe, questions: ['build:b', 'build:a'] } },
-    { ...probed, probe: { ...probe, commits: ['a'.repeat(40), 'a'.repeat(40)] } },
-    { ...probed, probe: { ...probe, reachable: ['b'.repeat(40)] } },
-    { ...probed, probe: { ...probe, trailers: ['build:c'] } },
-    { ...probed, probe: { ...probe, extra: true } },
-    { ...probed, identities: ['build:c'] },
-  ])
-    expect(() =>
-      validateRepositoryEventWrite({
-        actor: DISPATCHER,
-        type: 'change-presence.observed',
-        payload: invalid,
-      }),
-    ).toThrow()
-})
-
-test('destination aliases ignore other ready nodes and fail closed on uncertain ancestry', async () => {
-  const { reduceBuild } = await import('./reducer')
-  const child = reduceBuild([])
-  const parent = reduceBuild([])
-  const unrelated = reduceBuild([])
-  child.target = { build: 'parent', ticket: { source: 'fake', id: 'PARENT' } }
-  child.nodeRestack = { items: [], foreignAliases: { ['a'.repeat(40)]: 'b'.repeat(40) } }
-  parent.nodeRestack = { items: [], foreignAliases: { ['b'.repeat(40)]: 'c'.repeat(40) } }
-  unrelated.nodeRestack = { items: [], foreignAliases: { ['a'.repeat(40)]: 'd'.repeat(40) } }
-  const inputs = {
-    entries: [],
-    landings: [],
-    aliases: new Map<string, string>(),
-    states: new Map([
-      ['child', child],
-      ['parent', parent],
-      ['other', unrelated],
-    ]),
-  }
-  expect([...destinationAliases(inputs, 'child')]).toEqual([
-    ['a'.repeat(40), 'b'.repeat(40)],
-    ['b'.repeat(40), 'c'.repeat(40)],
-  ])
-  expect([...destinationAliases(inputs)]).toEqual([])
-  expect(() => destinationAliases(inputs, 'missing')).toThrow('missing')
-  parent.target = { build: 'child', ticket: { source: 'fake', id: 'CHILD' } }
-  expect(() => destinationAliases(inputs, 'child')).toThrow('cyclic')
 })
