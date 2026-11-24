@@ -27,7 +27,8 @@ bun ab dispatch --viewer --dispatched-by app.autobuild.run
 
 The optional label is descriptive input. Every frame says `viewer · dispatched by
 <label>`, or simply `viewer` when omitted. Plain/non-TTY output states the mode
-at startup and prints state changes. `--once` reads one snapshot; `--interval <s>`
+at startup and prints state changes. With `--web`, it prints only the URL and the
+web UI is the presentation. `--once` reads one snapshot; `--interval <s>`
 sets the polling cadence. Without a recorded configuration it waits for the dispatcher.
 
 The viewer takes no repository lease and starts no build, harvest, scan, janitor,

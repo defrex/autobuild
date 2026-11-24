@@ -1,10 +1,19 @@
 import { parseArgs, stringFlag } from './args'
+import { parseWebPort } from '../web/options'
+
+/** `ab dispatch --web` settings: `port` 0 lets the OS (or the launcher) choose. */
+export interface DispatchWebArgs {
+  port: number
+  host?: string
+  json: boolean
+}
+
 export function parseDispatchArgs(
   rest: readonly string[],
   env: Record<string, string | undefined>,
 ) {
   const usage =
-    'usage: ab dispatch [--viewer [--dispatched-by <label>] | --takeover] [--once] [--interval <seconds>] [--store <ref>] [--repository <origin>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
+    'usage: ab dispatch [--viewer [--dispatched-by <label>] | --takeover] [--once] [--interval <seconds>] [--store <ref>] [--repository <origin>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] [--web [--port <n>] [--host <addr>] [--json]] (§3.3)'
   const parsed = parseArgs(
     rest,
     {
@@ -20,6 +29,10 @@ export function parseDispatchArgs(
       'no-intake': 'boolean',
       'auto-merge': 'boolean',
       'no-auto-merge': 'boolean',
+      web: 'boolean',
+      port: 'value',
+      host: 'value',
+      json: 'boolean',
     },
     usage,
   )
@@ -48,6 +61,20 @@ export function parseDispatchArgs(
     throw new Error(`Auto-merge flags are retired; configure [[merge]] policy — ${usage}`)
   }
 
+  let web: DispatchWebArgs | undefined
+  if (parsed.flags.has('web')) {
+    if (once)
+      throw new Error(`--web serves until stopped and cannot be combined with --once — ${usage}`)
+    const host = stringFlag(parsed, 'host')
+    web = {
+      port: parseWebPort(stringFlag(parsed, 'port'), usage),
+      ...(host !== undefined ? { host } : {}),
+      json: parsed.flags.has('json'),
+    }
+  } else if (parsed.flags.has('port') || parsed.flags.has('host') || parsed.flags.has('json')) {
+    throw new Error(`--port, --host and --json require --web — ${usage}`)
+  }
+
   const interval = stringFlag(parsed, 'interval')
   let intervalMs: number | undefined
   if (interval !== undefined) {
@@ -73,5 +100,21 @@ export function parseDispatchArgs(
     intervalMs,
     storeRef,
     repository,
+    ...(web !== undefined ? { web } : {}),
   }
+}
+
+/** Pin `--port <port>` into dispatch arguments (without the leading
+ * `dispatch`), replacing any `--port` already given. */
+export function pinWebPort(args: readonly string[], port: number): string[] {
+  const pinned: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!
+    if (arg === '--port') {
+      index++
+      continue
+    }
+    pinned.push(arg)
+  }
+  return [...pinned, '--port', String(port)]
 }

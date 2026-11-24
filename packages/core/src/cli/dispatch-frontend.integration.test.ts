@@ -32,6 +32,7 @@ import {
   stripAnsi,
 } from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
+import { WebModelHub } from '../web/hub'
 import { lazyTicketSource, type ControlTickets, type ResolvedTicketCommand } from './ticket'
 import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
@@ -3153,12 +3154,15 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
     inputLive = false,
     writes = 0,
     attempts = 0,
-    writesAtRelease = 0
+    writesAtRelease = 0,
+    webClosed = 0
   const append = store.appendRepo.bind(store)
   store.appendRepo = async (repo, event) => {
     if (event.type === 'dispatcher.terminal-released') {
       attempts++
       expect(inputLive).toBe(false)
+      // The web port is free before a successor may bind it.
+      expect(webClosed).toBeGreaterThan(0)
       if (attempts === 1) {
         writesAtRelease = writes
         throw new Error('temporary store outage')
@@ -3170,12 +3174,23 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
   const write = () => {
     writes++
   }
+  const hub = new WebModelHub({})
   const frontend = new DispatchFrontend({
     repo,
     store,
     storeRef: '/unused',
     env: {},
     once: false,
+    web: {
+      dispatch: {
+        hub,
+        url: 'http://127.0.0.1:1/',
+        publishFacts: () => {},
+        close: async () => {
+          webClosed++
+        },
+      },
+    },
     terminal: {
       write,
       modes: createTerminalModeController(write, write),

@@ -1,15 +1,30 @@
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createWebHandler, type WebHandlerOptions } from './http'
 import type { WebAssetManifest } from './protocol'
 
-const assetsDir = new URL('./assets/', import.meta.url)
+/**
+ * The committed client bundle's directory, resolved at call time. A literal
+ * `new URL('./assets/', import.meta.url)` is a static asset reference to
+ * bundlers, and Turbopack fails the hosted service build on a directory one
+ * whenever the dispatcher module graph reaches this file.
+ */
+function assetsDir(): string {
+  const dir = (import.meta as { dir?: unknown }).dir
+  return join(
+    typeof dir === 'string' && dir !== '' ? dir : dirname(fileURLToPath(import.meta.url)),
+    'assets',
+  )
+}
 
 /** The committed client bundle's manifest. */
 export async function loadWebManifest(): Promise<WebAssetManifest> {
-  return (await Bun.file(new URL('manifest.json', assetsDir)).json()) as WebAssetManifest
+  return (await Bun.file(join(assetsDir(), 'manifest.json')).json()) as WebAssetManifest
 }
 
+/** Serves one manifest-allowlisted asset name. */
 export function readWebAsset(path: string): BodyInit {
-  return Bun.file(new URL(path, assetsDir))
+  return Bun.file(join(assetsDir(), path))
 }
 
 export interface StartedWebServer {
@@ -25,9 +40,9 @@ export function webServerUrl(hostname: string, port: number): string {
 }
 
 export class WebPortInUseError extends Error {
-  constructor(hostname: string, port: number) {
+  constructor(hostname: string, port: number, command = 'ab web') {
     super(
-      `ab web: port ${port} is already in use on ${hostname}; choose another --port, or omit it for a free port`,
+      `${command}: port ${port} is already in use on ${hostname}; choose another --port, or omit it for a free port`,
     )
     this.name = 'WebPortInUseError'
   }
@@ -38,8 +53,11 @@ export async function startWebServer(
     Partial<Pick<WebHandlerOptions, 'manifest' | 'readAsset'>> & {
       hostname: string
       port: number
+      /** The command named in errors; default `ab web`. */
+      command?: string
     },
 ): Promise<StartedWebServer> {
+  const command = opts.command ?? 'ab web'
   const handler = createWebHandler({
     ...opts,
     manifest: opts.manifest ?? (await loadWebManifest()),
@@ -56,7 +74,7 @@ export async function startWebServer(
       reusePort: false,
       fetch: (request, bun) => handler(request, bun),
       error: () =>
-        new Response('ab web: internal error', {
+        new Response(`${command}: internal error`, {
           status: 500,
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         }),
@@ -65,7 +83,7 @@ export async function startWebServer(
     const code = (error as { code?: unknown }).code
     const message = error instanceof Error ? error.message : String(error)
     if (code === 'EADDRINUSE' || /EADDRINUSE|address already in use|in use/i.test(message))
-      throw new WebPortInUseError(opts.hostname, opts.port)
+      throw new WebPortInUseError(opts.hostname, opts.port, command)
     throw error
   }
   const port = server.port ?? opts.port
@@ -75,3 +93,5 @@ export async function startWebServer(
     stop: () => server.stop(true),
   }
 }
+
+export type WebServerStarter = typeof startWebServer
