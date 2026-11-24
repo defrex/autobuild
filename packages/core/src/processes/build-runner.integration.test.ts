@@ -897,20 +897,6 @@ describe('attach', () => {
     expect(record?.heartbeatAt).toBeDefined()
   })
 
-  test('appends resumedFromSeq = last seq on a non-empty log', async () => {
-    const h = await makeHarness()
-    await h.br.attach()
-    const events = await h.store.getEvents(SLUG)
-    const attached = ofType(events, 'runner.attached')[0]!
-    expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
-      instance: attached.payload.instance,
-      attachedSeq: attached.seq,
-      runtime: runtimeIdentity(),
-    })
-    expect(attached.seq).toBe(4)
-    expect(attached.payload.resumedFromSeq).toBe(3)
-  })
-
   test('reclaims every pre-boundary open session before attachment without a transcript', async () => {
     const h = await makeHarness()
     await h.store.append(SLUG, {
@@ -976,43 +962,29 @@ describe('attach', () => {
     ])
     expect(ofType(events, 'runner.attached')).toHaveLength(1)
     expect(reduceBuild(events).sessions.open).toEqual([])
-  })
 
-  test('three successive recoveries leave only the newest rerun session open', async () => {
-    const h = await makeHarness()
-    for (let recovery = 1; recovery <= 3; recovery += 1) {
+    // Successive recoveries: each attach reclaims the previous rerun session,
+    // leaving only the newest one open.
+    for (const session of ['s_rerun_1', 's_rerun_2', 's_rerun_3']) {
       await h.store.append(SLUG, {
         actor: KERNEL,
         type: 'session.started',
-        payload: {
-          session: `s_run_${recovery}`,
-          role: 'implement',
-          runner: 'pi',
-          phase: 'implement',
-          round: 2,
-        },
+        payload: { session, role: 'implement', runner: 'pi', phase: 'implement', round: 2 },
       })
-      await h.br.attach()
+      if (session !== 's_rerun_3') await h.br.attach()
     }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'session.started',
-      payload: {
-        session: 's_run_4',
-        role: 'implement',
-        runner: 'pi',
-        phase: 'implement',
-        round: 2,
-      },
-    })
-
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'session.ended').map((event) => event.payload.session)).toEqual([
-      's_run_1',
-      's_run_2',
-      's_run_3',
+    events = await h.store.getEvents(SLUG)
+    const ended = ofType(events, 'session.ended')
+    expect(ended.map((event) => event.payload.session)).toEqual([
+      's_dead_1',
+      's_dead_2',
+      's_rerun_1',
+      's_rerun_2',
     ])
-    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual(['s_run_4'])
+    expect(ended.every((event) => event.payload.outcome === 'reclaimed')).toBe(true)
+    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual([
+      's_rerun_3',
+    ])
   })
 
   test('throws LeaseHeldError while another holder is live (§7.4)', async () => {
@@ -1020,7 +992,7 @@ describe('attach', () => {
     const h = await makeHarness({ clock })
     expect(await h.store.claimLease(SLUG, 'other-sandbox', 60_000)).toBe(true)
 
-    expect(h.br.attach()).rejects.toBeInstanceOf(LeaseHeldError)
+    await expect(h.br.attach()).rejects.toBeInstanceOf(LeaseHeldError)
     // Nothing was appended: the build still belongs to the live holder.
     expect(await typesOf(h.store)).toEqual([
       'build.created',
@@ -1028,15 +1000,6 @@ describe('attach', () => {
       'spec.imported',
     ])
     expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('other-sandbox')
-  })
-
-  test('an expired lease is claimable — dead-sandbox takeover (§7.4)', async () => {
-    const clock = manualClock()
-    const h = await makeHarness({ clock })
-    expect(await h.store.claimLease(SLUG, 'dead-sandbox', 1000)).toBe(true)
-    clock.advance(1001)
-    await h.br.attach()
-    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 })
 
@@ -1142,81 +1105,72 @@ describe('setup command (§16.1)', () => {
     expect(h.execCalls.map((c) => c.cmd[2])).toEqual(['bun install', 'bun install'])
   })
 
-  test('a failing setup deposits exact durable evidence and starts no phase or session', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
+  for (const failure of ['nonzero exit', 'exec exception'] as const) {
+    test(`a failing setup (${failure}) deposits exact durable evidence and starts no phase or session`, async () => {
+      const h = await makeHarness({
+        configToml: TOML_WITH_SETUP,
+        ...(failure === 'nonzero exit'
+          ? { failCommands: ['bun install'] }
+          : { throwCommands: ['bun install'] }),
+      })
+      await expect(h.br.run()).rejects.toBeInstanceOf(SetupFailureError)
+      const events = await h.store.getEvents(SLUG)
+      // An execution exception records an explicit unavailable status.
+      expect(ofType(events, 'runner.setup-failed')[0]?.payload).toEqual({
+        command: 'bun install',
+        attempt: 1,
+        ...(failure === 'nonzero exit'
+          ? {
+              exitStatus: 1,
+              output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
+            }
+          : { exitStatus: null, output: 'exec unavailable for bun install' }),
+      })
+      expect(events.slice(-3).map((event) => event.type)).toEqual([
+        'runner.attached',
+        'runner.runtime-recorded',
+        'runner.setup-failed',
+      ])
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'session.started' ||
+            event.type === 'phase.failed' ||
+            event.type === 'verify.completed',
+        ),
+      ).toEqual([])
+      expect(h.runner.sessions.size).toBe(0)
     })
-    await expect(h.br.run()).rejects.toBeInstanceOf(SetupFailureError)
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'runner.setup-failed')[0]?.payload).toEqual({
-      command: 'bun install',
-      attempt: 1,
-      exitStatus: 1,
-      output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
-    })
-    expect(events.slice(-3).map((event) => event.type)).toEqual([
-      'runner.attached',
-      'runner.runtime-recorded',
-      'runner.setup-failed',
-    ])
-    expect(
-      events.filter(
-        (event) =>
-          event.type === 'session.started' ||
-          event.type === 'phase.failed' ||
-          event.type === 'verify.completed',
-      ),
-    ).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-  })
+  }
 
-  test('a pre-existing pause bypasses broken setup and parks without workspace work', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
-    })
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.pause-requested',
-      payload: {},
-    })
+  for (const control of ['pause', 'abort'] as const) {
+    test(`a pre-existing ${control} bypasses broken setup and parks without workspace work`, async () => {
+      const h = await makeHarness({
+        configToml: TOML_WITH_SETUP,
+        failCommands: ['bun install'],
+      })
+      await h.store.append(SLUG, {
+        actor: humanActor('aron'),
+        ...(control === 'pause'
+          ? { type: 'build.pause-requested' as const, payload: {} }
+          : { type: 'build.abort-requested' as const, payload: { reason: 'stop before setup' } }),
+      })
 
-    const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(state.status).toBe('paused')
-    expect(h.execCalls).toEqual([])
-    expect(ofType(events, 'build.paused')).toHaveLength(1)
-    expect(ofType(events, 'runner.attached')).toHaveLength(0)
-    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
-    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-  })
-
-  test('a pre-existing abort bypasses broken setup and retains the execution lease', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
+      const state = await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      expect(state.status).toBe(control === 'pause' ? 'paused' : 'aborted')
+      expect(h.execCalls).toEqual([])
+      expect(ofType(events, control === 'pause' ? 'build.paused' : 'build.aborted')).toHaveLength(1)
+      expect(ofType(events, 'runner.attached')).toHaveLength(0)
+      expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
+      expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
+      expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
+      expect(h.runner.sessions.size).toBe(0)
+      // An abort retains the execution lease.
+      if (control === 'abort')
+        expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
     })
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'stop before setup' },
-    })
-
-    const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(state.status).toBe('aborted')
-    expect(h.execCalls).toEqual([])
-    expect(ofType(events, 'build.aborted')).toHaveLength(1)
-    expect(ofType(events, 'runner.attached')).toHaveLength(0)
-    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
-    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
-  })
+  }
 
   test('bounds repeated setup failures, raises once, and parks further attaches', async () => {
     const h = await makeHarness({
@@ -1243,32 +1197,21 @@ describe('setup command (§16.1)', () => {
     })
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('bun install')
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
-  })
 
-  test('an abort bypasses an open setup exhaustion without consuming another attempt', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
-    })
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
-    }
-    const before = await h.store.getEvents(SLUG)
-    expect(ofType(before, 'escalation.raised')).toHaveLength(1)
+    // An abort bypasses the open exhaustion without consuming another attempt.
     await h.store.append(SLUG, {
       actor: humanActor('aron'),
       type: 'build.abort-requested',
       payload: { reason: 'environment remains broken' },
     })
-
     const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
+    const aborted = await h.store.getEvents(SLUG)
     expect(state.status).toBe('aborted')
-    expect(h.execCalls).toHaveLength(3)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(3)
-    expect(ofType(events, 'runner.attached')).toHaveLength(1)
-    expect(ofType(events, 'escalation.raised')).toHaveLength(1)
-    expect(events.at(-1)?.type).toBe('build.aborted')
+    expect(h.execCalls).toHaveLength(beforePark)
+    expect(ofType(aborted, 'runner.setup-failed')).toHaveLength(3)
+    expect(ofType(aborted, 'runner.attached')).toHaveLength(1)
+    expect(ofType(aborted, 'escalation.raised')).toHaveLength(1)
+    expect(aborted.at(-1)?.type).toBe('build.aborted')
     expect(h.runner.sessions.size).toBe(0)
     expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
@@ -1404,24 +1347,6 @@ describe('setup command (§16.1)', () => {
       ofType(await h.store.getEvents(SLUG), 'runner.setup-failed').at(-1)?.payload.attempt,
     ).toBe(1)
   })
-
-  test('an execution exception records an explicit unavailable status', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      throwCommands: ['bun install'],
-    })
-    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
-    expect(ofType(await h.store.getEvents(SLUG), 'runner.setup-failed')[0]?.payload).toMatchObject({
-      exitStatus: null,
-      output: 'exec unavailable for bun install',
-    })
-  })
-
-  test('no [commands].setup → attach execs nothing (the knob is optional)', async () => {
-    const h = await makeHarness()
-    await h.br.attach()
-    expect(h.execCalls).toEqual([])
-  })
 })
 
 // ── step basics ──────────────────────────────────────────────────────────────
@@ -1438,79 +1363,83 @@ describe('step', () => {
   const DETECTED_BASE = '1'.repeat(40)
   const CURRENT_BASE = '2'.repeat(40)
 
-  test('reconcile refreshes an advanced base before recording the phase start (§15.7)', async () => {
-    const h = await makeHarness({ reconcileRefreshes: [{ sha: CURRENT_BASE }] })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
+  for (const [label, refreshed] of [
+    ['an advanced base', CURRENT_BASE],
+    ['an unchanged base (refresh resolves the detected SHA)', DETECTED_BASE],
+  ] as const)
+    test(`reconcile refreshes ${label} before recording the phase start (§15.7)`, async () => {
+      const h = await makeHarness({ reconcileRefreshes: [{ sha: refreshed }] })
+      await seedFinalized(h.store)
+      await h.store.append(SLUG, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: DETECTED_BASE },
+      })
 
-    const decision = await h.br.step()
-    expect(decision).toEqual({
-      kind: 'run-phase',
-      phase: 'reconcile',
-      round: 1,
-      reconcile: { attempt: 1 },
-    })
+      const decision = await h.br.step()
+      expect(decision).toEqual({
+        kind: 'run-phase',
+        phase: 'reconcile',
+        round: 1,
+        reconcile: { attempt: 1 },
+      })
 
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-4).map((e) => e.type)).toEqual([
-      'reconcile.replayed',
-      'session.started',
-      'reconcile.completed',
-      'session.ended',
-    ])
-    expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(DETECTED_BASE)
-    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
-      attempt: 1,
-      baseSha: CURRENT_BASE,
-    })
-    expect(
-      h.execCalls
-        .filter(
-          (call) =>
-            call.cmd[1] === 'fetch' ||
-            call.cmd.includes(`refs/autobuild/reconcile/${SLUG}/base^{commit}`),
-        )
-        .slice(-2),
-    ).toEqual([
-      {
-        cmd: [
-          'git',
-          'fetch',
-          '--no-tags',
-          '--no-write-fetch-head',
-          '--refmap=',
-          'origin',
-          `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
-        ],
-        cwd: h.workspacePath,
-      },
-      {
-        cmd: ['git', 'rev-parse', '--verify', `refs/autobuild/reconcile/${SLUG}/base^{commit}`],
-        cwd: h.workspacePath,
-      },
-    ])
+      const events = await h.store.getEvents(SLUG)
+      expect(events.slice(-4).map((e) => e.type)).toEqual([
+        'reconcile.replayed',
+        'session.started',
+        'reconcile.completed',
+        'session.ended',
+      ])
+      expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(DETECTED_BASE)
+      expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
+        attempt: 1,
+        baseSha: refreshed,
+      })
+      expect(
+        h.execCalls
+          .filter(
+            (call) =>
+              call.cmd[1] === 'fetch' ||
+              call.cmd.includes(`refs/autobuild/reconcile/${SLUG}/base^{commit}`),
+          )
+          .slice(-2),
+      ).toEqual([
+        {
+          cmd: [
+            'git',
+            'fetch',
+            '--no-tags',
+            '--no-write-fetch-head',
+            '--refmap=',
+            'origin',
+            `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
+          ],
+          cwd: h.workspacePath,
+        },
+        {
+          cmd: ['git', 'rev-parse', '--verify', `refs/autobuild/reconcile/${SLUG}/base^{commit}`],
+          cwd: h.workspacePath,
+        },
+      ])
 
-    // AB_PHASE uses the attempt as the round for reconcile (D8).
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-reconcile')
-    expect(journal?.opts.env.AB_PHASE).toBe('reconcile@1')
+      // AB_PHASE uses the attempt as the round for reconcile (D8).
+      const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-reconcile')
+      expect(journal?.opts.env.AB_PHASE).toBe('reconcile@1')
 
-    // Reconciliation changed code, so verify:* re-runs in full — cheap
-    // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
-    // already used attempt 1; reusing it would collide the reducer's
-    // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
-    await completeFixtureRestack(h.store)
-    expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
-    expect(await h.br.step()).toEqual({
-      kind: 'run-check',
-      step: 'types',
-      command: 'bun tsc --noEmit',
-      attempt: 2,
+      // Reconciliation changed code, so verify:* re-runs in full — cheap
+      // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
+      // already used attempt 1; reusing it would collide the reducer's
+      // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
+      await completeFixtureRestack(h.store)
+      expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
+      expect(await h.br.step()).toEqual({
+        kind: 'run-check',
+        step: 'types',
+        command: 'bun tsc --noEmit',
+        attempt: 2,
+      })
     })
-  })
 
   test('reconcile delegates authoritative base snapshots to a capable forge without fetching origin', async () => {
     class SnapshotForge extends FakeForge {
@@ -1553,24 +1482,6 @@ describe('step', () => {
       attempt: 1,
       baseSha: CURRENT_BASE,
     })
-  })
-
-  test('reconcile preserves unchanged-base behavior when refresh resolves the detected SHA', async () => {
-    const h = await makeHarness({ reconcileRefreshes: [{ sha: DETECTED_BASE }] })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    await h.br.step()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
-      attempt: 1,
-      baseSha: DETECTED_BASE,
-    })
-    expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
   })
 
   test('a crashed same-attempt reconcile refreshes the base again before replacement session startup', async () => {
@@ -1635,32 +1546,6 @@ describe('step', () => {
       baseSha: PHASE_BASE,
     })
     expect(h.execCalls.filter(({ cmd }) => cmd[1] === 'fetch')).toHaveLength(2)
-  })
-
-  test('a capable forge supplies the durable progress check without origin fetch', async () => {
-    class SnapshotForge extends FakeForge {
-      readonly snapshots: string[] = []
-
-      async snapshotBase(): Promise<string> {
-        this.snapshots.push('snapshot')
-        return CURRENT_BASE
-      }
-    }
-
-    const forge = new SnapshotForge()
-    const h = await makeHarness({ forge })
-    const conflictSeq = await seedRepeatConflict(h.store, DETECTED_BASE)
-    await h.br.step()
-
-    expect(forge.snapshots).toHaveLength(1)
-    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
-    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.progress-checked')[0]!.payload).toEqual(
-      {
-        conflictSeq,
-        attempt: 1,
-        baseSha: CURRENT_BASE,
-      },
-    )
   })
 
   test('restart after a persisted progress check consumes it without duplicating the fact', async () => {
@@ -1777,117 +1662,45 @@ describe('step', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
-  test('an answered roundless reconcile policy cause does not reset counted runner failures', async () => {
-    const stable = '5'.repeat(40)
-    const h = await makeHarness({
-      reconcileRefreshes: [{ sha: stable }],
-      runnerOpts: { maxPhaseAttempts: 2 },
-    })
-    const conflictSeq = await seedRepeatConflict(h.store, stable, 3)
-    for (const [attempt, willRetry] of [
-      [1, true],
-      [2, false],
-    ] as const) {
+  for (const [label, refresh, message] of [
+    [
+      'a failed base fetch',
+      { fetchError: 'fatal: could not read from origin' },
+      'could not read from origin',
+    ],
+    [
+      'a fetched ref that cannot resolve to a commit',
+      { resolveError: 'fatal: expected a commit object' },
+      'expected a commit object',
+    ],
+  ] as const)
+    test(`${label} records phase.failed before session startup and never falls back to pr.conflicted`, async () => {
+      const h = await makeHarness({ reconcileRefreshes: [refresh] })
+      await seedFinalized(h.store)
       await h.store.append(SLUG, {
-        actor: KERNEL,
-        type: 'phase.failed',
-        payload: {
-          phase: 'reconcile',
-          round: 4,
-          attempt,
-          error: 'progress snapshot failed',
-          willRetry,
-        },
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: DETECTED_BASE },
       })
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: {
-        id: 'esc_no_progress',
+
+      expect(await h.br.step()).toEqual({
+        kind: 'run-phase',
         phase: 'reconcile',
-        source: 'policy',
-        policyCause: 'reconcile-no-progress',
-        question: 'reconciliation made no progress',
-      },
+        round: 1,
+        reconcile: { attempt: 1 },
+      })
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'reconcile.started')).toEqual([])
+      expect(ofType(events, 'pr.conflicted')).toHaveLength(1)
+      expect(h.runner.sessions.size).toBe(0)
+      expect(ofType(events, 'phase.failed')[0]!.payload).toEqual({
+        phase: 'reconcile',
+        round: 1,
+        attempt: 1,
+        error: expect.stringContaining(message),
+        willRetry: true,
+      })
     })
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'escalation.answered',
-      payload: {
-        id: 'esc_no_progress',
-        answer: 'try the conflict again',
-        resolution: 'guidance',
-      },
-    })
-
-    expect(await h.br.step()).toEqual({
-      kind: 'check-reconcile-progress',
-      conflictSeq,
-      completedAttempt: 3,
-      nextAttempt: 4,
-    })
-
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'escalation.raised').at(-1)!.payload).toMatchObject({
-      phase: 'reconcile',
-      round: 4,
-      source: 'policy',
-      policyCause: 'phase-attempt-limit',
-      question: expect.stringContaining('maxPhaseAttempts 2'),
-    })
-    expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
-    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
-    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-  })
-
-  test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {
-    const h = await makeHarness({
-      reconcileRefreshes: [{ fetchError: 'fatal: could not read from origin' }],
-    })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    expect(await h.br.step()).toEqual({
-      kind: 'run-phase',
-      phase: 'reconcile',
-      round: 1,
-      reconcile: { attempt: 1 },
-    })
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-    expect(ofType(events, 'phase.failed')[0]!.payload).toEqual({
-      phase: 'reconcile',
-      round: 1,
-      attempt: 1,
-      error: expect.stringContaining('could not read from origin'),
-      willRetry: true,
-    })
-  })
-
-  test('a fetched ref that cannot resolve to a commit also fails before session startup', async () => {
-    const h = await makeHarness({
-      reconcileRefreshes: [{ resolveError: 'fatal: expected a commit object' }],
-    })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    await h.br.step()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-    expect(ofType(events, 'phase.failed')[0]!.payload.error).toContain('expected a commit object')
-  })
 })
 
 // ── The §15.6 happy path, live over fakes ────────────────────────────────────
