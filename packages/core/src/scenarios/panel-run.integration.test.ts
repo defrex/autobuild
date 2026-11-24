@@ -5,9 +5,6 @@
  * `ab judge prefer`. The store is local, so a judge holds no store: its
  * preference goes to its outbox and the runner commits it.
  */
-// Load the reducer registry first: build-runner's import cycle otherwise reaches
-// a reducer before it is initialized when this file runs alone.
-import '../kernel/reducer-registry'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import {
