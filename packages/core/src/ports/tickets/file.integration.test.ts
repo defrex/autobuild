@@ -493,10 +493,16 @@ describe('FileTicketSource', () => {
     await seedTicket('file-4', { state: 'ready', body: 'haystack' })
     await seedTicket('file-5', { state: 'icebox', body: 'haystack' })
     const tickets = source()
+    // Private TS methods are ordinary prototype methods, so they can be spied.
+    const internals = tickets as unknown as {
+      scan(): Promise<unknown>
+      loadAt(found: unknown): Promise<unknown>
+      locate(id: string): Promise<unknown>
+    }
     const spies = {
-      scan: spyOn(tickets as any, 'scan'),
-      loadAt: spyOn(tickets as any, 'loadAt'),
-      locate: spyOn(tickets as any, 'locate'),
+      scan: spyOn(internals, 'scan'),
+      loadAt: spyOn(internals, 'loadAt'),
+      locate: spyOn(internals, 'locate'),
       get: spyOn(tickets, 'get'),
       fetch: spyOn(globalThis, 'fetch'),
     }
