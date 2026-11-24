@@ -10,7 +10,17 @@ import { createTerminalModeController } from '../cli/terminal-restore'
 import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { WebModelHub } from '../web/hub'
 import { readOnlyStore } from '../web/read-only'
-import { RepositoryFrameSource } from '../web/repository-source'
+import { projectRepositoryFrame, RepositoryFrameSource } from '../web/repository-source'
+import type { WebServerStarter } from '../web/server'
+import { startDispatchWeb, type DispatchWeb } from '../cli/dispatch-web'
+import { abDispatch } from '../cli/dispatch'
+import { FakeForge } from '../ports/forge/fake'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
+import { randomUuids, sequentialIds } from '../ids'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { FakeRefreshScheduler } from './refresh-scheduler'
 import type { BuildStore } from '../store/types'
 import type { RepositoryEvent } from '../events/repository'
@@ -60,6 +70,7 @@ export async function dispatchReadBudget(
   await warmRestoreReadBudget(store, backing, true, fillDiscarded)
   await viewerReadBudget(store, backing)
   await webReadBudget(store, backing, fillDiscarded)
+  await webPresentationParity(store, backing)
   const repo = '/dashboard-read-budget'
   await backing.ensureRepo(repo)
   const metrics = {
@@ -716,8 +727,9 @@ const BUILD_SCOPE_READS = new Set([
   'getRepoArtifact',
 ])
 
-/** Count every store call by name; reduced-value reads also by scope kind. */
-function countingStore(store: BuildStore) {
+/** Count every store call by name; reduced-value reads also by scope kind,
+ * and with `reducers` by reducer name too. */
+function countingStore(store: BuildStore, reducers = false) {
   const calls: string[] = []
   const proxy = new Proxy(store, {
     get(target, key, receiver) {
@@ -727,7 +739,9 @@ function countingStore(store: BuildStore) {
         const name = String(key)
         calls.push(
           name === 'getReducerValue'
-            ? `getReducerValue:${(args[0] as { kind?: string }).kind}`
+            ? `getReducerValue:${(args[0] as { kind?: string }).kind}${
+                reducers ? `:${(args[1] as { reducer?: string }).reducer}` : ''
+              }`
             : name,
         )
         return Reflect.apply(value, target, args)
@@ -901,6 +915,327 @@ async function webReadBudget(
     slices?.restore()
     backing.getRepoEvents = originalEvents
     backing.getRepoStateEvents = originalSeed
+  }
+}
+
+/** Subscribers to a push hub: one from the start, ten more joining mid-run. */
+class WebSubscribers {
+  readonly early: string[] = []
+  readonly late: string[][] = []
+  constructor(private readonly hub: DispatchWeb['hub']) {
+    hub.subscribe((json) => this.early.push(json))
+  }
+  join(): void {
+    for (let i = 0; i < 10; i++) {
+      const list: string[] = []
+      this.late.push(list)
+      this.hub.subscribe((json) => list.push(json))
+    }
+  }
+  /** Every subscriber saw the same frames from when it joined, ending at the
+   * frame `ab web` shows for the repository's current facts. */
+  async expectConsistent(store: BuildStore, repo: string): Promise<void> {
+    expect(this.early.length).toBeGreaterThan(0)
+    expect(this.late).toHaveLength(10)
+    for (const list of this.late) {
+      expect(list).toEqual(this.late[0]!)
+      expect(list.length).toBeGreaterThan(0)
+      expect(this.early.slice(this.early.length - list.length)).toEqual(list)
+    }
+    const facts = (await readRepositoryFacts(store, repo)).value
+    expect(this.early.at(-1)).toBe(JSON.stringify(projectRepositoryFrame(repo, facts).frame))
+  }
+}
+
+interface ParityContext {
+  /** The counted store the run must read through. */
+  store: BuildStore
+  repo: string
+  /** Absent for the run without a web UI. Binds no socket. */
+  start: WebServerStarter | undefined
+  /** The web a frontend mode serves, as `abDispatch` would start it. */
+  openWeb(): Promise<DispatchWeb | undefined>
+  /** Ten more browser tabs connect. */
+  join(): void
+}
+
+/**
+ * `ab dispatch --web` adds no store reads (RFC 0007 §4.4, §9.3). In each mode
+ * the same script runs twice on fresh, identical repositories, once without
+ * the web UI and once with one subscriber from the start and ten joining
+ * mid-run. The store-call histograms and journal rows must be equal, and the
+ * frame the web serves must be the one `ab web` shows.
+ */
+async function webPresentationParity(store: BuildStore, backing: BuildStore): Promise<void> {
+  const slices = countJournalSlices(backing)
+  const parity = async (
+    mode: string,
+    prepare: (repo: string) => Promise<void>,
+    run: (context: ParityContext) => Promise<void>,
+  ) => {
+    const results: { calls: Record<string, number>; rows: number }[] = []
+    for (const withWeb of [false, true]) {
+      const repo = `https://github.com/budget/web-parity-${mode}-${withWeb ? 'web' : 'plain'}`
+      await backing.ensureRepo(repo)
+      await prepare(repo)
+      // The one canonical materialization precedes either run.
+      await readRepositoryFacts(store, repo)
+      const counter = countingStore(store, true)
+      let subscribers: WebSubscribers | undefined
+      const start: WebServerStarter = async (opts) => {
+        subscribers = new WebSubscribers(opts.hub)
+        return { url: 'http://127.0.0.1:1/', port: 1, stop: async () => {} }
+      }
+      slices?.reset()
+      await run({
+        store: counter.proxy,
+        repo,
+        start: withWeb ? start : undefined,
+        openWeb: async () =>
+          withWeb
+            ? startDispatchWeb({
+                options: { port: 0, json: true },
+                repo,
+                env: {},
+                stdout: () => {},
+                stderr: () => {},
+                start,
+              })
+            : undefined,
+        join: () => subscribers?.join(),
+      })
+      const rows = slices?.rows() ?? 0
+      if (withWeb) await subscribers!.expectConsistent(store, repo)
+      const calls = counter.histogram()
+      // The frontend's upgrade-release check runs on a wall-clock timer, not
+      // per refresh, so a slow run may add one; it is not a presentation read.
+      delete calls['getReducerValue:repo:dispatchUpgrade']
+      results.push({ calls, rows })
+    }
+    expect({ mode, ...results[1] }).toEqual({ mode, ...results[0] })
+  }
+  const configured = async (repo: string) => {
+    const config = await backing.putRepoArtifact(repo, {
+      kind: 'config',
+      content: JSON.stringify({
+        capacity: 4,
+        roles: { default: { runtime: 'claude' } },
+        tickets: { source: 'file', readyState: 'ready' },
+      }),
+    })
+    await backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'elsewhere',
+        pid: 1,
+        roleWarnings: [],
+        effectiveConfig: { kind: config.kind, rev: config.revision },
+      },
+    })
+  }
+  const activity = (repo: string, enabled: boolean) =>
+    backing.appendRepo(repo, {
+      actor: humanActor('budget'),
+      type: 'dispatcher.pause-set',
+      payload: { enabled },
+    })
+  const terminal = (interactive: boolean) => ({
+    columns: 100,
+    rows: 24,
+    interactive,
+    write: () => {},
+    modes: createTerminalModeController(
+      () => {},
+      () => {},
+    ),
+  })
+
+  // TTY dispatch: the frontend's own refreshes feed the web.
+  await parity(
+    'tty',
+    async () => {},
+    async ({ store, repo, openWeb, join }) => {
+      const web = await openWeb()
+      let now = 0
+      let finish!: (result: DispatchChildResult) => void
+      let started!: () => void
+      const startup = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const frontend = new DispatchFrontend({
+        repo,
+        storeRef: 'test',
+        store,
+        env: {},
+        once: true,
+        clock: () => new Date(now),
+        input: { start: () => () => {} },
+        terminal: terminal(true),
+        ...(web ? { web: { dispatch: web } } : {}),
+        launchChild: () => {
+          const completed = new Promise<DispatchChildResult>((resolve) => {
+            finish = resolve
+          })
+          void configured(repo).then(started)
+          return { completed, stop: async () => {} }
+        },
+      })
+      const running = frontend.run()
+      await startup
+      const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+      await refresh()
+      await activity(repo, true)
+      now += 6000
+      await refresh()
+      join()
+      await activity(repo, false)
+      now += 6000
+      await refresh()
+      now += 500
+      await refresh()
+      finish({ outcome: 'normal', exitCode: 0 })
+      await running
+      await web?.close()
+    },
+  )
+
+  // Viewers: the viewer loop feeds the web. Without a TTY, abDispatch
+  // discards the text frames; the sink here only marks the first frame.
+  for (const interactive of [true, false])
+    await parity(
+      interactive ? 'tty-viewer' : 'plain-viewer',
+      configured,
+      async ({ store, repo, openWeb, join }) => {
+        const web = await openWeb()
+        let now = 0
+        const controller = new AbortController()
+        let painted!: () => void
+        const firstFrame = new Promise<void>((resolve) => {
+          painted = resolve
+        })
+        let outputs = 0
+        const frontend = new DispatchFrontend({
+          viewer: {},
+          repo,
+          store,
+          storeRef: 'memory',
+          env: {},
+          once: false,
+          signal: controller.signal,
+          refreshScheduler: { now: () => now, set: () => undefined, clear: () => {} },
+          clock: () => new Date(now),
+          ...(interactive
+            ? {}
+            : {
+                plainOutput: () => {
+                  if (++outputs >= 2) painted()
+                },
+              }),
+          ...(web ? { web: { dispatch: web } } : {}),
+          terminal: {
+            ...terminal(interactive),
+            write: () => {
+              if (interactive) painted()
+            },
+          },
+          input: { start: () => () => {} },
+          launchChild: () => {
+            throw new Error('viewer child')
+          },
+        })
+        const readFrame = () => (frontend as unknown as { readFrame(): Promise<void> }).readFrame()
+        const running = frontend.run()
+        await firstFrame
+        await activity(repo, true)
+        now += 500
+        await readFrame()
+        join()
+        await activity(repo, false)
+        now += 500
+        await readFrame()
+        now += 500
+        await readFrame()
+        controller.abort()
+        await running
+        await web?.close()
+      },
+    )
+
+  // Plain dispatch: the kernel's repository-view refreshes feed the web.
+  const directory = await mkdtemp(join(tmpdir(), 'ab-web-parity-'))
+  try {
+    await writeFile(
+      join(directory, 'autobuild.toml'),
+      `[roles.default]
+runtime = "claude"
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+`,
+    )
+    await parity(
+      'kernel',
+      async () => {},
+      async ({ store, repo, start, join: joinTabs }) => {
+        const stop = new AbortController()
+        let ticks = 0
+        await abDispatch({
+          targetRepo: directory,
+          repo,
+          env: {},
+          exec: async (args) =>
+            args[1] === 'remote'
+              ? { stdout: `${repo}.git\n`, stderr: '', exitCode: 0 }
+              : {
+                  stdout: `${directory}/.git\n${directory}/.git\n${directory}\n`,
+                  stderr: '',
+                  exitCode: 0,
+                },
+          stdout: () => {},
+          stderr: () => {},
+          once: false,
+          plain: true,
+          signal: stop.signal,
+          ...(start ? { web: { port: 0, json: true, start } } : {}),
+          sleep: async () => {
+            ticks++
+            if (ticks === 1) joinTabs()
+            if (ticks < 3) await activity(repo, ticks % 2 === 0)
+            else stop.abort()
+          },
+          storeRef: '/budget',
+          wire: () => ({
+            store,
+            storeRef: '/budget',
+            tickets: new FakeTicketSource([]),
+            forge: new FakeForge(),
+            workspaces: new FakeWorkspaceProvider({ root: '/parity-workspaces', mode: 'logical' }),
+            buildExecution: {
+              start: () => {
+                throw new Error('no builds in web parity')
+              },
+            },
+            runtimes: {
+              claude: {
+                runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+                servesModels: [],
+              },
+            },
+            ids: sequentialIds(),
+            uuids: randomUuids(),
+            clock: () => new Date(1000),
+          }),
+        })
+        expect(ticks).toBe(3)
+      },
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
   }
 }
 

@@ -4,9 +4,11 @@ import { type WebFrame, type WebFrameSource, WebReadFencedError } from './protoc
 export type WebFrameListener = (json: string) => void
 
 export interface WebModelHubOptions {
-  source: WebFrameSource
+  /** Pull mode: the hub reads frames itself while anyone is connected. Absent
+   * is push mode: the hub reads nothing and serves what `publish` hands it. */
+  source?: WebFrameSource
   /** The store reads over a network; the refresh cadence adapts as the viewer's does. */
-  networkReads: boolean
+  networkReads?: boolean
   scheduler?: RefreshScheduler
   /** Called once per failure streak; a later success resets it. */
   onError?: (error: unknown) => void
@@ -22,6 +24,10 @@ export interface WebModelHubOptions {
  * started by a reconnecting tab joins a read its predecessor left running
  * instead of starting a second one, and a read whose subscribers all left
  * stops at its next store stage.
+ *
+ * Without a source the hub is in push mode: it owns no loop and reads
+ * nothing, and its owner publishes frames from reads it already makes
+ * (`ab dispatch --web`).
  */
 export class WebModelHub {
   private readonly listeners = new Set<WebFrameListener>()
@@ -49,7 +55,7 @@ export class WebModelHub {
     const entry: WebFrameListener = (json) => listener(json)
     this.listeners.add(entry)
     if (this.json !== undefined) this.deliver(entry, this.json)
-    if (this.listeners.has(entry) && this.refresh === undefined) {
+    if (this.listeners.has(entry) && this.refresh === undefined && this.opts.source !== undefined) {
       // An absent scheduler takes DashboardRefresh's real-timer default.
       this.refresh = new DashboardRefresh(
         () => this.tick(),
@@ -64,6 +70,17 @@ export class WebModelHub {
       active = false
       this.remove(entry)
     }
+  }
+
+  /** Push mode: serve `frame`, fanning it out only when it changed. */
+  publish(frame: WebFrame): void {
+    if (this.closed) return
+    this.push(JSON.stringify(frame))
+  }
+
+  /** Push mode: replace the frame with the failure's notice. */
+  fail(error: unknown): void {
+    this.publish(noticeFrame(error))
   }
 
   /** Await the in-flight tick and source read, if any. */
@@ -101,14 +118,15 @@ export class WebModelHub {
     } catch (error) {
       // Abandoned for lack of subscribers: nobody is waiting for a notice.
       if (error instanceof WebReadFencedError) return
-      frame = {
-        notice: `Viewer unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      }
+      frame = noticeFrame(error)
       if (!this.failing) this.opts.onError?.(error)
       this.failing = true
     }
     if (this.refresh !== refresh || refresh === undefined) return
-    const json = JSON.stringify(frame)
+    this.push(JSON.stringify(frame))
+  }
+
+  private push(json: string): void {
     if (json === this.json) return
     this.json = json
     for (const listener of [...this.listeners]) this.deliver(listener, json)
@@ -117,7 +135,7 @@ export class WebModelHub {
   /** Start the source read, or join the one already running. */
   private read(): ReturnType<WebFrameSource['read']> {
     if (this.reading === undefined) {
-      const reading = this.opts.source.read(() => !this.closed && this.listeners.size > 0)
+      const reading = this.opts.source!.read(() => !this.closed && this.listeners.size > 0)
       this.reading = reading
       const clear = () => {
         if (this.reading === reading) this.reading = undefined
@@ -135,4 +153,8 @@ export class WebModelHub {
       this.remove(listener)
     }
   }
+}
+
+function noticeFrame(error: unknown): WebFrame {
+  return { notice: `Viewer unavailable: ${error instanceof Error ? error.message : String(error)}` }
 }
