@@ -3,7 +3,7 @@ import { testProjects } from './testing/projects'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
-import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource, TicketSearchCursorInvalid } from '@defrex/autobuild/plugin-sdk'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import {
@@ -814,6 +814,20 @@ describe('agent tool registry contract', () => {
       (await toolFailure(() => run('tickets.search', { repo, query: 'body', cursor: 'nope' })))
         .code,
       'search-cursor-invalid',
+    )
+    // A plugin throwing the SDK's error gets the same refusal.
+    Object.assign(world.source, {
+      search: async () => {
+        throw new TicketSearchCursorInvalid('plugin', 'foreign')
+      },
+    })
+    expectEqual(
+      await toolFailure(() => run('tickets.search', { repo, query: 'x', cursor: 'foreign' })),
+      {
+        kind: 'refusal',
+        error: new TicketSearchCursorInvalid('plugin', 'foreign').message,
+        code: 'search-cursor-invalid',
+      },
     )
   })
 

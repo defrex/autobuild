@@ -649,7 +649,8 @@ against a service predating it. The POST list-ready protocol stays exhaustive.
 
 Text search is an optional API 1.11 ticket-source capability:
 `search?(query: TicketSearchQuery): Promise<TicketSearchPage>`. The SDK exports
-the types.
+the types and the `TicketSearchCursorInvalid` and `TicketSearchUnsupported`
+errors.
 
 | Type | Fields |
 | --- | --- |
@@ -666,7 +667,8 @@ the types.
 - **Paging.** `limit` is positive and already bounded by the caller. `cursor`
   is opaque and source-defined; return one only when more matches remain. Order
   is source-defined and stable across pages. Reject a malformed or foreign
-  cursor with `TicketSearchCursorInvalid`.
+  cursor with the SDK's `TicketSearchCursorInvalid(sourceName, cursor)`;
+  callers map it to the `search-cursor-invalid` refusal.
 - **Cost.** Build each hit from the search read itself, never from a follow-up
   read per result. A failure rejects; it never falls back to `listAll`.
 

@@ -152,6 +152,7 @@ describe('plugin SDK package surface', () => {
           type TicketSearchHit, type TicketSearchPage, type TicketSearchQuery,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
+          TicketSearchCursorInvalid, TicketSearchUnsupported,
         } from '@defrex/autobuild/plugin-sdk'
 
         import * as sdk from '@defrex/autobuild/plugin-sdk'
@@ -181,6 +182,10 @@ describe('plugin SDK package surface', () => {
           ({ tickets: [hit], cursor: String(query.limit), diagnostics: [] }) satisfies TicketSearchPage
         const searched = await search({ text: 'rate', limit: 1 })
         if (searched.tickets[0]?.id !== 'T-1' || searched.cursor !== '1') throw new Error('search types')
+        const badCursor = new TicketSearchCursorInvalid('sample', 'nope')
+        if (!(badCursor instanceof Error) || badCursor.source !== 'sample' || badCursor.cursor !== 'nope')
+          throw new Error('search cursor error export')
+        if (new TicketSearchUnsupported('sample').source !== 'sample') throw new Error('search refusal export')
         const searchless: TicketSource = Object.assign(new FakeTicketSource(), { search: undefined })
         if (searchless.search !== undefined) throw new Error('optional search types')
         const assigned: TicketCriteria = { state: 'Ready', assignee: 'me' }
