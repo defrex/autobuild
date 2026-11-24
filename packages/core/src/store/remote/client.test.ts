@@ -1437,6 +1437,8 @@ describe('open-build listing compatibility', () => {
   for (const [status, body] of [
     [404, 'route-miss'],
     [404, { kind: 'not-found', error: 'no route: GET /repos/:repo/open-builds' }],
+    // The older server's repository-existence gate for a journal-less repo.
+    [404, { kind: 'not-found', error: 'unknown repo "acme/repo"' }],
     [405, { kind: 'not-found', error: 'method not allowed' }],
     [501, { kind: 'unsupported-operation', error: 'unsupported' }],
   ] as const) {
@@ -1450,6 +1452,7 @@ describe('open-build listing compatibility', () => {
   }
   for (const [status, body] of [
     [404, { kind: 'not-found', error: 'no route: GET /repos/:repo/build-digests' }],
+    [404, { kind: 'not-found', error: 'unknown repo "other/repo"' }],
     [500, { kind: 'internal', error: 'outage' }],
   ] as const) {
     test(`a ${status} that is not a missing route stays an ordinary error`, async () => {

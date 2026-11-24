@@ -845,9 +845,10 @@ in the same transaction that inserts a build or appends its
 `build.completed`, `build.aborted` or `build.reopened`, so answering costs one
 entry per open build and never grows with settled history. Operator reads of
 active work use it. The route is additive and keeps the protocol version. A
-server without it answers the generic `no route` `404`, which a client
-surfaces as a typed capability error; it never answers from `build-digests`
-or the build list instead.
+server without it answers the generic `no route` `404`, or its
+repository-existence gate's `unknown repo` `404` for a journal-less
+repository; a client surfaces either as a typed capability error and never
+answers from `build-digests` or the build list instead.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded

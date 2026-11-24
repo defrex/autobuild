@@ -441,7 +441,10 @@ export class RemoteBuildStore implements BuildStore {
   async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
     // Handled before the repository-existence gate like `build-digests`: an
     // unknown repo answers 200 []. A server without the route answers a
-    // capability failure; listing every build instead is never allowed.
+    // capability failure; listing every build instead is never allowed. An
+    // older server routes the unrecognized operation through that gate, so
+    // its `unknown repo` 404 for an empty or journal-less repository is the
+    // same missing capability: this server never answers it for this route.
     const path = `${this.repoPath(repo)}/open-builds`
     const response = await this.raw('GET', path)
     if (!response.ok) {
@@ -458,7 +461,8 @@ export class RemoteBuildStore implements BuildStore {
             (response.status === 404 &&
               body.data.kind === 'not-found' &&
               (body.data.error === 'no route: GET /repos/:repo/open-builds' ||
-                body.data.error === `no route: GET ${new URL(`${this.base}${path}`).pathname}`))))
+                body.data.error === `no route: GET ${new URL(`${this.base}${path}`).pathname}` ||
+                body.data.error === `unknown repo "${repo}"`))))
       )
         throw new OpenBuildsCapabilityError(repo)
       throw await this.toError(response)
