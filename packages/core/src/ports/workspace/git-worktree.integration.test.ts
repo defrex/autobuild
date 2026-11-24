@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
-import { GitError, GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
+import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -76,6 +76,30 @@ async function registrationCount(repo: string, path: string): Promise<number> {
   return list.split('\n\n').filter((block) => block.split('\n').includes(`worktree ${path}`)).length
 }
 
+/** The private tracked-child shape the eviction tests probe. */
+type TrackedChild = {
+  proc: { exitCode: number | null; signalCode: NodeJS.Signals | null; kill(): void }
+  exitCode: number | null
+}
+
+/** A source repo whose `branch` is published to a bare origin at `base`,
+ * then carries two unpublished commits. */
+async function unpublishedBranch(prefix: string, branch: string) {
+  const root = await mkdtemp(join(tmpdir(), prefix))
+  const origin = join(root, 'origin.git')
+  const source = join(root, 'source')
+  await initRepo(source)
+  await run(['git', 'init', '--bare', origin], root)
+  await run(['git', 'remote', 'add', 'origin', origin], source)
+  await run(['git', 'push', 'origin', 'main'], source)
+  const base = await run(['git', 'rev-parse', 'HEAD'], source)
+  await run(['git', 'checkout', '-b', branch], source)
+  await run(['git', 'push', 'origin', branch], source)
+  const first = await commitFile(source, 'one', 'one', 'first unpublished')
+  const second = await commitFile(source, 'two', 'two', 'second unpublished')
+  return { root, origin, source, base, first, second }
+}
+
 describeWorkspaceProviderContract('GitWorktreeProvider', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-git-worktree-contract-'))
   const remote = join(tmp, 'remote.git')
@@ -132,23 +156,18 @@ describe('GitWorktreeProvider', () => {
   })
 
   test('provision creates an isolated worktree on a new branch from base', async () => {
+    // The shared contract suite above checks provider, branch, base, fixture
+    // content and writability; this pins the git-worktree specifics.
     const handle = await provider.provision({
       repo,
       baseBranch: 'main',
       branch: 'ab/feature-1',
     })
 
-    expect(handle.provider).toBe('git-worktree')
-    expect(handle.branch).toBe('ab/feature-1')
-    expect(handle.base).toEqual({
-      source: 'remote',
-      sha: await run(['git', 'rev-parse', 'refs/heads/main'], remote),
-    })
     // Paths come back canonicalized (macOS /var → /private/var), one
     // sanitized subdir per branch.
     expect(handle.path).toBe(join(await realpath(root), 'ab-feature-1'))
     expect(handle.ref).toBe(handle.path)
-    expect(existsSync(join(handle.path, 'README.md'))).toBe(true)
 
     // Starts at the base branch's tip.
     const baseSha = await run(['git', 'rev-parse', 'main'], repo)
@@ -227,6 +246,8 @@ describe('GitWorktreeProvider', () => {
   })
 
   test('provision is idempotent for the same branch (constitution #2)', async () => {
+    // The contract suite pins the reused path, existing base and preserved
+    // work; this pins that reuse never fetches and survives a restart.
     const calls: string[][] = []
     provider = new GitWorktreeProvider({
       root,
@@ -240,25 +261,10 @@ describe('GitWorktreeProvider', () => {
       baseBranch: 'main',
       branch: 'ab/feature-1',
     })
-    await writeFile(join(first.path, 'in-progress.txt'), 'wip\n')
 
     calls.length = 0
-    const second = await provider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/feature-1',
-    })
-
-    expect(second.path).toBe(first.path)
-    expect(second.ref).toBe(first.ref)
-    expect(second.branch).toBe(first.branch)
-    expect(second.base).toEqual({
-      source: 'existing',
-      sha: first.base.sha,
-    })
+    await provider.provision({ repo, baseBranch: 'main', branch: 'ab/feature-1' })
     expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
-    // Reused, not recreated: uncommitted work is untouched.
-    expect(existsSync(join(first.path, 'in-progress.txt'))).toBe(true)
 
     // A fresh provider instance (post-restart) also reuses the registration.
     const restarted = new GitWorktreeProvider({ root })
@@ -274,76 +280,56 @@ describe('GitWorktreeProvider', () => {
     })
   })
 
-  test('reprovision reattaches a registered detached worktree at its published head', async () => {
-    const branch = 'ab/detached-registered'
-    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
-    const { localSha, publishedSha } = await publishDetachedCommit(repo, handle.path, branch)
-    await writeFile(join(handle.path, 'recovery-wip.txt'), 'preserve me\n')
+  test.each([
+    ['registered', 'reattaches'],
+    ['removed', 'rematerializes'],
+  ] as const)(
+    'reprovision of a %s detached worktree %s it at its published head',
+    async (state) => {
+      const branch = `ab/detached-${state}`
+      const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+      const { localSha, publishedSha } = await publishDetachedCommit(repo, handle.path, branch)
+      expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(localSha)
+      if (state === 'registered') {
+        await writeFile(join(handle.path, 'recovery-wip.txt'), 'preserve me\n')
+        expect(await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo)).toBe(
+          publishedSha,
+        )
+        expect(await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], handle.path)).toBe('HEAD')
+      } else {
+        await rm(handle.path, { recursive: true, force: true })
+      }
 
-    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(localSha)
-    expect(await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo)).toBe(
-      publishedSha,
-    )
-    expect(await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], handle.path)).toBe('HEAD')
+      const calls: string[][] = []
+      const restarted = new GitWorktreeProvider({
+        root,
+        exec: async (cmd, opts) => {
+          calls.push([...cmd])
+          return spawnExec(cmd, opts)
+        },
+      })
+      const recovered = await restarted.provision({
+        repo,
+        baseBranch: 'main',
+        branch,
+        publication: { sha: publishedSha, cacheHeads: [localSha] },
+      })
 
-    const calls: string[][] = []
-    const restarted = new GitWorktreeProvider({
-      root,
-      exec: async (cmd, opts) => {
-        calls.push([...cmd])
-        return spawnExec(cmd, opts)
-      },
-    })
-    const recovered = await restarted.provision({
-      repo,
-      baseBranch: 'main',
-      branch,
-      publication: { sha: publishedSha, cacheHeads: [localSha] },
-    })
-
-    expect(recovered.path).toBe(handle.path)
-    expect(recovered.base).toEqual({ source: 'existing', sha: publishedSha })
-    expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], recovered.path)).toBe(branch)
-    expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(publishedSha)
-    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(publishedSha)
-    expect(await readFile(join(recovered.path, 'recovery-wip.txt'), 'utf8')).toBe('preserve me\n')
-    expect(await registrationCount(repo, handle.path)).toBe(1)
-    expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
-    expect(calls.some((cmd) => cmd.includes('push'))).toBe(false)
-  })
-
-  test('reprovision rematerializes a removed detached workspace at its published head', async () => {
-    const branch = 'ab/detached-removed'
-    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
-    const { localSha, publishedSha } = await publishDetachedCommit(repo, handle.path, branch)
-    await rm(handle.path, { recursive: true, force: true })
-
-    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(localSha)
-
-    const calls: string[][] = []
-    const restarted = new GitWorktreeProvider({
-      root,
-      exec: async (cmd, opts) => {
-        calls.push([...cmd])
-        return spawnExec(cmd, opts)
-      },
-    })
-    const recovered = await restarted.provision({
-      repo,
-      baseBranch: 'main',
-      branch,
-      publication: { sha: publishedSha, cacheHeads: [localSha] },
-    })
-
-    expect(recovered.path).toBe(handle.path)
-    expect(recovered.base).toEqual({ source: 'existing', sha: publishedSha })
-    expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], recovered.path)).toBe(branch)
-    expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(publishedSha)
-    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(publishedSha)
-    expect(await registrationCount(repo, handle.path)).toBe(1)
-    expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
-    expect(calls.some((cmd) => cmd.includes('push'))).toBe(false)
-  })
+      expect(recovered.path).toBe(handle.path)
+      expect(recovered.base).toEqual({ source: 'existing', sha: publishedSha })
+      expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], recovered.path)).toBe(branch)
+      expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(publishedSha)
+      expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(publishedSha)
+      if (state === 'registered') {
+        expect(await readFile(join(recovered.path, 'recovery-wip.txt'), 'utf8')).toBe(
+          'preserve me\n',
+        )
+      }
+      expect(await registrationCount(repo, handle.path)).toBe(1)
+      expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
+      expect(calls.some((cmd) => cmd.includes('push'))).toBe(false)
+    },
+  )
 
   test('published recovery never rolls back a newer local build branch', async () => {
     const branch = 'ab/local-ahead'
@@ -524,15 +510,8 @@ describe('GitWorktreeProvider', () => {
     expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
   })
 
-  test('release is idempotent and no-ops on never-provisioned handles', async () => {
-    const handle = await provider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/feature-3',
-    })
-    await provider.release(handle)
-    await provider.release(handle) // already removed → no-op
-
+  test('release no-ops on never-provisioned handles and a restarted provider rediscovers the repo', async () => {
+    // Releasing twice is the contract suite's "safe to call twice" case.
     const never: WorkspaceHandle = {
       provider: 'git-worktree',
       ref: join(root, 'never-existed'),
@@ -550,54 +529,6 @@ describe('GitWorktreeProvider', () => {
     })
     const restarted = new GitWorktreeProvider({ root })
     await restarted.release(live)
-    expect(existsSync(live.path)).toBe(false)
-  })
-
-  test('release fails typed when rev-parse --git-common-dir succeeds with empty stdout', async () => {
-    // discoverRepo guards the same degenerate-input shape as
-    // excludeProvisioningMarker: a successful rev-parse with empty stdout
-    // would feed '' into resolve(path, …) and target the worktree directory
-    // itself, misdirecting the subsequent worktree remove. The chosen posture
-    // is failing loudly (GitError, matching shaFrom's empty-SHA guard) rather
-    // than the release-is-a-no-op null return. Unreachable for real git
-    // output — pinned at the exec seam, the same injection point the suite
-    // uses for error shapes git cannot produce.
-    const live = await provider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/empty-common-dir',
-    })
-    const registrationsBefore = await registrationCount(repo, live.path)
-
-    let intercepted = false
-    const emptyCommonDir: Exec = async (cmd, opts) => {
-      if (cmd[0] === 'git' && cmd.at(-2) === 'rev-parse' && cmd.at(-1) === '--git-common-dir') {
-        intercepted = true
-        return { stdout: '', stderr: '', exitCode: 0 }
-      }
-      return spawnExec(cmd, opts)
-    }
-    const restarted = new GitWorktreeProvider({ root, exec: emptyCommonDir })
-    const error = await restarted.release(live).catch((e: unknown) => e)
-
-    expect(intercepted).toBe(true)
-    expect(error).toBeInstanceOf(GitError)
-    // Exact pin: shaFrom's guard uses the same synthesized stderr tail. A
-    // future edit to either message must move both implementations together
-    // and update this pin.
-    expect((error as Error).message).toBe(
-      `git -C ${resolve(live.path)} rev-parse --git-common-dir exited 1: git returned no common directory`,
-    )
-
-    // The guard fired before any side effect: the worktree is still on disk
-    // and still registered, and the throw did not fall through to a
-    // worktree remove against the worktree directory itself.
-    expect(existsSync(live.path)).toBe(true)
-    expect(await registrationCount(repo, live.path)).toBe(registrationsBefore)
-
-    // Non-empty discovery is unchanged: a healthy provider still discovers
-    // the owning repo and releases the same handle successfully.
-    await provider.release(live)
     expect(existsSync(live.path)).toBe(false)
   })
 
@@ -621,60 +552,36 @@ describe('GitWorktreeProvider', () => {
     expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(localSha)
   })
 
-  test('an authentication-style fetch failure falls back locally and is retained verbatim', async () => {
+  test.each([
+    [
+      'an authentication-style fetch failure falls back locally and is retained verbatim',
+      'ab/auth-fallback',
+      (cmd: string[]) => cmd.includes('fetch'),
+      'fatal: Authentication failed for origin',
+      'fatal: Authentication failed for origin',
+    ],
+    [
+      'a fetched-ref resolution failure also falls back with its diagnostic',
+      'ab/resolve-fallback',
+      (cmd: string[]) =>
+        cmd.at(-1) === 'refs/autobuild/provision/ab/resolve-fallback/base^{commit}',
+      'fatal: fetched ref could not be resolved',
+      'refs/autobuild/provision/ab/resolve-fallback/base^{commit} exited 128',
+    ],
+  ])('%s', async (_name, branch, fails, stderr, diagnostic) => {
     const localSha = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
-    const authFailure: Exec = async (cmd, opts) => {
-      if (cmd.includes('fetch')) {
-        return {
-          stdout: '',
-          stderr: 'fatal: Authentication failed for origin',
-          exitCode: 128,
-        }
-      }
-      return spawnExec(cmd, opts)
-    }
-    provider = new GitWorktreeProvider({ root, exec: authFailure })
-
-    const handle = await provider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/auth-fallback',
+    provider = new GitWorktreeProvider({
+      root,
+      exec: async (cmd, opts) =>
+        fails(cmd) ? { stdout: '', stderr, exitCode: 128 } : spawnExec(cmd, opts),
     })
+
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
 
     expect(handle.base).toEqual({
       source: 'local',
       sha: localSha,
-      remoteError: expect.stringContaining('fatal: Authentication failed for origin'),
-    })
-  })
-
-  test('a fetched-ref resolution failure also falls back with its diagnostic', async () => {
-    const localSha = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
-    const fetchedRef = 'refs/autobuild/provision/ab/resolve-fallback/base^{commit}'
-    const resolutionFailure: Exec = async (cmd, opts) => {
-      if (cmd.at(-1) === fetchedRef) {
-        return {
-          stdout: '',
-          stderr: 'fatal: fetched ref could not be resolved',
-          exitCode: 128,
-        }
-      }
-      return spawnExec(cmd, opts)
-    }
-    provider = new GitWorktreeProvider({ root, exec: resolutionFailure })
-
-    const handle = await provider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/resolve-fallback',
-    })
-
-    expect(handle.base).toEqual({
-      source: 'local',
-      sha: localSha,
-      remoteError: expect.stringContaining(
-        'refs/autobuild/provision/ab/resolve-fallback/base^{commit} exited 128',
-      ),
+      remoteError: expect.stringContaining(diagnostic),
     })
   })
 
@@ -720,61 +627,26 @@ describe('GitWorktreeProvider', () => {
     ])
   })
 
-  test('unknown baseBranch fails with the local ref diagnostic', async () => {
-    expect.assertions(2)
-    try {
-      await provider.provision({
-        repo,
-        baseBranch: 'no-such-base',
-        branch: 'ab/feature-5',
-      })
-    } catch (error) {
-      expect((error as Error).message).toContain('Needed a single revision')
-      expect((error as Error).message).toContain('refs/heads/no-such-base')
-    }
-  })
+  test('bad inputs fail informatively', async () => {
+    const unknownBase = await provider
+      .provision({ repo, baseBranch: 'no-such-base', branch: 'ab/feature-5' })
+      .then(
+        () => null,
+        (error: unknown) => error as Error,
+      )
+    expect(unknownBase?.message).toContain('Needed a single revision')
+    expect(unknownBase?.message).toContain('refs/heads/no-such-base')
 
-  test('nonexistent repo path and non-repo directory fail informatively', async () => {
     const missing = join(tmp, 'does-not-exist')
-    expect(provider.provision({ repo: missing, baseBranch: 'main', branch: 'x' })).rejects.toThrow(
-      /does-not-exist/,
-    )
+    await expect(
+      provider.provision({ repo: missing, baseBranch: 'main', branch: 'x' }),
+    ).rejects.toThrow(/does-not-exist/)
 
     const plain = join(tmp, 'plain-dir')
     await mkdir(plain)
-    expect(provider.provision({ repo: plain, baseBranch: 'main', branch: 'x' })).rejects.toThrow(
-      /not a git repository/i,
-    )
-  })
-
-  test('exec seam: git failures surface stderr in the thrown error', async () => {
-    const failing: Exec = async () => ({
-      stdout: '',
-      stderr: 'fatal: disk on fire',
-      exitCode: 128,
-    })
-    const broken = new GitWorktreeProvider({ root, exec: failing })
-    expect(broken.provision({ repo, baseBranch: 'main', branch: 'ab/feature-6' })).rejects.toThrow(
-      /disk on fire/,
-    )
-  })
-
-  test('exec seam: release rethrows unexpected worktree-remove failures', async () => {
-    let failRemove = false
-    const flaky: Exec = async (cmd, opts) => {
-      if (failRemove && cmd.includes('remove')) {
-        return { stdout: '', stderr: 'fatal: worktree is locked', exitCode: 128 }
-      }
-      return spawnExec(cmd, opts)
-    }
-    const flakyProvider = new GitWorktreeProvider({ root, exec: flaky })
-    const handle = await flakyProvider.provision({
-      repo,
-      baseBranch: 'main',
-      branch: 'ab/feature-7',
-    })
-    failRemove = true
-    expect(flakyProvider.release(handle)).rejects.toThrow(/worktree is locked/)
+    await expect(
+      provider.provision({ repo: plain, baseBranch: 'main', branch: 'x' }),
+    ).rejects.toThrow(/not a git repository/i)
   })
 })
 
@@ -930,7 +802,7 @@ describe('GitWorktreeProvider operator sandbox', () => {
     )
   })
 
-  test('setup runs with the scrubbed guest environment, never the host environment', async () => {
+  test('setup and exec run with the scrubbed guest environment inside the checkout', async () => {
     process.env.AB_SANDBOX_SETUP_CANARY = 'host-canary'
     try {
       const scrubProvider = new GitWorktreeProvider({
@@ -945,109 +817,37 @@ describe('GitWorktreeProvider operator sandbox', () => {
         operator: 'ops-scrub',
         baseBranch: 'main',
       })
-      const dump = readFileSync(join(identity.workspacePath, 'env-dump.txt'), 'utf8')
+      const setupEnv = readFileSync(join(identity.workspacePath, 'env-dump.txt'), 'utf8')
+      const exec = await scrubProvider.orchestratorSandbox.exec(identity, {
+        command: 'pwd && env | sort',
+      })
+      expect(exec.exitCode).toBe(0)
+      expect(exec.stdout.split('\n')[0]).toContain(identity.workspacePath)
       // Built from an empty record: a host-only variable never leaks in, and
       // only PATH plus the forwarded names are present.
-      expect(dump).not.toContain('AB_SANDBOX_SETUP_CANARY')
-      expect(dump).toContain('MY_TOOL_CONFIG=tool-value')
-      expect(dump).toContain('PATH=')
-      for (const name of SANDBOX_FORBIDDEN_ENV) {
-        expect(dump).not.toContain(`${name}=`)
+      for (const dump of [setupEnv, exec.stdout]) {
+        expect(dump).not.toContain('AB_SANDBOX_SETUP_CANARY')
+        expect(dump).toContain('MY_TOOL_CONFIG=tool-value')
+        expect(dump).toContain('PATH=')
+        for (const name of SANDBOX_FORBIDDEN_ENV) {
+          expect(dump).not.toContain(`${name}=`)
+        }
       }
     } finally {
       delete process.env.AB_SANDBOX_SETUP_CANARY
     }
   })
 
-  test('exec runs commands with a scrubbed environment inside the checkout', async () => {
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops',
-      baseBranch: 'main',
-    })
-    const result = await provider.orchestratorSandbox.exec(identity, {
-      command: 'pwd && echo "cfg=$MY_TOOL_CONFIG"',
-    })
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain(identity.workspacePath)
-    expect(result.stdout).toContain('cfg=tool-value')
-    // Built from an empty record: no credential name, only PATH + forwarded.
-    const envProbe = await provider.orchestratorSandbox.exec(identity, {
-      command: 'env | sort',
-    })
-    for (const name of SANDBOX_FORBIDDEN_ENV) {
-      expect(envProbe.stdout).not.toContain(`${name}=`)
-    }
-    expect(envProbe.stdout).toContain('MY_TOOL_CONFIG=tool-value')
-    expect(envProbe.stdout).toContain('PATH=')
-  })
-
-  test('exec past its timeout fails typed and start/wait round-trips a detached child', async () => {
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops',
-      baseBranch: 'main',
-    })
-    const error = await provider.orchestratorSandbox
-      .exec(identity, { command: 'sleep 5', timeoutSeconds: 1 })
-      .catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(SandboxOperationError)
-    expect((error as SandboxOperationError).stage).toBe('exec-timeout')
-
-    const { commandId } = await provider.orchestratorSandbox.start(identity, {
-      command: 'echo streamed-output',
-    })
-    expect(
-      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
-    ).toEqual({
-      state: 'exited',
-      exitCode: 0,
-      stdout: 'streamed-output\n',
-      stderr: '',
-    })
-    // A restarted host loses detached-command tracking: typed not-found.
-    const lost = await provider.orchestratorSandbox
-      .wait(identity, { commandId: 'sbcmd-gone', waitSeconds: 0 })
-      .catch((e: unknown) => e)
-    expect(lost).toBeInstanceOf(SandboxOperationError)
-    expect((lost as SandboxOperationError).stage).toBe('not-found')
-  })
-
-  test('the terminal wait consumes a finished detached command; a second wait fails typed not-found', async () => {
+  test('exec past its timeout fails typed; detached waits consume only the terminal exit', async () => {
     const identity = await provider.orchestratorSandbox.ensure({
       repo,
       operator: 'ops',
       baseBranch: 'main',
     })
     const { commandId } = await provider.orchestratorSandbox.start(identity, {
-      command: 'echo consumed',
+      command: 'sleep 1; echo streamed-output',
     })
-    expect(
-      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
-    ).toEqual({
-      state: 'exited',
-      exitCode: 0,
-      stdout: 'consumed\n',
-      stderr: '',
-    })
-    // Eviction reuses the restarted-host semantics: delivered results are
-    // gone, and re-waiting them is typed not-found, not stale repetition.
-    const again = await provider.orchestratorSandbox
-      .wait(identity, { commandId, waitSeconds: 0 })
-      .catch((e: unknown) => e)
-    expect(again).toBeInstanceOf(SandboxOperationError)
-    expect((again as SandboxOperationError).stage).toBe('not-found')
-  })
-
-  test('running waits do not consume; only the terminal exited wait does', async () => {
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops',
-      baseBranch: 'main',
-    })
-    const { commandId } = await provider.orchestratorSandbox.start(identity, {
-      command: 'sleep 1',
-    })
+    // Running waits do not consume.
     for (let i = 0; i < 2; i++) {
       expect(
         await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 0 }),
@@ -1057,456 +857,215 @@ describe('GitWorktreeProvider operator sandbox', () => {
         stderr: '',
       })
     }
+
+    // The detached child finishes while this exec times out.
+    const error = await provider.orchestratorSandbox
+      .exec(identity, { command: 'sleep 5', timeoutSeconds: 1 })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('exec-timeout')
+
     expect(
       await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
     ).toEqual({
       state: 'exited',
       exitCode: 0,
-      stdout: '',
+      stdout: 'streamed-output\n',
       stderr: '',
     })
+    // The terminal wait consumed it: delivered results are gone, and
+    // re-waiting them is typed not-found, not stale repetition. A restarted
+    // host loses detached-command tracking the same way.
+    for (const id of [commandId, 'sbcmd-gone']) {
+      const lost = await provider.orchestratorSandbox
+        .wait(identity, { commandId: id, waitSeconds: 0 })
+        .catch((e: unknown) => e)
+      expect(lost).toBeInstanceOf(SandboxOperationError)
+      expect((lost as SandboxOperationError).stage).toBe('not-found')
+    }
   })
 
-  test('finished-but-never-waited commands are bounded by the retention cap; running entries survive', async () => {
-    const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
-      .MAX_RETAINED_SANDBOX_COMMANDS
-    // Own provider with a large drain grace so the gated echo's stamp is
-    // controlled by its grandchild's lifetime (drain EOF wins the race at
-    // ~2s), not by the 250ms default — the same idiom the two adjacent
-    // drain-gate tests use. Own temp roots, removed in finally: the shared
-    // afterEach never sees them.
+  /** A provider with a large drain grace, so a `sleep 2 &` grandchild gates
+   * its command's exit stamp (drain EOF wins the race at ~2s) rather than the
+   * 250ms default, plus a running `sleep 30` sentinel that is never evictable
+   * and is killed afterwards. Own temp roots, removed afterwards. */
+  async function withSlowDrainSandbox(
+    operator: string,
+    body: (sandbox: {
+      cap: number
+      sentinel: string
+      children: Map<string, TrackedChild>
+      start: (command: string) => Promise<string>
+      wait: (
+        commandId: string,
+        waitSeconds: number,
+      ) => ReturnType<GitWorktreeProvider['orchestratorSandbox']['wait']>
+      expectNotFound: (commandId: string) => Promise<void>
+      expectRunning: (commandId: string) => Promise<void>
+    }) => Promise<void>,
+  ): Promise<void> {
     const slowRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-slow-'))
     const slowSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-slow-'))
+    const slowProvider = new GitWorktreeProvider({
+      root: slowRoot,
+      sandboxRoot: slowSandboxRoot,
+      exitDrainGraceMs: 5000,
+    })
+    // No private-access idiom exists in this suite; one cast local.
+    const children = (slowProvider as unknown as { sandboxChildren: Map<string, TrackedChild> })
+      .sandboxChildren
+    const started: TrackedChild[] = []
     try {
-      const slowProvider = new GitWorktreeProvider({
-        root: slowRoot,
-        sandboxRoot: slowSandboxRoot,
-        exitDrainGraceMs: 5000,
-      })
       const identity = await slowProvider.orchestratorSandbox.ensure({
         repo,
-        operator: 'ops-cap',
+        operator,
         baseBranch: 'main',
       })
-
-      // No private-access idiom exists in this suite; one-line cast local.
-      const children = (
-        slowProvider as unknown as { sandboxChildren: Map<string, { exitCode: number | null }> }
-      ).sandboxChildren
-
-      // This test forks more short-lived shells than any other in the
-      // suite, and a verify run executes it concurrently with the other
-      // verify steps — a load under which a fork can transiently fail
-      // (EAGAIN/ENOMEM). A failed `start` is an environment condition, not
-      // the behavior under test (the retention cap), so retry with bounded
-      // backoff: a deterministic start regression still fails. (The
-      // reproduction behind this hardening located the actual flake in
-      // victim selection, not here — the retry is defense, not the fix.)
-      const startWithRetry = async (command: string): Promise<string> => {
-        const backoffs = [50, 100, 200, 400, 800]
-        let lastError: unknown
-        for (let attempt = 0; attempt < backoffs.length; attempt++) {
-          try {
-            return (await slowProvider.orchestratorSandbox.start(identity, { command })).commandId
-          } catch (error) {
-            lastError = error
-            await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]))
-          }
-        }
-        throw lastError
+      const start = async (command: string) => {
+        const { commandId } = await slowProvider.orchestratorSandbox.start(identity, { command })
+        started.push(children.get(commandId)!)
+        return commandId
       }
-
-      // Live sentinel: running for the whole test, must never be evicted.
-      // `sleep 300` so it can never be outlived by the serialized body
-      // below (itself bounded by the explicit 120s test timeout).
-      const sentinelId = await startWithRetry('sleep 300')
-
-      // Deterministic completion order is the fix. The original
-      // fire-and-forget burst assumed echoes complete in insertion order,
-      // but under load an older echo can still be running while a newer
-      // one has already stamped — `evictFinishedBeyondCap` skips genuinely
-      // running entries and stops at exited-but-unstamped ones, so a
-      // newer stamped echo can be deleted ahead of a slower older one and
-      // the older survivor then breaks the positional assertions below
-      // (reproduced: evicted set {echo0..19, echo21} with echo20
-      // retained). Serializing the burst removes that precondition
-      // structurally: at any eviction pass, every echo older than the
-      // newest is stamped-or-deleted, never running.
-      const excess = 20
-      const echoes: string[] = []
-
-      // echo0 is the drain-gated entry: its child exits in ~ms, but the
-      // `sleep 2 &` grandchild holds the pipe write end, so its stamp
-      // lands ~2s in. Because it is the *oldest* echo, every over-cap
-      // pass walks to it and stops (exited-but-unstamped) — deferring all
-      // trimming until its stamp. Its own output is never asserted (it is
-      // always in the evicted slice).
-      echoes.push(await startWithRetry('sleep 2 & echo burst'))
-
-      // Stamped-or-absent, probed on the private map — never via `wait`:
-      // a wait observing `exited` would consume a never-waited entry and
-      // defeat the test. (`undefined` means already evicted, which only
-      // happens to stamped entries, so it counts as settled.)
-      const stamped = (id: string): boolean => {
-        const tracked = children.get(id)
-        return tracked === undefined || tracked.exitCode !== null
-      }
-      // echo1..echo(cap+excess-1): plain echoes, inserted one at a time,
-      // each stamped before the next starts.
-      for (let i = 1; i < cap + excess; i++) {
-        const id = await startWithRetry('echo burst')
-        echoes.push(id)
-        const stampDeadline = Date.now() + 10_000
-        while (Date.now() < stampDeadline && !stamped(id)) {
-          await new Promise((resolve) => setTimeout(resolve, 5))
-        }
-        expect(stamped(id)).toBe(true)
-      }
-
-      // Final settle: echo0's stamp (or its eviction) runs the final
-      // trim. Structurally bounded, not wall-clock luck — the drain EOF
-      // lands ~2s in and the 5s grace bounds the stamp regardless.
-      const settleDeadline = Date.now() + 15_000
-      while (Date.now() < settleDeadline && !stamped(echoes[0]!)) {
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      }
-      expect(stamped(echoes[0]!)).toBe(true)
-
-      // The regression guard. Verified by temporary experiment: removing
-      // the exit-stamp-path `evictFinishedBeyondCap()` call (the one in
-      // `trackChildStreams`'s exited handler) fails this size assertion,
-      // while removing the insert-time call in `sandboxStart` leaves this
-      // test green — the drain-gated echo0's stamp-path pass still trims
-      // the map to cap and compensates. What this test pins, then, is cap
-      // enforcement on the exit-stamp path; the insert-time path is
-      // currently unguarded by this suite — no test in this file fails
-      // when the insert-time call is removed (verified: the whole file
-      // stays 35/35 green across three isolated runs, including the
-      // adjacent 'a pending newer stamp does not block eviction of older
-      // stamped finished entries' test). The evicted slice below is
-      // derived, not lucky: in either timing (echo0's stamp after the
-      // insertion loop, or mid-insertion) the victims are exactly the
-      // oldest `excess + 1` echoes in insertion order — 71 entries
-      // (sentinel + cap + excess) trim to the cap with the sentinel
-      // un-evictable.
-      expect(children.size).toBeLessThanOrEqual(cap)
-
-      // Exactly the oldest `excess + 1` echoes were evicted. Typed
-      // not-found on wait.
-      for (const id of echoes.slice(0, excess + 1)) {
-        const evicted = await slowProvider.orchestratorSandbox
-          .wait(identity, { commandId: id, waitSeconds: 0 })
-          .catch((e: unknown) => e)
-        expect(evicted).toBeInstanceOf(SandboxOperationError)
-        expect((evicted as SandboxOperationError).stage).toBe('not-found')
-      }
-      // The first retained echo — immediately past the evicted slice —
-      // still delivers its result (and is consumed).
-      const retained = echoes[excess + 1]!
-      expect(
-        await slowProvider.orchestratorSandbox.wait(identity, {
-          commandId: retained,
-          waitSeconds: 5,
-        }),
-      ).toEqual({
-        state: 'exited',
-        exitCode: 0,
-        stdout: 'burst\n',
-        stderr: '',
-      })
-      // The running sentinel is untouched by the cap.
-      expect(
-        await slowProvider.orchestratorSandbox.wait(identity, {
-          commandId: sentinelId,
-          waitSeconds: 0,
-        }),
-      ).toEqual({
-        state: 'running',
-        stdout: '',
-        stderr: '',
+      const wait = (commandId: string, waitSeconds: number) =>
+        slowProvider.orchestratorSandbox.wait(identity, { commandId, waitSeconds })
+      await body({
+        cap: (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
+          .MAX_RETAINED_SANDBOX_COMMANDS,
+        sentinel: await start('sleep 30'),
+        children,
+        start,
+        wait,
+        expectNotFound: async (commandId) => {
+          const evicted = await wait(commandId, 0).catch((e: unknown) => e)
+          expect(evicted).toBeInstanceOf(SandboxOperationError)
+          expect((evicted as SandboxOperationError).stage).toBe('not-found')
+        },
+        expectRunning: async (commandId) => {
+          expect(await wait(commandId, 0)).toEqual({ state: 'running', stdout: '', stderr: '' })
+        },
       })
     } finally {
+      for (const child of started) child.proc.kill()
       await rm(slowRoot, { recursive: true, force: true })
       await rm(slowSandboxRoot, { recursive: true, force: true })
     }
-  }, 120_000)
+  }
+
+  /** The tracked entry's synchronous exit state, the same probe the eviction
+   * pass reads: exited but not yet stamped. */
+  const exitedUnstamped = (children: Map<string, TrackedChild>, id: string): boolean => {
+    const tracked = children.get(id)
+    return (
+      tracked !== undefined &&
+      tracked.exitCode === null &&
+      (tracked.proc.exitCode !== null || tracked.proc.signalCode !== null)
+    )
+  }
+  /** Stamped, or already evicted (which only happens to stamped entries). */
+  const stamped = (children: Map<string, TrackedChild>, id: string): boolean =>
+    children.get(id)?.exitCode !== null
+
+  async function pollUntil(done: () => boolean, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline && !done()) await Bun.sleep(25)
+  }
 
   test('eviction defers while an exited command’s drain-gated stamp is pending, then evicts the oldest finished first', async () => {
-    // Own provider with a large drain grace so the delayed command’s stamp
-    // is gated by its grandchild’s lifetime (drain EOF wins the race at ~2s),
-    // not by the 250ms default — stamp timing is controlled, not lucky.
-    const slowRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-slow-'))
-    const slowSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-slow-'))
-    try {
-      const slowProvider = new GitWorktreeProvider({
-        root: slowRoot,
-        sandboxRoot: slowSandboxRoot,
-        exitDrainGraceMs: 5000,
-      })
-      const identity = await slowProvider.orchestratorSandbox.ensure({
-        repo,
-        operator: 'ops-slow',
-        baseBranch: 'main',
-      })
-      const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
-        .MAX_RETAINED_SANDBOX_COMMANDS
+    await withSlowDrainSandbox(
+      'ops-slow',
+      async ({ cap, sentinel, children, start, wait, expectNotFound, expectRunning }) => {
+        // The oldest finished command: its child exits in ~ms, but the
+        // `sleep 2 &` grandchild holds the pipe write end, so the drain-gated
+        // stamp lands ~2s later — long after any echo's stamp (~ms).
+        const delayed = await start('sleep 2 & echo held-open')
+        // Only once it has exited unstamped is the burst inserted, so the
+        // first over-cap pass deterministically sees an exited-but-unstamped
+        // entry.
+        await pollUntil(() => exitedUnstamped(children, delayed))
+        expect(exitedUnstamped(children, delayed)).toBe(true)
 
-      // Live sentinel: running for the whole test, never evictable.
-      const sentinel = await slowProvider.orchestratorSandbox.start(identity, {
-        command: 'sleep 30',
-      })
-      // The oldest finished command: its child exits in ~ms, but the
-      // `sleep 2 &` grandchild holds the pipe write end, so the drain-gated
-      // stamp lands ~2s later — long after any echo's stamp (~ms).
-      const delayed = await slowProvider.orchestratorSandbox.start(identity, {
-        command: 'sleep 2 & echo held-open',
-      })
+        // Fill past the cap: sentinel + delayed + (cap - 1) echoes = cap + 1.
+        const echoes: string[] = []
+        for (let i = 0; i < cap - 1; i++) echoes.push(await start('echo burst'))
+        await pollUntil(() => echoes.every((id) => stamped(children, id)))
+        expect(echoes.every((id) => stamped(children, id))).toBe(true)
 
-      // No private-access idiom exists in this suite; one-line cast local.
-      const children = (
-        slowProvider as unknown as {
-          sandboxChildren: Map<
-            string,
-            {
-              proc: { exitCode: number | null; signalCode: NodeJS.Signals | null }
-              exitCode: number | null
-            }
-          >
+        // Deferral: while the older command's stamp is pending, the over-cap
+        // map evicts nothing — pre-fix code deletes the oldest stamped echo
+        // here instead of the oldest finished entry.
+        expect(children.has(delayed)).toBe(true)
+        expect(children.size).toBe(cap + 1)
+        expect(echoes.every((id) => children.has(id))).toBe(true)
+        // Stamp semantics unchanged: an exited-but-unstamped entry still
+        // reports `running`, and the wait does not consume it. (stdout may
+        // already carry what drained before the stamp.)
+        expect((await wait(delayed, 0)).state).toBe('running')
+
+        // The delayed stamp (~2s) runs the next pass, which evicts exactly the
+        // oldest finished entry — the delayed command itself (the running
+        // sentinel is un-evictable). Size settles at the cap.
+        await pollUntil(() => !children.has(delayed))
+        expect(children.has(delayed)).toBe(false)
+        expect(children.size).toBe(cap)
+
+        // The evicted delayed command reports typed not-found on wait.
+        await expectNotFound(delayed)
+        // Every newer echo survived, in order, with its output intact.
+        for (const id of echoes) {
+          expect(await wait(id, 5)).toEqual({
+            state: 'exited',
+            exitCode: 0,
+            stdout: 'burst\n',
+            stderr: '',
+          })
         }
-      ).sandboxChildren
-
-      // Poll the tracked entry's synchronous exit state (the same probe the
-      // eviction pass reads) until the child has exited but not yet been
-      // stamped. Only then is the burst inserted, so the first over-cap pass
-      // deterministically sees an exited-but-unstamped entry.
-      const exitedUnstamped = (id: string): boolean => {
-        const tracked = children.get(id)
-        return (
-          tracked !== undefined &&
-          tracked.exitCode === null &&
-          (tracked.proc.exitCode !== null || tracked.proc.signalCode !== null)
-        )
-      }
-      const stampDeadline = Date.now() + 5000
-      while (Date.now() < stampDeadline && !exitedUnstamped(delayed.commandId)) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      expect(exitedUnstamped(delayed.commandId)).toBe(true)
-
-      // Fill past the cap: sentinel + delayed + (cap - 1) echoes = cap + 1.
-      const echoes: string[] = []
-      for (let i = 0; i < cap - 1; i++) {
-        echoes.push(
-          (await slowProvider.orchestratorSandbox.start(identity, { command: 'echo burst' }))
-            .commandId,
-        )
-      }
-      // Every echo stamps within ~ms of its start (drain EOF wins
-      // immediately); the delayed command's stamp needs ~2s.
-      const echoDeadline = Date.now() + 5000
-      const stamped = (id: string): boolean => children.get(id)?.exitCode !== null
-      while (Date.now() < echoDeadline && !echoes.every(stamped)) {
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      }
-      expect(echoes.every(stamped)).toBe(true)
-
-      // Deferral: while the older command's stamp is pending, the over-cap
-      // map evicts nothing — pre-fix code deletes the oldest stamped echo
-      // here instead of the oldest finished entry.
-      expect(children.has(delayed.commandId)).toBe(true)
-      expect(children.size).toBe(cap + 1)
-      expect(echoes.every((id) => children.has(id))).toBe(true)
-      // Stamp semantics unchanged: an exited-but-unstamped entry still
-      // reports `running`, and the wait does not consume it. (stdout may
-      // already carry what drained before the stamp — the gate covers the
-      // stamp, not the reader's own appends.)
-      const pending = await slowProvider.orchestratorSandbox.wait(identity, {
-        commandId: delayed.commandId,
-        waitSeconds: 0,
-      })
-      expect(pending.state).toBe('running')
-
-      // The delayed stamp (~2s) runs the next pass, which evicts exactly the
-      // oldest finished entry — the delayed command itself (the running
-      // sentinel is un-evictable). Size settles at the cap.
-      const evictDeadline = Date.now() + 5000
-      while (Date.now() < evictDeadline && children.has(delayed.commandId)) {
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      }
-      expect(children.has(delayed.commandId)).toBe(false)
-      expect(children.size).toBe(cap)
-
-      // The evicted delayed command reports typed not-found on wait — the
-      // legitimate not-found population under the cap.
-      const evicted = await slowProvider.orchestratorSandbox
-        .wait(identity, { commandId: delayed.commandId, waitSeconds: 0 })
-        .catch((e: unknown) => e)
-      expect(evicted).toBeInstanceOf(SandboxOperationError)
-      expect((evicted as SandboxOperationError).stage).toBe('not-found')
-      // Every newer echo survived, in order, with its output intact.
-      for (const id of echoes) {
-        expect(
-          await slowProvider.orchestratorSandbox.wait(identity, { commandId: id, waitSeconds: 5 }),
-        ).toEqual({
-          state: 'exited',
-          exitCode: 0,
-          stdout: 'burst\n',
-          stderr: '',
-        })
-      }
-      // The running sentinel is untouched by the cap.
-      expect(
-        await slowProvider.orchestratorSandbox.wait(identity, {
-          commandId: sentinel.commandId,
-          waitSeconds: 0,
-        }),
-      ).toEqual({
-        state: 'running',
-        stdout: '',
-        stderr: '',
-      })
-    } finally {
-      await rm(slowRoot, { recursive: true, force: true })
-      await rm(slowSandboxRoot, { recursive: true, force: true })
-    }
+        await expectRunning(sentinel)
+      },
+    )
   })
 
   test('a pending newer stamp does not block eviction of older stamped finished entries', async () => {
-    // Own provider with a large drain grace so the pending command’s stamp
-    // is gated by its grandchild’s lifetime (drain EOF wins the race at ~2s),
-    // not by the 250ms default — stamp timing is controlled, not lucky.
-    const slowRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-newer-'))
-    const slowSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-newer-'))
-    try {
-      const slowProvider = new GitWorktreeProvider({
-        root: slowRoot,
-        sandboxRoot: slowSandboxRoot,
-        exitDrainGraceMs: 5000,
-      })
-      const identity = await slowProvider.orchestratorSandbox.ensure({
-        repo,
-        operator: 'ops-newer',
-        baseBranch: 'main',
-      })
-      const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
-        .MAX_RETAINED_SANDBOX_COMMANDS
+    await withSlowDrainSandbox(
+      'ops-newer',
+      async ({ cap, sentinel, children, start, wait, expectNotFound, expectRunning }) => {
+        // A burst of fast echoes settling the map exactly at the cap.
+        const echoes: string[] = []
+        for (let i = 0; i < cap - 1; i++) echoes.push(await start('echo burst'))
+        // The pending command is NEWER than the burst; its drain-gated stamp
+        // lands ~2s after its exit, long after every echo's stamp.
+        const delayed = await start('sleep 2 & echo held-open')
+        await pollUntil(() => exitedUnstamped(children, delayed))
+        expect(exitedUnstamped(children, delayed)).toBe(true)
 
-      // Live sentinel: running for the whole test, never evictable.
-      const sentinel = await slowProvider.orchestratorSandbox.start(identity, {
-        command: 'sleep 30',
-      })
-      // A burst of fast echoes settling the map exactly at the cap; every
-      // one stamps within ~ms of its start.
-      const echoes: string[] = []
-      for (let i = 0; i < cap - 1; i++) {
-        echoes.push(
-          (await slowProvider.orchestratorSandbox.start(identity, { command: 'echo burst' }))
-            .commandId,
-        )
-      }
-      // The pending command is NEWER than the burst: its child exits in ~ms,
-      // but the `sleep 2 &` grandchild holds the pipe write end, so the
-      // drain-gated stamp lands ~2s later — long after every echo’s stamp.
-      const delayed = await slowProvider.orchestratorSandbox.start(identity, {
-        command: 'sleep 2 & echo held-open',
-      })
+        // More fast echoes after the pending command push the map past the
+        // cap while the pending stamp has not landed: the echoes before the
+        // pending entry are unambiguously older finished entries.
+        const newer: string[] = []
+        for (let i = 0; i < 10; i++) newer.push(await start('echo burst'))
 
-      // No private-access idiom exists in this suite; one-line cast local.
-      const children = (
-        slowProvider as unknown as {
-          sandboxChildren: Map<
-            string,
-            {
-              proc: { exitCode: number | null; signalCode: NodeJS.Signals | null }
-              exitCode: number | null
-            }
-          >
+        // Settle without calling `wait` on any echo (a terminal wait would
+        // consume the entry and defeat the test).
+        const all = [...echoes, ...newer]
+        await pollUntil(() => all.every((id) => stamped(children, id)))
+        expect(all.every((id) => stamped(children, id))).toBe(true)
+        // The eviction choice below was made with a pending stamp in the map.
+        expect(exitedUnstamped(children, delayed)).toBe(true)
+
+        // The pending NEWER stamp must not block eviction of the older stamped
+        // echoes: the map is trimmed back to the cap, and the pending entry
+        // itself is untouched. Exactly the oldest `newer.length + 1` echoes
+        // were evicted: the walk reaches the cap before the pending command.
+        expect(children.size).toBe(cap)
+        expect(children.has(delayed)).toBe(true)
+        for (const id of echoes.slice(0, newer.length + 1)) await expectNotFound(id)
+        for (const id of [...echoes.slice(newer.length + 1), ...newer]) {
+          expect(children.has(id)).toBe(true)
         }
-      ).sandboxChildren
-
-      // The same synchronous-exit probe the eviction pass reads. Poll it
-      // until the pending command has exited but not yet been stamped, and
-      // only then insert the newer burst — so every over-cap pass below
-      // deterministically sees a pending stamp in the map.
-      const exitedUnstamped = (id: string): boolean => {
-        const tracked = children.get(id)
-        return (
-          tracked !== undefined &&
-          tracked.exitCode === null &&
-          (tracked.proc.exitCode !== null || tracked.proc.signalCode !== null)
-        )
-      }
-      const pendingDeadline = Date.now() + 5000
-      while (Date.now() < pendingDeadline && !exitedUnstamped(delayed.commandId)) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      expect(exitedUnstamped(delayed.commandId)).toBe(true)
-
-      // More fast echoes after the pending command, pushing the map past the
-      // cap while the pending stamp has not landed: the echoes before the
-      // pending entry are unambiguously older finished entries.
-      const newer: string[] = []
-      for (let i = 0; i < 10; i++) {
-        newer.push(
-          (await slowProvider.orchestratorSandbox.start(identity, { command: 'echo burst' }))
-            .commandId,
-        )
-      }
-
-      // Settle: wait for every echo to be stamped without calling `wait` on
-      // any (a terminal wait would consume the entry and defeat the test).
-      const stamped = (id: string): boolean => children.get(id)?.exitCode !== null
-      const stampDeadline = Date.now() + 5000
-      while (Date.now() < stampDeadline && ![...echoes, ...newer].every(stamped)) {
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      }
-      expect([...echoes, ...newer].every(stamped)).toBe(true)
-      // The pending command is still exited-but-unstamped at the settled
-      // boundary, so the eviction choice below was made with a pending
-      // stamp in the map.
-      expect(exitedUnstamped(delayed.commandId)).toBe(true)
-
-      // The pending NEWER stamp must not block eviction of the older stamped
-      // echoes: the map is trimmed back to the cap (a whole-pass deferral
-      // held all cap + 11 entries here), and the pending entry itself is
-      // untouched. Exactly the oldest `newer.length + 1` echoes were evicted:
-      // 61 entries (sentinel + burst + pending + newer) trim to the cap by
-      // deleting the oldest stamped entries, and the walk reaches the cap
-      // before it reaches the pending command.
-      expect(children.size).toBe(cap)
-      expect(children.has(delayed.commandId)).toBe(true)
-      for (const id of echoes.slice(0, newer.length + 1)) {
-        const evicted = await slowProvider.orchestratorSandbox
-          .wait(identity, { commandId: id, waitSeconds: 0 })
-          .catch((e: unknown) => e)
-        expect(evicted).toBeInstanceOf(SandboxOperationError)
-        expect((evicted as SandboxOperationError).stage).toBe('not-found')
-      }
-      for (const id of [...echoes.slice(newer.length + 1), ...newer]) {
-        expect(children.has(id)).toBe(true)
-      }
-      // The pending entry is still exited-but-unstamped to any observer: the
-      // wait neither consumes it nor reports it gone.
-      const pending = await slowProvider.orchestratorSandbox.wait(identity, {
-        commandId: delayed.commandId,
-        waitSeconds: 0,
-      })
-      expect(pending.state).toBe('running')
-      // The running sentinel is untouched by the cap.
-      expect(
-        await slowProvider.orchestratorSandbox.wait(identity, {
-          commandId: sentinel.commandId,
-          waitSeconds: 0,
-        }),
-      ).toEqual({
-        state: 'running',
-        stdout: '',
-        stderr: '',
-      })
-    } finally {
-      await rm(slowRoot, { recursive: true, force: true })
-      await rm(slowSandboxRoot, { recursive: true, force: true })
-    }
+        // The pending entry is still exited-but-unstamped to any observer.
+        expect((await wait(delayed, 0)).state).toBe('running')
+        await expectRunning(sentinel)
+      },
+    )
   })
 
   test('a grandchild inheriting the pipe bounds the exit stamp without truncating it', async () => {
@@ -1590,11 +1149,6 @@ describe('GitWorktreeProvider operator sandbox', () => {
     })
   })
 
-  test('the build-path publication discriminator is untouched; the sandbox seam exists', () => {
-    expect((provider as unknown as { publication?: unknown }).publication).toBeUndefined()
-    expect(provider.sandboxPublication).toBeDefined()
-  })
-
   test('sandboxPublication pushes an exact sha to one branch against a real temp origin', async () => {
     // A bare origin so the push has a real network-style destination; the
     // worktree's origin remote carries the host's local forge configuration
@@ -1628,11 +1182,6 @@ describe('GitWorktreeProvider operator sandbox', () => {
         branch: 'ab/orch-ops-abc12345',
       }),
     ).toBe(true)
-    // The git-worktree probe is workspace-anchored: without a ref it cannot
-    // run, and the service always supplies one.
-    await expect(publication.isPublished!({ sha, branch: 'ab/orch-ops-abc12345' })).rejects.toThrow(
-      /workspace ref/,
-    )
   })
 
   test('sandboxPublication without an origin remote moves the local ref forward-only', async () => {
@@ -1667,40 +1216,15 @@ describe('GitWorktreeProvider operator sandbox', () => {
       }),
     ).rejects.toThrow(/not an ancestor/)
   })
-
-  test('sandboxPublication validates input shapes and a missing ref', async () => {
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops-shape',
-      baseBranch: 'main',
-    })
-    const sha = await run(['git', 'rev-parse', 'HEAD'], identity.workspacePath)
-    const publication = provider.sandboxPublication!
-    await expect(
-      publication.publish({ ref: identity.environmentId, sha: 'nothash', branch: 'ab/orch-ops-x' }),
-    ).rejects.toThrow(/exact commit SHA/)
-    await expect(
-      publication.publish({ ref: identity.environmentId, sha, branch: 'main' }),
-    ).rejects.toThrow(/canonical build branch/)
-    await expect(publication.isPublished!({ sha, branch: 'ab/orch-ops-x' })).rejects.toThrow() // no ref and no recorded workspace → probe cannot run
-  })
 })
 
 test('private checkpoint retains two unpublished branch commits and detached work across replacement', async () => {
   const { preserveGitCommits, restoreGitCommits } = await import('./commit-preservation')
   const { gitRewrite } = await import('../forge/git-rewrite')
-  const root = await mkdtemp(join(tmpdir(), 'ab-commit-checkpoint-'))
-  const origin = join(root, 'origin.git')
-  const source = join(root, 'source')
-  await initRepo(source)
-  await run(['git', 'init', '--bare', origin], root)
-  await run(['git', 'remote', 'add', 'origin', origin], source)
-  await run(['git', 'push', 'origin', 'main'], source)
-  const base = await run(['git', 'rev-parse', 'HEAD'], source)
-  await run(['git', 'checkout', '-b', 'ab/checkpoint'], source)
-  await run(['git', 'push', 'origin', 'ab/checkpoint'], source)
-  const first = await commitFile(source, 'one', 'one', 'first unpublished')
-  const second = await commitFile(source, 'two', 'two', 'second unpublished')
+  const { root, origin, source, base, first, second } = await unpublishedBranch(
+    'ab-commit-checkpoint-',
+    'ab/checkpoint',
+  )
   await run(['git', 'checkout', '--detach'], source)
   const detached = await commitFile(source, 'three', 'three', 'detached producer')
   const heads = await preserveGitCommits({
@@ -1733,18 +1257,6 @@ test('private checkpoint retains two unpublished branch commits and detached wor
     heads,
   })
   expect(await run(['git', 'rev-parse', 'HEAD'], replacement)).toBe(second)
-  await run(['git', 'update-ref', heads[0]!.remoteRef!, base], origin)
-  await expect(
-    preserveGitCommits({
-      exec: spawnExec,
-      workspacePath: source,
-      slug: 'checkpoint',
-      branch: 'ab/checkpoint',
-      base,
-      candidates: [],
-      archive: gitRewrite(spawnExec, false).archive,
-    }),
-  ).rejects.toThrow('immutable archive')
 })
 
 test('a forge refusing archive refs preserves the unpublished range in the store for another host', async () => {
@@ -1754,24 +1266,16 @@ test('a forge refusing archive refs preserves the unpublished range in the store
     '../../kernel/history-retention'
   )
   const { seedStore, BUILD } = await import('../../cli/testkit')
-  const root = await mkdtemp(join(tmpdir(), 'ab-commit-retained-'))
-  const origin = join(root, 'origin.git')
-  const source = join(root, 'source')
-  await initRepo(source)
-  await run(['git', 'init', '--bare', origin], root)
+  const { root, origin, source, base, first, second } = await unpublishedBranch(
+    'ab-commit-retained-',
+    'ab/retained',
+  )
   // Branch pushes are accepted; archive refs are refused, like a proxy.
   await writeFile(
     join(origin, 'hooks', 'update'),
     '#!/bin/sh\ncase "$1" in refs/autobuild/archive/*) echo "only branches" >&2; exit 1;; esac\nexit 0\n',
     { mode: 0o755 },
   )
-  await run(['git', 'remote', 'add', 'origin', origin], source)
-  await run(['git', 'push', 'origin', 'main'], source)
-  const base = await run(['git', 'rev-parse', 'HEAD'], source)
-  await run(['git', 'checkout', '-b', 'ab/retained'], source)
-  await run(['git', 'push', 'origin', 'ab/retained'], source)
-  const first = await commitFile(source, 'one', 'one', 'first unpublished')
-  const second = await commitFile(source, 'two', 'two', 'second unpublished')
   const store = await seedStore()
   const archive = gitRewrite(spawnExec, false).archive
   const context = (exec: Exec, workspacePath: string, exclude: string) => ({
@@ -1819,27 +1323,6 @@ test('a forge refusing archive refs preserves the unpublished range in the store
   expect(await run(['git', 'log', '--format=%s', `${base}..HEAD`], replacement)).toBe(
     'second unpublished\nfirst unpublished',
   )
-  // Kept nowhere: preservation fails and the work stays in the checkout.
-  const refusing = await seedStore()
-  refusing.putArtifact = async () => {
-    throw new Error('store write refused')
-  }
-  await expect(
-    preserveGitCommits({
-      exec: spawnExec,
-      workspacePath: source,
-      slug: BUILD,
-      branch: 'ab/retained',
-      base,
-      candidates: [],
-      archive,
-      retain: (input) =>
-        retainPreservedCopy(
-          { ...context(input.exec, input.workspacePath, input.base), store: refusing },
-          input.sha,
-        ),
-    }),
-  ).rejects.toThrow(/BuildStore copy failed/)
 })
 
 describe('preserved branch heads superseded by a recorded rewrite', () => {

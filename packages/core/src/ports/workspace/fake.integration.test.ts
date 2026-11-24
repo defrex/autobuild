@@ -1,7 +1,6 @@
 import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describeWorkspaceProviderContract } from './contract'
@@ -31,78 +30,14 @@ describeWorkspaceProviderContract('FakeWorkspaceProvider', async () => {
 })
 
 describe('FakeWorkspaceProvider', () => {
-  test('provision returns <root>/<branch> with ref === path and journals', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    const handle = await provider.provision(OPTS)
-    expect(handle).toEqual({
-      provider: 'fake',
-      ref: '/ws/ab/fix-login',
-      path: '/ws/ab/fix-login',
-      branch: 'ab/fix-login',
-      base: { source: 'remote', sha: 'fake-base-sha' },
-    })
-    expect(provider.provisions).toEqual([OPTS])
-    expect(provider.isActive(handle.ref)).toBe(true)
-  })
-
-  test('logical provision stays idempotent without touching the filesystem', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-fake-workspace-logical-'))
-    const root = join(tmp, 'workspaces')
-    const provider = new FakeWorkspaceProvider({ root, mode: 'logical' })
-    try {
-      const first = await provider.provision({
-        ...OPTS,
-        repo: join(tmp, 'nonexistent-source'),
-      })
-      const second = await provider.provision({
-        ...OPTS,
-        repo: join(tmp, 'nonexistent-source'),
-      })
-      expect(second).toEqual({
-        ...first,
-        base: { source: 'existing', sha: 'fake-base-sha' },
-      })
-      expect(provider.provisions).toHaveLength(2)
-      expect(existsSync(root)).toBe(false)
-      expect(existsSync(first.path)).toBe(false)
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
-
-  test('configured fallback evidence is returned and the branch head survives release', async () => {
-    const provider = new FakeWorkspaceProvider({
-      root: '/ws',
-      mode: 'logical',
-      base: {
-        source: 'local',
-        sha: 'local-sha',
-        remoteError: 'origin unavailable',
-      },
-    })
-    const first = await provider.provision(OPTS)
-    expect(first.base).toEqual({
-      source: 'local',
-      sha: 'local-sha',
-      remoteError: 'origin unavailable',
-    })
-
-    provider.setBranchHead(OPTS.branch, 'implemented-sha')
-    await provider.release(first)
-    const resumed = await provider.provision(OPTS)
-    expect(resumed.base).toEqual({
-      source: 'existing',
-      sha: 'implemented-sha',
-    })
-  })
-
+  // Logical-mode behavior is covered in fake.test.ts; the shared contract
+  // above checks the rematerialized directory, fixture and writability.
   test('filesystem reprovision repairs stale active bookkeeping without releasing the branch', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-fake-workspace-recovery-'))
     const repo = join(tmp, 'source')
     const root = join(tmp, 'workspaces')
-    const fixture = join(repo, 'source-fixture.txt')
     await mkdir(repo, { recursive: true })
-    await writeFile(fixture, 'source tree\n')
+    await writeFile(join(repo, 'source-fixture.txt'), 'source tree\n')
     const provider = new FakeWorkspaceProvider({ root })
     const opts = { ...OPTS, repo }
 
@@ -123,12 +58,6 @@ describe('FakeWorkspaceProvider', () => {
       await rm(first.path, { recursive: true, force: true })
       const recovered = await provider.provision(opts)
 
-      expect(recovered.path).toBe(first.path)
-      expect((await stat(recovered.path)).isDirectory()).toBe(true)
-      expect(await readFile(join(recovered.path, 'source-fixture.txt'), 'utf8')).toBe(
-        'source tree\n',
-      )
-      await writeFile(join(recovered.path, 'write-probe.txt'), 'writable\n')
       expect(recovered.base).toEqual({
         source: 'existing',
         sha: 'implemented-sha',
@@ -140,39 +69,6 @@ describe('FakeWorkspaceProvider', () => {
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }
-  })
-
-  test('release journals and is idempotent', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    const handle = await provider.provision(OPTS)
-    await provider.release(handle)
-    expect(provider.isActive(handle.ref)).toBe(false)
-    // Releasing again (or releasing something never provisioned) is a no-op.
-    await provider.release(handle)
-    expect(provider.releases).toHaveLength(2)
-  })
-
-  test('setFailure makes the named operation throw until cleared', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    provider.setFailure('provision', new Error('disk full'))
-    await expect(provider.provision(OPTS)).rejects.toThrow('disk full')
-    expect(provider.provisions).toEqual([]) // failed calls are not journaled
-
-    provider.setFailure('provision', null)
-    const handle = await provider.provision(OPTS)
-
-    provider.setFailure('release', new Error('locked'))
-    await expect(provider.release(handle)).rejects.toThrow('locked')
-    expect(provider.releases).toEqual([])
-    expect(provider.isActive(handle.ref)).toBe(true)
-  })
-
-  test('the build-path publication discriminator is untouched; the sandbox seam exists', () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    // `publication` is the dispatcher's remote-workspace discriminator: it
-    // must stay absent on the fake so dispatcher-test builds classify local.
-    expect((provider as unknown as { publication?: unknown }).publication).toBeUndefined()
-    expect(provider.sandboxPublication).toBeDefined()
   })
 })
 
@@ -229,12 +125,20 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     expect(base.stdout.trim()).toBe(head.stdout.trim())
   })
 
-  test('baseSha is present on the fresh identity and absent on reuse', async () => {
+  test('baseSha is present on a fresh identity, absent on reuse, and refreshed after reset', async () => {
     const fresh = await sandbox()
     expect(fresh.baseSha).toMatch(/^[0-9a-f]{40}$/)
     const reused = await sandbox()
     expect(reused.baseSha).toBeUndefined()
     expect(reused.environmentId).toBe(fresh.environmentId)
+
+    await provider.orchestratorSandbox.release({
+      repo: source,
+      operator: 'ops',
+      environmentId: fresh.environmentId,
+    })
+    const reset = await sandbox()
+    expect(reset.baseSha).toMatch(/^[0-9a-f]{40}$/)
   })
 
   test('a git-repository source provisions with its base-branch head as baseSha', async () => {
@@ -248,17 +152,6 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     const identity = await sandbox()
     expect(identity.baseSha).toBe(expected)
     expect((await git(identity.workspacePath, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(expected)
-  })
-
-  test('reset re-provisions and refreshes baseSha', async () => {
-    const first = await sandbox()
-    await provider.orchestratorSandbox.release({
-      repo: source,
-      operator: 'ops',
-      environmentId: first.environmentId,
-    })
-    const second = await sandbox()
-    expect(second.baseSha).toMatch(/^[0-9a-f]{40}$/)
   })
 
   test('every recorded guest environment holds only PATH and forwarded names', async () => {
