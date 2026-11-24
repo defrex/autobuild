@@ -67,7 +67,15 @@ describe('local override classification', () => {
   test('the allowlist is exactly the personal and machine-local sections', () => {
     const allowlist: string[] = [...LOCAL_OVERRIDE_KEYS].sort()
     expect(allowlist).toEqual(
-      ['accounts', 'capacity', 'hooks', 'roles', 'ticketScanIntervalSeconds', 'upgrade'].sort(),
+      [
+        'accounts',
+        'capacity',
+        'hooks',
+        'operator',
+        'roles',
+        'ticketScanIntervalSeconds',
+        'upgrade',
+      ].sort(),
     )
   })
 
@@ -131,8 +139,8 @@ describe('parseLayeredConfig', () => {
     }
     const message = failure(() => layered('baseBranch = "dev"\nbogus = 1\ncapacity = 3\n'))
     expect(message.split('\n')).toEqual([
-      `${LOCAL}: baseBranch can only be set in autobuild.toml — local overrides accept capacity, ticketScanIntervalSeconds, upgrade, hooks, roles, accounts`,
-      `${LOCAL}: "bogus" is not a configuration setting — local overrides accept capacity, ticketScanIntervalSeconds, upgrade, hooks, roles, accounts`,
+      `${LOCAL}: baseBranch can only be set in autobuild.toml — local overrides accept capacity, ticketScanIntervalSeconds, upgrade, operator, hooks, roles, accounts`,
+      `${LOCAL}: "bogus" is not a configuration setting — local overrides accept capacity, ticketScanIntervalSeconds, upgrade, operator, hooks, roles, accounts`,
     ])
   })
 
@@ -212,4 +220,31 @@ describe('localOverrideSettings', () => {
       'roles.default.model',
     ])
   })
+})
+
+test('ownership is local-only while effective configuration accepts it', () => {
+  expect(layered().config.operator).toBeUndefined()
+  for (const dispatcher of ['human', 'agent'] as const) {
+    const text = `[operator]\ndispatcher = "${dispatcher}"`
+    const result = layered(text).config
+    expect(result.operator?.dispatcher).toBe(dispatcher)
+    expect(failure(() => parseConfig(`${committed}\n${text}`, 'custom-source'))).toContain(
+      '.autobuild/local.toml',
+    )
+    expect(layered(text).config.capacity).toBe(2)
+  }
+  expect(failure(() => parseConfig(`${committed}\n[operator]`))).toContain('local-only')
+  expect(
+    failure(() =>
+      parseLayeredConfig({
+        committed: { text: `${committed}\n[operator]`, source: 'custom' },
+        local: { text: '', source: LOCAL },
+      }),
+    ),
+  ).toContain('local-only')
+  for (const value of ['"other"', '42', 'true'])
+    expect(failure(() => layered(`[operator]\ndispatcher = ${value}`))).toContain(
+      'operator.dispatcher',
+    )
+  expect(failure(() => layered('[operator]\nunknown = true'))).toContain('unknown')
 })

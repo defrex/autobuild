@@ -137,3 +137,49 @@ proof of provider success. A clear appends once without reading history, even
 when already healthy; later degradation wins by ordinary journal order.
 Existing dispatcher/kernel automatic recovery and old payloads remain valid;
 the recovered payload additionally accepts an optional nonblank `reason`.
+
+## Dispatcher ownership
+
+Read `ab repository status --json` before starting a dispatcher. The shared
+`dispatcherRunning` field (also in the `repository.status` operator tool) is true
+when a holder, expired holder or unfinished handoff names a draining predecessor.
+An empty drain map does not prove retirement. Missing or unreadable running
+status fails closed: never start while running or while that fact is unknown.
+
+`ab operator dispatcher --json` reads the checkout's preference; save a choice
+with `ab operator dispatcher human` or `ab operator dispatcher agent`. The optional
+`[operator] dispatcher = "human" | "agent"` lives only in `.autobuild/local.toml`;
+no choice is assumed when unset. Even an empty `[operator]` is rejected in
+`autobuild.toml`. Saving preserves other settings semantically and may normalize
+TOML formatting. It needs no store or credential, writes no event, and is refused
+inside build or harvest sessions. Reading a missing local file creates nothing.
+
+Repository instructions take precedence. With none running, follow the saved
+preference or ask who should run it and offer to save the answer. For human
+ownership, give startup instructions and wait. For agent ownership, start
+`ab dispatch --web --plain --json` under the harness's managed background lifetime
+and give the person its URL. Stop only a dispatcher this session started, only
+when requested, using a clean stop with drain. Never adopt, restart, kill or manage
+another session's process; a preference does not authorize takeover.
+
+`ab web [--json]` is always allowed, even while a dispatcher exists: it serves a
+read-only UI without acquiring a dispatcher lease. `ab dispatch --web` serves the
+same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
+stderr. Both default to loopback. Serving beyond loopback has no access control;
+see [operator surfaces](operator-surfaces.md) for binding and refresh details.
+
+## Timeline and analytics vocabulary
+
+The overview and build detail show repository and build progress. The shared UI
+chart components and their catalog demonstrate Gantt timelines with clock axes
+(align actual times across builds) and relative axes (align each build's start).
+Repeated phase rounds remain separate segments; parallel work may overlap.
+Queued, ticket-wait, paused, escalated and awaiting-merge segments show waiting
+rather than execution. Open segments extend to the observation time.
+
+Step-duration charts distinguish per-run distributions (mean and percentile
+markers) from total accumulated time across runs. Totals reveal where work adds
+up; a slow individual run and a large total answer different questions. These
+charts are currently available in the shared UI catalog, not dedicated production
+analytics routes or filter pages. This vocabulary does not imply those routes
+have shipped.

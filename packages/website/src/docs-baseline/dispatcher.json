@@ -4,7 +4,7 @@
   "title": "The dispatcher and durable state",
   "group": "concepts",
   "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-  "textHash": "026f4ad70d2c4e863613419a9a11a8c38c07bdc3c5ae4917d3ce7178e2f4675c",
+  "textHash": "7f04f87073ee5b4a84ab7cee4b734ad9dc237cfb6322132335deecbddbe79802",
   "headings": [
     "Watch a dispatcher running elsewhere",
     "Ready work becomes a build",
@@ -12,7 +12,8 @@
     "The log is the source of truth",
     "Resume the work, not the chat",
     "The operator agent stays outside",
-    "Hosted dispatch and local viewing"
+    "Hosted dispatch and local viewing",
+    "Dispatcher ownership"
   ],
   "code": [
     "bun ab dispatch",

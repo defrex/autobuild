@@ -57,6 +57,7 @@ import type { PinnedAsset } from '../events/payloads'
  * switch makes it unit-testable.
  */
 export const SESSIONLESS_COMMANDS = new Set([
+  'operator',
   'init',
   'connect',
   'disconnect',
@@ -553,6 +554,21 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
+    case 'operator': {
+      const usage = 'usage: ab operator dispatcher [human|agent] [--json]'
+      const parsed = parseArgs(rest, { json: 'boolean' }, usage)
+      if (parsed.positionals[0] !== 'dispatcher' || parsed.positionals.length > 2)
+        throw new Error(usage)
+      const { abOperatorDispatcher } = await import('./operator-preference')
+      await abOperatorDispatcher({
+        targetRepo: deps.workspacePath,
+        value: parsed.positionals[1],
+        json: parsed.flags.get('json') === true,
+        env: deps.processEnv ?? process.env,
+        stdout,
+      })
+      return 0
+    }
     case 'accounts': {
       const { abAccountsLogin } = await import('./accounts')
       const usage = 'usage: ab accounts login NAME [--local|--project]'

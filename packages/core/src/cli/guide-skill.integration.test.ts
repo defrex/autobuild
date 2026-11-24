@@ -66,6 +66,7 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
+  operator: ['dispatcher'],
   accounts: ['kind', 'credentialEnv', 'region'],
   upgrade: ['automatic'],
   merge: Object.keys(landingRuleSchema.shape),
@@ -572,4 +573,20 @@ describe('ab-guide — model-invocable (AC3)', () => {
     expect(front).toContain('name: ab-guide')
     expect(front.some((line) => line.startsWith('disable-model-invocation:'))).toBe(false)
   })
+})
+
+test('operator ownership guidance permits dispatch only after fresh running evidence', async () => {
+  const operate = await readFile(join(DIST_ROOT, 'skills/operate/SKILL.md'), 'utf8')
+  expect(operate).toContain('`dispatcherRunning` is true')
+  expect(operate).toContain('`ab dispatch --web --plain --json`')
+  expect(operate).toContain('Stop only a dispatcher this session started')
+  for (const skill of await readDistSkills(DIST_ROOT)) {
+    const prose = skill.files
+      .filter((file) => file.path.endsWith('.md'))
+      .map((file) => file.content)
+      .join('\n')
+    expect(prose).not.toMatch(
+      /Never start, restart, or stop a dispatcher|never start, stop, or restart a dispatcher|Never start or run a dispatcher|setup agent must not start dispatch itself/,
+    )
+  }
 })

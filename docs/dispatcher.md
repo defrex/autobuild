@@ -38,8 +38,9 @@ intake and harvest gates, harvest resume/acknowledgement, queued discard and
 confirmed abort. Navigation and session inspection work as usual. These record
 operator intent for the dispatcher to execute. No current control needs a local
 dispatcher. Startup intake flags and `--repository` are rejected; use a local
-checkout with its configured Store or `--store`. Operator agents still must not
-run `ab dispatch`, including `--viewer`.
+checkout with its configured Store or `--store`. Operator agents follow the
+[dispatcher ownership boundaries](#dispatcher-ownership) for startup and process
+management; `ab web` is always available for read-only viewing.
 
 ## Ready work becomes a build
 
@@ -118,3 +119,33 @@ startup reports it as a repository resolution error naming its cause, and
 neither explicit mode bypasses it. Origin mode (`--repository` or
 `AB_REPOSITORY`) and hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
 liveness probe or a polling input.
+
+## Dispatcher ownership
+
+Read `ab repository status --json` before starting a dispatcher. The shared
+`dispatcherRunning` field (also in the `repository.status` operator tool) is true
+when a holder, expired holder or unfinished handoff names a draining predecessor.
+An empty drain map does not prove retirement. Missing or unreadable running
+status fails closed: never start while running or while that fact is unknown.
+
+`ab operator dispatcher --json` reads the checkout's preference; save a choice
+with `ab operator dispatcher human` or `ab operator dispatcher agent`. The optional
+`[operator] dispatcher = "human" | "agent"` lives only in `.autobuild/local.toml`;
+no choice is assumed when unset. Even an empty `[operator]` is rejected in
+`autobuild.toml`. Saving preserves other settings semantically and may normalize
+TOML formatting. It needs no store or credential, writes no event, and is refused
+inside build or harvest sessions. Reading a missing local file creates nothing.
+
+Repository instructions take precedence. With none running, follow the saved
+preference or ask who should run it and offer to save the answer. For human
+ownership, give startup instructions and wait. For agent ownership, start
+`ab dispatch --web --plain --json` under the harness's managed background lifetime
+and give the person its URL. Stop only a dispatcher this session started, only
+when requested, using a clean stop with drain. Never adopt, restart, kill or manage
+another session's process; a preference does not authorize takeover.
+
+`ab web [--json]` is always allowed, even while a dispatcher exists: it serves a
+read-only UI without acquiring a dispatcher lease. `ab dispatch --web` serves the
+same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
+stderr. Both default to loopback. Serving beyond loopback has no access control;
+see [operator surfaces](operator-surfaces.md) for binding and refresh details.
