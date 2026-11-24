@@ -18,6 +18,7 @@ test('CLI inventory covers the help catalog exactly once in the specified groups
     'init',
     'secrets',
     'upgrade',
+    'web',
   ])
   expect([...humanCommands, ...agentCommands].sort()).toEqual(
     HELP_CATALOG.map((entry) => entry.name).sort(),
