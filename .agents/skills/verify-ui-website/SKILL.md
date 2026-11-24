@@ -165,5 +165,6 @@ instead of a site-defect verdict. Preserve the explicit missing-Chromium failing
 verdict policy above. Existing DOM/probe assertion failures or real copy, layout,
 overflow and motion defects with valid evidence still fail; changed pages receive
 no waiver. Use the manifest commit range only to attribute a suspected defect,
-never to recalculate applicability or emit skip. When that range does not change
-landing inputs, never fail the build for timing-induced missing landing pixels.
+never to recalculate applicability or emit skip. When that range changes none of
+a page's inputs, never fail the build for missing or blank pixels on that page:
+rerun once, then escalate if evidence is still incomplete.

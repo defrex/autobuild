@@ -135,8 +135,9 @@ A `classification: capture-error` report or visually suspicious missing pixels
 requires one complete capture rerun, preserving both reports. A successful rerun
 still requires all visual and provenance checks. Never pass incomplete evidence;
 if it remains unavailable, attach nothing and use `ab escalate` with report
-references, not a site-defect verdict. Never fail a build for timing-induced
-missing landing pixels on unchanged landing inputs. The manifest range attributes
+references, not a site-defect verdict. When the manifest range changes none of a
+page's inputs, never fail the build for missing or blank pixels on that page:
+rerun once, then escalate if evidence is still incomplete. The manifest range attributes
 defects only; it never changes applicability or permits skip. Real defects with
 valid evidence still fail, including on changed pages. Missing Chromium retains
 its explicit setup-failure verdict.

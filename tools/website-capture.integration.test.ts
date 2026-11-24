@@ -1127,7 +1127,8 @@ test('website verifier retries unavailable captures and escalates without passin
     'Never pass incomplete evidence',
     'ab escalate',
     'record both attempts',
-    'never fail the build for timing-induced missing landing pixels',
+    'never fail the build for missing or blank pixels on that page',
+    'no Chromium binary',
   ])
     expect(skill).toContain(phrase)
 })
