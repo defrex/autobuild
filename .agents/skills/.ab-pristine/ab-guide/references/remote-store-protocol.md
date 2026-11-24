@@ -582,7 +582,7 @@ from the log after upgrading.
 ### Rollup values
 
 `POST /repos/{repo}/rollup-values` answers a derived reducer: a value across the
-repository's builds (SPEC §7.7). The body is a named-value request of at most
+repository's builds. The body is a named-value request of at most
 4 KiB, whose optional `read` record carries read-time arguments:
 
 ```json

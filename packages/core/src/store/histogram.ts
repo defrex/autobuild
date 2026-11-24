@@ -18,10 +18,14 @@ export const HISTOGRAM_BUCKETS = 140
 /** Bucket index → `[count, sumMs]`. Empty buckets are absent. */
 export type Histogram = Record<string, [number, number]>
 
+/**
+ * Cast because non-`strict` consumers (plugins typechecking this source) infer
+ * zod tuple elements as optional; the runtime schema is the two-element tuple.
+ */
 export const histogramSchema = z.record(
   z.string().regex(/^(0|[1-9][0-9]?|1[0-3][0-9])$/),
   z.tuple([z.number().int().positive(), z.number().nonnegative()]),
-)
+) as unknown as z.ZodType<Histogram>
 
 const LOG_GROWTH = Math.log(HISTOGRAM_GROWTH)
 
