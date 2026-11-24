@@ -56,4 +56,10 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'optimization/fold/n2q2dksb1t': '#1069 settlement chunks and the dispatcher-started clock',
   'build/fold/xfau4h85gn': '#1069 settlement chunks and the dispatcher-started clock',
   'buildDigest/fold/r14f4ydbcd': '#1069 settlement chunks and the dispatcher-started clock',
+  'optimization/shape/dlths9d2kt': '#1069 clock compacts below open runs and last batch',
+  'build/shape/qggqu27a51': '#1069 clock compacts below open runs and last batch',
+  'buildDigest/shape/qr2vs0xtvj': '#1069 clock compacts below open runs and last batch',
+  'optimization/fold/mpmd7m1p0r': '#1069 clock compacts below open runs and last batch',
+  'build/fold/sgmw4zxzmb': '#1069 clock compacts below open runs and last batch',
+  'buildDigest/fold/8fy0afqcn5': '#1069 clock compacts below open runs and last batch',
 }

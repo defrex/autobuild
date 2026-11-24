@@ -2186,6 +2186,10 @@
           "type": "4",
           "optional": true
         },
+        "recordedAt": {
+          "type": "4",
+          "optional": true
+        },
         "spans": {
           "type": "162",
           "optional": false

@@ -11,6 +11,7 @@ import {
   clockView,
   ExecutionFactsMissingError,
   optimizationActivityBatch,
+  type ActivityBuildInput,
   optimizationElapsedHours,
   optimizationReducer,
   unionLength,
@@ -176,6 +177,23 @@ describe('the node clock fold', () => {
       ['attempt-a', 2, 'ended', 'i', 30],
     ])
     expect(hours(digest(builder), 61)).toBe(0.5)
+  })
+
+  test('an open interval holds compaction back, so its delayed end still unions', () => {
+    const builder = measured().propose('r1', ['a', 'b'])
+    batch(builder, 5, [['attempt-a', 1, 'started', 'i', 0]])
+    // A watermark past a's open start, from a run of b's that a's read missed.
+    batch(
+      builder,
+      31,
+      [
+        ['attempt-b', 1, 'started', 'j', 20],
+        ['attempt-b', 2, 'ended', 'j', 30],
+      ],
+      { watermark: iso(30) },
+    )
+    batch(builder, 32, [['attempt-a', 2, 'ended', 'i', 10]])
+    expect(hours(digest(builder), 40)).toBe(20 / 60)
   })
 
   test('a start before the watermark is clamped to it', () => {
@@ -415,7 +433,11 @@ describe('the activity batch decision', () => {
 
   test('takes facts above the accounted count up to the digest count', () => {
     const batch = optimizationActivityBatch(
-      clock({ builds: { a: 1 }, open: { a: { instance: 'i', start: iso(0) } } }),
+      clock({
+        builds: { a: 1 },
+        open: { a: { instance: 'i', start: iso(0) } },
+        recordedAt: iso(15),
+      }),
       [
         {
           build: 'a',
@@ -436,7 +458,8 @@ describe('the activity batch decision', () => {
         { build: 'a', n: 3, instance: 'k', kind: 'started', at: iso(20) },
       ],
       accounted: { a: 3 },
-      watermark: iso(20),
+      // The previous batch's record time, not the latest fact.
+      watermark: iso(15),
     })
   })
 
@@ -530,6 +553,56 @@ describe('the activity batch decision', () => {
     expect(
       optimizationActivityBatch(clock({ stoppedAt: iso(60), settled: true }), [], iso(0)),
     ).toBeUndefined()
+  })
+
+  test('per-build read cutoffs neither charge idle time nor lose runs', () => {
+    const builder = measured().propose('r1', ['a', 'b', 'c'])
+    const pass = (when: number, inputs: ActivityBuildInput[]) => {
+      const state = digest(builder)
+      const payload = optimizationActivityBatch(state.clock, inputs, state.openedAt)
+      builder.wait(when - (Date.parse(builder.events.at(-1)!.ts) - START) / 60_000)
+      if (payload !== undefined)
+        builder.push({ actor: DISPATCHER, type: 'optimization.activity-recorded', payload })
+    }
+    const idle = (build: string, digestCount = 0): ActivityBuildInput => ({
+      build,
+      inFlightNewest: true,
+      digestCount,
+    })
+    pass(0, [idle('a'), idle('b'), idle('c')])
+    pass(5, [{ ...idle('a', 1), value: value([[1, 'started', 'i', 1]]) }, idle('b'), idle('c')])
+    // a's and c's digests were read before a ended at 10 and c started at
+    // 15; b's after its 20–30 run.
+    pass(31, [
+      idle('a', 1),
+      {
+        ...idle('b', 2),
+        value: value([
+          [1, 'started', 'j', 20],
+          [2, 'ended', 'j', 30],
+        ]),
+      },
+      idle('c'),
+    ])
+    pass(40, [
+      {
+        ...idle('a', 2),
+        value: value([
+          [1, 'started', 'i', 1],
+          [2, 'ended', 'i', 10],
+        ]),
+      },
+      idle('b', 2),
+      {
+        ...idle('c', 2),
+        value: value([
+          [1, 'started', 'k', 15],
+          [2, 'ended', 'k', 25],
+        ]),
+      },
+    ])
+    // 1–10, then 15–30: the union, with no idle gap charged and no run lost.
+    expect(hours(digest(builder), 40)).toBe(24 / 60)
   })
 
   test('chunks keep each event within the limit and account only what they carry', () => {

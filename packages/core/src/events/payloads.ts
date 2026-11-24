@@ -796,13 +796,12 @@ const optimizationPayloadSchemas = {
       starts: z.literal(true).optional(),
       settles: z.literal(true).optional(),
     })
+    // `watermark` bounds compaction: every attempt fact stamped before it is
+    // in this batch or an earlier one. Facts may follow it.
     .refine(
       (batch) =>
-        batch.facts.every(
-          (fact, index) =>
-            fact.at <= batch.watermark && (index === 0 || batch.facts[index - 1]!.at <= fact.at),
-        ),
-      'facts are sorted by at and none is after the watermark',
+        batch.facts.every((fact, index) => index === 0 || batch.facts[index - 1]!.at <= fact.at),
+      'facts are sorted by at',
     )
     .refine(
       (batch) =>

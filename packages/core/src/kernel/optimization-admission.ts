@@ -157,6 +157,12 @@ export class ExecutionFactsMissingError extends Error {
  * stop and settles. A clock with no batch yet gets one that starts it, so
  * every later settlement is tracked. Releases fully accounted builds that no
  * in-flight attempt runs on any more.
+ *
+ * The watermark, through which the clock compacts, is not the latest fact:
+ * each build's digest is read on its own, so a fact this pass missed on one
+ * build can be stamped before a fact it saw on another. It is the store time
+ * the node recorded its previous batch, which the previous pass wrote before
+ * this one read any digest, so every fact stamped before it is visible now.
  */
 export function optimizationActivityBatch(
   clock: OptimizationClock,
@@ -210,9 +216,9 @@ export function optimizationActivityBatch(
     released.length === 0
   )
     return undefined
-  const latest = settling ? clock.stoppedAt! : (facts.at(-1)?.at ?? fallbackWatermark)
+  const complete = settling ? clock.stoppedAt! : (clock.recordedAt ?? fallbackWatermark)
   const watermark =
-    clock.watermark !== undefined && clock.watermark > latest ? clock.watermark : latest
+    clock.watermark !== undefined && clock.watermark > complete ? clock.watermark : complete
   return {
     facts,
     accounted,
@@ -225,8 +231,9 @@ export function optimizationActivityBatch(
 
 /** Split a batch into events of at most `ACTIVITY_FACTS_PER_EVENT` facts, in
  * `at` order. Each chunk accounts only the facts it and earlier chunks carry
- * and watermarks at its last fact; the last chunk carries the batch's
- * accounted counts, releases, watermark and settlement. */
+ * and watermarks no later than its last fact, since a later chunk's facts
+ * follow it; the last chunk carries the batch's accounted counts, releases,
+ * watermark and settlement. */
 export function chunkActivityBatch(batch: ActivityBatch): ActivityBatch[] {
   if (batch.facts.length <= ACTIVITY_FACTS_PER_EVENT) return [batch]
   const chunks: ActivityBatch[] = []
@@ -243,7 +250,12 @@ export function chunkActivityBatch(batch: ActivityBatch): ActivityBatch[] {
       through[fact.build] = Math.max(through[fact.build] ?? 0, fact.n)
       accounted[fact.build] = through[fact.build]!
     }
-    chunks.push({ facts, accounted, watermark: facts.at(-1)!.at })
+    const lastAt = facts.at(-1)!.at
+    chunks.push({
+      facts,
+      accounted,
+      watermark: lastAt < batch.watermark ? lastAt : batch.watermark,
+    })
   }
   return chunks
 }

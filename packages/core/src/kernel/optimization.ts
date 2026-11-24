@@ -93,13 +93,19 @@ export interface OptimizationValue {
  * execution intervals the budget counts, the node's own proposer and
  * measurement runs and its attempts' runs. The node's own facts fold from its
  * log; attempt facts arrive in dispatcher batches. Activity before
- * `watermark` is compacted into `activeMs`, so the clock stays bounded.
+ * `watermark` is compacted into `activeMs`, so the clock stays bounded. The
+ * watermark never passes an open interval's start, so a delayed end still
+ * reconciles exactly against the spans after it.
  */
 export interface OptimizationClock {
   /** The union of active time before `watermark`, in milliseconds. */
   activeMs: number
   /** Every later fact is at or after it; absent before the first batch. */
   watermark?: string
+  /** When the node recorded its latest activity batch, in store time. Every
+   * attempt fact stamped before it was visible to the next pass, so that
+   * pass compacts at most through it. */
+  recordedAt?: string
   /** Closed active spans at or after `watermark`: sorted and disjoint. */
   spans: ClockSpan[]
   /** Running executions: `''` is the node itself, any other key an attempt
@@ -268,22 +274,26 @@ function closeInterval(clock: OptimizationClock, key: string, instance: string, 
   delete clock.open[key]
 }
 
-/** Fold every activity before `watermark` into `activeMs`. */
-function compactClock(clock: OptimizationClock, watermark: string) {
+/** Fold every closed span before `through` into `activeMs`, never past the
+ * start of an open interval: its end may arrive in a later batch with a time
+ * before facts this one carried, and must still union with the spans it
+ * overlaps. */
+function compactClock(clock: OptimizationClock, through: string) {
+  let watermark = through
+  for (const { start } of Object.values(clock.open)) if (start < watermark) watermark = start
   if (clock.watermark !== undefined && watermark <= clock.watermark) return
-  const open = Object.values(clock.open).map(({ start }) => [start, watermark] as ClockSpan)
-  clock.activeMs += unionLength(clipSpans([...clock.spans, ...open], undefined, watermark))
+  clock.activeMs += unionLength(clipSpans(clock.spans, undefined, watermark))
   clock.spans = clipSpans(clock.spans, watermark)
-  for (const interval of Object.values(clock.open))
-    if (interval.start < watermark) interval.start = watermark
   clock.watermark = watermark
 }
 
 function recordActivity(
   clock: OptimizationClock,
   batch: EventPayload<'optimization.activity-recorded'>,
+  recordedAt: string,
 ) {
   if (clock.settled) return
+  clock.recordedAt = recordedAt
   // After a stop a batch adds only pre-stop facts; a settlement chunked over
   // several events freezes the clock with its last, `settles`, chunk.
   const stop = clock.stoppedAt
@@ -307,6 +317,7 @@ function recordActivity(
   compactClock(clock, stop)
   clock.spans = []
   clock.builds = {}
+  delete clock.recordedAt
   clock.settled = true
 }
 
@@ -363,7 +374,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         closeInterval(clock, '', event.payload.instance, clockTime(clock, event.ts))
         break
       case 'optimization.activity-recorded':
-        recordActivity(clock, event.payload)
+        recordActivity(clock, event.payload, event.ts)
         break
       case 'optimization.objective-revised': {
         state.objective = applyObjectiveRevisions(state.objective, [event.payload.changes])
