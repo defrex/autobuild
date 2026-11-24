@@ -200,3 +200,25 @@ test('a fenced read publishes nothing and reports no failure', async () => {
   expect(time.tasks.size).toBe(0)
   hub.close()
 })
+
+test('push mode serves published frames, re-sends none unchanged, and owns no loop', async () => {
+  const time = new FakeRefreshScheduler()
+  const hub = new WebModelHub({ scheduler: time })
+  const early: string[] = []
+  hub.subscribe((json) => early.push(json))
+  expect(early).toEqual([])
+  hub.publish({ notice: 'one' })
+  hub.publish({ notice: 'one' })
+  const late: string[] = []
+  hub.subscribe((json) => late.push(json))
+  hub.fail(new Error('store down'))
+  const failed = JSON.stringify({ notice: 'Viewer unavailable: store down' })
+  expect(early).toEqual([JSON.stringify({ notice: 'one' }), failed])
+  expect(late).toEqual([JSON.stringify({ notice: 'one' }), failed])
+  await time.advance(60_000)
+  expect(time.tasks.size).toBe(0)
+  hub.close()
+  expect(hub.subscribers).toBe(0)
+  hub.publish({ notice: 'after close' })
+  expect(early).toHaveLength(2)
+})
