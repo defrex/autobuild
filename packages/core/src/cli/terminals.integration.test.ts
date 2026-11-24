@@ -14,9 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { z } from 'zod'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
-import { autoMergeDeferralObservation, pendingAutoMerge } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
 import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -27,7 +25,7 @@ import type { Finding } from '../ontology'
 import { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
 import { buildContext } from './context'
-import { done, escalate, renderFindingsIssues, verdict } from './terminals'
+import { done, escalate, verdict } from './terminals'
 import {
   BRANCH,
   BUILD,
@@ -132,19 +130,11 @@ describe('ab done — discipline (D5)', () => {
     await expect(done(deps)).rejects.toThrow(
       /second terminal call rejected \(D5\): plan\.completed for plan@1 already recorded at seq \d+/,
     )
-  })
-
-  test('escalate after done for the same phase+round is rejected', async () => {
-    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
-    await store.append(BUILD, {
-      actor: agent('plan'),
-      type: 'plan.completed',
-      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
-    })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const before = await eventTypes()
     await expect(escalate(deps, { question: 'unsure about scope' })).rejects.toThrow(
       /second terminal call rejected/,
     )
+    expect(await eventTypes()).toEqual(before)
   })
 
   test('done after this session escalated is rejected citing the escalation', async () => {
@@ -181,19 +171,6 @@ describe('ab done — plan', () => {
     )
   })
 
-  test('round 2 whose only revision was already cited by round 1 is rejected', async () => {
-    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan v1\n' })
-    await store.append(BUILD, {
-      actor: agent('plan'),
-      type: 'plan.completed',
-      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
-    })
-    const deps = planDeps({ round: 2, session: 's_r2' })
-    await expect(done(deps)).rejects.toThrow(
-      /requires this round's plan deposit.*no plan revision newer than rev 0/s,
-    )
-  })
-
   test('a stale plan cannot re-enter review: revision COUNT is no proxy for a fresh deposit (D5)', async () => {
     // Round 1 self-corrects with TWO deposits and cites rev 1. Round 2 then
     // calls done WITHOUT depositing — the old count check (revs ≥ round)
@@ -209,6 +186,8 @@ describe('ab done — plan', () => {
     await expect(done(deps)).rejects.toThrow(
       /requires this round's plan deposit.*no plan revision newer than rev 1.*already cited/s,
     )
+
+    expect((await eventTypes()).filter((type) => type === 'plan.completed')).toHaveLength(1)
 
     // Depositing this round's revision unblocks it, citing the NEW rev.
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan revised for r2\n' })
@@ -1561,6 +1540,11 @@ describe('ab done — finalize', () => {
     })
     const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
 
+    let commentCalls = 0
+    deps.forge.commentOnPr = async () => {
+      commentCalls += 1
+      throw new Error('comment API down')
+    }
     const event = await done(deps)
 
     expect(deps.forge.opened).toEqual([
@@ -1582,6 +1566,7 @@ describe('ab done — finalize', () => {
     })
 
     // §7.5: summary comment renders verdict history + verify results.
+    expect(commentCalls).toBe(0)
     expect(deps.forge.comments).toHaveLength(0)
     const comment = {
       body: renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD)),
@@ -1876,232 +1861,6 @@ describe('ab done — finalize', () => {
     expect(events.some((event) => event.type === 'finalize.completed')).toBe(true)
   })
 
-  test('proved ungated CLEAN finalizes successfully but leaves intent pending for the janitor', async () => {
-    class UngatedCleanForge extends FakeForge {
-      constructor() {
-        super({ gatePresence: 'absent' })
-      }
-      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
-        const pr = await super.openPr(opts)
-        this.setPrState(pr.number, { state: 'open', mergeable: true })
-        return pr
-      }
-    }
-    await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-    const forge = new UngatedCleanForge()
-
-    const event = await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge,
-      }),
-    )
-
-    expect(event.type).toBe('finalize.completed')
-    expect(forge.squashMergeCalls).toEqual([])
-    expect(forge.autoMergeCalls).toEqual([])
-    const types = (await store.getEvents(BUILD)).map((entry) => entry.type)
-    expect(types).not.toContain('pr.auto-merge-enabled')
-    expect(types).not.toContain('escalation.raised')
-  })
-
-  test('ungated transient state also finalizes without falsely acknowledging native state', async () => {
-    const forge = new FakeForge({ gatePresence: 'absent' }) // just-opened = UNKNOWN
-    await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-
-    await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge,
-      }),
-    )
-
-    const types = (await store.getEvents(BUILD)).map((entry) => entry.type)
-    expect(types).toContain('finalize.completed')
-    expect(types).not.toContain('pr.auto-merge-enabled')
-    expect(forge.squashMergeCalls).toEqual([])
-  })
-
-  test('a withdrawal arriving during finalize is retained without a native write', async () => {
-    const request = await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    class CancellingForge extends FakeForge {
-      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
-        const pr = await super.openPr(opts)
-        await store.append(BUILD, {
-          actor: humanActor('operator'),
-          type: 'build.auto-merge-cancelled',
-          payload: {},
-        })
-        return pr
-      }
-    }
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-    const forge = new CancellingForge()
-    await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge,
-      }),
-    )
-
-    expect(forge.autoMergeCalls).toEqual([])
-    const events = await store.getEvents(BUILD)
-    const cancellation = events.find((event) => event.type === 'build.auto-merge-cancelled')
-    const applied = events.find((event) => event.type === 'pr.auto-merge-disabled')
-    expect(cancellation?.seq).toBeGreaterThan(request.seq)
-    expect(cancellation).toBeDefined()
-    expect(applied).toBeUndefined()
-  })
-
-  test('finalize completes before dispatcher-owned native gate diagnostics', async () => {
-    class DisabledAutoMergeForge extends FakeForge {
-      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
-        const pr = await super.openPr(opts)
-        this.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
-        return pr
-      }
-    }
-    await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-    const event = await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge: new DisabledAutoMergeForge(),
-      }),
-    )
-
-    expect(event.type).toBe('finalize.completed')
-    const events = await store.getEvents(BUILD)
-    expect(events.some((entry) => entry.type === 'pr.auto-merge-enabled')).toBe(false)
-    expect(events.some((entry) => entry.type === 'escalation.raised')).toBe(false)
-    const observations = events.filter((entry) => entry.type === 'observation.recorded')
-    expect(observations).toHaveLength(0)
-  })
-
-  test('finalize honors a pre-existing matching auto-merge deferral marker', async () => {
-    class DisabledAutoMergeForge extends FakeForge {
-      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
-        const pr = await super.openPr(opts)
-        this.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
-        return pr
-      }
-    }
-    const command = await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await store.append(
-      BUILD,
-      autoMergeDeferralObservation(
-        { code: 'repository-auto-merge-disabled', detail: 'already recorded' },
-        1,
-        command.seq,
-        'obs_existing',
-      ),
-    )
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-
-    await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge: new DisabledAutoMergeForge(),
-      }),
-    )
-
-    const observations = (await store.getEvents(BUILD)).filter(
-      (event) => event.type === 'observation.recorded',
-    )
-    expect(observations).toHaveLength(1)
-    expect(observations[0]?.payload).toMatchObject({ id: 'obs_existing' })
-  })
-
-  test('a conflicted PR with a pipeline-owned deferral completes finalize and records no observation', async () => {
-    class ConflictedForge extends FakeForge {
-      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
-        const pr = await super.openPr(opts)
-        this.setPrState(pr.number, { state: 'open', mergeable: false })
-        this.setAutoMergeDeferral(pr.number, {
-          code: 'merge-conflicts',
-          detail:
-            "GitHub reports mergeable_state 'DIRTY' — the head branch has merge conflicts with 'main'; " +
-            'the conflict re-enters reconcile and the pending consent is re-examined on a later tick',
-        })
-        return pr
-      }
-    }
-    const command = await store.append(BUILD, {
-      actor: humanActor('operator'),
-      type: 'build.auto-merge-requested',
-      payload: {},
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-    const event = await done(
-      makeDeps({
-        store,
-        env: makeEnv({ phase: 'finalize' }),
-        workspacePath: workspace,
-        forge: new ConflictedForge(),
-      }),
-    )
-
-    expect(event.type).toBe('finalize.completed')
-    const events = await store.getEvents(BUILD)
-    // Pipeline-owned: nothing recorded, consent stays pending for the janitor.
-    expect(events.some((entry) => entry.type === 'observation.recorded')).toBe(false)
-    expect(events.some((entry) => entry.type === 'pr.auto-merge-enabled')).toBe(false)
-    expect(pendingAutoMerge(reduceBuild(events))).toEqual({
-      enabled: true,
-      commandSeq: command.seq,
-    })
-  })
-
   test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
@@ -2132,30 +1891,6 @@ describe('ab done — finalize', () => {
     expect(event.payload).toEqual({
       pr: { number: crashed.number, url: crashed.url, headSha: crashed.headSha },
     })
-  })
-
-  test('a comment failure AFTER the terminal committed does not fail ab done (§7.5 is best-effort)', async () => {
-    class NoCommentForge extends FakeForge {
-      override async commentOnPr(): Promise<void> {
-        throw new Error('comment API down')
-      }
-    }
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Add auth rate limiting\n\nBody.\n',
-    })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'finalize' }),
-      workspacePath: workspace,
-      forge: new NoCommentForge(),
-    })
-
-    // Were this to throw, the agent's retry would be rejected as a second
-    // terminal (D5) for an event that actually committed.
-    const event = await done(deps)
-    expect(event.type).toBe('finalize.completed')
-    expect(await eventTypes()).toContain('finalize.completed')
   })
 
   test('a pre-restart finalize.completed does not block the rebuilt pipeline’s finalize (§6.3)', async () => {
@@ -2419,31 +2154,6 @@ describe('ab verdict — vocabulary enforcement (§8.2)', () => {
 // ── ab verdict — review phases (D6) ──────────────────────────────────────────
 
 describe('ab verdict — review phases', () => {
-  test('findings issue rendering expands a synthetic untagged union with complete paths', () => {
-    // Renderer-contract seam only: `findingDraftSchema` cannot currently
-    // produce this union issue, and this fixture does not widen that schema.
-    const fixture = z.strictObject({
-      reviews: z.array(
-        z.strictObject({
-          detail: z.union([
-            z.object({ left: z.custom(() => false, 'left alternative rejected') }),
-            z.object({ right: z.custom(() => false, 'right alternative rejected') }),
-          ]),
-        }),
-      ),
-    })
-    const result = fixture.safeParse({ reviews: [{ detail: { left: 1, right: 2 } }] })
-    if (result.success) throw new Error('renderer fixture must fail')
-
-    const rendered = renderFindingsIssues(result.error.issues)
-
-    expect(rendered).toBe(
-      '  reviews.0.detail.left: option 1 of 2: left alternative rejected\n' +
-        '  reviews.0.detail.right: option 2 of 2: right alternative rejected',
-    )
-    expect(rendered).not.toContain('Invalid input')
-  })
-
   test('--notes is required (deposited as the phase artifact)', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
     await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(

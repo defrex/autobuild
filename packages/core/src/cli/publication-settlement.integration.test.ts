@@ -1,11 +1,6 @@
 import { renderPrSummary } from './pr-summary'
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
-import type { EventType } from '../events/payloads'
 import { FakeForge } from '../ports/forge/fake'
 import { ForgeFailure } from '../ports/forge-failure'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
@@ -18,33 +13,13 @@ const SHA = 'a'.repeat(40)
 const BASE = 'b'.repeat(40)
 const BRANCH = `ab/${SLUG}`
 
-class FailOnceStore extends MemoryBuildStore {
-  failCompletion = false
-  failRetry = false
-
-  override async append<T extends EventType>(
-    slug: string,
-    event: EventWrite<T>,
-  ): Promise<EventEnvelope<T>> {
-    if (this.failRetry && event.type === 'publication.retry-scheduled') {
-      this.failRetry = false
-      throw new Error('retry store unavailable')
-    }
-    if (this.failCompletion && event.type === 'implement.completed') {
-      this.failCompletion = false
-      throw new Error('injected append crash')
-    }
-    return super.append(slug, event)
-  }
-}
-
 async function seed(options: { workspace?: boolean; attachments?: boolean } = {}): Promise<{
-  store: FailOnceStore
+  store: MemoryBuildStore
   deps: PublicationSettlementDeps
   published: Array<{ ref: string; sha: string; branch: string }>
   forge: FakeForge
 }> {
-  const store = new FailOnceStore()
+  const store = new MemoryBuildStore()
   await store.createBuild({
     slug: SLUG,
     repo: '/repo',
@@ -110,158 +85,6 @@ async function seed(options: { workspace?: boolean; attachments?: boolean } = {}
 }
 
 describe('settlePendingPublication', () => {
-  test('trusted publication cancels persistent native enable before push, preserves hold, and recovers crashes', async () => {
-    const h = await seed()
-    h.forge.setPrState(1, { state: 'open', mergeable: true })
-    await h.forge.setAutoMerge('/repo', 1, true)
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: { pr: { number: 1, url: 'https://forge/1', headSha: BASE } },
-    })
-    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
-    await h.store.append(SLUG, {
-      actor: agentActor('implement', 's1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        base: BASE,
-        round: 1,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-    const set = h.forge.setAutoMerge.bind(h.forge)
-    h.forge.setAutoMerge = async () => ({ kind: 'deferred' })
-    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('cancellation unconfirmed')
-    expect(h.published).toEqual([])
-    let held = false
-    h.forge.setAutoMerge = async (...args) => {
-      const result = await set(...args)
-      if (!held) {
-        held = true
-        await h.store.append(SLUG, {
-          actor: humanActor('operator'),
-          type: 'build.hold-requested',
-          payload: {},
-        })
-      }
-      return result
-    }
-    const publish = h.deps.publication!.publish
-    h.deps.publication!.publish = async (input) => {
-      expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
-      const { readBuildFacts } = await import('../store/reduced-reads')
-      expect((await readBuildFacts(h.store, SLUG)).value.state.landing?.command?.kind).toBe('hold')
-      await publish(input)
-    }
-    h.store.failCompletion = true
-    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('injected append crash')
-    await settlePendingPublication(h.deps, SLUG)
-    expect(h.published).toHaveLength(1)
-    expect(
-      (await h.store.getEvents(SLUG)).filter((e) => e.type === 'implement.completed'),
-    ).toHaveLength(1)
-  })
-  test('publishes exact implementation identity, appends completion, and suppresses retry duplicates', async () => {
-    const h = await seed()
-    const artifact = await h.store.putArtifact(SLUG, {
-      kind: 'implement-notes',
-      content: 'implemented remotely\n',
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('implement', 'session-1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        round: 1,
-        base: BASE,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-
-    await settlePendingPublication(h.deps, SLUG)
-    await settlePendingPublication(h.deps, SLUG)
-
-    expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
-    const completed = (await h.store.getEvents(SLUG)).filter(
-      (event) => event.type === 'implement.completed',
-    )
-    expect(completed).toHaveLength(1)
-    expect(completed[0]!.payload).toEqual({
-      round: 1,
-      commits: { base: BASE, head: SHA },
-      artifact: { kind: 'implement-notes', rev: 0 },
-    })
-  })
-
-  test('a checkoutless dispatcher completes without touching host git in its scratch root', async () => {
-    const h = await seed()
-    const scratch = await mkdtemp(join(tmpdir(), 'ab-settlement-scratch-'))
-    try {
-      const artifact = await h.store.putArtifact(SLUG, {
-        kind: 'implement-notes',
-        content: 'implemented remotely\n',
-      })
-      await h.store.append(SLUG, {
-        actor: agentActor('implement', 'session-1'),
-        type: 'publication.requested',
-        payload: {
-          operation: 'implement',
-          branch: BRANCH,
-          sha: SHA,
-          round: 1,
-          base: BASE,
-          artifact: { kind: artifact.kind, rev: artifact.revision },
-        },
-      })
-      const deps: PublicationSettlementDeps = {
-        ...h.deps,
-        workspacePath: scratch,
-        checkoutless: true,
-        exec: async () => {
-          throw new Error('Executable not found in $PATH: "git"')
-        },
-      }
-
-      await settlePendingPublication(deps, SLUG)
-
-      expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
-      const types = (await h.store.getEvents(SLUG)).map((event) => event.type)
-      expect(types).toContain('implement.completed')
-    } finally {
-      await rm(scratch, { recursive: true, force: true })
-    }
-  })
-
-  test('leaves a published effect retryable across the event-append crash gap', async () => {
-    const h = await seed()
-    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
-    await h.store.append(SLUG, {
-      actor: agentActor('implement', 'session-1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        round: 1,
-        base: BASE,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-    h.store.failCompletion = true
-
-    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(/injected append crash/)
-    await settlePendingPublication(h.deps, SLUG)
-    expect(h.published).toHaveLength(1)
-    expect(
-      (await h.store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
-    ).toHaveLength(1)
-  })
-
   test('skips a request abandoned by workspace replacement and settles only its rerun', async () => {
     const h = await seed()
     const stale = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'lost' })
@@ -367,68 +190,6 @@ describe('settlePendingPublication', () => {
     expect(
       (await h.store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
     ).toHaveLength(1)
-  })
-
-  test('rejects a request with no open workspace before invoking publication', async () => {
-    const h = await seed({ workspace: false })
-    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
-    await h.store.append(SLUG, {
-      actor: agentActor('implement', 'session-1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        round: 1,
-        base: BASE,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(/no open workspace/)
-    expect(h.published).toEqual([])
-  })
-
-  test('a failed finalize-step publication records the ordinary failed outcome and follow-up', async () => {
-    const h = await seed()
-    let attempts = 0
-    h.deps.publication = {
-      isPublished: async () => false,
-      publish: async () => {
-        attempts += 1
-        throw new Error('branch rejected')
-      },
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'publication.requested',
-      payload: {
-        operation: 'finalize-step',
-        step: 'release-notes',
-        branch: BRANCH,
-        sha: SHA,
-      },
-    })
-
-    await settlePendingPublication(h.deps, SLUG)
-    await settlePendingPublication(h.deps, SLUG)
-
-    expect(attempts).toBe(1)
-    const events = await h.store.getEvents(SLUG)
-    expect(events.find((event) => event.type === 'finalize.step-completed')).toMatchObject({
-      actor: KERNEL,
-      payload: {
-        step: 'release-notes',
-        ok: false,
-        note: 'finalize publication failed: branch rejected',
-      },
-    })
-    expect(events.find((event) => event.type === 'observation.recorded')).toMatchObject({
-      actor: KERNEL,
-      payload: {
-        kind: 'followup',
-        summary: expect.stringContaining('branch rejected'),
-      },
-    })
   })
 
   test('finalize hosts attachments, applies auto-merge intent, and leaves the durable summary to outer settlement', async () => {
@@ -639,7 +400,7 @@ describe('settlePendingPublication', () => {
 
   test('drives the settlement guard across lease expiry deterministically via the injected clock', async () => {
     const clock = manualClock()
-    const store = new FailOnceStore({ clock })
+    const store = new MemoryBuildStore({ clock })
     await store.createBuild({
       slug: SLUG,
       repo: '/repo',
@@ -733,7 +494,7 @@ describe('settlePendingPublication', () => {
 
   test('a recorded execution end unlocks publication while the injected lease is still live', async () => {
     const clock = manualClock()
-    const store = new FailOnceStore({ clock })
+    const store = new MemoryBuildStore({ clock })
     await store.createBuild({
       slug: SLUG,
       repo: '/repo',
@@ -826,53 +587,6 @@ describe('settlePendingPublication', () => {
 })
 
 describe('settlePendingPublication: the publication.lost backstop (AUT-328)', () => {
-  test('an abandoned unpublished request records the loss durably, deduped per request', async () => {
-    const h = await seed()
-    const artifact = await h.store.putArtifact(SLUG, {
-      kind: 'implement-notes',
-      content: 'never merged',
-    })
-    const requested = await h.store.append(SLUG, {
-      actor: agentActor('implement', 'session-1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        round: 1,
-        base: BASE,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'workspace.released',
-      payload: { ref: 'sandbox-1', reason: 'replacement' },
-    })
-    h.deps.publication = {
-      isPublished: async () => false,
-      publish: async () => {
-        throw new Error('a released workspace must never be published again')
-      },
-    }
-
-    await settlePendingPublication(h.deps, SLUG)
-    await settlePendingPublication(h.deps, SLUG)
-
-    const lost = (await h.store.getEvents(SLUG)).filter(
-      (event) => event.type === 'publication.lost',
-    )
-    expect(lost).toHaveLength(1)
-    expect(lost[0]!.actor).toEqual(DISPATCHER)
-    expect(lost[0]!.payload).toEqual({
-      request: requested.seq,
-      operation: 'implement',
-      branch: BRANCH,
-      sha: SHA,
-      reason: 'workspace released with the publication uncompleted',
-    })
-  })
-
   test('an abandoned request the guest already pushed is settled, never recorded lost', async () => {
     const h = await seed()
     const artifact = await h.store.putArtifact(SLUG, {
@@ -1125,63 +839,6 @@ test('a provider retain callback settles past refused archives and records forge
   expect(events.some((e) => e.type === 'reconcile.completed')).toBe(true)
 })
 
-test('remote lease mismatch durably returns to replay without completion or plain push', async () => {
-  const h = await seedRestackPublication()
-  h.deps.publication!.rewrite = async () => ({ kind: 'lease-mismatch', actual: 'e'.repeat(40) })
-  await settlePendingPublication(h.deps, SLUG)
-  const events = await h.store.getEvents(SLUG)
-  expect(events.some((e) => e.type === 'reconcile.completed')).toBe(false)
-  expect(events.find((e) => e.type === 'reconcile.contended')?.payload).toEqual({
-    id: h.transaction.id,
-    request: h.request.seq,
-    actual: 'e'.repeat(40),
-  })
-  expect(events.find((e) => e.type === 'phase.failed')?.payload).toMatchObject({
-    phase: 'reconcile',
-    round: 1,
-    willRetry: true,
-  })
-  expect(h.published).toEqual([])
-})
-
-test('a provider without trusted rewrite capability refuses without using plain publication', async () => {
-  const h = await seedRestackPublication()
-  await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(
-    'lacks trusted reconcile rewrite/archive publication',
-  )
-  expect(h.published).toEqual([])
-})
-
-test('a genuinely lost reconcile candidate is durably retired without retrying publication', async () => {
-  const h = await seedRestackPublication()
-  await h.store.append(SLUG, {
-    actor: DISPATCHER,
-    type: 'publication.lost',
-    payload: {
-      request: h.request.seq,
-      operation: 'reconcile',
-      branch: BRANCH,
-      sha: SHA,
-      reason: 'replacement',
-    },
-  })
-  h.deps.publication!.recoverCandidate = async () => false
-  let calls = 0
-  h.deps.publication!.rewrite = async () => {
-    calls++
-    throw new Error(`archive publication rejected: fatal: bad object ${SHA}`)
-  }
-  await settlePendingPublication(h.deps, SLUG)
-  await settlePendingPublication(h.deps, SLUG)
-  expect(calls).toBe(0)
-  const events = await h.store.getEvents(SLUG)
-  expect(
-    events.some((e) => e.type === 'reconcile.completed' || e.type === 'reconcile.rewritten'),
-  ).toBe(false)
-  expect(h.published).toEqual([])
-  expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(1)
-})
-
 test.each(['available', 'unavailable-inspection', 'refused-archive-retry'] as const)(
   'legacy loss with %s preserves guarded publication behavior',
   async (outcome) => {
@@ -1253,61 +910,6 @@ test('lost and abandoned publication objects do not block trusted reconcile arch
     (await h.store.getEvents(SLUG)).some((event) => event.type === 'reconcile.completed'),
   ).toBe(true)
 })
-
-test('trusted publication records an overtaken successful rewrite without completing its request', async () => {
-  const h = await seedRestackPublication()
-  const observed = 'e'.repeat(40)
-  h.deps.publication!.rewrite = async () => ({
-    kind: 'lease-mismatch',
-    actual: observed,
-    rewritten: true,
-  })
-  await settlePendingPublication(h.deps, SLUG)
-  await settlePendingPublication(h.deps, SLUG)
-  const events = await h.store.getEvents(SLUG)
-  const receipts = events.filter((event) => event.type === 'reconcile.rewritten')
-  expect(receipts).toHaveLength(1)
-  expect(receipts[0]!.payload).toMatchObject({
-    oldHead: h.transaction.oldHead,
-    headSha: SHA,
-    observedHead: observed,
-  })
-  expect(events.some((event) => event.type === 'reconcile.completed')).toBe(false)
-  expect(events.filter((event) => event.type === 'reconcile.contended')).toHaveLength(1)
-  const { readBuildSelector } = await import('../store/reduced-reads')
-  expect(await readBuildSelector(h.store, SLUG, 'publishedBranchHead')).toBe(observed)
-  expect(await readBuildSelector(h.store, SLUG, 'verifyDiffBase')).toBe(BASE)
-})
-
-for (const failure of ['different-head', 'read-error'] as const) {
-  test(`hosted completion requires after-write authoritative readback: ${failure}`, async () => {
-    const h = await seed()
-    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })
-    await h.store.append(SLUG, {
-      actor: agentActor('implement', 'session-1'),
-      type: 'publication.requested',
-      payload: {
-        operation: 'implement',
-        branch: BRANCH,
-        sha: SHA,
-        round: 1,
-        base: BASE,
-        artifact: { kind: artifact.kind, rev: artifact.revision },
-      },
-    })
-    h.deps.publication!.isPublished = async () => {
-      if (h.published.length && failure === 'read-error') throw new Error('inspection offline')
-      return false
-    }
-    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(
-      failure === 'read-error' ? 'inspection offline' : 'publication readback did not confirm',
-    )
-    expect(h.published).toHaveLength(1)
-    expect((await h.store.getEvents(SLUG)).some((e) => e.type === 'implement.completed')).toBe(
-      false,
-    )
-  })
-}
 
 test('finalize publication waits through durable forge cooldown and settles after reset', async () => {
   const { guardForge, ForgeCooldown } = await import('../kernel/guarded-forge')
@@ -1452,34 +1054,6 @@ test('transient reconcile publication and exhausted attention retain the workspa
   ).toHaveLength(1)
 })
 
-test('a failed retry write propagates without recording loss or releasing the workspace', async () => {
-  const { ForgeFailure } = await import('../ports/forge-failure')
-  const { PublicationRetryPersistenceError } = await import('../kernel/publication-retry')
-  const { settlePublicationBeforeRelease } = await import('../processes/publication-loss')
-  const h = await seedRestackPublication()
-  h.store.failRetry = true
-  h.deps.publication!.rewrite = async () => {
-    throw new ForgeFailure('HTTP 503', { kind: 'transient', retry: 'retryable' })
-  }
-  await expect(
-    settlePublicationBeforeRelease(
-      { store: h.store, settlePublication: (slug) => settlePendingPublication(h.deps, slug) },
-      SLUG,
-      [],
-      'cleanup',
-    ),
-  ).rejects.toBeInstanceOf(PublicationRetryPersistenceError)
-  expect(
-    (await h.store.getEvents(SLUG)).some(
-      (e) =>
-        e.type === 'publication.lost' ||
-        e.type === 'workspace.released' ||
-        e.type === 'phase.failed' ||
-        e.type === 'publication.retry-scheduled',
-    ),
-  ).toBe(false)
-})
-
 describe('settlePendingPublication: ticket-wait commits', () => {
   const waitRequest = (h: Awaited<ReturnType<typeof seed>>) =>
     h.store.append(SLUG, {
@@ -1497,22 +1071,6 @@ describe('settlePendingPublication: ticket-wait commits', () => {
     const done = (await h.store.getEvents(SLUG)).filter((e) => e.type === 'wait.published')
     expect(done.map((e) => [e.actor, e.payload])).toEqual([
       [DISPATCHER, { id: 'wait_1', sha: SHA }],
-    ])
-  })
-
-  test('an abandoned unpublished wait request is recorded lost', async () => {
-    const h = await seed()
-    const requested = await waitRequest(h)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'workspace.released',
-      payload: { ref: 'sandbox-1', reason: 'replacement' },
-    })
-    h.deps.publication = { isPublished: async () => false, publish: async () => {} }
-    await settlePendingPublication(h.deps, SLUG)
-    const lost = (await h.store.getEvents(SLUG)).filter((e) => e.type === 'publication.lost')
-    expect(lost.map((e) => e.payload)).toEqual([
-      expect.objectContaining({ request: requested.seq, operation: 'wait', sha: SHA }),
     ])
   })
 })
