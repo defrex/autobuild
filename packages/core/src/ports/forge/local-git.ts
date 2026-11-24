@@ -199,7 +199,7 @@ export class LocalGitForge implements Forge {
     // Exec decodes stdout as text (BOM stripped, invalid UTF-8 replaced), so
     // read anything else as hex.
     const hex = await this.exec(
-      ['sh', '-c', 'git cat-file blob "$1" | od -An -v -tx1', 'sh', oid],
+      ['sh', '-c', 'git cat-file blob "$1" | od -An -v -tx1', 'read-blob', oid],
       { cwd: this.repoRoot },
     )
     if (hex.exitCode !== 0) throw new Error(`local-git: cannot read blob ${oid}: ${hex.stderr}`)

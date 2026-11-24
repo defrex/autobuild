@@ -157,7 +157,16 @@ export class AgentContextCapture {
     this.headReadAt = this.elapsed()
     let head: string | undefined
     try {
-      head = await forge.remoteBranchSha(opts.baseBranch)
+      try {
+        head = await forge.remoteBranchSha(opts.baseBranch)
+      } catch (error) {
+        // A repository whose base branch does not exist yet has no context
+        // to capture. Checked only on the failure path, so it costs nothing
+        // while the branch resolves.
+        if (forge.remoteBranchExists && !(await forge.remoteBranchExists(opts.baseBranch)))
+          return []
+        throw error
+      }
       const failed = this.lastFailure
       if (failed?.head === head && this.elapsed() - failed.at < AGENT_CONTEXT_RETRY_MS) return []
       const diagnostics = await this.capture(head, opts)

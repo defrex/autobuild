@@ -237,6 +237,8 @@ describe('capture', () => {
     w.clock.advance(AGENT_CONTEXT_RETRY_MS)
     expect(await capture.run({ baseBranch: 'main' })).toEqual([])
     expect((await w.record())?.commit).toBe(head(2))
+    // A base branch that does not exist yet has nothing to capture.
+    expect(await w.capture().run({ baseBranch: 'trunk' })).toEqual([])
 
     const bare = new AgentContextCapture({
       store: w.store,

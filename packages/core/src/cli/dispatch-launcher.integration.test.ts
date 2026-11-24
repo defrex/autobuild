@@ -22,6 +22,13 @@ const launchCheckout = () =>
       join(checkout, 'autobuild.toml'),
       'forge = "local-git"\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
     )
+    // A local-git forge serves a repository; with no base branch yet there is
+    // no agent context to capture, so the dispatcher stays quiet.
+    const init = Bun.spawnSync(['git', 'init', '-q'], {
+      cwd: checkout,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ...inheritedGitConfigIsolation() },
+    })
+    if (init.exitCode !== 0) throw new Error(`git init failed: ${init.stderr.toString()}`)
     return checkout
   })())
 afterAll(async () => {
