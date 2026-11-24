@@ -97,15 +97,15 @@ export async function readRepositoryFacts(
 }
 
 type Selectors = {
-  setupStreak: ReturnType<typeof import('../processes/build-runner').setupStreakReducer.finish>
+  setupStreak: ReturnType<typeof import('../kernel/setup-streak').setupStreakReducer.finish>
   baseBranch: ReturnType<
     typeof import('../processes/dispatcher-selectors').baseBranchReducer.finish
   >
   publishedBranchHead: ReturnType<
-    typeof import('../processes/build-runner').publishedBranchHeadReducer.finish
+    typeof import('../kernel/published-branch-head').publishedBranchHeadReducer.finish
   >
   verifyDiffBase: ReturnType<
-    typeof import('../processes/build-runner').verifyDiffBaseReducer.finish
+    typeof import('../kernel/verify-diff-base').verifyDiffBaseReducer.finish
   >
   recordedBaseSha: ReturnType<
     typeof import('../config/pipeline-source').recordedBaseShaReducer.finish
@@ -135,7 +135,7 @@ export async function readPhaseFailures(
   if (!validateReducerValue('phaseFailures', result.value))
     throw new Error('invalid phaseFailures value')
   return result.value as unknown as ReturnType<
-    ReturnType<typeof import('../processes/build-runner').phaseFailuresReducer>['finish']
+    ReturnType<typeof import('../kernel/phase-failures').phaseFailuresReducer>['finish']
   >
 }
 

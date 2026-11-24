@@ -1,6 +1,3 @@
-// Load the reducer registry first: build-runner's import cycle otherwise reaches
-// publishedBranchHeadReducer before it is initialized when this file runs alone.
-import '../kernel/reducer-registry'
 import { reconcileHead } from '../kernel/reconcile-head'
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
