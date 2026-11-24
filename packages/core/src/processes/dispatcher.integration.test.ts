@@ -56,6 +56,7 @@ import { LinearTicketSource } from '../ports/tickets/linear'
 import {
   ForgeFailure,
   NoCommitsBetweenBranchesError,
+  TicketClaimBlockedError,
   TicketSourceRateLimitError,
   WorkspaceCleanupRequired,
 } from '../ports/types'
@@ -1610,6 +1611,33 @@ releaseId = 42
     expect(report).toEqual({ ...emptyTickReport(), claimRaces: 1 })
     expect(await h.store.listBuilds()).toEqual([])
     expect(h.launches).toEqual([])
+  })
+
+  test('a blocker recorded after the dependency check blocks the claim until a later tick', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    const claim = h.tickets.claim.bind(h.tickets)
+    const seen: unknown[] = []
+    h.tickets.claim = async (id, opts) => {
+      seen.push(opts)
+      if (seen.length === 1) throw new TicketClaimBlockedError('fake', id, ['T-9'])
+      return claim(id, opts)
+    }
+
+    const blocked = await h.dispatcher.tick()
+    expect(blocked).toEqual({
+      ...emptyTickReport(),
+      dependencyBlocked: 1,
+      queued: 1,
+      dependencyDiagnostics: [
+        'ticket T-1: blockers T-9 were recorded after the dependency check; waiting for the next scan',
+      ],
+    })
+    expect(await h.store.listBuilds()).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(seen).toEqual([{ blockedBy: [] }])
+
+    h.clock.advance(60_000)
+    expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 1, claimRaces: 0 })
   })
 
   test('capacity 1, two ready tickets: second merges next tick after the first completes', async () => {
