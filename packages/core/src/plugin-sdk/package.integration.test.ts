@@ -149,6 +149,7 @@ describe('plugin SDK package surface', () => {
           ForgeFailure, isForgeFailure,
           type ForgeFailureDetails, type ForgeRequestObserver, type ForgeRequestContext,
           type TicketCriteria, type TicketPage, type TicketPageListing, type TicketSource,
+          type TicketSearchHit, type TicketSearchPage, type TicketSearchQuery,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
         } from '@defrex/autobuild/plugin-sdk'
@@ -175,6 +176,13 @@ describe('plugin SDK package surface', () => {
         const listing: TicketPageListing = { tickets: [], diagnostics: [], total: 5 }
         const native: NonNullable<TicketSource['listPage']> = async (_criteria, _page) => listing
         if ((await native(criteria, page)).total !== 5) throw new Error('page types')
+        const hit: TicketSearchHit = { id: 'T-1', title: 'Rate limit', state: 'Ready', labels: [], kind: 'work' }
+        const search: NonNullable<TicketSource['search']> = async (query: TicketSearchQuery) =>
+          ({ tickets: [hit], cursor: String(query.limit), diagnostics: [] }) satisfies TicketSearchPage
+        const searched = await search({ text: 'rate', limit: 1 })
+        if (searched.tickets[0]?.id !== 'T-1' || searched.cursor !== '1') throw new Error('search types')
+        const searchless: TicketSource = Object.assign(new FakeTicketSource(), { search: undefined })
+        if (searchless.search !== undefined) throw new Error('optional search types')
         const assigned: TicketCriteria = { state: 'Ready', assignee: 'me' }
         const capable: Pick<
           TicketSource,
@@ -193,7 +201,7 @@ describe('plugin SDK package surface', () => {
         const observer: ForgeRequestObserver = (request) => { if (request.build !== context.build) throw new Error('context') }
         observer(context)
         if (!isForgeFailure(new ForgeFailure('limit', details))) throw new Error('missing runtime failure export')
-        if (PLUGIN_API_VERSION !== '1.10.0') {
+        if (PLUGIN_API_VERSION !== '1.11.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
