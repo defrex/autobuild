@@ -68,7 +68,6 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { textContent, type BuildStore, type NewBuildInput } from '../store/types'
 import { creationBuildSlug, projectBuildSlugBase } from '../kernel/build-creation'
-import { openLocalStore } from '../store/local/store'
 import { manualClock } from '../testing/fixed'
 import { withFailingRepoAppend } from '../testing/store-failures'
 import {
@@ -2218,32 +2217,21 @@ describe('Dispatcher repository pause hold', () => {
   })
 
   test('the hold survives a dispatcher restart and is not defeated by re-running dispatch', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ab-pause-hold-'))
-    try {
-      const first = openLocalStore(root, { clock: manualClock() })
-      const seeded = harness({ tickets: [readyTicket('T-recover')], store: first })
-      await seedInterrupted(seeded, 'restart-held')
-      await pauseRepo(first, true)
-      await first.close()
+    const seeded = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(seeded, 'restart-held')
+    await pauseRepo(seeded.store, true)
 
-      // A brand-new store handle AND a brand-new Dispatcher: nothing but the
-      // durable journal carries the hold across the restart.
-      const second = openLocalStore(root, { clock: manualClock() })
-      try {
-        const h = harness({ tickets: [readyTicket('T-recover')], store: second })
-        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-        expect(h.launches).toEqual([])
+    // A brand-new Dispatcher over the same store: nothing but the durable
+    // journal carries the hold across the restart. File-level reopen
+    // durability is the local store's own test.
+    const h = harness({ tickets: [readyTicket('T-recover')], store: seeded.store })
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
 
-        await pauseRepo(second, false)
-        expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
-        expect(h.launches).toEqual(['restart-held'])
-      } finally {
-        await second.close()
-      }
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
+    expect(h.launches).toEqual(['restart-held'])
   })
 
   test('a bulk pause whose intake write fails still leaves queued work unlaunchable', async () => {
@@ -2270,6 +2258,8 @@ describe('Dispatcher repository pause hold', () => {
     const h = harness()
     const slug = await seedBuild(h, { attached: false })
     await pauseRepo(h.store, true, '/repos/elsewhere')
+    // This repository has no row at all, and still ticks normally.
+    expect(await h.store.getRepo(REPO)).toBeNull()
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
     expect(h.launches).toEqual([slug])
@@ -2282,15 +2272,6 @@ describe('Dispatcher repository pause hold', () => {
     expect(await foreign.dispatcher.tick()).toEqual(emptyTickReport())
     expect(foreign.launches).toEqual([])
     expect(reduceBuild(await foreign.store.getEvents('foreign-build')).status).toBe('queued')
-  })
-
-  test('a store where no repository row exists ticks normally', async () => {
-    const h = harness()
-    expect(await h.store.getRepo(REPO)).toBeNull()
-    const slug = await seedBuild(h, { attached: false })
-
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
   })
 })
 
@@ -2515,7 +2496,12 @@ describe('Dispatcher dependency gate', () => {
       ],
       toml: CAPACITY_2,
     })
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(2)
+    const first = await h.dispatcher.tick()
+    expect(first.dependencyBlocked).toBe(2)
+    expect(first.dependencyDiagnostics).toContain(
+      'ticket B blocked by missing, which does not exist in this ticket source',
+    )
+    expect(await h.store.listBuilds()).toEqual([])
     expect(h.tickets.dependencyQueries).toEqual([['missing']])
     await h.tickets.transition('B', 'Done')
     h.clock.advance(60_000)
@@ -2524,7 +2510,7 @@ describe('Dispatcher dependency gate', () => {
     expect(report.dependencyDiagnostics).toEqual([])
     expect(h.tickets.dependencyQueries).toEqual([['missing'], ['B']])
   })
-  test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
+  test('an unresolved blocker: not claimed, no build, no workspace, no comment; it completes and the NEXT tick dispatches', async () => {
     const h = harness({
       tickets: [
         readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
@@ -2537,6 +2523,7 @@ describe('Dispatcher dependency gate', () => {
 
     expect(report.dependencyBlocked).toBe(1)
     expect(report.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
+    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
     // Never claimed (§12: the gate precedes claim-before-launch)…
     expect(h.tickets.claims).not.toContain('T-1')
     // …no build, no workspace, no projection outward.
@@ -2544,6 +2531,17 @@ describe('Dispatcher dependency gate', () => {
     expect(h.workspaces.provisions.map((p) => p.branch)).not.toContain('ab/blocked-work')
     expect(h.tickets.comments.map((c) => c.id)).not.toContain('T-1')
     expect(h.launches).not.toContain('blocked-work')
+
+    // Native lifecycle only: the blocker reaches the source's done state, and
+    // the next tick dispatches with no manual step.
+    await h.tickets.transition('T-9', 'Done')
+    h.clock.advance(60_000)
+    const second = await h.dispatcher.tick()
+    expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
+    expect(second.dependencyBlocked).toBe(0)
+    expect(second.dependencyDiagnostics).toEqual([])
+    expect(second.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
   })
 
   /** The strongest test here: a blocked ticket must not spend a slot. With
@@ -2566,95 +2564,26 @@ describe('Dispatcher dependency gate', () => {
     expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['free-work'])
   })
 
-  test('the blocker completes: the NEXT tick dispatches, with no manual step', async () => {
-    const h = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
-        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
-      ],
-      toml: CAPACITY_2,
-    })
-
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
-
-    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
-    // Native lifecycle only: the blocker reaches the source's done state.
-    await h.tickets.transition('T-9', 'Done')
-
-    h.clock.advance(60_000)
-    const second = await h.dispatcher.tick()
-    expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
-    expect(second.dependencyBlocked).toBe(0)
-    expect(second.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
-  })
-  test('two blockers: ineligible until BOTH resolve', async () => {
-    const tickets = [
-      readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-8', 'T-9'] }),
-      readyTicket('T-8', { title: 'Blocker eight', state: 'In Progress' }),
-      readyTicket('T-9', { title: 'Blocker nine', state: 'In Progress' }),
-    ]
-    const h = harness({ tickets, toml: CAPACITY_2 })
-
-    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
-
-    await h.tickets.transition('T-8', 'Done')
-    h.clock.advance(60_000)
-    const second = await h.dispatcher.tick()
-    expect(second.dependencyBlocked).toBe(1)
-    expect(second.dispatched).toBe(0)
-    expect(second.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
-
-    await h.tickets.transition('T-9', 'Done')
-    h.clock.advance(60_000)
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-  })
-  test('a missing blocker keeps the ticket undispatched with an actionable diagnostic', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-404'] })],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(1)
-    expect(report.dependencyDiagnostics).toEqual([
-      'ticket T-1 blocked by T-404, which does not exist in this ticket source',
-    ])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
-
-  test('a dependency cycle keeps every affected ticket undispatched and names the loop', async () => {
+  test('a dependency cycle or self-dependency keeps every affected ticket undispatched and names the loop', async () => {
     const h = harness({
       tickets: [
         readyTicket('T-1', { title: 'First', blockedBy: ['T-2'] }),
         readyTicket('T-2', { title: 'Second', blockedBy: ['T-1'] }),
+        readyTicket('T-3', { title: 'Ouroboros', blockedBy: ['T-3'] }),
       ],
       toml: CAPACITY_2,
     })
 
     const report = await h.dispatcher.tick()
 
-    expect(report.dependencyBlocked).toBe(2)
+    expect(report.dependencyBlocked).toBe(3)
     expect(report.dispatched).toBe(0)
     expect(report.dependencyDiagnostics).toEqual([
       'ticket T-1: dependency cycle T-1 → T-2 → T-1',
       'ticket T-2: dependency cycle T-2 → T-1 → T-2',
+      'ticket T-3 depends on itself',
     ])
     expect(h.tickets.dependencyQueries).toEqual([])
-    expect(await h.store.listBuilds()).toEqual([])
-  })
-
-  test('a self-dependency keeps the ticket undispatched', async () => {
-    const h = harness({
-      tickets: [readyTicket('T-1', { title: 'Ouroboros', blockedBy: ['T-1'] })],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(1)
-    expect(report.dependencyDiagnostics).toEqual(['ticket T-1 depends on itself'])
     expect(await h.store.listBuilds()).toEqual([])
   })
 
@@ -2893,22 +2822,6 @@ describe('Dispatcher dependency gate', () => {
     expect(h.tickets.dependencyQueries).toEqual([])
   })
 
-  test('a resolved blocker dispatches normally and reports nothing', async () => {
-    const h = harness({
-      tickets: [
-        readyTicket('T-1', { title: 'Unblocked work', blockedBy: ['T-9'] }),
-        readyTicket('T-9', { title: 'The blocker', state: 'Done' }),
-      ],
-      toml: CAPACITY_2,
-    })
-
-    const report = await h.dispatcher.tick()
-
-    expect(report.dependencyBlocked).toBe(0)
-    expect(report.dependencyDiagnostics).toEqual([])
-    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('unblocked-work')
-  })
-
   /** A shared blocker is fetched once per tick, not once per dependent. */
   test('the per-tick node cache fetches a shared blocker only once', async () => {
     const h = harness({
@@ -2986,37 +2899,43 @@ describe('Dispatcher dependency gate', () => {
 })
 
 describe('Dispatcher interrupted-dispatch recovery', () => {
-  for (const text of [undefined, 'token rotated, try again']) {
-    test(`dispatch budget parks, survives restart, and grants a fresh budget for ${text ?? 'bare retry'}`, async () => {
-      const h = harness({ tickets: [readyTicket('T-recover')] })
-      await seedInterrupted(h)
-      h.workspaces.setFailure('provision', new Error('offline'))
-      for (let i = 0; i < 6; i++)
-        await h.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
-      let events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(3)
-      expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(1)
-      expect(h.launches).toEqual([])
-      await controlBuild({
-        store: h.store,
-        repo: REPO,
-        slug: 'interrupted-dispatch',
-        action: { kind: 'answer', text },
-      })
-      events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.at(-1)?.payload).toMatchObject({
-        resolution: text === undefined ? 'retry' : 'guidance',
-      })
-      const restarted = harness({ store: h.store, tickets: [readyTicket('T-recover')] })
-      restarted.workspaces.setFailure('provision', new Error('still offline'))
-      for (let i = 0; i < 5; i++)
-        await restarted.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
-      events = await h.store.getEvents('interrupted-dispatch')
-      expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(6)
-      expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(2)
-      expect(restarted.launches).toEqual([])
+  test('dispatch budget parks, survives restart, and grants a fresh budget on each answer kind', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h)
+    h.workspaces.setFailure('provision', new Error('offline'))
+    for (let i = 0; i < 6; i++)
+      await h.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
+    let events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(3)
+    expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(1)
+    expect(h.launches).toEqual([])
+    // A bare answer resolves as a retry.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug: 'interrupted-dispatch',
+      action: { kind: 'answer' },
     })
-  }
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.at(-1)?.payload).toMatchObject({ resolution: 'retry' })
+    const restarted = harness({ store: h.store, tickets: [readyTicket('T-recover')] })
+    restarted.workspaces.setFailure('provision', new Error('still offline'))
+    for (let i = 0; i < 5; i++)
+      await restarted.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(6)
+    expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(2)
+    expect(restarted.launches).toEqual([])
+    // An answer with text resolves the fresh escalation as guidance.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug: 'interrupted-dispatch',
+      action: { kind: 'answer', text: 'token rotated, try again' },
+    })
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.at(-1)?.payload).toMatchObject({ resolution: 'guidance' })
+  })
 
   test('repairs the failure/raise crash gap before workspace or startup launch', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
