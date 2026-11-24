@@ -15,6 +15,7 @@ const {
   ticketDiagnostics,
   creationDiagnostics,
   dependencyDiagnostics,
+  agentContextDiagnostics,
   ...counters
 } = report
 const baseline: RepositoryEvent = {

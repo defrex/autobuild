@@ -7851,3 +7851,106 @@ export async function operatorSandboxCallReadBudget(opts: { revisions: number })
   }
   return { callVector: counter.vector(), rows, issued, composed }
 }
+
+/** Agent-context stage (`processes/agent-context.ts`) read budget. At an
+ * unchanged base head a warm stage makes no store call, and a fresh process
+ * makes exactly one pointer read; neither reads an event row, a tree or a
+ * blob, at 100 or at 10,000 repository journal events. Reading the latest
+ * record costs one latest-revision artifact read at 1 and at 1,000 stored
+ * revisions. */
+export async function agentContextReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { AgentContextCapture } = await import('../processes/agent-context')
+  const { encodeAgentContext, readAgentContext, AGENT_CONTEXT_ARTIFACT } = await import(
+    '../store/agent-context'
+  )
+  const head = 'a'.repeat(40)
+  const unchangedHeadCost = async (events: number) => {
+    const store = new MemoryBuildStore()
+    const repo = `agent-context-budget-${events}`
+    await store.ensureRepo(repo)
+    for (let i = 0; i < events; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    const forge = new FakeForge()
+    forge.seedTree(head, {
+      '.agents/skills/x/SKILL.md': '# x',
+      'AGENTS.md': 'agents',
+    })
+    forge.remoteBranches.set('main', head)
+    // Every run is past the head-poll interval: the head is really read.
+    let elapsed = 0
+    const paced = () => (elapsed += 60_000)
+    const warm = new AgentContextCapture({ store, repo, forge, elapsed: paced })
+    expect(await warm.run({ baseBranch: 'main' })).toEqual([])
+    const forgeReads = () => [forge.treeReads.length, forge.blobReads.length]
+    const before = forgeReads()
+    const warmTick = await measureStoreReads(store, async () => {
+      expect(await warm.run({ baseBranch: 'main' })).toEqual([])
+    })
+    const freshTick = await measureStoreReads(store, async () => {
+      expect(
+        await new AgentContextCapture({ store, repo, forge, elapsed: paced }).run({
+          baseBranch: 'main',
+        }),
+      ).toEqual([])
+    })
+    expect(forgeReads()).toEqual(before)
+    // `repoState` is the memory store's own private lookup, not a store call.
+    const publicCalls = (calls: Record<string, number>) =>
+      Object.fromEntries(Object.entries(calls).filter(([name]) => name !== 'repoState'))
+    return {
+      warm: publicCalls(warmTick.calls),
+      fresh: publicCalls(freshTick.calls),
+      rows: warmTick.rows + warmTick.repoRows + freshTick.rows + freshTick.repoRows,
+    }
+  }
+  const small = await unchangedHeadCost(100)
+  expect(small).toEqual({ warm: {}, fresh: { getRepoArtifact: 1 }, rows: 0 })
+  expect(await unchangedHeadCost(10_000)).toEqual(small)
+
+  const latestCost = async (revisions: number) => {
+    const store = new MemoryBuildStore({ retention: { maxRevisions: 5_000 } })
+    const repo = `agent-context-revisions-${revisions}`
+    await store.ensureRepo(repo)
+    for (let i = 0; i < revisions; i++) {
+      const encoded = encodeAgentContext({
+        version: 1,
+        commit: i.toString(16).padStart(40, '0'),
+        baseBranch: 'main',
+        skills: [],
+        instructions: [
+          {
+            paths: ['AGENTS.md'],
+            directory: '',
+            oid: `o${i}`,
+            bytes: 1,
+            text: `${i % 10}`,
+            imports: [],
+          },
+        ],
+        imports: [],
+        links: [],
+        omitted: [],
+      })
+      await store.putRepoArtifact(repo, {
+        kind: AGENT_CONTEXT_ARTIFACT,
+        content: encoded.content,
+        metadata: { digest: encoded.digest },
+      })
+    }
+    const metrics = await measureStoreReads(store, async () => {
+      expect((await readAgentContext(store, repo))?.meta.revision).toBe(revisions - 1)
+    })
+    const calls = Object.fromEntries(
+      Object.entries(metrics.calls).filter(([name]) => name !== 'repoState'),
+    )
+    return { calls, rows: metrics.rows + metrics.repoRows }
+  }
+  const one = await latestCost(1)
+  expect(one).toEqual({ calls: { getRepoArtifact: 1 }, rows: 0 })
+  expect(await latestCost(1_000)).toEqual(one)
+}

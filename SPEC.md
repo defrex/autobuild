@@ -3018,6 +3018,37 @@ event-level mechanics live in the repository catalog and reducer tests):
   closed-unmerged PRs must still merge where the next tick will not reclaim
   them — a bounce filed into Ready is claimed and bounced again forever.
 
+
+**Repository agent context.** At the end of every tick that still has budget
+and repository authority, the dispatcher keeps one repository-level record of
+the agent context at the base-branch head. It covers every skill directory
+under `.agents/skills/` and `.claude/skills/` with all its files (deduplicated
+by real directory and by identical content), every root and nested `AGENTS.md`
+and `CLAUDE.md`, and the files those import by `@path`, captured as separate
+entries. The record names its base commit. Both checkout and origin mode read
+the tree through the forge (`readTree`, `readBlob`), so they record identical
+content for one commit.
+
+- **Artifacts.** The `agent-context` repository artifact holds the record as
+  gzip JSON, with a new revision only when its content digest changes. A small
+  `agent-context-head` pointer names the last base head handled, the input
+  fingerprint and any standing diagnostic. `agent-context-cache.<i>` slots hold
+  blob bytes an interrupted capture already fetched, so a later invocation
+  resumes rather than refetching. All three are retention-managed.
+- **Cost.** Each process reads the base head at most once a minute, always on
+  its first tick. An unchanged head then costs one pointer read per process.
+  Nothing else is read, and no repository event is read or written. A failed
+  capture is retried after five minutes, or as soon as the head moves. A head
+  change reads the tree; only a changed input fingerprint reads the latest
+  record and the blobs it lacks. Readers take the latest revision only.
+- **Bounds.** The encoded record may not exceed 2.25 MiB (`oversize`), and the
+  record may not exceed 32 MiB uncompressed (`raw-oversize`), the same ceiling
+  every reader decodes to. Both diagnostics name the bound and the largest
+  contributors, keep the last good revision, and appear in the tick report
+  once per base head.
+
+Serving the record to connected agents is a separate concern from capturing it.
+
 ## 13. Ticket source policy
 
 **Hosted tickets are project-scoped.** A project credential selects one registered

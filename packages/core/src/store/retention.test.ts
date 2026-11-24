@@ -7,6 +7,8 @@
  */
 import { describe, expect, test } from 'bun:test'
 import {
+  agentContextCacheKind,
+  AGENT_CONTEXT_RETENTION_REPO_KINDS,
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   DISPATCHER_RETENTION_BUILD_KINDS,
   DISPATCHER_RETENTION_REPO_KINDS,
@@ -64,6 +66,12 @@ describe('retention family', () => {
     for (const kind of [...DISPATCHER_RETENTION_REPO_KINDS, ...DISPATCHER_RETENTION_BUILD_KINDS]) {
       expect(isRetentionManagedKind(kind)).toBe(true)
     }
+  })
+
+  test('the agent-context record, pointer and continuation slots are retention-managed', () => {
+    expect([...AGENT_CONTEXT_RETENTION_REPO_KINDS]).toEqual(['agent-context', 'agent-context-head'])
+    for (const kind of [...AGENT_CONTEXT_RETENTION_REPO_KINDS, agentContextCacheKind(0)])
+      expect(isRetentionManagedKind(kind)).toBe(true)
   })
 
   test('the default bound is the documented 200 revisions', () => {
