@@ -115,7 +115,7 @@ describe('loadPlugins', () => {
     expect(diagnosis.reports[2]).toMatchObject({
       resolutionKind: 'repo-path',
       pluginName: 'good',
-      api: { hostVersion: '1.10.0', status: 'compatible' },
+      api: { hostVersion: '1.11.0', status: 'compatible' },
     })
   })
 
@@ -147,7 +147,7 @@ describe('loadPlugins', () => {
       `export default { name: 'future-plugin', apiVersion: '^2.0.0' }\n`,
     )
     await expect(loadPlugins(['./future.ts'], repo)).rejects.toThrow(
-      /future\.ts.*future-plugin.*\^2\.0\.0.*1\.10\.0/,
+      /future\.ts.*future-plugin.*\^2\.0\.0.*1\.11\.0/,
     )
 
     await write(
@@ -305,7 +305,7 @@ describe('loadPlugins', () => {
       `export default { name: 'guest-future', apiVersion: '^2.0.0' }\n`,
     )
     await expect(loadPlugins(['./guest-future.ts'], repo, { guest: true })).rejects.toThrow(
-      /guest-future\.ts.*\^2\.0\.0.*1\.10\.0/,
+      /guest-future\.ts.*\^2\.0\.0.*1\.11\.0/,
     )
   })
 

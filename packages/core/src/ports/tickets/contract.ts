@@ -242,6 +242,77 @@ export function describeTicketSourceContract(
       })
     })
 
+    test('search, when declared, matches title and body, honours filters, and pages by cursor', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.search) return
+        const token = crypto.randomUUID().replaceAll('-', '')
+        const inTitle = await createTracked(
+          harness,
+          {
+            title: `${contractTicketTitle('search')} ${token}`,
+            body: CONTRACT_TICKET_BODY,
+            labels: [harness.editableLabel],
+          },
+          { state: harness.states.ready },
+        )
+        const mixed = token.slice(0, 8).toUpperCase() + token.slice(8)
+        const inBody = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('search'),
+            body: `${CONTRACT_TICKET_BODY}\nSearch marker ${mixed}.\n`,
+          },
+          { state: harness.states.completed },
+        )
+        await createTracked(harness, {
+          title: contractTicketTitle('search miss'),
+          body: CONTRACT_TICKET_BODY,
+        })
+        const search = (query: Partial<Parameters<NonNullable<TicketSource['search']>>[0]>) =>
+          source.search!({ text: token.toUpperCase(), limit: 100, ...query })
+        const ids = (page: { tickets: Array<{ id: string }> }) =>
+          page.tickets.map((hit) => hit.id).sort()
+
+        const all = await search({})
+        expect(ids(all)).toEqual([inTitle.ref.id, inBody.ref.id].sort())
+        expect(all.cursor).toBeUndefined()
+        for (const hit of all.tickets) {
+          const ticket = (await source.get(hit.id))!
+          expect({
+            id: hit.id,
+            title: hit.title,
+            state: hit.state,
+            labels: [...hit.labels].sort(),
+            kind: hit.kind,
+          }).toEqual({
+            id: ticket.ref.id,
+            title: ticket.title,
+            state: ticket.state,
+            labels: [...ticket.labels].sort(),
+            kind: ticket.kind ?? 'work',
+          })
+        }
+        expect(ids(await search({ labels: [harness.editableLabel] }))).toEqual([inTitle.ref.id])
+        expect(ids(await search({ state: inTitle.state ?? harness.states.ready }))).toEqual([
+          inTitle.ref.id,
+        ])
+        expect(ids(await search({ state: harness.states.completed }))).toEqual([inBody.ref.id])
+        expect((await search({ text: `${token} ${crypto.randomUUID()}` })).tickets).toEqual([])
+
+        const paged: string[] = []
+        let cursor: string | undefined
+        let pages = 0
+        do {
+          const page = await search({ limit: 1, ...(cursor !== undefined ? { cursor } : {}) })
+          paged.push(...page.tickets.map((hit) => hit.id))
+          cursor = page.cursor
+          expect(++pages).toBeLessThanOrEqual(3)
+        } while (cursor !== undefined)
+        expect(paged.sort()).toEqual([inTitle.ref.id, inBody.ref.id].sort())
+      })
+    })
+
     test('native pages order urgent dispatch first and newest filed first when declared', async () => {
       await withTicketSource(factory, async (harness) => {
         const source = harness.source

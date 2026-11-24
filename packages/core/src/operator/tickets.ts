@@ -8,7 +8,8 @@ import { normalizeIssueLinks, type IssueLinkInput } from '../ports/tickets/issue
 import { urgentFirst } from '../ports/tickets/priority'
 import { creationAssignees } from '../ports/tickets/assignees'
 import { creationLabels } from '../ports/tickets/labels'
-import type { IssueLink } from '../ports/types'
+import type { IssueLink, TicketSearchPage } from '../ports/types'
+import { searchTickets } from '../ports/tickets/search'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
@@ -132,6 +133,29 @@ export function operatorControlTickets(opts: {
     ticketSource: async () => (await tickets()).source,
     rejectedState: async () => ticketLifecycle((await tickets()).context.tickets).rejected,
   }
+}
+
+/** Text search over the configured source in every state unless `state` is
+ * given. A source without search refuses with `TicketSearchUnsupported`
+ * before any ticket read; nothing falls back to a listing. */
+export async function searchOperatorTickets(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+  query: string
+  state?: string
+  labels?: string[]
+  limit?: number
+  cursor?: string
+}): Promise<TicketSearchPage> {
+  const { source } = await openOperatorTickets(opts)
+  return searchTickets(source, {
+    text: opts.query,
+    ...(opts.state !== undefined ? { state: opts.state } : {}),
+    ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
+  })
 }
 
 export async function listOperatorTickets(opts: {

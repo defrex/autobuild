@@ -10,6 +10,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { FileTicketSource } from '../ports/tickets/file'
+import { loadConfig } from '../config/load'
+import { buildRegistry } from '../operator/registry'
+import { MemoryBuildStore } from '../store/memory'
 import { GitHubTicketSource } from '../ports/tickets/github'
 import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import type {
@@ -775,6 +779,87 @@ describe('abTicketList', () => {
       sourceFactory: () => new FakeTicketSource(),
     })
     expect(empty).toEqual(['no tickets matched in the configured fake ticket source'])
+  })
+})
+
+describe('ab ticket search', () => {
+  async function seedSearchTickets(): Promise<void> {
+    await writeRepo(FILE_TICKETS_TOML)
+    const seed = async (state: string, id: string, title: string, body: string, extra = '') => {
+      await mkdir(join(tmp, 'tickets', state), { recursive: true })
+      await writeFile(
+        join(tmp, 'tickets', state, `${id}.md`),
+        `+++\nid = "${id}"\ntitle = "${title}"\n${extra}+++\n${body}\n`,
+      )
+    }
+    await seed('ready', 'file-1', 'Rate limit auth', 'Token bucket.', 'labels = [ "bug" ]\n')
+    await seed('done', 'file-2', 'Auth docs', 'Mention the RATE LIMIT.', 'kind = "node"\n')
+    await seed('triage', 'file-3', 'Unrelated', 'Nothing here.')
+  }
+
+  test('human output lists hits, the no-match line and the next-page cursor', async () => {
+    await seedSearchTickets()
+    const out: string[] = []
+    await abTicket(['search', 'rate', 'LIMIT'], cliOpts(tmp, out))
+    expect(out.sort()).toEqual([
+      'file:file-1 (ready) [work] — Rate limit auth — labels: bug',
+      'file:file-2 (done) [node] — Auth docs',
+    ])
+
+    out.length = 0
+    await abTicket(['search', 'rate', '--limit', '1'], cliOpts(tmp, out))
+    expect(out).toHaveLength(2)
+    expect(out[1]).toBe('more matches: rerun with --cursor 1')
+
+    out.length = 0
+    await abTicket(['search', 'missing', '--state', 'READY'], cliOpts(tmp, out))
+    expect(out).toEqual(['no tickets matched "missing" in the configured file ticket source'])
+  })
+
+  test('--json is exactly the tickets.search tool result', async () => {
+    await seedSearchTickets()
+    const config = await loadConfig(join(tmp, 'autobuild.toml'))
+    const registry = buildRegistry({
+      store: new MemoryBuildStore(),
+      tickets: {
+        contextFor: async (repo) => ({ repo, tickets: config.tickets, teamKey: '' }),
+        sourceFor: () => new FileTicketSource({ dir: join(tmp, 'tickets') }),
+        statesFor: () => [],
+      },
+    })
+    for (const [args, input] of [
+      [['auth'], { query: 'auth' }],
+      [
+        ['auth', '--labels', 'bug', '--state', 'ready'],
+        { query: 'auth', labels: ['bug'], state: 'ready' },
+      ],
+      [['auth', '--limit', '1', '--cursor', '1'], { query: 'auth', limit: 1, cursor: '1' }],
+    ] as const) {
+      const out: string[] = []
+      await abTicket(['search', ...args, '--json'], cliOpts(tmp, out))
+      expect(JSON.parse(out.join('\n'))).toEqual(
+        await registry.call('tickets.search', { repo: tmp, ...input }),
+      )
+    }
+  })
+
+  test('usage errors and a source without search', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    for (const args of [
+      ['search'],
+      ['search', 'x', '--limit', '0'],
+      ['search', 'x', '--limit', 'abc'],
+    ]) {
+      await expect(abTicket(args, cliOpts(tmp))).rejects.toThrow('usage: ab ticket search')
+    }
+    const searchless = (): TicketSource =>
+      Object.defineProperties(Object.create(new FakeTicketSource()), {
+        name: { value: 'linear' },
+        search: { value: undefined },
+      })
+    await expect(
+      abTicket(['search', 'x'], { ...cliOpts(tmp), sourceFactory: searchless }),
+    ).rejects.toThrow('linear ticket source does not support search; no tickets were read')
   })
 })
 
