@@ -143,6 +143,29 @@ describe('build-runner selector reducers', () => {
     checkAgainstReference(verifyDiffBaseReducer, [reordered], referenceDiffBase)
   })
 
+  test('the diff base advances only after a completed reconcile', () => {
+    const provisioned = [
+      'workspace.provisioned',
+      { provider: 'p', ref: 'r', branch: 'b', base: { source: 'remote', sha: 'provisioned' } },
+    ] as const
+    const reconcile = (attempt: number, baseSha: string) =>
+      ['reconcile.started', { attempt, baseSha }] as const
+    const completed = ['reconcile.completed', { mergeCommit: 'm', artifact: {} }] as const
+    expect(selectVerifyDiffBase(buildLog([provisioned]))).toBe('provisioned')
+    // One completed promotion, then a dangling start that does not promote.
+    const dangling = [
+      provisioned,
+      reconcile(1, 'base-after-first'),
+      completed,
+      reconcile(2, 'dangling'),
+    ]
+    expect(selectVerifyDiffBase(buildLog(dangling))).toBe('base-after-first')
+    // A second completed promotion wins.
+    expect(
+      selectVerifyDiffBase(buildLog([...dangling, reconcile(2, 'refreshed-base'), completed])),
+    ).toBe('refreshed-base')
+  })
+
   test('buildReadFacts publishes the verify diff base at every split point', () => {
     const sha = (c: string) => c.repeat(40)
     const provisioned = [

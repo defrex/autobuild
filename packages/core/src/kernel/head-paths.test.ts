@@ -122,7 +122,11 @@ describe('changed paths', () => {
       computeChangedPaths(exec, '/repo', { head: HEAD, destination: DEST }),
     ).rejects.toThrow('no merge base')
   })
-  test('NUL parsing fails closed', () => {
+  test('NUL parsing preserves whitespace and newlines and fails closed', () => {
+    expect(parseNulChangedPaths('old name.ts\0new\nname.ts\0')).toEqual([
+      'old name.ts',
+      'new\nname.ts',
+    ])
     expect(parseNulChangedPaths('')).toEqual([])
     expect(() => parseNulChangedPaths('a.ts\n')).toThrow('non-NUL-terminated')
     expect(() => parseNulChangedPaths('a.ts\0\0')).toThrow('empty path entry')

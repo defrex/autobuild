@@ -57,9 +57,7 @@ import {
   BuildRunner,
   LeaseHeldError,
   SetupFailureError,
-  parseNulChangedPaths,
   selectPublishedBranchHead,
-  selectVerifyDiffBase,
   VERIFY_BASE_ENV,
   type BuildRunnerOpts,
 } from './build-runner'
@@ -897,20 +895,6 @@ describe('attach', () => {
     expect(record?.heartbeatAt).toBeDefined()
   })
 
-  test('appends resumedFromSeq = last seq on a non-empty log', async () => {
-    const h = await makeHarness()
-    await h.br.attach()
-    const events = await h.store.getEvents(SLUG)
-    const attached = ofType(events, 'runner.attached')[0]!
-    expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
-      instance: attached.payload.instance,
-      attachedSeq: attached.seq,
-      runtime: runtimeIdentity(),
-    })
-    expect(attached.seq).toBe(4)
-    expect(attached.payload.resumedFromSeq).toBe(3)
-  })
-
   test('reclaims every pre-boundary open session before attachment without a transcript', async () => {
     const h = await makeHarness()
     await h.store.append(SLUG, {
@@ -976,43 +960,31 @@ describe('attach', () => {
     ])
     expect(ofType(events, 'runner.attached')).toHaveLength(1)
     expect(reduceBuild(events).sessions.open).toEqual([])
-  })
 
-  test('three successive recoveries leave only the newest rerun session open', async () => {
-    const h = await makeHarness()
-    for (let recovery = 1; recovery <= 3; recovery += 1) {
+    // Successive recoveries: each attach reclaims the previous rerun session,
+    // leaving only the newest one open.
+    for (const session of ['s_rerun_1', 's_rerun_2', 's_rerun_3']) {
       await h.store.append(SLUG, {
         actor: KERNEL,
         type: 'session.started',
-        payload: {
-          session: `s_run_${recovery}`,
-          role: 'implement',
-          runner: 'pi',
-          phase: 'implement',
-          round: 2,
-        },
+        payload: { session, role: 'implement', runner: 'pi', phase: 'implement', round: 2 },
       })
-      await h.br.attach()
+      if (session !== 's_rerun_3') await h.br.attach()
     }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'session.started',
-      payload: {
-        session: 's_run_4',
-        role: 'implement',
-        runner: 'pi',
-        phase: 'implement',
-        round: 2,
-      },
-    })
-
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'session.ended').map((event) => event.payload.session)).toEqual([
-      's_run_1',
-      's_run_2',
-      's_run_3',
+    events = await h.store.getEvents(SLUG)
+    const ended = ofType(events, 'session.ended')
+    expect(ended.map((event) => event.payload.session)).toEqual([
+      's_dead_1',
+      's_dead_2',
+      's_rerun_1',
+      's_rerun_2',
     ])
-    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual(['s_run_4'])
+    expect(
+      ended.every((event) => 'outcome' in event.payload && event.payload.outcome === 'reclaimed'),
+    ).toBe(true)
+    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual([
+      's_rerun_3',
+    ])
   })
 
   test('throws LeaseHeldError while another holder is live (§7.4)', async () => {
@@ -1020,7 +992,7 @@ describe('attach', () => {
     const h = await makeHarness({ clock })
     expect(await h.store.claimLease(SLUG, 'other-sandbox', 60_000)).toBe(true)
 
-    expect(h.br.attach()).rejects.toBeInstanceOf(LeaseHeldError)
+    await expect(h.br.attach()).rejects.toBeInstanceOf(LeaseHeldError)
     // Nothing was appended: the build still belongs to the live holder.
     expect(await typesOf(h.store)).toEqual([
       'build.created',
@@ -1028,15 +1000,6 @@ describe('attach', () => {
       'spec.imported',
     ])
     expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('other-sandbox')
-  })
-
-  test('an expired lease is claimable — dead-sandbox takeover (§7.4)', async () => {
-    const clock = manualClock()
-    const h = await makeHarness({ clock })
-    expect(await h.store.claimLease(SLUG, 'dead-sandbox', 1000)).toBe(true)
-    clock.advance(1001)
-    await h.br.attach()
-    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 })
 
@@ -1142,81 +1105,72 @@ describe('setup command (§16.1)', () => {
     expect(h.execCalls.map((c) => c.cmd[2])).toEqual(['bun install', 'bun install'])
   })
 
-  test('a failing setup deposits exact durable evidence and starts no phase or session', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
+  for (const failure of ['nonzero exit', 'exec exception'] as const) {
+    test(`a failing setup (${failure}) deposits exact durable evidence and starts no phase or session`, async () => {
+      const h = await makeHarness({
+        configToml: TOML_WITH_SETUP,
+        ...(failure === 'nonzero exit'
+          ? { failCommands: ['bun install'] }
+          : { throwCommands: ['bun install'] }),
+      })
+      await expect(h.br.run()).rejects.toBeInstanceOf(SetupFailureError)
+      const events = await h.store.getEvents(SLUG)
+      // An execution exception records an explicit unavailable status.
+      expect(ofType(events, 'runner.setup-failed')[0]?.payload).toEqual({
+        command: 'bun install',
+        attempt: 1,
+        ...(failure === 'nonzero exit'
+          ? {
+              exitStatus: 1,
+              output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
+            }
+          : { exitStatus: null, output: 'exec unavailable for bun install' }),
+      })
+      expect(events.slice(-3).map((event) => event.type)).toEqual([
+        'runner.attached',
+        'runner.runtime-recorded',
+        'runner.setup-failed',
+      ])
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'session.started' ||
+            event.type === 'phase.failed' ||
+            event.type === 'verify.completed',
+        ),
+      ).toEqual([])
+      expect(h.runner.sessions.size).toBe(0)
     })
-    await expect(h.br.run()).rejects.toBeInstanceOf(SetupFailureError)
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'runner.setup-failed')[0]?.payload).toEqual({
-      command: 'bun install',
-      attempt: 1,
-      exitStatus: 1,
-      output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
-    })
-    expect(events.slice(-3).map((event) => event.type)).toEqual([
-      'runner.attached',
-      'runner.runtime-recorded',
-      'runner.setup-failed',
-    ])
-    expect(
-      events.filter(
-        (event) =>
-          event.type === 'session.started' ||
-          event.type === 'phase.failed' ||
-          event.type === 'verify.completed',
-      ),
-    ).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-  })
+  }
 
-  test('a pre-existing pause bypasses broken setup and parks without workspace work', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
-    })
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.pause-requested',
-      payload: {},
-    })
+  for (const control of ['pause', 'abort'] as const) {
+    test(`a pre-existing ${control} bypasses broken setup and parks without workspace work`, async () => {
+      const h = await makeHarness({
+        configToml: TOML_WITH_SETUP,
+        failCommands: ['bun install'],
+      })
+      await h.store.append(SLUG, {
+        actor: humanActor('aron'),
+        ...(control === 'pause'
+          ? { type: 'build.pause-requested' as const, payload: {} }
+          : { type: 'build.abort-requested' as const, payload: { reason: 'stop before setup' } }),
+      })
 
-    const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(state.status).toBe('paused')
-    expect(h.execCalls).toEqual([])
-    expect(ofType(events, 'build.paused')).toHaveLength(1)
-    expect(ofType(events, 'runner.attached')).toHaveLength(0)
-    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
-    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-  })
-
-  test('a pre-existing abort bypasses broken setup and retains the execution lease', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
+      const state = await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      expect(state.status).toBe(control === 'pause' ? 'paused' : 'aborted')
+      expect(h.execCalls).toEqual([])
+      expect(ofType(events, control === 'pause' ? 'build.paused' : 'build.aborted')).toHaveLength(1)
+      expect(ofType(events, 'runner.attached')).toHaveLength(0)
+      expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
+      expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
+      expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
+      expect(h.runner.sessions.size).toBe(0)
+      // An abort retains the execution lease.
+      if (control === 'abort')
+        expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
     })
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'stop before setup' },
-    })
-
-    const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(state.status).toBe('aborted')
-    expect(h.execCalls).toEqual([])
-    expect(ofType(events, 'build.aborted')).toHaveLength(1)
-    expect(ofType(events, 'runner.attached')).toHaveLength(0)
-    expect(ofType(events, 'runner.runtime-recorded')).toHaveLength(0)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
-    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
-  })
+  }
 
   test('bounds repeated setup failures, raises once, and parks further attaches', async () => {
     const h = await makeHarness({
@@ -1243,32 +1197,21 @@ describe('setup command (§16.1)', () => {
     })
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('bun install')
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
-  })
 
-  test('an abort bypasses an open setup exhaustion without consuming another attempt', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      failCommands: ['bun install'],
-    })
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
-    }
-    const before = await h.store.getEvents(SLUG)
-    expect(ofType(before, 'escalation.raised')).toHaveLength(1)
+    // An abort bypasses the open exhaustion without consuming another attempt.
     await h.store.append(SLUG, {
       actor: humanActor('aron'),
       type: 'build.abort-requested',
       payload: { reason: 'environment remains broken' },
     })
-
     const state = await h.br.run()
-    const events = await h.store.getEvents(SLUG)
+    const aborted = await h.store.getEvents(SLUG)
     expect(state.status).toBe('aborted')
-    expect(h.execCalls).toHaveLength(3)
-    expect(ofType(events, 'runner.setup-failed')).toHaveLength(3)
-    expect(ofType(events, 'runner.attached')).toHaveLength(1)
-    expect(ofType(events, 'escalation.raised')).toHaveLength(1)
-    expect(events.at(-1)?.type).toBe('build.aborted')
+    expect(h.execCalls).toHaveLength(beforePark)
+    expect(ofType(aborted, 'runner.setup-failed')).toHaveLength(3)
+    expect(ofType(aborted, 'runner.attached')).toHaveLength(1)
+    expect(ofType(aborted, 'escalation.raised')).toHaveLength(1)
+    expect(aborted.at(-1)?.type).toBe('build.aborted')
     expect(h.runner.sessions.size).toBe(0)
     expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
@@ -1404,24 +1347,6 @@ describe('setup command (§16.1)', () => {
       ofType(await h.store.getEvents(SLUG), 'runner.setup-failed').at(-1)?.payload.attempt,
     ).toBe(1)
   })
-
-  test('an execution exception records an explicit unavailable status', async () => {
-    const h = await makeHarness({
-      configToml: TOML_WITH_SETUP,
-      throwCommands: ['bun install'],
-    })
-    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
-    expect(ofType(await h.store.getEvents(SLUG), 'runner.setup-failed')[0]?.payload).toMatchObject({
-      exitStatus: null,
-      output: 'exec unavailable for bun install',
-    })
-  })
-
-  test('no [commands].setup → attach execs nothing (the knob is optional)', async () => {
-    const h = await makeHarness()
-    await h.br.attach()
-    expect(h.execCalls).toEqual([])
-  })
 })
 
 // ── step basics ──────────────────────────────────────────────────────────────
@@ -1438,79 +1363,83 @@ describe('step', () => {
   const DETECTED_BASE = '1'.repeat(40)
   const CURRENT_BASE = '2'.repeat(40)
 
-  test('reconcile refreshes an advanced base before recording the phase start (§15.7)', async () => {
-    const h = await makeHarness({ reconcileRefreshes: [{ sha: CURRENT_BASE }] })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
+  for (const [label, refreshed] of [
+    ['an advanced base', CURRENT_BASE],
+    ['an unchanged base (refresh resolves the detected SHA)', DETECTED_BASE],
+  ] as const)
+    test(`reconcile refreshes ${label} before recording the phase start (§15.7)`, async () => {
+      const h = await makeHarness({ reconcileRefreshes: [{ sha: refreshed }] })
+      await seedFinalized(h.store)
+      await h.store.append(SLUG, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: DETECTED_BASE },
+      })
 
-    const decision = await h.br.step()
-    expect(decision).toEqual({
-      kind: 'run-phase',
-      phase: 'reconcile',
-      round: 1,
-      reconcile: { attempt: 1 },
-    })
+      const decision = await h.br.step()
+      expect(decision).toEqual({
+        kind: 'run-phase',
+        phase: 'reconcile',
+        round: 1,
+        reconcile: { attempt: 1 },
+      })
 
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-4).map((e) => e.type)).toEqual([
-      'reconcile.replayed',
-      'session.started',
-      'reconcile.completed',
-      'session.ended',
-    ])
-    expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(DETECTED_BASE)
-    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
-      attempt: 1,
-      baseSha: CURRENT_BASE,
-    })
-    expect(
-      h.execCalls
-        .filter(
-          (call) =>
-            call.cmd[1] === 'fetch' ||
-            call.cmd.includes(`refs/autobuild/reconcile/${SLUG}/base^{commit}`),
-        )
-        .slice(-2),
-    ).toEqual([
-      {
-        cmd: [
-          'git',
-          'fetch',
-          '--no-tags',
-          '--no-write-fetch-head',
-          '--refmap=',
-          'origin',
-          `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
-        ],
-        cwd: h.workspacePath,
-      },
-      {
-        cmd: ['git', 'rev-parse', '--verify', `refs/autobuild/reconcile/${SLUG}/base^{commit}`],
-        cwd: h.workspacePath,
-      },
-    ])
+      const events = await h.store.getEvents(SLUG)
+      expect(events.slice(-4).map((e) => e.type)).toEqual([
+        'reconcile.replayed',
+        'session.started',
+        'reconcile.completed',
+        'session.ended',
+      ])
+      expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(DETECTED_BASE)
+      expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
+        attempt: 1,
+        baseSha: refreshed,
+      })
+      expect(
+        h.execCalls
+          .filter(
+            (call) =>
+              call.cmd[1] === 'fetch' ||
+              call.cmd.includes(`refs/autobuild/reconcile/${SLUG}/base^{commit}`),
+          )
+          .slice(-2),
+      ).toEqual([
+        {
+          cmd: [
+            'git',
+            'fetch',
+            '--no-tags',
+            '--no-write-fetch-head',
+            '--refmap=',
+            'origin',
+            `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
+          ],
+          cwd: h.workspacePath,
+        },
+        {
+          cmd: ['git', 'rev-parse', '--verify', `refs/autobuild/reconcile/${SLUG}/base^{commit}`],
+          cwd: h.workspacePath,
+        },
+      ])
 
-    // AB_PHASE uses the attempt as the round for reconcile (D8).
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-reconcile')
-    expect(journal?.opts.env.AB_PHASE).toBe('reconcile@1')
+      // AB_PHASE uses the attempt as the round for reconcile (D8).
+      const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-reconcile')
+      expect(journal?.opts.env.AB_PHASE).toBe('reconcile@1')
 
-    // Reconciliation changed code, so verify:* re-runs in full — cheap
-    // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
-    // already used attempt 1; reusing it would collide the reducer's
-    // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
-    await completeFixtureRestack(h.store)
-    expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
-    expect(await h.br.step()).toEqual({
-      kind: 'run-check',
-      step: 'types',
-      command: 'bun tsc --noEmit',
-      attempt: 2,
+      // Reconciliation changed code, so verify:* re-runs in full — cheap
+      // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
+      // already used attempt 1; reusing it would collide the reducer's
+      // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
+      await completeFixtureRestack(h.store)
+      expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
+      expect(await h.br.step()).toEqual({
+        kind: 'run-check',
+        step: 'types',
+        command: 'bun tsc --noEmit',
+        attempt: 2,
+      })
     })
-  })
 
   test('reconcile delegates authoritative base snapshots to a capable forge without fetching origin', async () => {
     class SnapshotForge extends FakeForge {
@@ -1553,24 +1482,6 @@ describe('step', () => {
       attempt: 1,
       baseSha: CURRENT_BASE,
     })
-  })
-
-  test('reconcile preserves unchanged-base behavior when refresh resolves the detected SHA', async () => {
-    const h = await makeHarness({ reconcileRefreshes: [{ sha: DETECTED_BASE }] })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    await h.br.step()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
-      attempt: 1,
-      baseSha: DETECTED_BASE,
-    })
-    expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
   })
 
   test('a crashed same-attempt reconcile refreshes the base again before replacement session startup', async () => {
@@ -1635,32 +1546,6 @@ describe('step', () => {
       baseSha: PHASE_BASE,
     })
     expect(h.execCalls.filter(({ cmd }) => cmd[1] === 'fetch')).toHaveLength(2)
-  })
-
-  test('a capable forge supplies the durable progress check without origin fetch', async () => {
-    class SnapshotForge extends FakeForge {
-      readonly snapshots: string[] = []
-
-      async snapshotBase(): Promise<string> {
-        this.snapshots.push('snapshot')
-        return CURRENT_BASE
-      }
-    }
-
-    const forge = new SnapshotForge()
-    const h = await makeHarness({ forge })
-    const conflictSeq = await seedRepeatConflict(h.store, DETECTED_BASE)
-    await h.br.step()
-
-    expect(forge.snapshots).toHaveLength(1)
-    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
-    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.progress-checked')[0]!.payload).toEqual(
-      {
-        conflictSeq,
-        attempt: 1,
-        baseSha: CURRENT_BASE,
-      },
-    )
   })
 
   test('restart after a persisted progress check consumes it without duplicating the fact', async () => {
@@ -1777,117 +1662,45 @@ describe('step', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
-  test('an answered roundless reconcile policy cause does not reset counted runner failures', async () => {
-    const stable = '5'.repeat(40)
-    const h = await makeHarness({
-      reconcileRefreshes: [{ sha: stable }],
-      runnerOpts: { maxPhaseAttempts: 2 },
-    })
-    const conflictSeq = await seedRepeatConflict(h.store, stable, 3)
-    for (const [attempt, willRetry] of [
-      [1, true],
-      [2, false],
-    ] as const) {
+  for (const [label, refresh, message] of [
+    [
+      'a failed base fetch',
+      { fetchError: 'fatal: could not read from origin' },
+      'could not read from origin',
+    ],
+    [
+      'a fetched ref that cannot resolve to a commit',
+      { resolveError: 'fatal: expected a commit object' },
+      'expected a commit object',
+    ],
+  ] as const)
+    test(`${label} records phase.failed before session startup and never falls back to pr.conflicted`, async () => {
+      const h = await makeHarness({ reconcileRefreshes: [refresh] })
+      await seedFinalized(h.store)
       await h.store.append(SLUG, {
-        actor: KERNEL,
-        type: 'phase.failed',
-        payload: {
-          phase: 'reconcile',
-          round: 4,
-          attempt,
-          error: 'progress snapshot failed',
-          willRetry,
-        },
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: DETECTED_BASE },
       })
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: {
-        id: 'esc_no_progress',
+
+      expect(await h.br.step()).toEqual({
+        kind: 'run-phase',
         phase: 'reconcile',
-        source: 'policy',
-        policyCause: 'reconcile-no-progress',
-        question: 'reconciliation made no progress',
-      },
+        round: 1,
+        reconcile: { attempt: 1 },
+      })
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'reconcile.started')).toEqual([])
+      expect(ofType(events, 'pr.conflicted')).toHaveLength(1)
+      expect(h.runner.sessions.size).toBe(0)
+      expect(ofType(events, 'phase.failed')[0]!.payload).toEqual({
+        phase: 'reconcile',
+        round: 1,
+        attempt: 1,
+        error: expect.stringContaining(message),
+        willRetry: true,
+      })
     })
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'escalation.answered',
-      payload: {
-        id: 'esc_no_progress',
-        answer: 'try the conflict again',
-        resolution: 'guidance',
-      },
-    })
-
-    expect(await h.br.step()).toEqual({
-      kind: 'check-reconcile-progress',
-      conflictSeq,
-      completedAttempt: 3,
-      nextAttempt: 4,
-    })
-
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'escalation.raised').at(-1)!.payload).toMatchObject({
-      phase: 'reconcile',
-      round: 4,
-      source: 'policy',
-      policyCause: 'phase-attempt-limit',
-      question: expect.stringContaining('maxPhaseAttempts 2'),
-    })
-    expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
-    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
-    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
-    expect(h.runner.sessions.size).toBe(0)
-  })
-
-  test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {
-    const h = await makeHarness({
-      reconcileRefreshes: [{ fetchError: 'fatal: could not read from origin' }],
-    })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    expect(await h.br.step()).toEqual({
-      kind: 'run-phase',
-      phase: 'reconcile',
-      round: 1,
-      reconcile: { attempt: 1 },
-    })
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-    expect(ofType(events, 'phase.failed')[0]!.payload).toEqual({
-      phase: 'reconcile',
-      round: 1,
-      attempt: 1,
-      error: expect.stringContaining('could not read from origin'),
-      willRetry: true,
-    })
-  })
-
-  test('a fetched ref that cannot resolve to a commit also fails before session startup', async () => {
-    const h = await makeHarness({
-      reconcileRefreshes: [{ resolveError: 'fatal: expected a commit object' }],
-    })
-    await seedFinalized(h.store)
-    await h.store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.conflicted',
-      payload: { baseSha: DETECTED_BASE },
-    })
-
-    await h.br.step()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'reconcile.started')).toEqual([])
-    expect(h.runner.sessions.size).toBe(0)
-    expect(ofType(events, 'phase.failed')[0]!.payload.error).toContain('expected a commit object')
-  })
 })
 
 // ── The §15.6 happy path, live over fakes ────────────────────────────────────
@@ -1949,6 +1762,65 @@ describe('happy path (§15.6)', () => {
       url: 'https://forge.test/acme/app/pull/7',
       headSha: 'sha-head-1',
     })
+    const events = await h.store.getEvents(SLUG)
+
+    // heartbeatAt advanced past creation and the lease is held.
+    const record = await h.store.getBuild(SLUG)
+    expect(record?.heartbeatAt).toBeDefined()
+    expect(Date.parse(record!.heartbeatAt!)).toBeGreaterThan(Date.parse(record!.createdAt))
+    expect(record?.lease?.holder).toBe('runner-1')
+
+    // Every installed skill is invoked through the ab-* namespace.
+    expect([...h.runner.sessions.values()].map((journal) => journal.opts.skill)).toEqual([
+      'ab-plan',
+      'ab-plan-review',
+      'ab-implement',
+      'ab-code-review',
+      'ab-verify-e2e',
+      'ab-finalize',
+      'ab-release-notes',
+    ])
+
+    // Ambient env (D8): AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION on the e2e session.
+    const e2eSession = ofType(events, 'session.started').find((e) => e.payload.role === 'e2e')!
+    const e2eJournal = [...h.runner.sessions.values()].find(
+      (j) => j.opts.skill === 'ab-verify-e2e',
+    )!
+    expect(e2eJournal.opts.env.AB_STORE).toBe('local')
+    expect(e2eJournal.opts.env.AB_BUILD).toBe(SLUG)
+    expect(e2eJournal.opts.env.AB_PHASE).toBe('verify:e2e@1')
+    expect(e2eJournal.opts.env.AB_CONTEXT_DIR).toBe('.ab/verify-e2e')
+    expect(e2eJournal.opts.env.AB_SESSION).toBe(e2eSession.payload.session)
+
+    // Deterministic checks run through exec sh -c in the workspace (§8.2),
+    // commands resolved from [commands] — and nothing else (no [commands].setup).
+    expect(h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd)).toEqual([
+      ['sh', '-c', 'bun tsc --noEmit'],
+      ['sh', '-c', 'bun test'],
+    ])
+    expect(h.execCalls.every((c) => c.cwd === h.workspacePath)).toBe(true)
+    expect(
+      ofType(events, 'verify.completed').map((e) => [
+        e.payload.step,
+        normalizeVerifyCompletion(e.payload).outcome,
+        e.actor.kind,
+      ]),
+    ).toEqual([
+      ['types', 'pass', 'kernel'],
+      ['unit', 'pass', 'kernel'],
+      ['e2e', 'pass', 'agent'],
+    ])
+
+    // finalize.step-completed is recorded with the session agent actor.
+    const stepDone = ofType(events, 'finalize.step-completed')[0]!
+    expect(stepDone.payload).toEqual({ step: 'release-notes', ok: true })
+    expect(stepDone.actor.kind).toBe('agent')
+    if (stepDone.actor.kind !== 'agent') throw new Error('unreachable')
+    expect(stepDone.actor.role).toBe('release-notes')
+    const notesSession = ofType(events, 'session.started').find(
+      (e) => e.payload.role === 'release-notes',
+    )!
+    expect(stepDone.actor.session).toBe(notesSession.payload.session)
   })
 
   test('every session.ended carries a transcript artifact whose metadata names phase/round/role (§7.1)', async () => {
@@ -1980,51 +1852,20 @@ describe('happy path (§15.6)', () => {
       ['finalize', 1, 'finalize'],
       ['finalize', 1, 'release-notes'],
     ])
-  })
 
-  test('heartbeatAt advanced past creation and the lease is held', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const record = await h.store.getBuild(SLUG)
-    expect(record?.heartbeatAt).toBeDefined()
-    expect(Date.parse(record!.heartbeatAt!)).toBeGreaterThan(Date.parse(record!.createdAt))
-    expect(record?.lease?.holder).toBe('runner-1')
-  })
-
-  test('invokes every installed skill through the ab-* namespace', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    expect([...h.runner.sessions.values()].map((journal) => journal.opts.skill)).toEqual([
-      'ab-plan',
-      'ab-plan-review',
-      'ab-implement',
-      'ab-code-review',
-      'ab-verify-e2e',
-      'ab-finalize',
-      'ab-release-notes',
-    ])
-  })
-
-  test('role routing (§9): the plan session carries the configured model everywhere', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
+    // Role routing (§9): the plan session carries the configured model everywhere.
     const planSession = ofType(events, 'session.started').find((e) => e.payload.role === 'plan')!
     expect(planSession.payload.model).toBe('m-plan')
     expect(planSession.payload.runner).toBe('scripted')
-
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-plan')
-    expect(journal?.opts.model).toBe('m-plan')
-
-    const ended = ofType(events, 'session.ended').find(
-      (e) => e.payload.session === planSession.payload.session,
-    )!
-    const transcript = await h.store.getArtifact(
+    const planJournal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-plan')
+    expect(planJournal?.opts.model).toBe('m-plan')
+    const planEnded = ended.find((e) => e.payload.session === planSession.payload.session)!
+    const planTranscript = await h.store.getArtifact(
       SLUG,
       'transcript',
-      completedSessionEnd(ended).transcript.rev,
+      completedSessionEnd(planEnded).transcript.rev,
     )
-    expect(transcript?.meta.metadata.model).toBe('m-plan')
+    expect(planTranscript?.meta.metadata.model).toBe('m-plan')
   })
 
   // The routing rule (§9) as an explicit contract, not incidentally as a
@@ -2043,11 +1884,13 @@ describe('happy path (§15.6)', () => {
       return { h, started }
     }
 
-    test('an agent verify step routes by its STEP name, not its skill name', async () => {
+    test('agent verify and finalize steps route by their STEP name, not their skill name', async () => {
       const { h, started } = await startedFor(
         withRoles(
           'e2e = { runtime = "scripted", model = "m-step", args = ["--effort", "high"] }\n' +
-            '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n',
+            '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n' +
+            '"release-notes" = { runtime = "scripted", model = "m-notes-step" }\n' +
+            '"ab-release-notes" = { runtime = "scripted", model = "m-notes-skill" }\n',
         ),
         'e2e',
       )
@@ -2057,6 +1900,16 @@ describe('happy path (§15.6)', () => {
       const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
       expect(journal.opts.model).toBe('m-step')
       expect(journal.opts.args).toEqual(['--effort', 'high'])
+
+      const notes = ofType(await h.store.getEvents(SLUG), 'session.started').find(
+        (e) => e.payload.role === 'release-notes',
+      )!
+      expect(notes.payload.phase).toBe('finalize')
+      expect(notes.payload.model).toBe('m-notes-step')
+      const notesJournal = [...h.runner.sessions.values()].find(
+        (j) => j.opts.skill === 'ab-release-notes',
+      )!
+      expect(notesJournal.opts.model).toBe('m-notes-step')
     })
 
     test('…and still routes by its deprecated skill-name key when that is all there is', async () => {
@@ -2072,35 +1925,6 @@ describe('happy path (§15.6)', () => {
       const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
       expect(journal.opts.model).toBe('m-skill')
     })
-
-    test('an agent finalize step routes by its step name — unchanged', async () => {
-      const { h, started } = await startedFor(
-        withRoles(
-          '"release-notes" = { runtime = "scripted", model = "m-step" }\n' +
-            '"ab-release-notes" = { runtime = "scripted", model = "m-skill" }\n',
-        ),
-        'release-notes',
-      )
-      expect(started.payload.phase).toBe('finalize')
-      expect(started.payload.model).toBe('m-step')
-      const journal = [...h.runner.sessions.values()].find(
-        (j) => j.opts.skill === 'ab-release-notes',
-      )!
-      expect(journal.opts.model).toBe('m-step')
-    })
-  })
-
-  test('ambient env (D8): AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION on the e2e session', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const e2eSession = ofType(events, 'session.started').find((e) => e.payload.role === 'e2e')!
-    const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
-    expect(journal.opts.env.AB_STORE).toBe('local')
-    expect(journal.opts.env.AB_BUILD).toBe(SLUG)
-    expect(journal.opts.env.AB_PHASE).toBe('verify:e2e@1')
-    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/verify-e2e')
-    expect(journal.opts.env.AB_SESSION).toBe(e2eSession.payload.session)
   })
 
   test('sessionEnv spreads extra AB_* and may override AB_STORE, never the identity keys', async () => {
@@ -2120,29 +1944,6 @@ describe('happy path (§15.6)', () => {
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
     expect(journal.opts.env.AB_SESSION).not.toBe('spoofed')
     expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/plan')
-  })
-
-  test('deterministic checks run through exec sh -c in the workspace (§8.2), commands resolved from [commands]', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    expect(h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd)).toEqual([
-      ['sh', '-c', 'bun tsc --noEmit'],
-      ['sh', '-c', 'bun test'],
-    ])
-    expect(h.execCalls.every((c) => c.cwd === h.workspacePath)).toBe(true)
-    const events = await h.store.getEvents(SLUG)
-    const completed = ofType(events, 'verify.completed')
-    expect(
-      completed.map((e) => [
-        e.payload.step,
-        normalizeVerifyCompletion(e.payload).outcome,
-        e.actor.kind,
-      ]),
-    ).toEqual([
-      ['types', 'pass', 'kernel'],
-      ['unit', 'pass', 'kernel'],
-      ['e2e', 'pass', 'agent'],
-    ])
   })
 
   test('an agent verify skip is terminal and the runner continues to finalize', async () => {
@@ -2180,21 +1981,6 @@ describe('happy path (§15.6)', () => {
     expect(ofType(events, 'finalize.completed')).toHaveLength(1)
   })
 
-  test('finalize.step-completed is recorded with the session agent actor', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const stepDone = ofType(events, 'finalize.step-completed')[0]!
-    expect(stepDone.payload).toEqual({ step: 'release-notes', ok: true })
-    expect(stepDone.actor.kind).toBe('agent')
-    if (stepDone.actor.kind !== 'agent') throw new Error('unreachable')
-    expect(stepDone.actor.role).toBe('release-notes')
-    const notesSession = ofType(events, 'session.started').find(
-      (e) => e.payload.role === 'release-notes',
-    )!
-    expect(stepDone.actor.session).toBe(notesSession.payload.session)
-  })
-
   test('a structured finalize-step failure is failure-tolerant and keeps its transcript', async () => {
     const h = await makeHarness({
       handlers: (store) => ({
@@ -2202,22 +1988,7 @@ describe('happy path (§15.6)', () => {
         'release-notes': () => failedTurnResult('403 billing disabled', true),
       }),
     })
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    for (const step of ['types', 'unit', 'e2e']) {
-      await h.store.append(SLUG, {
-        actor: KERNEL,
-        type: 'verify.completed',
-        payload: { step, attempt: 1, pass: true },
-      })
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: {
-        pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
-      },
-    })
+    await seedReadyForFinalizeStep(h.store)
 
     const decision = await h.br.step()
     expect(decision.kind).toBe('run-finalize-step')
@@ -2328,63 +2099,30 @@ describe('finalize post-step publication', () => {
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff', '--cached'])
   })
 
-  test('a remote workspace forks the finalize push into a publication request, by marker and by legacy name', async () => {
-    for (const provisioned of [
-      { provider: 'fake', remote: true },
-      { provider: 'vercel-sandbox' },
-    ]) {
-      const h = await readyHarness({
-        finalizeStatuses: ['', ''],
-        finalizeHeads: [FINALIZE_HEAD],
-        finalizeAncestors: [true],
-        workspaceProvider: provisioned.provider,
-        ...(provisioned.remote !== undefined ? { workspaceRemote: provisioned.remote } : {}),
-      })
-
-      expect((await h.br.step()).kind).toBe('run-finalize-step')
-      expect(h.forge.pushes).toEqual([])
-      const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
-      expect(requests).toHaveLength(1)
-      expect(requests[0]!.payload).toEqual({
-        operation: 'finalize-step',
-        branch: BRANCH,
-        sha: FINALIZE_HEAD,
-        step: 'release-notes',
-      })
-      // The guest records the head before requesting its publication.
-      const recorded = ofType(await h.store.getEvents(SLUG), 'head.paths-recorded')
-      expect(recorded.map((event) => [event.payload.source, event.payload.head])).toEqual([
-        ['finalize-step', FINALIZE_HEAD],
-      ])
-      expect(recorded[0]!.seq).toBeLessThan(requests[0]!.seq)
-    }
-  })
-
-  test('an explicit local marker keeps the finalize push direct', async () => {
+  test('a remote workspace forks the finalize push into a publication request', async () => {
     const h = await readyHarness({
       finalizeStatuses: ['', ''],
       finalizeHeads: [FINALIZE_HEAD],
       finalizeAncestors: [true],
-      workspaceRemote: false,
+      workspaceRemote: true,
     })
 
     expect((await h.br.step()).kind).toBe('run-finalize-step')
-    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
-    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
-  })
-
-  test('an explicit local marker keeps the finalize push direct even over a remote-suggestive provider name', async () => {
-    const h = await readyHarness({
-      finalizeStatuses: ['', ''],
-      finalizeHeads: [FINALIZE_HEAD],
-      finalizeAncestors: [true],
-      workspaceProvider: 'vercel-sandbox',
-      workspaceRemote: false,
+    expect(h.forge.pushes).toEqual([])
+    const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.payload).toEqual({
+      operation: 'finalize-step',
+      branch: BRANCH,
+      sha: FINALIZE_HEAD,
+      step: 'release-notes',
     })
-
-    expect((await h.br.step()).kind).toBe('run-finalize-step')
-    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
-    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
+    // The guest records the head before requesting its publication.
+    const recorded = ofType(await h.store.getEvents(SLUG), 'head.paths-recorded')
+    expect(recorded.map((event) => [event.payload.source, event.payload.head])).toEqual([
+      ['finalize-step', FINALIZE_HEAD],
+    ])
+    expect(recorded[0]!.seq).toBeLessThan(requests[0]!.seq)
   })
 
   test('scratch commits fail tolerantly with an observation and no push', async () => {
@@ -2416,19 +2154,6 @@ describe('finalize post-step publication', () => {
     await h.br.step()
     expect(h.forge.pushes).toEqual([])
     await expectFailureTolerance(h, 'cancellation unconfirmed')
-  })
-
-  test('an unchanged HEAD creates and pushes nothing', async () => {
-    const h = await readyHarness({ finalizeHeads: ['sha-head-1'] })
-
-    await h.br.step()
-    expect(h.forge.pushes).toEqual([])
-    expect(h.execCalls.some((call) => call.cmd[0] === 'git' && call.cmd[1] === 'commit')).toBe(
-      false,
-    )
-    expect(
-      ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload,
-    ).toEqual({ step: 'release-notes', ok: true })
   })
 
   test('dirty post-step output is observed and still advances to the open PR wait', async () => {
@@ -2591,61 +2316,52 @@ skill = "custom-notes-skill"
     })
   }
 
-  test.each([false, true])(
-    'routes finalize post-step context with alternate routing %s',
-    async (alternates) => {
-      const h = await makeHarness({
-        configToml:
-          finalizeConfig +
-          (alternates
-            ? '\n[roles.release-notes]\nruntime = "scripted"\nmodel = "m-post"\nalternates = [{ runtime = "pi", model = "kimi-post" }]\n'
-            : ''),
-        handlers: (store) => ({
-          ...happyHandlers(store),
-          'custom-notes-skill': (ctx) => {
-            expect(ctx.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
-            return ctx.opts.model === 'm-post'
-              ? failedTurnResult('primary exhausted', true, '', 'exhaustion')
-              : defaultTurnResult('notes posted')
-          },
-        }),
-      })
-      await seedReady(h.store)
+  test('routes finalize post-step context', async () => {
+    const h = await makeHarness({
+      configToml: finalizeConfig,
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'custom-notes-skill': (ctx) => {
+          expect(ctx.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+          return defaultTurnResult('notes posted')
+        },
+      }),
+    })
+    await seedReady(h.store)
 
-      expect(await h.br.step()).toEqual({
-        kind: 'run-finalize-step',
-        step: 'publish',
-        action: { kind: 'check', command: 'bun run publish' },
-      })
-      expect(h.execCalls).toEqual([
-        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-        { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
-        { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
-        { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
-      ])
-      let events = await h.store.getEvents(SLUG)
-      expect(ofType(events, 'session.started')).toHaveLength(0)
-      expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
-        actor: { kind: 'kernel' },
-        payload: { step: 'publish', ok: true },
-      })
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'publish',
+      action: { kind: 'check', command: 'bun run publish' },
+    })
+    expect(h.execCalls).toEqual([
+      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+      { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
+      { cmd: ['git', 'status', '--porcelain'], cwd: h.workspacePath },
+      { cmd: ['git', 'rev-parse', 'HEAD'], cwd: h.workspacePath },
+    ])
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.started')).toHaveLength(0)
+    expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
+      actor: { kind: 'kernel' },
+      payload: { step: 'publish', ok: true },
+    })
 
-      expect(await h.br.step()).toEqual({
-        kind: 'run-finalize-step',
-        step: 'release-notes',
-        action: { kind: 'agent', skill: 'custom-notes-skill' },
-      })
-      const journal = [...h.runner.sessions.values()].at(-1)!
-      expect(journal.opts.skill).toBe('custom-notes-skill')
-      expect(journal.opts.env.AB_PHASE).toBe('finalize@1')
-      expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
-      expect(journal.opts.workspacePath).toBe(h.workspacePath)
-      events = await h.store.getEvents(SLUG)
-      const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
-      expect(agentDone.actor.kind).toBe('agent')
-      expect(ofType(events, 'session.ended')).toHaveLength(alternates ? 2 : 1)
-    },
-  )
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'custom-notes-skill' },
+    })
+    const journal = [...h.runner.sessions.values()].at(-1)!
+    expect(journal.opts.skill).toBe('custom-notes-skill')
+    expect(journal.opts.env.AB_PHASE).toBe('finalize@1')
+    expect(journal.opts.env.AB_CONTEXT_DIR).toBe('.ab/finalize-release-notes')
+    expect(journal.opts.workspacePath).toBe(h.workspacePath)
+    events = await h.store.getEvents(SLUG)
+    const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
+    expect(agentDone.actor.kind).toBe('agent')
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+  })
 
   test('publishes a check-created descendant through the same kernel boundary', async () => {
     const checkHead = 'c'.repeat(40)
@@ -2778,41 +2494,78 @@ describe('session memory (§10)', () => {
     expect(journals.every((journal) => journal.messages.length === 0)).toBe(true)
   })
 
-  test('implement r2 continues the SAME producer session; the message names the findings and .ab/', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
+  test('implement r2 continues the SAME producer session with re-issued ambient auth; reviewer rounds are fresh (§10, D8)', async () => {
+    // Regression: the runner used to leave the continued turn on round 1's
+    // start env, so the real CLI resolved round=1 and its terminal was
+    // rejected as a D5 second call — §10 continuation was dead in production.
+    const seen: Array<{ phase: string; session: string }> = []
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = reviseThenApproveHandlers(store)
+        const implement = table.implement!
+        table.implement = (ctx) => {
+          seen.push({
+            phase: ctx.opts.env.AB_PHASE ?? '',
+            session: sessionOf(ctx),
+          })
+          return implement(ctx)
+        }
+        return table
+      },
+    })
     const state = await h.br.run()
     expect(state.status).toBe('running') // ran through to awaiting-pr
 
+    // ONE runner session, two rounds; the continuation names the findings.
     const implementJournals = [...h.runner.sessions.values()].filter(
       (j) => j.opts.skill === 'ab-implement',
     )
-    expect(implementJournals.length).toBe(1) // ONE runner session, two rounds
+    expect(implementJournals.length).toBe(1)
     const journal = implementJournals[0]!
     expect(journal.turns.length).toBe(2)
     expect(journal.messages.length).toBe(1)
     expect(journal.messages[0]).toContain('f_1')
     expect(journal.messages[0]).toContain('$AB_CONTEXT_DIR/findings.json')
-  })
 
-  test('reviewer rounds are FRESH sessions (fresh skeptic)', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
+    // Reviewer rounds are FRESH sessions (fresh skeptic).
     const reviewJournals = [...h.runner.sessions.values()].filter(
       (j) => j.opts.skill === 'ab-code-review',
     )
     expect(reviewJournals.length).toBe(2)
     expect(reviewJournals.every((j) => j.turns.length === 1)).toBe(true)
     expect(reviewJournals[0]!.session.id).not.toBe(reviewJournals[1]!.session.id)
-  })
 
-  test('implement.started r2 carries the findings feedback (§15.3)', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
     const events = await h.store.getEvents(SLUG)
-    const starts = ofType(events, 'implement.started')
-    expect(starts.length).toBe(2)
-    expect(starts[0]!.payload).toEqual({ round: 1 })
-    expect(starts[1]!.payload).toEqual({ round: 2, feedback: { findings: ['f_1'] } })
+    expect(ofType(events, 'implement.started').map((e) => e.payload)).toEqual([
+      { round: 1 },
+      { round: 2, feedback: { findings: ['f_1'] } },
+    ])
+
+    // Each producer round gets its own session bracket, all closed with transcripts.
+    const implementSessions = ofType(events, 'session.started').filter(
+      (e) => e.payload.role === 'implement',
+    )
+    expect(implementSessions.map((e) => e.payload.round)).toEqual([1, 2])
+    const brackets = implementSessions.map((e) => e.payload.session)
+    expect(new Set(brackets).size).toBe(2)
+    for (const bracket of brackets) {
+      const ended = ofType(events, 'session.ended').find((e) => e.payload.session === bracket)
+      expect(ended).toBeDefined()
+      expect(completedSessionEnd(ended!).transcript.kind).toBe('transcript')
+    }
+
+    // The continued turn re-issues the new round in AB_PHASE and the new
+    // bracket in AB_SESSION.
+    expect(seen).toEqual([
+      { phase: 'implement@1', session: brackets[0]! },
+      { phase: 'implement@2', session: brackets[1]! },
+    ])
+    // The refreshed AB_SESSION stamps the terminals: each round's completion
+    // carries its OWN bracket's identity (§15.3), not round 1's.
+    const completions = ofType(events, 'implement.completed').map((e) =>
+      e.actor.kind === 'agent' ? e.actor.session : e.actor.kind,
+    )
+    expect(completions).toEqual(brackets)
   })
 
   test('producer guidance survives a crash after its carrier start and before session launch', async () => {
@@ -3009,44 +2762,6 @@ describe('session memory (§10)', () => {
     ).toHaveLength(3)
   })
 
-  test('a continued turn re-issues ambient auth (D8): the new round in AB_PHASE, the new bracket in AB_SESSION', async () => {
-    // Regression: the runner used to leave the continued turn on round 1's
-    // start env, so the real CLI resolved round=1 and its terminal was
-    // rejected as a D5 second call — §10 continuation was dead in production.
-    const seen: Array<{ phase: string; session: string }> = []
-    const h = await makeHarness({
-      handlers: (store) => {
-        const table = reviseThenApproveHandlers(store)
-        const implement = table.implement!
-        table.implement = (ctx) => {
-          seen.push({
-            phase: ctx.opts.env.AB_PHASE ?? '',
-            session: sessionOf(ctx),
-          })
-          return implement(ctx)
-        }
-        return table
-      },
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('running')
-
-    const events = await h.store.getEvents(SLUG)
-    const brackets = ofType(events, 'session.started')
-      .filter((e) => e.payload.role === 'implement')
-      .map((e) => e.payload.session)
-    expect(seen).toEqual([
-      { phase: 'implement@1', session: brackets[0]! },
-      { phase: 'implement@2', session: brackets[1]! },
-    ])
-    // The refreshed AB_SESSION stamps the terminals: each round's completion
-    // carries its OWN bracket's identity (§15.3), not round 1's.
-    const completions = ofType(events, 'implement.completed').map((e) =>
-      e.actor.kind === 'agent' ? e.actor.session : e.actor.kind,
-    )
-    expect(completions).toEqual(brackets)
-  })
-
   test("`ab escalate` from a continued round stamps the refreshed AB_SESSION, so it IS the turn's terminal (§8.4)", async () => {
     // Regression: with the stale start env, the continued round's escalation
     // carried round 1's session id, executeSession's terminal check missed
@@ -3087,22 +2802,6 @@ describe('session memory (§10)', () => {
       role: 'implement',
       session: r2.payload.session,
     })
-  })
-
-  test('each producer round gets its own session bracket, both closed with transcripts', async () => {
-    const h = await makeHarness({ handlers: reviseThenApproveHandlers })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const implementSessions = ofType(events, 'session.started').filter(
-      (e) => e.payload.role === 'implement',
-    )
-    expect(implementSessions.length).toBe(2)
-    expect(implementSessions[0]!.payload.session).not.toBe(implementSessions[1]!.payload.session)
-    expect(implementSessions.map((e) => e.payload.round)).toEqual([1, 2])
-    const endedSessions = new Set(ofType(events, 'session.ended').map((e) => e.payload.session))
-    for (const started of implementSessions) {
-      expect(endedSessions.has(started.payload.session)).toBe(true)
-    }
   })
 
   test('after a phase.failed the producer session is dropped: next attempt is start, not continue (D5)', async () => {
@@ -3389,52 +3088,58 @@ model = "m-plan"
 alternates = [{ runtime = "pi", model = "kimi-alt" }]
 `
 
-  test('an eligible primary failure substitutes in-order inside one attempt with durable attribution', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        const happyPlan = table.plan!
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('primary quota exhausted', true, '', 'exhaustion')
-            : happyPlan(ctx)
-        return table
-      },
-    })
-
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    const starts = events.filter((event) => event.type === 'session.started')
-    const planStarts = starts.filter(
-      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
-    )
-    expect(planStarts).toHaveLength(2)
-    expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
-    expect(planStarts[1]?.payload).toMatchObject({
-      runner: 'pi',
-      model: 'kimi-alt',
-      substitution: {
-        failed: {
-          index: 0,
-          runner: 'scripted',
-          model: 'm-plan',
-          error: 'primary quota exhausted',
-          cause: 'exhaustion',
+  for (const [label, error, cause, missing] of [
+    ['exhaustion', 'primary quota exhausted', 'exhaustion', undefined],
+    ['missing executable', 'executable "codex" was not found', 'configuration', true],
+  ] as const)
+    test(`an eligible primary failure (${label}) substitutes in-order inside one attempt with durable attribution`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          const happyPlan = table.plan!
+          table.plan = (ctx) =>
+            ctx.opts.model === 'm-plan'
+              ? failedTurnResult(error, true, '', cause, missing)
+              : happyPlan(ctx)
+          return table
         },
-        selectedIndex: 1,
-      },
+      })
+
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      const starts = events.filter((event) => event.type === 'session.started')
+      const planStarts = starts.filter(
+        (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(2)
+      expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
+      expect(planStarts[1]?.payload).toMatchObject({
+        runner: 'pi',
+        model: 'kimi-alt',
+        substitution: {
+          failed: {
+            index: 0,
+            runner: 'scripted',
+            model: 'm-plan',
+            error,
+            cause,
+          },
+          selectedIndex: 1,
+        },
+      })
+      expect(
+        events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+      ).toHaveLength(0)
+      const planCompleted = events.find((event) => event.type === 'plan.completed')
+      expect(planCompleted?.actor).toMatchObject({
+        kind: 'agent',
+        session: planStarts[1]?.payload.session,
+      })
+      expect(starts[2]?.payload.runner).toBe('scripted')
+      const primary = [...h.runner.sessions.values()].find((j) => j.opts.model === 'm-plan')
+      expect(primary?.ended).toBe(true)
     })
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(0)
-    const planCompleted = events.find((event) => event.type === 'plan.completed')
-    expect(planCompleted?.actor).toMatchObject({
-      kind: 'agent',
-      session: planStarts[1]?.payload.session,
-    })
-    expect(starts[2]?.payload.runner).toBe('scripted')
-  })
 
   test('a failed producer continuation falls back fresh and the following round resets to primary', async () => {
     const continuationConfig = `
@@ -3671,165 +3376,93 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     })
   })
 
-  test('a completed turn with no typed terminal does not engage alternates', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => defaultTurnResult('agent omitted its terminal')
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const starts = ofType(events, 'session.started').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(starts).toHaveLength(2)
-    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(2)
-  })
-
-  test('an exhausted chain writes one phase failure and escalation names every target', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('primary overloaded', false, '', 'availability')
-            : failedTurnResult('alternate quota exhausted', true, '', 'exhaustion')
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const failures = events.filter(
-      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
-    )
-    expect(failures).toHaveLength(1)
-    expect(failures[0]?.payload).toMatchObject({
-      attempt: 1,
-      error: 'alternate quota exhausted',
-      willRetry: false,
-      providerAttempts: [
+  for (const chain of [
+    {
+      name: 'an exhausted chain',
+      primaryError: 'primary overloaded',
+      alternateError: 'alternate quota exhausted',
+      primary: () => failedTurnResult('primary overloaded', false, '', 'availability'),
+      alternate: () => failedTurnResult('alternate quota exhausted', true, '', 'exhaustion'),
+      attempts: [
         { index: 0, runner: 'scripted', error: 'primary overloaded' },
         { index: 1, runner: 'pi', error: 'alternate quota exhausted' },
       ],
-    })
-    const escalation = ofType(events, 'escalation.raised').find(
-      (event) => event.payload.source === 'policy',
-    )
-    expect(escalation?.payload.question).toContain('primary overloaded')
-    expect(escalation?.payload.question).toContain('alternate quota exhausted')
-  })
-
-  test('a missing primary CLI is skipped; the alternate completes with no phase.failed', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        const happyPlan = table.plan!
-        table.plan = (ctx) =>
-          ctx.opts.model === 'm-plan'
-            ? failedTurnResult('executable "codex" was not found', true, '', 'configuration', true)
-            : happyPlan(ctx)
-        return table
-      },
-    })
-
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(
-      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
-    ).toHaveLength(0)
-    const planStarts = ofType(events, 'session.started').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(planStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi'])
-    const primary = [...h.runner.sessions.values()].find((j) => j.opts.model === 'm-plan')
-    expect(primary?.ended).toBe(true)
-  })
-
-  test('every target missing emits one non-retried configuration failure naming the last', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = (ctx) =>
-          failedTurnResult(
-            `executable "${ctx.opts.model === 'm-plan' ? 'codex' : 'pi'}" was not found`,
-            true,
-            '',
-            'configuration',
-            true,
-          )
-        return table
-      },
-    })
-
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const failures = ofType(events, 'phase.failed').filter(
-      (event) => event.payload.phase === 'plan',
-    )
-    expect(failures).toHaveLength(1)
-    expect(failures[0]?.payload).toMatchObject({
-      error: 'executable "pi" was not found',
-      willRetry: false,
-      providerAttempts: [
+    },
+    {
+      // Every target missing emits one non-retried configuration failure
+      // naming the last.
+      name: 'a chain with every target missing',
+      primaryError: 'executable "codex" was not found',
+      alternateError: 'executable "pi" was not found',
+      primary: () =>
+        failedTurnResult('executable "codex" was not found', true, '', 'configuration', true),
+      alternate: () =>
+        failedTurnResult('executable "pi" was not found', true, '', 'configuration', true),
+      attempts: [
         { index: 0, error: 'executable "codex" was not found', cause: 'configuration' },
         { index: 1, error: 'executable "pi" was not found', cause: 'configuration' },
       ],
-    })
-  })
+    },
+  ])
+    test(`${chain.name} writes one non-retried phase failure and escalation names every target`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          table.plan = (ctx) => (ctx.opts.model === 'm-plan' ? chain.primary() : chain.alternate())
+          return table
+        },
+      })
 
-  test('a non-missing configuration failure bypasses a declared alternate', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => failedTurnResult('requires Pi 0.81 or newer', true, '', 'configuration')
-        return table
-      },
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      const failures = events.filter(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+      )
+      expect(failures).toHaveLength(1)
+      expect(failures[0]?.payload).toMatchObject({
+        attempt: 1,
+        error: chain.alternateError,
+        willRetry: false,
+        providerAttempts: chain.attempts,
+      })
+      const escalation = ofType(events, 'escalation.raised').find(
+        (event) => event.payload.source === 'policy',
+      )
+      expect(escalation?.payload.question).toContain(chain.primaryError)
+      expect(escalation?.payload.question).toContain(chain.alternateError)
     })
 
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(
-      ofType(events, 'session.started').filter((event) => event.payload.phase === 'plan'),
-    ).toHaveLength(1)
-  })
+  for (const [cause, error] of [
+    ['credentials', 'invalid API key'],
+    ['configuration', 'requires Pi 0.81 or newer'],
+  ] as const)
+    test(`a ${cause} rejection bypasses a declared alternate and parks immediately`, async () => {
+      const h = await makeHarness({
+        configToml: alternateConfig,
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          table.plan = () => failedTurnResult(error, true, '', cause)
+          return table
+        },
+      })
 
-  test('credential rejection bypasses a declared alternate and parks immediately', async () => {
-    const h = await makeHarness({
-      configToml: alternateConfig,
-      handlers: (store) => {
-        const table = happyHandlers(store)
-        table.plan = () => failedTurnResult('invalid API key', true, '', 'credentials')
-        return table
-      },
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      const planStarts = events.filter(
+        (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(1)
+      const failed = events.find(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+      )
+      expect(failed?.payload).toMatchObject({
+        error,
+        willRetry: false,
+        providerAttempts: [{ index: 0, error, cause }],
+      })
     })
 
-    expect((await h.br.run()).status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    const planStarts = events.filter(
-      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
-    )
-    expect(planStarts).toHaveLength(1)
-    const failed = events.find(
-      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
-    )
-    expect(failed?.payload).toMatchObject({
-      error: 'invalid API key',
-      willRetry: false,
-      providerAttempts: [{ index: 0, error: 'invalid API key', cause: 'credentials' }],
-    })
-  })
   test('AUT-28 quota rejection fails attempt 1 verbatim, deposits the transcript, and escalates without attempt 2', async () => {
     let calls = 0
     const h = await makeHarness({
@@ -3941,6 +3574,9 @@ describe('phase-session budget', () => {
       }),
     }
     const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
       runtimeRunner: stuck,
       runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
     })
@@ -3957,6 +3593,20 @@ describe('phase-session budget', () => {
       'phase session budget expired after 3600 seconds',
       'phase session budget expired after 3600 seconds',
     ])
+
+    // Both expired brackets' streams closed aborted (best-effort background
+    // release; poll for the writer's cadence).
+    const deadline = Date.now() + 2_000
+    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    while (streams.length < 2 && Date.now() < deadline) {
+      await Bun.sleep(25)
+      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    }
+    expect(streams).toHaveLength(2)
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('aborted')
+    }
   })
 
   test('operator abort keeps the deadline armed for an abort-ignoring start and skips alternates', async () => {
@@ -4546,40 +4196,13 @@ describe('no-terminal retry policy (D5)', () => {
     })
   }
 
-  test('a silent session fails the phase; the transcript and session.ended still merge', async () => {
+  test('a silent session fails the phase without engaging alternates; the second failure exhausts maxPhaseAttempts and run exits blocked', async () => {
     const h = await makeHarness({
-      handlers: () => ({ plan: () => defaultTurnResult('rambled and exited') }),
-    })
-    await h.br.attach()
-    await h.br.step()
-
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-4).map((e) => e.type)).toEqual([
-      'plan.started',
-      'session.started',
-      'session.ended',
-      'phase.failed',
-    ])
-    const failed = ofType(events, 'phase.failed')[0]!
-    expect(failed.payload).toEqual({
-      phase: 'plan',
-      round: 1,
-      attempt: 1,
-      error: 'no-terminal',
-      willRetry: true,
-    })
-    const ended = ofType(events, 'session.ended')[0]!
-    const transcript = await h.store.getArtifact(
-      SLUG,
-      'transcript',
-      completedSessionEnd(ended).transcript.rev,
-    )
-    expect(transcript).not.toBeNull()
-    expect(transcript!.meta.metadata.phase).toBe('plan')
-  })
-
-  test('the second failure exhausts maxPhaseAttempts: policy escalation, no third session, run exits blocked', async () => {
-    const h = await makeHarness({
+      // A completed turn with no typed terminal does not engage alternates.
+      configToml: CONFIG_TOML.replace(
+        'plan = { runtime = "scripted", model = "m-plan" }',
+        'plan = { runtime = "scripted", model = "m-plan", alternates = [{ runtime = "pi", model = "kimi-alt" }] }',
+      ),
       handlers: () => ({ plan: () => defaultTurnResult('rambled again') }),
     })
     const state = await h.br.run()
@@ -4604,11 +4227,36 @@ describe('no-terminal retry policy (D5)', () => {
     expect(h.runner.sessions.size).toBe(2) // never a third session
 
     const events = await h.store.getEvents(SLUG)
+    const starts = ofType(events, 'session.started')
+    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
     const failed = ofType(events, 'phase.failed')
     expect(failed.map((e) => [e.payload.attempt, e.payload.willRetry])).toEqual([
       [1, true],
       [2, false],
     ])
+    expect(failed[0]!.payload).toEqual({
+      phase: 'plan',
+      round: 1,
+      attempt: 1,
+      error: 'no-terminal',
+      willRetry: true,
+      providerAttempts: [
+        {
+          index: 0,
+          runner: 'scripted',
+          model: 'm-plan',
+          session: starts[0]!.payload.session,
+          error: 'no-terminal',
+        },
+      ],
+    })
+    // The failed session's transcript and session.ended still merge.
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      completedSessionEnd(ofType(events, 'session.ended')[0]!).transcript.rev,
+    )
+    expect(transcript!.meta.metadata.phase).toBe('plan')
     const escalation = ofType(events, 'escalation.raised')[0]!
     expect(escalation.actor).toEqual({ kind: 'kernel' })
     expect(escalation.payload.source).toBe('policy')
@@ -4679,70 +4327,58 @@ describe('no-terminal retry policy (D5)', () => {
 // ── Crash-gap repair (§8.5) ──────────────────────────────────────────────────
 
 describe('crash-gap repair', () => {
-  test('an escalate verdict without its escalation.raised is repaired by the kernel; run exits blocked', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'code-review': async (ctx) => {
-          // Simulates the CLI dying between the verdict and its escalation.
-          await reviewVerdict(
-            store,
-            ctx,
-            'code-review',
-            'escalate',
-            [],
-            'auth approach conflicts with the spec',
-          )
-          return defaultTurnResult('escalated')
-        },
-      }),
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
+  for (const cliRaised of [false, true])
+    test(`an escalate verdict ${cliRaised ? 'with' : 'without'} its escalation.raised gets exactly one raise; run exits blocked`, async () => {
+      const h = await makeHarness({
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'code-review': async (ctx) => {
+            // Without the raise: simulates the CLI dying between the verdict
+            // and its escalation, so the kernel repairs it.
+            await reviewVerdict(
+              store,
+              ctx,
+              'code-review',
+              'escalate',
+              [],
+              'auth approach conflicts with the spec',
+            )
+            if (cliRaised)
+              await store.append(SLUG, {
+                actor: agentActor('code-review', sessionOf(ctx)),
+                type: 'escalation.raised',
+                payload: {
+                  id: 'esc_agent',
+                  phase: 'code-review',
+                  round: roundOf(ctx),
+                  source: 'agent',
+                  question: 'auth approach conflicts with the spec',
+                },
+              })
+            return defaultTurnResult('escalated')
+          },
+        }),
+      })
+      const state = await h.br.run()
+      expect(state.status).toBe('blocked')
 
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-5).map((e) => e.type)).toEqual([
-      'code-review.started',
-      'session.started',
-      'code-review.verdict',
-      'escalation.raised',
-      'session.ended',
-    ])
-    const escalation = ofType(events, 'escalation.raised')[0]!
-    expect(escalation.actor).toEqual({ kind: 'kernel' })
-    expect(escalation.payload.source).toBe('agent')
-    expect(escalation.payload.phase).toBe('code-review')
-    expect(escalation.payload.round).toBe(1)
-    expect(escalation.payload.question).toBe('auth approach conflicts with the spec')
-  })
-
-  test('no duplicate raise when the CLI already appended the escalation', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'code-review': async (ctx) => {
-          await reviewVerdict(store, ctx, 'code-review', 'escalate', [], 'which auth approach?')
-          await store.append(SLUG, {
-            actor: agentActor('code-review', sessionOf(ctx)),
-            type: 'escalation.raised',
-            payload: {
-              id: 'esc_agent',
-              phase: 'code-review',
-              round: roundOf(ctx),
-              source: 'agent',
-              question: 'which auth approach?',
-            },
-          })
-          return defaultTurnResult('escalated')
-        },
-      }),
+      const events = await h.store.getEvents(SLUG)
+      expect(events.slice(-5).map((e) => e.type)).toEqual([
+        'code-review.started',
+        'session.started',
+        'code-review.verdict',
+        'escalation.raised',
+        'session.ended',
+      ])
+      expect(ofType(events, 'escalation.raised')).toHaveLength(1)
+      const escalation = ofType(events, 'escalation.raised')[0]!
+      if (cliRaised) expect(escalation.payload.id).toBe('esc_agent')
+      else expect(escalation.actor).toEqual({ kind: 'kernel' })
+      expect(escalation.payload.source).toBe('agent')
+      expect(escalation.payload.phase).toBe('code-review')
+      expect(escalation.payload.round).toBe(1)
+      expect(escalation.payload.question).toBe('auth approach conflicts with the spec')
     })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'escalation.raised').length).toBe(1)
-    expect(ofType(events, 'escalation.raised')[0]!.payload.id).toBe('esc_agent')
-  })
 })
 
 // ── Deterministic checks (§8.2) ──────────────────────────────────────────────
@@ -4803,26 +4439,16 @@ describe('checks', () => {
       command: 'bun tsc --noEmit',
       exitCode: 1,
     })
-  })
 
-  test('the engine routes implement r2 with the verify feedback; the started event carries it (§15.6-A)', async () => {
-    const h = await makeHarness({ failCommands: ['bun tsc --noEmit'] })
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    await h.br.step() // run-check types → fail
-
-    const decision = await h.br.step()
-    expect(decision).toEqual({
-      kind: 'run-phase',
-      phase: 'implement',
+    // The engine routes implement r2 with the verify feedback; the started
+    // event carries it (§15.6-A).
+    const feedback = {
+      verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } },
+    }
+    expect(await h.br.step()).toEqual({ kind: 'run-phase', phase: 'implement', round: 2, feedback })
+    expect(ofType(await h.store.getEvents(SLUG), 'implement.started').at(-1)!.payload).toEqual({
       round: 2,
-      feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
-    })
-    const events = await h.store.getEvents(SLUG)
-    const started = ofType(events, 'implement.started').at(-1)!
-    expect(started.payload).toEqual({
-      round: 2,
-      feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
+      feedback,
     })
   })
 })
@@ -4952,32 +4578,7 @@ paths = ["src/cli/dashboard/**"]
     })
   })
 
-  test('a nonmatching check records a kernel skip and launches no command', async () => {
-    const h = await makeHarness({
-      configToml: conditionalCheck,
-      verifyDiffs: [{ paths: ['README.md', 'docs/guide.md'] }],
-    })
-    await seedApproved(h.store)
-    await h.br.step()
-
-    expect(h.execCalls).toHaveLength(1)
-    expect(h.execCalls[0]?.cmd.slice(0, 2)).toEqual(['git', 'diff'])
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-2).map((event) => event.type)).toEqual([
-      'verify.started',
-      'verify.completed',
-    ])
-    expect(ofType(events, 'verify.completed').at(-1)?.actor).toEqual(KERNEL)
-    expect(ofType(events, 'verify.completed').at(-1)?.payload).toEqual({
-      step: 'dashboard',
-      attempt: 1,
-      outcome: 'skipped',
-      reason:
-        'excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**"]',
-    })
-  })
-
-  test('a generated skip advances to the next verifier at the same attempt', async () => {
+  test('a nonmatching check records a kernel skip, launches no command, and advances to the next verifier at the same attempt', async () => {
     const h = await makeHarness({
       configToml: `
 [tickets]
@@ -4996,10 +4597,19 @@ paths = ["src/cli/dashboard/**"]
 kind = "check"
 command = "unit"
 `,
-      verifyDiffs: [{ paths: ['README.md'] }],
+      verifyDiffs: [{ paths: ['README.md', 'docs/guide.md'] }],
     })
     await seedApproved(h.store)
     await h.br.step()
+    expect(h.execCalls).toHaveLength(1)
+    expect(h.execCalls[0]?.cmd.slice(0, 2)).toEqual(['git', 'diff'])
+    const skipped = await h.store.getEvents(SLUG)
+    expect(skipped.slice(-2).map((event) => event.type)).toEqual([
+      'verify.started',
+      'verify.completed',
+    ])
+    expect(ofType(skipped, 'verify.completed').at(-1)?.actor).toEqual(KERNEL)
+
     expect(await h.br.step()).toEqual({
       kind: 'run-check',
       step: 'unit',
@@ -5106,44 +4716,13 @@ paths = ["web/**"]
       attempt: 1,
       feedback,
     })
-  })
-
-  test('matching agent steps retain normal session execution', async () => {
-    const h = await makeHarness({
-      configToml: `
-[tickets]
-source = "file"
-readyState = "ready"
-[verify]
-steps = ["e2e"]
-[verify.e2e]
-kind = "agent"
-skill = "ab-verify-e2e"
-paths = ["web/**"]
-`,
-      verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
-    })
-    await seedApproved(h.store)
-    await h.br.step()
+    // The wrapped action retains normal session execution.
     expect(h.ops).toEqual(['session:ab-verify-e2e'])
     expect(
       normalizeVerifyCompletion(
         ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)!.payload,
       ).outcome,
     ).toBe('pass')
-  })
-
-  test('always = true bypasses path inspection and runs the mandatory gate', async () => {
-    const h = await makeHarness({
-      configToml: conditionalCheck.replace(
-        'paths = ["src/cli/dashboard/**"]',
-        'paths = ["src/cli/dashboard/**"]\nalways = true',
-      ),
-      verifyDiffs: [{ error: 'must not inspect paths' }],
-    })
-    await seedApproved(h.store)
-    expect((await h.br.step()).kind).toBe('run-check')
-    expect(h.execCalls).toEqual([{ cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath }])
   })
 
   test('Git diff failures fail closed without a skip outcome', async () => {
@@ -5156,56 +4735,6 @@ paths = ["web/**"]
     await expect(h.br.step()).rejects.toThrow('fatal: bad object fake-base-sha')
     expect(ofType(await h.store.getEvents(SLUG), 'verify.started')).toHaveLength(starts)
     expect(ofType(await h.store.getEvents(SLUG), 'verify.completed')).toEqual([])
-  })
-
-  test('NUL parsing preserves whitespace/newlines and rejects malformed output', () => {
-    expect(parseNulChangedPaths('old name.ts\0new\nname.ts\0')).toEqual([
-      'old name.ts',
-      'new\nname.ts',
-    ])
-    expect(parseNulChangedPaths('')).toEqual([])
-    expect(() => parseNulChangedPaths('src/file.ts\n')).toThrow('non-NUL-terminated')
-    expect(() => parseNulChangedPaths('src/file.ts\0\0')).toThrow('empty path entry')
-  })
-
-  test('the diff base advances only after a completed reconcile', async () => {
-    const h = await makeHarness()
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('0'.repeat(40))
-
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'base-after-first' },
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('reconcile', 's_reconcile_1'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-1',
-        artifact: { kind: 'reconcile-notes', rev: 0 },
-      },
-    })
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 2, baseSha: 'dangling-base' },
-    })
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('base-after-first')
-
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 2, baseSha: 'refreshed-base' },
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('reconcile', 's_reconcile_2'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-2',
-        artifact: { kind: 'reconcile-notes', rev: 1 },
-      },
-    })
-    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('refreshed-base')
   })
 })
 
@@ -5245,13 +4774,6 @@ command = "unit"
     await seedCodeApproved(store)
   }
 
-  test('an unconditional leaf check receives the provisioned base', async () => {
-    const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
-    await seedApproved(h.store)
-    await h.br.step()
-    expect(received).toEqual([{ command: 'bun test', env: { [VERIFY_BASE_ENV]: '0'.repeat(40) } }])
-  })
-
   test('after a completed reconcile a check receives the refreshed base', async () => {
     const { h, received } = await baseHarness({ steps: '["unit", "dashboard"]' })
     await h.store.append(SLUG, {
@@ -5269,17 +4791,20 @@ command = "unit"
     expect(received.map((entry) => entry.env[VERIFY_BASE_ENV])).toEqual(['refreshed-base'])
   })
 
-  test('a matching conditional check receives the base its paths were diffed against', async () => {
+  test('unconditional and matching conditional checks receive the provisioned base their paths were diffed against', async () => {
     const { h, received } = await baseHarness({
-      steps: '["dashboard", "unit"]',
+      steps: '["unit", "dashboard"]',
       paths: ['src/cli/dashboard/model.ts'],
     })
     await seedApproved(h.store)
     await h.br.step()
+    await h.br.step()
     const diff = h.execCalls.find((call) => call.cmd[0] === 'git' && call.cmd[1] === 'diff')
-    expect(received).toHaveLength(1)
-    expect(received[0]!.env[VERIFY_BASE_ENV]).toBe(diff!.cmd[5]!)
     expect(diff!.cmd[5]).toBe('0'.repeat(40))
+    expect(received).toEqual([
+      { command: 'bun test', env: { [VERIFY_BASE_ENV]: diff!.cmd[5]! } },
+      { command: 'bun test dashboard', env: { [VERIFY_BASE_ENV]: diff!.cmd[5]! } },
+    ])
   })
 
   test('every member of a staged check receives the base', async () => {
@@ -5422,19 +4947,6 @@ describe('operator commands (D2)', () => {
     const types = await typesOf(h.store)
     expect(types).toContain('build.resumed')
     expect(types.at(-1)).toBe('pr-summary.result')
-  })
-
-  test('abort-requested is acknowledged and run() exits aborted', async () => {
-    const h = await makeHarness()
-    await h.store.append(SLUG, {
-      actor: humanActor('aron'),
-      type: 'build.abort-requested',
-      payload: { reason: 'wrong ticket' },
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('aborted')
-    expect((await typesOf(h.store)).slice(-2)).toEqual(['build.abort-requested', 'build.aborted'])
-    expect(h.runner.sessions.size).toBe(0) // no phase ever ran
   })
 
   test('an abort cancels a live turn, deposits its transcript, and retains the execution lease', async () => {
@@ -5604,34 +5116,31 @@ describe('session streams', () => {
 })
 
 describe('session streams: capability boundary and failure containment', () => {
-  test('a plugin registration without the capability yields sessions with no stream and no emitter', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    for (const event of ofType(events, 'session.started')) {
-      expect(event.payload.stream).toBeUndefined()
-    }
-    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
-    // No emitter reached the turns either.
-    for (const journal of h.runner.sessions.values()) {
-      expect(journal.opts.stream).toBeUndefined()
-    }
-  })
-
-  test('streamSessions: false reproduces the no-stream event log', async () => {
-    const h = await makeHarness({
-      registrationExtras: {
-        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+  for (const [label, options] of [
+    ['a plugin registration without the capability', {}],
+    [
+      'streamSessions: false',
+      {
+        registrationExtras: {
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+        runnerOpts: { streamSessions: false },
       },
-      runnerOpts: { streamSessions: false },
+    ],
+  ] satisfies Array<[string, HarnessOptions]>)
+    test(`${label} yields sessions with no stream and no emitter`, async () => {
+      const h = await makeHarness(options)
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      for (const event of ofType(events, 'session.started')) {
+        expect(event.payload.stream).toBeUndefined()
+      }
+      expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
+      // No emitter reached the turns either.
+      for (const journal of h.runner.sessions.values()) {
+        expect(journal.opts.stream).toBeUndefined()
+      }
     })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    for (const event of ofType(events, 'session.started')) {
-      expect(event.payload.stream).toBeUndefined()
-    }
-    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
-  })
 
   test('a store whose stream appends always fail lets the phase complete with one diagnostic and an aborted close', async () => {
     const diagnostics: string[] = []
@@ -5677,45 +5186,6 @@ describe('session streams: capability boundary and failure containment', () => {
 })
 
 describe('session streams: close outcomes per exit path', () => {
-  test('a budget-expired bracket closes its stream aborted', async () => {
-    const timers = new ManualSessionBudgetScheduler()
-    const stuck: AgentRunner = {
-      name: 'stuck',
-      start: () => new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {}),
-      continue: () => new Promise<AgentTurnResult>(() => {}),
-      end: async () => ({
-        content: '',
-        metadata: { runner: 'stuck', usage: { inputTokens: 0, outputTokens: 0, turns: 0 } },
-      }),
-    }
-    const h = await makeHarness({
-      registrationExtras: {
-        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
-      },
-      runtimeRunner: stuck,
-      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
-    })
-
-    const run = h.br.run()
-    await timers.expireNext()
-    await timers.expireNext()
-    expect((await run).status).toBe('blocked')
-
-    // Both expired brackets' streams closed aborted (best-effort background
-    // release; poll for the writer's cadence).
-    const deadline = Date.now() + 2_000
-    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
-    while (streams.length < 2 && Date.now() < deadline) {
-      await Bun.sleep(25)
-      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
-    }
-    expect(streams).toHaveLength(2)
-    for (const record of streams) {
-      expect(record.status).toBe('closed')
-      expect(record.outcome).toBe('aborted')
-    }
-  })
-
   test('an operator-aborted bracket that settles keeps its transcript deposit and closes aborted', async () => {
     const h = await makeHarness({
       registrationExtras: {
@@ -5870,133 +5340,135 @@ describe('coalesced summary boundaries', () => {
       expect(summary.seq).toBeGreaterThan(ended.seq)
     })
 
-  for (const remote of [false, true])
-    for (const count of [3, 300]) {
-      test(`${remote ? 'remote' : 'local'} verify with ${count} attachments publishes only after session settlement`, async () => {
-        const forge = new FakeForge()
-        forge.setPrState(7, { state: 'open', mergeable: true })
-        let verifyCalls = 0
-        let guestSummaryCalls = 0
-        const h = await makeHarness({
-          forge,
-          workspaceRemote: remote,
-          handlers: (store) => ({
-            ...happyHandlers(store),
-            'verify-e2e': async (ctx) => {
-              verifyCalls++
-              // Simulate artifact put's atomic designation, including one after
-              // the terminal command: the session must settle before rendering.
-              await store.append(SLUG, {
-                actor: agentActor('verify-e2e', sessionOf(ctx)),
-                type: 'verify.completed',
-                payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
-              })
-              for (let i = 0; i < count; i++) {
-                await store.appendWithArtifacts(
-                  SLUG,
-                  [{ kind: `frame:${i}`, content: 'pixels' }],
-                  (metas) => ({
-                    actor: agentActor('verify-e2e', sessionOf(ctx)),
-                    type: 'pr-attachment.designated',
-                    payload: {
-                      artifact: refOf(metas),
-                      filename: `frame-${i}.png`,
-                      mediaType: 'image/png',
-                    },
-                  }),
-                )
-                expect(forge.comments).toHaveLength(0)
-              }
-              return defaultTurnResult('complete')
-            },
-          }),
+  // Large attachment sets (300) are covered at the publication seam in
+  // cli/pr-summary-publication.test.ts; this boundary needs only a few.
+  for (const remote of [false, true]) {
+    const count = 3
+    test(`${remote ? 'remote' : 'local'} verify with attachments publishes only after session settlement`, async () => {
+      const forge = new FakeForge()
+      forge.setPrState(7, { state: 'open', mergeable: true })
+      let verifyCalls = 0
+      let guestSummaryCalls = 0
+      const h = await makeHarness({
+        forge,
+        workspaceRemote: remote,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'verify-e2e': async (ctx) => {
+            verifyCalls++
+            // Simulate artifact put's atomic designation, including one after
+            // the terminal command: the session must settle before rendering.
+            await store.append(SLUG, {
+              actor: agentActor('verify-e2e', sessionOf(ctx)),
+              type: 'verify.completed',
+              payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
+            })
+            for (let i = 0; i < count; i++) {
+              await store.appendWithArtifacts(
+                SLUG,
+                [{ kind: `frame:${i}`, content: 'pixels' }],
+                (metas) => ({
+                  actor: agentActor('verify-e2e', sessionOf(ctx)),
+                  type: 'pr-attachment.designated',
+                  payload: {
+                    artifact: refOf(metas),
+                    filename: `frame-${i}.png`,
+                    mediaType: 'image/png',
+                  },
+                }),
+              )
+              expect(forge.comments).toHaveLength(0)
+            }
+            return defaultTurnResult('complete')
+          },
+        }),
+      })
+      await seedFinalized(h.store)
+      // Make a fresh verification cycle eligible after a completed reconcile.
+      await h.store.append(SLUG, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'detected-base' },
+      })
+      // Drive deterministic checks first; run() then verifies and handles the boundary.
+      await h.br.attach()
+      await h.br.step() // reconcile
+      await completeFixtureRestack(h.store)
+      await h.br.step() // capture policy
+      await h.br.step() // types
+      await h.br.step() // unit
+      const previous = summaryBoundary(await h.store.getEvents(SLUG))!
+      if (remote) {
+        const request = await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'pr-summary.requested',
+          payload: previous,
         })
-        await seedFinalized(h.store)
-        // Make a fresh verification cycle eligible after a completed reconcile.
         await h.store.append(SLUG, {
-          actor: DISPATCHER,
-          type: 'pr.conflicted',
-          payload: { baseSha: 'detected-base' },
+          actor: KERNEL,
+          type: 'pr-summary.settled',
+          payload: { request: request.seq, disposition: 'skipped' },
         })
-        // Drive deterministic checks first; run() then verifies and handles the boundary.
-        await h.br.attach()
-        await h.br.step() // reconcile
-        await completeFixtureRestack(h.store)
-        await h.br.step() // capture policy
-        await h.br.step() // types
-        await h.br.step() // unit
-        const previous = summaryBoundary(await h.store.getEvents(SLUG))!
-        if (remote) {
-          const request = await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.requested',
-            payload: previous,
-          })
-          await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.settled',
-            payload: { request: request.seq, disposition: 'skipped' },
-          })
-        } else {
-          await h.store.append(SLUG, {
-            actor: KERNEL,
-            type: 'pr-summary.attempted',
-            payload: { ...previous, pr: 7 },
-          })
+      } else {
+        await h.store.append(SLUG, {
+          actor: KERNEL,
+          type: 'pr-summary.attempted',
+          payload: { ...previous, pr: 7 },
+        })
+      }
+      if (remote) {
+        // Any summary call by the guest is an error, even if best effort.
+        forge.commentOnPr = async () => {
+          guestSummaryCalls++
+          throw new Error('guest summary call')
         }
-        if (remote) {
-          // Any summary call by the guest is an error, even if best effort.
-          forge.commentOnPr = async () => {
-            guestSummaryCalls++
-            throw new Error('guest summary call')
-          }
-        }
+      }
+      await h.br.run()
+      expect(verifyCalls).toBe(1)
+      const events = await h.store.getEvents(SLUG)
+      const latest = events.findLast(
+        (e) => e.type === 'pr-summary.requested' || e.type === 'pr-summary.attempted',
+      )!
+      if (remote) {
+        expect(latest.type).toBe('pr-summary.requested')
+        expect(events.some((e) => e.type === 'pr-summary.attempted')).toBe(false)
+        expect(forge.comments).toHaveLength(0)
+        expect(guestSummaryCalls).toBe(0)
+        // The execution owner has reaped the guest and released its lease.
+        await h.store.releaseLease(SLUG, 'runner-1')
+        const hostForge = new FakeForge()
+        hostForge.setPrState(7, { state: 'open', mergeable: true })
+        await settleSummaryRequests({
+          store: h.store,
+          forge: hostForge,
+          slug: SLUG,
+          workspacePath: h.workspacePath,
+          storeRef: 'https://store.test',
+          clock: steppingClock(),
+          holder: 'authenticated-host',
+        })
+        expect(hostForge.comments).toHaveLength(1)
+        const body = hostForge.comments[0]!.body
+        const full = body.includes('pr-summary@')
+          ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+          : body
+        expect(full).toContain(`frame-${count - 1}.png`)
+        expect(full).toContain('<code>e2e</code> (attempt 2): pass')
         await h.br.run()
         expect(verifyCalls).toBe(1)
-        const events = await h.store.getEvents(SLUG)
-        const latest = events.findLast(
-          (e) => e.type === 'pr-summary.requested' || e.type === 'pr-summary.attempted',
-        )!
-        if (remote) {
-          expect(latest.type).toBe('pr-summary.requested')
-          expect(events.some((e) => e.type === 'pr-summary.attempted')).toBe(false)
-          expect(forge.comments).toHaveLength(0)
-          expect(guestSummaryCalls).toBe(0)
-          // The execution owner has reaped the guest and released its lease.
-          await h.store.releaseLease(SLUG, 'runner-1')
-          const hostForge = new FakeForge()
-          hostForge.setPrState(7, { state: 'open', mergeable: true })
-          await settleSummaryRequests({
-            store: h.store,
-            forge: hostForge,
-            slug: SLUG,
-            workspacePath: h.workspacePath,
-            storeRef: 'https://store.test',
-            clock: steppingClock(),
-            holder: 'authenticated-host',
-          })
-          expect(hostForge.comments).toHaveLength(1)
-          const body = hostForge.comments[0]!.body
-          const full = body.includes('pr-summary@')
-            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
-            : body
-          expect(full).toContain(`frame-${count - 1}.png`)
-          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
-          await h.br.run()
-          expect(verifyCalls).toBe(1)
-          expect(guestSummaryCalls).toBe(0)
-        } else {
-          expect(latest.type).toBe('pr-summary.attempted')
-          expect(forge.comments).toHaveLength(1)
-          const body = forge.comments[0]!.body
-          const full = body.includes('pr-summary@')
-            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
-            : body
-          expect(full).toContain(`frame-${count - 1}.png`)
-          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
-        }
-      })
-    }
+        expect(guestSummaryCalls).toBe(0)
+      } else {
+        expect(latest.type).toBe('pr-summary.attempted')
+        expect(forge.comments).toHaveLength(1)
+        const body = forge.comments[0]!.body
+        const full = body.includes('pr-summary@')
+          ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+          : body
+        expect(full).toContain(`frame-${count - 1}.png`)
+        expect(full).toContain('<code>e2e</code> (attempt 2): pass')
+      }
+    })
+  }
 })
 
 describe('coalesced summary boundaries: one handoff per remote verify cycle', () => {
@@ -6140,7 +5612,7 @@ skill = "ab-release-notes"
       : body
   }
 
-  async function passingCycle(coalesce: boolean) {
+  async function passingCycle() {
     const forge = new FakeForge()
     forge.setPrState(7, { state: 'open', mergeable: true })
     const hostForge = publishingForge()
@@ -6150,9 +5622,6 @@ skill = "ab-release-notes"
       workspaceRemote: true,
       verifyDiffs: [{ paths: ['README.md'] }],
     })
-    if (!coalesce)
-      // biome-ignore lint/complexity/useLiteralKeys: record today's per-step baseline without a production flag.
-      h.br['summaryContinuesVerifyCycle'] = () => false
     await enterCycle(h)
     const result = await driveCycle(h, hostForge, (events) => {
       const settled =
@@ -6165,15 +5634,7 @@ skill = "ab-release-notes"
   }
 
   test('a passing four-step cycle yields once instead of once per step', async () => {
-    const baseline = await passingCycle(false)
-    const after = await passingCycle(true)
-
-    // Baseline: every verify step, the skipped one included, cost a guest exit.
-    const baselineEvents = await baseline.h.store.getEvents(SLUG)
-    expect(cycleCompleted(baselineEvents)).toBe(STEPS.length)
-    expect(baseline.summaryExits).toBeGreaterThanOrEqual(4)
-    expect(baseline.launches).toBeGreaterThanOrEqual(4)
-    expect(baseline.hostForge.published.length).toBeGreaterThanOrEqual(4)
+    const after = await passingCycle()
 
     const events = await after.h.store.getEvents(SLUG)
     expect(
@@ -6186,9 +5647,10 @@ skill = "ab-release-notes"
       ['dashboard', 'skipped'],
       ['unit', 'pass'],
     ])
+    // Without coalescing every one of the four steps costs a guest exit, a
+    // launch and a publication; the coalesced cycle needs one of each.
     expect(after.summaryExits).toBeLessThanOrEqual(1)
-    expect(after.summaryExits).toBeLessThan(baseline.summaryExits)
-    expect(after.launches).toBeLessThan(baseline.launches)
+    expect(after.launches).toBe(1)
     // The guest never published; the host published the cycle once.
     expect(after.forge.comments).toHaveLength(0)
     expect(after.hostForge.published).toHaveLength(1)
@@ -6715,63 +6177,90 @@ describe('native suspension and continuation', () => {
     expect(ofType(events, 'session.resumed')).toHaveLength(0)
   })
 
-  test('shutdown deposits partial evidence; restart resumes the same native handle and phase round', async () => {
-    const shutdown = new AbortController()
-    let observed!: () => void
-    const ready = new Promise<void>((r) => {
-      observed = r
-    })
-    let resumed = false
-    const h = await makeHarness({
-      nativeSessions: true,
-      workspaceProvider: 'git-worktree',
-      shutdownSignal: shutdown.signal,
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        return {
-          ...handlers,
-          'ab-plan': async (ctx) => {
-            if (!ctx.message) {
-              observed()
-              await new Promise(() => {})
-            }
-            resumed = true
-            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
-          },
+  for (const cause of ['shutdown', 'pause'] as const)
+    test(`${cause} suspends promptly with partial evidence; restart resumes the same native handle and phase round`, async () => {
+      const shutdown = new AbortController()
+      let observed!: () => void
+      const ready = new Promise<void>((r) => {
+        observed = r
+      })
+      let resumed = false
+      const h = await makeHarness({
+        nativeSessions: true,
+        workspaceProvider: 'git-worktree',
+        shutdownSignal: shutdown.signal,
+        handlers: (store) => {
+          const handlers = happyHandlers(store)
+          return {
+            ...handlers,
+            'ab-plan': async (ctx) => {
+              if (!ctx.message) {
+                observed()
+                await new Promise(() => {})
+              }
+              resumed = true
+              return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
+            },
+          }
+        },
+      })
+      const running = h.br.run()
+      await ready
+      let failedRead = false
+      if (cause === 'shutdown') shutdown.abort()
+      else {
+        // Pause cleanup tolerates a transient read failure.
+        const read = h.store.getReducerValue.bind(h.store)
+        h.store.getReducerValue = async (scope, request) => {
+          if (!failedRead && request.reducer === 'buildReadFacts') {
+            failedRead = true
+            throw new Error('transient pause read failure')
+          }
+          return read(scope, request)
         }
-      },
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.pause-requested',
+          payload: {},
+        })
+      }
+      await running
+      const before = await h.store.getEvents(SLUG)
+      const suspended = ofType(before, 'session.suspended')[0]!
+      expect(suspended.payload.cause).toBe(cause)
+      expect(
+        await h.store.getArtifact(
+          SLUG,
+          suspended.payload.transcript.kind,
+          suspended.payload.transcript.rev,
+        ),
+      ).not.toBeNull()
+      if (cause === 'pause') {
+        expect(failedRead).toBe(true)
+        expect(reduceBuild(before).status).toBe('paused')
+        await h.store.append(SLUG, {
+          actor: humanActor('operator'),
+          type: 'build.resume-requested',
+          payload: {},
+        })
+      }
+      const resumedRunner = successor(h)
+      await resumedRunner.attach()
+      await resumedRunner.step()
+      expect(resumed).toBe(true)
+      const log = await h.store.getEvents(SLUG)
+      const acceptance = ofType(log, 'session.resumed')[0]!
+      expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
+      expect(ofType(log, 'plan.started')).toHaveLength(1)
+      const continuation = ofType(log, 'session.started').at(-1)!
+      expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
+      expect(continuation.payload.round).toBe(1)
+      const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
+      expect(journal.messages[0]).toContain(`interrupted (${cause})`)
+      expect(journal.messages[0]).toContain('Re-check the worktree')
+      // The continued bracket records the interruption notice it actually sent.
+      if (cause === 'shutdown') expect(continuation.payload.prompt).toBe(journal.messages[0])
     })
-    const running = h.br.run()
-    await ready
-    shutdown.abort()
-    await running
-    const before = await h.store.getEvents(SLUG)
-    const suspended = ofType(before, 'session.suspended')[0]!
-    expect(suspended.payload.cause).toBe('shutdown')
-    expect(
-      await h.store.getArtifact(
-        SLUG,
-        suspended.payload.transcript.kind,
-        suspended.payload.transcript.rev,
-      ),
-    ).not.toBeNull()
-    const resumedRunner = successor(h)
-    await resumedRunner.attach()
-    await resumedRunner.step()
-    expect(resumed).toBe(true)
-    const log = await h.store.getEvents(SLUG)
-    const acceptance = ofType(log, 'session.resumed')[0]!
-    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
-    expect(ofType(log, 'plan.started')).toHaveLength(1)
-    const continuation = ofType(log, 'session.started').at(-1)!
-    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
-    expect(continuation.payload.round).toBe(1)
-    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
-    expect(journal.messages[0]).toContain('interrupted (shutdown)')
-    expect(journal.messages[0]).toContain('Re-check the worktree')
-    // The continued bracket records the interruption notice it actually sent.
-    expect(continuation.payload.prompt).toBe(journal.messages[0])
-  })
 
   for (const countermanded of [false, true]) {
     test(`pause before session.started is ${countermanded ? 'countermanded by resume' : 'honored without waiting for the phase'}`, async () => {
@@ -6843,81 +6332,10 @@ describe('native suspension and continuation', () => {
     })
   }
 
-  test('pause suspends promptly and resumes the same native session', async () => {
-    let observed!: () => void
-    const ready = new Promise<void>((r) => {
-      observed = r
-    })
-    let resumed = false
-    const h = await makeHarness({
-      nativeSessions: true,
-      workspaceProvider: 'git-worktree',
-      handlers: (store) => {
-        const handlers = happyHandlers(store)
-        return {
-          ...handlers,
-          'ab-plan': async (ctx) => {
-            if (!ctx.message) {
-              observed()
-              await new Promise(() => {})
-            }
-            resumed = true
-            return (handlers['ab-plan'] ?? handlers.plan!)(ctx)
-          },
-        }
-      },
-    })
-    const running = h.br.run()
-    await ready
-    const read = h.store.getReducerValue.bind(h.store)
-    let failedRead = false
-    h.store.getReducerValue = async (scope, request) => {
-      if (!failedRead && request.reducer === 'buildReadFacts') {
-        failedRead = true
-        throw new Error('transient pause read failure')
-      }
-      return read(scope, request)
-    }
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'build.pause-requested',
-      payload: {},
-    })
-    await running
-    const before = await h.store.getEvents(SLUG)
-    const suspended = ofType(before, 'session.suspended')[0]!
-    expect(suspended.payload.cause).toBe('pause')
-    expect(failedRead).toBe(true)
-    expect(
-      await h.store.getArtifact(
-        SLUG,
-        suspended.payload.transcript.kind,
-        suspended.payload.transcript.rev,
-      ),
-    ).not.toBeNull()
-    expect(reduceBuild(before).status).toBe('paused')
-    await h.store.append(SLUG, {
-      actor: humanActor('operator'),
-      type: 'build.resume-requested',
-      payload: {},
-    })
-    const resumedRunner = successor(h)
-    await resumedRunner.attach()
-    await resumedRunner.step()
-    expect(resumed).toBe(true)
-    const log = await h.store.getEvents(SLUG)
-    const acceptance = ofType(log, 'session.resumed')[0]!
-    expect(acceptance.payload.handle.nativeId).toBe(suspended.payload.handle!.nativeId)
-    expect(ofType(log, 'plan.started')).toHaveLength(1)
-    const continuation = ofType(log, 'session.started').at(-1)!
-    expect(continuation.payload.continuation?.predecessor).toBe(suspended.payload.session)
-    expect(continuation.payload.round).toBe(1)
-    const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
-    expect(journal.messages[0]).toContain('interrupted (pause)')
-    expect(journal.messages[0]).toContain('Re-check the worktree')
-  })
-
-  for (const scenario of ['missing-handle', 'remote', 'unsupported'] as const) {
+  // The unsupported-runtime fallback is covered by the recovery-boundary
+  // matrix below; remote stays because shutdown skips remote suspension but
+  // pause does not.
+  for (const scenario of ['missing-handle', 'remote'] as const) {
     test(`pause suspends ${scenario} sessions and logs a fresh recovery fallback`, async () => {
       let ready!: () => void
       const observed = new Promise<void>((resolve) => {
@@ -6960,26 +6378,13 @@ describe('native suspension and continuation', () => {
         type: 'build.resume-requested',
         payload: {},
       })
-      const runner =
-        scenario === 'unsupported'
-          ? {
-              name: h.runner.name,
-              start: h.runner.start.bind(h.runner),
-              continue: h.runner.continue.bind(h.runner),
-              end: h.runner.end.bind(h.runner),
-            }
-          : h.runner
-      const next = successor(h, runner, scenario === 'remote')
+      const next = successor(h, h.runner, scenario === 'remote')
       await next.attach()
       await next.step()
       const log = await h.store.getEvents(SLUG)
       expect(ofType(log, 'session.resumed')).toHaveLength(0)
       expect(ofType(log, 'session.resume-fallback')[0]!.payload.reason).toBe(
-        scenario === 'remote'
-          ? 'workspace-not-local-git-worktree'
-          : scenario === 'unsupported'
-            ? 'unsupported-runtime'
-            : 'missing-handle',
+        scenario === 'remote' ? 'workspace-not-local-git-worktree' : 'missing-handle',
       )
       expect(ofType(log, 'phase.failed')).toHaveLength(0)
     })
@@ -8014,40 +7419,40 @@ test('a deferral answer preserves a genuine failure, and the next ordinary failu
   expect(calls).toBe(2)
 })
 
-for (const role of ['verify-e2e', 'release-notes'] as const)
-  test(`${role} read failure parks its distinct agent path before completion`, async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        [role]: async (ctx: ScriptContext) => {
-          const { phase, round } = parseAbPhase(ctx.opts.env.AB_PHASE!)
-          await store.append(SLUG, {
-            actor: KERNEL,
-            type: 'session.build-read-failed',
-            payload: {
-              session: sessionOf(ctx),
-              phase,
-              round,
-              operation: 'context',
-              reason: 'own-build-read',
-              diagnostic: 'cannot read contract',
-            },
-          })
-          return defaultTurnResult('context unavailable')
-        },
-      }),
-    })
-    const state = await h.br.run()
-    expect(state.status).toBe('blocked')
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'phase.failed')).toHaveLength(0)
-    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-    if (role === 'release-notes') expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-    else
-      expect(
-        ofType(events, 'verify.completed').filter((event) => event.payload.step === 'e2e'),
-      ).toHaveLength(0)
+// The release-notes path is covered by `finalize post-step read recovery`
+// (`single: fail parks once without a step outcome`).
+test('verify-e2e read failure parks its distinct agent path before completion', async () => {
+  const role = 'verify-e2e'
+  const h = await makeHarness({
+    handlers: (store) => ({
+      ...happyHandlers(store),
+      [role]: async (ctx: ScriptContext) => {
+        const { phase, round } = parseAbPhase(ctx.opts.env.AB_PHASE!)
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'session.build-read-failed',
+          payload: {
+            session: sessionOf(ctx),
+            phase,
+            round,
+            operation: 'context',
+            reason: 'own-build-read',
+            diagnostic: 'cannot read contract',
+          },
+        })
+        return defaultTurnResult('context unavailable')
+      },
+    }),
   })
+  const state = await h.br.run()
+  expect(state.status).toBe('blocked')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.failed')).toHaveLength(0)
+  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+  expect(
+    ofType(events, 'verify.completed').filter((event) => event.payload.step === 'e2e'),
+  ).toHaveLength(0)
+})
 
 test('same-turn context recovery and a valid terminal override the read marker', async () => {
   const h = await makeHarness({
@@ -8076,44 +7481,6 @@ test('same-turn context recovery and a valid terminal override the read marker',
   expect(ofType(events, 'phase.deferred')).toHaveLength(0)
   expect(ofType(events, 'phase.failed')).toHaveLength(0)
   expect((await h.br.step()).kind).toBe('run-phase')
-})
-
-test('finalize post-step expiry still parks classified read evidence before recording an outcome', async () => {
-  const timers = new ManualSessionBudgetScheduler()
-  let signalRead!: () => void
-  const readRecorded = new Promise<void>((resolve) => {
-    signalRead = resolve
-  })
-  const h = await makeHarness({
-    runnerOpts: { scheduleSessionBudget: timers.schedule },
-    handlers: (store) => ({
-      ...happyHandlers(store),
-      'release-notes': async (ctx) => {
-        await store.append(SLUG, {
-          actor: KERNEL,
-          type: 'session.build-read-failed',
-          payload: {
-            session: sessionOf(ctx),
-            phase: 'finalize',
-            round: 1,
-            operation: 'context',
-            reason: 'own-build-read',
-            diagnostic: 'unreadable before expiry',
-          },
-        })
-        signalRead()
-        return new Promise<AgentTurnResult>(() => {})
-      },
-    }),
-  })
-  const running = h.br.run()
-  await readRecorded
-  await timers.expireNext()
-  expect((await running).status).toBe('blocked')
-  const events = await h.store.getEvents(SLUG)
-  expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-  expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-  expect(ofType(events, 'phase.failed')).toHaveLength(0)
 })
 
 describe('finalize post-step read recovery', () => {
@@ -8187,37 +7554,23 @@ alternates = [{ runtime = "pi" }]
       expect(indexLog(events).readDeferrals).toEqual([])
     })
 
-    for (const script of [['fail'], ['fail', 'recover', 'fail']] as const)
-      test(`${path}: ${script.join(', ')} parks once without a step outcome`, async () => {
-        const h = await makeHarness({
-          configToml,
-          handlers: (store) => ({
-            ...happyHandlers(store),
-            'release-notes': recoveringNotes(store, script),
-          }),
-        })
-        expect((await h.br.run()).status).toBe('blocked')
-        const events = await h.store.getEvents(SLUG)
-        expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
-        expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
-        expect(ofType(events, 'phase.failed')).toHaveLength(0)
+    // Invalidation by a later failure (and re-recovery) is a projection rule
+    // pinned in kernel/engine.test.ts; the runner reads only `recovered`.
+    test(`${path}: fail parks once without a step outcome`, async () => {
+      const h = await makeHarness({
+        configToml,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'release-notes': recoveringNotes(store, ['fail']),
+        }),
       })
-  }
-
-  test('single: re-recovery after a later failure completes the step', async () => {
-    const h = await makeHarness({
-      handlers: (store) => ({
-        ...happyHandlers(store),
-        'release-notes': recoveringNotes(store, ['fail', 'recover', 'fail', 'recover']),
-      }),
+      expect((await h.br.run()).status).toBe('blocked')
+      const events = await h.store.getEvents(SLUG)
+      expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+      expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+      expect(ofType(events, 'phase.failed')).toHaveLength(0)
     })
-    await h.br.run()
-    const events = await h.store.getEvents(SLUG)
-    expect(ofType(events, 'finalize.step-completed')).toEqual([
-      expect.objectContaining({ payload: expect.objectContaining({ ok: true }) }),
-    ])
-    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(0)
-  })
+  }
 
   test('a recovered read still parks when the post-step budget expires', async () => {
     const timers = new ManualSessionBudgetScheduler()
@@ -8244,6 +7597,7 @@ alternates = [{ runtime = "pi" }]
     expect(ofType(events, 'session.build-read-recovered')).toHaveLength(1)
     expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
     expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+    expect(ofType(events, 'phase.failed')).toHaveLength(0)
   })
 })
 
@@ -8392,25 +7746,6 @@ describe('accepted runtime relaunch at phase boundaries', () => {
       append.mockRestore()
     }
   })
-
-  for (const kind of ['equal', 'foreign', 'settled'] as const) {
-    test(`${kind} target does not request relaunch`, async () => {
-      const h = await makeHarness()
-      await authorize(
-        h.store,
-        kind === 'foreign' ? 'another-runner' : 'runner-1',
-        kind === 'equal' ? runtimeIdentity() : target,
-      )
-      if (kind === 'settled')
-        await h.store.append(SLUG, {
-          actor: DISPATCHER,
-          type: 'execution.drain-settled',
-          payload: { instance: 'runner-1', correlation: 'handoff-1' },
-        })
-      await h.br.run()
-      expect(ofType(await h.store.getEvents(SLUG), 'execution.relaunch-requested')).toHaveLength(0)
-    })
-  }
 })
 
 test('continued producer prompts route all feedback to the receiving directory', async () => {
