@@ -74,7 +74,8 @@ bun ab web
 - `--host <addr>` serves beyond loopback with no access control; `ab web` warns that anyone who can reach the port can read the repository's builds.
 - `--json` prints one line, `{"url":"http://127.0.0.1:<port>/"}`, for agents that open or hand off the page.
 - Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
-- While idle, each poll reads only the repository change position. A fresh process starts the overview from the build roster and reads only live builds.
+- While idle, each poll reads only the repository change position.
+- A fresh process starts the overview from the build roster. It reads each live build plus each aborted build among the roster's 10 newest finished builds, to show aborts still cleaning up. An older abort still cleaning up appears at its next change. Startup never scans history.
 - A build change reads that build only, plus one roster read when a build starts, finishes or aborts. It never lists builds or reads event history.
 - A remote store server too old to serve the roster or the changed-builds feed fails the read with a typed error instead of falling back.
 
