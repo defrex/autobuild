@@ -2801,6 +2801,10 @@ does not stop, pause or displace a running build.
 5. normal ticket claims: `normal` start requests, then ordinary normal ready
    tickets while intake is on.
 
+An optimization attempt's ready ticket claims in its node's tier: the node's
+current build priority, decided at claim. Nothing is reserved for attempts,
+and they never jump ahead of other work in their tier.
+
 Each tier keeps its own order: start requests oldest first, parked leaves in
 the tick's visit order, nodes in slug order, tickets in the source's listing
 order. Start requests bypass intake off and open-PR backpressure; ordinary
@@ -3140,7 +3144,14 @@ normal. Urgent ready work is claimed before normal ready work, and ahead of
 normal parked work (§12 "Slot admission order"); a claimed ticket's priority
 becomes its build's priority, and nothing else changes. A single-ticket start
 request has its own admission tier (§11); an `urgent` request also makes its
-build urgent. Sources declare support. The file source stores
+build urgent. An optimization attempt (§13.1.1) is the exception: an in-flight
+attempt of an open, unstopped optimization node claims at the node's current
+build priority, whatever its ticket says and whether or not its source stores
+priority. `ab priority <node> urgent|normal` therefore reaches the node's
+attempts claimed afterwards; an attempt already claimed keeps its build's
+priority, as any build does. No slot is reserved for attempts, they preempt
+nothing, and within a tier the source's order applies. Sources declare
+support. The file source stores
 `priority = "urgent"` in its frontmatter, writes no key for normal, and covers
 urgent priority in its revisions; the in-memory fake behaves the same way.
 The hosted source stores priority in the hosted ticket store, covers it in its
@@ -3749,11 +3760,12 @@ marked. `ab ticket tree` labels such a ticket
 node an objective row (RFC 0005 §12): the starting and current value against
 the threshold, with the baseline's noise; accepted, rejected and running
 attempts; the budget used; and the stop cause once stopped. A panel objective
-shows win rates. Budget hours stop at the stop time. The terminal dashboard
+shows win rates. Budget hours are active hours, and they stop growing at the
+stop; a stopped node whose clock is not yet settled says `settling`. The terminal dashboard
 prints the row under the node's progress bar and in its detail view; `ab
 status` prints it on a continuation line and `ab build status <node>` under
 the `optimization node` label. `--json` summaries, `builds.list`, `builds.get`
-and `ab watch --json` records (`state.objective`, with elapsed hours evaluated
+and `ab watch --json` records (`state.objective`, with active hours evaluated
 at the record's own timestamp) carry the same fields under `objective`, and
 the dashboard row under `objectiveRow`, in the same terms. Each is projected
 from the digest in the build state the surface already reads. The web app's
@@ -4005,8 +4017,8 @@ runtime compatibility is not requested; the dispatcher instead records
 node only after a fact that can clear the blocker lands on its log. The
 request is the node's `propose` slot request, admitted ahead of normal ticket
 claims (§13.1, §12 "Slot admission order"). Before admission the dispatcher re-checks it against current
-state: a request whose node has stopped, whose hours budget expired, whose
-room fell to zero or below the recorded room, or whose node has no free
+state: a request whose node has stopped, whose active-hours budget is spent,
+whose room fell to zero or below the recorded room, or whose node has no free
 concurrency slot, and for which no session has started, records
 `optimization.proposal-withdrawn {request, reason: stopped|budget|concurrency}`.
 A withdrawal clears the request and never counts as an empty proposal. A
@@ -4051,9 +4063,14 @@ mode belongs to the stop policy, not to the proposer.
 Discovery reads only build digests. Each build digest carries an
 `optimization` signal, `false` for a plain node and a bounded summary for an
 optimization node (stop, measurement, attempts in flight, concurrency,
-attempt room, empty proposals, opening time, hours budget, the open request
-and its deposit, and the latest wake and deferral sequences), from which the
-dispatcher selects nodes to request, file or stop. A store service whose digest
+attempt room, empty proposals, opening time, hours budget, the active-hours
+`clock` view, the open request and its deposit, and the latest wake and
+deferral sequences), from which the dispatcher selects nodes to request, file
+or stop. Every build digest also carries `executionFacts`, the count of its
+`execution.started` and `execution.ended` facts. A service whose digest lacks
+the `clock` view skips the hours condition of a proposal request, which the
+build read then confirms; one whose digest lacks `executionFacts` fails the
+activity pass closed with the same typed capability error. A store service whose digest
 lacks the member fails the proposer stage and the creation hold closed with a
 typed capability error: nothing is proposed and every ready ticket carrying a
 creation key is withheld that pass. There is no per-node fallback read.
@@ -4068,8 +4085,8 @@ stop at any point lands real, verified progress. The node records
   `target.threshold` in the objective's direction;
 - `plateau`: `stop.plateau.attempts` consecutive `no-improvement` or `declined`
   settlements;
-- `budget`: attempts filed reached `budget.maxAttempts`, or the hours since the
-  first acceptance reached `budget.maxHours`;
+- `budget`: attempts filed reached `budget.maxAttempts`, or the node's active
+  hours reached `budget.maxHours`;
 - `exhausted`: recorded by the proposer when it has nothing left to try;
 - `operator`: recorded by a human through `ab objective <node> --stop` or the
   operator tool `optimization.stop`.
@@ -4086,6 +4103,64 @@ objective's stop mode applies, and that defaults to `abort`. Both refuse a
 build that is not a node, a node with no objective, a terminal node and a node
 that has already stopped. `--stop` does not combine with revision flags. A stop
 is final: a later revision is recorded but never resumes proposing.
+
+**Active hours.** `budget.maxHours` counts the time the node's optimization
+work actually runs, never wall-clock time since opening. The clock runs while
+at least one of the node's attempts is executing, or while the node runs its
+proposer or a measurement; overlapping runs count once. Executing means an
+execution is open: from its `execution.started` to its `execution.ended`. A
+queued attempt has no build, and a runner ends its execution on every wait
+(paused, blocked on an escalation, a ticket wait, awaiting merge), so time
+spent queued, parked or paused is never charged.
+
+The value is an exact union of execution intervals, kept in the node digest's
+`clock` (§15.5):
+
+- The node's own `execution.started` counts when, at that moment, the node has
+  an undeposited proposal, has no starting value, or has a panel head waiting
+  for its progress panel. Its matching end closes the interval. Other node
+  runs, such as a branch reconcile, are not counted.
+- Attempt runs reach the node in dispatcher batches,
+  `optimization.activity-recorded`. Every build has an `executionIntervals`
+  reduced value holding its execution facts no node has acknowledged yet, each
+  numbered from 1. On every tick the dispatcher compares each relevant attempt
+  build's digest `executionFacts` with the count the node's clock has
+  accounted, reads the value only for a build whose count grew, and records
+  the new facts. After the node's batch lands it appends the advisory
+  `execution.accounted {count}` to the build, whose value then drops those
+  facts. An idle tick reads and writes nothing.
+- Relevant builds are each in-flight attempt's newest build and the builds the
+  clock tracks. The dispatcher's first pass over a node writes a batch with
+  `starts: true`, before the node can file an attempt. From then on a build is
+  tracked from its first batch, or from its attempt's `attempt.settled`, so an
+  attempt that ends and settles between two ticks is still charged to its
+  real end. The
+  dispatcher releases a tracked build once no in-flight attempt runs on it, it
+  has no open execution, and every fact is accounted.
+- Activity before a batch's watermark, its latest fact, is compacted into a
+  running total, so the clock stays bounded. Every fact a later batch can carry
+  is at or after the watermark, because the batch only carries facts the
+  listing it read had already counted.
+
+`optimization.stopped` records the stop time `T` and closes the node's own
+open interval there. From then on every surface evaluates active hours at
+`min(now, T)`, so the value never grows after a stop. The next dispatcher pass
+over a stopped node reads every relevant build's value once and writes a
+final batch, `settles: true`, with every unaccounted fact at or before `T`;
+an interval still open at `T` ends there. A settlement too large for one event
+is chunked: earlier chunks add their pre-stop facts, as any batch after a stop
+does, and only the last chunk settles. The clock ignores everything after
+that settlement. Until it lands, which is normally the next tick, a surface
+shows the value as `settling`: it may change once more, by attempt runs from
+before the stop the node had not yet accounted.
+
+A node opened before active hours keeps a defined budget. Its log reduces once
+under the revised fold, so its own past proposer and measurement runs count.
+Its in-flight attempts' builds enter tracking when the upgraded dispatcher
+first sees them, with their whole execution history; attempts that settled
+before its clock's starting batch are not charged. A stopped node that has not completed
+gets one settlement, which adds its still in-flight attempts' runs up to its
+stop. A node that already completed reports its own runs, clipped at its stop.
 
 Every stop, whatever its cause, is enforced the same way on each tick until no
 attempt is in flight:
@@ -4546,7 +4621,7 @@ with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, advisory dispatcher `pr.checks-failed {pr, head, buildHead, checks, total, digest}` and `pr.checks-cleared {pr, head, cause}` (forge CI on finished leaves, §15.7), `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}`; dispatcher policy `escalation.raised {policyCause: wait-unresolvable}` ends an open wait whose ticket was rejected or deleted |
-| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}`; dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`. `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. The dispatcher records `exhausted` after two consecutive empty proposals. All are decisive except advisory `optimization.noise-exceeded`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
+| Optimization (§13.1.1) | Dispatcher `optimization.objective-accepted {objective, revision, harnessPin, specRev}`; human `optimization.objective-revised {changes, revision}` (revision ≥ 2; `changes` a nonempty subset of threshold, epsilon, maxAttempts, maxHours, plateau, stopMode, concurrency); `optimization.baseline-measured {revision, head, harnessPin, samples, median, spread, report?}` (a panel records its self-comparison win rate and that rate's distance from 0.5); advisory `optimization.noise-exceeded {revision, head, harnessPin, median, spread, epsilon, effectiveEpsilon}`; dispatcher `optimization.proposal-requested {id, head, room, budgetUsed: {attempts, hours}}` (`hours` is active hours); dispatcher `optimization.proposal-deferred {reason: paused \| blocked \| command \| restack \| integration \| landing \| compatibility}`; dispatcher `optimization.proposal-withdrawn {request, reason: stopped \| budget \| concurrency}`, which clears an undeposited request and never counts as an empty proposal; dispatcher `optimization.attempts-proposed {request, proposals: [{id, ticket, title, strategy}], reason?}`, written after ticket creation, with `reason` required when `proposals` is empty; `attempt.measurement-requested {id, node, candidate, baseline, harnessPin, revision, metric?, purpose?}` (`metric` the node's command or panel metric; `purpose` the objective purpose, required with a panel metric); kernel `attempt.sampled {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, report}` with exactly one of `medians` and `winRate` (`samples` is a panel's judge count); `attempt.measured {request, candidate, baseline, harnessPin, revision, samples, medians?: {candidate, baseline}, winRate?, delta, decision: improved \| no-improvement \| non-regressing \| regressed, spread?, report?}` with exactly one of `medians` and `winRate`; `optimization.progress-measured {revision, head, start, winRate, judges}`; `attempt.settled {attempt: {proposal, ticket, build?, branch?}, outcome: accepted \| no-improvement \| declined \| stopped \| aborted \| merged-unmeasured, measurement?: {revision, baseline, candidate, delta}, policy?: release-unmeasured, mergedSha?, note?, head?}`, with `measurement` required for `accepted` and `no-improvement`, `policy` required and `measurement` forbidden for `merged-unmeasured` (human actor), `policy` and `mergedSha` allowed only with it, `head` (the landed node head) only for `accepted`, and `attempt.branch` only for `declined` and `no-improvement`; `attempt.merged-unmeasured {proposal, ticket, build, sha?, reason: absent \| stale-head \| unrelated \| unresolvable, measuredCandidate?}`, with `sha` absent exactly for `unresolvable`; dispatcher `attempt.ticket-rejected {proposal, ticket, state}`, recording a settled attempt ticket move to rejected; dispatcher `attempt.branch-deleted {proposal, build, branch}` and `attempt.branch-cleanup-failed {proposal, build?, branch, error}` for a settled attempt's branch cleanup obligation; `optimization.stopped {cause: threshold \| plateau \| budget \| exhausted \| operator, mode: abort \| drain}`; dispatcher `optimization.activity-recorded {facts: [{build, n, instance, kind: started \| ended, at}], accounted, released?, watermark, starts?, settles?}`, at most 200 facts sorted by `at`, none after `watermark`, which records attempt execution facts into the active-hours clock; dispatcher `execution.accounted {count}`, advisory, acknowledging that a node accounted a build's first `count` execution facts. `execution.accounted`, `attempt.measurement-requested`, `attempt.sampled` and `attempt.measured` are on the attempt's log; every other member, including `attempt.settled`, is on the node's log. The dispatcher records `exhausted` after two consecutive empty proposals. All are decisive except advisory `optimization.noise-exceeded` and `execution.accounted`. A measurement failure is a kernel or dispatcher `escalation.raised {phase: measurement, source: policy, policyCause: measurement-failed}`. |
 | Judge panels (§13.1.1) | Kernel `panel.started {panel, candidate, baseline, harnessPin, purpose, rubric, harness, judges}` (judges 1–20); kernel `panel.judge-started {panel, judge, session, order: candidate-first \| baseline-first, runner, model?, account?, stream?, substitution?}`; agent (judge) `panel.preferred {panel, judge, session, preference: A \| B \| tie, reason}` (nonblank reason, no order); kernel `panel.judged {panel, judge, session, order, preference, reason}`; kernel `panel.judge-ended {panel, judge, session, outcome: completed \| no-terminal \| failed \| expired \| interrupted \| reclaimed, error?, transcript?}`. All live on the log of the build that runs the panel, and all are decisive. |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled`; `ticket.start-requested`, `ticket.start-cancelled`, `ticket.start-settled` and the advisory `ticket.identity-recorded`; configured hook health `hook.failing`, `hook.recovered` and `hook.skipped` (advisory attention, §16.1) |
 
@@ -4763,8 +4838,13 @@ dispatcher's settlement completes the build, and `done` then wins.
 an optimization node's own log, absent until the first
 `optimization.objective-accepted` (§13.1.1). It holds:
 
-- the latest acceptance with its time; `openedAt`, the first acceptance's time
-  and the start of the hours budget; the effective `objective`, which is the
+- the latest acceptance with its time; `openedAt`, the first acceptance's
+  time; `clock`, the active-hours clock (§13.1.1 "Active hours"): `activeMs`,
+  the union of activity before its `watermark`; `spans`, the closed active
+  spans since, sorted and disjoint; `open`, the running executions, the node's
+  own under `''` and each attempt's under its build slug; `builds`, the tracked
+  attempt builds with the execution facts accounted of each; and, once
+  stopped, `stoppedAt` and `settled`; the effective `objective`, which is the
   latest accepted objective with every later quick revision applied in order;
   `revision`; `revisedFields`, the fields quick-revised since the latest
   acceptance; and `rulerRevision`;
@@ -4809,12 +4889,13 @@ an optimization node's own log, absent until the first
   `optimization.attempts-proposed` closes it; `optimization.proposal-withdrawn`
   closes it only while it is undeposited. At most one request is open.
 
-Pure selectors over the digest take the current time. Elapsed hours run from
-`openedAt`. Stop eligibility is computed per cause: threshold when `current` has
+Pure selectors over the digest take the current time. Active hours at `now`
+are `activeMs` plus the length of the union of `spans` and the open intervals,
+each running to `now`, everything clipped at `stoppedAt`. Stop eligibility is computed per cause: threshold when `current` has
 reached `target.threshold` in the objective's direction (a panel compares its
 recorded progress, the head's win rate against the starting head, which it
 maximizes); plateau when `plateau` ≥ `stop.plateau.attempts`;
-budget when `filed` ≥ `maxAttempts` or elapsed hours ≥ `maxHours`. Admission
+budget when `filed` ≥ `maxAttempts` or active hours ≥ `maxHours`. Admission
 reports whether the node stopped, the attempts the budget still allows (none
 without `maxAttempts`), and the concurrency slots held neither by an in-flight
 attempt nor by a pending rejection. A tracker that keeps refusing the move
@@ -4856,7 +4937,7 @@ proposals and has positive room, and that no non-optimization blocker holds
 (paused, blocked, pending commands, compatibility deferral, active or
 conflicted node restack, landing intent, merged or closed PR).
 `proposalEligible` re-checks an open request against current state: not
-stopped, hours budget not expired, attempt room and a free concurrency slot
+stopped, active-hours budget not spent, attempt room and a free concurrency slot
 remaining, and the request's room no larger than the current room.
 `proposalWithdrawalDue` names the reason (`stopped`, `budget` or
 `concurrency`) an undeposited request fails it. `exhaustedStopDue` holds when

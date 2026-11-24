@@ -26,7 +26,17 @@ import type { TicketRef } from '../ontology'
 import { defineReducer } from './incremental'
 export { optimizationCompletionBlocker } from './integration-state'
 import type { BuildState } from './reducer'
-import { direction, HOUR_MS, optimizationAdmission } from './optimization-admission'
+import {
+  activeHours,
+  clipSpans,
+  clockView,
+  direction,
+  optimizationAdmission,
+  unionLength,
+  unionSpans,
+  type ClockSpan,
+  type OptimizationClockView,
+} from './optimization-admission'
 
 // The admission selectors live in a module with no reducer machinery, so the
 // browser dashboards can import them through dispatch capacity.
@@ -78,13 +88,42 @@ export interface OptimizationValue {
   head: string
 }
 
+/**
+ * The node's active-hours clock (SPEC §13.1.1): the exact union of the
+ * execution intervals the budget counts, the node's own proposer and
+ * measurement runs and its attempts' runs. The node's own facts fold from its
+ * log; attempt facts arrive in dispatcher batches. Activity before
+ * `watermark` is compacted into `activeMs`, so the clock stays bounded.
+ */
+export interface OptimizationClock {
+  /** The union of active time before `watermark`, in milliseconds. */
+  activeMs: number
+  /** Every later fact is at or after it; absent before the first batch. */
+  watermark?: string
+  /** Closed active spans at or after `watermark`: sorted and disjoint. */
+  spans: ClockSpan[]
+  /** Running executions: `''` is the node itself, any other key an attempt
+   * build. At most the attempts' concurrency plus one. */
+  open: Record<string, { instance: string; start: string }>
+  /** Tracked attempt builds: the execution facts accounted of each. */
+  builds: Record<string, number>
+  /** When the node stopped: every active interval ends there. */
+  stoppedAt?: string
+  /** The stop's settlement accounted every pre-stop fact; the clock never
+   * changes again. */
+  settled?: true
+}
+
 /** The bounded per-node digest. Plain JSON; its size never grows with the
  * number of settled attempts. */
 export interface OptimizationState {
   /** The latest `optimization.objective-accepted`. */
   accepted: EventPayload<'optimization.objective-accepted'> & { acceptedAt: string }
-  /** When the objective was first accepted: the start of the hours budget. */
+  /** When the objective was first accepted. The hours budget counts active
+   * hours on `clock`, not time since opening. */
   openedAt: string
+  /** The active-hours clock the hours budget reads. */
+  clock: OptimizationClock
   /** The accepted objective with every later quick revision applied. */
   objective: Objective
   /** The latest objective revision, across acceptances and quick revisions. */
@@ -160,7 +199,17 @@ function better(objective: Objective, a: number | undefined, b: number): number 
   return direction(objective) === 'minimize' ? Math.min(a, b) : Math.max(a, b)
 }
 
-/** Whether `event` is a node-log fact the digest folds. */
+/** Whether `event` is a fact the optimization fold reads: an optimization
+ * fact, or one of the node's own execution facts its clock counts. */
+export function foldsIntoOptimization(event: { type: string }): boolean {
+  return (
+    isOptimizationEvent(event) ||
+    event.type === 'execution.started' ||
+    event.type === 'execution.ended'
+  )
+}
+
+/** Whether `event` is a node-log optimization fact. */
 export function isOptimizationEvent(event: { type: string }): boolean {
   return (
     event.type.startsWith('optimization.') ||
@@ -185,6 +234,82 @@ function startRuler(state: OptimizationState, revision: number) {
   }
 }
 
+/** The node runs optimization work: an undeposited proposal, a starting
+ * measurement due, or a landed panel head awaiting its progress panel. */
+function nodeWorkDue(state: OptimizationState): boolean {
+  return (
+    (state.proposal !== undefined && state.proposal.deposited === undefined) ||
+    state.starting === undefined ||
+    (state.progressQueue?.length ?? 0) > 0
+  )
+}
+
+/** A fact's time, never below the clock's watermark (a store-skew guard). */
+function clockTime(clock: OptimizationClock, at: string): string {
+  return clock.watermark !== undefined && at < clock.watermark ? clock.watermark : at
+}
+
+function addSpan(clock: OptimizationClock, start: string, end: string) {
+  if (start < end) clock.spans = unionSpans([...clock.spans, [start, end]])
+}
+
+/** Start an interval under `key`; a start without the previous one's end
+ * closes it there. */
+function openInterval(clock: OptimizationClock, key: string, instance: string, at: string) {
+  const previous = clock.open[key]
+  if (previous !== undefined) addSpan(clock, previous.start, at)
+  clock.open[key] = { instance, start: at }
+}
+
+function closeInterval(clock: OptimizationClock, key: string, instance: string, at: string) {
+  const open = clock.open[key]
+  if (open === undefined || open.instance !== instance) return
+  addSpan(clock, open.start, at)
+  delete clock.open[key]
+}
+
+/** Fold every activity before `watermark` into `activeMs`. */
+function compactClock(clock: OptimizationClock, watermark: string) {
+  if (clock.watermark !== undefined && watermark <= clock.watermark) return
+  const open = Object.values(clock.open).map(({ start }) => [start, watermark] as ClockSpan)
+  clock.activeMs += unionLength(clipSpans([...clock.spans, ...open], undefined, watermark))
+  clock.spans = clipSpans(clock.spans, watermark)
+  for (const interval of Object.values(clock.open))
+    if (interval.start < watermark) interval.start = watermark
+  clock.watermark = watermark
+}
+
+function recordActivity(
+  clock: OptimizationClock,
+  batch: EventPayload<'optimization.activity-recorded'>,
+) {
+  if (clock.settled) return
+  // After a stop a batch adds only pre-stop facts; a settlement chunked over
+  // several events freezes the clock with its last, `settles`, chunk.
+  const stop = clock.stoppedAt
+  for (const fact of batch.facts) {
+    if (stop !== undefined && fact.at > stop) continue
+    if (fact.n <= (clock.builds[fact.build] ?? 0)) continue
+    const at = clockTime(clock, fact.at)
+    if (fact.kind === 'started') openInterval(clock, fact.build, fact.instance, at)
+    else closeInterval(clock, fact.build, fact.instance, at)
+  }
+  for (const [build, count] of Object.entries(batch.accounted))
+    clock.builds[build] = Math.max(clock.builds[build] ?? 0, count)
+  for (const build of batch.released ?? [])
+    if (clock.open[build] === undefined) delete clock.builds[build]
+  if (stop === undefined || !batch.settles) {
+    compactClock(clock, stop !== undefined && stop < batch.watermark ? stop : batch.watermark)
+    return
+  }
+  for (const interval of Object.values(clock.open)) addSpan(clock, interval.start, stop)
+  clock.open = {}
+  compactClock(clock, stop)
+  clock.spans = []
+  clock.builds = {}
+  clock.settled = true
+}
+
 /** Fold node-log events into the digest. Returns the advanced value; the
  * previous one is mutated in place when it exists. */
 export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEvent[]) {
@@ -196,6 +321,7 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         state = {
           accepted,
           openedAt: event.ts,
+          clock: { activeMs: 0, spans: [], open: {}, builds: {} },
           objective: structuredClone(event.payload.objective),
           revision: event.payload.revision,
           revisedFields: [],
@@ -219,7 +345,26 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
       continue
     }
     if (state === undefined) continue
+    const clock = state.clock
     switch (event.type) {
+      case 'execution.started': {
+        // The node's own runs count only while they serve the objective.
+        if (clock.stoppedAt !== undefined) break
+        const at = clockTime(clock, event.ts)
+        if (nodeWorkDue(state)) openInterval(clock, '', event.payload.instance, at)
+        else if (clock.open[''] !== undefined) {
+          addSpan(clock, clock.open['']!.start, at)
+          delete clock.open['']
+        }
+        break
+      }
+      case 'execution.ended':
+        if (clock.stoppedAt !== undefined) break
+        closeInterval(clock, '', event.payload.instance, clockTime(clock, event.ts))
+        break
+      case 'optimization.activity-recorded':
+        recordActivity(clock, event.payload)
+        break
       case 'optimization.objective-revised': {
         state.objective = applyObjectiveRevisions(state.objective, [event.payload.changes])
         state.revision = event.payload.revision
@@ -285,6 +430,17 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
         break
       case 'attempt.settled': {
         const { attempt, outcome, measurement } = event.payload
+        // A build the dispatcher has not accounted is still read once it
+        // settles. Only a started clock tracks: the dispatcher starts every
+        // node's clock on its first pass, before the node can file an
+        // attempt, so only a legacy node's history is not charged.
+        if (
+          !clock.settled &&
+          clock.watermark !== undefined &&
+          attempt.build !== undefined &&
+          clock.builds[attempt.build] === undefined
+        )
+          clock.builds[attempt.build] = 0
         const wasInFlight = state.inFlight.some((entry) => entry.proposal === attempt.proposal)
         state.inFlight = state.inFlight.filter((entry) => entry.proposal !== attempt.proposal)
         if (outcome === 'merged-unmeasured') {
@@ -340,6 +496,14 @@ export function advanceOptimization(acc: OptimizationAcc, events: readonly AbEve
       }
       case 'optimization.stopped':
         state.stopped ??= { ...event.payload, at: event.ts }
+        if (clock.stoppedAt === undefined) {
+          clock.stoppedAt = event.ts
+          const node = clock.open['']
+          if (node !== undefined) {
+            addSpan(clock, node.start, event.ts)
+            delete clock.open['']
+          }
+        }
         break
       case 'attempt.ticket-rejected':
         state.rejections = state.rejections.filter(
@@ -705,6 +869,8 @@ export interface OptimizationSignal {
   emptyProposals: number
   openedAt: string
   maxHours?: number
+  /** The active-hours clock's view; absent only from an older service. */
+  clock?: OptimizationClockView
   proposal?: { request: string; deposited?: { ids: string[]; at: string } }
   /** seq of the latest fact that can clear a proposer blocker. */
   wakeSeq?: number
@@ -728,6 +894,7 @@ export function optimizationSignal(
     emptyProposals: state.emptyProposals,
     openedAt: state.openedAt,
     ...(maxHours !== undefined ? { maxHours } : {}),
+    clock: clockView(state.clock),
     ...(proposal !== undefined
       ? {
           proposal: {
@@ -766,7 +933,8 @@ export function signalDue(
     signal.attemptRoom !== 0 &&
     signal.emptyProposals < 2 &&
     (signal.maxHours === undefined ||
-      (now.getTime() - Date.parse(signal.openedAt)) / HOUR_MS < signal.maxHours) &&
+      signal.clock === undefined ||
+      activeHours(signal.clock, now) < signal.maxHours) &&
     !compatibilityDeferred
   )
     return 'request'
