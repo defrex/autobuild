@@ -14,6 +14,21 @@ test('full immutable identity comparison needs no Store access', () => {
   const runtime = RUNTIME
   const state = reduceBuild([])
   expect(relaunchTarget(state, 'runner', runtime)).toBeUndefined()
+  // A draining authorization whose target equals the running runtime never
+  // requests relaunch.
+  state.drainingExecutions = {
+    runner: {
+      correlation: 'handoff',
+      authorization: {
+        instance: 'runner',
+        correlation: 'handoff',
+        run: 'old',
+        runtime,
+        targetRuntime: { ...runtime, source: { ...runtime.source } },
+      },
+    },
+  }
+  expect(relaunchTarget(state, 'runner', runtime)).toBeUndefined()
   for (const to of [
     { ...runtime, commit: 'changed' },
     { ...runtime, source: { ...runtime.source, location: '/changed' } },
