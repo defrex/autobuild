@@ -452,10 +452,13 @@ subscriptions a person holds, which notifications they want. Put those in
 - **Validation:** the merged result is validated exactly like `autobuild.toml`.
   An invalid local value gets the same message it would get in
   `autobuild.toml`, prefixed with the local file's path.
-- **Committed-only sections are rejected:** a local file that sets one, or an
-  unknown key, is refused with
-  `<path>/.autobuild/local.toml: <key> can only be set in autobuild.toml`. No
-  flag overrides this.
+- **Committed-only sections are rejected:** a local file that sets one is
+  refused with
+  `<path>/.autobuild/local.toml: <key> can only be set in autobuild.toml`.
+  An unknown key is refused with
+  `<path>/.autobuild/local.toml: "<key>" is not a configuration setting`. Both
+  messages go on to list the sections a local file accepts. No flag overrides
+  this.
 - **Reload:** a running dispatcher reads both files before every tick as one
   candidate, with the same hot or restart treatment per field. A rejected local
   file leaves the last accepted configuration running, exactly like a rejected

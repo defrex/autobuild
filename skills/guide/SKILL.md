@@ -641,8 +641,10 @@ so the file is never committed; edit it by hand.
   orchestrator, PR, merge, policy, base branch, generated files and profiles
   must agree across everyone sharing the store and ticket source, and the
   build-owned `[verify]`, `[finalize]`, `[commands]` and `[workspace]` come from
-  the build's own branch. A local file that sets one, or an unknown key, is
-  rejected: `<path>: <key> can only be set in autobuild.toml`.
+  the build's own branch. A local file that sets one is rejected with
+  `<path>: <key> can only be set in autobuild.toml`; an unknown key is
+  rejected with `<path>: "<key>" is not a configuration setting`. Both messages
+  then list the allowed sections.
 - **Merge:** tables merge key by key; scalars and arrays replace whole. A local
   file adds or changes keys but cannot remove a committed role, hook or key.
   Invalid local values get the `autobuild.toml` message, naming the local file.
