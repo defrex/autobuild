@@ -643,10 +643,16 @@ clock rollback, rescans, and resets the cache to the current clock.
 `.autobuild/local.toml`, beside `autobuild.toml` in a checkout, overrides
 personal settings for every `ab` command that reads configuration from that
 checkout, including a checkout-mode dispatcher. `ab init` ignores `.autobuild/`,
-so the file is never committed; edit it by hand.
+so the file is never committed. Edit overrides by hand; use
+`ab operator dispatcher [human|agent] [--json]` to read or save ownership.
+Saving may normalize local TOML formatting.
 
 - **Allowed:** `capacity`, `ticketScanIntervalSeconds`, `[upgrade]`, `[hooks]`,
-  `[roles]`, `[accounts]`.
+  `[roles]`, `[accounts]`, `[operator]`.
+- **Local only:** `[operator] dispatcher = "human" | "agent"` is optional, with no
+  default. Even an empty `[operator]` is rejected in `autobuild.toml`, with advice
+  to use `.autobuild/local.toml`. Preference changes are hot and never command a
+  dispatcher. Repository instructions take precedence.
 - **Committed only:** every other section — store, forge, plugins, tickets,
   orchestrator, PR, merge, policy, base branch, generated files and profiles
   must agree across everyone sharing the store and ticket source, and the
@@ -665,6 +671,16 @@ so the file is never committed; edit it by hand.
   `dispatcher local overrides (<path>): <settings>` (`localOverrides` in
   `--json`) when the held dispatcher took settings from its local file.
 - Build worktrees, origin-mode and hosted dispatchers never read it.
+
+### `[operator]`
+
+This table is local-only: put it in `.autobuild/local.toml`. Committed input
+rejects even an empty table. `ab operator dispatcher [human|agent] [--json]`
+reads or saves the preference; it never starts or stops a dispatcher.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `dispatcher` | unset | `"human"` or `"agent"` | Who runs a dispatcher when fresh status proves none is running; repository instructions take precedence. Hot, with no process action. |
 
 ### Root scalars
 
@@ -4018,3 +4034,24 @@ ticket numbering from 1. Old credentials remain invalid with 401; independently
 repository-established requests receive 403 project not registered. See
 [project deletion](references/operator-api.md#permanent-project-deletion) for
 generation-bound preview tokens and API semantics.
+
+## Dispatcher ownership and web views
+
+Read fresh `ab repository status --json` (`repository.status` for connected
+operators). `dispatcherRunning` is true for a holder, expired holder or unfinished
+handoff with a draining predecessor, including an empty drain map. Only durable
+retirement clears that evidence; missing/unreadable status fails closed for startup.
+Follow `ab-operate` boundaries: never start while running, honor repository rules,
+then the local ownership preference, or ask and offer to save it when unset.
+Agent-owned startup uses `ab dispatch --web --plain --json` and returns the URL;
+only a dispatcher this session started may be cleanly stopped on request.
+
+`ab web [--json]` always permits a read-only browser surface without a dispatcher
+lease. `ab dispatch --web` serves the same UI with the dispatcher; `--plain`
+keeps the URL on stdout and diagnostics on stderr. Loopback binding is the default;
+non-loopback serving has no access control. The overview and build detail show progress. Shared UI catalog charts demonstrate
+Gantt clock axes (actual times) and relative axes (aligned starts), repeated rounds,
+parallel segments and explicit waits. Step-duration charts compare per-run means
+and percentiles or total accumulated time. These catalog views do not imply
+dedicated production analytics routes or filters. Open tabs share refresh work;
+standalone web serving reads nothing while no browser is connected.

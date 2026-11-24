@@ -641,7 +641,7 @@ Treat every default-watch record as a call to act:
   and reason, including a rejected protocol-write preflight. The running generation stays active; the same failed input is
   suppressed until target or selected-store compatibility evidence changes or a fresh operator launch. Report
   launcher-contract changes or disabled automatic upgrades as manual restart
-  needs. Agents still never manage the process. Status shows a failure as
+  needs. Do not manage another session's dispatcher process. Status shows a failure as
   current only until a later different resolved target, a later successful
   preparation or handoff, or a later generation supersedes it; a failure marked
   `(superseded)` needs no action.
@@ -652,14 +652,14 @@ Treat every default-watch record as a call to act:
   upgrade opt-out. A different successfully resolved target or a fresh operator
   launch clears the effective hold. Existing phases keep their leases and continue
   on the restored runtime at their next boundary; unreadable decisive facts defer
-  with attention. Report the evidence to the operator; agents never restart the
+  with attention. Report the evidence to the operator; agents never restart another session's
   dispatcher.
 - Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
   persistent tick failure: diagnose through repository status and report the
   condition to the human. Repository read failures fail the watch tick and
   retry on the next tick, using the existing five-minute persistent-failure
   attention. For validation failures, inspect the stored tick error for reducer,
-  scope, cursor, field path, and running version/commit. Never start or run a dispatcher.
+  scope, cursor, field path, and running version/commit. Follow the ownership rules below before considering a new dispatcher.
 - Persistent source degradation: inspect the source cause and reset evidence,
   diagnose and report the continuing intake problem.
 - Abandoned ticket preparation (`ticket-preparation.resolved`, outcome
@@ -755,13 +755,25 @@ for the exceptions above.
 - Human checkout dispatch defaults to viewer for hosted placement. Humans can use
   `--takeover` to dispatch locally with a displacement warning; unreadable placement
   fails closed and names `--viewer` and `--takeover` as explicit recovery choices.
-  These human defaults and overrides do not authorize operator-agent dispatch.
-- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode (including `--viewer` and `--takeover`),
-  and no dispatcher process-management commands. This applies when the
-  dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
-  process, and configuration management belong to the maintainer. Diagnose
-  through repository status and report trouble to the human; reporting
-  does not authorize process intervention, including on a later retry.
+  These placement defaults do not authorize agent takeover; the ownership rules below still apply.
+- Inspect fresh repository status before starting: never start a dispatcher when
+  `dispatcherRunning` is true. Missing, unreadable or unrecognized running status
+  fails closed. A holder, expired holder or unfinished draining handoff counts as
+  running, regardless of lease age or an empty drain map.
+- When none is running, honor repository instructions first, then read
+  `ab operator dispatcher --json`. Follow the saved `human` or `agent` preference;
+  if unset, ask who should run it and offer to save the answer with
+  `ab operator dispatcher human` or `ab operator dispatcher agent`. This writes
+  only `.autobuild/local.toml`; it does not authorize takeover.
+- For human ownership, provide startup instructions and wait. For agent ownership,
+  start `ab dispatch --web --plain --json` under the harness's managed background
+  lifetime and give the person the returned URL. If that lifetime is unavailable,
+  explain that limitation and leave startup to the human.
+- Stop only a dispatcher this session started, only when requested, using a clean
+  stop and waiting for drain. Never adopt, restart, kill or manage another
+  session's dispatcher. Diagnose and report trouble without process intervention.
+- `ab web` is always permitted, including while a dispatcher is running; it is a
+  read-only surface and does not acquire a dispatcher lease.
 
 - You never claim to have done anything outside the tools you have. If you cannot
   observe it with a tool, say you cannot observe it.

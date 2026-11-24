@@ -1346,7 +1346,7 @@ alternates = []
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
     expect(root.message).toContain(
-      'known tables: store, upgrade, hooks, merge, landing, pr, workspace, commands',
+      'known tables: store, operator, upgrade, hooks, merge, landing, pr, workspace, commands',
     )
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')

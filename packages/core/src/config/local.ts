@@ -12,7 +12,7 @@
  * gets in `autobuild.toml`, naming the local file.
  */
 import { join } from 'node:path'
-import { ConfigError, parseConfigTable, validateConfigTable } from './load'
+import { admitCommittedConfig, ConfigError, parseConfigTable, validateConfigTable } from './load'
 import type { Config, configRootSchema } from './schema'
 
 /** Location of the local override file, relative to the checkout root. */
@@ -35,6 +35,7 @@ export const LOCAL_OVERRIDE_CLASSIFICATION = {
   capacity: 'local',
   ticketScanIntervalSeconds: 'local',
   upgrade: 'local',
+  operator: 'local',
   // Personal notifications.
   hooks: 'local',
   // Which model subscriptions a person holds.
@@ -171,6 +172,7 @@ export function parseLayeredConfig(
 ): LayeredConfig {
   const { committed, local } = input
   const committedTable = parseConfigTable(committed.text, committed.source)
+  admitCommittedConfig(committedTable, committed.source)
   const committedConfig = validateConfigTable(committedTable, committed.source, warn)
   if (local === undefined) return { config: committedConfig }
 

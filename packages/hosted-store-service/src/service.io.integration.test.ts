@@ -135,6 +135,7 @@ describe('hosted store service', () => {
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       upgradeStatus: {},
+      dispatcherRunning: false,
       publications: [],
     })
     expect(opens).toBe(1)

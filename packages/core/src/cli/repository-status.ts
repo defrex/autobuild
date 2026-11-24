@@ -103,6 +103,14 @@ export interface RepositoryUpgradeStatus {
   previous?: UpgradeStatusEntry
 }
 
+/** Conservative running evidence: only durable retirement clears an expired run. */
+export function dispatcherRunning(
+  dispatcher: DispatcherLiveness,
+  upgrades: RepositoryUpgradeStatus,
+): boolean {
+  return Boolean(dispatcher.holder || dispatcher.expiredHolder || upgrades.handoff)
+}
+
 export function projectUpgradeStatus(
   upgrades: DispatchUpgradeState,
   dispatcher: DispatcherLiveness,
@@ -179,6 +187,7 @@ export function projectUpgradeStatus(
 
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
+  dispatcherRunning: boolean
   operator: RepositoryOperatorStatus
   repo: string
   /** Bounded retention window; full history stays in the repository journal. */
@@ -368,6 +377,7 @@ export function projectRepositoryStatus(
     latestScan?.type === 'dispatcher.ticket-scan-completed'
       ? latestScan.payload.ticketDiagnostics
       : []
+  const upgradeStatus = projectUpgradeStatus(dispatchUpgradeReducer.reduce(events), dispatcher)
   return {
     ...(forgeHealthReducer.reduce(events)
       ? { forgeDegradation: forgeHealthReducer.reduce(events) }
@@ -381,7 +391,8 @@ export function projectRepositoryStatus(
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: dispatchUpgradeReducer.reduce(events),
-    upgradeStatus: projectUpgradeStatus(dispatchUpgradeReducer.reduce(events), dispatcher),
+    upgradeStatus,
+    dispatcherRunning: dispatcherRunning(dispatcher, upgradeStatus),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),
@@ -409,6 +420,7 @@ export function repositoryStatusFromFacts(
   dispatcher: DispatcherLiveness,
   now: Date = new Date(),
 ): RepositoryStatus {
+  const upgradeStatus = projectUpgradeStatus(facts.upgrades, dispatcher)
   const credentialLimits = activeForgeCredentialLimits(facts.forgeCredentialLimits, now)
   const warningLines = facts.status
     ? [...facts.status.roleWarnings, ...forgeReadinessWarnings(facts.status)]
@@ -423,7 +435,8 @@ export function repositoryStatusFromFacts(
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: facts.upgrades,
-    upgradeStatus: projectUpgradeStatus(facts.upgrades, dispatcher),
+    upgradeStatus,
+    dispatcherRunning: dispatcherRunning(dispatcher, upgradeStatus),
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),

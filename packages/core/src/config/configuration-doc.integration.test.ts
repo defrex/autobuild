@@ -373,6 +373,7 @@ function openMapEnumeration(summary: string): string[] {
 /** Owning prose sections remain explicit; accepted fields come from the schema walker. */
 const TABLE_HEADINGS: Record<string, string> = {
   accounts: '`[accounts]`',
+  operator: '`[operator]`',
   upgrade: '`[upgrade]`',
   merge: '`[[merge]]`',
   landing: '`[[merge]]`',
