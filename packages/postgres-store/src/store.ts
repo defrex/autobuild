@@ -56,11 +56,17 @@ import type {
 import { SQL } from 'bun'
 import {
   BuildFeedValidationError,
+  buildPageOrder,
   decodeBuildPageCursor,
   encodeBuildPageCursor,
+  hasBuildPageFilters,
+  requireBuildPageCursorOrder,
+  resolveBuildPageFilters,
   parseChangePosition,
   resolveBuildPageLimit,
   type BuildPage,
+  type BuildPageCursor,
+  type BuildPageFilters,
   type BuildPageOptions,
   type ChangedBuilds,
 } from '@defrex/autobuild/store-adapter'
@@ -383,9 +389,15 @@ export class PostgresBuildStore implements BuildStore {
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
     const limit = resolveBuildPageLimit(opts.limit)
-    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
+    const filters = resolveBuildPageFilters(opts)
+    const cursor =
+      opts.cursor === undefined
+        ? undefined
+        : requireBuildPageCursorOrder(decodeBuildPageCursor(opts.cursor), filters)
     if (cursor && !POSTGRES_TIMESTAMP_TEXT.test(cursor.at))
       throw new BuildFeedValidationError('malformed build page cursor')
+    if (hasBuildPageFilters(filters))
+      return this.listFilteredBuildsPage(repo, limit, filters, cursor)
     // The first page starts below every real key, so both pages are one
     // backward range scan of builds_repo_created_slug, limit + 1 rows; the
     // extra row decides `next`. The cursor keeps created_at's exact text, so
@@ -416,7 +428,70 @@ export class PostgresBuildStore implements BuildStore {
         builds: page.map((row) => this.projectedRecord(row)),
         next:
           rows.length > limit && last
-            ? encodeBuildPageCursor({ at: String(last.cursor_at), slug: String(last.slug) })
+            ? encodeBuildPageCursor({
+                order: 'created',
+                at: String(last.cursor_at),
+                slug: String(last.slug),
+              })
+            : null,
+      }
+    })
+  }
+
+  /**
+   * A filtered page: one backward range scan of the `build_listing_facts`
+   * index for the filter class and order, at most `limit + 1` entries, joined
+   * to `builds` by primary key. The kind and merged predicates are literals,
+   * so every plan, generic or custom, matches the class's (partial) index. The
+   * first page starts at `'infinity'` like the unfiltered scan. The cursor
+   * keeps the ordering column's exact text.
+   */
+  private async listFilteredBuildsPage(
+    repo: string,
+    limit: number,
+    filters: BuildPageFilters,
+    cursor: BuildPageCursor | undefined,
+  ): Promise<BuildPage> {
+    const order = buildPageOrder(filters)
+    const column = order === 'updated' ? 'updated_at' : 'created_at'
+    const params: (string | number)[] = [
+      repo,
+      cursor?.at ?? 'infinity',
+      cursor?.slug ?? '',
+      limit + 1,
+    ]
+    const where = ['f.repo = $1', `(f.${column}, f.slug) < ($2::timestamptz, $3)`]
+    if (filters.kind !== undefined) where.push(`f.node = ${filters.kind === 'node'}`)
+    if (filters.outcome === 'merged') where.push('f.merged')
+    if (filters.activeSince !== undefined) {
+      params.push(filters.activeSince)
+      where.push(`f.updated_at >= $${params.length}::timestamptz`)
+    }
+    const candidates = `SELECT b.*, f.${column}::text AS cursor_at, f.${column} AS page_key
+      FROM build_listing_facts f JOIN builds b ON b.slug = f.slug
+      WHERE ${where.join(' AND ')}
+      ORDER BY f.${column} DESC, f.slug DESC LIMIT $4`
+    return this.run(async (q) => {
+      const rows: Row[] = !(await this.hasReadableTicketSchema(q))
+        ? await q.unsafe(candidates, params)
+        : await q.unsafe(
+            `SELECT p.*, t.readable_id AS projected_ticket_id FROM (${candidates}) p
+            LEFT JOIN LATERAL (
+              SELECT readable_id FROM ab_tickets
+              WHERE p.ticket->>'source' = 'hosted' AND repo = p.repo
+                AND (id = p.ticket->>'id' OR lower(readable_id) = lower(p.ticket->>'id'))
+              LIMIT 1
+            ) t ON true
+            ORDER BY p.page_key DESC, p.slug DESC`,
+            params,
+          )
+      const page = rows.slice(0, limit)
+      const last = page.at(-1)
+      return {
+        builds: page.map((row) => this.projectedRecord(row)),
+        next:
+          rows.length > limit && last
+            ? encodeBuildPageCursor({ order, at: String(last.cursor_at), slug: String(last.slug) })
             : null,
       }
     })
