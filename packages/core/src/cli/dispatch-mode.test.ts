@@ -26,6 +26,31 @@ test('takeover arguments conflict with viewer and preserve other flags', () => {
   expect(parseDispatchArgs(['--takeover', '--once'], {}).takeover).toBe(true)
   expect(() => parseDispatchArgs(['--viewer', '--takeover'], {})).toThrow('cannot be combined')
 })
+
+test('viewer argument contract rejects startup mutations and checkout-less operation', () => {
+  for (const flags of [
+    ['--viewer', '--intake'],
+    ['--viewer', '--no-intake'],
+    ['--viewer', '--repository', 'https://example/repo'],
+    ['--dispatched-by', 'host'],
+    ['--viewer', '--dispatched-by', '  '],
+    ['--viewer', '--auto-merge'],
+  ])
+    expect(() => parseDispatchArgs(flags, {})).toThrow()
+  expect(
+    parseDispatchArgs(
+      ['--viewer', '--once', '--plain', '--interval', '2', '--dispatched-by', 'host'],
+      { AB_REPOSITORY: 'elsewhere' },
+    ),
+  ).toMatchObject({
+    viewer: true,
+    once: true,
+    plain: true,
+    intervalMs: 2000,
+    dispatchedBy: 'host',
+    repository: undefined,
+  })
+})
 for (const placement of [
   { status: 'known', placement: { hosted: true, origin: 'https://hosted.test:8443' } },
   { status: 'known', placement: { hosted: false } },

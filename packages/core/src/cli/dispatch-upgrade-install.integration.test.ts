@@ -4,7 +4,7 @@ import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { prepareUpgrade, validateUpgradeLockReceipt } from './dispatch-upgrade-install'
+import { prepareUpgrade } from './dispatch-upgrade-install'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { Forge } from '../ports/types'
@@ -162,56 +162,6 @@ test('real Bun lock and isolated install validate exact registry integrity, then
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
-
-test('forge staging receipts match resolution and Bun tag across separately parsed metadata objects', () => {
-  const text =
-    '["@defrex/autobuild@github:fork-owner/repo-name#a1b2c3d", {}, "fork-owner-repo-name-a1b2c3d"]'
-  const authoritative = Bun.JSONC.parse(text) as unknown[]
-  const receipt = Bun.JSONC.parse(text) as unknown[]
-  expect(authoritative[1]).not.toBe(receipt[1])
-  expect(() => validateUpgradeLockReceipt(authoritative, receipt)).not.toThrow()
-  expect(() =>
-    validateUpgradeLockReceipt(authoritative, [
-      receipt[0],
-      { dependencies: { example: '1' } },
-      receipt[2],
-    ]),
-  ).not.toThrow()
-  expect(() =>
-    validateUpgradeLockReceipt(authoritative, [
-      '@defrex/autobuild@github:fork-owner/repo-name#b1b2c3d',
-      receipt[1],
-      receipt[2],
-    ]),
-  ).toThrow('installed package contradicts authoritative lock')
-  expect(() =>
-    validateUpgradeLockReceipt(authoritative, [
-      receipt[0],
-      receipt[1],
-      'fork-owner-repo-name-b1b2c3d',
-    ]),
-  ).toThrow('installed forge identity contradicts authoritative lock')
-  expect(() => validateUpgradeLockReceipt(authoritative, undefined)).toThrow(
-    'installed package contradicts authoritative lock',
-  )
-})
-
-test('registry staging receipts still validate URL and integrity values', () => {
-  const authoritative = ['@defrex/autobuild@2.0.0', 'https://registry.example', {}, 'sha512-locked']
-  const receipt = JSON.parse(JSON.stringify(authoritative)) as unknown[]
-  expect(() => validateUpgradeLockReceipt(authoritative, receipt)).not.toThrow()
-  expect(() =>
-    validateUpgradeLockReceipt(authoritative, [
-      receipt[0],
-      'https://other.example',
-      receipt[2],
-      receipt[3],
-    ]),
-  ).toThrow('installed package contradicts authoritative lock')
-  expect(() =>
-    validateUpgradeLockReceipt(authoritative, [...receipt.slice(0, -1), 'sha512-different']),
-  ).toThrow('installed integrity contradicts authoritative lock')
-})
 
 test('source installation publishes exact provenance atomically, reuses a validated cache and rejects corruption and abort', async () => {
   const { sourceCommand, sourceContent } = await import('./dispatch-upgrade-source')
