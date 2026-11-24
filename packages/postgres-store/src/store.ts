@@ -47,6 +47,16 @@ import type {
 } from '@defrex/autobuild/store-adapter'
 import { SQL } from 'bun'
 import {
+  BuildFeedValidationError,
+  decodeBuildPageCursor,
+  encodeBuildPageCursor,
+  parseChangePosition,
+  resolveBuildPageLimit,
+  type BuildPage,
+  type BuildPageOptions,
+  type ChangedBuilds,
+} from '@defrex/autobuild/store-adapter'
+import {
   contentHash,
   humanActor,
   createBuildScopedStore,
@@ -141,6 +151,10 @@ import {
 import type { ReducerSnapshot, SnapshotScope } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 import { PlanRetryRunner, type Exec, type Row } from './retry'
+
+/** `timestamptz::text` under the ISO DateStyle, the page cursor's sort key. */
+const POSTGRES_TIMESTAMP_TEXT =
+  /^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?([+-]\d{2}(:?\d{2}){0,2}|Z)?( BC)?$/
 
 // The held-read poll cadence for event waits — a re-export of the canonical
 // core constant (AUT-388), not a second definition. See core
@@ -334,6 +348,66 @@ export class PostgresBuildStore implements BuildStore {
     return this.listBuildRecords(repo)
   }
 
+  async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+    parseChangePosition(position)
+    return this.run(async (q) => {
+      // One statement, so the head and the changed rows share a snapshot.
+      const rows: Row[] = await q`SELECT h.head, c.slug, c.position::text AS position
+        FROM (SELECT COALESCE((SELECT position FROM repo_change_positions WHERE repo = ${repo}), 0)::text AS head) h
+        LEFT JOIN build_change_positions c ON c.repo = ${repo} AND c.position > ${position}::bigint
+        ORDER BY c.position`
+      return {
+        position: String(rows[0]?.head ?? '0'),
+        builds: rows.flatMap((row) =>
+          row.slug === null || row.slug === undefined
+            ? []
+            : [{ slug: String(row.slug), position: String(row.position) }],
+        ),
+      }
+    })
+  }
+
+  async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
+    const limit = resolveBuildPageLimit(opts.limit)
+    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
+    if (cursor && !POSTGRES_TIMESTAMP_TEXT.test(cursor.at))
+      throw new BuildFeedValidationError('malformed build page cursor')
+    // The first page starts below every real key, so both pages are one
+    // backward range scan of builds_repo_created_slug, limit + 1 rows; the
+    // extra row decides `next`. The cursor keeps created_at's exact text, so
+    // microsecond rows neither repeat nor drop.
+    const at = cursor?.at ?? 'infinity'
+    const after = cursor?.slug ?? ''
+    return this.run(async (q) => {
+      const rows: Row[] = !(await this.hasReadableTicketSchema(q))
+        ? await q`SELECT *, created_at::text AS cursor_at FROM builds
+          WHERE repo = ${repo} AND (created_at, slug) < (${at}::timestamptz, ${after})
+          ORDER BY created_at DESC, slug DESC LIMIT ${limit + 1}`
+        : await q`SELECT b.*, b.created_at::text AS cursor_at, t.readable_id AS projected_ticket_id
+          FROM (
+            SELECT * FROM builds
+            WHERE repo = ${repo} AND (created_at, slug) < (${at}::timestamptz, ${after})
+            ORDER BY created_at DESC, slug DESC LIMIT ${limit + 1}
+          ) b
+          LEFT JOIN LATERAL (
+            SELECT readable_id FROM ab_tickets
+            WHERE b.ticket->>'source' = 'hosted' AND repo = b.repo
+              AND (id = b.ticket->>'id' OR lower(readable_id) = lower(b.ticket->>'id'))
+            LIMIT 1
+          ) t ON true
+          ORDER BY b.created_at DESC, b.slug DESC`
+      const page = rows.slice(0, limit)
+      const last = page.at(-1)
+      return {
+        builds: page.map((row) => this.projectedRecord(row)),
+        next:
+          rows.length > limit && last
+            ? encodeBuildPageCursor({ at: String(last.cursor_at), slug: String(last.slug) })
+            : null,
+      }
+    })
+  }
+
   private async listBuildRecords(repo?: string): Promise<BuildRecord[]> {
     return this.run(async (q) => {
       if (!(await this.hasReadableTicketSchema(q))) {
@@ -343,6 +417,8 @@ export class PostgresBuildStore implements BuildStore {
             : await q`SELECT * FROM builds WHERE repo = ${repo} ORDER BY created_at, slug`
         return rows.map((row) => this.record(row))
       }
+      // The readable-ticket lateral projection; listBuildsPage applies the
+      // same lookup to its page rows.
       const rows: Row[] =
         repo === undefined
           ? await q`SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b
@@ -362,13 +438,17 @@ export class PostgresBuildStore implements BuildStore {
           LIMIT 1
         ) t ON true
         ORDER BY b.created_at, b.slug`
-      return rows.map((row) => {
-        const record = this.record(row)
-        return record.ticket && row.projected_ticket_id
-          ? { ...record, ticket: { ...record.ticket, id: String(row.projected_ticket_id) } }
-          : record
-      })
+      return rows.map((row) => this.projectedRecord(row))
     })
+  }
+
+  /** A listing row's record with its current readable ticket id, when the
+   * lateral projection found one. */
+  private projectedRecord(row: Row): BuildRecord {
+    const record = this.record(row)
+    return record.ticket && row.projected_ticket_id
+      ? { ...record, ticket: { ...record.ticket, id: String(row.projected_ticket_id) } }
+      : record
   }
 
   async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {

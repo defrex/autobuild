@@ -1366,6 +1366,12 @@ its own repository-authorized route before the journal-existence gate. PostgreSQ
 counter DDL is additive, outside the guarded core schema/checksum, and must be
 explicitly migrated before the service rollout. Existing writers use the same
 triggers; rerunning migration preserves positions without replaying old events.
+Positions are ordered. `packages/core/src/store/build-feed.ts` holds the shared
+changed-builds feed and paged-listing vocabulary (`listBuildsChangedSince`,
+`listBuildsPage`, cursor and position codecs). Each build's latest position
+lives in `build_change_positions`, written by the same trigger that advances
+the counter (memory: a one-node-per-build linked list); its first creation
+backfills existing builds once at a bumped head.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
