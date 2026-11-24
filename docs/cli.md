@@ -26,6 +26,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `help` — Show the overview or one command's help.
 - `ticket` — Create, groom, inspect, and move tickets.
 - `repository` — Inspect durable dispatcher settings.
+- `operator` — Read or save the local dispatcher ownership preference.
 - `merges` — List merges awaiting consent.
 - `builds` — List builds and status.
 - `build` — Inspect one build's state and events.

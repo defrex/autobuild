@@ -401,6 +401,7 @@ These fields hot-reload:
 | `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary, except existing ChatGPT descriptors require stopped dispatch before replacement or removal (see [accounts](#accounts)); credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[profiles]` | Next agent session of a build that selected the profile; builds without it are unaffected. A build's selected profile name never changes after claim. |
+| `[operator]` | Next explicit ownership decision; never starts or restarts a dispatcher. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[hooks]` | After the next dispatcher tick: an added hook starts at its baseline, a removed one stops, and a changed one resumes from its saved progress. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
@@ -432,7 +433,7 @@ generated markers is maintained by hand. Defaults below are parser input default
 resolver inheritance is described separately. Nested required fields are required
 when their containing table or array entry is supplied.
 
-## Operator preference
+## `[operator]`
 
 <!-- configuration-reference:operator -->
 
@@ -512,6 +513,7 @@ subscriptions a person holds, which notifications they want. Put those in
 |---|---|
 | `capacity` | Allowed |
 | `ticketScanIntervalSeconds` | Allowed |
+| `[operator]` | Allowed |
 | `[upgrade]` | Allowed |
 | `[hooks]` | Allowed |
 | `[roles]` | Allowed |
@@ -534,7 +536,8 @@ subscriptions a person holds, which notifications they want. Put those in
 
 Allowed sections describe the local machine and process (`capacity`,
 `ticketScanIntervalSeconds`, `[upgrade]`), personal notifications (`[hooks]`),
-or the subscriptions a person holds (`[roles]`, `[accounts]`). Everything else
+the subscriptions a person holds (`[roles]`, `[accounts]`), or personal dispatcher
+ownership (`[operator]`, which is local-only). Everything else
 must agree across everyone sharing the repository's store, ticket source and
 forge, or defines a build's pipeline, which comes from the build's own branch
 on every machine. Each field block below repeats its section's classification.
