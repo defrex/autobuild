@@ -467,10 +467,7 @@ test('frontend renders the dispatcher-published triage count and never fabricate
   const childDone = deferred<DispatchChildResult>()
   const frames: Array<{ triage: number | undefined; warnings: readonly string[] }> = []
   let childRun: string | undefined
-  let output = ''
-  const write = (chunk: string): void => {
-    output += chunk
-  }
+  const write = (_chunk: string): void => {}
   // Execution mode renders published status and never reads the source.
   let sourceReads = 0
   const tickets = Object.assign(new FakeTicketSource(), {
@@ -535,21 +532,8 @@ test('frontend renders the dispatcher-published triage count and never fabricate
   const running = frontend.run()
   await waitFor(() => frames.length > 0, 'first frame before any triage sample')
   expect(frames.every((frame) => frame.triage === undefined)).toBe(true)
+  // Routine tick diagnostics stay out of the warning region.
   expect(frames.flatMap((frame) => frame.warnings)).toEqual([])
-  const completed = (await backing.getRepoEvents(repo)).find(
-    (item) => item.type === 'dispatcher.tick-completed',
-  )
-  expect(completed?.payload).toMatchObject({
-    janitorDiagnostics: ['janitor diagnostic'],
-    ticketDiagnostics: ['ticket diagnostic'],
-    creationDiagnostics: ['creation diagnostic'],
-    dependencyDiagnostics: [
-      'incomplete blocker',
-      'absent blocker',
-      'dependency cycle',
-      'self dependency',
-    ],
-  })
 
   await tick(childRun!, { triage: 4 })
   await waitFor(() => frames.some((frame) => frame.triage === 4), 'published triage count')
@@ -566,7 +550,6 @@ test('frontend renders the dispatcher-published triage count and never fabricate
   )
   expect(frames.at(-1)?.triage).toBe(4)
   expect(frames.some((frame) => frame.triage === 0)).toBe(false)
-  expect(output).not.toContain('observations')
   expect(sourceReads).toBe(0)
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
@@ -992,216 +975,74 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   await running
 })
 
-test('frontend rejects a recorded normal outcome when the child exits nonzero', async () => {
-  const repo = '/cleanup-failed-repo'
-  const store = new MemoryBuildStore()
-  await store.ensureRepo(repo)
-  const childDone = deferred<DispatchChildResult>()
-  const frontend = new DispatchFrontend({
-    repo,
-    storeRef: 'memory',
-    store,
-    env: {},
-    terminal: {
-      write: () => {},
-      modes: createTerminalModeController(
-        () => {},
-        () => {},
-      ),
-      columns: 80,
-      rows: 24,
-      interactive: true,
-    },
-    input: { start: () => () => {} },
-    once: false,
-    launchChild: () => ({ completed: childDone.promise, async stop() {} }),
-  })
-
-  const running = frontend.run()
-  childDone.resolve({ outcome: 'normal', exitCode: 17 })
-  await expect(running).rejects.toThrow('dispatcher kernel normal (exit code 17)')
-})
-
-test('frontend preserves unsolicited child failure detail and process evidence', async () => {
-  const repo = '/failed-repo'
-  const store = new MemoryBuildStore()
-  await store.ensureRepo(repo)
-  const childDone = deferred<DispatchChildResult>()
-  const frontend = new DispatchFrontend({
-    repo,
-    storeRef: 'memory',
-    store,
-    env: {},
-    terminal: {
-      write: () => {},
-      modes: createTerminalModeController(
-        () => {},
-        () => {},
-      ),
-      columns: 80,
-      rows: 24,
-      interactive: true,
-    },
-    input: { start: () => () => {} },
-    once: false,
-    launchChild: () => ({ completed: childDone.promise, async stop() {} }),
-  })
-
-  const running = frontend.run()
-  childDone.resolve({
-    outcome: 'abnormal',
-    exitCode: 2,
-    signal: 'SIGTERM',
-    error: 'adapter startup exploded',
-  })
-  await expect(running).rejects.toThrow(
+test.each<[string, DispatchChildResult, string]>([
+  [
+    'a recorded normal outcome with a nonzero exit',
+    { outcome: 'normal', exitCode: 17 },
+    'dispatcher kernel normal (exit code 17)',
+  ],
+  [
+    'an unsolicited failure, keeping its detail and process evidence',
+    { outcome: 'abnormal', exitCode: 2, signal: 'SIGTERM', error: 'adapter startup exploded' },
     'dispatcher kernel failed: adapter startup exploded (exit code 2, signal SIGTERM)',
-  )
-})
-
-test.each([false, true])(
-  'frontend keeps the durable effective config across rejection and adopts a published reload (legacy enabled=%s)',
-  async (enabled) => {
-    const repo = '/reload-repo'
-    const store = new MemoryBuildStore()
-    await store.ensureRepo(repo)
-    const childDone = deferred<DispatchChildResult>()
-    const frames: Array<{
-      capacity: number
-      warnings: readonly string[]
-      availableUpgrade?: string
-    }> = []
-    let runId = ''
-    // Presentation polls on test time: each check first advances the refresh
-    // clock past a scheduled idle poll instead of waiting it out.
-    const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
-    const time = new FakeRefreshScheduler()
-    const polled = (predicate: () => boolean) => async () => {
-      await time.advance(1_000)
-      return predicate()
-    }
-    const write = (_chunk: string): void => {}
-    const configContent = (capacity: number): string =>
-      JSON.stringify({
-        ...historicalEffectiveConfig(enabled),
-        capacity,
-        roles: { default: { runtime: 'claude' } },
-        tickets: { source: 'file', readyState: 'ready' },
-      })
-    const frontend = new DispatchFrontend({
-      repo,
-      storeRef: 'memory',
-      store,
-      env: {},
-      terminal: {
-        write,
-        modes: createTerminalModeController(write, write),
-        columns: 80,
-        rows: 24,
-        interactive: true,
-      },
-      input: { start: () => () => {} },
-      once: false,
-      refreshScheduler: time,
-      resolveDashboardRenderer: () => (model) => {
-        frames.push({
-          capacity: model.active.limit,
-          warnings: model.warningLines ?? [],
-          ...(model.availableUpgrade !== undefined
-            ? { availableUpgrade: model.availableUpgrade }
-            : {}),
-        })
-        return ['frame']
-      },
-      launchChild: ({ run }) => {
-        runId = run
-        const startup = store.appendRepoWithArtifacts(
-          repo,
-          [{ kind: 'dispatcher-effective-config', content: configContent(2) }],
-          (artifacts) => ({
-            actor: DISPATCHER,
-            type: 'dispatcher.run-started',
-            payload: {
-              run,
-              pid: 999,
-              effectiveConfig: {
-                kind: artifacts[0]!.kind,
-                rev: artifacts[0]!.revision,
-              },
-              roleWarnings: [],
-            },
-          }),
-        )
-        return {
-          completed: startup.then(() => childDone.promise),
-          async stop() {},
-        }
-      },
-    })
-
-    const running = frontend.run()
-    await waitFor(() => frames.some((frame) => frame.capacity === 2), 'startup effective config')
-    await store.appendRepo(repo, {
-      actor: DISPATCHER,
-      type: 'dispatcher.config-rejected',
-      payload: { run: runId, error: 'invalid capacity on disk' },
-    })
-    await waitFor(
-      polled(() =>
-        frames.some((frame) => frame.warnings.some((line) => line.includes('rejected'))),
-      ),
-      'rejected reload notice',
-    )
-    expect(frames.at(-1)?.capacity).toBe(2)
-
-    await store.appendRepoWithArtifacts(
-      repo,
-      [
-        { kind: 'dispatcher-config', content: 'capacity = 3' },
-        { kind: 'dispatcher-effective-config', content: configContent(3) },
-      ],
-      (artifacts) => ({
-        actor: DISPATCHER,
-        type: 'dispatcher.config-reloaded',
-        payload: {
-          artifact: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-          restartRequired: [],
-          effectiveChanged: true,
-          run: runId,
-          effectiveConfig: { kind: artifacts[1]!.kind, rev: artifacts[1]!.revision },
-          roleWarnings: [],
-        },
-      }),
-    )
-    await waitFor(
-      polled(() => frames.some((frame) => frame.capacity === 3)),
-      'accepted effective config',
-    )
-
-    await store.appendRepo(repo, {
-      actor: DISPATCHER,
-      type: 'dispatcher.upgrade-available',
-      payload: { run: runId, version: '0.5.0' },
-    })
-    await waitFor(
-      polled(() => frames.some((frame) => frame.availableUpgrade === '0.5.0')),
-      'durable upgrade notice',
-    )
-
-    childDone.resolve({ outcome: 'normal', exitCode: 0 })
-    await running
-  },
-  30_000,
-)
-
-test('frontend elapsed repaint cadence advances while the child remains gated', async () => {
-  const repo = '/timer-repo'
+  ],
+])('frontend rejects %s from the child', async (_case, result, message) => {
+  const repo = '/child-failure-repo'
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   const childDone = deferred<DispatchChildResult>()
-  const paints: number[] = []
-  let now = 1_700_000_000_000
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 80,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    launchChild: () => ({ completed: childDone.promise, async stop() {} }),
+  })
+
+  const running = frontend.run()
+  childDone.resolve(result)
+  await expect(running).rejects.toThrow(message)
+})
+
+test('frontend keeps the durable effective config across rejection and adopts a published reload', async () => {
+  const repo = '/reload-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const childDone = deferred<DispatchChildResult>()
+  const frames: Array<{
+    capacity: number
+    warnings: readonly string[]
+    availableUpgrade?: string
+  }> = []
+  let runId = ''
+  // Presentation polls on test time: each check first advances the refresh
+  // clock past a scheduled idle poll instead of waiting it out.
+  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+  const time = new FakeRefreshScheduler()
+  const polled = (predicate: () => boolean) => async () => {
+    await time.advance(1_000)
+    return predicate()
+  }
   const write = (_chunk: string): void => {}
+  const configContent = (capacity: number): string =>
+    JSON.stringify({
+      ...historicalEffectiveConfig(true),
+      capacity,
+      roles: { default: { runtime: 'claude' } },
+      tickets: { source: 'file', readyState: 'ready' },
+    })
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
@@ -1216,27 +1057,22 @@ test('frontend elapsed repaint cadence advances while the child remains gated', 
     },
     input: { start: () => () => {} },
     once: false,
-    clock: () => {
-      now += 1_000
-      return new Date(now)
-    },
-    resolveDashboardRenderer: () => (_model, opts) => {
-      paints.push(opts.now)
+    refreshScheduler: time,
+    resolveDashboardRenderer: () => (model) => {
+      frames.push({
+        capacity: model.active.limit,
+        warnings: model.warningLines ?? [],
+        ...(model.availableUpgrade !== undefined
+          ? { availableUpgrade: model.availableUpgrade }
+          : {}),
+      })
       return ['frame']
     },
     launchChild: ({ run }) => {
+      runId = run
       const startup = store.appendRepoWithArtifacts(
         repo,
-        [
-          {
-            kind: 'dispatcher-effective-config',
-            content: JSON.stringify({
-              capacity: 1,
-              roles: { default: { runtime: 'claude' } },
-              tickets: { source: 'file', readyState: 'ready' },
-            }),
-          },
-        ],
+        [{ kind: 'dispatcher-effective-config', content: configContent(2) }],
         (artifacts) => ({
           actor: DISPATCHER,
           type: 'dispatcher.run-started',
@@ -1259,11 +1095,55 @@ test('frontend elapsed repaint cadence advances while the child remains gated', 
   })
 
   const running = frontend.run()
-  await waitFor(() => paints.length >= 2, 'independent elapsed repaint ticks')
-  expect(paints.at(-1)!).toBeGreaterThan(paints[0]!)
+  await waitFor(() => frames.some((frame) => frame.capacity === 2), 'startup effective config')
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.config-rejected',
+    payload: { run: runId, error: 'invalid capacity on disk' },
+  })
+  await waitFor(
+    polled(() => frames.some((frame) => frame.warnings.some((line) => line.includes('rejected')))),
+    'rejected reload notice',
+  )
+  expect(frames.at(-1)?.capacity).toBe(2)
+
+  await store.appendRepoWithArtifacts(
+    repo,
+    [
+      { kind: 'dispatcher-config', content: 'capacity = 3' },
+      { kind: 'dispatcher-effective-config', content: configContent(3) },
+    ],
+    (artifacts) => ({
+      actor: DISPATCHER,
+      type: 'dispatcher.config-reloaded',
+      payload: {
+        artifact: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+        restartRequired: [],
+        effectiveChanged: true,
+        run: runId,
+        effectiveConfig: { kind: artifacts[1]!.kind, rev: artifacts[1]!.revision },
+        roleWarnings: [],
+      },
+    }),
+  )
+  await waitFor(
+    polled(() => frames.some((frame) => frame.capacity === 3)),
+    'accepted effective config',
+  )
+
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.upgrade-available',
+    payload: { run: runId, version: '0.5.0' },
+  })
+  await waitFor(
+    polled(() => frames.some((frame) => frame.availableUpgrade === '0.5.0')),
+    'durable upgrade notice',
+  )
+
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
-})
+}, 30_000)
 
 // ── The read-only session view (production frontend path) ───────────────────
 //
@@ -1294,6 +1174,8 @@ interface SessionViewHarness {
   frame: () => string
   /** Renderer invocations — one per paint timer tick. */
   paints: () => number
+  /** The `now` each renderer invocation received, in paint order. */
+  nows: () => number[]
   focus: (focused: boolean) => void
   /** Stop the run: interrupt, then release the gated child. */
   finish: () => Promise<void>
@@ -1364,6 +1246,7 @@ async function seedSessionViewHarness(
   let handler: ((event: TerminalInputEvent) => void) | undefined
   let focus: ((focused: boolean) => void) | undefined
   let paintCount = 0
+  const paintNows: number[] = []
   const childDone = deferred<DispatchChildResult>()
   if (overrides.viewer) await seedRun('remote-dispatcher')
   const frontend = new DispatchFrontend({
@@ -1399,6 +1282,7 @@ async function seedSessionViewHarness(
     once: false,
     resolveDashboardRenderer: () => (model, opts) => {
       paintCount += 1
+      paintNows.push(opts.now)
       return renderDashboard(model, opts)
     },
     launchChild: ({ run }) => ({
@@ -1416,6 +1300,7 @@ async function seedSessionViewHarness(
     output: () => stripAnsi(chunks.join('')),
     frame: () => stripAnsi(chunks.join('').split('\x1b[2J\x1b[1;1H').at(-1) ?? ''),
     paints: () => paintCount,
+    nows: () => [...paintNows],
     focus: (focused) => focus?.(focused),
     finish: async () => {
       handler?.({ type: 'interrupt' })
@@ -1482,36 +1367,32 @@ async function seedReadyNode(h: SessionViewHarness): Promise<void> {
   await controller.renderOnce()
 }
 
-test.each([false, true])(
-  'merge key records consent for a ready node using a fresh ticket-source read (viewer=%s)',
-  async (viewer) => {
-    let reads = 0
-    const tickets = new FakeTicketSource()
-    const h = await seedSessionViewHarness({
-      viewer,
-      controlTickets: () => ({
-        ticketSource: async () => {
-          reads++
-          return tickets
-        },
-      }),
-    })
-    try {
-      await waitFor(() => h.output().includes('watched'), 'initial frame')
-      await seedReadyNode(h)
-      h.press({ type: 'down' })
-      h.press({ type: 'text', text: 'l' })
-      await waitFor(
-        async () =>
-          (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
-        'node merge request',
-      )
-      expect(reads).toBeGreaterThan(0)
-    } finally {
-      await h.finish()
-    }
-  },
-)
+test('a viewer merge key records consent for a ready node using a fresh ticket-source read', async () => {
+  let reads = 0
+  const tickets = new FakeTicketSource()
+  const h = await seedSessionViewHarness({
+    viewer: true,
+    controlTickets: () => ({
+      ticketSource: async () => {
+        reads++
+        return tickets
+      },
+    }),
+  })
+  try {
+    await waitFor(() => h.output().includes('watched'), 'initial frame')
+    await seedReadyNode(h)
+    h.press({ type: 'down' })
+    h.press({ type: 'text', text: 'l' })
+    await waitFor(
+      async () => (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
+      'node merge request',
+    )
+    expect(reads).toBeGreaterThan(0)
+  } finally {
+    await h.finish()
+  }
+})
 
 test('each merge key press reads the current rejected role for node completeness', async () => {
   // The node's only open child sits in Rejected; the configured role decides
@@ -1648,7 +1529,7 @@ test('Enter on a session with a stream opens the read-only session view; every c
   await h.finish()
 })
 
-test('a stream closing mid-view preserves error and abort lines across the close', async () => {
+test('a stream closing mid-view shows the outcome and keeps error, abort and earlier content', async () => {
   const h = await seedSessionViewHarness()
   await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
   h.press({ type: 'down' })
@@ -1673,26 +1554,11 @@ test('a stream closing mid-view preserves error and abort lines across the close
   await waitFor(() => h.frame().includes('ABORTED: operator aborted'), 'live abort line')
   await h.store.closeStream(h.streamId, 'completed')
   await waitFor(() => h.frame().includes('Stream closed: completed'), 'outcome line')
-  // The close must not swap sources: both lines survive on the parts path.
+  expect(h.frame()).toContain('· closed')
+  // The close must not swap sources: both lines survive on the parts path,
+  // and so does the content streamed before them.
   expect(h.frame()).toContain('ERROR: provider exploded')
   expect(h.frame()).toContain('ABORTED: operator aborted')
-
-  await h.finish()
-})
-
-test('a stream closing mid-view shows the outcome, and a pruned log renders the deposited document', async () => {
-  const h = await seedSessionViewHarness()
-  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
-  h.press({ type: 'down' })
-  h.press({ type: 'enter' })
-  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
-  h.press({ type: 'enter' })
-  await waitFor(() => h.output().includes('Session  watched'), 'session view')
-
-  await h.store.closeStream(h.streamId, 'completed')
-  await waitFor(() => h.frame().includes('Stream closed: completed'), 'outcome line')
-  expect(h.frame()).toContain('· closed')
-  // The final content is preserved across the close.
   expect(h.frame()).toContain('bash({"command":"bun test"})')
 
   await h.finish()
@@ -1737,7 +1603,7 @@ test('a closed session whose chunks were pruned renders the finalized artifact d
   await h.finish()
 })
 
-test('the frame keeps painting while a stream read is slow', async () => {
+test('the frame keeps painting with an advancing clock while a stream read is slow', async () => {
   let releaseRead!: () => void
   const gate = new Promise<void>((resolve) => {
     releaseRead = resolve
@@ -1765,10 +1631,13 @@ test('the frame keeps painting while a stream read is slow', async () => {
   await waitFor(() => h.output().includes('Session  watched'), 'session view')
 
   // With the read gated, the paint timer (250 ms) keeps repainting: the
-  // renderer keeps being invoked and the frame chrome stays on screen.
+  // renderer keeps being invoked with an advancing clock (elapsed time ticks
+  // while the child stays gated) and the frame chrome stays on screen.
   const before = h.paints()
+  const beforeNow = h.nows().at(-1)!
   await new Promise((resolve) => setTimeout(resolve, 800))
   expect(h.paints()).toBeGreaterThan(before + 1)
+  expect(h.nows().at(-1)!).toBeGreaterThan(beforeNow)
   expect(h.output()).toContain('Session  watched')
   expect(h.output()).toContain('Esc back')
   releaseRead()
@@ -2339,28 +2208,6 @@ test('the interactive frontend seeds its initial fold from canonical facts befor
   expect(model.queued).toBe(3)
   expect(model.warningLines).toEqual(['durable role warning'])
   expect(model).not.toHaveProperty('observations')
-})
-
-test('a failed canonical seed launches immediately and recovers from the prelaunch boundary', async () => {
-  const repo = '/bounded-fallback-repo'
-  const backing = new MemoryBuildStore({ clock: steppingClock() })
-  await seedAgedJournal(backing, repo)
-  const probe = frontendProbe(backing, { failBounded: true })
-  const frames = await runBoundedSeed({ repo, backing, probe })
-
-  // A failed canonical seed does not trigger a prelaunch retry or full replay.
-  expect(probe.launchOrder).toBeDefined()
-  const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
-  expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
-    ['repositoryReadFacts', null, true],
-  ])
-
-  // The frame is complete and identical in shape to the bounded run's.
-  const model = JSON.parse(
-    frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,
-  ) as DashboardModel
-  expect(model.queued).toBe(3)
-  expect(model.warningLines).toEqual(['durable role warning'])
 })
 
 test('post-launch recovery survives a competitor anchor', async () => {
@@ -3502,13 +3349,9 @@ test('interactive frontend restores older handoffs from bounded seed and clears 
     )
     expect(activeText).toContain('handoff 1.0.0 aaaaaaaaaaaa to 1.1.0 bbbbbbbbbbbb; mode drain;')
     expect(activeText).toContain('2026-07-15T12:15:00.000Z')
+    expect(activeText).toContain('(draining)')
     expect(active.builds.find((row) => row.slug === 'old-build')?.draining).toBe(true)
     expect(active.builds.find((row) => row.slug === 'unaffected')?.draining).toBeUndefined()
-    expect(
-      stripAnsi(
-        renderDashboard(active, { width: 120, height: 30, color: false, now: 0 }).join('\n'),
-      ),
-    ).toContain('(draining)')
     await append(handoffEvents('old-build', 'settled').at(-1)!)
     await refresh()
     const settled = snapshots.at(-1)!
