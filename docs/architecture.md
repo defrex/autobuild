@@ -913,7 +913,11 @@ environment, and absolute repository root. `WorkspaceHandle.ref` remains a
 provider identifier, `path` is absolute inside the execution environment, and
 optional `localPath` explicitly identifies dispatcher reachability. Local Forge
 operations fall back to the main checkout when `localPath` is absent.
-`packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
+`packages/core/src/ports/workspace/git-worktree.ts` chooses between those
+candidates on canonical paths, so build worktrees never sit inside the
+checkout's package ancestry, validates the choice before each fresh provision
+(`WorktreeIsolationError` otherwise), and adopts legacy in-checkout
+registrations in place. It selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
 resumes at the branch tip, so the first provisioning fact remains immutable
 original provenance. Both providers record the verified checked-out commit as
@@ -1167,7 +1171,9 @@ slug routing. Upgrade performs the same composition lazily at its first merge
 conflict.
 
 `packages/core/src/cli/repo-state.ts` owns repository identity and store precedence
-(`--store` > `AB_STORE` > `[store] url` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
+(`--store` > `AB_STORE` > `[store] url` > `.autobuild/`), and supplies the two
+build worktree candidates: the state tree's `worktrees/` and a per-checkout
+root under the host state home; `packages/core/src/cli/store-opening.ts` is the
 production store composition boundary shared by finite sessionless queries and
 phase sessions. Its shared scoping primitive preserves remote token composition
 and adds local ambient authority only for filesystem stores. The dedicated

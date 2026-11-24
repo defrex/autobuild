@@ -130,7 +130,8 @@ others choose local storage. The destination is shown before the browser opens.
 OpenAI handles consent and authorization. No token is printed.
 
 Local credentials live in protected, ignored main-checkout
-`.autobuild/accounts/` state shared by worktrees. Project sign-in transfers
+`.autobuild/accounts/` state. Worktrees reach it through the main checkout,
+wherever they live. Project sign-in transfers
 credentials directly to the encrypted refreshing project secret named by
 `credentialEnv`; it retains no renewable credential locally. This name
 identifies a host access-token slot, not a refresh token supplied in TOML.
