@@ -15,7 +15,12 @@ import {
 } from './machine-auth'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import type { ZodType } from 'zod'
-import { systemClock, type BuildStore, type Clock } from '@defrex/autobuild/plugin-sdk'
+import {
+  systemClock,
+  TicketAssetValidationError,
+  type BuildStore,
+  type Clock,
+} from '@defrex/autobuild/plugin-sdk'
 import {
   clientIdentityError,
   AUTOBUILD_VERSION_HEADER,
@@ -745,6 +750,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             return failure(409, 'refusal', error.message, { code: 'priority-unsupported' })
           if (error instanceof TicketAssigneesUnsupported)
             return failure(409, 'refusal', error.message, { code: 'assignees-unsupported' })
+          if (error instanceof TicketAssetValidationError)
+            return failure(400, 'validation', error.message, { code: 'ticket-asset-invalid' })
           if (error instanceof TicketOperationError) {
             return failure(
               error.code === 'not-found' ? 404 : 409,

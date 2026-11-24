@@ -2355,16 +2355,20 @@ assets composed with legacy BuildStore attachments. Sources without native asset
 use the BuildStore. Existing service assets need no migration. Old local hosted-ticket
 assets are not moved and are not a fallback. Each has a kind and a name.
 
-- `ab ticket attach <id> <kind> <path> [--name <name>] [--json]` stores `<path>`
+- `ab ticket attach <id> <kind> <path> [--name <name>] [--json]`
+  (`tickets.asset.attach`) stores `<path>`
   (default name: its basename). Attaching the same kind and name again makes a
   new revision; earlier ones stay retrievable. Over the store's size limit
   (25 MiB by default, lower when the instance advertises a request ceiling) it is refused. Attach and
   remove leave a note on the ticket naming the asset.
 - `ab ticket show <id>` lists the current assets; with `--json` the ticket
-  gains an `assets` array.
-- `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]` downloads the
-  exact bytes of the latest (or given) revision; `ab ticket asset rm <id> <kind>
-  <name>` drops it from the current assets.
+  gains an `assets` array, as does `tickets.get`.
+- `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]`
+  (`tickets.asset.get`) downloads the exact bytes of the latest (or given)
+  revision; `ab ticket asset rm <id> <kind> <name>` (`tickets.asset.remove`)
+  drops it from the current assets.
+- The operator tools carry bytes as base64 under the same rules, limits and
+  notes; see the [operator API](references/operator-api.md#ticket-assets).
 - **Frozen at claim.** A claim pins the current revisions into the build.
   Hosted revisions are copied into immutable snapshots in the build store,
   preserving revision numbers and allowing reads without the ticket service.

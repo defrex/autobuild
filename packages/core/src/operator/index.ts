@@ -88,7 +88,14 @@ export type {
   OperatorTicketDetail,
   OperatorTicketPage,
   OperatorTicketQueue,
+  OperatorTicketView,
 } from './tickets'
+export type { OperatorTicketAsset, OperatorTicketAssetEntry } from './ticket-assets'
+export {
+  attachOperatorTicketAsset,
+  getOperatorTicketAsset,
+  removeOperatorTicketAsset,
+} from './ticket-assets'
 export {
   openOperatorTickets,
   operatorControlTickets,

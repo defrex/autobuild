@@ -119,6 +119,12 @@ import {
   type Unsubscribe,
 } from '../types'
 import {
+  FIRST_NAME as ASSET_FIRST_NAME,
+  FIRST_NAME_NEXT_KIND as ASSET_FIRST_NAME_NEXT_KIND,
+  HEAD as ASSET_HEAD,
+  NEXT_NAME_SAME_KIND as ASSET_NEXT_NAME_SAME_KIND,
+} from './ticket-asset-heads'
+import {
   DEFAULT_TICKET_ASSET_LIMITS,
   loadTicketAsset,
   storeTicketAssetBlobs,
@@ -1887,22 +1893,58 @@ export class SqliteBuildStore implements BuildStore {
     ticketId: string,
     opts?: { revisions?: boolean },
   ): Promise<TicketAssetSummary[]> {
-    const rows = this.db
-      .select()
-      .from(ticketAssets)
-      .where(and(eq(ticketAssets.repo, repo), eq(ticketAssets.ticketId, ticketId)))
-      .orderBy(asc(ticketAssets.kind), asc(ticketAssets.name), asc(ticketAssets.revision))
-      .all()
     if (opts?.revisions) {
-      return rows
+      return this.db
+        .select()
+        .from(ticketAssets)
+        .where(and(eq(ticketAssets.repo, repo), eq(ticketAssets.ticketId, ticketId)))
+        .orderBy(asc(ticketAssets.kind), asc(ticketAssets.name), asc(ticketAssets.revision))
+        .all()
         .filter((row) => !row.removed)
         .map((row) => summarizeTicketAsset(this.toTicketAssetMeta(row)))
     }
-    const latest = new Map<string, typeof ticketAssets.$inferSelect>()
-    for (const row of rows) latest.set(JSON.stringify([row.kind, row.name]), row)
-    return [...latest.values()]
-      .filter((row) => !row.removed)
-      .map((row) => summarizeTicketAsset(this.toTicketAssetMeta(row)))
+    // Current assets: seek from head to head (see ticket-asset-heads.ts), so
+    // only head rows are read, however many revisions each name retains.
+    type NameRow = { kind: string; name: string }
+    type HeadRow = {
+      repo: string
+      ticket_id: string
+      kind: string
+      name: string
+      revision: number
+      layout: 'file' | 'tree'
+      manifest: string
+      size: number
+      removed: number
+      created_at: string
+    }
+    const out: TicketAssetSummary[] = []
+    let at = this.sqlite.query(ASSET_FIRST_NAME).get(repo, ticketId) as NameRow | null
+    while (at) {
+      const head = this.sqlite.query(ASSET_HEAD).get(repo, ticketId, at.kind, at.name) as HeadRow
+      if (!head.removed)
+        out.push(
+          summarizeTicketAsset({
+            repo: head.repo,
+            ticketId: head.ticket_id,
+            kind: head.kind,
+            name: head.name,
+            revision: head.revision,
+            layout: head.layout,
+            size: head.size,
+            entries: JSON.parse(head.manifest) as TicketAssetMeta['entries'],
+            createdAt: head.created_at,
+          }),
+        )
+      at =
+        (this.sqlite
+          .query(ASSET_NEXT_NAME_SAME_KIND)
+          .get(repo, ticketId, at.kind, at.name) as NameRow | null) ??
+        (this.sqlite
+          .query(ASSET_FIRST_NAME_NEXT_KIND)
+          .get(repo, ticketId, at.kind) as NameRow | null)
+    }
+    return out
   }
 
   async removeTicketAsset(

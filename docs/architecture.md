@@ -1486,7 +1486,10 @@ BuildStore for other sources. `packages/core/src/store/ticket-assets.ts`
 holds the types, the limits, and the one validator every adapter calls;
 `packages/core/src/cli/ticket-assets.ts` holds the filesystem walk, the download
 writer, and the note builder; `ab ticket attach`, `asset get`, and `asset rm`
-live in `packages/core/src/cli/ticket.ts`. The optional hosted source asset
+live in `packages/core/src/cli/ticket.ts`. `packages/core/src/operator/ticket-assets.ts`
+is the operator half behind the `tickets.asset.*` registry tools, sharing the
+listing projection and id keying in `operator/ticket-asset-list.ts` with the CLI.
+The optional hosted source asset
 capability reuses RemoteBuildStore transport with the ticket URL and credential.
 Other sources retain the existing store path.
 A claim freezes the ticket's current assets into the build (SPEC §6.3):
