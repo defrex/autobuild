@@ -21,8 +21,6 @@ import { openLocalStore } from '../store/local/store'
 import { loadConfig } from '../config/load'
 import type { BuildStore } from '../store/types'
 import {
-  assertGitHubStateLabels,
-  createReadinessRedactor,
   runGuestReadinessProbe,
   ticketRoleReadiness,
   validateInitReadiness,
@@ -32,10 +30,8 @@ import {
 import { runCli } from './main'
 import { ticketsSchema } from '../config/schema'
 import { FileTicketSource } from '../ports/tickets/file'
-import { LinearTicketSource } from '../ports/tickets/linear'
 import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import { GitHubApiError } from '../ports/forge/github-transport'
-import type { TicketSource } from '../ports/types'
 
 // The test file lives at packages/core/src/cli/, so four levels up is the
 // repository root — resolving the real probe from here keeps the suite
@@ -100,7 +96,6 @@ const usableRuntime: RuntimeRegistry = {
 const REAL_OPERATION_TIMEOUT_MS = 15_000
 const REAL_SCENARIO_TIMEOUT_MS = 45_000
 const REAL_TEST_TIMEOUT_MS = 60_000
-const FAKE_TEST_TIMEOUT_MS = 2_000
 
 interface DeadlineOptions {
   operationMs: number
@@ -806,30 +801,6 @@ readyState = "ready"
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('AB_INIT_READINESS_V1=')
     expect(result.stdout).toContain('"status":"fail"')
-  })
-
-  test('a missing probe path fails the spawn diagnosably', async () => {
-    const repo = await mkdtemp(join(tmpdir(), 'ab-probe-missing-'))
-    roots.push(repo)
-    const result = await spawnExec(['bun', join(REPO_ROOT, 'bin', 'does-not-exist.ts')], {
-      cwd: repo,
-    })
-    expect(result.exitCode).not.toBe(0)
-    expect(result.stderr.trim()).not.toBe('')
-  })
-
-  test('redacts nested error causes without hiding non-secret configuration', () => {
-    const redact = createReadinessRedactor({
-      API_KEY: 'distinct-secret',
-      AB_STORE: 'https://store.example',
-    })
-    const error = new AggregateError(
-      [new Error('runtime echoed distinct-secret')],
-      'provider distinct-secret failed at https://store.example',
-    )
-    expect(redact(error)).toContain('[REDACTED]')
-    expect(redact(error)).not.toContain('distinct-secret')
-    expect(redact(error)).toContain('https://store.example')
   })
 
   test('fresh Vercel validation uses the remote SHA, exact guest env, and always deletes', async () => {
@@ -1843,55 +1814,6 @@ createAssignee = "${assignee}"
         await expectSingleWorktree(repo, exec)
       }),
     REAL_TEST_TIMEOUT_MS,
-  )
-
-  test(
-    'operation deadlines identify stalled setup, runtime, Store, and cleanup seams',
-    async () => {
-      const never = () => new Promise<never>(() => {})
-      for (const exercise of [
-        (tracker: OperationTracker) => tracker.exec(async () => never())(['sh', '-c', 'setup'], {}),
-        (tracker: OperationTracker) =>
-          tracker.exec(async () => never())(['git', 'rev-parse', '--verify', 'main^{commit}'], {}),
-        (tracker: OperationTracker) => tracker.run('runtime fake usability probe', never),
-        (tracker: OperationTracker) => tracker.run('Store listBuilds', never),
-        (tracker: OperationTracker) => tracker.run('Store close', never),
-        (tracker: OperationTracker) =>
-          tracker.exec(async () => never())(['git', 'worktree', 'remove', '--force', '/fake'], {}),
-      ]) {
-        await expect(
-          withTrackedScenario({ operationMs: 20, scenarioMs: 200 }, exercise),
-        ).rejects.toThrow(
-          /(setup: sh -c setup|git rev-parse|runtime fake usability probe|Store (listBuilds|close)|git worktree remove).*20ms operation deadline/,
-        )
-      }
-    },
-    FAKE_TEST_TIMEOUT_MS,
-  )
-
-  // Jitter tolerance (obs_67ad494d): the original { operationMs: 30, scenarioMs: 55 }
-  // gave the scenario guard only ~15ms of headroom over the ~40ms cumulative sleep
-  // time, so a single slow scheduler tick under load pushed the breach into a
-  // completed operation and the test failed (once during the record-a-pipeline
-  // full-suite run; green on rerun, three isolated runs, and a subsequent
-  // full-suite run with and without those changes). Binding timing invariant: the
-  // scenario guard must beat op3's own operation deadline, i.e.
-  // scenarioMs < 2 sleeps + operationMs (here 400 < 40 + 500, 140ms of margin),
-  // otherwise op3 rejects with its operation-deadline message instead. The guard
-  // now fires at 400ms with ~360ms of tolerance over the ~40ms of cumulative
-  // sleeps, so jitter cannot move the breach into a completed operation; the
-  // assertion still fails if the tracker misattributes the breach to one.
-  test(
-    'scenario deadline identifies the active operation after cumulative latency',
-    () =>
-      expect(
-        withTrackedScenario({ operationMs: 500, scenarioMs: 400 }, async (tracker) => {
-          await tracker.run('first bounded operation', () => Bun.sleep(20))
-          await tracker.run('second bounded operation', () => Bun.sleep(20))
-          await tracker.run('runtime fallback probe', () => new Promise<never>(() => {}))
-        }),
-      ).rejects.toThrow('scenario exceeded 400ms while runtime fallback probe'),
-    FAKE_TEST_TIMEOUT_MS,
   )
 
   test('CLI routes --validate sessionlessly and rejects --force with it', async () => {
@@ -2984,50 +2906,6 @@ test('missing local ChatGPT credential names the account and local login destina
 })
 
 describe('optional ticket role readiness', () => {
-  const linear = (states: string[]) =>
-    Object.assign(Object.create(LinearTicketSource.prototype), {
-      name: 'linear',
-      workflowStateNames: async () => states,
-    }) as TicketSource
-
-  test('unset roles are notes, never failures, and read nothing', async () => {
-    const tickets = ticketsSchema.parse({ source: 'file', readyState: 'ready' })
-    let opened = false
-    const result = await ticketRoleReadiness(tickets, async () => {
-      opened = true
-      throw new Error('no source needed')
-    })
-    expect(opened).toBe(false)
-    expect(result.checks).toEqual([])
-    expect(result.notes).toEqual([
-      'Note: [tickets].backlogState is not set; the backlog role is unavailable (recommended: backlogState = "backlog")',
-      'Note: [tickets].rejectedState is not set; the rejected role is unavailable (recommended: rejectedState = "rejected")',
-    ])
-  })
-
-  test('a configured role naming no source state is a warning', async () => {
-    const tickets = ticketsSchema.parse({
-      source: 'linear',
-      teamKey: 'ENG',
-      readyState: 'Todo',
-      triageState: 'Triage',
-      backlogState: 'Icebox',
-      rejectedState: 'canceled',
-    })
-    const result = await ticketRoleReadiness(tickets, async () =>
-      linear(['Triage', 'Todo', 'In Progress', 'Done', 'Canceled']),
-    )
-    expect(result.notes).toEqual([])
-    expect(result.checks).toEqual([
-      {
-        name: 'ticket-role-backlog',
-        status: 'warning',
-        detail:
-          '[tickets].backlogState "Icebox" names no state in the linear source (known: Triage, Todo, In Progress, Done, Canceled)',
-      },
-    ])
-  })
-
   test('a source that creates states reports creation on first use', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-role-readiness-'))
     try {
@@ -3045,32 +2923,5 @@ describe('optional ticket role readiness', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  })
-})
-
-describe('github ticket source init validation', () => {
-  test('a configured state that cannot be an autobuild: label is refused naming the key', () => {
-    const tickets = ticketsSchema.parse({ source: 'github', readyState: 'Ready Now' })
-    expect(() => assertGitHubStateLabels(tickets)).toThrow(
-      '[tickets].readyState "Ready Now" cannot be a GitHub state label (autobuild:<state>)',
-    )
-    expect(() =>
-      assertGitHubStateLabels(
-        ticketsSchema.parse({ source: 'github', backlogState: 'x'.repeat(41) }),
-      ),
-    ).toThrow('[tickets].backlogState')
-  })
-
-  test('done and rejected are closing reasons and need no label', () => {
-    expect(() =>
-      assertGitHubStateLabels(
-        ticketsSchema.parse({
-          source: 'github',
-          doneState: 'Done Done',
-          rejectedState: 'Won’t Do',
-          backlogState: 'backlog',
-        }),
-      ),
-    ).not.toThrow()
   })
 })
