@@ -35,9 +35,17 @@ import { readPersistedBuildDigests } from '@defrex/autobuild/store-adapter'
 import { assertPublicSnapshotReducer } from '@defrex/autobuild/store-adapter'
 import {
   readReducerValue,
+  readRollupValue,
   resolveReducerValue,
   type ReducerValueRequest,
   type ReducerValue,
+  type ReducerValueScope,
+  type ReducerValueStorage,
+  type RollupAdvance,
+  type RollupRow,
+  type RollupScope,
+  type RollupStorage,
+  type ValueCacheRow,
 } from '@defrex/autobuild/store-adapter'
 import { validateTickFinish } from '@defrex/autobuild/store-adapter'
 import type {
@@ -337,11 +345,13 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async getRepoChangePosition(repo: string): Promise<string> {
-    return this.run(async (q) => {
-      const rows: Row[] =
-        await q`SELECT position::text AS position FROM repo_change_positions WHERE repo = ${repo}`
-      return rows[0] ? String(rows[0].position) : '0'
-    })
+    return this.run((q) => this.changePositionOn(q, repo))
+  }
+
+  private async changePositionOn(q: Exec, repo: string): Promise<string> {
+    const rows: Row[] =
+      await q`SELECT position::text AS position FROM repo_change_positions WHERE repo = ${repo}`
+    return rows[0] ? String(rows[0].position) : '0'
   }
 
   async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
@@ -350,21 +360,25 @@ export class PostgresBuildStore implements BuildStore {
 
   async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
     parseChangePosition(position)
-    return this.run(async (q) => {
-      // One statement, so the head and the changed rows share a snapshot.
-      const rows: Row[] = await q`SELECT h.head, c.slug, c.position::text AS position
-        FROM (SELECT COALESCE((SELECT position FROM repo_change_positions WHERE repo = ${repo}), 0)::text AS head) h
-        LEFT JOIN build_change_positions c ON c.repo = ${repo} AND c.position > ${position}::bigint
-        ORDER BY c.position`
-      return {
-        position: String(rows[0]?.head ?? '0'),
-        builds: rows.flatMap((row) =>
-          row.slug === null || row.slug === undefined
-            ? []
-            : [{ slug: String(row.slug), position: String(row.position) }],
-        ),
-      }
-    })
+    return this.run((q) => this.changedBuildsOn(q, repo, position))
+  }
+
+  /** The feed query; shared by the public method and the rollup advance, which
+   * runs it on its own transaction. */
+  private async changedBuildsOn(q: Exec, repo: string, position: string): Promise<ChangedBuilds> {
+    // One statement, so the head and the changed rows share a snapshot.
+    const rows: Row[] = await q`SELECT h.head, c.slug, c.position::text AS position
+      FROM (SELECT COALESCE((SELECT position FROM repo_change_positions WHERE repo = ${repo}), 0)::text AS head) h
+      LEFT JOIN build_change_positions c ON c.repo = ${repo} AND c.position > ${position}::bigint
+      ORDER BY c.position`
+    return {
+      position: String(rows[0]?.head ?? '0'),
+      builds: rows.flatMap((row) =>
+        row.slug === null || row.slug === undefined
+          ? []
+          : [{ slug: String(row.slug), position: String(row.position) }],
+      ),
+    }
   }
 
   async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
@@ -1492,7 +1506,11 @@ export class PostgresBuildStore implements BuildStore {
     }
   }
 
-  async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+  async getReducerValue(
+    scope: ReducerValueScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    if (scope.kind === 'rollup') return readRollupValue(scope, request, this.rollupStorage(scope))
     if (scope.kind === 'repo' && request.reducer === 'dispatchPlacement') {
       resolveReducerValue(scope, request)
       return this.tx(async (q) => {
@@ -1536,36 +1554,170 @@ export class PostgresBuildStore implements BuildStore {
         })) as (AbEvent | RepositoryEvent)[]
       },
       put: (key, snapshot) => this.putSnapshot(scope, key, snapshot),
-      read: async (key) => {
-        const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
-        const rows: Row[] = await this.run(
-          (q) =>
-            q`SELECT version, cursor, state, state::text AS raw FROM reducer_snapshots WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key}`,
-        )
-        const row = rows[0]
-        if (!row) return null
-        let state: unknown = null
-        try {
-          state = json(row.state)
-        } catch {
-          /* malformed JSON cache string */
-        }
-        return {
-          snapshot: { version: num(row.version), cursor: num(row.cursor), state },
-          token: String(row.raw),
-        }
-      },
-      repair: async (key, observed, snapshot) => {
-        const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
-        const rows: Row[] = await this.tx(
-          (q) =>
-            q`UPDATE reducer_snapshots SET version=${snapshot.version}::integer, cursor=${snapshot.cursor}::bigint, state=${JSON.stringify(snapshot.state)}::jsonb, updated_at=${this.now()}::timestamptz WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key} AND version=${observed.snapshot.version}::integer AND cursor=${observed.snapshot.cursor}::bigint AND state::text=${observed.token}
-          AND (${observed.snapshot.cursor}::bigint <= ${snapshot.cursor}::bigint OR ${observed.snapshot.cursor}::bigint > CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END)
-          AND ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END RETURNING 1`,
-        )
-        return rows.length > 0
-      },
+      read: (key) => this.run((q) => this.valueRowOn(q, scope, key)),
+      repair: (key, observed, snapshot) =>
+        this.tx((q) => this.repairValueOn(q, scope, key, observed, snapshot)),
     })
+  }
+
+  /** One saved value row, with the exact stored bytes as its token. */
+  private async valueRowOn(
+    q: Exec,
+    scope: SnapshotScope,
+    key: string,
+  ): Promise<ValueCacheRow | null> {
+    const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
+    const rows: Row[] =
+      await q`SELECT version, cursor, state, state::text AS raw FROM reducer_snapshots WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key}`
+    const row = rows[0]
+    if (!row) return null
+    let state: unknown = null
+    try {
+      state = json(row.state)
+    } catch {
+      /* malformed JSON cache string */
+    }
+    return {
+      snapshot: { version: num(row.version), cursor: num(row.cursor), state },
+      token: String(row.raw),
+    }
+  }
+
+  /** The conditional repair of a saved value row the reader observed. */
+  private async repairValueOn(
+    q: Exec,
+    scope: SnapshotScope,
+    key: string,
+    observed: ValueCacheRow,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
+    const rows: Row[] =
+      await q`UPDATE reducer_snapshots SET version=${snapshot.version}::integer, cursor=${snapshot.cursor}::bigint, state=${JSON.stringify(snapshot.state)}::jsonb, updated_at=${this.now()}::timestamptz WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key} AND version=${observed.snapshot.version}::integer AND cursor=${observed.snapshot.cursor}::bigint AND state::text=${observed.token}
+      AND (${observed.snapshot.cursor}::bigint <= ${snapshot.cursor}::bigint OR ${observed.snapshot.cursor}::bigint > CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END)
+      AND ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END RETURNING 1`
+    return rows.length > 0
+  }
+
+  /** A build's named-value storage bound to one transaction's executor: the
+   * same SQL as `getReducerValue` and `putSnapshot`, so a rollup advance can
+   * read and save cold build values without touching the pool. */
+  private txValueStorage(q: Exec, scope: { kind: 'build'; slug: string }): ReducerValueStorage {
+    return {
+      highWater: async () => {
+        const rows: Row[] =
+          await q`SELECT (SELECT COALESCE(MAX(seq),0) FROM events WHERE build=${scope.slug}) AS tail FROM builds WHERE slug=${scope.slug}`
+        if (!rows[0]) throw new Error('unknown reducer scope')
+        return num(rows[0].tail)
+      },
+      read: (key) => this.valueRowOn(q, scope, key),
+      events: async (since, through) => {
+        const rows: Row[] =
+          await q`SELECT * FROM events WHERE build=${scope.slug} AND seq>${since} AND seq<=${through} ORDER BY seq`
+        return rows.map((row) => this.eventRow(row, scope))
+      },
+      put: (key, snapshot) => this.putSnapshotOn(q, scope, key, snapshot),
+      repair: (key, observed, snapshot) => this.repairValueOn(q, scope, key, observed, snapshot),
+    }
+  }
+
+  /** The rollup engine's port (SPEC §7.7). The fast path reads outside any
+   * transaction, so an idle read opens none. An advance runs in one
+   * transaction holding a transaction-scoped advisory lock per rollup key
+   * (pooler-safe: no session state), and every query of it — head, feed,
+   * contributions, cold build-value reads and saves, and the conditional
+   * commit — runs on that transaction's executor. It never waits on the
+   * pool, so it completes on a single-connection pool. */
+  private rollupStorage(scope: RollupScope): RollupStorage {
+    const repo = scope.repo
+    return {
+      now: () => this.clock(),
+      // One connection executes statements sequentially.
+      buildReadConcurrency: 1,
+      head: () => this.getRepoChangePosition(repo),
+      read: (key) => this.run((q) => this.rollupRowOn(q, repo, key)),
+      serialize: (key, run) =>
+        this.tx(async (q) => {
+          await q`SELECT pg_advisory_xact_lock(hashtextextended(${`rollup:${repo}:${key}`}, 0))`
+          return run(this.rollupAdvanceOn(q, repo))
+        }),
+    }
+  }
+
+  private async rollupRowOn(q: Exec, repo: string, key: string): Promise<RollupRow | null> {
+    const rows: Row[] =
+      await q`SELECT version, state, state::text AS raw FROM reducer_snapshots WHERE scope_kind='rollup' AND scope_key=${repo} AND reducer=${key}`
+    const row = rows[0]
+    if (!row) return null
+    let state: unknown = null
+    try {
+      state = json(row.state)
+    } catch {
+      /* malformed row: a miss */
+    }
+    return { version: num(row.version), state, token: String(row.raw) }
+  }
+
+  private rollupAdvanceOn(q: Exec, repo: string): RollupAdvance {
+    return {
+      head: () => this.changePositionOn(q, repo),
+      read: (key) => this.rollupRowOn(q, repo, key),
+      changed: (since) => this.changedBuildsOn(q, repo, since),
+      buildValue: async (slug, request) => {
+        const scope = { kind: 'build', slug } as const
+        const exists: Row[] = await q`SELECT 1 FROM builds WHERE slug=${slug}`
+        if (!exists[0]) return null
+        return readReducerValue(scope, request, this.txValueStorage(q, scope))
+      },
+      contributions: async (key, slugs) => {
+        const found = new Map<string, unknown>()
+        if (slugs.length === 0) return found
+        const rows: Row[] =
+          await q`SELECT scope_key, state FROM reducer_snapshots WHERE scope_kind='build' AND reducer=${key} AND scope_key = ANY(${q.array([...slugs], 'text')})`
+        for (const row of rows) {
+          try {
+            found.set(String(row.scope_key), json(row.state))
+          } catch {
+            found.set(String(row.scope_key), null) // malformed: the engine recomputes
+          }
+        }
+        return found
+      },
+      commit: async (key, observed, row, contributionKey, writes) => {
+        const state = JSON.stringify(row.state)
+        const now = this.now()
+        const written: Row[] =
+          observed === null
+            ? await q`INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+                VALUES ('rollup', ${repo}, ${key}, ${row.version}::integer, 0, ${state}::jsonb, ${now}::timestamptz)
+                ON CONFLICT (scope_kind, scope_key, reducer) DO NOTHING RETURNING 1`
+            : await q`UPDATE reducer_snapshots SET version=${row.version}::integer, cursor=0, state=${state}::jsonb, updated_at=${now}::timestamptz
+                WHERE scope_kind='rollup' AND scope_key=${repo} AND reducer=${key} AND state::text=${observed} RETURNING 1`
+        if (!written[0]) return false
+        const upserts = [...writes].filter(([, contribution]) => contribution !== null)
+        const deletes = [...writes].filter(([, contribution]) => contribution === null)
+        if (upserts.length)
+          await q`INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+            SELECT 'build', t.slug, ${contributionKey}, ${row.version}::integer, 0, t.state::jsonb, ${now}::timestamptz
+            FROM unnest(${q.array(
+              upserts.map(([slug]) => slug),
+              'text',
+            )}, ${q.array(
+              upserts.map(([, contribution]) => JSON.stringify(contribution)),
+              'text',
+            )}) AS t(slug, state)
+            ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+              version = EXCLUDED.version, cursor = 0, state = EXCLUDED.state, updated_at = EXCLUDED.updated_at`
+        if (deletes.length)
+          await q`DELETE FROM reducer_snapshots WHERE scope_kind='build' AND reducer=${contributionKey}
+            AND scope_key = ANY(${q.array(
+              deletes.map(([slug]) => slug),
+              'text',
+            )})`
+        return true
+      },
+      renew: async () => {},
+    }
   }
 
   private async seedHead(q: Exec, scope: SnapshotScope): Promise<number> {
@@ -1785,43 +1937,54 @@ export class PostgresBuildStore implements BuildStore {
     snapshot: ReducerSnapshot,
   ): Promise<boolean> {
     const key = scope.kind === 'build' ? scope.slug : scope.repo
-    const state = JSON.stringify(snapshot.state ?? null)
     const repoExists =
       scope.kind === 'repo' && hasRepositoryReadContext()
         ? (knownRepositoryExists(this, key) ?? (await this.getRepo(key)) !== null)
         : undefined
     try {
-      // Tail bounds and never-decrease guards remain atomic. Outside a request
-      // the existence guard is atomic too; request-scoped reuse is safe because
-      // repository journals have no deletion API.
-      const rows: Row[] = await this.tx(
-        (q) => q`INSERT INTO reducer_snapshots
-            (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
-          SELECT ${scope.kind}, ${key}, ${reducer}, ${snapshot.version}::integer,
-            ${snapshot.cursor}::bigint, ${state}::jsonb, ${this.now()}::timestamptz
-          WHERE ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build'
-              THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${key}), 0)
-              ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
-            AND CASE WHEN ${scope.kind}='build'
-              THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
-              ELSE ${
-                repoExists === undefined
-                  ? this.sql`EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key})`
-                  : this.sql`${repoExists}::boolean`
-              } END
-          ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
-            version = EXCLUDED.version, cursor = EXCLUDED.cursor,
-            state = EXCLUDED.state, updated_at = EXCLUDED.updated_at
-          WHERE EXCLUDED.version >= reducer_snapshots.version AND (EXCLUDED.cursor > reducer_snapshots.cursor
-            OR (EXCLUDED.cursor = reducer_snapshots.cursor
-              AND EXCLUDED.version > reducer_snapshots.version))
-          RETURNING 1 AS written`,
-      )
-      return rows.length > 0
+      return await this.tx((q) => this.putSnapshotOn(q, scope, reducer, snapshot, repoExists))
     } catch (error) {
       if (PostgresBuildStore.missingSnapshotTable(error)) return false
       throw error
     }
+  }
+
+  /** The monotone snapshot upsert on one executor. `repoExists` replaces the
+   * repository existence guard with a request-scoped answer when known. */
+  private async putSnapshotOn(
+    q: Exec,
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+    repoExists?: boolean,
+  ): Promise<boolean> {
+    const key = scope.kind === 'build' ? scope.slug : scope.repo
+    const state = JSON.stringify(snapshot.state ?? null)
+    // Tail bounds and never-decrease guards remain atomic. Outside a request
+    // the existence guard is atomic too; request-scoped reuse is safe because
+    // repository journals have no deletion API.
+    const rows: Row[] = await q`INSERT INTO reducer_snapshots
+        (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+      SELECT ${scope.kind}, ${key}, ${reducer}, ${snapshot.version}::integer,
+        ${snapshot.cursor}::bigint, ${state}::jsonb, ${this.now()}::timestamptz
+      WHERE ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build'
+          THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${key}), 0)
+          ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
+        AND CASE WHEN ${scope.kind}='build'
+          THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
+          ELSE ${
+            repoExists === undefined
+              ? this.sql`EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key})`
+              : this.sql`${repoExists}::boolean`
+          } END
+      ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+        version = EXCLUDED.version, cursor = EXCLUDED.cursor,
+        state = EXCLUDED.state, updated_at = EXCLUDED.updated_at
+      WHERE EXCLUDED.version >= reducer_snapshots.version AND (EXCLUDED.cursor > reducer_snapshots.cursor
+        OR (EXCLUDED.cursor = reducer_snapshots.cursor
+          AND EXCLUDED.version > reducer_snapshots.version))
+      RETURNING 1 AS written`
+    return rows.length > 0
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {

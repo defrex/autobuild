@@ -219,6 +219,9 @@ async function hostedSandboxBackend(
 }
 const storeResourceRoutes = new Set([
   'POST reducer-values',
+  // Rollup values (SPEC §7.7): served inside the store server's own gate,
+  // where an unknown repository answers the empty value and creates nothing.
+  'POST rollup-values',
   'GET events',
   'POST events',
   // The session-events compare-and-append (AUT-342): the same resource route

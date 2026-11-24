@@ -1484,3 +1484,89 @@ test.skipIf(!testUrl)(
     }
   },
 )
+
+if (testUrl)
+  describe('PostgreSQL rollup advances on a small pool (SPEC §7.7)', () => {
+    const repo = 'rollup/pg'
+    const scope = { kind: 'rollup', repo } as const
+    const request = { reducer: 'stepDurations', args: { outcome: 'all' }, read: { window: 'all' } }
+    const kernel = { kind: 'kernel' } as const
+    const agent = { kind: 'agent', role: 'plan', session: 's' } as const
+
+    async function plan(store: PostgresBuildStore, slug: string, round: number) {
+      await store.append(slug, { actor: kernel, type: 'plan.started', payload: { round } })
+      await store.append(slug, {
+        actor: agent,
+        type: 'plan.completed',
+        payload: { round, artifact: { kind: 'plan', rev: 0 } },
+      })
+    }
+    async function seed(store: PostgresBuildStore, count: number) {
+      for (let i = 0; i < count; i++) {
+        await store.createBuild({ slug: `rollup-${i}`, repo })
+        await plan(store, `rollup-${i}`, 1)
+      }
+    }
+    const planCount = (value: unknown) =>
+      (value as { steps: { step: string; count: number }[] }).steps.find((s) => s.step === 'plan')
+        ?.count
+
+    async function savedRows(url: string) {
+      const raw = new SQL(url)
+      try {
+        const [rollups] =
+          await raw`SELECT COUNT(*)::int AS n FROM reducer_snapshots WHERE scope_kind='rollup' AND scope_key=${repo}`
+        // The only named values these builds have are their saved timelines.
+        const timelines = await raw`SELECT scope_key FROM reducer_snapshots WHERE scope_kind='build'
+          AND scope_key LIKE 'rollup-%' AND reducer LIKE 'value.v2.%'`
+        return { rollups: Number(rollups!.n), timelines: timelines.length }
+      } finally {
+        await raw.close()
+      }
+    }
+
+    test('a cold and an incremental advance complete on a single-connection pool', async () => {
+      const database = await isolatedDatabase()
+      const store = new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+        blobs: new MemoryBlobStore(),
+      })
+      try {
+        await seed(store, 5)
+        expect(planCount((await store.getReducerValue(scope, request)).value)).toBe(5)
+        await plan(store, 'rollup-2', 2)
+        expect(planCount((await store.getReducerValue(scope, request)).value)).toBe(6)
+        expect(await savedRows(database.url)).toEqual({ rollups: 1, timelines: 5 })
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    }, 20_000)
+
+    test('four concurrent cold readers on a two-connection pool agree and query the feed once', async () => {
+      const database = await isolatedDatabase()
+      const store = new PostgresBuildStore(new SQL(database.url, { max: 2 }), {
+        blobs: new MemoryBlobStore(),
+      })
+      try {
+        await seed(store, 5)
+        const feedFrom: string[] = []
+        const feed = Reflect.get(store, 'changedBuildsOn').bind(store)
+        Reflect.set(store, 'changedBuildsOn', (q: unknown, target: string, since: string) => {
+          feedFrom.push(since)
+          return feed(q, target, since)
+        })
+        const answers = await Promise.all(
+          Array.from({ length: 4 }, () => store.getReducerValue(scope, request)),
+        )
+        for (const answer of answers) {
+          expect(answer.value).toEqual(answers[0]!.value)
+          expect(planCount(answer.value)).toBe(5)
+        }
+        expect(feedFrom).toEqual(['0'])
+        expect(await savedRows(database.url)).toEqual({ rollups: 1, timelines: 5 })
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    }, 20_000)
+  })

@@ -157,7 +157,7 @@ export class ReducerValueIncompatibilityError extends Error {
   override readonly name = 'ReducerValueIncompatibilityError'
   constructor(
     readonly reducer: string,
-    readonly scope: import('../snapshots').SnapshotScope,
+    readonly scope: import('../snapshots').ReducerValueScope,
     readonly clientVersion: number,
     readonly serverVersion: number | undefined,
     readonly reason: string,
