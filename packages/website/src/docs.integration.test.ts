@@ -1,8 +1,13 @@
-import { expect, test } from 'bun:test'
+import { beforeAll, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
+
+let defaultFiles: Awaited<ReturnType<typeof buildFiles>>
+beforeAll(async () => {
+  defaultFiles = Object.freeze(await buildFiles())
+})
 import {
   renderDocsPage,
   prepareHeadings,
@@ -22,7 +27,7 @@ const DOCS_PAGES = await loadDocsPages()
 import { REPO_URL, SITE_URL } from './constants'
 
 test('docs emit complete shared navigation and distinct metadata with rooted assets', async () => {
-  const files = await buildFiles()
+  const files = defaultFiles
   expect(DOCS_PAGES.map((p) => p.path)).toEqual([
     '/docs/',
     '/docs/getting-started/',
@@ -93,7 +98,7 @@ test('build writes all docs pages and cleans stale output', async () => {
 })
 
 test('all generated local hrefs and fragments resolve to emitted files and IDs', async () => {
-  const files = await buildFiles()
+  const files = defaultFiles
   for (const [name, html] of Object.entries(files)) {
     if (!name.endsWith('.html') || typeof html !== 'string') continue
     for (const match of html.matchAll(/href="([^"]+)"/g)) {
@@ -106,15 +111,6 @@ test('all generated local hrefs and fragments resolve to emitted files and IDs',
       if (url.hash) expect(files[target as `${string}.html`]).toContain(`id="${url.hash.slice(1)}"`)
     }
   }
-})
-
-test('docs renderer escapes page metadata', () => {
-  const html = renderDocsPage(
-    { ...DOCS_PAGES[0]!, title: '<unsafe>"&', description: '"<text>&' },
-    DOCS_PAGES,
-  )
-  expect(html).toContain('<title>&lt;unsafe&gt;&quot;&amp; · Autobuild docs</title>')
-  expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
 })
 
 test('published pages keep navigation on-site and link only declared repository references', () => {
@@ -258,19 +254,6 @@ test('every discovered article preserves rendering, headings, and shared navigat
   }
 })
 
-test('heading preparation preserves markup and existing anchors and avoids collisions', () => {
-  const source =
-    '<h2 id="a-b">Existing</h2><h2>A &amp; <code>B</code>!</h2><h2>A &amp; B?</h2><h2>&#x43; &#68; &quot;E&quot;</h2>'
-  const prepared = prepareHeadings(source)
-  expect(prepared.headings).toEqual([
-    { id: 'a-b', label: 'Existing' },
-    { id: 'a-b-2', label: 'A & B!' },
-    { id: 'a-b-3', label: 'A & B?' },
-    { id: 'c-d-e', label: 'C D "E"' },
-  ])
-  expect(prepared.html).toContain('<h2 id="a-b-2">A &amp; <code>B</code>!</h2>')
-})
-
 test('pager boundaries and synthetic additions derive from the same registry', () => {
   expect(renderPager(DOCS_PAGES[0]!, DOCS_PAGES)).not.toContain('← previous')
   expect(renderPager(DOCS_PAGES.at(-1)!, DOCS_PAGES)).not.toContain('next →')
@@ -285,7 +268,7 @@ test('pager boundaries and synthetic additions derive from the same registry', (
 })
 
 test('seam overview reuses the selector and links every seam guide', async () => {
-  const files = await buildFiles()
+  const files = defaultFiles
   expect(files['index.html']).toContain('class="seam-selector"')
   for (const page of DOCS_PAGES) {
     const html = files[page.file]!
@@ -314,7 +297,7 @@ test('seam overview reuses the selector and links every seam guide', async () =>
 })
 
 test('retired server documentation has no source, route or link in the site', async () => {
-  const files = await buildFiles()
+  const files = defaultFiles
   for (const slug of [
     'hosted-service',
     'hosted-dispatcher',

@@ -134,22 +134,37 @@ test('app-load scratch is removed when the run fails', async () => {
   expect(existsSync(seen)).toBe(false)
 })
 
-test('app-load refuses a temporary root inside the checkout', async () => {
+test('both app-load APIs refuse checkout-contained temporary roots without work', async () => {
   const checkout = await mkdtemp(join(tmpdir(), 'ab-app-load-checkout-'))
   try {
-    const tempRoot = join(checkout, 'nested')
-    await mkdir(tempRoot)
-    const refused = appLoadScratch('x-', { tempRoot, checkoutRoot: checkout })
-    await expect(refused).rejects.toThrow('inside the checkout')
-    await expect(appLoadScratch('x-', { tempRoot, checkoutRoot: checkout })).rejects.toThrow(
-      'bun pm pack',
-    )
-    // The checkout itself is refused too.
-    await expect(
-      appLoadScratch('x-', { tempRoot: checkout, checkoutRoot: checkout }),
-    ).rejects.toThrow('inside the checkout')
-    expect(await readdir(tempRoot)).toEqual([])
-    expect(await readdir(checkout)).toEqual(['nested'])
+    const nested = join(checkout, 'nested')
+    await mkdir(nested)
+    for (const tempRoot of [checkout, nested]) {
+      await expect(appLoadScratch('x-', { tempRoot, checkoutRoot: checkout })).rejects.toThrow(
+        /inside the checkout.*bun pm pack/,
+      )
+      const error: string[] = []
+      let called = false
+      expect(
+        await runAppLoad({
+          chromium: '/unused/chromium',
+          tempRoot,
+          checkoutRoot: checkout,
+          log: () => {},
+          error: (line) => error.push(line),
+          check: async () => {
+            called = true
+            return []
+          },
+        }),
+      ).toBe(1)
+      expect(called).toBe(false)
+      expect(error).toEqual([
+        expect.stringMatching(/^app-load: temporary root .* inside the checkout.*bun pm pack/),
+      ])
+      expect(await readdir(nested)).toEqual([])
+      expect(await readdir(checkout)).toEqual(['nested'])
+    }
   } finally {
     await rm(checkout, { recursive: true, force: true })
   }
@@ -231,6 +246,7 @@ test('runAppLoad removes its scratch only after the check settles, on every outc
       outside: true,
     })
     expect(existsSync(profile)).toBe(true)
+    expect(contains(await realpath(tmpdir()), await realpath(outDir))).toBe(true)
     gate.resolve()
     expect({ name: outcome.name, code: await running, log, error }).toEqual({
       name: outcome.name,
@@ -244,31 +260,4 @@ test('runAppLoad removes its scratch only after the check settles, on every outc
     })
   }
   if (!hadInRepoDir) expect(existsSync(IN_REPO_APP_LOAD)).toBe(false)
-})
-
-test('runAppLoad reports a temporary root inside the checkout as a failed check', async () => {
-  const checkout = await mkdtemp(join(tmpdir(), 'ab-app-load-checkout-'))
-  try {
-    const error: string[] = []
-    let called = false
-    const code = await runAppLoad({
-      chromium: '/unused/chromium',
-      tempRoot: checkout,
-      checkoutRoot: checkout,
-      log: () => {},
-      error: (line) => error.push(line),
-      check: async () => {
-        called = true
-        return []
-      },
-    })
-    expect(code).toBe(1)
-    expect(called).toBe(false)
-    expect(error).toEqual([
-      expect.stringMatching(/^app-load: temporary root .* inside the checkout/),
-    ])
-    expect(await readdir(checkout)).toEqual([])
-  } finally {
-    await rm(checkout, { recursive: true, force: true })
-  }
 })
