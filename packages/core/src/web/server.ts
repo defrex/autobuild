@@ -1,15 +1,30 @@
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createWebHandler, type WebHandlerOptions } from './http'
 import type { WebAssetManifest } from './protocol'
 
-const assetsDir = new URL('./assets/', import.meta.url)
+/**
+ * The committed client bundle's directory, resolved at call time. A literal
+ * `new URL('./assets/', import.meta.url)` is a static asset reference to
+ * bundlers, and Turbopack fails the hosted service build on a directory one
+ * whenever the dispatcher module graph reaches this file.
+ */
+function assetsDir(): string {
+  const dir = (import.meta as { dir?: unknown }).dir
+  return join(
+    typeof dir === 'string' && dir !== '' ? dir : dirname(fileURLToPath(import.meta.url)),
+    'assets',
+  )
+}
 
 /** The committed client bundle's manifest. */
 export async function loadWebManifest(): Promise<WebAssetManifest> {
-  return (await Bun.file(new URL('manifest.json', assetsDir)).json()) as WebAssetManifest
+  return (await Bun.file(join(assetsDir(), 'manifest.json')).json()) as WebAssetManifest
 }
 
+/** Serves one manifest-allowlisted asset name. */
 export function readWebAsset(path: string): BodyInit {
-  return Bun.file(new URL(path, assetsDir))
+  return Bun.file(join(assetsDir(), path))
 }
 
 export interface StartedWebServer {
