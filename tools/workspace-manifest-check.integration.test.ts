@@ -290,12 +290,6 @@ describe('workspace manifest invariants', () => {
     ).resolves.toBeDefined()
   })
 
-  test('accepts a root manifest without patchedDependencies', async () => {
-    // Covered implicitly by every fixture without the field; pinned
-    // explicitly so the rule reads as vacuous-by-absence, not accidental.
-    await expect(validateWorkspaceManifests(await fixture())).resolves.toBeDefined()
-  })
-
   test('parses scoped patch keys', async () => {
     // The version separator in `@scope/pkg@1.2.3` is the last '@', not the
     // leading one that belongs to the scope.

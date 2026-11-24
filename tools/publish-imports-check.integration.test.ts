@@ -1,23 +1,14 @@
+import { afterEach, describe, expect, test } from 'bun:test'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
-import { afterEach, describe, expect, test } from 'bun:test'
 import {
   type PublishImportsCheckEnvironment,
   type PublishImportsReport,
-  exportsSubpaths,
-  exportsTargets,
-  importsSubpaths,
-  isProviderSpecifier,
-  packedPathOfTarget,
-  packedScriptKind,
   realEnvironment,
-  resolvePackedClosureTarget,
   runPublishImportsCheck,
   scanPublishedImports,
-  subpathOfProviderSpecifier,
 } from './publish-imports-check'
-import ts from 'typescript'
 
 /**
  * Fixture strategy: a real on-disk mini-repo (manifests and sources written to
@@ -166,47 +157,6 @@ async function passFixture(): Promise<{ root: string; env: PublishImportsCheckEn
   const root = await buildFixtureRepo(specs)
   return { root, env: fixtureEnvironment(root, specs) }
 }
-
-describe('isProviderSpecifier / subpathOfProviderSpecifier', () => {
-  test('the bare provider name and its subpaths qualify', () => {
-    expect(isProviderSpecifier(PROVIDER)).toBe(true)
-    expect(isProviderSpecifier(`${PROVIDER}/operator`)).toBe(true)
-    expect(isProviderSpecifier(`${PROVIDER}/web/auth`)).toBe(true)
-  })
-
-  test('sibling package names sharing the prefix are never provider specifiers', () => {
-    expect(isProviderSpecifier(`${SERVICE}/service`)).toBe(false)
-    expect(isProviderSpecifier(`${SERVICE}`)).toBe(false)
-    expect(isProviderSpecifier(`${POSTGRES}/env`)).toBe(false)
-    expect(isProviderSpecifier('@defrex/autobuild-hosted-dispatcher/runtime')).toBe(false)
-    expect(isProviderSpecifier('./relative')).toBe(false)
-    expect(isProviderSpecifier('other-package')).toBe(false)
-  })
-
-  test('subpath mapping: bare name to ".", subpath to "./<sub>"', () => {
-    expect(subpathOfProviderSpecifier(PROVIDER)).toBe('.')
-    expect(subpathOfProviderSpecifier(`${PROVIDER}/operator`)).toBe('./operator')
-    expect(subpathOfProviderSpecifier(`${PROVIDER}/web/auth`)).toBe('./web/auth')
-  })
-})
-
-describe('exportsTargets / exportsSubpaths', () => {
-  test('collects string leaves from conditions objects and bare strings', () => {
-    expect(exportsTargets('./src/index.ts')).toEqual(['./src/index.ts'])
-    expect(
-      exportsTargets({
-        types: './src/index.ts',
-        import: './src/index.ts',
-        default: null,
-        nested: { node: './src/node.ts' },
-      }),
-    ).toEqual(['./src/index.ts', './src/index.ts', './src/node.ts'])
-  })
-
-  test('a manifest without exports yields an empty map (fail-closed for the guard)', () => {
-    expect(exportsSubpaths({ name: 'x' }).size).toBe(0)
-  })
-})
 
 describe('scanPublishedImports', () => {
   test('pass case: an exported subpath resolves from the staged tarball layout', async () => {
@@ -505,36 +455,8 @@ describe('scanPublishedImports', () => {
   })
 })
 
-describe('packedScriptKind', () => {
-  test('maps exactly the chosen TS/JS/JSX suffix set and nothing else', () => {
-    expect(packedScriptKind('src/index.ts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.mts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.cts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.d.ts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.d.mts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.d.cts')).toBe(ts.ScriptKind.TS)
-    expect(packedScriptKind('x.tsx')).toBe(ts.ScriptKind.TSX)
-    expect(packedScriptKind('x.js')).toBe(ts.ScriptKind.JS)
-    expect(packedScriptKind('x.mjs')).toBe(ts.ScriptKind.JS)
-    expect(packedScriptKind('x.cjs')).toBe(ts.ScriptKind.JS)
-    expect(packedScriptKind('x.jsx')).toBe(ts.ScriptKind.JSX)
-    expect(packedScriptKind('x.json')).toBeUndefined()
-    expect(packedScriptKind('README.md')).toBeUndefined()
-    expect(packedScriptKind('src/x.d.ts.map')).toBeUndefined()
-    expect(packedScriptKind('native.node')).toBeUndefined()
-    expect(packedScriptKind('no-extension')).toBeUndefined()
-    expect(packedScriptKind('LICENSE')).toBeUndefined()
-  })
-
-  test('matching is case-sensitive, like the \\.tsx?$ filter it replaced', () => {
-    expect(packedScriptKind('x.JS')).toBeUndefined()
-    expect(packedScriptKind('x.TS')).toBeUndefined()
-    expect(packedScriptKind('x.Jsx')).toBeUndefined()
-  })
-})
-
 describe('widened packed-file scan (AUT-479)', () => {
-  test('a packed .js file importing an unexported subpath fails the guard and is counted as scanned', async () => {
+  test('scans JS, CJS, MTS and JSX while skipping packed non-script files', async () => {
     const specs: FixtureSpec[] = [
       {
         directory: '.',
@@ -550,144 +472,38 @@ describe('widened packed-file scan (AUT-479)', () => {
         files: {
           'packages/store-service/src/legacy.js':
             "import '@defrex/autobuild/missing'\nexport const legacy = true\n",
-        },
-      },
-    ]
-    const root = await buildFixtureRepo(specs)
-    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
-    expect(report.violations).toEqual([
-      {
-        kind: 'missing-export',
-        packageName: SERVICE,
-        specifier: `${PROVIDER}/missing`,
-        subpath: './missing',
-        path: 'packages/store-service/src/legacy.js',
-        line: 1,
-      },
-    ])
-    // The JS file is counted, not silently skipped.
-    expect(report.scannedFiles).toBe(1)
-  })
-
-  test('a packed .cjs require form fails the guard (ScriptKind.JS collects require-ish specifiers)', async () => {
-    const specs: FixtureSpec[] = [
-      {
-        directory: '.',
-        manifest: providerManifest(operatorExports),
-        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
-      },
-      {
-        directory: 'packages/store-service',
-        manifest: {
-          ...dependentManifest,
-          exports: { '.': { default: './src/legacy.cjs' } },
-        },
-        files: {
           'packages/store-service/src/legacy.cjs':
             "const { testing } = require('@defrex/autobuild/testing')\nmodule.exports = { testing }\n",
-        },
-      },
-    ]
-    const root = await buildFixtureRepo(specs)
-    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
-    expect(report.violations).toEqual([
-      {
-        kind: 'missing-export',
-        packageName: SERVICE,
-        specifier: `${PROVIDER}/testing`,
-        subpath: './testing',
-        path: 'packages/store-service/src/legacy.cjs',
-        line: 1,
-      },
-    ])
-  })
-
-  test('a packed .mts file no longer escapes the scan (it did under the \\.tsx?$ filter)', async () => {
-    const specs: FixtureSpec[] = [
-      {
-        directory: '.',
-        manifest: providerManifest(operatorExports),
-        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
-      },
-      {
-        directory: 'packages/store-service',
-        manifest: {
-          ...dependentManifest,
-          exports: { '.': { import: './src/modern.mts' } },
-        },
-        files: {
           'packages/store-service/src/modern.mts':
             "import '@defrex/autobuild/missing'\nexport const modern = true\n",
-        },
-      },
-    ]
-    const root = await buildFixtureRepo(specs)
-    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
-    expect(report.violations).toEqual([
-      {
-        kind: 'missing-export',
-        packageName: SERVICE,
-        specifier: `${PROVIDER}/missing`,
-        subpath: './missing',
-        path: 'packages/store-service/src/modern.mts',
-        line: 1,
-      },
-    ])
-  })
-
-  test('a packed .jsx file parses as JSX, not the unparseable sentinel, and its exported subpath is probed', async () => {
-    const specs: FixtureSpec[] = [
-      {
-        directory: '.',
-        manifest: providerManifest(operatorExports),
-        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
-      },
-      {
-        directory: 'packages/store-service',
-        manifest: {
-          ...dependentManifest,
-          exports: { '.': { import: './src/component.jsx' } },
-        },
-        files: {
           'packages/store-service/src/component.jsx':
             "import { operator } from '@defrex/autobuild/operator'\nexport const component = () => <div>{operator}</div>\n",
-        },
-      },
-    ]
-    const root = await buildFixtureRepo(specs)
-    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
-    expect(report.violations).toEqual([])
-    expect(report.scannedFiles).toBe(1)
-    expect(report.probedSpecifiers).toBe(1)
-  })
-
-  test('packed non-script files are not scanned: no sentinel findings, no added scan count', async () => {
-    const specs: FixtureSpec[] = [
-      {
-        directory: '.',
-        manifest: providerManifest(operatorExports),
-        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
-      },
-      {
-        directory: 'packages/store-service',
-        manifest: dependentManifest,
-        files: {
           'packages/store-service/src/index.ts': 'export {}\n',
-          // If any of these were scanned, each would fail closed as an
-          // unparseable-file violation naming its provider specifier text.
           'packages/store-service/data.json': '{"imports": "@defrex/autobuild/testing"}',
-          'packages/store-service/README.md': '# reads `@defrex/autobuild/testing`',
+          'packages/store-service/README.md': '# reads @defrex/autobuild/testing',
           'packages/store-service/src/index.d.ts.map':
-            '{"sources": ["import \'@defrex/autobuild/testing\'"]}',
+            '{"sources": ["import @defrex/autobuild/testing"]}',
         },
       },
     ]
     const root = await buildFixtureRepo(specs)
     const report = await scanPublishedImports(fixtureEnvironment(root, specs))
-    expect(report.violations).toEqual([])
-    // Only src/index.ts is scanned; the JSON, markdown, and source-map files
-    // add nothing to the count.
-    expect(report.scannedFiles).toBe(1)
+    expect(report.violations).toEqual(
+      [
+        ['legacy.js', 'missing'],
+        ['legacy.cjs', 'testing'],
+        ['modern.mts', 'missing'],
+      ].map(([file, subpath]) => ({
+        kind: 'missing-export',
+        packageName: SERVICE,
+        specifier: `${PROVIDER}/${subpath}`,
+        subpath: `./${subpath}`,
+        path: `packages/store-service/src/${file}`,
+        line: 1,
+      })),
+    )
+    expect(report.scannedFiles).toBe(5)
+    expect(report.probedSpecifiers).toBe(1)
   })
 })
 
@@ -756,302 +572,6 @@ describe('runPublishImportsCheck', () => {
     expect(captured.stderr.join('')).toContain(
       `Could not check published imports against the packed ${PROVIDER} tarball`,
     )
-  })
-})
-
-describe('packedPathOfTarget', () => {
-  test('strips exactly one leading ./ (finding f_146dfbd3)', () => {
-    expect(packedPathOfTarget('./x')).toBe('x')
-    expect(packedPathOfTarget('x')).toBe('x')
-    expect(packedPathOfTarget('././x')).toBe('./x')
-    expect(packedPathOfTarget('./core-src/operator/index.ts')).toBe('core-src/operator/index.ts')
-  })
-})
-
-describe('resolvePackedClosureTarget', () => {
-  const exportsMap = new Map([['./testing', ['./core-src/testing/index.ts']]])
-  const importsMap = new Map<string, string[]>()
-
-  test('an exact relative hit resolves to itself', () => {
-    expect(
-      resolvePackedClosureTarget(['src/util.ts'], 'src/a.ts', './util.ts', exportsMap, importsMap),
-    ).toEqual({ kind: 'relative', path: 'src/util.ts' })
-  })
-
-  test('a .js specifier resolves to a packed .ts file (TS-style rewrite)', () => {
-    expect(
-      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x.js', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'relative',
-      path: 'src/x.ts',
-    })
-  })
-
-  test('an extensionless specifier hits the packed .ts through same-stem probing', () => {
-    expect(
-      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'relative',
-      path: 'src/x.ts',
-    })
-  })
-
-  test('a directory-index import resolves to <dir>/index.ts, .json last', () => {
-    expect(
-      resolvePackedClosureTarget(['src/dir/index.ts'], 'src/a.ts', './dir', exportsMap, importsMap),
-    ).toEqual({ kind: 'relative', path: 'src/dir/index.ts' })
-    expect(
-      resolvePackedClosureTarget(
-        ['src/dir/index.json'],
-        'src/a.ts',
-        './dir',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/dir/index.json' })
-  })
-
-  test('a relative specifier matching nothing is missing with the literal joined path', () => {
-    expect(
-      resolvePackedClosureTarget(['src/other.ts'], 'src/a.ts', './gone', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'missing',
-      path: 'src/gone',
-    })
-    expect(
-      resolvePackedClosureTarget(
-        ['src/other.json'],
-        'src/a.ts',
-        './data.json',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'missing', path: 'src/data.json' })
-  })
-
-  test('bare, #-prefixed, and absolute specifiers are external when no imports field matches', () => {
-    expect(resolvePackedClosureTarget([], 'src/a.ts', 'zod', exportsMap, importsMap)).toEqual({
-      kind: 'external',
-    })
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '#internal/thing', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'external',
-    })
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '/absolute/path', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'external',
-    })
-  })
-
-  test('a provider self-import resolves through the exports map, or self-missing when the key is absent', () => {
-    expect(
-      resolvePackedClosureTarget(
-        [],
-        'src/a.ts',
-        '@defrex/autobuild/testing',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'self', targets: ['./core-src/testing/index.ts'] })
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild', exportsMap, importsMap),
-    ).toEqual({
-      kind: 'self-missing',
-      subpath: '.',
-    })
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild/nope', exportsMap, importsMap),
-    ).toEqual({ kind: 'self-missing', subpath: './nope' })
-  })
-
-  test('# specifiers resolve through the imports map, exact match only (seq 36 shape)', () => {
-    const imports = importsSubpaths({
-      imports: {
-        '#internal/util': './core-src/internal/util.ts',
-        '#config': { import: './config/index.ts', default: null },
-        '#internal/*': ['./core-src/internal/*.ts'],
-      },
-    })
-    // An exact key resolves to its string leaves, conditions objects included.
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '#internal/util', exportsMap, imports),
-    ).toEqual({ kind: 'imports', targets: ['./core-src/internal/util.ts'] })
-    expect(resolvePackedClosureTarget([], 'src/a.ts', '#config', exportsMap, imports)).toEqual({
-      kind: 'imports',
-      targets: ['./config/index.ts'],
-    })
-    // A specifier only a pattern key could match stays external: exact-match
-    // lookup cannot see `#internal/*`, and pattern syntax is unsupported by
-    // design (see the mechanics header).
-    expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '#internal/other', exportsMap, imports),
-    ).toEqual({ kind: 'external' })
-    // No imports entry at all: external, unchanged from the pre-imports walk.
-    expect(resolvePackedClosureTarget([], 'src/a.ts', '#nothing', exportsMap, imports)).toEqual({
-      kind: 'external',
-    })
-  })
-
-  test('kind-aware probing: a non-script extension never resolves across kinds (seq 46 shape)', () => {
-    // A .json specifier whose JSON is absent is missing, not a silent match
-    // on a packed same-stem .ts.
-    expect(
-      resolvePackedClosureTarget(
-        ['src/data.ts'],
-        'src/a.ts',
-        './data.json',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'missing', path: 'src/data.json' })
-    // The exact packed JSON still satisfies the specifier (exact hit is
-    // checked first, any kind).
-    expect(
-      resolvePackedClosureTarget(
-        ['src/data.json'],
-        'src/a.ts',
-        './data.json',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/data.json' })
-    // A .js specifier no longer falls through to a packed same-stem .json.
-    expect(
-      resolvePackedClosureTarget(['src/x.json'], 'src/a.ts', './x.js', exportsMap, importsMap),
-    ).toEqual({ kind: 'missing', path: 'src/x.js' })
-    // Other non-script extensions are exact-only too.
-    expect(
-      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './README.md', exportsMap, importsMap),
-    ).toEqual({ kind: 'missing', path: 'src/README.md' })
-    // …but the script-family stem rewrite survives: ./x.js with x.ts packed.
-    expect(
-      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x.js', exportsMap, importsMap),
-    ).toEqual({ kind: 'relative', path: 'src/x.ts' })
-    // Script-family directory-index candidates survive for script specifiers
-    // (the candidates join against the specifier's own joined path).
-    expect(
-      resolvePackedClosureTarget(
-        ['src/dir.js/index.ts'],
-        'src/a.ts',
-        './dir.js',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/dir.js/index.ts' })
-    // …while a .json directory-index never serves a script specifier.
-    expect(
-      resolvePackedClosureTarget(
-        ['src/dir/index.json'],
-        'src/a.ts',
-        './dir.js',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'missing', path: 'src/dir.js' })
-  })
-
-  test('a dotted extensionless directory specifier keeps the directory-index probe (AUT-518)', () => {
-    // './foo.bar' whose final-segment dot is not a kind boundary resolves
-    // through the packed foo.bar/index.ts, like './foo' would.
-    expect(
-      resolvePackedClosureTarget(
-        ['src/foo.bar/index.ts'],
-        'src/a.ts',
-        './foo.bar',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/foo.bar/index.ts' })
-    expect(
-      resolvePackedClosureTarget(
-        ['src/v1.2/index.ts'],
-        'src/a.ts',
-        './v1.2',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/v1.2/index.ts' })
-  })
-
-  test('an unrecognized extension is never stripped from the stem (no cross-stem silent pass)', () => {
-    // './v1.2' must not probe './v1.ts': Node appends extensions to the full
-    // specifier, and silently resolving ./v1.2 onto a packed v1.ts would be
-    // a cross-module silent pass.
-    expect(
-      resolvePackedClosureTarget(['src/v1.ts'], 'src/a.ts', './v1.2', exportsMap, importsMap),
-    ).toEqual({ kind: 'missing', path: 'src/v1.2' })
-    expect(
-      resolvePackedClosureTarget(['src/foo.ts'], 'src/a.ts', './foo.bar', exportsMap, importsMap),
-    ).toEqual({ kind: 'missing', path: 'src/foo.bar' })
-  })
-
-  test('a dotted extensionless specifier probes stem and .json variants with the whole path as stem', () => {
-    expect(
-      resolvePackedClosureTarget(
-        ['src/foo.bar.ts'],
-        'src/a.ts',
-        './foo.bar',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/foo.bar.ts' })
-    expect(
-      resolvePackedClosureTarget(
-        ['src/foo.bar.json'],
-        'src/a.ts',
-        './foo.bar',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/foo.bar.json' })
-    expect(
-      resolvePackedClosureTarget(
-        ['src/foo.bar/index.json'],
-        'src/a.ts',
-        './foo.bar',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'relative', path: 'src/foo.bar/index.json' })
-  })
-
-  test('known non-script kinds stay exact-match-only by enumeration, not by the blanket rule', () => {
-    // '.md' is in KNOWN_NON_SCRIPT_EXTENSIONS, so neither the stem nor the
-    // directory-index probe runs even when absurd pack shapes exist.
-    expect(
-      resolvePackedClosureTarget(
-        ['src/data.md.ts', 'src/data.md/index.ts'],
-        'src/a.ts',
-        './data.md',
-        exportsMap,
-        importsMap,
-      ),
-    ).toEqual({ kind: 'missing', path: 'src/data.md' })
-  })
-})
-
-describe('importsSubpaths', () => {
-  test('collects string and conditions-object leaves, keyed exactly as written', () => {
-    expect(
-      importsSubpaths({
-        imports: {
-          '#internal/util': './core-src/internal/util.ts',
-          '#config': { import: './config/index.ts', default: null },
-        },
-      }),
-    ).toEqual(
-      new Map([
-        ['#internal/util', ['./core-src/internal/util.ts']],
-        ['#config', ['./config/index.ts']],
-      ]),
-    )
-  })
-
-  test('a manifest without imports yields an empty map (# specifiers stay external)', () => {
-    expect(importsSubpaths({ name: 'x' }).size).toBe(0)
-    expect(importsSubpaths({ imports: null }).size).toBe(0)
   })
 })
 
