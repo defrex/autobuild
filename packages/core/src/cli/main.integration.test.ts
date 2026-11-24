@@ -186,21 +186,66 @@ describe('runCli — routing and exit codes', () => {
     expect(d.err.join('\n')).toContain('usage: ab verdict <approve|revise|escalate|pass|fail|skip>')
   })
 
-  test('dependency-light routing gives build commands the complete session guard', async () => {
-    const err: string[] = []
-    expect(
-      await runCli(['context'], {
+  const BUILD_SESSION_COMMANDS = [
+    ['context', ['context']],
+    ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],
+    ['artifact get', ['artifact', 'get', 'notes']],
+    ['observe', ['observe', '--kind', 'followup', 'record this']],
+    ['issue downgrade', ['issue', 'downgrade', '824', '--reason', 'partial']],
+    ['done', ['done']],
+    ['verdict', ['verdict', 'approve']],
+    ['escalate', ['escalate', 'Which behavior is intended?']],
+  ] as const
+
+  test.each(BUILD_SESSION_COMMANDS)(
+    'dependency-light ab %s reports complete build-session guidance',
+    async (_label, argv) => {
+      const out: string[] = []
+      const err: string[] = []
+      const code = await runCli([...argv], {
         workspacePath: tmp,
-        stdout: () => {},
+        stdout: (line) => out.push(line),
         stderr: (line) => err.push(line),
-      }),
-    ).toBe(1)
-    const feedback = err.join('\n')
-    expect(feedback).toContain("'ab context' runs inside a build session")
-    for (const name of ['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION']) {
-      expect(feedback).toContain(name)
-    }
-  })
+      })
+      const result = { code, stdout: out.join('\n'), stderr: err.join('\n') }
+      expect(result.code).toBe(1)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain(`'ab ${argv[0]}' runs inside a build session`)
+      for (const name of ['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION']) {
+        expect(result.stderr).toContain(name)
+        expect(result.stderr).not.toContain(`${name} is not set`)
+      }
+    },
+  )
+
+  const HARVEST_SESSION_COMMANDS = [
+    ['context', ['harvest', 'context']],
+    ['submit', ['harvest', 'submit', 'proposals.json']],
+    ['verdict', ['harvest', 'verdict', 'approve', '--notes', 'review.md']],
+  ] as const
+
+  test.each(HARVEST_SESSION_COMMANDS)(
+    'dependency-light ab harvest %s reports complete harvest-session guidance',
+    async (subcommand, argv) => {
+      const out: string[] = []
+      const err: string[] = []
+      const code = await runCli([...argv], {
+        workspacePath: tmp,
+        stdout: (line) => out.push(line),
+        stderr: (line) => err.push(line),
+      })
+      const result = { code, stdout: out.join('\n'), stderr: err.join('\n') }
+      expect(result.code).toBe(1)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain(
+        `'ab harvest ${subcommand}' runs inside a harvest agent session`,
+      )
+      for (const name of ['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION']) {
+        expect(result.stderr).toContain(name)
+        expect(result.stderr).not.toContain(`${name} is not set`)
+      }
+    },
+  )
 
   test('build-session guidance keeps precedence where it did before argument parsing', async () => {
     for (const argv of [
@@ -218,22 +263,6 @@ describe('runCli — routing and exit codes', () => {
       ).toBe(1)
       expect(err.join('\n')).toContain('runs inside a build session')
       expect(err.join('\n')).toContain('AB_SESSION')
-    }
-  })
-
-  test('dependency-light routing gives harvest commands their own session guard', async () => {
-    const err: string[] = []
-    expect(
-      await runCli(['harvest', 'context'], {
-        workspacePath: tmp,
-        stdout: () => {},
-        stderr: (line) => err.push(line),
-      }),
-    ).toBe(1)
-    const feedback = err.join('\n')
-    expect(feedback).toContain("'ab harvest context' runs inside a harvest agent session")
-    for (const name of ['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION']) {
-      expect(feedback).toContain(name)
     }
   })
 })
