@@ -40,47 +40,6 @@ const OBJECTIVE = [
 const block = (toml = OBJECTIVE) => ['```autobuild-objective', toml, '```'].join('\n')
 const withBlock = (...parts: string[]) => [CONFORMING_BODY, '', ...parts].join('\n')
 
-test('a valid objective is accepted before the node opens, pinned to its opening commit', async (makeHarness) => {
-  const h = await makeHarness({
-    localGitForge: true,
-    configToml: WITH_REJECTED,
-    handlers: happyHandlers(),
-    tickets: [
-      { ...readyTicket('OPT', { title: 'Faster search', body: withBlock(block()) }), kind: 'node' },
-    ],
-  })
-  try {
-    await h.dispatcher.tick()
-    const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'OPT')!
-    const events = await h.events(node.slug)
-    const accepted = ofType(events, 'optimization.objective-accepted')
-    const opened = ofType(events, 'node.opened')
-    expect(accepted).toHaveLength(1)
-    expect(opened).toHaveLength(1)
-    expect(accepted[0]!.seq).toBeLessThan(opened[0]!.seq)
-    expect(accepted[0]!.payload).toMatchObject({
-      revision: 1,
-      specRev: 0,
-      harnessPin: opened[0]!.payload.sha,
-      objective: {
-        metric: { kind: 'command', harness: ['bench/**'] },
-        stop: { mode: 'abort' },
-        proposer: { concurrency: 1 },
-      },
-    })
-    const state = reduceBuild(events)
-    expect(state.status).toBe('collecting')
-    expect(state.optimization?.revision).toBe(1)
-
-    // Ticks after opening never accept twice.
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
-    expect(ofType(await h.events(node.slug), 'optimization.objective-accepted')).toHaveLength(1)
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
-
 test('a heading, a toml block and prose open as plain nodes', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
@@ -192,7 +151,7 @@ test('an objective node without a rejected role is refused naming the setting', 
   }
 }, 30_000)
 
-test('spec revisions may change the objective but never add or remove the block', async (makeHarness) => {
+test('a valid objective is accepted before the node opens; revisions may change it but never add or remove the block', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     configToml: WITH_REJECTED,
@@ -207,6 +166,30 @@ test('spec revisions may change the objective but never add or remove the block'
     const records = await h.store.listBuilds()
     const node = records.find((r) => r.ticket?.id === 'OPT')!
     const plain = records.find((r) => r.ticket?.id === 'PLAIN')!
+    // Accepted once, before the node opens, pinned to its opening commit.
+    const opening = await h.events(node.slug)
+    const opened = ofType(opening, 'node.opened')
+    const initial = ofType(opening, 'optimization.objective-accepted')
+    expect(initial).toHaveLength(1)
+    expect(opened).toHaveLength(1)
+    expect(initial[0]!.seq).toBeLessThan(opened[0]!.seq)
+    expect(initial[0]!.payload).toMatchObject({
+      revision: 1,
+      specRev: 0,
+      harnessPin: opened[0]!.payload.sha,
+      objective: {
+        metric: { kind: 'command', harness: ['bench/**'] },
+        stop: { mode: 'abort' },
+        proposer: { concurrency: 1 },
+      },
+    })
+    expect(reduceBuild(opening).status).toBe('collecting')
+    expect(reduceBuild(opening).optimization?.revision).toBe(1)
+    // Ticks after opening never accept twice.
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(ofType(await h.events(node.slug), 'optimization.objective-accepted')).toHaveLength(1)
+
     const revise = (slug: string, body: string) =>
       controlBuild({
         store: h.store,

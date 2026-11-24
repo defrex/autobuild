@@ -92,10 +92,11 @@ async function setup(
   others: string[] = [],
   harness?: RegExp,
   body = nodeBody,
+  configToml = WITH_REJECTED,
 ) {
   const h = await makeHarness({
     localGitForge: true,
-    configToml: WITH_REJECTED,
+    configToml,
     handlers: handlers(harness),
     tickets: [
       { ...readyTicket('OPT', { title: 'Faster search', body }), kind: 'node' },
@@ -371,76 +372,60 @@ test('an interrupted landing recovers only while its measurement still qualifies
   }
 }, 30_000)
 
-test('a sibling landing makes a measurement stale: the attempt restacks and measures again', async (makeHarness) => {
-  const { h, node } = await setup(makeHarness as never, ['A1', 'A2'])
+test('a sibling landing supersedes requests: a measured one restacks and measures again, an unsampled one is skipped', async (makeHarness) => {
+  // Three children beside the node's own slot.
+  const config = WITH_REJECTED.replace('capacity = 3', 'capacity = 4')
+  const { h, node } = await setup(
+    makeHarness as never,
+    ['A1', 'A2', 'A3'],
+    [],
+    undefined,
+    nodeBody,
+    config,
+  )
   try {
     await tick(h)
     const first = await slugOf(h, 'A1')
-    const second = await slugOf(h, 'A2')
-    await toPr(h, first)
-    await toPr(h, second)
+    const measured = await slugOf(h, 'A2')
+    const unsampled = await slugOf(h, 'A3')
+    for (const slug of [first, measured, unsampled]) await toPr(h, slug)
     await tick(h)
-    expect(await requests(h, first)).toHaveLength(1)
-    expect(await requests(h, second)).toHaveLength(1)
+    for (const slug of [first, measured, unsampled]) expect(await requests(h, slug)).toHaveLength(1)
+    const [skipped] = await requests(h, unsampled)
     await measure(h, first, 3)
-    // The second attempt's result is for the node head the first replaces.
-    const stale = await measure(h, second, 5)
+    // A2's result is for the node head A1 replaces; A3's request is never sampled.
+    const stale = await measure(h, measured, 5)
     await tick(h)
     expect((await stateOf(h, first)).outcome).toBe('merged')
     const moved = await git(['rev-parse', node.branch!], h.origin)
     expect(moved).not.toBe(stale.baseline)
-    // Drive the second attempt until it has restacked and asked again.
-    await driveToRequest(h, second, 2)
-    const again = (await requests(h, second)).at(-1)!.payload
+    expect(moved).not.toBe(skipped!.payload.baseline)
+    // Drive both until they have restacked and asked again.
+    await driveToRequest(h, measured, 2)
+    await driveToRequest(h, unsampled, 2)
+    const again = (await requests(h, measured)).at(-1)!.payload
     expect(again.baseline).toBe(moved)
     // A restack changed the candidate; a clean restack kept verification.
     expect(again.candidate).not.toBe(stale.candidate)
-    expect(again.candidate).toBe((await stateOf(h, second)).pr!.headSha)
-    expect((await stateOf(h, second)).landingMeasurement?.overtakes).toBe(1)
-    expect((await stateOf(h, second)).status).not.toBe('done')
-    await measure(h, second, 2)
-    await tick(h)
-    expect((await stateOf(h, second)).outcome).toBe('merged')
-    expect((await settled(h, node.slug)).map((s) => s.outcome)).toEqual(['accepted', 'accepted'])
-  } finally {
-    await h.cleanup()
-  }
-}, 30_000)
-
-test('a request a sibling landing superseded before sampling is skipped, never measured', async (makeHarness) => {
-  const { h, node } = await setup(makeHarness as never, ['A1', 'A2'])
-  try {
-    await tick(h)
-    const first = await slugOf(h, 'A1')
-    const second = await slugOf(h, 'A2')
-    await toPr(h, first)
-    await toPr(h, second)
-    await tick(h)
-    const [stale] = await requests(h, second)
-    expect(stale).toBeDefined()
-    // Only the first is measured; the second's request is still unsampled.
-    await measure(h, first, 3)
-    await tick(h)
-    expect((await stateOf(h, first)).outcome).toBe('merged')
-    const moved = await git(['rev-parse', node.branch!], h.origin)
-    expect(moved).not.toBe(stale!.payload.baseline)
-    await driveToRequest(h, second, 2)
-    const events = await h.events(second)
-    // The stale request was never sampled and raised no measurement failure.
+    expect(again.candidate).toBe((await stateOf(h, measured)).pr!.headSha)
+    expect((await stateOf(h, measured)).landingMeasurement?.overtakes).toBe(1)
+    expect((await stateOf(h, measured)).status).not.toBe('done')
+    // The superseded request was never sampled and raised no measurement failure.
+    const events = await h.events(unsampled)
     expect(
-      ofType(events, 'attempt.sampled').filter((e) => e.payload.request === stale!.payload.id),
+      ofType(events, 'attempt.sampled').filter((e) => e.payload.request === skipped!.payload.id),
     ).toEqual([])
     expect(
       ofType(events, 'escalation.raised').filter(
         (e) => e.payload.policyCause === 'measurement-failed',
       ),
     ).toEqual([])
-    const again = (await requests(h, second)).at(-1)!.payload
-    expect(again.id).not.toBe(stale!.payload.id)
-    expect(again.baseline).toBe(moved)
-    await measure(h, second, 2)
+    const fresh = (await requests(h, unsampled)).at(-1)!.payload
+    expect(fresh.id).not.toBe(skipped!.payload.id)
+    expect(fresh.baseline).toBe(moved)
+    await measure(h, measured, 2)
     await tick(h)
-    expect((await stateOf(h, second)).outcome).toBe('merged')
+    expect((await stateOf(h, measured)).outcome).toBe('merged')
     expect((await settled(h, node.slug)).map((s) => s.outcome)).toEqual(['accepted', 'accepted'])
   } finally {
     await h.cleanup()

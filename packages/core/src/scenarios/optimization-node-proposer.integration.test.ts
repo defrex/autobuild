@@ -160,9 +160,12 @@ async function revise(h: E2eHarness, slug: string, changes: Record<string, numbe
   })
 }
 
-test('the proposer is requested, deposits, and its attempts are filed ready and targeted', async (makeHarness) => {
+test('the proposer is requested, deposits, and its attempts are filed ready, labelled and targeted', async (makeHarness) => {
   const seen = { files: [] as string[] }
-  const { h, node } = await openNode(makeHarness, { propose: proposer(['cache', 'index'], seen) })
+  const { h, node } = await openNode(makeHarness, {
+    propose: proposer(['cache', 'index'], seen),
+    tickets: 'createLabels = ["attempt", "autobuild"]',
+  })
   try {
     // No starting measurement: no request.
     h.clock.advance(60_000)
@@ -196,7 +199,9 @@ test('the proposer is requested, deposits, and its attempts are filed ready and 
       const ticket = (await h.tickets.listAll()).tickets.find(
         (candidate) => candidate.ref.id === id,
       )!
-      expect(ticket).toMatchObject({ kind: 'work', target: 'OPT', labels: ['autobuild'] })
+      expect(ticket).toMatchObject({ kind: 'work', target: 'OPT' })
+      // The ready labels and any configured creation labels, deduplicated.
+      expect(ticket.labels).toEqual(['autobuild', 'attempt'])
       expect(ticket.creationKey).toBe(
         attemptCreationKey(h.origin, node.slug, ['cache', 'index'][index]!),
       )
@@ -209,30 +214,6 @@ test('the proposer is requested, deposits, and its attempts are filed ready and 
     h.clock.advance(60_000)
     await h.dispatcher.tick()
     expect(ofType(await h.events(node.slug), 'optimization.proposal-requested')).toHaveLength(1)
-  } finally {
-    await h.cleanup()
-  }
-}, 60_000)
-
-test('filed attempts carry the ready labels and any configured creation labels', async (makeHarness) => {
-  const { h, node } = await openNode(makeHarness, {
-    tickets: 'createLabels = ["attempt", "autobuild"]',
-  })
-  try {
-    await measure(h, node.slug)
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
-    await h.runLatest()
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
-    const filed = ofType(await h.events(node.slug), 'optimization.attempts-proposed')
-    expect(filed).toHaveLength(1)
-    const created = new Set(filed[0]!.payload.proposals.map((entry) => entry.ticket.id))
-    const tickets = (await h.tickets.listAll()).tickets.filter((ticket) =>
-      created.has(ticket.ref.id),
-    )
-    expect(tickets).toHaveLength(2)
-    for (const ticket of tickets) expect(ticket.labels).toEqual(['autobuild', 'attempt'])
   } finally {
     await h.cleanup()
   }
@@ -401,7 +382,10 @@ test('a crash between creation and record adopts the same tickets and holds them
     const filed = ofType(events, 'optimization.attempts-proposed')
     expect(filed).toHaveLength(1)
     expect(filed[0]!.payload.proposals).toHaveLength(2)
-    expect((await h.tickets.listAll()).tickets.filter((t) => t.target === 'OPT')).toHaveLength(2)
+    const adopted = (await h.tickets.listAll()).tickets.filter((t) => t.target === 'OPT')
+    expect(adopted).toHaveLength(2)
+    // With no creation labels configured, attempts carry the ready labels alone.
+    for (const ticket of adopted) expect(ticket.labels).toEqual(['autobuild'])
     expect(ofType(events, 'optimization.proposal-withdrawn')).toHaveLength(0)
     const state = reduceBuild(events)
     expect(state.optimization?.attempts.filed).toBe(2)
