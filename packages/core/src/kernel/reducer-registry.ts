@@ -6,8 +6,13 @@ import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import { forgeHealthReducer } from './forge-health'
 import { decodeStoredEvent } from '../events/compatibility'
 import { nodeRestackReducer } from './node-restack-state'
-import { isOptimizationEvent, optimizationLedgerReducer, optimizationReducer } from './optimization'
+import {
+  foldsIntoOptimization,
+  optimizationLedgerReducer,
+  optimizationReducer,
+} from './optimization'
 import { leafRestackReducer } from './leaf-restack-state'
+import { executionIntervalsReducer } from './execution-intervals'
 import { terminalGuardReducer } from './terminal-guard'
 import { repositoryAttentionReducer } from './repository-attention'
 import {
@@ -103,6 +108,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   leafRestack: { reducer: leafRestackReducer, covers: ['advanceLeafRestack'] },
   optimization: { reducer: optimizationReducer, covers: ['advanceOptimization'] },
   optimizationLedger: { reducer: optimizationLedgerReducer, covers: [] },
+  executionIntervals: { reducer: executionIntervalsReducer, covers: [] },
   baseBranchValue: { reducer: optionalValue(baseBranchReducer), covers: [] },
   publishedBranchHeadValue: { reducer: optionalValue(publishedBranchHeadReducer), covers: [] },
   verifyDiffBaseValue: { reducer: optionalValue(verifyDiffBaseReducer), covers: [] },
@@ -327,7 +333,7 @@ function digestAttemptOf(
 function digestOptimizationOf(
   event: Parameters<ValueCatalogEntry['adapt']>[0][number],
 ): Pick<DigestEventRow, 'optimizationEvent'> {
-  if (!isOptimizationEvent(event)) return {}
+  if (!foldsIntoOptimization(event)) return {}
   const decoded = decodeStoredEvent(event)
   return decoded === null
     ? {}

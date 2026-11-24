@@ -59,6 +59,7 @@ import type { BuildStore } from '../store/types'
 import { writeAssetTo } from './ticket-assets'
 import type { CliEnv } from './env'
 import { readAttemptContext, type AttemptContext } from './attempt'
+import { optimizationElapsedHours } from '../kernel/optimization-admission'
 
 export interface ContextDeps {
   store: BuildStore
@@ -68,6 +69,8 @@ export interface ContextDeps {
   /** Present in the wired CLI; optional for non-Git materializer unit tests. */
   exec?: Exec
   ids?: IdSource
+  /** The clock progress.json evaluates active hours against. */
+  clock?: () => Date
 }
 
 /** Paths are relative to the session directory, forward-slash separated. */
@@ -893,6 +896,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
           plateau: optimization.plateau,
           emptyProposals: optimization.emptyProposals,
           openedAt: optimization.openedAt,
+          activeHours: optimizationElapsedHours(optimization, deps.clock?.() ?? new Date()),
           request: { id: proposal.id, head: proposal.head, room: proposal.room },
         },
         null,

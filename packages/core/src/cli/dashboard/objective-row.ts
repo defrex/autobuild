@@ -5,11 +5,18 @@
  * of the node's reduced digest, so it adds no store read to any surface.
  *
  * The row is independent of `now`, like the rest of the cached dashboard
- * model: it records when the budget opened and renderers evaluate elapsed
- * hours against their own clock.
+ * model: it carries the node's active-hours clock and renderers evaluate the
+ * hours against their own clock. Hours are active hours, the time the node's
+ * attempts, proposer or measurements ran, never time since opening.
  */
 import type { BuildState } from '../../kernel/reducer'
 import type { PendingCleanupView, UnmeasuredMergeView } from '../../kernel/optimization'
+import {
+  activeHours,
+  clockSettling,
+  clockView,
+  type OptimizationClockView,
+} from '../../kernel/optimization-admission'
 import type { OptimizationStopCause } from '../../events/payloads'
 
 export interface ObjectiveRow {
@@ -33,13 +40,24 @@ export interface ObjectiveRow {
   /** Running attempts that merged without a landing measurement and hold
    * their slot until an operator settles them. Present only when > 0. */
   unmeasuredMerges?: number
-  budget: { maxAttempts?: number; maxHours?: number; openedAt: string }
+  budget: {
+    maxAttempts?: number
+    maxHours?: number
+    openedAt: string
+    /** The active-hours clock the hours budget reads. */
+    clock: OptimizationClockView
+    /** Stopped, and the value may change once more when the dispatcher
+     * accounts attempt runs from before the stop. */
+    settling?: true
+  }
   stopped?: { cause: OptimizationStopCause; mode: 'abort' | 'drain'; at: string }
 }
 
-/** The row with its elapsed hours evaluated, as the status, watch and
- * operator surfaces carry it under `objective`. */
-export type ObjectiveSummary = ObjectiveRow & { elapsedHours: number }
+/** The row with its active hours evaluated, as the status, watch and
+ * operator surfaces carry it under `objective`. `elapsedHours` is active
+ * hours; `settling` marks a stopped node whose value may still rise once,
+ * when the dispatcher accounts attempt runs from before the stop. */
+export type ObjectiveSummary = ObjectiveRow & { elapsedHours: number; settling?: true }
 
 /** The terms every objective surface uses. */
 export const objectiveVocabulary = {
@@ -56,7 +74,8 @@ export const objectiveVocabulary = {
   mergedUnmeasured: 'merged unmeasured',
   slotHeld: 'slot held',
   budget: 'budget',
-  hours: 'hours',
+  hours: 'active hours',
+  settling: 'settling',
   stopped: 'stopped',
 } as const
 
@@ -85,24 +104,35 @@ export function projectObjectiveRow(state: BuildState): ObjectiveRow | undefined
       ...(maxAttempts !== undefined ? { maxAttempts } : {}),
       ...(maxHours !== undefined ? { maxHours } : {}),
       openedAt: digest.openedAt,
+      clock: clockView(digest.clock),
+      ...(clockSettling(digest) ? { settling: true as const } : {}),
     },
     ...(digest.stopped !== undefined ? { stopped: { ...digest.stopped } } : {}),
   }
 }
 
-const HOUR_MS = 3_600_000
-
-/** Hours the budget has consumed at `now`; a stopped node's stop at its stop. */
+/** Active hours the budget has consumed at `now`; constant once the node
+ * stopped. */
 export function objectiveElapsedHours(row: ObjectiveRow, now: Date): number {
-  const end = row.stopped !== undefined ? Date.parse(row.stopped.at) : now.getTime()
-  return Math.max(0, (end - Date.parse(row.budget.openedAt)) / HOUR_MS)
+  return activeHours(row.budget.clock, now)
+}
+
+/** A stopped node whose clock the dispatcher has not settled yet. */
+export function objectiveSettling(row: ObjectiveRow): boolean {
+  return row.budget.settling === true
 }
 
 /** The summary surfaces carry, or undefined for a build that is not an
  * optimization node. */
 export function objectiveSummary(state: BuildState, now: Date): ObjectiveSummary | undefined {
   const row = projectObjectiveRow(state)
-  return row === undefined ? undefined : { ...row, elapsedHours: objectiveElapsedHours(row, now) }
+  return row === undefined
+    ? undefined
+    : {
+        ...row,
+        elapsedHours: objectiveElapsedHours(row, now),
+        ...(objectiveSettling(row) ? { settling: true as const } : {}),
+      }
 }
 
 /** A measured value, trimmed to at most six decimals. */
@@ -137,7 +167,9 @@ export function objectiveParts(row: ObjectiveRow, elapsedHours: number): string[
   if (budget.maxAttempts !== undefined)
     budgetParts.push(`${attempts.filed}/${budget.maxAttempts} ${v.attempts}`)
   if (budget.maxHours !== undefined)
-    budgetParts.push(`${elapsedHours.toFixed(1)}/${budget.maxHours} ${v.hours}`)
+    budgetParts.push(
+      `${elapsedHours.toFixed(1)}/${budget.maxHours} ${v.hours}${objectiveSettling(row) ? ` (${v.settling})` : ''}`,
+    )
   return [
     value,
     [
