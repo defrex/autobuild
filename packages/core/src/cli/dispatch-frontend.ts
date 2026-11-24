@@ -2,6 +2,7 @@ import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
+import type { DispatchWeb } from './dispatch-web'
 import {
   readDispatchUpgrade,
   readRepositoryFacts,
@@ -106,6 +107,9 @@ interface ResumePrompt {
 export interface DispatchFrontendOptions {
   viewer?: { dispatchedBy?: string }
   plainOutput?: (line: string) => void
+  /** `--web`: each frame's repository facts are published to the web UI from
+   * the read this frontend already made; the web adds no store read. */
+  web?: { dispatch: DispatchWeb }
   /** Repository identity (§12): the normalized origin, or the checkout path
    * when there is no origin. Every Store key uses this. */
   repo: string
@@ -433,6 +437,7 @@ export class DispatchFrontend {
               this.repositoryFeed.present ? true : undefined,
             )
           ).value
+        this.opts.web?.dispatch.publishFacts(repositoryFacts)
         const upgrades = repositoryFacts.upgrades
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
@@ -499,6 +504,7 @@ export class DispatchFrontend {
             this.repositoryFeed.present ? true : undefined,
           )
         ).value
+        this.opts.web?.dispatch.publishFacts(repositoryFacts)
         upgrades = repositoryFacts.upgrades
         status = this.dispatchStatus
       }
@@ -1118,6 +1124,7 @@ export class DispatchFrontend {
           // One durable warning per failure streak, not per poll: a poll that
           // fails on every tick would otherwise grow the journal it reads.
           // Messages carry moving cursors, so they cannot serve as the dedup key.
+          if (this.refresh?.admitted) this.opts.web?.dispatch.hub.fail(error)
           if (this.refresh?.admitted && !this.renderFailureReported) {
             this.renderFailureReported = true
             await this.report(
@@ -1301,6 +1308,8 @@ export class DispatchFrontend {
           this.presentationRestored = true
           releaseDispatchPresentation()
         }
+        // Free the web port before the successor may bind it.
+        await this.opts.web?.dispatch.close()
         await this.opts.store.appendRepo(this.opts.repo, {
           actor: DISPATCHER,
           type: 'dispatcher.terminal-released',

@@ -82,6 +82,11 @@ export interface RepoViewOptions {
   repo: string
   resident?: boolean
   now?: () => number
+  /** Called with the repository value each successful journal refresh just
+   * read, for presentation only (`ab dispatch --web`). It must be synchronous
+   * and must never read: it observes reads the view already makes. Its
+   * exceptions are swallowed, so a presentation sink cannot fail a refresh. */
+  onRepositoryFacts?: (facts: RepositoryReadFacts) => void
 }
 export type WindowSource = { build: string } | 'journal'
 export type BuildFacts = CurrentBuildFacts
@@ -114,6 +119,7 @@ export class RepoViewStore implements BuildStore {
   private readonly windows = new Map<string, RawWindow<AbEvent>>()
   private journalWindow?: RawWindow<RepositoryEvent>
   private readonly repo: string
+  private readonly onRepositoryFacts: RepoViewOptions['onRepositoryFacts']
   private readonly builds = new Map<string, Chain>()
   private readonly journalChain = new Chain()
   private readonly metaChain = new Chain()
@@ -146,6 +152,7 @@ export class RepoViewStore implements BuildStore {
     this.getStreamSeed = backing.getStreamSeed?.bind(backing)
     this.getHarvestHistoryPage = backing.getHarvestHistoryPage?.bind(backing)
     this.repo = opts.repo
+    this.onRepositoryFacts = opts.onRepositoryFacts
   }
   private build<T>(slug: string, task: () => Promise<T>): Promise<T> {
     let chain = this.builds.get(slug)
@@ -179,6 +186,12 @@ export class RepoViewStore implements BuildStore {
       this.recorded = recorded
       this.repoFacts = facts
       this.tickSample = record?.tick?.finished
+      if (this.onRepositoryFacts !== undefined)
+        try {
+          this.onRepositoryFacts(structuredClone(facts))
+        } catch {
+          // Presentation only: a failing sink never fails the kernel's refresh.
+        }
     })
   }
   /** The repository record's latest durable tick sample, as the last journal
