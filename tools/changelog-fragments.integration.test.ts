@@ -3,28 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { main } from './changelog-add'
-import {
-  addFragment,
-  collectPendingChangelog,
-  fragmentPath,
-  parseFragment,
-  renderFragment,
-} from './changelog-fragments'
+import { addFragment, collectPendingChangelog, renderFragment } from './changelog-fragments'
 
 const scaffold = '# Changelog\n\n## Unreleased\n\n'
-test('canonical fragment validation', () => {
-  expect(renderFragment(99, 'https://example.test/99', 'Title')).toBe(
-    '- [#99](https://example.test/99) — Title\n',
-  )
-  for (const number of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
-    expect(() => fragmentPath(number)).toThrow()
-  for (const [path, content] of [
-    ['.changelog/099.md', renderFragment(99, 'url', 'Title')],
-    ['.changelog/99.md', renderFragment(100, 'url', 'Title')],
-    ['.changelog/99.md', '- [#99](url) — Title\nextra\n'],
-  ])
-    expect(() => parseFragment(path!, content!)).toThrow()
-})
 
 test('collects both sources numerically, preserves history, refuses duplicates and emptiness', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fragment-test-'))

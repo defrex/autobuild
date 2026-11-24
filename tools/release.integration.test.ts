@@ -1,36 +1,26 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { repoRoot } from './git-tracked'
 import { checkDeploymentTemplates } from './hosted-service-packaging'
 import { addDeploymentFixture } from './hosted-service-packaging.test-fixture'
-import { repoRoot } from './git-tracked'
-import { readWorkspaceManifests } from './workspace-manifest-check'
-import type { WorkspaceManifest } from './workspace-manifest-check'
 import {
-  releasePolicy,
-  normalizeClaudeSummary,
-  parseReleaseArguments,
-  peerFloorRefusalMessage,
-  peerFloorViolations,
+  publishablePackages,
   README_INSTALL_END,
   README_INSTALL_START,
-  renderReleasedChangelog,
-  replacePackageVersion,
+  releasePolicy,
   replaceReadmeInstall,
-  resolveReleaseVersion,
   runRelease,
   spawnCommand,
   uploadDistributionAsset,
   type CommandRequest,
   type CommandResult,
   type CommandRunner,
-  type PeerFloorViolation,
   type ReleaseOutput,
-  publishablePackages,
-  publishRecoveryCommand,
 } from './release'
+import { readWorkspaceManifests } from './workspace-manifest-check'
 
 const temporaryDirectories: string[] = []
 
@@ -224,60 +214,6 @@ async function expectReleaseFailure(
 }
 
 describe('release transforms', () => {
-  test('requires exactly one version selector', () => {
-    expect(() => parseReleaseArguments([])).toThrow('choose exactly one')
-    expect(() => parseReleaseArguments(['--patch', '--minor'])).toThrow('choose only one')
-    expect(() => parseReleaseArguments(['--version', '2.1.0', '--patch'])).toThrow(
-      'choose exactly one',
-    )
-    expect(parseReleaseArguments(['--dry-run', '--version', '2.1.0'])).toEqual({
-      dryRun: true,
-      version: '2.1.0',
-    })
-  })
-
-  test('resolves explicit and major/minor/patch versions', () => {
-    expect(resolveReleaseVersion('2.3.4', { dryRun: false, version: '3.0.0' })).toBe('3.0.0')
-    expect(resolveReleaseVersion('2.3.4', { dryRun: false, bump: 'major' })).toBe('3.0.0')
-    expect(resolveReleaseVersion('2.3.4', { dryRun: false, bump: 'minor' })).toBe('2.4.0')
-    expect(resolveReleaseVersion('2.3.4', { dryRun: false, bump: 'patch' })).toBe('2.3.5')
-    expect(() => resolveReleaseVersion('nope', { dryRun: false, bump: 'patch' })).toThrow(
-      'not valid semver',
-    )
-    expect(() => resolveReleaseVersion('2.0.0', { dryRun: false, version: 'v2.1.0' })).toThrow(
-      'exact semver',
-    )
-  })
-
-  test('normalizes only usable plain-prose Claude output', () => {
-    expect(normalizeClaudeSummary('  A useful release ships.\nIt also fixes reliability.  ')).toBe(
-      'A useful release ships. It also fixes reliability.',
-    )
-    expect(normalizeClaudeSummary('')).toBeUndefined()
-    expect(normalizeClaudeSummary('- A bullet, not prose.')).toBeUndefined()
-    expect(normalizeClaudeSummary('too short')).toBeUndefined()
-  })
-
-  test('cuts one release while preserving entry and released-section bytes', () => {
-    const oldRelease = '## v1.9.0 — 2026-01-01\n\nOld prose.\n\n- old entry\n'
-    const source = `${fixtureChangelog}\n${oldRelease}`
-    const rendered = renderReleasedChangelog(source, 'v2.0.1', '2026-07-27', 'Release prose.')
-    expect(rendered.entries).toBe(
-      '- [#2](https://example.test/2) — New capability\n- [#1](https://example.test/1) — Important repair',
-    )
-    expect(rendered.content.match(/^## Unreleased$/gm)).toHaveLength(1)
-    expect(rendered.content).toContain('## Unreleased\n\n## v2.0.1 — 2026-07-27')
-    expect(rendered.content).toContain(rendered.entries)
-    expect(rendered.content).toContain(`${rendered.entries}\n\n${oldRelease}`)
-    expect(rendered.content.endsWith(oldRelease)).toBe(true)
-    expect(rendered.cutSection).toBe(
-      `## v2.0.1 — 2026-07-27\n\nRelease prose.\n\n${rendered.entries}\n`,
-    )
-    expect(() =>
-      renderReleasedChangelog('# Changelog\n\n## Unreleased\n\n', 'v2.0.1', '2026-07-27'),
-    ).toThrow('has no entries')
-  })
-
   test('tracked README and future stable pins agree with the release renderer', async () => {
     const assertStableInstall = (readme: string) => {
       const block = readme.split(README_INSTALL_START)[1]?.split(README_INSTALL_END)[0]
@@ -291,148 +227,12 @@ describe('release transforms', () => {
     assertStableInstall(await readFile(join(repoRoot, 'README.md'), 'utf8'))
     assertStableInstall(replaceReadmeInstall(fixtureReadme, '1.0.0'))
   })
-
-  test('strictly replaces only the fenced README command and manifest version', () => {
-    const replaced = replaceReadmeInstall(fixtureReadme, '2.1.0')
-    expect(replaced).toBe(
-      fixtureReadme.replace(
-        'bun add -g @defrex/autobuild@0.0.0',
-        'bun add -d --exact @defrex/autobuild@2.1.0',
-      ),
-    )
-    expect(replaced).not.toContain('github:')
-    expect(replaced.match(/release-install:start/g)).toHaveLength(1)
-    expect(() => replaceReadmeInstall('# no markers\n', '2.1.0')).toThrow('exactly one')
-    for (const marker of [README_INSTALL_START, README_INSTALL_END]) {
-      expect(() => replaceReadmeInstall(`${fixtureReadme}${marker}`, '2.1.0')).toThrow(
-        'exactly one',
-      )
-    }
-    expect(() =>
-      replaceReadmeInstall(`${README_INSTALL_END}\n${README_INSTALL_START}`, '2.1.0'),
-    ).toThrow('out of order')
-    expect(replacePackageVersion('{\n  "version": "2.0.0"\n}\n', '2.1.0')).toBe(
-      '{\n  "version": "2.1.0"\n}\n',
-    )
-  })
 })
 
 describe('peer floor guard', () => {
-  function manifestEntry(path: string, manifest: Record<string, unknown>): WorkspaceManifest {
-    return {
-      path,
-      text: JSON.stringify(manifest),
-      manifest: manifest as WorkspaceManifest['manifest'],
-    }
-  }
-
   function dependentManifest(range: string): string {
     return `{\n  "name": "@fixture/dep",\n  "version": "2.0.0",\n  "peerDependencies": {\n    "fixture": "${range}"\n  }\n}\n`
   }
-
-  test('flags a requested version below a declared peer floor, and passes compliant versions', () => {
-    const manifests = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/service/package.json', {
-        name: '@fixture/service',
-        version: '0.8.0',
-        peerDependencies: { fixture: '>=0.9.0' },
-        peerDependenciesMeta: { fixture: { optional: true } },
-      }),
-    ]
-    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([
-      { manifestPath: 'packages/service/package.json', peerName: 'fixture', range: '>=0.9.0' },
-    ] satisfies PeerFloorViolation[])
-    expect(peerFloorViolations(manifests, ['fixture'], '0.9.0')).toEqual([])
-    expect(peerFloorViolations(manifests, ['fixture'], '1.0.0')).toEqual([])
-  })
-
-  test('ignores peers on names this release does not publish and private dependents', () => {
-    const manifests = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/service/package.json', {
-        name: '@fixture/service',
-        version: '0.8.0',
-        peerDependencies: { 'unrelated-package': '>=99.0.0' },
-      }),
-      manifestEntry('packages/private/package.json', {
-        name: '@fixture/private',
-        version: '0.8.0',
-        private: true,
-        peerDependencies: { fixture: '<0.8.0' },
-      }),
-    ]
-    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([])
-  })
-
-  test('satisfies workspace-protocol peers by construction and checks remainders', () => {
-    const manifests = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/a/package.json', {
-        name: '@fixture/a',
-        version: '0.8.0',
-        peerDependencies: { fixture: 'workspace:*' },
-      }),
-      manifestEntry('packages/b/package.json', {
-        name: '@fixture/b',
-        version: '0.8.0',
-        peerDependencies: { fixture: 'workspace:>=0.9.0' },
-      }),
-    ]
-    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([
-      {
-        manifestPath: 'packages/b/package.json',
-        peerName: 'fixture',
-        range: 'workspace:>=0.9.0',
-      },
-    ] satisfies PeerFloorViolation[])
-  })
-
-  test('throws on peer declarations it cannot evaluate', () => {
-    const nonObject = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/a/package.json', {
-        name: '@fixture/a',
-        version: '0.8.0',
-        peerDependencies: '>=0.9.0',
-      }),
-    ]
-    expect(() => peerFloorViolations(nonObject, ['fixture'], '0.9.0')).toThrow(
-      'packages/a/package.json: peerDependencies must be an object',
-    )
-    const nonString = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/b/package.json', {
-        name: '@fixture/b',
-        version: '0.8.0',
-        peerDependencies: { fixture: 9 },
-      }),
-    ]
-    expect(() => peerFloorViolations(nonString, ['fixture'], '0.9.0')).toThrow(
-      'packages/b/package.json: peerDependencies.fixture must be a string',
-    )
-    const unparsable = [
-      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
-      manifestEntry('packages/c/package.json', {
-        name: '@fixture/c',
-        version: '0.8.0',
-        peerDependencies: { fixture: 'not a range >>>' },
-      }),
-    ]
-    expect(() => peerFloorViolations(unparsable, ['fixture'], '0.9.0')).toThrow(
-      'peerDependencies.fixture is not a valid semver range: not a range >>>',
-    )
-  })
-
-  test('the refusal names the version, each violating pair, and the way out', () => {
-    const message = peerFloorRefusalMessage('0.8.1', [
-      { manifestPath: 'packages/service/package.json', peerName: 'fixture', range: '>=0.9.0' },
-    ])
-    expect(message).toContain('cannot release 0.8.1')
-    expect(message).toContain('packages/service/package.json: peer "fixture" requires >=0.9.0')
-    expect(message).toContain('uninstallable from npm')
-    expect(message).toContain('--minor')
-  })
 
   test('refuses a patch release below a dependent package peer floor', async () => {
     const fixture = await createFixture({
@@ -442,12 +242,6 @@ describe('peer floor guard', () => {
       fixture.root,
       /cannot release 2\.0\.1[\s\S]*packages\/dep\/package\.json[\s\S]*peer "fixture" requires >=2\.1\.0[\s\S]*uninstallable/,
     )
-  })
-
-  test('refuses an explicit --version below the peer floor', async () => {
-    const fixture = await createFixture({
-      extraPackages: [{ path: 'packages/dep/package.json', text: dependentManifest('>=2.1.0') }],
-    })
     await expectReleaseFailure(
       fixture.root,
       /cannot release 2\.0\.5[\s\S]*peer "fixture" requires >=2\.1\.0/,
@@ -471,8 +265,10 @@ describe('peer floor guard', () => {
       'Would publish fixture@2.1.0, @fixture/core@2.1.0, @fixture/dep@2.1.0 to the npm registry, in that order, as release-bot.',
     )
   })
+})
 
-  test('a private dependent with an unsatisfiable peer does not block the release', async () => {
+describe('release orchestration', () => {
+  test('commits all release files, pushes an annotated tag, and publishes the exact cut section', async () => {
     const fixture = await createFixture({
       extraPackages: [
         {
@@ -481,26 +277,6 @@ describe('peer floor guard', () => {
         },
       ],
     })
-    const testHarness = harness()
-    await runRelease(['--patch'], fixture.root, {
-      run: testHarness.run,
-      output: testHarness.output,
-      today: () => '2026-07-27',
-      repositoryUrl: fixture.remote,
-      packageArchive: async () => new Uint8Array([1, 2, 3]),
-    })
-    const publishedLine = testHarness.logs.find((message) =>
-      message.startsWith('Published fixture@2.0.1'),
-    )
-    expect(publishedLine).toBeDefined()
-    expect(testHarness.logs.join('\n')).not.toContain('@fixture/private-dep')
-    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
-  })
-})
-
-describe('release orchestration', () => {
-  test('commits all release files, pushes an annotated tag, and publishes the exact cut section', async () => {
-    const fixture = await createFixture()
     const testHarness = harness()
     const before = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()
 
@@ -513,6 +289,11 @@ describe('release orchestration', () => {
       // the upload uses the injected bytes.
       packageArchive: async () => new Uint8Array([1, 2, 3]),
     })
+
+    expect(testHarness.logs.some((message) => message.startsWith('Published fixture@2.0.1'))).toBe(
+      true,
+    )
+    expect(testHarness.logs.join('\n')).not.toContain('@fixture/private-dep')
 
     const cloneRequests = testHarness.requests.filter(
       (request) => request.command === 'git' && request.args[0] === 'clone',
@@ -602,7 +383,13 @@ describe('release orchestration', () => {
         .trim()
         .split('\n')
         .sort(),
-    ).toEqual(['CHANGELOG.md', 'README.md', 'package.json', 'packages/core/package.json'])
+    ).toEqual([
+      'CHANGELOG.md',
+      'README.md',
+      'package.json',
+      'packages/core/package.json',
+      'packages/private-dep/package.json',
+    ])
     expect((await command(fixture.root, 'git', ['cat-file', '-t', 'v2.0.1'])).stdout.trim()).toBe(
       'tag',
     )
@@ -1001,35 +788,6 @@ describe('distribution asset upload', () => {
 })
 
 describe('npm publication', () => {
-  test('orders publishable packages after their workspace dependencies and skips private ones', () => {
-    const packages = publishablePackages([
-      { path: 'package.json', text: '{"name":"@acme/cli","version":"1.0.0"}' },
-      {
-        path: 'packages/service/package.json',
-        text: '{"name":"@acme/service","dependencies":{"@acme/store":"workspace:*"},"peerDependencies":{"@acme/cli":">=1"}}',
-      },
-      { path: 'packages/store/package.json', text: '{"name":"@acme/store"}' },
-      { path: 'packages/private/package.json', text: '{"name":"@acme/private","private":true}' },
-      // A plugin peering on the root package (AUT-517): publishable, and it
-      // must not create a root ↔ provider cycle.
-      {
-        path: 'packages/plugin/package.json',
-        text: '{"name":"@acme/plugin","peerDependencies":{"@acme/cli":">=1"}}',
-      },
-    ])
-    expect(packages.map((entry) => [entry.name, entry.directory])).toEqual([
-      ['@acme/cli', '.'],
-      ['@acme/store', 'packages/store'],
-      ['@acme/service', 'packages/service'],
-      ['@acme/plugin', 'packages/plugin'],
-    ])
-    expect(publishRecoveryCommand(packages.slice(1))).toBe(
-      '(cd packages/store && bun publish --access public --ignore-scripts)\n' +
-        '(cd packages/service && bun publish --access public --ignore-scripts)\n' +
-        '(cd packages/plugin && bun publish --access public --ignore-scripts)',
-    )
-  })
-
   test('the real workspace manifests order without a root ↔ provider cycle (AUT-517)', async () => {
     const manifests = await readWorkspaceManifests(repoRoot)
     const packages = publishablePackages(manifests)
@@ -1193,17 +951,6 @@ test('hosted release frozen installs succeed before the new core version is publ
 }, 30_000)
 
 describe('prerelease publishing', () => {
-  test('derives channels and resolves stable targets from beta', () => {
-    expect(releasePolicy('1.0.0-beta.0')).toEqual({ prerelease: true, distTag: 'beta' })
-    expect(releasePolicy('1.0.0-rc.2')).toEqual({ prerelease: true, distTag: 'rc' })
-    for (const identifier of ['0', '99999999999999999999', 'latest', 'x', 'v1']) {
-      expect(() => releasePolicy(`1.0.0-${identifier}`)).toThrow(identifier)
-    }
-    for (const selector of [{ version: '1.0.0' }, { bump: 'major' as const }]) {
-      expect(resolveReleaseVersion('1.0.0-beta.2', { dryRun: false, ...selector })).toBe('1.0.0')
-    }
-  })
-
   test('invalid channels fail before gates or summary', async () => {
     const fixture = await createFixture()
     for (const channel of ['0', 'latest', 'x']) {
@@ -1489,13 +1236,13 @@ for (const fragmentOnly of [false, true]) {
   }
 }
 
-import {
-  prepareReleaseCompatibility,
-  COMPATIBILITY_ROOT,
-  catalogVersions,
-} from './release-compatibility'
 import type { ReleasedClient } from '../packages/core/src/store/remote/released-clients'
 import type { ReleasedReducerValues } from '../packages/core/src/store/remote/released-reducer-values'
+import {
+  catalogVersions,
+  COMPATIBILITY_ROOT,
+  prepareReleaseCompatibility,
+} from './release-compatibility'
 const tinyCatalog: ReleasedReducerValues = {
   roots: { build: { value: '0' } },
   schemas: { '0': { kind: 'object', props: {} } },
