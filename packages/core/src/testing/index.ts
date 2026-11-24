@@ -86,6 +86,7 @@ export {
 } from './dispatch-read-budget'
 
 export {
+  buildFeedReadBudget,
   catalogSkewReadBudget,
   reducedReadBudget,
   countHistoricalRows,

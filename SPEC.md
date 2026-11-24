@@ -1137,7 +1137,21 @@ through `GET /builds/:slug/ticket-assets`. `createBuild` optionally takes the
 build's initial `build.created` event and appends it as seq 1 in the same atomic
 step as the record on every adapter. This guard applies identically to every adapter; remote tokens
 carry the same authority over the wire as defense in depth rather than creating
-it. Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
+it.
+
+Repository change positions are ordered, so the contract answers two
+cross-build questions at a cost proportional to the answer.
+`listBuildsChangedSince(repo, position)` returns the builds whose latest change
+position is greater than `position`, ascending by position, each once at its
+latest position, together with the repository head read in the same snapshot.
+It reads no event rows, and with nothing changed it does constant work.
+`listBuildsPage(repo, { cursor?, limit? })` returns one page of builds newest
+first by creation (slug descending breaks ties), with records identical to
+`listBuildsForRepo` and an opaque, adapter-issued `next` cursor; its cost does
+not depend on the repository's build count. Limits run from 1 to 100 (default
+25). Malformed positions, cursors and limits reject. Unknown repositories answer
+empty without creating state. Scoped build and session handles reject both
+methods. Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
 conformance suite):
 
 1. **Local** — one self-contained state tree at `<main-repo>/.autobuild/` by
@@ -4460,12 +4474,16 @@ reporting even when no frame painted, with synchronous process restoration for
 catchable faults. Plain, non-TTY, and once runs never enable focus reporting.
 
 Interactive frames first read `BuildStore.getRepoChangePosition(repo)`, a canonical
-unsigned decimal string used only for invalidation. Unknown repositories return
+unsigned decimal string. Unknown repositories return
 `"0"` without creating state. Each repository's durable position advances in the
 same transaction as build creation, build/repository event insertion (including
 artifact-backed and tick writes), or a stored dispatcher lease holder transition.
 Other repositories, failed writes, denied claims, same-holder renewals, heartbeats,
 and passive expiry do not advance it. It is separate from journal sequence cursors.
+Positions are ordered: a later advancing write yields a strictly greater value,
+compared numerically. Build creation and every build event also record the new
+position as that build's latest change position, in the same transaction, which
+the changed-builds feed (§7.2) reads.
 Unchanged positions reuse the complete presentation snapshot; an ordinary refresh, focused or unfocused,
 then makes exactly one store request. Discovery uses required exact-repo
 `listBuildsForRepo(repo)`, never a global listing. Initial hydration, position or
@@ -4477,11 +4495,17 @@ independently; kernel ticks and watch/wait retain their existing reads.
 SQLite installs an additive counter table and transactional triggers on open.
 PostgreSQL installs the corresponding additive table/functions/triggers through
 explicit migration before deploying the new service; the core schema version
-and checksum stay unchanged. Existing data starts at zero, with no replay or
-backfill, and migration reruns preserve counters. Hosted reads use one GET
-`/repos/:repo/change-position` returning only `{ position: string }`, and
-`/repos/:repo/builds` returns scoped build records. Both routes authorize the
-repository before reading and support repositories with builds but no journal.
+and checksum stay unchanged. Existing counters start at zero, with no replay,
+and migration reruns preserve counters. The per-build positions live in a
+separate additive table. When it is first created, in the same transaction,
+each repository with builds advances by one and every existing build is
+recorded at that new head, so the feed reports pre-existing builds once and
+never misses one. Later opens and migrations cost one catalog lookup. Hosted
+reads use one GET `/repos/:repo/change-position` returning only
+`{ position: string }`; `/repos/:repo/builds` returns scoped build records;
+`/repos/:repo/changed-builds?since=` and `/repos/:repo/build-page?limit=&cursor=`
+serve the feed and the paged listing. All four routes authorize the repository
+before reading and support repositories with builds but no journal.
 
 Durable operator settings (intake, repository pause, harvest gate) and pending
 single-ticket start requests survive restarts through the repository journal. Per-merge hold and merge commands

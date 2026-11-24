@@ -268,6 +268,19 @@ export const repoChangePositions = sqliteTable('repo_change_positions', {
   position: integer('position').notNull(),
 })
 
+/** Each build's latest repository change position, written by the same
+ * trigger statement that advances `repo_change_positions`. One row per build,
+ * upserted in place; the changed-builds feed range-scans `(repo, position)`. */
+export const buildChangePositions = sqliteTable(
+  'build_change_positions',
+  {
+    slug: text('slug').primaryKey(),
+    repo: text('repo').notNull(),
+    position: integer('position').notNull(),
+  },
+  (t) => [index('build_change_positions_repo_position').on(t.repo, t.position)],
+)
+
 export const operatorPresence = sqliteTable(
   'operator_presence',
   {

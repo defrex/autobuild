@@ -8,6 +8,11 @@ import {
 } from '@defrex/autobuild/remote-store'
 import { scanCadenceWriteSchema } from '@defrex/autobuild/remote-store'
 import {
+  BuildFeedValidationError,
+  parseBuildPageLimitParam,
+  parseChangePosition,
+} from '@defrex/autobuild/remote-store'
+import {
   CursorTooOldError,
   CheckpointIntegrityError,
   RetiredSeedGenerationError,
@@ -159,6 +164,17 @@ export interface StoreServer {
 }
 
 /** Thrown by route helpers; the top-level handler maps it to a response. */
+/** Run a feed or page read; its argument errors are `400 validation`. */
+async function buildFeedRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read()
+  } catch (error) {
+    if (error instanceof BuildFeedValidationError)
+      throw new RequestError(400, 'validation', error.message)
+    throw error
+  }
+}
+
 class RequestError extends Error {
   constructor(
     readonly status: number,
@@ -1766,6 +1782,28 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         if (segments[2] === 'change-position')
           return json(200, { position: await store.getRepoChangePosition(repo) })
         if (segments[2] === 'builds') return json(200, await store.listBuildsForRepo(repo))
+        // The changed-builds feed and paged listing answer journal-less
+        // repositories like `builds`, before the existence gate.
+        if (segments[2] === 'changed-builds')
+          return json(
+            200,
+            await buildFeedRead(() => {
+              const since = url.searchParams.get('since')
+              parseChangePosition(since)
+              return store.listBuildsChangedSince(repo, since!)
+            }),
+          )
+        if (segments[2] === 'build-page')
+          return json(
+            200,
+            await buildFeedRead(() => {
+              const cursor = url.searchParams.get('cursor')
+              return store.listBuildsPage(repo, {
+                limit: parseBuildPageLimitParam(url.searchParams.get('limit')),
+                ...(cursor === null ? {} : { cursor }),
+              })
+            }),
+          )
       }
       if (segments.length === 3 && segments[2] === 'build-digests') {
         return buildDigestRoute(req, repo)

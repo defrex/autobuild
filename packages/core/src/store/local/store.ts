@@ -16,6 +16,15 @@ import {
   type ReducerValue,
 } from '../reducer-values'
 import { validateTickFinish } from '../repo-tick'
+import {
+  decodeBuildPageCursor,
+  encodeBuildPageCursor,
+  parseChangePosition,
+  resolveBuildPageLimit,
+  type BuildPage,
+  type BuildPageOptions,
+  type ChangedBuilds,
+} from '../build-feed'
 import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from '../types'
 /**
  * The local BuildStore (SPEC §7.2.1): SQLite + blob directory beneath an
@@ -165,14 +174,8 @@ import {
 export const REPO_CHANGE_DDL = `
 CREATE TABLE IF NOT EXISTS repo_change_positions (repo TEXT PRIMARY KEY, position INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS builds_repo_created_slug ON builds(repo, created_at, slug);
-CREATE TRIGGER IF NOT EXISTS builds_repo_change AFTER INSERT ON builds
- BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
- ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
 CREATE TRIGGER IF NOT EXISTS repo_events_repo_change AFTER INSERT ON repo_events
  BEGIN INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
- ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
-CREATE TRIGGER IF NOT EXISTS events_repo_change AFTER INSERT ON events
- BEGIN INSERT INTO repo_change_positions(repo, position) VALUES ((SELECT repo FROM builds WHERE slug = NEW.build), 1)
  ON CONFLICT(repo) DO UPDATE SET position = position + 1; END;
 CREATE TRIGGER IF NOT EXISTS repo_holder_change AFTER UPDATE OF lease_holder ON repo_streams
  WHEN OLD.lease_holder IS NOT NEW.lease_holder
@@ -213,6 +216,93 @@ const OPEN_BUILDS_BACKFILL = `INSERT OR IGNORE INTO open_builds(slug, repo)
   SELECT 1 FROM events c WHERE c.type = 'build.completed' AND c.build = b.slug
    AND c.seq > COALESCE((SELECT MAX(a.seq) FROM events a
     WHERE a.type = 'build.aborted' AND a.build = b.slug), 0))`
+
+/**
+ * Per-build latest change positions (the changed-builds feed). Each trigger
+ * body advances the repository position and then records it as the build's
+ * latest, in one statement list, so the two can never disagree in order and
+ * share the writing transaction. Build creation and build events use these
+ * triggers; they replace the older `builds_repo_change` and
+ * `events_repo_change` (`ensureBuildChangePositions` drops those once). An
+ * older runtime that recreates one only double-advances the counter, which
+ * keeps positions strictly ordered.
+ */
+export const BUILD_CHANGE_DDL = `
+CREATE TABLE IF NOT EXISTS build_change_positions (slug TEXT PRIMARY KEY, repo TEXT NOT NULL, position INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS build_change_positions_repo_position ON build_change_positions(repo, position);
+CREATE TRIGGER IF NOT EXISTS builds_change_recorded AFTER INSERT ON builds
+ BEGIN
+ INSERT INTO repo_change_positions(repo, position) VALUES (NEW.repo, 1)
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1;
+ INSERT INTO build_change_positions(slug, repo, position)
+ SELECT NEW.slug, NEW.repo, position FROM repo_change_positions WHERE repo = NEW.repo
+ ON CONFLICT(slug) DO UPDATE SET position = MAX(position, excluded.position);
+ END;
+CREATE TRIGGER IF NOT EXISTS events_change_recorded AFTER INSERT ON events
+ BEGIN
+ INSERT INTO repo_change_positions(repo, position) SELECT repo, 1 FROM builds WHERE slug = NEW.build
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1;
+ INSERT INTO build_change_positions(slug, repo, position)
+ SELECT b.slug, b.repo, p.position FROM builds b JOIN repo_change_positions p ON p.repo = b.repo
+ WHERE b.slug = NEW.build
+ ON CONFLICT(slug) DO UPDATE SET position = MAX(position, excluded.position);
+ END;
+`
+
+/** Runs once, when `build_change_positions` is first created: advance each
+ * repository that has builds by one, and record every existing build at that
+ * new head, so every pre-migration build is strictly newer than any position
+ * a consumer could have saved before. */
+const BUILD_CHANGE_BACKFILL = `
+DROP TRIGGER IF EXISTS builds_repo_change;
+DROP TRIGGER IF EXISTS events_repo_change;
+${BUILD_CHANGE_DDL}
+INSERT INTO repo_change_positions(repo, position) SELECT DISTINCT repo, 1 FROM builds WHERE true
+ ON CONFLICT(repo) DO UPDATE SET position = position + 1;
+INSERT INTO build_change_positions(slug, repo, position)
+ SELECT b.slug, b.repo, p.position FROM builds b JOIN repo_change_positions p ON p.repo = b.repo WHERE true
+ ON CONFLICT(slug) DO UPDATE SET position = excluded.position;
+`
+
+/**
+ * Install the per-build change positions. Process start costs one
+ * `sqlite_master` lookup once the table exists; only a database that lacks
+ * it takes a write transaction, rechecked under BEGIN IMMEDIATE because two
+ * processes can open the same file at once.
+ */
+export function ensureBuildChangePositions(sqlite: Database): void {
+  const present = () =>
+    sqlite
+      .query(
+        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'build_change_positions'",
+      )
+      .get() !== null
+  if (present()) return
+  sqlite
+    .transaction(() => {
+      if (!present()) sqlite.exec(BUILD_CHANGE_BACKFILL)
+    })
+    .immediate()
+}
+
+/** The changed-builds feed: the head plus an index range scan, one snapshot. */
+export const CHANGED_BUILDS_SQL = `SELECT h.head AS head, c.slug AS slug, CAST(c.position AS TEXT) AS position
+FROM (SELECT CAST(COALESCE((SELECT position FROM repo_change_positions WHERE repo = ?1), 0) AS TEXT) AS head) h
+LEFT JOIN build_change_positions c ON c.repo = ?1 AND c.position > ?2
+ORDER BY c.position`
+
+const BUILD_PAGE_COLUMNS = `slug, repo, ticket, branch, repo_origin AS repoOrigin,
+ created_at AS createdAt, updated_at AS updatedAt, heartbeat_at AS heartbeatAt,
+ lease_holder AS leaseHolder, lease_expires_at AS leaseExpiresAt`
+
+/** A build page, newest first: a backward scan of `builds_repo_created_slug`. */
+export const BUILD_PAGE_SQL = `SELECT ${BUILD_PAGE_COLUMNS} FROM builds WHERE repo = ?1
+ORDER BY created_at DESC, slug DESC LIMIT ?2`
+
+/** A later build page: the same scan, starting below the cursor key. */
+export const BUILD_PAGE_AFTER_SQL = `SELECT ${BUILD_PAGE_COLUMNS} FROM builds
+WHERE repo = ?1 AND (created_at, slug) < (?3, ?4)
+ORDER BY created_at DESC, slug DESC LIMIT ?2`
 
 export const BOOTSTRAP_DDL = [
   // Reducer snapshots: additive and idempotent, so databases that predate the
@@ -384,6 +474,20 @@ export const BOOTSTRAP_DDL = [
 ] as const
 
 type BuildRow = typeof builds.$inferSelect
+/** The columns a `BuildRecord` is projected from. */
+type BuildRecordRow = Pick<
+  BuildRow,
+  | 'slug'
+  | 'repo'
+  | 'ticket'
+  | 'branch'
+  | 'repoOrigin'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'heartbeatAt'
+  | 'leaseHolder'
+  | 'leaseExpiresAt'
+>
 type RepoRow = typeof repoStreams.$inferSelect
 
 interface PreparedArtifact {
@@ -452,6 +556,7 @@ export class SqliteBuildStore implements BuildStore {
         this.sqlite.exec('ROLLBACK')
         throw error
       }
+      ensureBuildChangePositions(this.sqlite)
       for (const table of ['events', 'repo_events']) {
         const columns = this.sqlite.query(`PRAGMA table_info('${table}')`).all() as {
           name: string
@@ -533,6 +638,7 @@ export class SqliteBuildStore implements BuildStore {
     const expected = new Database(':memory:')
     try {
       for (const ddl of BOOTSTRAP_DDL) expected.exec(ddl)
+      ensureBuildChangePositions(expected)
       // ALTER appends columns, and legacy creation-order columns have a DEFAULT
       // used only for backfill. Neither changes the target's runtime requirements.
       const catalog = (database: Database) => {
@@ -700,7 +806,7 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  private toRecord(row: BuildRow): BuildRecord {
+  private toRecord(row: BuildRecordRow): BuildRecord {
     return {
       slug: row.slug,
       repo: row.repo,
@@ -752,6 +858,47 @@ export class SqliteBuildStore implements BuildStore {
       )
       .get(repo)
     return row?.position ?? '0'
+  }
+
+  async listBuildsChangedSince(repo: string, position: string): Promise<ChangedBuilds> {
+    const since = parseChangePosition(position)
+    const rows = this.sqlite
+      .query<{ head: string; slug: string | null; position: string | null }, [string, bigint]>(
+        CHANGED_BUILDS_SQL,
+      )
+      .all(repo, since)
+    return {
+      position: rows[0]?.head ?? '0',
+      builds: rows.flatMap((row) =>
+        row.slug !== null && row.position !== null
+          ? [{ slug: row.slug, position: row.position }]
+          : [],
+      ),
+    }
+  }
+
+  async listBuildsPage(repo: string, opts: BuildPageOptions = {}): Promise<BuildPage> {
+    const limit = resolveBuildPageLimit(opts.limit)
+    const cursor = opts.cursor === undefined ? undefined : decodeBuildPageCursor(opts.cursor)
+    type PageRow = Omit<BuildRecordRow, 'ticket'> & { ticket: string | null }
+    const rows = cursor
+      ? this.sqlite
+          .query<PageRow, [string, number, string, string]>(BUILD_PAGE_AFTER_SQL)
+          .all(repo, limit + 1, cursor.at, cursor.slug)
+      : this.sqlite.query<PageRow, [string, number]>(BUILD_PAGE_SQL).all(repo, limit + 1)
+    const builds = rows
+      .slice(0, limit)
+      .map((row) =>
+        this.toRecord({ ...row, ticket: row.ticket === null ? null : JSON.parse(row.ticket) }),
+      )
+    const last = builds.at(-1)
+    return {
+      builds,
+      next:
+        rows.length > limit && last
+          ? encodeBuildPageCursor({ at: last.createdAt, slug: last.slug })
+          : null,
+    }
   }
 
   async listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
