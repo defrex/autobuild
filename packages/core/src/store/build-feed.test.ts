@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildFeedReadBudget } from '../testing/reduced-read-budget'
+import { buildFeedReadBudget, filteredBuildPageReadBudget } from '../testing/reduced-read-budget'
 import {
   BUILD_PAGE_DEFAULT_LIMIT,
   BUILD_PAGE_MAX_LIMIT,
@@ -45,9 +45,13 @@ describe('build page arguments', () => {
   })
 
   test('cursors round-trip opaque sort keys and reject malformed input', () => {
+    // A creation-order cursor keeps the exact bytes it had before filters.
+    expect(
+      encodeBuildPageCursor({ order: 'created', at: '2026-11-23T00:00:00.000Z', slug: 'build-a' }),
+    ).toBe('eyJ2IjoxLCJhdCI6IjIwMjYtMTEtMjNUMDA6MDA6MDAuMDAwWiIsInNsdWciOiJidWlsZC1hIn0')
     for (const key of [
-      { at: '2026-11-23T00:00:00.000Z', slug: 'build-a' },
-      { at: '2026-11-23 00:00:00.123456+00', slug: 'ünïcode/slug?&=' },
+      { order: 'created' as const, at: '2026-11-23T00:00:00.000Z', slug: 'build-a' },
+      { order: 'updated' as const, at: '2026-11-23 00:00:00.123456+00', slug: 'ünïcode/slug?&=' },
     ]) {
       const cursor = encodeBuildPageCursor(key)
       expect(cursor).toMatch(/^[A-Za-z0-9_-]+$/)
@@ -62,7 +66,7 @@ describe('build page arguments', () => {
       encode({}),
       encode([]),
       encode(null),
-      encode({ v: 2, at: 'x', slug: 'y' }),
+      encode({ v: 3, at: 'x', slug: 'y' }),
       encode({ v: 1, at: '', slug: 'y' }),
       encode({ v: 1, at: 'x', slug: 1 }),
       encode({ v: 1, at: 'x', slug: 'y', extra: true }),
@@ -75,4 +79,8 @@ describe('build page arguments', () => {
 
 test('feed and page reads cost the same at 100 and 10,000 builds or writes', async () => {
   await buildFeedReadBudget()
+}, 60_000)
+
+test('every filtered page costs its page size at 100 and 100,000 builds', async () => {
+  await filteredBuildPageReadBudget()
 }, 60_000)

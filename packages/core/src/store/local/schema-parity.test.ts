@@ -38,6 +38,7 @@ import {
   repoStreams,
   repoChangePositions,
   buildChangePositions,
+  buildListingFacts,
   sessionArtifacts,
   sessionEvents,
   sessions,
@@ -45,11 +46,11 @@ import {
   streams,
   ticketAssets,
 } from './schema'
-import { BOOTSTRAP_DDL, BUILD_CHANGE_DDL } from './store'
+import { BOOTSTRAP_DDL, BUILD_CHANGE_DDL, BUILD_LISTING_DDL } from './store'
 
 /** Everything an opened store creates: the bootstrap DDL, then the build
- * change positions `ensureBuildChangePositions` installs. */
-const STORE_DDL = [...BOOTSTRAP_DDL, BUILD_CHANGE_DDL] as const
+ * change positions and listing facts the `ensure*` steps install. */
+const STORE_DDL = [...BOOTSTRAP_DDL, BUILD_CHANGE_DDL, BUILD_LISTING_DDL] as const
 
 const tables: Record<string, SQLiteTable> = {
   builds,
@@ -61,6 +62,7 @@ const tables: Record<string, SQLiteTable> = {
   repo_streams: repoStreams,
   repo_change_positions: repoChangePositions,
   build_change_positions: buildChangePositions,
+  build_listing_facts: buildListingFacts,
   repo_events: repoEvents,
   repo_artifacts: repoArtifacts,
   ticket_assets: ticketAssets,
