@@ -223,13 +223,18 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         threshold: 35,
         noise: 1.6,
         attempts: { filed: 4, accepted: 1, rejected: 1, unmeasured: 0, running: 2 },
-        budget: { maxAttempts: 60, maxHours: 24, openedAt: '2026-07-15T06:10:00.000Z' },
+        budget: {
+          maxAttempts: 60,
+          maxHours: 24,
+          openedAt: '2026-07-15T06:10:00.000Z',
+          clock: { activeMs: 8_400_000, spans: [], open: ['2026-07-15T09:30:00.000Z'] },
+        },
       })
       const lines = frame.text.split('\n')
       const first = lines.findIndex((line) =>
         line.includes(frame.id.endsWith('wide') ? 'objective 50' : 'Objective'),
       )
-      const last = lines.findIndex((line) => line.includes('6.0/24 hours'))
+      const last = lines.findIndex((line) => line.includes('5.0/24 active hours'))
       expect(first).toBeGreaterThan(-1)
       expect(last).toBeGreaterThan(first)
       const objective = lines.slice(first, last + 1)
@@ -253,7 +258,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         '1 rejected',
         '2 running',
         'budget 4/60 attempts',
-        '6.0/24 hours',
+        '5.0/24 active hours',
       ]) {
         const next = joined.indexOf(term, at)
         expect(next).toBeGreaterThanOrEqual(at)

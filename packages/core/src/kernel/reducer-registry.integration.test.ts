@@ -19,6 +19,9 @@ import {
   optimizationLog,
   unmeasuredMergeLog,
   panelOptimizationLog,
+  optimizationClockLog,
+  optimizationSettledClockLog,
+  executionIntervalsLog,
 } from './generators/optimization-log'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
@@ -864,6 +867,9 @@ function corpora(): unknown[][] {
     attemptMeasurementLog(),
     attemptLandingLog(),
     unmeasuredMergeLog(),
+    optimizationClockLog(),
+    optimizationSettledClockLog(),
+    executionIntervalsLog(),
     ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
     ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
     ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),

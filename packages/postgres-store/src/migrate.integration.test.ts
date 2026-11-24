@@ -256,6 +256,7 @@ if (testUrl) {
           expect(digests.get('v6-build')).toEqual({
             slug: 'v6-build',
             observations: [],
+            executionFacts: 0,
             nodeTargets: [],
           })
         } finally {

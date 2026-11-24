@@ -2801,6 +2801,17 @@ export async function nodePollingReadBudget(opts: {
    * so the every-tick admission stage is measured on its waiting path. Its
    * own reads are excluded from the measurement. */
   slotWaiting?: () => Promise<boolean>
+  /** An optimization node with one in-flight attempt build (#1069): proves
+   * its active-hours activity pass. Each change is appended on the attempt
+   * build; `pad` appends unrelated events there. */
+  activity?: {
+    build: string
+    start(): Promise<void>
+    end(): Promise<void>
+    /** A whole start and end pair. */
+    between(): Promise<void>
+    pad(count: number): Promise<void>
+  }
 }) {
   const { store, slug } = opts
   const checkpoint = (await readBuildFacts(store, slug)).value.state.nodePolling!
@@ -2890,9 +2901,130 @@ export async function nodePollingReadBudget(opts: {
     } finally {
       Reflect.deleteProperty(events, 'slice')
     }
+    if (opts.activity) costs.push(...(await activityBudget(store, slug, opts, opts.activity)))
     if (baseline) expect(costs).toEqual(baseline)
     baseline = costs
   }
+}
+
+/** The active-hours activity pass on an optimization node (#1069): an idle
+ * tick writes nothing and reads nothing extra; a tick after new attempt
+ * execution facts writes one batch and one acknowledgment and reads the
+ * attempt's `executionIntervals` value once, with zero history rows on
+ * either log, also after a long unrelated gap and with more unacknowledged
+ * facts than any window would hold. Every tick is a fresh dispatcher. */
+async function activityBudget(
+  store: import('../store/memory').MemoryBuildStore,
+  slug: string,
+  opts: { tick: () => Promise<unknown>; advance: (ms: number) => void },
+  activity: NonNullable<Parameters<typeof nodePollingReadBudget>[0]['activity']>,
+): Promise<number[]> {
+  const { readExecutionIntervals } = await import('./../store/reduced-reads')
+  type Logged = import('../events/catalog').AbEvent
+  const builds = Reflect.get(store, 'builds') as Map<string, { events: Logged[] }>
+  const nodeEvents = builds.get(slug)!.events
+  const attemptEvents = builds.get(activity.build)!.events
+  const count = (events: Logged[], type: string) =>
+    events.filter((event) => event.type === type).length
+  // The value is computed once per key; every later read advances it. One
+  // warm tick brings the attempt's own values to its log's end.
+  await readExecutionIntervals(store, activity.build)
+  opts.advance(10_000)
+  await opts.tick()
+  // Each reduced value of the attempt reads each row at most once over the
+  // whole proof; raw event reads of the attempt are never made.
+  const readBy = new Map<string, Set<number>>()
+  const measure = async (change: () => Promise<void>) => {
+    const nodeBoundary = nodeEvents.at(-1)!.seq
+    await change()
+    const batches = count(nodeEvents, 'optimization.activity-recorded')
+    const acks = count(attemptEvents, 'execution.accounted')
+    let history = 0
+    let reader: string | undefined
+    const nodeSlice = nodeEvents.slice.bind(nodeEvents)
+    nodeEvents.slice = (start, end) => {
+      const selected = nodeSlice(start, end)
+      history += selected.filter((event) => event.seq <= nodeBoundary).length
+      return selected
+    }
+    const attemptSlice = attemptEvents.slice.bind(attemptEvents)
+    attemptEvents.slice = (start, end) => {
+      const selected = attemptSlice(start, end)
+      if (reader === undefined) history += selected.length
+      else {
+        const seen = readBy.get(reader) ?? new Set<number>()
+        readBy.set(reader, seen)
+        for (const event of selected) {
+          if (seen.has(event.seq)) history++
+          seen.add(event.seq)
+        }
+      }
+      return selected
+    }
+    let intervalReads = 0
+    const getReduced = store.getReducerValue.bind(store)
+    // Serialized while measured, so each slice is attributed to its value.
+    let chain: Promise<unknown> = Promise.resolve()
+    store.getReducerValue = (scope, request) => {
+      if (request.reducer === 'executionIntervals') intervalReads++
+      const read = chain.then(async () => {
+        reader =
+          scope.kind === 'build' && scope.slug === activity.build
+            ? `${request.reducer}:${JSON.stringify(request.args ?? {})}`
+            : undefined
+        try {
+          return await getReduced(scope, request)
+        } finally {
+          reader = undefined
+        }
+      })
+      chain = read.catch(() => {})
+      return read
+    }
+    try {
+      opts.advance(10_000)
+      await opts.tick()
+    } finally {
+      Reflect.deleteProperty(nodeEvents, 'slice')
+      Reflect.deleteProperty(attemptEvents, 'slice')
+      store.getReducerValue = getReduced
+    }
+    expect(history).toBe(0)
+    return {
+      batches: count(nodeEvents, 'optimization.activity-recorded') - batches,
+      acks: count(attemptEvents, 'execution.accounted') - acks,
+      intervalReads,
+    }
+  }
+  const idle = { batches: 0, acks: 0, intervalReads: 0 }
+  const recorded = { batches: 1, acks: 1, intervalReads: 1 }
+  const vector: number[] = []
+  const expectCost = async (change: () => Promise<void>, cost: typeof idle) => {
+    const measured = await measure(change)
+    expect(measured).toEqual(cost)
+    vector.push(measured.batches, measured.acks, measured.intervalReads)
+  }
+  const nothing = async () => {}
+  await expectCost(nothing, idle)
+  await expectCost(activity.start, recorded)
+  await expectCost(nothing, idle)
+  await expectCost(activity.end, recorded)
+  await expectCost(activity.between, recorded)
+  await expectCost(nothing, idle)
+  // A long unrelated gap between execution facts: still one value read.
+  await expectCost(async () => {
+    await activity.pad(100_000)
+    await activity.between()
+  }, recorded)
+  await expectCost(nothing, idle)
+  // More unacknowledged facts than any window would hold: one read, one
+  // node event, and the value then holds no facts.
+  await expectCost(async () => {
+    for (let pair = 0; pair < 75; pair++) await activity.between()
+  }, recorded)
+  expect((await readExecutionIntervals(store, activity.build)).value.facts).toEqual([])
+  await expectCost(nothing, idle)
+  return vector
 }
 
 /** Node child discovery (AUT-1129) reads only the digest batch plus facts for
