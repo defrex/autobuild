@@ -81,6 +81,7 @@ export {
 
 export {
   buildFeedReadBudget,
+  filteredBuildPageReadBudget,
   buildRosterReadBudget,
   rollupReadBudget,
   rollupRemoteReadBudget,

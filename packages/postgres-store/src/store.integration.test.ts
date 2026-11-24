@@ -12,7 +12,12 @@ import {
   type StreamPart,
 } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
-import { EVENT_WAIT_POLL_MS, PostgresBuildStore, openPostgresBuildStore } from './store'
+import {
+  EVENT_WAIT_POLL_MS,
+  PostgresBuildStore,
+  filteredBuildPageQuery,
+  openPostgresBuildStore,
+} from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -1076,6 +1081,185 @@ if (testUrl)
       await database.cleanup()
     }
   }, 30_000)
+
+if (testUrl)
+  test('build listing facts backfill once and answer filtered pages through the migration', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      const marker = await sql`SELECT * FROM ab_schema_migrations`
+      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      try {
+        const actor = { kind: 'dispatcher' } as const
+        const created = (slug: string, kind: 'work' | 'node') => ({
+          actor,
+          type: 'build.created' as const,
+          payload: {
+            ticket: { source: 'file' as const, id: slug },
+            repo: 'repo',
+            baseBranch: 'main',
+            kind,
+          },
+        })
+        const complete = (slug: string, outcome: 'merged' | 'closed-unmerged') =>
+          store.append(slug, { actor, type: 'build.completed', payload: { outcome } })
+        await store.createBuild({
+          slug: 'lf-node',
+          repo: 'repo',
+          created: created('lf-node', 'node'),
+        })
+        await complete('lf-node', 'merged')
+        await store.createBuild({
+          slug: 'lf-work',
+          repo: 'repo',
+          created: created('lf-work', 'work'),
+        })
+        await complete('lf-work', 'merged')
+        await store.append('lf-work', {
+          actor: { kind: 'human', user: 'op' } as const,
+          type: 'build.reopened',
+          payload: { feedback: 'again' },
+        })
+        await store.createBuild({ slug: 'lf-leaf', repo: 'repo' })
+        await complete('lf-leaf', 'closed-unmerged')
+        await complete('lf-leaf', 'merged')
+        const since = '2000-01-01T00:00:00Z'
+        const answers = async () => {
+          const slugs = async (opts: Parameters<typeof store.listBuildsPage>[1]) => {
+            const walked: string[] = []
+            let cursor: string | undefined
+            do {
+              const page = await store.listBuildsPage('repo', {
+                ...opts,
+                limit: 1,
+                ...(cursor === undefined ? {} : { cursor }),
+              })
+              walked.push(...page.builds.map((build) => build.slug))
+              cursor = page.next ?? undefined
+            } while (cursor !== undefined)
+            return walked
+          }
+          return {
+            node: await slugs({ kind: 'node' }),
+            leaf: await slugs({ kind: 'leaf' }),
+            merged: await slugs({ outcome: 'merged' }),
+            mergedLeaf: await slugs({ kind: 'leaf', outcome: 'merged' }),
+            active: await slugs({ activeSince: since }),
+            activeNode: await slugs({ activeSince: since, kind: 'node' }),
+          }
+        }
+        const before = await answers()
+        const sorted = (value: Record<string, string[]>) =>
+          Object.fromEntries(Object.entries(value).map(([key, slugs]) => [key, slugs.toSorted()]))
+        expect(sorted(before)).toEqual({
+          node: ['lf-node'],
+          leaf: ['lf-leaf', 'lf-work'],
+          merged: ['lf-leaf', 'lf-node'],
+          mergedLeaf: ['lf-leaf'],
+          active: ['lf-leaf', 'lf-node', 'lf-work'],
+          activeNode: ['lf-node'],
+        })
+        // Rebuild a database from before the listing facts.
+        await sql.unsafe(`DROP TABLE build_listing_facts;
+          DROP TRIGGER builds_listing_seeded ON builds;
+          DROP TRIGGER builds_listing_touched ON builds;
+          DROP TRIGGER events_listing_recorded ON events;`)
+        await migratePostgres(database.url)
+        expect(await answers()).toEqual(before)
+        expect(await sql`SELECT * FROM ab_schema_migrations`).toEqual(marker)
+        // A second migrate is a no-op, and the triggers keep facts current.
+        await migratePostgres(database.url)
+        await store.append('lf-node', {
+          actor: { kind: 'human', user: 'op' } as const,
+          type: 'build.reopened',
+          payload: { feedback: 'again' },
+        })
+        expect((await answers()).merged).toEqual(['lf-leaf'])
+        expect((await answers()).active[0]).toBe('lf-node')
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 30_000)
+
+if (testUrl)
+  test('every filtered page range-scans only its class index under a skewed history', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      await migratePostgres(database.url)
+      // Classes clustered in time, against the planner's uniform estimate: the
+      // oldest 100 builds are merged nodes, then merged leaves, then the newest
+      // 200 unmerged, leaves before nodes. A plan that walked a wider index and
+      // filtered would discard a run of non-matching rows first.
+      const n = 20_000
+      await sql.unsafe(`INSERT INTO builds(slug, repo, created_at, updated_at)
+        SELECT 's' || lpad(g::text, 6, '0'), 'repo', timestamptz '2026-01-01' + g * interval '1 second',
+          timestamptz '2026-01-01' + g * interval '1 second' FROM generate_series(0, ${n - 1}) g`)
+      await sql.unsafe(`UPDATE build_listing_facts SET
+        node = (substr(slug, 2)::int < 100 OR substr(slug, 2)::int >= ${n - 100}),
+        merged = (substr(slug, 2)::int < ${n - 200})`)
+      await sql.unsafe('ANALYZE')
+      const since = '2026-01-01T00:00:00.000Z'
+      const cases = [
+        ['kind_created', { kind: 'leaf' }],
+        ['kind_created', { kind: 'node' }],
+        ['merged_created', { outcome: 'merged' }],
+        ['merged_kind_created', { kind: 'node', outcome: 'merged' }],
+        ['merged_kind_created', { kind: 'leaf', outcome: 'merged' }],
+        ['updated', { activeSince: since }],
+        ['kind_updated', { kind: 'leaf', activeSince: since }],
+        ['kind_updated', { kind: 'node', activeSince: since }],
+        ['merged_updated', { outcome: 'merged', activeSince: since }],
+        ['merged_kind_updated', { kind: 'node', outcome: 'merged', activeSince: since }],
+        ['merged_kind_updated', { kind: 'leaf', outcome: 'merged', activeSince: since }],
+      ] as const
+      type PlanNode = Record<string, unknown> & { Plans?: PlanNode[] }
+      const scans = (node: PlanNode): PlanNode[] => [
+        ...(node['Relation Name'] === 'build_listing_facts' ? [node] : []),
+        ...(node.Plans ?? []).flatMap(scans),
+      ]
+      for (const [index, filters] of cases) {
+        let cursor: { order: 'created' | 'updated'; at: string; slug: string } | undefined
+        for (const page of ['first', 'later']) {
+          const query = filteredBuildPageQuery('repo', 26, filters, cursor)
+          const [explained] = await sql.unsafe(
+            `EXPLAIN (ANALYZE, FORMAT JSON) ${query.sql}`,
+            query.params,
+          )
+          const [scan, ...others] = scans(explained['QUERY PLAN'][0].Plan)
+          const label = `${JSON.stringify(filters)} ${page}`
+          expect({ label, index: scan?.['Index Name'], others: others.length }).toEqual({
+            label,
+            index: `build_listing_${index}`,
+            others: 0,
+          })
+          expect({
+            label,
+            rows: scan!['Actual Rows'],
+            removed: scan!['Rows Removed by Filter'] ?? 0,
+          }).toEqual({
+            label,
+            rows: 26,
+            removed: 0,
+          })
+          const rows = await sql.unsafe(query.sql, query.params)
+          expect(rows).toHaveLength(26)
+          cursor = {
+            order: 'activeSince' in filters ? 'updated' : 'created',
+            at: String(rows[24].cursor_at),
+            slug: String(rows[24].slug),
+          }
+        }
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 60_000)
 
 if (testUrl) {
   test('mixed-version persisted events retain opaque bytes and replay under catalog-specific checkpoints', async () => {
