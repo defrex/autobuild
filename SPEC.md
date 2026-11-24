@@ -4429,8 +4429,22 @@ events, render, send commands** — commands being events appended to the
 applicable build or repository log (§15.2.7). The event vocabulary *is* the
 UI API; forge mutation remains kernel/dispatcher plumbing. Anything a UI
 displays is a reduction of the logs, and anything it does is an event — so
-every frontend (terminal today, web later) is the same adapter pattern
-against the same store, and a dead runner still receives commands on resume.
+every frontend (the terminal dashboard and the web UIs) is the same adapter
+pattern against the same store, and a dead runner still receives commands on
+resume.
+
+The standalone web UI, `ab web`, is a store-only, read-only frontend. It binds
+loopback by default and refuses a request whose `Host` is not the bound
+address, `localhost` or `127.0.0.1`; `--host` widens the bind with a warning
+that the server has no access control. Every page carries the CSP
+`default-src 'self'` with a fresh per-response style nonce, and the page loads
+only a client bundle prebuilt from `packages/ui` and committed with the
+package, so serving it adds no runtime dependency. One refresh loop, alive
+only while at least one browser is subscribed, fans each changed model out
+over one server-sent event stream. Its recurring reads are repository-scope
+saved values gated on `getRepoChangePosition`, so its cost does not grow with
+history, build count or tab count, and it reads nothing while no browser is
+connected. It appends nothing, takes no lease and registers no presence.
 
 Within the immutable generation, interactive `ab dispatch` owns the terminal in a frontend process and supervises
 one private child containing the dispatcher, build runners, Harvest, config and
