@@ -191,7 +191,7 @@ import type {
   WorkspaceReapOutcome,
 } from '../ports/types'
 import { createWorkspaceRuntime, type WorkspaceRuntime } from '../ports/workspace/create'
-import { GitWorktreeProvider } from '../ports/workspace/git-worktree'
+import { GitWorktreeProvider, worktreeIsolationNotice } from '../ports/workspace/git-worktree'
 import { LocalBuildExecution } from '../ports/workspace/local-build-execution'
 import {
   BUILD_EXECUTION_LEASE_TTL_MS,
@@ -389,6 +389,9 @@ export interface DispatchWiring {
   plugins?: PluginRegistry
   /** Keeps workspace-owned runtime preflights aligned with accepted hot role reloads. */
   updateRuntimeReferences?: (config: Config) => void
+  /** Wiring-time startup notices (a workspace destination that cannot take
+   * new builds), shown with the configuration-level startup warnings. */
+  startupNotices?: readonly string[]
 }
 
 export type DispatchNonStoreWiring = Omit<DispatchWiring, 'store' | 'storeRef' | 'token'>
@@ -713,12 +716,15 @@ async function defaultWire(
     accountRedactor(() => allAccounts, opts.env),
   )
   let runtimeReferences = effectiveRuntimeReferences(config, { includeUnusedAccounts: false })
-  // A local override relocates the whole tree. Remote stores still need local
-  // scratch beneath the repository default. Plugin factories receive only
-  // their explicit config plus repository/environment context.
+  // The builtin provider places build worktrees outside the checkout's
+  // package ancestry: the state tree's own worktrees/ when that resolves
+  // outside the checkout, else the per-checkout isolated root. Plugin
+  // factories receive only their explicit config plus repository/environment
+  // context.
   const workspaceRuntime = await createWorkspaceRuntime(config.workspace, {
     registry: plugins,
     worktreeRoot: opened.worktreeRoot,
+    isolatedWorktreeRoot: opened.isolatedWorktreeRoot,
     // Plugin factories always get the filesystem checkout (the physical path
     // or the origin-mode scratch root) — never the store identity.
     repoRoot: state.checkout,
@@ -743,10 +749,23 @@ async function defaultWire(
       ? []
       : [
           {
-            provider: new GitWorktreeProvider({ root: resolve(opened.worktreeRoot) }),
+            provider: new GitWorktreeProvider({
+              root: resolve(opened.worktreeRoot),
+              isolatedRoot: opened.isolatedWorktreeRoot,
+            }),
             execution: new LocalBuildExecution({ env: opts.env }),
           },
         ]
+
+  // Once per process start, a few lstat calls and no store reads: a host with
+  // no isolated destination is told why at startup. Never a gate — fresh
+  // provisioning fails per build, and recorded or legacy worktrees continue.
+  const isolationNotice =
+    !originMode &&
+    config.workspace.provider === 'git-worktree' &&
+    workspaceRuntime.provider instanceof GitWorktreeProvider
+      ? await worktreeIsolationNotice(workspaceRuntime.provider, state.checkout)
+      : undefined
 
   return {
     store: opened.store,
@@ -759,6 +778,7 @@ async function defaultWire(
     workspaces: workspaceRuntime.provider,
     retiredWorkspaces,
     buildExecution: workspaceRuntime.execution,
+    ...(isolationNotice !== undefined ? { startupNotices: [isolationNotice] } : {}),
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
     runtimes,
@@ -4084,6 +4104,7 @@ class DispatchLoop {
     const lines = [
       ...this.liveConfig.deprecations(),
       ...startupWarnings(this.currentConfig().config, this.wiring.forge),
+      ...(this.wiring.startupNotices ?? []),
     ]
     if (this.dashboard) {
       this.configWarnings = lines

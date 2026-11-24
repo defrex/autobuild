@@ -243,6 +243,7 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
         const provider = await createWorkspaceProvider(mcpConfig.workspace, {
           registry: plugins,
           worktreeRoot: context.worktreeRoot,
+          isolatedWorktreeRoot: context.isolatedWorktreeRoot,
           repoRoot: context.checkout,
           env: opts.env,
           storeRef: context.storeRef,

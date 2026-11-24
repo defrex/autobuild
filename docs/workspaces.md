@@ -20,6 +20,8 @@ Install with `bun add -d --exact @defrex/autobuild`. Examples are complete `auto
 
 The default, for builds on your own machine. Needs Git, a writable repository and scratch location, and your runtime and check tools on the host. No workspace credential.
 
+Worktrees live outside the checkout, under `$XDG_STATE_HOME/autobuild/worktrees/` (default `~/.local/state/…`) or a local store's own `worktrees/` when the store is outside the checkout. Each new worktree is checked first: it must not resolve inside the checkout or have `node_modules` above it ([fix](troubleshooting.md#worktree-destination-not-isolated)). Worktrees don't inherit the checkout's dependencies, so `[commands].setup` installs them.
+
 <!-- seam-config:start -->
 ```toml
 forge = "local-git"

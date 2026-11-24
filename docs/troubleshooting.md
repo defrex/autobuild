@@ -61,6 +61,14 @@ bun ab harvest status
 - **Capacity:** paused unfinished work, and work blocked on a question, keeps its slot; builds waiting for a merge decision, builds waiting on other tickets, and idle collecting nodes take none. A finished build that must re-verify or reconcile, or a build whose ticket wait ended, reserves a slot ahead of normal claims; urgent work, including urgent ready tickets, goes first, and `ab priority <slug> urgent` expedites a waiting build. Node verification and reconciliation account specially for descendants' slots.
 - **Harvest:** check the acknowledged harvest gate and unclaimed observations. Harvest triggers at `policy.harvestThreshold` observations, or `policy.harvestMaxDrift` other merged builds since the oldest observation (zero disables drift), and uses no build slot.
 
+## Worktree destination not isolated
+
+**Symptom.** Dispatch shows `new build worktrees cannot be provisioned: build worktree root … is not isolated` or `… resolves inside the checkout`, and new builds record a workspace-stage dispatch failure.
+
+**Cause.** Local build worktrees must sit outside the checkout's package ancestry. The destination under `$XDG_STATE_HOME/autobuild/worktrees/` resolves inside the checkout, or a directory above it holds `node_modules`.
+
+**Fix.** Set `XDG_STATE_HOME` to an absolute directory outside the checkout with no `node_modules` above it, remove the stray `node_modules` the message names, or select a local store outside the checkout. Builds already in a worktree keep running and release meanwhile.
+
 ## Authentication failures
 
 **Symptom.** Ticket requests, forge operations, agent launches or hosted reads report missing or rejected credentials. Each service has its own credential and scope.
