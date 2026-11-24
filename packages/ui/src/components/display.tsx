@@ -17,7 +17,6 @@ import {
   MenuTrigger,
 } from '@ui-sdk/react/menu'
 import type { ReactNode } from 'react'
-import { formatDuration } from '../charts/model'
 import { withTransition } from './motion'
 
 /** A lifecycle word. Color carries state; the word carries it too. */
@@ -31,19 +30,26 @@ export function StateWord({ tone, children }: { tone: StateTone; children: React
   )
 }
 
-export type StepState = 'done' | 'current' | 'retrying' | 'pending'
+export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 
 const stepMark: Record<StepState, { mark: string; name: string }> = {
   done: { mark: '[x]', name: 'done' },
   current: { mark: '[>]', name: 'running' },
-  retrying: { mark: '[~]', name: 'retrying' },
+  provisional: { mark: '[~]', name: 'provisional' },
   pending: { mark: '[ ]', name: 'pending' },
 }
 
 export interface Step {
   name: string
   state: StepState
-  elapsedMs?: number
+  /** The step's glyph; defaults to the state's own mark. */
+  mark?: string
+  /** The parenthesised note, already formatted: `(review, 4m12s/2)`. */
+  note?: string
+  /** The widest text the note can reach. It sizes the note's reserved slot
+   * and is never shown, so a ticking or starting step never rewraps the list. */
+  noteSizer?: string
+  reason?: string
 }
 
 export function StepList({ steps }: { steps: readonly Step[] }) {
@@ -52,13 +58,23 @@ export function StepList({ steps }: { steps: readonly Step[] }) {
       {steps.map((s) => (
         <li key={s.name} data-state={s.state}>
           <span aria-hidden="true" data-ansi="mark">
-            {stepMark[s.state].mark}
+            {s.mark ?? stepMark[s.state].mark}
           </span>
           <span data-ansi="visually-hidden">{stepMark[s.state].name}: </span>
-          {s.name}
-          {s.elapsedMs !== undefined && (
-            <span data-ansi="elapsed"> {formatDuration(s.elapsedMs)}</span>
+          <span data-ansi="step-name">{s.name}</span>
+          {(s.note !== undefined || s.noteSizer !== undefined) && (
+            // The sizer comes first: the slot's baseline is its first item's,
+            // so an empty note never changes the line's height.
+            <span data-ansi="note-slot" data-flow-slot="">
+              {s.noteSizer !== undefined && (
+                <span data-ansi="note-sizer" aria-hidden="true">
+                  {s.noteSizer}
+                </span>
+              )}
+              <span data-ansi="elapsed">{s.note ?? ''}</span>
+            </span>
           )}
+          {s.reason !== undefined && <span data-ansi="step-reason"> — {s.reason}</span>}
         </li>
       ))}
     </ol>
@@ -77,7 +93,9 @@ export function SignOff({
 }) {
   return (
     <section data-ansi="sign-off" data-kind={kind}>
-      <p data-ansi="question">{question}</p>
+      <p data-ansi="question">
+        <span>{question}</span>
+      </p>
       {children}
     </section>
   )

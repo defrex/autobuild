@@ -341,7 +341,7 @@ a:hover {
   color: var(--teal);
   font-weight: 700;
 }
-[data-ansi="steps"] li[data-state="retrying"] {
+[data-ansi="steps"] li[data-state="provisional"] {
   color: var(--amber);
 }
 [data-ansi="steps"] li[data-state="pending"] {
@@ -351,6 +351,24 @@ a:hover {
   font-size: 1em;
   color: var(--slack);
   font-weight: 400;
+}
+[data-ansi="steps"] :where([data-ansi="step-name"], [data-ansi="note-slot"]) {
+  margin-inline-start: 1ch;
+}
+[data-ansi="step-reason"] {
+  font-weight: 400;
+}
+/* A step's note keeps the width of the widest note it can reach, so a timer
+   tick or a step starting never rewraps the list. */
+[data-ansi="note-slot"] {
+  display: inline-grid;
+}
+[data-ansi="note-slot"] > * {
+  grid-area: 1 / 1;
+  justify-self: start;
+}
+[data-ansi="note-sizer"] {
+  visibility: hidden;
 }
 
 /* Spacing lives on the region, never on its children, so padding reads the
@@ -476,6 +494,82 @@ a:hover {
   margin: 0;
 }
 
+/* Counts tick in place: tabular figures in a slot of at least three. */
+[data-ansi="count-slot"] {
+  display: inline-block;
+  min-width: 3ch;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Page sections ───────────────────────────────────── */
+
+[data-ansi="section-heading"] {
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
+  margin: 0;
+  padding: var(--space-lg) 0 var(--space-xs);
+  border-bottom: var(--stroke-rule) solid var(--rule);
+  font-size: var(--fs-detail-heading);
+  font-weight: 700;
+}
+[data-ansi="section-heading"] [data-ansi="num"] {
+  font-weight: 400;
+  color: var(--slack);
+}
+[data-ansi="empty-sentence"] {
+  margin: 0;
+  padding: var(--space-sm) 0;
+  color: var(--slack);
+}
+[data-ansi="attention-line"] {
+  margin: 0;
+  padding: var(--space-xs) 0;
+}
+[data-ansi="attention-line"] > [data-ansi="ticket-id"] {
+  margin-inline-end: 1ch;
+}
+:where(
+  [data-ansi="attention-line"],
+  [data-ansi="row-line"],
+  [data-ansi="row-flag"],
+  [data-ansi="toned"]
+) {
+  &[data-tone="ok"] {
+    color: var(--green);
+  }
+  &[data-tone="live"] {
+    color: var(--teal);
+  }
+  &[data-tone="held"] {
+    color: var(--amber);
+  }
+  &[data-tone="alert"] {
+    color: var(--red);
+  }
+  &[data-tone="pending"] {
+    color: var(--slack);
+  }
+}
+[data-ansi="fact-list"] {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-xs) var(--space-md);
+  margin: 0;
+  padding: var(--space-sm) 0;
+}
+[data-ansi="fact-list"] > div {
+  display: contents;
+}
+[data-ansi="fact-list"] dt {
+  color: var(--slack);
+}
+[data-ansi="fact-list"] dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ── Build rows ──────────────────────────────────────── */
 
 [data-ansi="build-row"] {
@@ -511,12 +605,27 @@ a:hover {
   text-align: end;
   margin-inline-start: auto;
 }
+[data-ansi="dispatcher-strip"] [data-ansi="state-slot"] {
+  display: inline-block;
+  margin: 0;
+  text-align: start;
+}
 [data-ansi="row-head"] [data-ansi="state-word"] {
   margin-inline-start: auto;
 }
 [data-ansi="row-meta"] {
   margin: 0;
   color: var(--slack);
+}
+[data-ansi="row-flags"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1ch;
+  font-family: var(--mono);
+  font-size: var(--fs-machine);
+}
+[data-ansi="row-line"] {
+  margin: 0;
 }
 @media (max-width: 720px) {
   [data-ansi="build-row"] {
@@ -1012,4 +1121,68 @@ a:hover {
 ::view-transition-new(root) {
   animation-duration: var(--motion-layout);
   animation-timing-function: var(--ease-out);
+}
+
+/* ── Masked pages and stable flows ───────────────────── */
+
+/* A masked page is the real page painted as skeleton: text turns
+   transparent and every inline text run is barred across its own line boxes.
+   Only paint changes here, never a box metric, so the geometry is the loaded
+   page's exactly. */
+[data-ansi="masked"] {
+  -webkit-text-fill-color: transparent;
+}
+[data-ansi="masked"] * {
+  text-decoration-color: transparent;
+}
+[data-ansi="masked"]
+  :is(span, a, time, code):not(
+    [data-ansi="build-row"] > [data-ansi="ticket-id"],
+    [data-ansi="row-title"],
+    [data-ansi="row-flags"],
+    [data-ansi="state-slot"],
+    [data-ansi="count-slot"],
+    [data-ansi="note-slot"],
+    [data-ansi="note-sizer"],
+    [data-ansi="visually-hidden"]
+  ) {
+  background-color: var(--skeleton);
+  box-decoration-break: clone;
+}
+[data-ansi="masked"] [data-ansi="sign-off"] {
+  border-color: var(--skeleton);
+  background: none;
+}
+
+/* A live page's flow: blocks above a change never move; the changed region
+   fades out, takes its new layout while invisible, and fades back in. */
+[data-ansi="flow"] {
+  position: relative;
+  overflow-anchor: none;
+}
+[data-ansi="flow-block"] {
+  display: flow-root;
+}
+[data-ansi="flow-measure"] {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+/* Measured at rest: no entry transition offsets a fresh element's box. */
+[data-ansi="flow-measure"] * {
+  transition: none;
+}
+[data-flow="leaving"] {
+  opacity: 0;
+  transition: opacity calc(var(--motion-layout) * var(--motion-exit-scale)) var(--ease-out);
+}
+[data-flow="hidden"] {
+  opacity: 0;
+  transition: none;
+}
+[data-flow="entering"] {
+  opacity: 1;
+  transition: opacity var(--motion-layout) var(--ease-out);
 }
