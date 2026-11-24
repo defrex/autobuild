@@ -194,3 +194,13 @@ test('previous is the latest settled outcome, not an unfinished predecessor hand
     expect(lines[3]).toStartWith(`upgrade ${a}: handoff-completed; `)
   }
 })
+
+test('running status retains an unfinished predecessor even with no draining builds', () => {
+  for (const status of statuses([])) expect(status.dispatcherRunning).toBe(false)
+  for (const status of statuses(upgradeGenerationWrites(0).slice(0, -1))) {
+    expect(status.upgradeStatus.handoff?.draining).toEqual({})
+    expect(status.dispatcherRunning).toBe(true)
+  }
+  for (const status of statuses(upgradeGenerationWrites(0)))
+    expect(status.dispatcherRunning).toBe(false)
+})

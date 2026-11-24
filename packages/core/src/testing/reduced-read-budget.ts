@@ -1,3 +1,4 @@
+import { upgradeGenerationWrites } from './upgrade-generations'
 import { restoreReplay } from '../kernel/replay-retention'
 import { reducerValueForClient } from '../store/remote/compatibility'
 import { RELEASED_CLIENTS } from '../store/remote/released-clients'
@@ -720,6 +721,30 @@ export async function reducedReadBudget(opts: {
     expect(JSON.parse(polled[0]!).observation.pr.number).toBe(7)
     expect(costs.events).toBeLessThanOrEqual(2)
     expect(costs.metadata).toBeLessThan(50)
+  }
+  // Fresh status readers reuse saved values even after long unrelated history.
+  // Check both absence and a no-holder, empty-drain unfinished handoff.
+  for (const handoff of [false, true]) {
+    if (handoff) {
+      for (const write of upgradeGenerationWrites(1000).slice(0, -1))
+        await store.appendRepo(repo, write)
+    }
+    await getRepositoryStatus(store, repo, new Date(1000))
+    for (let request = 0; request < 3; request++) {
+      const fresh = await opts.fresh()
+      reset()
+      const status = await getRepositoryStatus(fresh, repo, new Date(1000))
+      expect(status.dispatcherRunning).toBe(
+        Boolean(
+          status.dispatcher.holder ||
+            status.dispatcher.expiredHolder ||
+            status.upgradeStatus.handoff,
+        ),
+      )
+      if (handoff) expect(status.dispatcherRunning).toBe(true)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(40)
+    }
   }
 }
 

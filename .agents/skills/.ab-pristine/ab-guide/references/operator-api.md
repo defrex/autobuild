@@ -848,3 +848,13 @@ proof of provider success. A clear appends once without reading history, even
 when already healthy; later degradation wins by ordinary journal order.
 Existing dispatcher/kernel automatic recovery and old payloads remain valid;
 the recovered payload additionally accepts an optional nonblank `reason`.
+
+### Dispatcher running evidence
+
+`repository.status` returns required `dispatcherRunning`: true for a lease holder,
+an expired holder, or an unfinished handoff naming a draining predecessor (even
+with an empty drain map). This uses already loaded projections without extra reads.
+Missing or unreadable status is not permission to start. Ownership is local-only:
+`ab operator dispatcher [human|agent] [--json]` reads/saves the optional preference
+in `.autobuild/local.toml`; there is no remote preference endpoint. Repository
+instructions take precedence. See `ab-operate` for ownership and clean-stop limits.

@@ -3,6 +3,7 @@ import { HELP_CATALOG, recognizeHelpRequest, renderCommandHelp, renderTopLevelHe
 import { isSessionlessInvocation, runCli } from './main'
 
 const COMMANDS = [
+  'operator',
   'help',
   'init',
   'accounts',
@@ -158,6 +159,12 @@ describe('layered CLI help catalog', () => {
 
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
+      operator: [
+        'ab operator dispatcher [human|agent] [--json]',
+        '.autobuild/local.toml',
+        'normalize',
+        'no store',
+      ],
       merges: ['ab merges', '--json', '--store', 'ab merge', 'ab hold'],
       accounts: ['accounts login NAME', '--local', '--project', 'tokens are never printed'],
       secrets: ['secrets set NAME', 'stdin', 'owner credential'],
@@ -531,6 +538,7 @@ describe('layered CLI help catalog', () => {
     ]) {
       expect(isSessionlessInvocation([command, '--help'])).toBe(true)
     }
+    expect(isSessionlessInvocation(['operator', 'dispatcher'])).toBe(true)
     expect(isSessionlessInvocation(['repository', 'status'])).toBe(true)
     expect(isSessionlessInvocation(['mcp'])).toBe(true)
     expect(isSessionlessInvocation(['mcp', '--repo', 'acme/widgets'])).toBe(true)
