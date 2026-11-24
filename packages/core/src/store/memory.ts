@@ -112,6 +112,7 @@ import {
   type BlobStore,
   type BuildRecord,
   type BuildDigest,
+  type OpenBuild,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -160,6 +161,30 @@ interface RepoState {
   artifacts: Map<string, RepositoryArtifactMeta[]>
 }
 
+function openBuildSet(openByRepo: Map<string, Set<string>>, repo: string): Set<string> {
+  const set = openByRepo.get(repo) ?? new Set<string>()
+  openByRepo.set(repo, set)
+  return set
+}
+
+/** Apply one build-event write to the open-build index: `build.completed`
+ * removes the build, `build.aborted` or `build.reopened` re-derive it from
+ * the build's latest terminal fact. */
+function trackOpenBuild(
+  openByRepo: Map<string, Set<string>>,
+  state: BuildState,
+  type: EventType,
+): void {
+  if (type === 'build.completed' || type === 'build.aborted') state.lastTerminal = type
+  if (type === 'build.completed')
+    openBuildSet(openByRepo, state.record.repo).delete(state.record.slug)
+  else if (
+    (type === 'build.aborted' || type === 'build.reopened') &&
+    state.lastTerminal !== 'build.completed'
+  )
+    openBuildSet(openByRepo, state.record.repo).add(state.record.slug)
+}
+
 interface BuildState {
   nodeWriter?: Lease
   record: {
@@ -177,6 +202,9 @@ interface BuildState {
   earlierRewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'> | null>
   rewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'>>
   events: AbEvent[]
+  /** The build's latest terminal fact, maintained by `trackOpen` so open
+   * membership never scans the log. */
+  lastTerminal?: 'build.completed' | 'build.aborted'
   /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
   artifacts: Map<string, ArtifactMeta[]>
 }
@@ -355,8 +383,22 @@ export class MemoryBuildStore implements BuildStore {
       )
     }
     this.builds.set(input.slug, state)
+    openBuildSet(this.openByRepo, input.repo).add(input.slug)
+    if (created !== undefined) trackOpenBuild(this.openByRepo, state, created.type)
     this.advanceRepo(input.repo)
     return this.snapshot(state)
+  }
+
+  /** repo → open build slugs: every build whose latest terminal fact is not
+   * `build.completed`, maintained synchronously at each build-event write. */
+  private readonly openByRepo = new Map<string, Set<string>>()
+
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    const records = [...(this.openByRepo.get(repo) ?? [])]
+      .map((slug) => this.snapshot(this.state(slug)))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
+    const digests = await readPersistedBuildDigests(this, repo, records)
+    return records.map((record) => ({ record, digest: digests.get(record.slug)! }))
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
@@ -415,6 +457,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    trackOpenBuild(this.openByRepo, state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -452,6 +495,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    trackOpenBuild(this.openByRepo, state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -531,6 +575,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    trackOpenBuild(this.openByRepo, state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
@@ -613,6 +658,7 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    trackOpenBuild(this.openByRepo, state, envelope.type)
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>

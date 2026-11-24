@@ -2,7 +2,10 @@
  * The operator read paths' repository view: every poll-driven route (dashboard,
  * repository and harvest status, build listings) derives its state from a
  * `RepoViewStore` backed by persisted reduced values. Each pass refreshes
- * repository facts and metadata without hydrating raw history.
+ * repository facts and metadata without hydrating raw history. A pass that
+ * needs builds discovers them through the store's open-build listing
+ * (`refreshOpen`), so its cost follows open builds and never settled history;
+ * only an explicit history read (`builds.list --all`) lists every build.
  *
  * Passes are single-flight per `(store, repo)` within one serving process: at
  * most one pass runs at a time, and requests arriving while it runs join the
@@ -50,7 +53,7 @@ function flightFor(store: BuildStore, repo: string): Flight {
 async function pass(store: BuildStore, repo: string, waiters: Waiter[]): Promise<void> {
   const view = new RepoViewStore(store, { repo })
   try {
-    if (waiters.some((waiter) => waiter.need === 'builds')) await view.refresh()
+    if (waiters.some((waiter) => waiter.need === 'builds')) await view.refreshOpen()
     else await view.startJournal()
   } catch (error) {
     for (const waiter of waiters) waiter.reject(error)

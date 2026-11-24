@@ -716,10 +716,10 @@ export async function readRepositoryCapacity(
     normalizeEffectiveConfigArtifact(JSON.parse(new TextDecoder().decode(artifact.content))),
   )
   const builds: CapacityBuild[] = []
-  const records = await store.listBuildsForRepo(repo)
-  const digests = await store.getRepoBuildDigests(repo)
-  for (const record of records) {
-    if (digests.get(record.slug)?.terminal) continue
+  // Only nonterminal builds hold capacity; the open listing never reads a
+  // settled build, so this read stays flat as history accumulates.
+  for (const { record, digest } of await store.listOpenBuilds(repo)) {
+    if (digest.terminal) continue
     const build = (await readBuildFacts(store, record.slug)).value
     builds.push({
       record,

@@ -69,6 +69,7 @@ import {
   type BlobStore,
   type BuildRecord,
   type BuildDigest,
+  type OpenBuild,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -334,17 +335,38 @@ export class PostgresBuildStore implements BuildStore {
     return this.listBuildRecords(repo)
   }
 
-  private async listBuildRecords(repo?: string): Promise<BuildRecord[]> {
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    // A missing open_builds table (a server running before its migration)
+    // fails the read; it is never answered by listing every build.
+    const records = await this.listBuildRecords(repo, true)
+    const digests = await readPersistedBuildDigests(this, repo, records)
+    return records.map((record) => ({ record, digest: digests.get(record.slug)! }))
+  }
+
+  private async listBuildRecords(repo?: string, open = false): Promise<BuildRecord[]> {
     return this.run(async (q) => {
       if (!(await this.hasReadableTicketSchema(q))) {
         const rows: Row[] =
           repo === undefined
             ? await q`SELECT * FROM builds ORDER BY created_at, slug`
-            : await q`SELECT * FROM builds WHERE repo = ${repo} ORDER BY created_at, slug`
+            : open
+              ? await q`SELECT b.* FROM open_builds o JOIN builds b ON b.slug = o.slug
+          WHERE o.repo = ${repo} ORDER BY b.created_at, b.slug`
+              : await q`SELECT * FROM builds WHERE repo = ${repo} ORDER BY created_at, slug`
         return rows.map((row) => this.record(row))
       }
-      const rows: Row[] =
-        repo === undefined
+      const rows: Row[] = open
+        ? await q`SELECT b.*, t.readable_id AS projected_ticket_id
+        FROM (SELECT bb.* FROM open_builds o JOIN builds bb ON bb.slug = o.slug
+          WHERE o.repo = ${repo}) b
+        LEFT JOIN LATERAL (
+          SELECT readable_id FROM ab_tickets
+          WHERE b.ticket->>'source' = 'hosted' AND repo = b.repo
+            AND (id = b.ticket->>'id' OR lower(readable_id) = lower(b.ticket->>'id'))
+          LIMIT 1
+        ) t ON true
+        ORDER BY b.created_at, b.slug`
+        : repo === undefined
           ? await q`SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b
         LEFT JOIN LATERAL (
           SELECT readable_id FROM ab_tickets

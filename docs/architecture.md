@@ -293,8 +293,10 @@ source promise chains. Its build and journal facts come from persisted reduced
 values. Reads after an append or lost conditional append consult that boundary
 again, so no process-local memo suppresses a required delta. The adapter owns
 cache persistence and recovery; the view neither writes work bundles nor hydrates
-whole logs for decisions. Discovery uses persisted build digests, including for
-settled builds. Raw methods forward actual cursor event output.
+whole logs for decisions. The dispatcher's discovery (`refresh`) uses persisted
+build digests, including for settled builds. Operator passes discover through
+`refreshOpen` and the store's `listOpenBuilds`, which never reads a settled
+build. Raw methods forward actual cursor event output.
 
 JSON-safe companion projections preserve collection and optional-value contracts.
 The build facts projection returns one prefix for engine routing; its log-index
@@ -1375,6 +1377,15 @@ its own repository-authorized route before the journal-existence gate. PostgreSQ
 counter DDL is additive, outside the guarded core schema/checksum, and must be
 explicitly migrated before the service rollout. Existing writers use the same
 triggers; rerunning migration preserves positions without replaying old events.
+
+`listOpenBuilds` is served the same way. The memory adapter keeps a per-repository
+set at each build-event write; SQLite and PostgreSQL keep an additive
+`open_builds` table maintained by triggers on build insertion and on
+`build.completed`, `build.aborted` and `build.reopened` appends. Each SQL adapter
+backfills the table once, when its bootstrap or migration creates it. Like the
+counter DDL, it sits outside the guarded core schema and must be migrated before
+a hosted rollout serves `open-builds`; until then the route fails rather than
+listing every build.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw
