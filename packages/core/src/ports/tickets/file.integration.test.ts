@@ -573,11 +573,11 @@ describe('FileTicketSource', () => {
     )
     clock.advance(60_000)
     await tickets.comment('file-1', 'second')
-    const body = (await tickets.get('file-1'))?.body ?? ''
-    expect(body.indexOf('## Comment (2026-07-15T12:01:00.000Z)')).toBeGreaterThan(
-      body.indexOf('## Comment (2026-07-15T12:00:00.000Z)'),
+    // The whole body: the first comment survives the second append, in order.
+    expect((await tickets.get('file-1'))?.body).toBe(
+      `${SPEC_BODY}\n## Comment (2026-07-15T12:00:00.000Z)\n\nSpec imported as rev 0.\n` +
+        '\n## Comment (2026-07-15T12:01:00.000Z)\n\nsecond\n',
     )
-    expect(body.startsWith(SPEC_BODY)).toBe(true)
     const commented = await readFile(path('ready', 'file-1'), 'utf8')
     await tickets.transition('file-1', 'Done')
     expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(commented)
