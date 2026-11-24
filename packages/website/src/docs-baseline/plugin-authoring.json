@@ -4,7 +4,7 @@
   "title": "Writing a plugin",
   "group": "guides",
   "description": "Build, contract-test, package, and publish an Autobuild infrastructure adapter.",
-  "textHash": "620b220d9677a8b6f45e1cbc85668403da8504485f5aac4b17d01d6c19eae8ad",
+  "textHash": "04002c1b5d862e96719413899b4a5500a0193b17ba231769e4fb8564e45643fa",
   "headings": [
     "1. Choose the port and preserve its semantics",
     "2. Create a repository-local module",
@@ -17,7 +17,8 @@
     "Optional priority capability",
     "Optional ready assignee capability",
     "Optional assignees capability",
-    "Optional ticket paging capability"
+    "Optional ticket paging capability",
+    "Optional ticket search capability"
   ],
   "code": [
     "// Rate limit, with a valid ISO reset timestamp:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt })\n// The limited request carried no credential: say why, so the limit stays local\n// to the caller instead of pausing the repository:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt, unauthenticated: reason })\n// Retryable transport error:\nthrow new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })",

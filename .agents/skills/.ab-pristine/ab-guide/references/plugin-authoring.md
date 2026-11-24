@@ -244,6 +244,7 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.8** Forge failure classification and request observers.
 - **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
 - **1.10** Optional ticket-source ready-assignee capability (`readyAssignee`, with `prepareReadyAssignee`, `readyAssigneeRefusal` and `describeReadyAssignee`); sources without it refuse `[tickets].readyAssignee`. Also optional targeted ticket listing (`listTargeting`); older tree sources are observed through `listAll`.
+- **1.11** Optional ticket-source search (`search`); callers refuse sources without it and never fall back to a listing.
 
 ## 2. Create a repository-local module
 
@@ -643,6 +644,36 @@ source counts matches without bodies and reads only the SQL-bounded window.
 File, Linear and GitHub retain fallback; the remote `HostedTicketSource`
 forwards pages to the service's native paging (`list-page`), falling back only
 against a service predating it. The POST list-ready protocol stays exhaustive.
+
+## Optional ticket search capability
+
+Text search is an optional API 1.11 ticket-source capability:
+`search?(query: TicketSearchQuery): Promise<TicketSearchPage>`. The SDK exports
+the types.
+
+| Type | Fields |
+| --- | --- |
+| `TicketSearchQuery` | `text`, optional `state`, optional `labels`, `limit`, optional `cursor` |
+| `TicketSearchHit` | `id`, `title`, optional `state`, `labels`, `kind`, optional `target` |
+| `TicketSearchPage` | `tickets: TicketSearchHit[]`, optional `cursor`, `diagnostics` |
+
+- **Matching.** A ticket matches when every whitespace-separated term of
+  `text` occurs, case-insensitively, in its title or body; each term may hit
+  either field. A provider-backed source may apply its provider's word matching
+  instead.
+- **Filters.** `state` resolves as `listReady` resolves it; absent means every
+  state, including completed and rejected tickets. `labels` are ANDed.
+- **Paging.** `limit` is positive and already bounded by the caller. `cursor`
+  is opaque and source-defined; return one only when more matches remain. Order
+  is source-defined and stable across pages. Reject a malformed or foreign
+  cursor with `TicketSearchCursorInvalid`.
+- **Cost.** Build each hit from the search read itself, never from a follow-up
+  read per result. A failure rejects; it never falls back to `listAll`.
+
+Sources that cannot search omit the method. Callers (`tickets.search`,
+`ab ticket search`) then refuse with `TicketSearchUnsupported`, naming the
+source, before reading any ticket. The shared `describeTicketSourceContract`
+suite checks declared search automatically and skips it otherwise.
 
 Hosted cooldown recording rejects observed reset deadlines beyond the 24-hour
 admission horizon explicitly; adapters must not shorten or invent a provider
