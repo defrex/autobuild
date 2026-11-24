@@ -4,7 +4,8 @@ import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
 import { ticketProject } from './testing/ticket-project'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testProjects } from './testing/projects'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { createHostedOperatorSandboxService } from '@defrex/autobuild/operator-sandbox-host'
 import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { parseConfig } from '@defrex/autobuild/testing'
 import {
@@ -655,12 +656,25 @@ enabled = true
     })
   }
 
+  // The resolver caches each composed backend for the process lifetime, and
+  // the hosted service has no shutdown hook, so the tests dispose what they
+  // compose: each backend owns a scratch directory under the temporary root.
+  const composed: { dispose?(): Promise<void> }[] = []
+  afterEach(async () => {
+    await Promise.all(composed.splice(0).map((backend) => backend.dispose?.()))
+  })
+
   function sandboxService(
     backing: MemoryBuildStore,
     extraEnv: Record<string, string | undefined> = {},
   ) {
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      composeOperatorSandbox: async (options) => {
+        const backend = await createHostedOperatorSandboxService(options)
+        composed.push(backend)
+        return backend
+      },
       openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),

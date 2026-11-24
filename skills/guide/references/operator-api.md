@@ -193,8 +193,13 @@ identity and, when minted with one, the `via` attribution marker; the body
 never does. Failures keep the shared `{kind,error,code?,progress?}` shape:
 validation is `400`, auth `403`, not-found `404`, conflict and refusal `409`,
 internal `500`. The route adds no authority of its own — it is the registry
-behind the token check — so a tool available here is exactly the tool table,
-and the table's contract suite is the single gate.
+behind the token check — so a tool available here is exactly the deployment's
+served table, and the table's contract suite is the single gate. The hosted
+`/mcp` binding advertises that same table. Sandbox tools are in it when the
+deployment can host operator sandboxes, and each call is gated per repository
+on the latest deposited effective config. A closed gate is a `409 refusal`
+with code `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,
+`sandbox-effective-config-invalid` or `sandbox-backend-unavailable`.
 
 ### Success results
 

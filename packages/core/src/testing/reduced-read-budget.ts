@@ -7696,3 +7696,67 @@ export async function ticketStartReadBudget(): Promise<{
   for (const calls of tiers.get(100)!) expect(calls).toEqual({})
   return baseline
 }
+
+/** One hosted sandbox tool call's store cost (#1219): the resolver's gate
+ * plus the sandbox service's own reads, measured on the second of two
+ * consecutive `sandbox.exec` calls over `revisions` deposited effective
+ * configs (the last enables `[orchestrator]`). The vector and row counts
+ * must not depend on `revisions`, and two calls must issue at most one store
+ * credential and compose once. */
+export async function operatorSandboxCallReadBudget(opts: { revisions: number }) {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { historicalEffectiveConfig } = await import('../config/effective-artifact.fixture')
+  const { createOperatorSandboxResolver } = await import('../operator/sandbox-resolver')
+  const { createOperatorSandboxService } = await import('../operator/sandbox')
+  const { memoryOperatorSandbox } = await import('./memory-operator-sandbox')
+  const { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } = await import('../store/retention')
+  const sandboxRepo = 'https://github.com/example/sandbox-budget'
+  const store = new MemoryBuildStore({ retention: { maxRevisions: opts.revisions + 1 } })
+  await store.ensureRepo(sandboxRepo)
+  for (let revision = 1; revision <= opts.revisions; revision++) {
+    await store.putRepoArtifact(sandboxRepo, {
+      kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+      content: JSON.stringify(historicalEffectiveConfig(revision === opts.revisions)),
+    })
+  }
+  const deposited = await store.listRepoArtifacts(sandboxRepo, DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
+  expect(deposited).toHaveLength(opts.revisions)
+  const sandbox = memoryOperatorSandbox()
+  let issued = 0
+  let composed = 0
+  const resolver = createOperatorSandboxResolver({
+    store,
+    canPublish: true,
+    issueStoreToken: async () => `token-${++issued}`,
+    compose: async ({ repo, config }) => {
+      composed++
+      return createOperatorSandboxService({
+        store,
+        repo,
+        provider: sandbox.provider,
+        sandbox: config.orchestrator.sandbox,
+        baseBranch: config.baseBranch,
+        forge: new FakeForge(),
+      })
+    },
+  })
+  const registry = buildRegistry({ store, sandboxResolution: { canPublish: true } })
+  const call = () =>
+    registry.call(
+      'sandbox.exec',
+      { repo: sandboxRepo, command: 'echo hi' },
+      { identity: 'ada@example.com', sandboxFor: () => resolver.resolve(sandboxRepo) },
+    )
+  await call()
+  const counter = memoryStoreRequestCounter(store)
+  let rows = 0
+  try {
+    const metrics = await measureStoreReads(store, async () => {
+      await call()
+    })
+    rows = metrics.rows + metrics.repoRows
+  } finally {
+    counter.restore()
+  }
+  return { callVector: counter.vector(), rows, issued, composed }
+}
