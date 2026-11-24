@@ -1,5 +1,4 @@
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
-import { migrationIdentity } from '../kernel/ticket-migrations'
 import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import type { DispatchWeb } from './dispatch-web'
@@ -10,8 +9,6 @@ import {
 } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
-import { dispatchCapacity, startClaimDemand, urgentClaimDemand } from '../kernel/dispatch-capacity'
-import { dispatchWarningLines } from './dashboard/header'
 import { RepositoryPollCache } from './dashboard/repository-poll'
 import {
   DashboardRefresh,
@@ -46,7 +43,11 @@ import {
   type DashboardSelection,
   type DashboardView,
 } from './dashboard/model'
-import { DashboardBuildPollCache, type DashboardPollSnapshot } from './dashboard/poll'
+import {
+  DashboardBuildPollCache,
+  repositoryDashboardHeader,
+  type DashboardPollSnapshot,
+} from './dashboard/poll'
 import {
   dashboardContentWidth,
   detailScrollLimit,
@@ -511,31 +512,16 @@ export class DispatchFrontend {
     }
 
     const previous = this.model === undefined ? [] : dashboardSelections(this.model)
-    const warningLines = dispatchWarningLines(status)
     const projected = buildDashboardFromProjected(
       snapshot.builds,
-      {
+      repositoryDashboardHeader({
         repo: this.opts.repo,
-        ...(standby !== undefined ? { standby } : {}),
-        queued: status.queued ?? 0,
-        activeCount: [...snapshot.states.values()].filter(
-          (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
-        ).length,
-        capacity: config.capacity,
-        capacityProjection: dispatchCapacity(
-          snapshot.capacityBuilds ?? [],
-          config.capacity,
-          this.clock(),
-          migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
-          {
-            urgentClaims: urgentClaimDemand(repositoryFacts),
-            openPrs: {
-              policy: config.policy,
-              engaged: repositoryFacts.openPrBackpressure !== undefined,
-            },
-            startRequests: startClaimDemand(repositoryFacts),
-          },
-        ),
+        status,
+        config,
+        repositoryFacts,
+        capacityBuilds: snapshot.capacityBuilds ?? [],
+        states: snapshot.states.values(),
+        now: this.clock(),
         // A viewer shows only its own read; headless ticks publish no count.
         ...(this.opts.viewer
           ? this.viewerTriage !== undefined
@@ -544,11 +530,8 @@ export class DispatchFrontend {
           : status.triage !== undefined
             ? { triage: status.triage }
             : {}),
-        ...(status.availableUpgrade !== undefined
-          ? { availableUpgrade: status.availableUpgrade }
-          : {}),
-        ...(warningLines.length > 0 ? { warningLines } : {}),
-      },
+        ...(standby !== undefined ? { standby } : {}),
+      }),
       repositoryFacts,
       upgrades,
     )
