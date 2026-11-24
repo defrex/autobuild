@@ -2227,10 +2227,12 @@ async function ensureBuildListingFacts(tx: SQL): Promise<void> {
  * path, including an older release writing to the same database: a build
  * insert seeds it, `build.created` sets `node`, the latest `build.completed`
  * sets `merged` and `build.reopened` clears it, and each `builds.updated_at`
- * change is copied exactly. One index per filter class and order makes every
- * filtered page one bounded backward range scan; the partial indexes match
- * the literal `merged` predicate. Hosted servers read the table, so migrate
- * before rolling the service out.
+ * change is copied exactly. One index per filter class and order leads with
+ * that class's columns (`merged`, then `node`), so a filtered page, which
+ * bounds and orders by `(class columns, key, slug)`, is one backward range
+ * scan of exactly that index: no other index yields that order without a
+ * full sort. Hosted servers read the table, so migrate before rolling the
+ * service out.
  */
 export const BUILD_LISTING_DDL = `
 CREATE TABLE IF NOT EXISTS build_listing_facts (
@@ -2242,12 +2244,12 @@ CREATE TABLE IF NOT EXISTS build_listing_facts (
   merged boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS build_listing_kind_created ON build_listing_facts(repo, node, created_at, slug);
-CREATE INDEX IF NOT EXISTS build_listing_merged_created ON build_listing_facts(repo, created_at, slug) WHERE merged;
-CREATE INDEX IF NOT EXISTS build_listing_merged_kind_created ON build_listing_facts(repo, node, created_at, slug) WHERE merged;
+CREATE INDEX IF NOT EXISTS build_listing_merged_created ON build_listing_facts(repo, merged, created_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_kind_created ON build_listing_facts(repo, merged, node, created_at, slug);
 CREATE INDEX IF NOT EXISTS build_listing_updated ON build_listing_facts(repo, updated_at, slug);
 CREATE INDEX IF NOT EXISTS build_listing_kind_updated ON build_listing_facts(repo, node, updated_at, slug);
-CREATE INDEX IF NOT EXISTS build_listing_merged_updated ON build_listing_facts(repo, updated_at, slug) WHERE merged;
-CREATE INDEX IF NOT EXISTS build_listing_merged_kind_updated ON build_listing_facts(repo, node, updated_at, slug) WHERE merged;
+CREATE INDEX IF NOT EXISTS build_listing_merged_updated ON build_listing_facts(repo, merged, updated_at, slug);
+CREATE INDEX IF NOT EXISTS build_listing_merged_kind_updated ON build_listing_facts(repo, merged, node, updated_at, slug);
 CREATE OR REPLACE FUNCTION ab_build_listing_seeded() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  INSERT INTO build_listing_facts(slug, repo, created_at, updated_at)

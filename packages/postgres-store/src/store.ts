@@ -166,6 +166,56 @@ import type { ReducerSnapshot, SnapshotScope } from '@defrex/autobuild/store-ada
 import { assertSchema } from './schema'
 import { PlanRetryRunner, type Exec, type Row } from './retry'
 
+/**
+ * A filtered page's candidate statement: one backward range scan of the
+ * `build_listing_facts` index for the filter class and order, at most `limit`
+ * entries, joined to `builds` by primary key.
+ *
+ * The class index leads with the class's columns (`merged`, then `node`), and
+ * the statement both bounds and orders by the row `(class columns, key,
+ * slug)` instead of testing the columns for equality. The planner therefore
+ * sees no constant to drop from the order, and every other index would need a
+ * full sort to produce it, so no plan can walk a wider index and discard
+ * non-matching rows, however the classes are distributed over time. The lower
+ * bound is `activeSince` or `-infinity`; the upper bound is the cursor or
+ * `infinity`. The cursor keeps the ordering column's exact text.
+ */
+export function filteredBuildPageQuery(
+  repo: string,
+  limit: number,
+  filters: BuildPageFilters,
+  cursor?: BuildPageCursor,
+): { sql: string; params: (string | number)[] } {
+  const column = buildPageOrder(filters) === 'updated' ? 'updated_at' : 'created_at'
+  const classColumns: string[] = []
+  const classValues: string[] = []
+  if (filters.outcome === 'merged') {
+    classColumns.push('f.merged')
+    classValues.push('true')
+  }
+  if (filters.kind !== undefined) {
+    classColumns.push('f.node')
+    classValues.push(String(filters.kind === 'node'))
+  }
+  const key = [...classColumns, `f.${column}`, 'f.slug'].join(', ')
+  const bound = (at: string, slug: string) => [...classValues, at, slug].join(', ')
+  return {
+    sql: `SELECT b.*, f.${column}::text AS cursor_at, f.${column} AS page_key
+      FROM build_listing_facts f JOIN builds b ON b.slug = f.slug
+      WHERE f.repo = $1 AND (${key}) < (${bound('$2::timestamptz', '$3')})
+        AND (${key}) >= (${bound('$5::timestamptz', "''")})
+      ORDER BY ${[...classColumns, `f.${column}`, 'f.slug'].map((name) => `${name} DESC`).join(', ')}
+      LIMIT $4`,
+    params: [
+      repo,
+      cursor?.at ?? 'infinity',
+      cursor?.slug ?? '',
+      limit,
+      filters.activeSince ?? '-infinity',
+    ],
+  }
+}
+
 /** `timestamptz::text` under the ISO DateStyle, the page cursor's sort key. */
 const POSTGRES_TIMESTAMP_TEXT =
   /^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?([+-]\d{2}(:?\d{2}){0,2}|Z)?( BC)?$/
@@ -438,14 +488,6 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  /**
-   * A filtered page: one backward range scan of the `build_listing_facts`
-   * index for the filter class and order, at most `limit + 1` entries, joined
-   * to `builds` by primary key. The kind and merged predicates are literals,
-   * so every plan, generic or custom, matches the class's (partial) index. The
-   * first page starts at `'infinity'` like the unfiltered scan. The cursor
-   * keeps the ordering column's exact text.
-   */
   private async listFilteredBuildsPage(
     repo: string,
     limit: number,
@@ -453,24 +495,7 @@ export class PostgresBuildStore implements BuildStore {
     cursor: BuildPageCursor | undefined,
   ): Promise<BuildPage> {
     const order = buildPageOrder(filters)
-    const column = order === 'updated' ? 'updated_at' : 'created_at'
-    const params: (string | number)[] = [
-      repo,
-      cursor?.at ?? 'infinity',
-      cursor?.slug ?? '',
-      limit + 1,
-    ]
-    const where = ['f.repo = $1', `(f.${column}, f.slug) < ($2::timestamptz, $3)`]
-    if (filters.kind !== undefined) where.push(`f.node = ${filters.kind === 'node'}`)
-    if (filters.outcome === 'merged') where.push('f.merged')
-    if (filters.activeSince !== undefined) {
-      params.push(filters.activeSince)
-      where.push(`f.updated_at >= $${params.length}::timestamptz`)
-    }
-    const candidates = `SELECT b.*, f.${column}::text AS cursor_at, f.${column} AS page_key
-      FROM build_listing_facts f JOIN builds b ON b.slug = f.slug
-      WHERE ${where.join(' AND ')}
-      ORDER BY f.${column} DESC, f.slug DESC LIMIT $4`
+    const { sql: candidates, params } = filteredBuildPageQuery(repo, limit + 1, filters, cursor)
     return this.run(async (q) => {
       const rows: Row[] = !(await this.hasReadableTicketSchema(q))
         ? await q.unsafe(candidates, params)

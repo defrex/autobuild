@@ -1414,8 +1414,12 @@ read `build_listing_facts`: one row per build holding `created_at`, a mirror of
 (a build insert seeds it, `build.created` sets `node`, `build.completed` sets
 `merged`, `build.reopened` clears it, and each `builds.updated_at` change is
 copied). Seven indexes, one per filter class (kind, merged, kind and merged,
-plus all builds for update order) and order (creation or update), with partial
-`merged` indexes, make every filtered page one backward range scan. The memory
+plus all builds for update order) and order (creation or update), make every
+filtered page one backward range scan of its own index. SQLite names that
+index with `INDEXED BY`. PostgreSQL has no hints, so each index leads with its
+class's columns and the statement bounds and orders by the row `(class
+columns, key, slug)`; any other index would need a full sort, so no plan can
+walk a wider index and discard rows when classes cluster in time. The memory
 adapter keeps the same classes as sorted slug lists, moved in the step that
 writes the fact or `updatedAt`. Its first creation backfills existing builds
 once from their latest relevant events. The PostgreSQL DDL is additive, like

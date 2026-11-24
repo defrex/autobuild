@@ -12,7 +12,12 @@ import {
   type StreamPart,
 } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
-import { EVENT_WAIT_POLL_MS, PostgresBuildStore, openPostgresBuildStore } from './store'
+import {
+  EVENT_WAIT_POLL_MS,
+  PostgresBuildStore,
+  filteredBuildPageQuery,
+  openPostgresBuildStore,
+} from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -1179,6 +1184,82 @@ if (testUrl)
       await database.cleanup()
     }
   }, 30_000)
+
+if (testUrl)
+  test('every filtered page range-scans only its class index under a skewed history', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      await migratePostgres(database.url)
+      // Classes clustered in time, against the planner's uniform estimate: the
+      // oldest 100 builds are merged nodes, then merged leaves, then the newest
+      // 200 unmerged, leaves before nodes. A plan that walked a wider index and
+      // filtered would discard a run of non-matching rows first.
+      const n = 20_000
+      await sql.unsafe(`INSERT INTO builds(slug, repo, created_at, updated_at)
+        SELECT 's' || lpad(g::text, 6, '0'), 'repo', timestamptz '2026-01-01' + g * interval '1 second',
+          timestamptz '2026-01-01' + g * interval '1 second' FROM generate_series(0, ${n - 1}) g`)
+      await sql.unsafe(`UPDATE build_listing_facts SET
+        node = (substr(slug, 2)::int < 100 OR substr(slug, 2)::int >= ${n - 100}),
+        merged = (substr(slug, 2)::int < ${n - 200})`)
+      await sql.unsafe('ANALYZE')
+      const since = '2026-01-01T00:00:00.000Z'
+      const cases = [
+        ['kind_created', { kind: 'leaf' }],
+        ['kind_created', { kind: 'node' }],
+        ['merged_created', { outcome: 'merged' }],
+        ['merged_kind_created', { kind: 'node', outcome: 'merged' }],
+        ['merged_kind_created', { kind: 'leaf', outcome: 'merged' }],
+        ['updated', { activeSince: since }],
+        ['kind_updated', { kind: 'leaf', activeSince: since }],
+        ['kind_updated', { kind: 'node', activeSince: since }],
+        ['merged_updated', { outcome: 'merged', activeSince: since }],
+        ['merged_kind_updated', { kind: 'node', outcome: 'merged', activeSince: since }],
+        ['merged_kind_updated', { kind: 'leaf', outcome: 'merged', activeSince: since }],
+      ] as const
+      type PlanNode = Record<string, unknown> & { Plans?: PlanNode[] }
+      const scans = (node: PlanNode): PlanNode[] => [
+        ...(node['Relation Name'] === 'build_listing_facts' ? [node] : []),
+        ...(node.Plans ?? []).flatMap(scans),
+      ]
+      for (const [index, filters] of cases) {
+        let cursor: { order: 'created' | 'updated'; at: string; slug: string } | undefined
+        for (const page of ['first', 'later']) {
+          const query = filteredBuildPageQuery('repo', 26, filters, cursor)
+          const [explained] = await sql.unsafe(
+            `EXPLAIN (ANALYZE, FORMAT JSON) ${query.sql}`,
+            query.params,
+          )
+          const [scan, ...others] = scans(explained['QUERY PLAN'][0].Plan)
+          const label = `${JSON.stringify(filters)} ${page}`
+          expect({ label, index: scan?.['Index Name'], others: others.length }).toEqual({
+            label,
+            index: `build_listing_${index}`,
+            others: 0,
+          })
+          expect({
+            label,
+            rows: scan!['Actual Rows'],
+            removed: scan!['Rows Removed by Filter'] ?? 0,
+          }).toEqual({
+            label,
+            rows: 26,
+            removed: 0,
+          })
+          const rows = await sql.unsafe(query.sql, query.params)
+          expect(rows).toHaveLength(26)
+          cursor = {
+            order: 'activeSince' in filters ? 'updated' : 'created',
+            at: String(rows[24].cursor_at),
+            slug: String(rows[24].slug),
+          }
+        }
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  }, 60_000)
 
 if (testUrl) {
   test('mixed-version persisted events retain opaque bytes and replay under catalog-specific checkpoints', async () => {
