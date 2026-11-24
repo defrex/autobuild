@@ -2,8 +2,7 @@ import { formatRollback } from './rollback'
 import { formatHandoff } from './handoff'
 import { handPushedLabel, handPushedText } from './hand-pushed'
 import { integrationBarCells } from './integration-row'
-import { capacityExplanation } from '../../kernel/dispatch-capacity'
-import { NO_DISPATCHER_RUN_LINE, activeCounterText } from './configuration'
+import { NO_DISPATCHER_RUN_LINE } from './configuration'
 import { treeVocabulary, consentQueue } from './tree'
 import { objectiveElapsedHours, objectiveParts, type ObjectiveRow } from './objective-row'
 /**
@@ -35,12 +34,7 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
-import {
-  landingPolicyDisplay,
-  mergeVocabulary,
-  mergeSummary,
-  mergedChildren,
-} from './landing-display'
+import { landingPolicyDisplay, mergeVocabulary } from './landing-display'
 import { dashboardBuildControl, pauseResumeHelp } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
@@ -49,6 +43,18 @@ import type { SessionDashboardView } from './model'
 import { dashboardSelections, sameSelection } from './selection'
 import { displayText, layoutComposer, packAtomic, wrapDisplay } from './composer'
 import { cellWidth, graphemes, padEndCells } from './cells'
+import {
+  HARVEST_TITLE,
+  projectHarvestRowText,
+  projectHeaderText,
+  projectProgress,
+  projectRowText,
+  reviewRoundCeilingText,
+  type RowAttention,
+} from './row-text'
+import { statusText, stepLine, stepTone, viewerLabel, type DashboardTone } from './vocabulary'
+
+export { formatDuration } from './vocabulary'
 
 export interface RenderOpts {
   /** ANSI on. False ⇒ not a single `\x1b` in the output (the `--plain` AC). */
@@ -109,6 +115,15 @@ const CODES = {
   bold: 1,
 } as const
 type ColorName = keyof typeof CODES
+
+/** The terminal's colour for each shared tone. */
+const TONE_COLOR: Record<DashboardTone, ColorName> = {
+  ok: 'green',
+  live: 'cyan',
+  held: 'yellow',
+  alert: 'red',
+  pending: 'dim',
+}
 
 function paint(text: string, color: ColorName, on: boolean): string {
   return on ? `${ESC}${CODES[color]}m${text}${RESET}` : text
@@ -252,72 +267,14 @@ function objectiveTokens(
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
-const GLYPH: Record<PipelineStep['state'], string> = {
-  done: '[x]',
-  current: '[>]',
-  provisional: '[~]',
-  pending: '[ ]',
-}
-
-const STEP_COLOR: Record<PipelineStep['state'], ColorName> = {
-  done: 'green',
-  current: 'cyan',
-  provisional: 'yellow',
-  pending: 'dim',
-}
-
-/**
- * Elapsed duration, ASCII only: `Xs` under a minute, `MmSSs` under an hour,
- * `HhMMmSSs` above — seconds/minutes zero-padded when a larger unit precedes, so
- * the field width is stable as it ticks (`38s`, `4m12s`, `1h04m07s`).
- */
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(0, Math.floor(ms / 1000))
-  if (totalSec < 60) return `${totalSec}s`
-  const totalMin = Math.floor(totalSec / 60)
-  if (totalMin < 60) return `${totalMin}m${String(totalSec % 60).padStart(2, '0')}s`
-  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m${String(totalSec % 60).padStart(2, '0')}s`
-}
-
 function renderStep(step: PipelineStep, color: boolean, now: number): string {
-  const parts: string[] = []
-  if (step.qualifier !== undefined) parts.push(step.qualifier)
-  // The elapsed segment can only be composed here — it depends on the
-  // render-time clock. A running step's open interval grows with `now`; a
-  // frozen or done step has none, so its elapsed is stable across repaints.
-  // `count` rides the time as `/n` (AC 7); with no time in scope it is not
-  // shown (a fresh/restarted step should not carry a stale round).
-  if (step.timing !== undefined) {
-    const { accumulatedMs, runningSince } = step.timing
-    const elapsedMs =
-      accumulatedMs + (runningSince !== undefined ? Math.max(0, now - runningSince) : 0)
-    const count = step.count !== undefined && step.count > 1 ? `/${step.count}` : ''
-    parts.push(`${formatDuration(elapsedMs)}${count}`)
-  }
-  const note = parts.length > 0 ? `(${parts.join(', ')})` : ''
-  const reason = step.reason !== undefined ? ` — ${step.reason}` : ''
-  const text = `${GLYPH[step.state]} ${step.label}${note}${reason}`
-  const painted = paint(text, STEP_COLOR[step.state], color)
+  // The elapsed segment depends on the render-time clock: a running step's
+  // open interval grows with `now`, a frozen or done step's is stable.
+  const painted = paint(stepLine(step, now, 'row'), TONE_COLOR[stepTone(step.state)], color)
   return step.state === 'current' ? paint(painted, 'bold', color) : painted
 }
 
 // ── Builds ───────────────────────────────────────────────────────────────────
-
-const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status'], ColorName> = {
-  queued: 'cyan',
-  running: 'green',
-  collecting: 'cyan',
-  pausing: 'yellow',
-  paused: 'yellow',
-  suspended: 'yellow',
-  resuming: 'cyan',
-  blocked: 'red',
-  waiting: 'yellow',
-  aborting: 'red',
-  cleaning: 'yellow',
-  escalated: 'yellow',
-  failed: 'red',
-}
 
 /** The marker is one shared visual grammar for every selectable row. */
 function selectionMarker(selected: boolean, selecting: boolean, color: boolean): string {
@@ -355,19 +312,6 @@ function buildHeader(
   return `${left}${' '.repeat(Math.max(0, width - visibleLength(left) - visibleLength(pinned)))}${pinned}`
 }
 
-function reviewRoundCeilingText(build: DashboardBuild): string | undefined {
-  if (build.reviewRoundCeilings === undefined) return undefined
-  const values = [
-    ...(build.reviewRoundCeilings.plan !== undefined
-      ? [`plan ${build.reviewRoundCeilings.plan}`]
-      : []),
-    ...(build.reviewRoundCeilings.code !== undefined
-      ? [`code ${build.reviewRoundCeilings.code}`]
-      : []),
-  ]
-  return values.length === 0 ? undefined : `review round ceiling: ${values.join(', ')}`
-}
-
 function renderBuild(
   build: DashboardBuild,
   repositoryPaused: boolean,
@@ -377,6 +321,8 @@ function renderBuild(
   selecting: boolean,
 ): string[] {
   const { color, width, now } = opts
+  const text = projectRowText(build, { repositoryPaused })
+  const statusColor = TONE_COLOR[text.status.tone]
 
   // ── The slug line: TICKET-ID  slug  …  <right cluster> ──────────────────────
   //
@@ -390,138 +336,93 @@ function renderBuild(
   // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
   const marker = selectionMarker(selected, selecting, color)
   const ticketCol =
-    widths.ticket > 0 ? paint(padEndCells(build.ticketId ?? '', widths.ticket), 'blue', color) : ''
+    widths.ticket > 0 ? paint(padEndCells(text.ticketId ?? '', widths.ticket), 'blue', color) : ''
   const leftPrefix = `${marker}${ticketCol === '' ? '' : `${ticketCol}  `}`
 
-  // Right cluster, rightmost last: [PR] [(paused)] STATUS. `padStart`
+  // Right cluster, rightmost last: [merge] [PR] [(flags)] STATUS. `padStart`
   // right-justifies the status word so it is never truncated and always ends at
-  // the frame's right edge (AC 3, AC 5).
+  // the frame's right edge (AC 3, AC 5). The merge state is ALWAYS drawn —
+  // including `off` — so consent is never conveyed by the absence of a token.
   const rightTokens: string[] = []
-  // The state is ALWAYS drawn — including `off` — so consent is never conveyed
-  // by the absence of a token alone. Legacy repository defaults have no
-  // effect on a landing or its presentation.
-  {
-    const autoColor: ColorName =
-      build.autoMerge === 'enabled'
-        ? 'green'
-        : build.autoMerge === 'requested' || build.autoMerge === 'polling'
-          ? 'cyan'
-          : build.autoMerge === 'cancelling' || build.autoMerge === 'human-merge'
-            ? 'yellow'
-            : 'dim'
-    if (build.kind !== 'integration') rightTokens.push(paint(mergeSummary(build), autoColor, color))
-  }
-  if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
-  // A repository hold changes no build lifecycle state. Keep QUEUED literal
-  // and annotate only the rows the hold prevents from launching.
-  if (repositoryPaused && build.status === 'queued') {
-    rightTokens.push(paint('(held)', 'yellow', color))
-  }
-  // Blocked overrides paused visually, but the pause is still a fact the
-  // operator needs — so it rides along rather than being overwritten.
-  if (build.draining) rightTokens.push(paint('(draining)', 'yellow', color))
-  if (build.alsoPaused) rightTokens.push(paint('(paused)', 'yellow', color))
-  rightTokens.push(
-    paint(build.status.toUpperCase().padStart(widths.status), STATUS_COLOR[build.status], color),
-  )
+  if (text.merge !== undefined)
+    rightTokens.push(paint(text.merge.text, TONE_COLOR[text.merge.tone], color))
+  if (text.pr !== undefined) rightTokens.push(link(text.pr.url, text.pr.text, color))
+  for (const flag of text.flags)
+    rightTokens.push(paint(`(${flag.term})`, TONE_COLOR[flag.tone], color))
+  rightTokens.push(paint(text.status.word.padStart(widths.status), statusColor, color))
   const rightStr = rightTokens.join('  ')
 
   // The slug is the sole flexible segment; narrow frames truncate it before
   // the right-pinned lifecycle status.
-  const destination = build.integrationRow?.destination ?? build.target
-  const suffix = build.integrationRow?.parentDistance ?? build.targetDistance ?? '+?'
-  const target = destination
-    ? ` → ${displayText(destination)}${suffix ? ` ${paint(suffix, 'dim', color)}` : ''}`
+  const target = text.target
+    ? ` → ${displayText(text.target.destination)}${text.target.distance ? ` ${paint(text.target.distance, 'dim', color)}` : ''}`
     : ''
   const lines = [
     buildHeader(
       leftPrefix,
-      paint(build.slug, 'bold', color),
+      paint(text.slug, 'bold', color),
       target,
       rightStr,
       width,
-      paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color),
+      paint(text.status.word, statusColor, color),
     ),
   ]
-  if (build.integrationRow) {
-    const row = build.integrationRow
-    const { bar, counts } = integrationProgress(row, color)
+  if (text.progress !== undefined) {
+    const { bar, counts } = integrationProgress(text.progress, color)
     lines.push(
       ...packLines(
-        [bar, ...counts, ...(row.verified ? [paint('· verified', 'green', color)] : [])],
+        [bar, ...counts, ...(text.progress.verified ? [paint('· verified', 'green', color)] : [])],
         width,
         '  ',
       ),
     )
-    if (build.objectiveRow)
+    if (text.objective)
       lines.push(
-        ...packLines(objectiveTokens(build.objectiveRow, now, width, '  ', color), width, '  '),
+        ...packLines(objectiveTokens(text.objective, now, width, '  ', color), width, '  '),
       )
     lines.push(
       ...packLines(
-        row.steps.map((s) => renderStep(s, color, now)),
+        text.steps.map((s) => renderStep(s, color, now)),
         width,
         '  ',
       ),
     )
-    if (row.alert)
-      for (const line of wrappedText(row.alert.text, Math.max(1, width - 4), ''))
-        lines.push(paint(`  ! ${line}`, row.alert.tone, color))
+    for (const item of text.attention) lines.push(...attentionLines(item, width, color))
     return lines
   }
-  if (build.tree && (build.kind === 'integration' || build.tree.consent)) {
-    const tree = build.tree
-    for (const text of [
-      `${tree.branch ?? 'unknown branch'} · ${treeVocabulary.restack} ${tree.restack} · ${treeVocabulary.verify} ${tree.verification.current ? treeVocabulary.current : treeVocabulary.pending} · ${tree.reason ?? (tree.ready ? treeVocabulary.readyToLand : treeVocabulary.notReady)}`,
-      ...(tree.kind === 'node'
-        ? [
-            `${treeVocabulary.children} ${tree.children?.length ?? 'unknown'} · ${tree.completeness}${tree.diagnostics?.length ? ` · ${tree.diagnostics.join('; ')}` : ''}`,
-          ]
-        : []),
-    ])
-      for (const line of wrappedText(text, width - 4, ''))
-        lines.push(truncate(`    ${line}`, width))
-  }
-  const ceiling = reviewRoundCeilingText(build)
-  if (ceiling !== undefined) lines.push(truncate(`  ${ceiling}`, width))
+  for (const line of text.tree ?? [])
+    for (const wrapped of wrappedText(line, width - 4, ''))
+      lines.push(truncate(`    ${wrapped}`, width))
+  if (text.ceiling !== undefined) lines.push(truncate(`  ${text.ceiling}`, width))
 
-  if (build.abortProgress !== undefined) {
-    for (const line of wrappedText(build.abortProgress, width - 4, '')) {
-      lines.push(truncate(paint(`  ! ${line}`, STATUS_COLOR[build.status], color), width))
-    }
-  } else if (build.dispatch !== undefined) {
-    for (const line of wrappedText(build.dispatch, width - 4, '')) {
-      lines.push(truncate(paint(`  ! ${line}`, STATUS_COLOR[build.status], color), width))
+  if (text.notice !== undefined) {
+    for (const line of wrappedText(text.notice.text, width - 4, '')) {
+      lines.push(truncate(paint(`  ! ${line}`, TONE_COLOR[text.notice.tone], color), width))
     }
   } else {
     // The progress row wraps rather than truncating: the tail is `finalize` and
     // `merge waiting`, which the ACs require and the operator is waiting on.
     lines.push(
       ...packLines(
-        build.steps.map((s) => renderStep(s, color, now)),
+        text.steps.map((s) => renderStep(s, color, now)),
         width,
         '  ',
       ),
     )
   }
-  if (build.alert)
-    for (const line of wrappedText(build.alert.text, Math.max(1, width - 4), ''))
-      lines.push(paint(`  ! ${line}`, build.alert.tone, color))
-  // A ticket wait is held work, not a blocker: one yellow line naming the
-  // tickets, never a red question preview.
-  if (build.wait)
-    for (const line of wrappedText(build.wait.text, Math.max(1, width - 4), ''))
-      lines.push(paint(`  ! ${line}`, 'yellow', color))
-  // Setup failures and blocker questions are dense-list previews. Their model
-  // strings remain untouched; newline-aware wrapping and capping happen only
-  // at this presentation seam.
-  if (build.setupError !== undefined) {
-    lines.push(...prefixedMessagePreview(build.setupError, width, 'red', color, true))
-  }
-  for (const blocker of build.blockers) {
-    lines.push(...prefixedMessagePreview(blocker, width, 'red', color, true))
-  }
+  for (const item of text.attention) lines.push(...attentionLines(item, width, color))
   return lines
+}
+
+/** A row's attention line. Alerts and ticket waits wrap whole; setup failures
+ * and blocker questions are dense-list previews whose model strings remain
+ * untouched, wrapped and capped only at this presentation seam. */
+function attentionLines(item: RowAttention, width: number, color: boolean): string[] {
+  if (item.kind === 'setup-error' || item.kind === 'escalation')
+    return prefixedMessagePreview(item.text, width, TONE_COLOR[item.tone], color, true)
+  return wrappedText(item.text, Math.max(1, width - 4), '').map((line) =>
+    paint(`  ! ${line}`, TONE_COLOR[item.tone], color),
+  )
 }
 
 function renderHarvest(
@@ -532,25 +433,34 @@ function renderHarvest(
   selecting: boolean,
 ): string[] {
   const { color, width, now } = opts
+  const text = projectHarvestRowText(harvest)
   const marker = selectionMarker(selected, selecting, color)
   // Harvest has no ticket id, so its title takes the ticket column itself —
   // aligned with the ids, not the slugs — and the observation count sits in
   // the flexible slug slot, keeping one row grammar across mixed frames.
-  const title = widths.ticket > 0 ? padEndCells(HARVEST_TITLE, widths.ticket) : HARVEST_TITLE
+  const title = widths.ticket > 0 ? padEndCells(text.title, widths.ticket) : text.title
   const leftPrefix = `${marker}${paint(title, 'bold', color)}  `
-  const identity = paint(`${harvest.observations} observations`, 'dim', color)
-  const statusColor = STATUS_COLOR[harvest.status]
-  const status = paint(harvest.status.toUpperCase().padStart(widths.status), statusColor, color)
+  const identity = paint(text.observations, 'dim', color)
+  const statusColor = TONE_COLOR[text.status.tone]
+  const status = paint(text.status.word.padStart(widths.status), statusColor, color)
   const lines = [rightPinnedLine(leftPrefix, identity, status, width)]
   lines.push(
     ...packLines(
-      harvest.steps.map((item) => renderStep(item, color, now)),
+      text.steps.map((item) => renderStep(item, color, now)),
       width,
       '  ',
     ),
   )
-  if (harvest.detail !== undefined) {
-    lines.push(...prefixedMessagePreview(harvest.detail, width, statusColor, color, false))
+  if (text.detail !== undefined) {
+    lines.push(
+      ...prefixedMessagePreview(
+        text.detail.text,
+        width,
+        TONE_COLOR[text.detail.tone],
+        color,
+        false,
+      ),
+    )
   }
   return lines
 }
@@ -559,8 +469,6 @@ interface Widths {
   ticket: number
   status: number
 }
-
-const HARVEST_TITLE = 'Harvest'
 
 /** Pad ticket id and status to the widest in the FRAME, so columns line up down
  * the whole dashboard rather than per-row. `ticket` is 0 when no build in the
@@ -578,8 +486,8 @@ function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undef
     ),
     status: Math.max(
       0,
-      ...builds.map((b) => cellWidth(b.status)),
-      ...(harvest !== undefined ? [cellWidth(harvest.status)] : []),
+      ...builds.map((b) => cellWidth(statusText(b.status).word)),
+      ...(harvest !== undefined ? [cellWidth(statusText(harvest.status).word)] : []),
     ),
   }
 }
@@ -711,23 +619,7 @@ function wrappedText(value: string, width: number, indent = ''): string[] {
 }
 
 function detailStep(step: PipelineStep, opts: RenderOpts): string {
-  const { color, now } = opts
-  const notes: string[] = []
-  if (step.qualifier !== undefined) notes.push(step.qualifier)
-  if (step.count !== undefined) {
-    const kind =
-      step.label.startsWith('verify:') || step.label === 'reconcile' ? 'attempt' : 'round'
-    notes.push(`${kind} ${step.count}`)
-  }
-  if (step.timing !== undefined) {
-    const elapsed =
-      step.timing.accumulatedMs +
-      (step.timing.runningSince !== undefined ? Math.max(0, now - step.timing.runningSince) : 0)
-    notes.push(formatDuration(elapsed))
-  }
-  const note = notes.length > 0 ? ` (${notes.join(', ')})` : ''
-  const reason = step.reason !== undefined ? ` — ${step.reason}` : ''
-  return paint(`${GLYPH[step.state]} ${step.label}${note}${reason}`, STEP_COLOR[step.state], color)
+  return paint(stepLine(step, opts.now, 'detail'), TONE_COLOR[stepTone(step.state)], opts.color)
 }
 
 function sessionLines(session: DashboardSession, selected: boolean, opts: RenderOpts): string[] {
@@ -778,24 +670,20 @@ interface DetailBodyLayout {
 
 export type DetailFocusTarget = 'session' | 'message'
 
-function integrationProgress(row: NonNullable<DashboardBuild['integrationRow']>, color: boolean) {
-  const children = row.children
+function integrationProgress(progress: ReturnType<typeof projectProgress>, color: boolean) {
+  const children = progress.children
   let bar = paint('┄'.repeat(22), 'dim', color)
-  let counts = [paint('children unknown', 'dim', color)]
   if (children.known) {
     const cells = integrationBarCells(children.landed, children.building, children.queued)
     bar =
       paint('━'.repeat(cells[0]!), 'green', color) +
       paint('━'.repeat(cells[1]!), 'cyan', color) +
       paint('─'.repeat(children.total ? cells[2]! : 22), 'dim', color)
-    counts = children.total
-      ? [
-          paint(mergedChildren(children.landed, children.total), 'green', color),
-          ...(children.building ? [paint(`· ${children.building} building`, 'cyan', color)] : []),
-          ...(children.queued ? [paint(`· ${children.queued} queued`, 'dim', color)] : []),
-        ]
-      : [paint('no children yet', 'dim', color)]
   }
+  // The separator rides inside each later count's paint.
+  const counts = progress.counts.map((count, index) =>
+    paint(index === 0 ? count.text : `· ${count.text}`, TONE_COLOR[count.tone], color),
+  )
   return { bar, counts }
 }
 
@@ -842,7 +730,7 @@ function detailBody(
     const field = (label: string, text: string) =>
       body.push(...wrapDisplay(`${label}  ${text}`, width, '  '))
     field('Integration', detail.destination)
-    const progress = integrationProgress(build.integrationRow, color)
+    const progress = integrationProgress(projectProgress(build.integrationRow), color)
     body.push(...packLines(['Progress', progress.bar, ...progress.counts], width, '  '))
     if (build.objectiveRow)
       body.push(
@@ -1035,7 +923,12 @@ function detailGeometry(
   if (view?.kind !== 'detail') return undefined
   const build = model.builds.find((candidate) => candidate.slug === view.slug)
   if (build === undefined) return undefined
-  const layout = detailBody(build, view, { color: false, width, height, now: 0 })
+  const layout = detailBody(build, view, {
+    color: false,
+    width,
+    height,
+    now: 0,
+  })
   const topLength =
     2 +
     (model.standby === undefined ? 0 : 1) +
@@ -1046,7 +939,11 @@ function detailGeometry(
       ? dashboardControls(model, false, width, controlsCapacity(height, topLength))
       : [buildLegend(build, true)]
   const capacity = Math.max(0, height - topLength - 2 - controls.length)
-  return { ...layout, capacity, limit: Math.max(0, layout.body.length - capacity) }
+  return {
+    ...layout,
+    capacity,
+    limit: Math.max(0, layout.body.length - capacity),
+  }
 }
 
 export function detailScrollLimit(model: DashboardModel, width: number, height: number): number {
@@ -1097,7 +994,7 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   const top = [
     truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
     truncate(
-      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}${draining}`,
+      `  status ${paint(statusText(build.status).word, TONE_COLOR[statusText(build.status).tone], color)}${paused}${draining}`,
       width,
     ),
     ...standbyLine(model, color, width),
@@ -1406,7 +1303,10 @@ export function resumeKeysRows(width: number): string[] {
     width,
   )
   const short = layoutBindings(
-    RESUME_BINDINGS.map((b) => ({ key: b.keyShort ?? b.key, action: b.action })),
+    RESUME_BINDINGS.map((b) => ({
+      key: b.keyShort ?? b.key,
+      action: b.action,
+    })),
     width,
   )
   // Fewer rows wins; a tie goes to the long form, so `Shift+Enter` is named
@@ -1685,22 +1585,14 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   const selecting = model.selection !== undefined
   const globalSelection = { kind: 'global' } as const
   const marker = selectionMarker(sameSelection(globalSelection, model.selection), selecting, color)
-  const intake = model.drained
-    ? paint('intake OFF', 'yellow', color)
-    : paint('intake ON', 'green', color)
-  const harvestGate = model.harvestPaused
-    ? paint('harvest OFF', 'yellow', color)
-    : paint('harvest ON', 'green', color)
-  const repositoryPause = model.repositoryPaused
-    ? paint('repository PAUSED', 'yellow', color)
-    : undefined
+  const header = projectHeaderText(model)
   const summary = truncate(
     `${marker}${[
       paint('Autobuild', 'bold', color),
       displayText(basename(model.repo)),
       paint(
-        `triage ${model.triage ?? '–'} | queue ${model.queued} | ` +
-          `active ${activeCounterText(model)}${model.configuration === 'no-dispatcher-run' ? '' : capacityExplanation(model.capacity)}`,
+        header.counts.map((count) => `${count.label} ${count.value}`).join(' | ') +
+          (header.capacityNote !== undefined ? ` ${header.capacityNote}` : ''),
         'dim',
         color,
       ),
@@ -1711,8 +1603,8 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // marker prefix aligns the first toggle with the title while keeping the
   // selection lane empty.
   const toggles = truncate(
-    `  ${[intake, harvestGate, repositoryPause]
-      .filter((token): token is string => token !== undefined)
+    `  ${header.gates
+      .map((gate) => paint(`${gate.label} ${gate.word}`, TONE_COLOR[gate.tone], color))
       .join('  ')}`,
     width,
   )
@@ -1929,11 +1821,7 @@ export function renderViewerNotice(
 }
 
 export function viewerIndicator(viewer: { dispatchedBy?: string }, width: number): string {
-  const label =
-    viewer.dispatchedBy === undefined
-      ? 'viewer'
-      : `viewer · dispatched by ${displayText(viewer.dispatchedBy)}`
-  return width >= 6 && width < 9 ? 'viewer' : truncate(label, width)
+  return width >= 6 && width < 9 ? 'viewer' : truncate(viewerLabel(viewer), width)
 }
 
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
