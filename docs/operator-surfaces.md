@@ -75,6 +75,14 @@ bun ab web
 - `--json` prints one line, `{"url":"http://127.0.0.1:<port>/"}`, for agents that open or hand off the page.
 - Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
 
+`ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
+
+- `--port`, `--host` and `--json` work as for `ab web` and require `--web`; `--json` changes only the URL announcement line.
+- A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation.
+- Adds no store reads: it shows what the dispatcher's own refresh reads. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
+- Binds before the repository lease; a taken port fails dispatch before it claims anything.
+- The URL keeps working across automatic runtime upgrades and is printed once. Ctrl-C closes it. `--once` is refused.
+
 ### Local stdio MCP
 
 For an agent with an MCP client but no convenient shell, configure the client to launch:
