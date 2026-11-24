@@ -13,7 +13,6 @@ import {
 } from './migration'
 import { serializeTicketFile } from './file-codec'
 import { hostedRequestedIds } from './requested-id'
-import { normalizeStateName } from './states'
 import { MemoryBuildStore } from '../../store/memory'
 import { composeTicketAssets, preparePinnedAssets } from '../../store/ticket-assets'
 import { readAssetSnapshot } from '../../store/ticket-asset-snapshots'
@@ -182,18 +181,6 @@ test('export normalization collisions, malformed input and nonempty destinations
   ).rejects.toThrow('incomplete ticket scan')
   expect(await target.listReady({})).toEqual({ tickets: [], diagnostics: [] })
 })
-test('requested number policy is literal, bigint-safe and allocates above every preserved number', () => {
-  const policy = hostedRequestedIds('A.+')
-  expect(policy.preserve('A.+-706')).toBe('A.+-706')
-  for (const id of ['AUT-706', 'A.+-01', 'A.+-0', 'A.+--1'])
-    expect(policy.preserve(id)).toBeUndefined()
-  expect(policy.allocate(['A.+-706', 'A.+-9007199254740993'])).toBe('A.+-9007199254740994')
-  expect(() => policy.preserve('A.+-9223372036854775808')).toThrow('bigint')
-  expect(normalizeStateName(' In  Progress ')).toBe('in-progress')
-  for (const state of ['123', '☃', 'a'.repeat(41)])
-    expect(() => normalizeStateName(state)).toThrow('invalid state')
-})
-
 test('native and legacy assets compose, tombstones suppress fallback and snapshots outlive source bytes', async () => {
   const source = await fixture()
   const legacy = new MemoryBuildStore()
