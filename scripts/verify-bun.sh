@@ -36,6 +36,15 @@ selected="$prefix/node_modules/.bin/bun"
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then
     npm install --prefix "$prefix" --no-save "bun@$required_version"
   fi
+  # npm 12 blocks dependency install scripts that no allowScripts policy
+  # covers, which leaves bun.exe as a placeholder that exits 1. Run the
+  # postinstall that placeholder prescribes. This also repairs a cache an
+  # earlier blocked install left behind.
+  postinstall="$prefix/node_modules/bun/install.js"
+  if [[ -x "$selected" && -f "$postinstall" ]] \
+    && [[ $("$selected" --version 2>/dev/null) != "$required_version" ]]; then
+    (cd "$(dirname "$postinstall")" && node install.js)
+  fi
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then
     echo 'verify Bun installation has the wrong version' >&2
     exit 1

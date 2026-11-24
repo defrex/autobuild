@@ -32,9 +32,23 @@ async function fixture(current = 'old', mode = 'ok') {
     ${mode === 'fail' ? 'exit 23' : ''}
     sleep 0.1
     mkdir -p "$3/node_modules/bun/bin" "$3/node_modules/.bin"
-    printf '#!/bin/sh\\necho ${mode === 'wrong' ? 'wrong' : version}\\n' > "$3/node_modules/bun/bin/bun.exe"
+    ${
+      mode === 'blocked'
+        ? `# npm 12 blocked the postinstall: bun.exe is Bun's failing placeholder.
+    printf '#!/bin/sh\\necho placeholder >&2; exit 1\\n' > "$3/node_modules/bun/bin/bun.exe"
+    touch "$3/node_modules/bun/install.js"`
+        : `printf '#!/bin/sh\\necho ${mode === 'wrong' ? 'wrong' : version}\\n' > "$3/node_modules/bun/bin/bun.exe"`
+    }
     chmod +x "$3/node_modules/bun/bin/bun.exe"
     ln -sfn ../bun/bin/bun.exe "$3/node_modules/.bin/bun"
+  `,
+  )
+  // Bun's postinstall replaces the placeholder with the platform binary.
+  await executable(
+    join(bin, 'node'),
+    `
+    printf '%s %s\\n' "$PWD" "$*" >> "$HOME/node-args"
+    printf '#!/bin/sh\\necho ${version}\\n' > bin/bun.exe
   `,
   )
   const env = { ...process.env, HOME: root, PATH: `${bin}:/usr/bin:/bin` }
@@ -122,6 +136,16 @@ test('existing cache without the bun sibling is repaired without reinstalling', 
   expect(await Bun.file(join(root, 'npm-args')).exists()).toBe(false)
   expect(await readlink(join(cache, 'node_modules/bun/bin/bun'))).toBe('bun.exe')
   expect(lstatSync(join(cache, 'install.lock.link'), { throwIfNoEntry: false })).toBeUndefined()
+})
+
+test('a postinstall npm blocked is run once, then cached', async () => {
+  const { root, run } = await fixture('old', 'blocked')
+  const pkg = join(root, '.cache/autobuild-repository-verify-bun/node_modules/bun')
+  expect(await run(['bun', '--version'])).toMatchObject({ code: 0, stdout: `${version}\n` })
+  expect(await run(['bun', '--version'])).toMatchObject({ code: 0, stdout: `${version}\n` })
+  expect(await readFile(join(root, 'node-args'), 'utf8')).toBe(`${pkg} install.js\n`)
+  expect((await readFile(join(root, 'npm-args'), 'utf8')).match(/^install$/gm)).toHaveLength(1)
+  expect(await readlink(join(pkg, 'bin/bun'))).toBe('bun.exe')
 })
 
 for (const mode of ['fail', 'wrong']) {
