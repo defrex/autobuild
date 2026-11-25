@@ -3481,7 +3481,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       checkpoint()
       const command = (await sandbox.runCommand({
         cmd: 'sh',
-        args: [`${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
+        args: ['-c', 'exec sh "$1"', 'tail', `${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
         cwd: VERCEL_WORKSPACE_PATH,
         env,
         detached: true,

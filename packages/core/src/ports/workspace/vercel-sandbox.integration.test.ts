@@ -333,7 +333,7 @@ class FakeSandbox implements VercelSandboxHandle {
     if (
       params.cmd === 'sh' &&
       params.detached === true &&
-      ((params.args as string[])?.[0] ?? '').endsWith('/tail.sh')
+      ((params.args as string[])?.[3] ?? '').endsWith('/tail.sh')
     ) {
       this.tailLaunches += 1
       const outcome = this.tailOutcome
@@ -3360,7 +3360,7 @@ describe('operator sandbox capability', () => {
     const launch = h.sandbox.commands.find((command) => command.detached === true)!
     expect(launch).toMatchObject({
       cmd: 'sh',
-      args: [`${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
+      args: ['-c', 'exec sh "$1"', 'tail', `${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
       cwd: VERCEL_WORKSPACE_PATH,
     })
     // Stage files in order: dependencies, runtimes sorted (install before
