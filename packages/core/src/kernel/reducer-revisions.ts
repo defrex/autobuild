@@ -62,4 +62,7 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'optimization/fold/mpmd7m1p0r': '#1069 clock compacts below open runs and last batch',
   'build/fold/sgmw4zxzmb': '#1069 clock compacts below open runs and last batch',
   'buildDigest/fold/8fy0afqcn5': '#1069 clock compacts below open runs and last batch',
+  'sandboxStates/shape/gbrf8k4qxq': '#1223 sandbox provisioning/failed states',
+  'repositoryReadFacts/shape/o7791nz2gt': '#1223 sandbox provisioning/failed states',
+  'sandboxStates/fold/hjdgop7xoh': '#1223 fold sandbox lifecycle facts',
 }

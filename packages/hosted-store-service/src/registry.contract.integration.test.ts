@@ -369,6 +369,9 @@ describe('sandbox registry tools (AUT-340)', () => {
       forge,
       clock,
     })
+    // Every tool but open/status refuses until the environment is ready.
+    await sandbox.open('Ada', { repo: source })
+    await sandbox.settled('Ada')
     return {
       world,
       sandbox,
@@ -382,8 +385,12 @@ describe('sandbox registry tools (AUT-340)', () => {
     }
   }
 
-  test('tool↔annotation lockstep covers the seven sandbox tools', () => {
+  test('tool↔annotation lockstep covers every sandbox tool', () => {
     for (const name of [
+      'sandbox.open',
+      'sandbox.status',
+      'sandbox.close',
+      'sandbox.refresh',
       'sandbox.exec',
       'sandbox.start',
       'sandbox.wait',
@@ -395,7 +402,7 @@ describe('sandbox registry tools (AUT-340)', () => {
       const tool = TOOLS.find((entry) => entry.name === name)
       expect(tool).toBeDefined()
       const table = OPERATOR_TOOL_ANNOTATIONS[name as keyof typeof OPERATOR_TOOL_ANNOTATIONS]
-      expect(tool!.approval).toBe('default')
+      expect(tool!.approval).toBe(table.approval)
       expect(tool!.annotations).toEqual({
         readOnlyHint: table.readOnlyHint,
         destructiveHint: table.destructiveHint,
@@ -438,11 +445,11 @@ describe('sandbox registry tools (AUT-340)', () => {
     }
   })
 
-  test('with a backend the seven tools advertise and execute end to end', async () => {
+  test('with a backend every sandbox tool advertises and executes end to end', async () => {
     const fx = await sandboxWorld()
     try {
       const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
-      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(7)
+      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(11)
       const result = (await registry.call(
         'sandbox.exec',
         { repo: fx.source, command: 'echo hi' },
@@ -482,7 +489,7 @@ describe('sandbox registry tools (AUT-340)', () => {
       const registry = buildRegistry({ store: world.store, clock, sandbox })
       expect(sandbox.canPublish).toBe(false)
       expect(registry.entries.some((tool) => tool.name === 'sandbox.publish')).toBe(false)
-      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(6)
+      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(10)
       const error = await registry
         .call('sandbox.publish', { repo: source, title: 'Fix' }, { identity: 'Ada' })
         .catch((e) => e)
@@ -618,7 +625,11 @@ describe('sandbox registry tools (AUT-340)', () => {
       )) as { encoding: string; content: string }
       expect(binary.encoding).toBe('base64')
       expect(Buffer.from(binary.content, 'base64')).toEqual(Buffer.from([0, 255]))
-      await registry.call('sandbox.reset', { repo: fx.source }, { identity: 'Ada' })
+      // Reset returns while the fresh provision runs in the background.
+      expect(
+        await registry.call('sandbox.reset', { repo: fx.source }, { identity: 'Ada' }),
+      ).toMatchObject({ state: 'provisioning' })
+      await fx.sandbox.settled('Ada')
     } finally {
       await fx.cleanup()
     }

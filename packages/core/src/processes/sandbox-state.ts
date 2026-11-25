@@ -2,8 +2,12 @@
  * Durable operator-sandbox state (AUT-340): the repository-journal projection
  * the sandbox service, the dispatcher's idle-settlement stage, and the
  * repository status projection read instead of process memory. The lifecycle
- * facts (`orchestrator.sandbox.provisioned`/`resumed`/`activity`/`stopped`/
- * `released`/`reset`) bracket one environment per operator × repository.
+ * facts (`orchestrator.sandbox.provisioning`/`provisioned`/`resumed`/
+ * `provision-failed`/`activity`/`refreshed`/`stopped`/`closed`/`released`/
+ * `reset`) bracket one environment per operator × repository. A
+ * `provisioning` fact opens a background attempt (state `provisioning`, its
+ * kind kept as `pendingKind`) that `provisioned`/`resumed` settles to `live`
+ * or `provision-failed` settles to `failed`; `closed` maps to `stopped`.
  * Every helper here is a pure function over the journal, mirroring the
  * harvest execution settlement, so any dispatcher invocation can settle an
  * orphaned environment.
@@ -11,7 +15,9 @@
 import type { RepositoryEvent } from '../events/repository'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 
-export type SandboxEnvironmentState = 'live' | 'stopped' | 'released'
+export type SandboxEnvironmentState = 'provisioning' | 'live' | 'stopped' | 'failed' | 'released'
+
+export type SandboxFailureStage = 'checkout' | 'setup' | 'environment' | 'resume' | 'provision'
 
 export interface SandboxEnvironmentSnapshot {
   operator: string
@@ -26,9 +32,14 @@ export interface SandboxEnvironmentSnapshot {
   /** The base branch head the fresh provision selected; carried forward
    * through later lifecycle facts (the base head cannot change without a
    * fresh provision, which overwrites it) — the publication precondition's
-   * reference point, read by the publish operation. Absent on snapshots
-   * provisioned before this field existed. */
+   * reference point, read by the publish operation. A `refreshed` fact
+   * moves it. Absent on snapshots provisioned before this field existed. */
   baseSha?: string
+  /** The latest background attempt's failure, while `failed`. */
+  failure?: { stage: SandboxFailureStage; message: string }
+  /** The in-flight attempt's kind, while `provisioning`: which fact
+   * (`provisioned` or `resumed`) settles it. */
+  pendingKind?: 'provision' | 'resume'
 }
 
 type MutableSnapshot = {
@@ -39,6 +50,8 @@ type MutableSnapshot = {
   lastEvidenceTs: string
   sessionId?: string
   baseSha?: string
+  failure?: { stage: SandboxFailureStage; message: string }
+  pendingKind?: 'provision' | 'resume'
 }
 
 /** Per-environment sandbox state, keyed deterministically by
@@ -57,7 +70,40 @@ function foldSandboxStates(acc: SandboxStatesAcc, events: readonly RepositoryEve
   const byEnvironment = new Map<string, MutableSnapshot>(acc.map((s) => [s.environmentId, s]))
   for (const event of events) {
     const ts = event.ts
-    if (event.type === 'orchestrator.sandbox.provisioned') {
+    if (event.type === 'orchestrator.sandbox.provisioning') {
+      const previous = byEnvironment.get(event.payload.environmentId)
+      byEnvironment.set(event.payload.environmentId, {
+        operator: event.payload.operator,
+        environmentId: event.payload.environmentId,
+        provider: event.payload.provider,
+        state: 'provisioning',
+        lastEvidenceTs: ts,
+        ...(previous?.sessionId !== undefined ? { sessionId: previous.sessionId } : {}),
+        ...(previous?.baseSha !== undefined ? { baseSha: previous.baseSha } : {}),
+        pendingKind: event.payload.kind,
+      })
+    } else if (event.type === 'orchestrator.sandbox.provision-failed') {
+      const current = byEnvironment.get(event.payload.environmentId)
+      if (current !== undefined) {
+        current.state = 'failed'
+        current.failure = { stage: event.payload.stage, message: event.payload.message }
+        delete current.pendingKind
+        if (current.lastEvidenceTs <= ts) current.lastEvidenceTs = ts
+      }
+    } else if (event.type === 'orchestrator.sandbox.closed') {
+      const current = byEnvironment.get(event.payload.environmentId)
+      if (current !== undefined && current.lastEvidenceTs <= ts) {
+        current.state = 'stopped'
+        current.lastEvidenceTs = ts
+        delete current.pendingKind
+      }
+    } else if (event.type === 'orchestrator.sandbox.refreshed') {
+      const current = byEnvironment.get(event.payload.environmentId)
+      if (current !== undefined) {
+        current.baseSha = event.payload.baseSha
+        if (current.lastEvidenceTs <= ts) current.lastEvidenceTs = ts
+      }
+    } else if (event.type === 'orchestrator.sandbox.provisioned') {
       byEnvironment.set(event.payload.environmentId, {
         operator: event.payload.operator,
         environmentId: event.payload.environmentId,
@@ -92,6 +138,7 @@ function foldSandboxStates(acc: SandboxStatesAcc, events: readonly RepositoryEve
       if (current !== undefined && current.lastEvidenceTs <= ts) {
         current.state = 'stopped'
         current.lastEvidenceTs = ts
+        delete current.pendingKind
       }
     } else if (event.type === 'orchestrator.sandbox.reset') {
       // Destructive marker only: the following released/provisioned facts
