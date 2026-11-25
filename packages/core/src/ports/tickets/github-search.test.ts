@@ -190,6 +190,7 @@ describe('github ticket search', () => {
       [{ text: '" ""', limit: 5 }, /no searchable words/],
       [{ text: 'x'.repeat(260), limit: 5 }, /at most 256/],
       [{ text: 'needle', labels: ['a"b'], limit: 5 }, /double quote/],
+      [{ text: 'needle', labels: ['bug,enhancement'], limit: 5 }, /contains a comma/],
       [{ text: 'needle', cursor: '5', limit: 5 }, TicketSearchCursorInvalid],
       [{ text: 'needle', cursor: 'garbage', limit: 5 }, TicketSearchCursorInvalid],
     ]

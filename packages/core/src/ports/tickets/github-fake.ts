@@ -14,7 +14,8 @@
  * 404. REST issue search (`search-issues`) understands exactly the qualifiers
  * the adapter sends and answers 422 for anything else, including an unquoted
  * word; a quoted term matches as a case-insensitive substring of the title or
- * body, the fake's approximation of GitHub's word matching.
+ * body, the fake's approximation of GitHub's word matching, and commas in a
+ * `label:` value list alternatives, as GitHub reads them even when quoted.
  * Identity routes answer for the requesting credential: `GET user` returns
  * its login (or 403 for `transportAs(null)`), and the assignee-check route
  * answers 204 for `assignable` logins. Issue create and edit set the
@@ -950,7 +951,7 @@ export class FakeGitHubIssues {
     let state: 'open' | 'closed' | undefined
     let reason: boolean | undefined
     const terms: string[] = []
-    const labels: Array<{ name: string; negated: boolean }> = []
+    const labels: Array<{ names: string[]; negated: boolean }> = []
     const token = /(-?)([a-z_]+):("([^"]*)"|\S+)|"([^"]*)"|(\S+)/g
     for (const match of q.matchAll(token)) {
       const [whole, minus, name, raw, quotedValue, term, bare] = match
@@ -967,7 +968,9 @@ export class FakeGitHubIssues {
       else if (name === 'is' && !negated && (value === 'open' || value === 'closed')) state = value
       else if (name === 'in' && !negated && value === 'title,body') continue
       else if (name === 'reason' && value === 'completed') reason = !negated
-      else if (name === 'label') labels.push({ name: value.toLowerCase(), negated })
+      else if (name === 'label')
+        // As on GitHub, commas list alternatives even inside quotes.
+        labels.push({ names: value.toLowerCase().split(','), negated })
       else throw unsupported(`qualifier ${whole}`)
     }
     if (!isIssue)
@@ -986,7 +989,7 @@ export class FakeGitHubIssues {
             if ((issue.state_reason === 'completed') !== reason) return false
           }
           for (const label of labels) {
-            const held = issue.labels.some((name) => name.toLowerCase() === label.name)
+            const held = issue.labels.some((name) => label.names.includes(name.toLowerCase()))
             if (held === label.negated) return false
           }
           const [title, body] = this.lowered(issue)

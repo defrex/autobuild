@@ -312,9 +312,14 @@ export function githubSearchQuery(
       `github ticket search: the query is ${quoted.length} characters once quoted; GitHub search allows at most ${SEARCH_TEXT_MAX}`,
     )
   const labels = query.labels ?? []
-  for (const label of labels)
+  for (const label of labels) {
     if (label.includes('"'))
       throw new Error(`github ticket search: label "${label}" contains a double quote`)
+    // GitHub reads `label:"a,b"` as a OR b even when quoted, so a comma would
+    // widen the filter instead of naming one label.
+    if (label.includes(','))
+      throw new Error(`github ticket search: label "${label}" contains a comma`)
+  }
   const state = searchStateQualifiers(lifecycle, query.state)
   const q = [
     `repo:${repository}`,
