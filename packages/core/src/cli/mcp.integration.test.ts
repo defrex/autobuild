@@ -20,7 +20,7 @@ import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
-const TOOL_NAMES = 38
+const TOOL_NAMES = 40
 
 let tmp: string
 let storeDir: string
@@ -68,7 +68,7 @@ async function connect(env: Record<string, string> = bareEnv()): Promise<Client>
   return client
 }
 
-test('ab mcp advertises the registry: 38 tools with schemas and annotations', async () => {
+test('ab mcp advertises the registry: 40 tools with schemas and annotations', async () => {
   await seed()
   const client = await connect()
   try {
@@ -622,6 +622,74 @@ test('canonical and deprecated merge tools and actions work through the stdio SD
         payload: { decisionSeq: 4 },
       })
     }
+  } finally {
+    await durable.close()
+  }
+})
+
+test('ab mcp serves the agent context: tools equal the registry, prompts and instructions', async () => {
+  const { AGENT_CONTEXT_ARTIFACT, encodeAgentContext } = await import('../store/agent-context')
+  const { buildRegistry } = await import('../operator/registry')
+  const repo = await realpath(tmp)
+  const text = (value: string) => ({ oid: `o-${value}`, bytes: value.length, text: value })
+  const encoded = encodeAgentContext({
+    version: 1,
+    commit: 'b'.repeat(40),
+    baseBranch: 'main',
+    skills: [
+      {
+        name: 'ab-operate',
+        paths: ['.agents/skills/ab-operate'],
+        files: [{ path: 'SKILL.md', ...text('---\ndescription: Operate.\n---\nab abort x') }],
+      },
+    ],
+    instructions: [{ paths: ['AGENTS.md'], directory: '', ...text('rules'), imports: [] }],
+    imports: [],
+    links: [],
+    omitted: [],
+  })
+  const local = openLocalStore(storeDir)
+  await local.ensureRepo(repo)
+  await local.putRepoArtifact(repo, {
+    kind: AGENT_CONTEXT_ARTIFACT,
+    content: encoded.content,
+    metadata: { digest: encoded.digest },
+  })
+  await local.close()
+
+  const results: unknown[] = []
+  const client = await connect()
+  try {
+    const instructions = client.getInstructions() ?? ''
+    expect(instructions).toContain('- ab-operate — Operate.')
+    expect(instructions).toContain('`AGENTS.md` (repository root)')
+    for (const [name, args] of [
+      ['context.list', { repo }],
+      ['context.read', { repo, path: 'AGENTS.md' }],
+      ['context.read', { repo, path: '.agents/skills/ab-operate/SKILL.md' }],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args })
+      expect(result.isError).toBeUndefined()
+      results.push(JSON.parse((result.content as { text: string }[])[0]!.text))
+    }
+    const { prompts } = await client.listPrompts()
+    expect(prompts.map((prompt) => prompt.name)).toEqual(['ab-operate'])
+    const prompt = await client.getPrompt({ name: 'ab-operate' })
+    expect(prompt.messages[0]!.content).toEqual({
+      type: 'text',
+      text: (results[2] as { text: string }).text,
+    })
+  } finally {
+    await client.close()
+  }
+  const durable = openLocalStore(storeDir)
+  try {
+    const registry = buildRegistry({ store: durable })
+    expect(results).toEqual([
+      await registry.call('context.list', { repo }),
+      await registry.call('context.read', { repo, path: 'AGENTS.md' }),
+      await registry.call('context.read', { repo, path: '.agents/skills/ab-operate/SKILL.md' }),
+    ])
   } finally {
     await durable.close()
   }

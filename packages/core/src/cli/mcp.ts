@@ -37,6 +37,13 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { openSessionlessStore, type StoreOpener } from './store-opening'
 import { InvalidAmbientContextError, resolveAmbientReadSession } from './env'
 import { buildRegistry, RegistryError, type OperatorToolRegistry } from '../operator/registry'
+import {
+  contextInstructions,
+  type ContextEntry,
+  type ContextIndex,
+  type ContextReadResult,
+} from '../operator/agent-context-serve'
+import { registerContextPrompts } from '../operator/context-prompts'
 import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
 import type { OperatorTicketBackend } from '../operator/tickets'
 
@@ -51,6 +58,7 @@ const SERVER_INSTRUCTIONS = [
   'and the operator API routes — every result equals the corresponding route. Prefer the CLI when a command exists;',
   'use these tools when no shell is available, for dogfooding, and for parity testing of the tool registry.',
   'Every tool names its repository explicitly via `repo`; mutating tools append durable, human-attributed events.',
+  'Call `context.list` first: it names the skills and agent instructions to load before acting.',
 ].join(' ')
 
 export interface AbMcpOpts {
@@ -295,10 +303,32 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
       ...(opts.repo !== undefined ? { allowedRepo: opts.repo } : {}),
     })
 
+    // The agent context is read once per process start (one latest-revision
+    // artifact read): the long-lived stdio server is not a recurring path.
+    const repo = context.repo
+    let contextEntry: ContextEntry
+    try {
+      contextEntry = {
+        repo,
+        index: (await registry.call('context.list', { repo })) as ContextIndex,
+      }
+    } catch (error) {
+      contextEntry = { repo, error: error instanceof Error ? error.message : String(error) }
+    }
     const server = new McpServer(
       { name: 'autobuild', version: AUTOBUILD_VERSION },
-      { instructions: SERVER_INSTRUCTIONS },
+      {
+        instructions: `${SERVER_INSTRUCTIONS}\n${contextInstructions([contextEntry], { scoped: true })}`,
+      },
     )
+    registerContextPrompts(server.server, {
+      scoped: true,
+      indexes: async () => [
+        { repo, index: (await registry.call('context.list', { repo })) as ContextIndex },
+      ],
+      read: async (target, path) =>
+        (await registry.call('context.read', { repo: target, path })) as ContextReadResult,
+    })
     serveRegistry(registry, server, {
       identity: buildControlUser(opts.env),
       // Unlike the hosted stateless server, the stdio server is long-lived:
