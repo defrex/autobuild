@@ -20,7 +20,12 @@ import {
 import { readDispatcherLiveness } from '../cli/dispatcher-liveness'
 import { composeBuildConfig } from '../config/live'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
-import { configSchema, type Config } from '../config/schema'
+import {
+  configSchema,
+  orchestratorEnabled,
+  type Config,
+  type OrchestratorHost,
+} from '../config/schema'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -548,19 +553,22 @@ export class OrchestratorConfigError extends Error {
 }
 
 /** The sandbox gate's answer for one repository: its latest deposited
- * effective config when that config enables `[orchestrator]`, else the
- * reason the gate is closed. */
+ * effective config when that config enables `[orchestrator]` for the given
+ * host, else the reason the gate is closed. */
 export type OrchestratorGate =
   | { enabled: true; config: Config; revision: number }
   | { enabled: false; reason: 'no-effective-config' | 'orchestrator-disabled' }
 
 /** Read the sandbox gate from the repository's LATEST deposited effective
- * config. Bounded: one repository read plus the latest artifact row and its
- * blob, never a listing of every revision. Throws `OrchestratorConfigError`
- * when the latest deposit is unreadable or invalid. */
+ * config, resolving `[orchestrator].enabled` for `host` through
+ * `orchestratorEnabled` (an unset value is enabled on a hosted deployment).
+ * Bounded: one repository read plus the latest artifact row and its blob,
+ * never a listing of every revision. Throws `OrchestratorConfigError` when
+ * the latest deposit is unreadable or invalid. */
 export async function readOrchestratorGate(
   store: BuildStore,
   repo: string,
+  host: OrchestratorHost,
 ): Promise<OrchestratorGate> {
   // A repository the store has no record for has no deposited artifact and
   // no dispatcher history: sandbox tools are disabled there.
@@ -580,13 +588,18 @@ export async function readOrchestratorGate(
       `effective config ${label} is invalid: ${parsed.error.message}`,
     )
   }
-  return parsed.data.orchestrator.enabled
+  return orchestratorEnabled(parsed.data, host)
     ? { enabled: true, config: parsed.data, revision: artifact.meta.revision }
     : { enabled: false, reason: 'orchestrator-disabled' }
 }
 
-/** Resolve the sandbox gate from the latest effective config; absent/disabled returns null. */
-export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
-  const gate = await readOrchestratorGate(store, repo)
+/** Resolve the sandbox gate for `host` from the latest effective config;
+ * no deposit or a closed gate returns null. */
+export async function orchestratorConfig(
+  store: BuildStore,
+  repo: string,
+  host: OrchestratorHost,
+): Promise<Config | null> {
+  const gate = await readOrchestratorGate(store, repo, host)
   return gate.enabled ? gate.config : null
 }

@@ -133,7 +133,7 @@ import {
   roleKeyWarnings,
   SLUG_ROLE,
 } from '../config/roles'
-import type { Config } from '../config/schema'
+import { orchestratorEnabled, type Config, type OrchestratorHost } from '../config/schema'
 import { loadPlugins, pluginResolutionKind } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
@@ -546,6 +546,10 @@ export interface DispatchOpts {
    * config error at startup and on reload, never silently ignored. URL hooks
    * are delivered either way. */
   localCommands?: false
+  /** Where `[orchestrator].enabled` is resolved (`orchestratorEnabled`): an
+   * unset value is enabled for `hosted` and disabled for `local`. Default
+   * `local`; the hosted dispatcher passes `hosted`. */
+  orchestratorHost?: OrchestratorHost
   /** Test seam for configured hook delivery; defaults to running the hook's
    * command or POSTing to its URL (`processes/hook-webhook.ts`). */
   invokeHook?: HookInvoke
@@ -738,7 +742,7 @@ async function defaultWire(
     sandboxSetupCommand: config.commands.setup,
     sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
-    orchestratorSandboxEnabled: config.orchestrator.enabled,
+    orchestratorSandboxEnabled: orchestratorEnabled(config, opts.orchestratorHost ?? 'local'),
     ...providerSeams,
     ...(refusedArchive !== undefined ? { refusedArchive } : {}),
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
@@ -1147,6 +1151,7 @@ class DispatchLoop {
       missingAccounts: () => this.missingAccounts(),
       accountCredentialSource: opts.repository ? 'project-secrets' : 'environment',
       repairBuildConfig: (slug) => this.publishBuildConfig(slug),
+      ...(opts.orchestratorHost !== undefined ? { orchestratorHost: opts.orchestratorHost } : {}),
       repo: this.repoIdentity,
       // Origin mode: the forge answers remote base-branch questions; no
       // checkout git is probed for the served repository's origin.
