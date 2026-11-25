@@ -1225,8 +1225,10 @@ export type TicketsConfig = z.infer<typeof ticketsSchema>
 // and no environment is ever provisioned.
 
 export const orchestratorSandboxSchema = z.strictObject({
-  /** Idle minutes without a sandbox tool call before the dispatcher tick's
-   * janitor stops the environment, keeping its snapshot for the next resume. */
+  /** Idle minutes without a sandbox tool call before the environment stops,
+   * keeping its snapshot for the next resume: the provider timer on
+   * vercel-sandbox (extended by every tool call), and the dispatcher tick's
+   * janitor from journal evidence. */
   idleMinutes: z.number().int().positive().default(30),
   /** Names of non-secret host environment variables forwarded into the
    * sandbox (during provisioning/setup and tool exec/start alike). These are
@@ -1238,7 +1240,7 @@ export const orchestratorSandboxSchema = z.strictObject({
 
 documentFields(orchestratorSandboxSchema, {
   idleMinutes:
-    "Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it.",
+    "Minutes without a sandbox tool call after which the operator sandbox stops, keeping its snapshot; a later sandbox.open resumes it. On vercel-sandbox the provider's own timer stops it, and every tool call extends that timer, so no dispatcher tick is needed; the dispatcher tick's janitor also stops an environment whose journal evidence is older, so it is no longer the only idle stop.",
   environmentVariables:
     'Names of non-secret host variables forwarded into the sandbox \u2014 the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.',
 })

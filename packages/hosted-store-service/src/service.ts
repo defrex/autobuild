@@ -124,6 +124,10 @@ export interface HostedStoreServiceOptions {
   ) => unknown | Promise<unknown>
   /** Receives one JSON line per browser error report. Defaults to `console.error`. */
   logBrowserError?: (line: string) => void
+  /** The platform's background seam (Next's `after()`): receives each
+   * operator sandbox attempt's settle promise so the function outlives the
+   * `sandbox.open` response for the attempt's host phase and settlement. */
+  background?: (work: Promise<unknown>) => void
   /** Test seam: compose the operator-sandbox backend. Production uses
    * `createHostedOperatorSandboxService`. */
   composeOperatorSandbox?: (
@@ -734,6 +738,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                     storeRef: sandboxOrigin,
                     storeToken,
                     clock,
+                    ...(options.background !== undefined ? { background: options.background } : {}),
                   }),
                 report: (error) =>
                   report(error, new Request('ab://operator-sandbox-composition'), 'operator'),

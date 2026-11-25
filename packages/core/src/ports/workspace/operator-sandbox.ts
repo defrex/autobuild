@@ -95,6 +95,24 @@ export type SandboxRefreshResult =
     }
   | { outcome: 'refused'; reason: 'dirty' | 'diverged'; message: string }
 
+/** `refresh`'s dirty refusal, shared by every lifecycle adapter. */
+export const SANDBOX_REFRESH_DIRTY_MESSAGE =
+  'the sandbox checkout has uncommitted changes; commit or discard them before refreshing'
+
+/** `refresh`'s diverged refusal, shared by every lifecycle adapter. */
+export function sandboxRefreshDivergedMessage(
+  head: string,
+  baseBranch: string,
+  base: string,
+): string {
+  return `the checkout head ${head} has diverged from ${baseBranch} (${base}); a fast-forward is impossible, so rebase inside the sandbox or run sandbox.reset`
+}
+
+/** The failure a provider reports for an environment whose provisioning
+ * stopped without a recorded outcome. */
+export const SANDBOX_INTERRUPTED_MESSAGE =
+  'provisioning was interrupted before it finished; call sandbox.open to retry'
+
 export interface SandboxCommandRequest {
   command: string
   cwd?: string
