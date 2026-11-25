@@ -5,6 +5,7 @@ import {
   BUILTIN_WORKSPACE_PROVIDER_CONFIG,
   TOP_LEVEL_SCALARS,
   vercelSandboxConfigSchema,
+  orchestratorEnabled,
   type WorkspaceProviderConfigDeclaration,
 } from './schema'
 
@@ -178,7 +179,6 @@ describe('parseConfig — complete flattened surface', () => {
         readyState: 'ready',
       },
       orchestrator: {
-        enabled: false,
         sandbox: { idleMinutes: 30, environmentVariables: [] },
       },
     })
@@ -232,7 +232,6 @@ describe('parseConfig — defaults', () => {
       },
       tickets: { source: 'file', readyState: 'ready' },
       orchestrator: {
-        enabled: false,
         sandbox: { idleMinutes: 30, environmentVariables: [] },
       },
     })
@@ -1384,11 +1383,18 @@ describe('parseConfig — TOML syntax errors', () => {
 })
 
 describe('parseConfig — [orchestrator] sandbox gate', () => {
-  test('an absent table reads as disabled with documented defaults', () => {
-    expect(parseConfig(READY).orchestrator).toEqual({
-      enabled: false,
+  test('an absent table keeps enabled unset, resolving per host', () => {
+    const config = parseConfig(READY)
+    expect(config.orchestrator).toEqual({
       sandbox: { idleMinutes: 30, environmentVariables: [] },
     })
+    expect(orchestratorEnabled(config, 'hosted')).toBe(true)
+    expect(orchestratorEnabled(config, 'local')).toBe(false)
+    for (const enabled of [true, false]) {
+      const explicit = parseConfig(`${READY}[orchestrator]\nenabled = ${enabled}\n`)
+      expect(orchestratorEnabled(explicit, 'hosted')).toBe(enabled)
+      expect(orchestratorEnabled(explicit, 'local')).toBe(enabled)
+    }
   })
 
   test('accepts explicit enablement, idle minutes, and forwarded variables', () => {
@@ -1448,6 +1454,18 @@ describe('parseConfig — [orchestrator] sandbox gate', () => {
       expect(error.message).toContain('credential')
       expect(error.message).toContain(name)
     }
+  })
+
+  test('the forwarding check runs unless enabled = false', () => {
+    const sandbox = '[orchestrator.sandbox]\nenvironmentVariables = ["GITHUB_TOKEN"]\n'
+    expect(parseError(`${READY}${sandbox}`).message).toContain('GITHUB_TOKEN')
+    expect(parseError(`${READY}[orchestrator]\nenabled = true\n\n${sandbox}`).message).toContain(
+      'GITHUB_TOKEN',
+    )
+    expect(
+      parseConfig(`${READY}[orchestrator]\nenabled = false\n\n${sandbox}`).orchestrator.sandbox
+        .environmentVariables,
+    ).toEqual(['GITHUB_TOKEN'])
   })
 })
 

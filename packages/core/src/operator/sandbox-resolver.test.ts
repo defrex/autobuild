@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
+import { parseConfig } from '../config/load'
+import { effectiveBuildConfigContent } from '../processes/build-execution-state'
 import { MemoryBuildStore } from '../store/memory'
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { manualClock } from '../testing/fixed'
@@ -39,7 +41,9 @@ function fakeService(disposed: string[], label: string): OperatorSandboxService 
   return { canPublish: true, dispose: async () => void disposed.push(label) } as never
 }
 
-async function fixture(options: { enabled?: boolean; deposit?: boolean } = {}) {
+async function fixture(
+  options: { enabled?: boolean; deposit?: boolean; preflight?: () => void } = {},
+) {
   const store = new MemoryBuildStore()
   await store.ensureRepo(REPO)
   const deposit = (enabled: boolean) =>
@@ -52,6 +56,7 @@ async function fixture(options: { enabled?: boolean; deposit?: boolean } = {}) {
   const issued: Date[] = []
   const composed: { storeToken: string; oidc?: string }[] = []
   const disposed: string[] = []
+  const reported: unknown[] = []
   let failCompose: Error | undefined
   const resolver = createOperatorSandboxResolver({
     store,
@@ -62,6 +67,8 @@ async function fixture(options: { enabled?: boolean; deposit?: boolean } = {}) {
       return `token-${issued.length}`
     },
     credentialKey: (credentials) => credentials?.oidcToken ?? '',
+    ...(options.preflight !== undefined ? { preflight: options.preflight } : {}),
+    report: (error) => void reported.push(error),
     compose: async ({ storeToken, credentials }) => {
       if (failCompose) throw failCompose
       composed.push({
@@ -79,6 +86,7 @@ async function fixture(options: { enabled?: boolean; deposit?: boolean } = {}) {
     issued,
     composed,
     disposed,
+    reported,
     failNext: (error: Error | undefined) => {
       failCompose = error
     },
@@ -107,6 +115,44 @@ describe('gate reasons', () => {
     const { resolver, deposit } = await fixture({ enabled: true })
     await deposit(false)
     expect(await reasonOf(resolver.resolve(REPO))).toBe('orchestrator-disabled')
+  })
+
+  test('a deposit that never names enabled is served: the hosted default', async () => {
+    const { resolver, store, composed } = await fixture({ deposit: false })
+    await store.putRepoArtifact(REPO, {
+      kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(
+        parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n'),
+      ),
+    })
+    await resolver.resolve(REPO)
+    expect(composed).toHaveLength(1)
+  })
+
+  test('a preflight refusal keeps its reason, mints no token, and is retried next call', async () => {
+    let missing = true
+    const { resolver, issued, composed, reported } = await fixture({
+      preflight: () => {
+        if (missing)
+          throw new SandboxUnavailableError('credentials-missing', 'missing: GITHUB_TOKEN')
+      },
+    })
+    const error = await resolver.resolve(REPO).catch((caught: unknown) => caught)
+    expect((error as SandboxUnavailableError).reason).toBe('credentials-missing')
+    expect((error as Error).message).toBe('missing: GITHUB_TOKEN')
+    expect(issued).toHaveLength(0)
+    expect(composed).toHaveLength(0)
+    expect(reported).toHaveLength(0)
+    missing = false
+    await resolver.resolve(REPO)
+    expect(composed).toHaveLength(1)
+  })
+
+  test('a composition refusing with a typed reason propagates unwrapped', async () => {
+    const { resolver, failNext, reported } = await fixture()
+    failNext(new SandboxUnavailableError('credentials-missing', 'missing: GH_TOKEN'))
+    expect(await reasonOf(resolver.resolve(REPO))).toBe('credentials-missing')
+    expect(reported).toHaveLength(0)
   })
 
   test('an invalid latest config is effective-config-invalid', async () => {

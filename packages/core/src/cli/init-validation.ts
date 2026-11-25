@@ -23,7 +23,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { effectiveRuntimeReferences } from '../config/roles'
-import type { Config, TicketsConfig } from '../config/schema'
+import { orchestratorEnabled, type Config, type TicketsConfig } from '../config/schema'
 import { loadConfig } from '../config/load'
 import { createRuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -484,7 +484,7 @@ function declaredForgeEnvChecks(
  * `sandboxForbiddenEnv` extras. Enforced at the registry-aware init seam so a
  * plugin-declared forbidden name is refused before any infrastructure is
  * provisioned, mirroring `createWorkspaceProvider`'s construction-site check:
- * same gate (`[orchestrator].enabled`), same name union
+ * same gate (`[orchestrator].enabled`, resolved for the local host), same name union
  * (`SANDBOX_FORBIDDEN_ENV` plus the declared extras), same message. A no-op
  * repeat for builtins — config parse already rejected every shared and
  * builtin-declared name — and a no-op when the declaration is absent. */
@@ -492,7 +492,7 @@ function declaredSandboxForbiddenEnvCheck(
   caps: WorkspaceProviderCapabilities | undefined,
   config: Config,
 ): void {
-  if (!config.orchestrator.enabled || caps?.sandboxForbiddenEnv === undefined) return
+  if (!orchestratorEnabled(config, 'local') || caps?.sandboxForbiddenEnv === undefined) return
   for (const name of config.orchestrator.sandbox.environmentVariables) {
     if (SANDBOX_FORBIDDEN_ENV.includes(name) || caps.sandboxForbiddenEnv.includes(name)) {
       throw new Error(sandboxForbiddenEnvMessage(name))

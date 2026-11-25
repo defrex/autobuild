@@ -515,6 +515,9 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             // commands: command hooks are a config error here; url hooks are
             // delivered from this dispatcher's environment.
             localCommands: false,
+            // A hosted deployment serves these projects: an unset
+            // `[orchestrator].enabled` resolves enabled here.
+            orchestratorHost: 'hosted',
           })
         } catch (error) {
           failure = redact(error instanceof Error ? error.message : String(error))
