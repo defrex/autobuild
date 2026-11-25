@@ -344,6 +344,19 @@ export function randomSandboxJournal(seed: number, length: number): RepositoryEv
         type: 'orchestrator.sandbox.released',
         payload: { ...base, snapshots: { outcome: 'confirmed' } },
       }),
+      () => ({
+        type: 'orchestrator.sandbox.provisioning',
+        payload: { ...base, provider: 'vercel', kind: rand() < 0.5 ? 'provision' : 'resume' },
+      }),
+      () => ({
+        type: 'orchestrator.sandbox.provision-failed',
+        payload: { ...base, stage: 'setup', message: 'boom' },
+      }),
+      () => ({ type: 'orchestrator.sandbox.closed', payload: base }),
+      () => ({
+        type: 'orchestrator.sandbox.refreshed',
+        payload: { ...base, baseSha: 'a'.repeat(40), headSha: 'a'.repeat(40) },
+      }),
     ]
     specs.push({ ...pick(rand, templates)(), actor: DISPATCHER })
   }

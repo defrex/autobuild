@@ -370,9 +370,11 @@ export const harvestEventPayloadSchemas = {
   }),
 } as const
 
-/** Operator sandbox lifecycle facts (AUT-340). The provision/resume/activity
- * facts bracket one environment's usable window and rate-limited activity;
- * stopped/released/reset close it. Derived state lives in the pure reducer
+/** Operator sandbox lifecycle facts (AUT-340, #1223). `provisioning` opens a
+ * background provision or resume attempt that `provisioned`/`resumed` or
+ * `provision-failed` settles; provision/resume/activity bracket one
+ * environment's usable window and rate-limited activity; `refreshed` moves its
+ * recorded base head; stopped/closed/released/reset close it. Derived state lives in the pure reducer
  * `processes/sandbox-state.ts`, mirroring harvest execution settlement. */
 export const orchestratorSandboxEventPayloadSchemas = {
   /** First use of one operator's environment for this repository, or a
@@ -447,6 +449,43 @@ export const orchestratorSandboxEventPayloadSchemas = {
       url: z.string().min(1),
       headSha: z.string().min(1),
     }),
+  }),
+  /** `sandbox.open` began provisioning (`kind: 'provision'`) or resuming
+   * (`kind: 'resume'`) in the background of the serving process. The
+   * environment refuses other tools until `provisioned`/`resumed` or
+   * `provision-failed` closes the attempt. */
+  'orchestrator.sandbox.provisioning': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    provider: z.string().min(1),
+    kind: z.enum(['provision', 'resume']),
+  }),
+  /** A background provision or resume failed. `stage` names where;
+   * `message` is the provider's text, redacted of credential values by the
+   * service. */
+  'orchestrator.sandbox.provision-failed': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    stage: z.enum(['checkout', 'setup', 'environment', 'resume', 'provision']),
+    message: z.string().min(1),
+  }),
+  /** Operator-requested close: the environment stopped and its provider
+   * capacity released, the checkout kept for a later `sandbox.open`. */
+  'orchestrator.sandbox.closed': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+  }),
+  /** A clean checkout fast-forwarded to the current base head. `baseSha`
+   * replaces the publication precondition's reference point. */
+  'orchestrator.sandbox.refreshed': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    baseSha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+    headSha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+    previousHeadSha: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/i)
+      .optional(),
   }),
   /** A refused or failed publication attempt. `stage` names where it stopped
    * (the precondition checks, the push, or the forge PR call); `message` is
@@ -1167,6 +1206,10 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.reset': ['human'],
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
+  'orchestrator.sandbox.provisioning': ['human'],
+  'orchestrator.sandbox.provision-failed': ['human'],
+  'orchestrator.sandbox.closed': ['human'],
+  'orchestrator.sandbox.refreshed': ['human'],
   'dispatcher.upgrade-target-resolved': ['dispatcher'],
   'dispatcher.target-prepared': ['dispatcher'],
   'dispatcher.yield-requested': ['dispatcher'],

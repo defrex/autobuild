@@ -7788,6 +7788,56 @@ export async function ticketStartReadBudget(): Promise<{
   return baseline
 }
 
+/** `sandbox.status` is a recurring poll (#1223): pad the repository journal
+ * with `history` unrelated facts, open a ready memory sandbox, warm one status
+ * call, then measure a second. The call vector and rows must not depend on
+ * `history`, the repeat over an unchanged journal reads zero event rows, and
+ * status writes nothing. */
+export async function operatorSandboxStatusReadBudget(opts: { history: number }) {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { createOperatorSandboxService } = await import('../operator/sandbox')
+  const { memoryOperatorSandbox } = await import('./memory-operator-sandbox')
+  const repo = 'https://github.com/example/sandbox-status-budget'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  for (let i = 0; i < opts.history; i++) {
+    await store.appendRepo(repo, {
+      actor: humanActor('human'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: i % 2 === 0 },
+    })
+  }
+  const sandbox = memoryOperatorSandbox()
+  const service = await createOperatorSandboxService({
+    store,
+    repo,
+    provider: sandbox.provider,
+    sandbox: { idleMinutes: 30, environmentVariables: [] },
+    baseBranch: 'main',
+  })
+  const registry = buildRegistry({ store, sandbox: service })
+  const ctx = { identity: 'ada@example.com' }
+  await registry.call('sandbox.open', { repo }, ctx)
+  await registry.call('sandbox.status', { repo }, ctx)
+  const before = (await store.getRepoEvents(repo)).length
+  const counter = memoryStoreRequestCounter(store)
+  let metrics: StoreReadMetrics
+  try {
+    metrics = await measureStoreReads(store, async () => {
+      await registry.call('sandbox.status', { repo }, ctx)
+    })
+  } finally {
+    counter.restore()
+  }
+  const appended = (await store.getRepoEvents(repo)).length - before
+  return {
+    callVector: counter.vector(),
+    rows: metrics.rows,
+    repoRows: metrics.repoRows,
+    appended,
+  }
+}
+
 /** One hosted sandbox tool call's store cost (#1219): the resolver's gate
  * plus the sandbox service's own reads, measured on the second of two
  * consecutive `sandbox.exec` calls over `revisions` deposited effective
@@ -7838,6 +7888,11 @@ export async function operatorSandboxCallReadBudget(opts: { revisions: number })
       { repo: sandboxRepo, command: 'echo hi' },
       { identity: 'ada@example.com', sandboxFor: () => resolver.resolve(sandboxRepo) },
     )
+  await registry.call(
+    'sandbox.open',
+    { repo: sandboxRepo },
+    { identity: 'ada@example.com', sandboxFor: () => resolver.resolve(sandboxRepo) },
+  )
   await call()
   const counter = memoryStoreRequestCounter(store)
   let rows = 0

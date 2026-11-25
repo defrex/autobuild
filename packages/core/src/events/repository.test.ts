@@ -575,6 +575,32 @@ describe('operator sandbox facts (AUT-340)', () => {
     ).toEqual(tick)
   })
 
+  test('open/close/refresh lifecycle facts validate, reject a bad stage, and are human-only (#1223)', () => {
+    const env = { operator: 'ops', environmentId: 'env-1' }
+    const sha = 'c'.repeat(40)
+    const valid = [
+      ['orchestrator.sandbox.provisioning', { ...env, provider: 'git-worktree', kind: 'resume' }],
+      ['orchestrator.sandbox.provision-failed', { ...env, stage: 'setup', message: 'boom' }],
+      ['orchestrator.sandbox.closed', env],
+      ['orchestrator.sandbox.refreshed', { ...env, baseSha: sha, headSha: sha }],
+    ] as const
+    for (const [type, payload] of valid) {
+      expect(
+        validateRepositoryEventWrite({ actor: humanActor('ops'), type, payload } as never).payload,
+      ).toEqual(payload)
+      expect(() =>
+        validateRepositoryEventWrite({ actor: DISPATCHER, type, payload } as never),
+      ).toThrow(/may not emit/)
+    }
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.provision-failed',
+        payload: { ...env, stage: 'network', message: 'boom' },
+      } as never),
+    ).toThrow()
+  })
+
   test('lifecycle facts are human-attributed and carry strict payloads', () => {
     const provisioned = {
       operator: 'ops',

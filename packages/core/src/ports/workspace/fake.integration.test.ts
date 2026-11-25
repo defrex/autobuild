@@ -154,6 +154,78 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     expect((await git(identity.workspacePath, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(expected)
   })
 
+  test('lifecycle: open settles ready, close keeps the checkout, refresh fast-forwards from a git source (#1223)', async () => {
+    await git(source, ['init', '-q', '-b', 'main'])
+    await git(source, ['config', 'user.email', 't@t.invalid'])
+    await git(source, ['config', 'user.name', 't'])
+    await git(source, ['add', '-A'])
+    await git(source, ['commit', '-q', '-m', 'seed'])
+    const opened = await provider.orchestratorSandbox.open({
+      repo: source,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    expect(opened.status.state).toBe('provisioning')
+    const ready = await opened.settled!
+    expect(ready.state).toBe('ready')
+    const handle = ready.handle!
+    await provider.orchestratorSandbox.start(handle, {
+      command: 'trap "" TERM; sleep 60 & echo $! > ../child.pid; wait',
+    })
+    const childPid = join(tmp, 'sandboxes', 'child.pid')
+    for (let i = 0; i < 200 && !(await Bun.file(childPid).exists()); i++) await Bun.sleep(25)
+    const child = Number((await Bun.file(childPid).text()).trim())
+    expect(
+      await provider.orchestratorSandbox.close({
+        repo: source,
+        operator: 'ops',
+        environmentId: handle.environmentId,
+      }),
+    ).toEqual({ outcome: 'closed' })
+    expect(() => process.kill(child, 0)).toThrow()
+    await writeFile(join(source, 'next.txt'), 'next\n')
+    await git(source, ['add', '-A'])
+    await git(source, ['commit', '-q', '-m', 'advance'])
+    const advanced = (await git(source, ['rev-parse', 'refs/heads/main'])).stdout.trim()
+    expect(
+      await provider.orchestratorSandbox.refresh(handle, { repo: source, baseBranch: 'main' }),
+    ).toMatchObject({
+      outcome: 'refreshed',
+      headSha: advanced,
+      baseSha: advanced,
+    })
+  })
+
+  test('lifecycle: close cancels a hanging setup and removes the copied checkout (#1223)', async () => {
+    const hanging = new FakeWorkspaceProvider({
+      sandboxRoot: join(tmp, 'sandboxes-hang'),
+      // The leader shell dies on SIGTERM; its child ignores it and holds the
+      // output pipes until the group is killed.
+      sandboxSetupCommand: `sh -c 'trap "" TERM; echo $$ > ../hang.pid; exec sleep 60' & wait`,
+      envSource: { PATH: process.env.PATH ?? '' },
+    })
+    const opened = await hanging.orchestratorSandbox.open({
+      repo: source,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const identity = await hanging.orchestratorSandbox.describe({ repo: source, operator: 'ops' })
+    const hangPid = join(tmp, 'sandboxes-hang', 'hang.pid')
+    for (let i = 0; i < 200 && !(await Bun.file(hangPid).exists()); i++) await Bun.sleep(25)
+    const setupChild = Number((await Bun.file(hangPid).text()).trim())
+    const started = Date.now()
+    const closed = await hanging.orchestratorSandbox.close({
+      repo: source,
+      operator: 'ops',
+      environmentId: identity.environmentId,
+    })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(closed.attempt).toEqual({ state: 'absent', cancelled: true })
+    expect(() => process.kill(setupChild, 0)).toThrow()
+    expect(await opened.settled!).toEqual({ state: 'absent', cancelled: true })
+    expect(await Bun.file(join(identity.workspacePath, 'README.md')).exists()).toBe(false)
+  })
+
   test('every recorded guest environment holds only PATH and forwarded names', async () => {
     const recording = new FakeWorkspaceProvider({
       sandboxRoot: join(tmp, 'sandboxes-fwd'),

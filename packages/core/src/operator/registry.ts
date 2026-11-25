@@ -137,6 +137,8 @@ export interface ToolFailureBody {
   error: string
   code?: string
   progress?: unknown
+  /** The operator sandbox's lifecycle state, on `sandbox-not-ready`. */
+  state?: string
 }
 
 export type RegistryErrorReason =
@@ -700,6 +702,10 @@ const sandboxWriteFileInput = z.strictObject({
 })
 
 const sandboxResetInput = z.strictObject({ repo: repoField })
+const sandboxOpenInput = z.strictObject({ repo: repoField })
+const sandboxStatusInput = z.strictObject({ repo: repoField })
+const sandboxCloseInput = z.strictObject({ repo: repoField })
+const sandboxRefreshInput = z.strictObject({ repo: repoField })
 
 const sandboxPublishInput = z.strictObject({
   repo: repoField,
@@ -716,7 +722,7 @@ const sandboxPublishInput = z.strictObject({
     .min(1)
     .optional()
     .describe(
-      'Optional commit-ish to publish instead of the checkout HEAD; must resolve to a commit that is a descendant of the base head recorded at provision or reset time.',
+      'Optional commit-ish to publish instead of the checkout HEAD; must resolve to a commit that is a descendant of the base head recorded at provision, refresh, or reset time.',
     ),
 })
 
@@ -1443,8 +1449,48 @@ export const TOOLS: readonly ToolEntry[] = [
     },
   ),
   defineTool(
+    'sandbox.open',
+    'Open your operator sandbox, a persistent, credential-free environment provisioned from the repository, and return at once. Provisioning or resuming continues in the background; poll sandbox.status until it reports ready. Other sandbox tools refuse with code "sandbox-not-ready" until then. Idempotent: opening a ready or in-flight environment changes nothing.',
+    sandboxOpenInput,
+    '{state, environmentId, provider, baseSha?, failure?}: state is provisioning, resuming, ready, or failed; baseSha is the recorded base head once ready; failure ({stage, message}) explains a failed attempt.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxOpenInput>
+      return (await sandboxOf(ctx)).open(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.status',
+    "Report your operator sandbox's lifecycle state without changing anything: absent, provisioning, resuming, ready, stopped, or failed, plus the checkout head and the base head recorded at provisioning (or the last refresh or reset). Safe to poll; it never keeps an idle environment alive.",
+    sandboxStatusInput,
+    "{state, environmentId, provider, headSha?, baseSha?, failure?, lastEvidenceAt?}: the lifecycle state, the checkout head when ready, the recorded base head, a failed attempt's {stage, message}, and the latest journaled evidence time.",
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxStatusInput>
+      return (await sandboxOf(ctx)).status(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.close',
+    'Close your operator sandbox: stop the environment and its detached commands and release provider capacity, keeping the checkout and any uncommitted work. A later sandbox.open resumes it. Cancels an in-flight provision. Closing an environment that does not exist succeeds and does nothing.',
+    sandboxCloseInput,
+    '{outcome, environmentId}: outcome is "closed", or "noop" when there was nothing to close.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxCloseInput>
+      return (await sandboxOf(ctx)).close(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.refresh',
+    'Fast-forward your operator sandbox\'s clean checkout to the current base-branch head and record that head as the publication base. Not destructive: a checkout with uncommitted changes refuses with code "sandbox-refresh-dirty", and one whose commits diverge from the base refuses with code "sandbox-refresh-diverged"; a refusal changes nothing. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code "sandbox-not-ready" naming the state.',
+    sandboxRefreshInput,
+    '{outcome, headSha, baseSha, previousHeadSha}: outcome is "refreshed" (fast-forwarded) or "current" (the checkout already contains the base head).',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxRefreshInput>
+      return (await sandboxOf(ctx)).refresh(attributed(ctx), input)
+    },
+  ),
+  defineTool(
     'sandbox.exec',
-    'Run one shell command inside your operator sandbox: a persistent, credential-free environment provisioned from the repository (first call provisions; later calls reuse it). The command waits at most 300 seconds; on expiry it is killed and the tool fails with code "sandbox-exec-timeout". Stdout and stderr are each truncated at 65,536 bytes with a "[truncated by autobuild: output exceeded 65536 bytes]" marker. The environment holds no store, forge, or model credentials — the typed tools remain the only route to build state.',
+    'Run one shell command inside your operator sandbox, a persistent, credential-free environment provisioned from the repository. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code "sandbox-not-ready" naming the state. The command waits at most 300 seconds; on expiry it is killed and the tool fails with code "sandbox-exec-timeout". Stdout and stderr are each truncated at 65,536 bytes with a "[truncated by autobuild: output exceeded 65536 bytes]" marker. The environment holds no store, forge, or model credentials — the typed tools remain the only route to build state.',
     sandboxExecInput,
     '{exitCode, stdout, stderr}: the command’s exit status and truncated output streams.',
     async (raw, ctx) => {
@@ -1454,7 +1500,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.start',
-    'Launch one shell command detached inside your operator sandbox and return immediately. Pair with sandbox.wait to observe it. Calls against one environment are serialized; a detached command is tracked only by the serving process.',
+    'Launch one shell command detached inside your operator sandbox and return immediately. Pair with sandbox.wait to observe it. Calls against one environment are serialized; a detached command is tracked only by the serving process. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code "sandbox-not-ready" naming the state.',
     sandboxStartInput,
     '{commandId}: the id to pass to sandbox.wait.',
     async (raw, ctx) => {
@@ -1474,7 +1520,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.read_file',
-    'Read one file from your operator sandbox, rooted at the checkout. Absolute paths and ".." escapes are refused.',
+    'Read one file from your operator sandbox, rooted at the checkout. Absolute paths and ".." escapes are refused. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code "sandbox-not-ready" naming the state.',
     sandboxReadFileInput,
     '{encoding, content}: the file bytes — "utf8" when they decode as UTF-8, else "base64".',
     async (raw, ctx) => {
@@ -1489,7 +1535,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.write_file',
-    'Write one file inside your operator sandbox, rooted at the checkout (parent directories are created). Absolute paths and ".." escapes are refused; content is bounded at 1 MiB after decoding.',
+    'Write one file inside your operator sandbox, rooted at the checkout (parent directories are created). Absolute paths and ".." escapes are refused; content is bounded at 1 MiB after decoding. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code "sandbox-not-ready" naming the state.',
     sandboxWriteFileInput,
     '{path}: the written path, confirming the durable write.',
     async (raw, ctx) => {
@@ -1500,18 +1546,17 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.reset',
-    'Destructively reset your operator sandbox: discard every change, purge the environment and its snapshots, and re-provision fresh from the current base branch head. Use when the environment is wedged or its checkout is dirty beyond repair.',
+    'Destructively reset your operator sandbox: discard every change, purge the environment and its snapshots, and re-provision fresh from the current base branch head. Returns at once while the fresh provision continues in the background; poll sandbox.status until it reports ready. Use when the environment is wedged or its checkout is dirty beyond repair; sandbox.refresh updates a clean checkout without discarding anything.',
     sandboxResetInput,
-    '{ok: true}: the environment was released and re-provisioned from the current base head.',
+    '{state, environmentId, provider, baseSha?, failure?}: the sandbox.open result for the fresh provision, normally state "provisioning".',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxResetInput>
-      await (await sandboxOf(ctx)).reset(attributed(ctx), input)
-      return { ok: true as const }
+      return (await sandboxOf(ctx)).reset(attributed(ctx), input)
     },
   ),
   defineTool(
     'sandbox.publish',
-    "Publish your operator sandbox's work as a pull request: push the checkout's current head commit (or an explicit commit) to your operator's dedicated branch and open or update a PR against the base branch. Refuses when the checkout has uncommitted changes (tracked or untracked; the sandbox's own provisioning marker is excluded), when the commit is not a descendant of the base head recorded at provision or reset time, or when the base branch head itself would be published. The sandbox itself never pushes and holds no credential — the push and PR creation are kernel plumbing; a publication is a durable repository-journal fact. PR only: the base branch is never pushed to.",
+    "Publish your operator sandbox's work as a pull request: push the checkout's current head commit (or an explicit commit) to your operator's dedicated branch and open or update a PR against the base branch. Refuses when the checkout has uncommitted changes (tracked or untracked; the sandbox's own provisioning marker is excluded), when the commit is not a descendant of the base head recorded at provision, refresh, or reset time, or when the base branch head itself would be published. The sandbox itself never pushes and holds no credential — the push and PR creation are kernel plumbing; a publication is a durable repository-journal fact. PR only: the base branch is never pushed to. The environment must be open and ready first (sandbox.open, then sandbox.status); otherwise the call refuses with code \"sandbox-not-ready\" naming the state.",
     sandboxPublishInput,
     '{branch, sha, pr: {number, url, headSha}}: the publication branch, the published commit, and the opened or updated pull request.',
     async (raw, ctx) => {
@@ -1628,6 +1673,7 @@ function mapDomainError(error: unknown): RegistryError {
       kind: 'refusal',
       error: error.message,
       code: `sandbox-${error.stage}`,
+      ...(error.state !== undefined ? { state: error.state } : {}),
     })
   }
   if (error instanceof OperatorQueryError) {

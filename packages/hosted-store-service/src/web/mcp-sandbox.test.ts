@@ -186,8 +186,21 @@ const PARITY_INPUTS: Record<string, Record<string, unknown>> = {
   'tickets.unblock': { ...ticket, blockerIds: ['PARITY-2'] },
   'tickets.move': { ...ticket, state: 'ready' },
   'tickets.start': ticket,
+  'tickets.asset.attach': {
+    ...ticket,
+    kind: 'reference',
+    name: 'parity',
+    layout: 'tree',
+    entries: [],
+  },
+  'tickets.asset.get': { ...ticket, kind: 'reference', name: 'parity' },
+  'tickets.asset.remove': { ...ticket, kind: 'reference', name: 'parity' },
   'notes.read': ref,
   'notes.write': { ...ref, document: 'parity' },
+  'sandbox.open': ref,
+  'sandbox.status': ref,
+  'sandbox.close': ref,
+  'sandbox.refresh': ref,
   'sandbox.exec': { ...ref, command: 'true' },
   'sandbox.start': { ...ref, command: 'true' },
   'sandbox.wait': { ...ref, commandId: 'cmd-parity', waitSeconds: 0 },
@@ -208,7 +221,7 @@ describe('hosted sandbox tools over /mcp', () => {
       const { tools } = await h.client.listTools()
       const listed = tools.map((tool) => tool.name)
       expect(listed).toEqual(expect.arrayContaining(sandboxNames))
-      expect(sandboxNames).toHaveLength(7)
+      expect(sandboxNames).toHaveLength(11)
       // Read-only tools keep their advertisement and results.
       expect(listed).toEqual(
         expect.arrayContaining(
@@ -219,6 +232,8 @@ describe('hosted sandbox tools over /mcp', () => {
       expect(status.isError).toBe(false)
       expect(status.body).toMatchObject({ repo: ENABLED })
 
+      const opened = await call(h.client, 'sandbox.open', { repo: ENABLED })
+      expect(opened.body).toMatchObject({ state: 'ready' })
       const exec = await call(h.client, 'sandbox.exec', { repo: ENABLED, command: 'echo hi' })
       expect(exec).toEqual({ isError: false, body: { exitCode: 0, stdout: 'echo hi', stderr: '' } })
       const exec2 = await call(h.client, 'sandbox.exec', { repo: ENABLED, command: 'pwd' })
