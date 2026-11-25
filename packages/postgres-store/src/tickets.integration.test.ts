@@ -1535,6 +1535,23 @@ if (testUrl) {
       expect((await fresh.search({ text: 'x', state: 'icebox', limit: 1 })).tickets).toEqual([])
       expect(await db.sql`SELECT name FROM ab_ticket_states WHERE repo = 'fresh'`).toHaveLength(0)
 
+      // A configured non-ASCII name folds as resolveState folds it, whatever
+      // the database's default collation (C and libc leave É unfolded).
+      const accented = db.source({
+        repo: 'accented',
+        teamKey: 'ENG',
+        lifecycle: { ...lifecycle, ready: 'ÉCOLE' },
+      })
+      const école = await accented.create({ title: 'Needle', body: 'Body' }, { state: 'ÉCOLE' })
+      expect((await accented.listReady({ state: 'école' })).tickets.map((t) => t.ref.id)).toEqual([
+        école.ref.id,
+      ])
+      expect(
+        (await accented.search({ text: 'needle', state: 'école', limit: 5 })).tickets.map(
+          (hit) => hit.id,
+        ),
+      ).toEqual([école.ref.id])
+
       const source = db.source({ repo: 'states', teamKey: 'ENG', lifecycle })
       const ticket = await source.create({ title: 'Needle', body: 'Body' }, { state: 'Ready' })
       const hits = (state: string) =>

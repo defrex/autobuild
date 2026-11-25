@@ -390,26 +390,27 @@ export class PostgresTicketSource implements TicketSource {
       rows = await this.retry.run(
         this.sql,
         // `COLLATE "und-x-icu"` makes lower() ICU's root-locale full case
-        // mapping, which is what JS toLowerCase (the shared matcher) does; the
-        // database default (C or libc) folds differently. Keep both clauses;
-        // the Postgres search parity test exposes the difference. `strpos`
-        // keeps `%`, `_` and `\` literal, as `String.includes` does.
+        // mapping, which is what JS toLowerCase does: the shared matcher for
+        // terms, and `resolveState` and the seed for state names. The database
+        // default (C or libc) folds differently. Keep every clause; the
+        // Postgres search parity and state-parity tests expose the difference.
+        // `strpos` keeps `%`, `_` and `\` literal, as `String.includes` does.
         (q) => q`WITH existing AS (SELECT name FROM ab_ticket_states WHERE repo = ${this.repo}),
         names AS (
           SELECT name FROM existing
           UNION SELECT c FROM unnest(${q.array(this.configured, 'text')}) AS c
           UNION SELECT r FROM unnest(${q.array(roles, 'text')}) AS r
-            WHERE NOT EXISTS (SELECT 1 FROM existing e WHERE lower(btrim(e.name)) = lower(btrim(r)))),
+            WHERE NOT EXISTS (SELECT 1 FROM existing e WHERE lower(btrim(e.name) COLLATE "und-x-icu") = lower(btrim(r) COLLATE "und-x-icu"))),
         resolved AS (
           SELECT CASE
             WHEN ${state}::text IS NULL THEN NULL
             WHEN EXISTS (SELECT 1 FROM names WHERE name = ${state}::text) THEN ${state}::text
-            WHEN (SELECT count(*) FROM names WHERE lower(name) = lower(${state}::text)) = 1
-              THEN (SELECT name FROM names WHERE lower(name) = lower(${state}::text))
+            WHEN (SELECT count(*) FROM names WHERE lower(name COLLATE "und-x-icu") = lower(${state}::text COLLATE "und-x-icu")) = 1
+              THEN (SELECT name FROM names WHERE lower(name COLLATE "und-x-icu") = lower(${state}::text COLLATE "und-x-icu"))
           END AS state,
           (${state}::text IS NULL
             OR EXISTS (SELECT 1 FROM names WHERE name = ${state}::text)
-            OR (SELECT count(*) FROM names WHERE lower(name) = lower(${state}::text)) = 1) AS ok)
+            OR (SELECT count(*) FROM names WHERE lower(name COLLATE "und-x-icu") = lower(${state}::text COLLATE "und-x-icu")) = 1) AS ok)
         SELECT r.ok,
           CASE WHEN r.ok THEN NULL ELSE ARRAY(SELECT name FROM names) END AS state_names,
           h.readable_id, h.title, h.hit_state, h.labels, h.kind, h.search_number, h.target_readable_id
@@ -440,10 +441,12 @@ export class PostgresTicketSource implements TicketSource {
         this.lifecycle.doing,
         this.lifecycle.done,
       ])
-      resolveState(query.state!, names, 'database ticket source')
-      // Only reachable when JS and PostgreSQL case folding disagree on a name.
+      // Raises listReady's own unknown or ambiguous state error.
+      const resolved = resolveState(query.state!, names, 'database ticket source')
+      // Unreachable while both sides fold with ICU's root locale; never answer
+      // from a second statement, and never with a different state's hits.
       throw new Error(
-        `database ticket source: unknown state "${query.state}" — this tracker's states are ${names.join(', ')}`,
+        `database ticket source: state "${query.state}" resolves to "${resolved}" under JavaScript case folding but not under PostgreSQL's; search refused`,
       )
     }
     const hits = rows.filter((row) => row.readable_id !== null && row.readable_id !== undefined)
