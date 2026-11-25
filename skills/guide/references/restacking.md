@@ -30,7 +30,9 @@ defers new replay. A non-descendant without kernel lineage records
 previous SHA and observed SHA, retains the accepted target, and raises watch/wait
 attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
 clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
-Upstream force-pushes are never adopted automatically. Accepted node reparenting
+Upstream force-pushes are never adopted automatically. `ab build status` reports
+the `target.rewritten` wait, and names the base when the build's first provision
+adopted it from a pre-existing branch, a wait only abort clears. Accepted node reparenting
 starts a new branch scope; frozen transactions recover their retained inputs.
 
 Kernel restacks of a node are admitted through durable guarded publication
