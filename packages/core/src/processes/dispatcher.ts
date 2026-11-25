@@ -2724,7 +2724,7 @@ export class Dispatcher {
    * provider no longer matches the wired provider is likewise dispositioned
    * once idle: its trail is closed with an unconfirmed release fact (AUT-377)
    * — never a stop, since this dispatcher cannot reach a provider it is not
-   * wired to — and if the old provider returns, the next operator ensure()
+   * wired to — and if the old provider returns, the next sandbox.open
    * re-provisions and re-brackets the environment, so the disposition is
    * reachable again. The stage is a no-op unless `[orchestrator]` is
    * enabled and the wired provider hosts the capability; `unsupported`
@@ -2776,7 +2776,7 @@ export class Dispatcher {
           // every tick forever. Close the trail with an unconfirmed release —
           // never a stop: nothing was stopped through a provider this
           // dispatcher no longer owns. If the provider returns, the next
-          // operator ensure() re-provisions and re-brackets the environment.
+          // sandbox.open re-provisions and re-brackets the environment.
           await this.store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'orchestrator.sandbox.released',

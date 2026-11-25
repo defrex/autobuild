@@ -253,6 +253,30 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'sandbox.open': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'default',
+  },
+  'sandbox.status': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
+  'sandbox.close': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'default',
+  },
+  'sandbox.refresh': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'default',
+  },
   'sandbox.exec': {
     readOnlyHint: false,
     destructiveHint: false,

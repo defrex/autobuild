@@ -1626,7 +1626,8 @@ describe('agent tool registry contract', () => {
       layout: 'file',
       entries: [{ type: 'file', path: 'reference', content: new Uint8Array([1]) }],
     })
-    for (const name of reads) {
+    // sandbox.status is a read but, like every sandbox tool, absent here.
+    for (const name of reads.filter((name) => !name.startsWith('sandbox.'))) {
       const outcome = await registry.call(name, readInputs[name]).then(
         () => 'ok',
         (caught: unknown) => `${(caught as Error).name}: ${(caught as Error).message}`,
@@ -1808,7 +1809,7 @@ describe('agent tool registry contract', () => {
       name.startsWith('sandbox.'),
     )
     const names = (table: readonly { name: string }[]) => table.map((tool) => tool.name)
-    expect(sandboxNames).toHaveLength(7)
+    expect(sandboxNames).toHaveLength(11)
     expect(names(operatorToolTable()).filter((name) => name.startsWith('sandbox.'))).toEqual([])
     expect(names(operatorToolTable({ canPublish: false }))).toEqual(
       names(TOOLS).filter((name) => name !== 'sandbox.publish'),
