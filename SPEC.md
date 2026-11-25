@@ -2403,6 +2403,24 @@ latest deposited effective config enables `[orchestrator]`, with one bounded
 latest-artifact read per listing. Its tokens are bound to their RFC 8707
 resource: it accepts only tokens issued for it or for `/mcp`.
 
+Connected agents discover how to work from the captured agent context (§12)
+through the registry's `context.list` and `context.read` tools, so every
+binding serves it. The index names the skills with descriptions, the agent
+instructions with scopes, and which to load before operating and before ticket
+work. A read returns one file, found by path or by a relative link from another
+file. Each skill file that mentions `ab` commands starts with a generated
+preamble that maps every command to the tool that performs it, or marks it as
+build-session only, runnable in the sandbox, or a host task. The mapping comes
+from a checked-in CLI-equivalence table that a test holds to the registry and
+the help catalog. Agent instructions get a preamble framing them as the
+repository's own file, written for a checkout, whose conventions bind tickets,
+specs and answers and which win over Autobuild skills. Each binding also offers
+one MCP prompt per skill, with the same text, and appends the context to its
+server instructions. Hosted endpoints build those instructions only for an
+`initialize` request, at one latest-revision record read per repository in
+scope. A repository with no captured record is served the canonical skills
+bundled with the serving Autobuild, and the index and every preamble say so.
+
 ### 8.10 Hosted project connection
 
 `ab connect <service-url>` requests owner browser approval for the normalized
@@ -3271,7 +3289,8 @@ content for one commit.
   contributors, keep the last good revision, and appear in the tick report
   once per base head.
 
-Serving the record to connected agents is a separate concern from capturing it.
+Connected agents read the record through the context tools, prompts and server
+instructions of §8.9.
 
 ## 13. Ticket source policy
 

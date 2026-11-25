@@ -95,7 +95,7 @@ Every dispatcher, in checkout or origin mode, keeps a record of the repository's
 - **Revisions.** The record is a repository artifact, `agent-context`. A new revision is written only when the captured content changes, not on every base-branch commit. It is retention-managed like the dispatcher's run and config artifacts: the newest 200 revisions survive (`AB_ARTIFACT_RETENTION_MAX_REVISIONS` overrides the bound).
 - **Pacing.** Each dispatcher process checks the base head on its first tick, then at most once a minute. An unchanged head reads no tree, blob, record or event. A capture cut short by an invocation deadline keeps the bytes it fetched and resumes on the next invocation.
 - **Bounds.** A record over 2.25 MiB encoded (`oversize`) or 32 MiB uncompressed (`raw-oversize`) is not written. The last good revision stays, and the diagnostic names the largest contributors.
-- **Scope.** The dispatcher captures only. It adds no MCP tool or other retrieval surface for connected agents.
+- **Scope.** The dispatcher captures only. Connected agents read the record through the [agent-context tools and prompts](operator-api.md#agent-context).
 
 `ab dispatch` prints each diagnostic once:
 
