@@ -27,12 +27,26 @@ heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
 defers new replay. A non-descendant without kernel lineage records
 `target.rewritten` with branch,
-previous SHA and observed SHA, retains the accepted target, and raises watch/wait
-attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
-clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
-Upstream force-pushes are never adopted automatically. `ab build status` reports
-the `target.rewritten` wait, and names the base when the build's first provision
-adopted it from a pre-existing branch, a wait only abort clears. Accepted node reparenting
+previous SHA and observed SHA, and retains the accepted target. Repeated rewrite
+pairs are deduplicated. Returning to a safe target clears the wait
+(`target.rewrite-cleared` when the accepted tip is unchanged). Upstream
+force-pushes are never adopted on top of existing work automatically:
+
+- A leaf with no work of its own (no published head, no PR, no commits beyond
+  its base in use) is reprovisioned from the current target by its next runner,
+  without operator action: `target.rewrite-reprovision-prepared`, a branch
+  reset, then `target.rewrite-recovered` (`reprovisioned`). A runner that dies
+  mid-reset completes it forward.
+- A leaf with work raises one `policy/target-rewritten` escalation per episode
+  (a run of rewrites of the same rejected base), naming that base, the new
+  target head and its own commits. `ab answer <slug> --accept-target` waives
+  the rejected base (`target.rewrite-recovered`, `accepted`) and restacks its
+  own commits onto the target at the next replay boundary; `ab abort` is the
+  other way out.
+- A node waits, and raises watch/wait attention once per episode.
+
+`ab build status` names a leaf's recovery state, and the base when the build's
+first provision adopted it from a pre-existing branch. Accepted node reparenting
 starts a new branch scope; frozen transactions recover their retained inputs.
 
 Kernel restacks of a node are admitted through durable guarded publication

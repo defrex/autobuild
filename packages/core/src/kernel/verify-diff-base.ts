@@ -31,6 +31,11 @@ export const verifyDiffBaseReducer = defineReducer<
         acc.promoted = event.payload.targetBase
       } else if (event.type === 'restack.advanced') {
         acc.promoted = event.payload.to
+      } else if (
+        event.type === 'target.rewrite-recovered' &&
+        event.payload.recovery === 'reprovisioned'
+      ) {
+        acc.promoted = event.payload.sha
       } else if (event.type === 'reconcile.superseded') {
         // An abandoned occurrence's base never promotes.
         delete acc.pendingReconcileBase

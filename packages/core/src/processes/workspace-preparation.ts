@@ -53,6 +53,8 @@ export function decisionUsesWorkspace(decision: Decision): boolean {
     case 'skip-verify':
     case 'check-reconcile-progress':
     case 'raise-escalation':
+    case 'recover-target-rewrite':
+    case 'accept-target-rewrite':
       return false
     default: {
       const unclassified: never = decision

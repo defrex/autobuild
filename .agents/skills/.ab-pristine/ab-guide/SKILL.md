@@ -1598,7 +1598,8 @@ while `round` remains occurrence scope. Answering a runner-failure cause re-arms
 only its matching phase and round. The phase-level `verify-failure-limit` cause
 explicitly re-arms all rounds for its verify target, while
 `reconcile-no-progress`, `publication-retry-limit`, `wait-unresolvable`,
-`measurement-failed` and the setup-only cause reset no phase-runner failures.
+`measurement-failed`, `target-rewritten` and the setup-only cause reset no
+phase-runner failures.
 The closed cause map forces every future policy condition to choose one of these
 semantics instead of inheriting behavior from a missing `round`. Runner failures
 while checking progress or refreshing the base therefore remain counted after a
@@ -2941,6 +2942,7 @@ to the build's event log and apply the same write-time checks.
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
+| Accept a rewritten target | `ab answer <slug> --accept-target [--store <ref>]` | CLI or MCP `builds.answer` with `resolution: accept-target`; answers only a leaf's `policy/target-rewritten` escalation, which other answer forms skip. | One `escalation.answered` with `resolution: accept-target`, then kernel `target.rewrite-recovered {recovery: accepted}` and a restack onto the current target |
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
 | Reopen a finished leaf | `ab reopen <slug> [--feedback <text>] [--revise-spec <file> \| --revise-spec-from-ticket] [--store <ref>]` | CLI/tool request (`builds.reopen`); only for a leaf waiting for its merge decision. Feedback alone returns to implement; a spec revision restarts from plan; the PR and branch are kept. | `build.reopened`; with a spec, kernel `spec.revised` with operator provenance |
@@ -3834,8 +3836,19 @@ and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.
 ## Forge failure recovery
 
 Destination observation uses authoritative remote tips and fails closed on read
-or ancestry errors. External rewrites retain the accepted target and raise
-`target.rewritten` attention. Kernel node restacks instead require durable
+or ancestry errors. External rewrites record `target.rewritten` and retain the
+accepted target; nothing adopts them on top of existing work automatically:
+
+- A leaf with no work of its own (no published head, no PR, no commits beyond
+  its base) is reprovisioned from the current target by its next runner,
+  without operator action (`target.rewrite-recovered`, `reprovisioned`).
+- A leaf with work raises one `policy/target-rewritten` escalation per episode
+  (a run of rewrites of the same rejected base) naming that base, the new
+  target head and its own commits. `ab answer <slug> --accept-target` restacks
+  those commits onto the current target; `ab abort` is the other way out.
+- A node waits and raises `target.rewritten` attention once per episode.
+
+Kernel node restacks instead require durable
 guarded publication receipts: the dispatcher proves at most 64 indexed hops per
 baseline and records them in `target.moved.lineage` for scoped runners. Missing
 proof or a longer gap still raises attention. See

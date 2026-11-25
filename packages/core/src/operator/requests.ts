@@ -118,24 +118,26 @@ export function answerAction(request: OperatorAnswerRequest): {
         ? { kind: 'answer' }
         : request.resolution === 'dismiss'
           ? { kind: 'answer', text: request.text, resolve: { kind: 'dismiss-finding' } }
-          : request.resolution === 'review-round-ceiling'
-            ? { kind: 'answer', text: request.text, reviewRoundCeiling: request.ceiling }
-            : {
-                kind: 'answer',
-                text: request.text,
-                ...(request.ceiling !== undefined ? { reviewRoundCeiling: request.ceiling } : {}),
-                resolve: {
-                  kind: 'revise-spec',
-                  body:
-                    request.origin === 'body'
-                      ? {
-                          kind: 'supplied',
-                          origin: 'operator API body',
-                          read: async () => request.body,
-                        }
-                      : { kind: 'ticket' },
-                },
-              }
+          : request.resolution === 'accept-target'
+            ? { kind: 'answer', text: request.text, resolve: { kind: 'accept-target' } }
+            : request.resolution === 'review-round-ceiling'
+              ? { kind: 'answer', text: request.text, reviewRoundCeiling: request.ceiling }
+              : {
+                  kind: 'answer',
+                  text: request.text,
+                  ...(request.ceiling !== undefined ? { reviewRoundCeiling: request.ceiling } : {}),
+                  resolve: {
+                    kind: 'revise-spec',
+                    body:
+                      request.origin === 'body'
+                        ? {
+                            kind: 'supplied',
+                            origin: 'operator API body',
+                            read: async () => request.body,
+                          }
+                        : { kind: 'ticket' },
+                  },
+                }
   return {
     action,
     ...(request.resolution === 'revise-spec' && request.origin === 'ticket'

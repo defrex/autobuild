@@ -47,6 +47,7 @@ import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer
 import { stalledChains, type FindingChain } from './stall'
 import { pendingWaitRequest, waitGuidance, waitResumeRestackCycle } from './ticket-wait'
 import { leafRestackedBase } from './leaf-restack-state'
+import { acceptedRewriteBoundary } from './leaf-restack-base'
 import {
   baselineMeasurementDue,
   pendingMeasurementRequest,
@@ -113,6 +114,12 @@ export type Decision =
       cycle: number
     }
   | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
+  /** A leaf parked on a rewritten target (or holding an open no-work reset)
+   * with no target-rewrite escalation in this episode: the runner proves
+   * whether it has work, then reprovisions it or escalates. */
+  | { kind: 'recover-target-rewrite' }
+  /** The episode's target-rewrite escalation was answered `accept-target`. */
+  | { kind: 'accept-target-rewrite'; escalation: string }
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
   | {
@@ -291,8 +298,25 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     return { kind: 'wait', reason: 'awaiting-spec' }
 
   // Frozen transactions retain their original destination and may recover.
-  if (state.targetRewrite && !log.restack.active && !state.nodeRestack?.active)
-    return { kind: 'wait', reason: 'target-rewritten' }
+  // A leaf leaves the wait by itself (SPEC §7.4): with no work it is
+  // reprovisioned from the current target; with work it raises one escalation
+  // per episode, which an operator answers with accept-target or abort. An
+  // open no-work reset is completed before any phase work even after the
+  // rewrite cleared, because its workspace mutation may already have run.
+  const reprovision = state.kind === 'node' ? undefined : log.restack.reprovision
+  if ((state.targetRewrite || reprovision) && !log.restack.active && !state.nodeRestack?.active) {
+    if (state.kind === 'node' || state.openEscalations.length > 0)
+      return { kind: 'wait', reason: 'target-rewritten' }
+    const since = state.targetRewrite
+      ? (state.targetRewriteSince ?? state.targetRewrite.seq)
+      : reprovision!.seq
+    const latest = state.answeredEscalations.findLast(
+      (e) => e.source === 'policy' && e.policyCause === 'target-rewritten' && e.seq > since,
+    )
+    if (latest?.resolution === 'accept-target')
+      return { kind: 'accept-target-rewrite', escalation: latest.id }
+    return { kind: 'recover-target-rewrite' }
+  }
 
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).
@@ -512,7 +536,11 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // the union is the complete durable deduplication history. Both dimensions
   // must match: a later raise for another source or target cannot repair this
   // condition's crash gap or acknowledge its exhausted budget.
-  const allRaised = [...state.openEscalations, ...state.answeredEscalations]
+  // A target-rewrite raise belongs to its own episode, never to another
+  // condition's dedup history for the same phase, and the reverse.
+  const allRaised = [...state.openEscalations, ...state.answeredEscalations].filter(
+    (e) => e.policyCause !== 'target-rewritten',
+  )
   const raisedAfter = (seq: number, source: EscalationSource, phase: EscalationTarget): boolean =>
     allRaised.some(
       (e) => e.seq > seq && e.source === source && e.phase === phase && e.deferral === undefined,
@@ -564,7 +592,15 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // selection's `stageCycle` above shares these inputs. Replay identity
   // remains separate: refreshing config or resuming a wait neither restacks
   // the workspace again nor discards its post-reconcile policy.
-  const replayBoundary = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
+  // An accepted rewritten target opens a replay boundary like a completed
+  // reconcile: the build's own commits restack onto the current target before
+  // any further verification.
+  const acceptedBoundary = acceptedRewriteBoundary(log) ?? 0
+  const replayBoundary = Math.max(
+    log.code.latestApproveSeq,
+    log.lastReconcileCompletedSeq,
+    acceptedBoundary,
+  )
   const cycleBoundary = leafVerifyCycleInputs(log)
   const cycleResults = log.verifyCompleted.filter((v) => v.seq > cycleBoundary)
   const cycleFails = cycleResults.filter((v) => v.outcome === 'fail')
@@ -718,7 +754,9 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   }
   if (
     log.restack.gates[String(replayBoundary)] === undefined &&
-    (log.restack.finalizedAt ?? 0) < replayBoundary &&
+    // A pending finalize owner that publishes and then finishes finalize
+    // still restacks onto the accepted target before landing.
+    ((log.restack.finalizedAt ?? 0) < replayBoundary || replayBoundary === acceptedBoundary) &&
     !log.verifyStarted.some((v) => v.seq > replayBoundary) &&
     !log.verifyCompleted.some((v) => v.seq > replayBoundary)
   ) {

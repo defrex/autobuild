@@ -48,6 +48,8 @@ const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'collecting', 'pause
 export const BARE_RETRY_ANSWER = 'Operator requested a bare retry with no feedback'
 export const DISMISSAL_ANSWER = 'Operator dismissed the cited findings with no feedback'
 export const SPEC_REVISION_ANSWER = 'Operator replaced the spec; the build restarts from plan'
+export const ACCEPT_TARGET_ANSWER =
+  "Operator accepted the rewritten target; the build's own commits restack onto it"
 
 /** Both forms are lazy: completing an earlier authorization must not open the
  * replacement source supplied to the retrying invocation. */
@@ -58,6 +60,8 @@ export type SpecBodySource =
 export type AnswerResolutionRequest =
   | { kind: 'dismiss-finding' }
   | { kind: 'revise-spec'; body: SpecBodySource }
+  /** Answers only a leaf's `policy/target-rewritten` escalation. */
+  | { kind: 'accept-target' }
 
 export type BuildControlAction =
   | {
@@ -129,7 +133,7 @@ export type BuildControlResult =
       kind: 'answered'
       slug: string
       count: number
-      resolution: 'guidance' | 'retry' | 'dismiss-finding' | 'revise-spec'
+      resolution: 'guidance' | 'retry' | 'dismiss-finding' | 'revise-spec' | 'accept-target'
       resumed: boolean
       nodeRevision?: boolean
       specRev?: number
@@ -284,10 +288,33 @@ function rejectCancelledAnswer(state: BuildState, captured?: Set<string>): void 
     )
 }
 
+function isTargetRewrite(item: OpenEscalation): boolean {
+  return item.source === 'policy' && item.policyCause === 'target-rewritten'
+}
+
+/** The selected open escalations guidance, retry, dismiss and revise-spec
+ * answers resolve. A target-rewritten escalation is answered only by
+ * `--accept-target` or an abort. */
 function selectedOpen(state: BuildState, captured?: Set<string>): OpenEscalation[] {
+  return selectedAll(state, captured).filter((item) => !isTargetRewrite(item))
+}
+
+function selectedAll(state: BuildState, captured?: Set<string>): OpenEscalation[] {
   return captured === undefined
     ? state.openEscalations
     : state.openEscalations.filter((item) => captured.has(item.id))
+}
+
+/** Refuse an ordinary answer when only target-rewritten escalations block. */
+function rejectTargetRewriteOnly(slug: string, state: BuildState, captured?: Set<string>): void {
+  const selected = selectedAll(state, captured)
+  if (selected.length > 0 && selected.every(isTargetRewrite))
+    throw new BuildControlError(
+      'no-open-escalations',
+      `build "${slug}" is blocked only by a target-rewritten escalation; answer it with ` +
+        `ab answer ${slug} --accept-target to restack the build onto its current target, ` +
+        `or ab abort ${slug}`,
+    )
 }
 
 function reviewRoundLimitEscalation(
@@ -788,6 +815,57 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
       const guidance = (opts.action.text ?? '').trim()
       const actor = humanActor(user, opts.via)
       const requestedCeiling = opts.action.reviewRoundCeiling
+
+      if (opts.action.resolve?.kind === 'accept-target') {
+        if (requestedCeiling !== undefined)
+          throw new BuildControlError(
+            'incompatible-answer-options',
+            'cannot combine a review round ceiling with --accept-target; nothing was recorded',
+          )
+        if (hasPendingAbort(state)) throw abortPending(opts.slug)
+        const selected = selectedAll(state, captured).filter(isTargetRewrite)
+        if (selected.length === 0)
+          throw new BuildControlError(
+            'no-open-escalations',
+            `build "${opts.slug}" has no open target-rewritten escalation; --accept-target ` +
+              'answers only that escalation',
+          )
+        const answer = guidance === '' ? ACCEPT_TARGET_ANSWER : guidance
+        const alsoPaused = state.status === 'paused'
+        let answeredCount = 0
+        for (const escalation of selected) {
+          for (;;) {
+            const fresh = (await readBuildFacts(opts.store, opts.slug)).value.state
+            assertStillActive(opts.slug, fresh)
+            if (hasPendingAbort(fresh)) throw abortPending(opts.slug)
+            if (!fresh.openEscalations.some((item) => item.id === escalation.id)) break
+            if (
+              await opts.store.appendIfCurrent(opts.slug, fresh.lastSeq, {
+                actor,
+                type: 'escalation.answered',
+                payload: { id: escalation.id, answer, resolution: 'accept-target' },
+              })
+            ) {
+              answeredCount += 1
+              break
+            }
+          }
+        }
+        if (alsoPaused)
+          await opts.store.append(opts.slug, {
+            actor,
+            type: 'build.resume-requested',
+            payload: {},
+          })
+        return {
+          kind: 'answered',
+          slug: opts.slug,
+          count: answeredCount,
+          resolution: 'accept-target',
+          resumed: alsoPaused,
+        }
+      }
+      if (state.kind !== 'node') rejectTargetRewriteOnly(opts.slug, state, captured)
       if (
         requestedCeiling !== undefined &&
         (!Number.isInteger(requestedCeiling) || requestedCeiling <= 0)

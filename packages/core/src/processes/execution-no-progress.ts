@@ -37,6 +37,8 @@ export const executionProgress = {
   'target.rewritten': 'bookkeeping',
   'target.rewrite-cleared': 'bookkeeping',
   'target.moved': 'bookkeeping',
+  'target.rewrite-reprovision-prepared': 'bookkeeping',
+  'target.rewrite-recovered': 'progress',
   'head.paths-recorded': 'bookkeeping',
   'restack.prepared': 'progress',
   'restack.replayed': 'progress',

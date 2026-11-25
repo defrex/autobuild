@@ -9264,3 +9264,72 @@ export async function webAnalyticsReadBudget(): Promise<
     expect(flat(results[10_000]![name]!)).toEqual(flat(results[100]![name]!))
   return results
 }
+
+/** A leaf whose rejected base an operator's accept-target waived
+ * (`target.rewrite-recovered` with `accepted`): repeated idle observations of
+ * the unchanged accepted target, by the dispatcher and by a runner enforcing
+ * its used baseline, append nothing and read zero event rows at 100 and
+ * 100,000 events. The waiver comes from the reduced value already read. */
+export async function waivedTargetObservationReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { steppingClock } = await import('./fixed')
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const waivedSlug = 'waived-target'
+  const old = 'a'.repeat(40)
+  const rewritten = 'b'.repeat(40)
+  const forge = new FakeForge()
+  forge.seedCommit(old)
+  forge.seedCommit(rewritten)
+  await store.createBuild({ slug: waivedSlug, repo })
+  await store.append(waivedSlug, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: { provider: 'fake', ref: '/ws', branch: 'ab/w', base: { source: 'remote', sha: old } },
+  })
+  await store.append(waivedSlug, {
+    actor: KERNEL,
+    type: 'target.rewritten',
+    payload: { branch: 'main', previousSha: old, sha: rewritten },
+  })
+  await store.append(waivedSlug, {
+    actor: KERNEL,
+    type: 'target.rewrite-recovered',
+    payload: {
+      branch: 'main',
+      previousSha: old,
+      sha: rewritten,
+      base: old,
+      recovery: 'accepted',
+      escalation: 'esc-1',
+    },
+  })
+  for (const length of [100, 100_000]) {
+    await seedBuildFiller(store, waivedSlug, length)
+    const metrics = { historicalRows: 0, tailRows: 0 }
+    const boundary = buildEventRows(store, waivedSlug).at(-1)!.seq
+    // Warm the reduced value over the new tail once.
+    await readBuildFacts(store, waivedSlug)
+    const undo = instrumentBuildRows(store, waivedSlug, () => boundary, metrics)
+    try {
+      for (const enforceUsedBaseline of [false, true, false, true]) {
+        const requests = await countStoreRequests(store, async () => {
+          expect(
+            await observeTarget({
+              store,
+              forge,
+              slug: waivedSlug,
+              branch: 'main',
+              sha: rewritten,
+              enforceUsedBaseline,
+              actor: KERNEL,
+            }),
+          ).toBe('unchanged')
+        })
+        expect(requests.appendIfCurrent ?? 0).toBe(0)
+      }
+    } finally {
+      undo()
+    }
+    expect(metrics).toEqual({ historicalRows: 0, tailRows: 0 })
+  }
+}

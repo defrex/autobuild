@@ -4,6 +4,7 @@ import { KERNEL } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { readBuildFacts } from '../store/reduced-reads'
 import { observeTarget } from './target-observation'
+import { waivedTargetObservationReadBudget } from '../testing/reduced-read-budget'
 
 const A = 'a'.repeat(40),
   B = 'b'.repeat(40),
@@ -300,3 +301,53 @@ test('clearing an unchanged target retains newly proven lineage for scoped recov
   expect(await observeTarget({ ...input, store: store.scopeBuild(BUILD) })).toBe('unchanged')
   expect((await store.getEvents(BUILD)).filter((e) => e.type === 'target.moved')).toHaveLength(1)
 })
+
+test('a waived leaf base admits a non-descendant target; other baselines and branches still reject', async () => {
+  const { store, forge, observe } = await fixture()
+  const D = 'd'.repeat(40)
+  const E = 'e'.repeat(40)
+  forge.seedCommit(D)
+  forge.seedCommit(E, [C])
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'fake',
+      ref: '/ws',
+      branch: 'ab/test',
+      base: { source: 'remote', sha: B },
+    },
+  })
+  const accept = (branch: string) =>
+    store.append(BUILD, {
+      actor: KERNEL,
+      type: 'target.rewrite-recovered',
+      payload: { branch, previousSha: B, sha: C, base: B, recovery: 'accepted', escalation: 'e' },
+    })
+  const observeUsed = (sha: string) =>
+    observeTarget({
+      store,
+      forge,
+      slug: BUILD,
+      branch: 'main',
+      sha,
+      enforceUsedBaseline: true,
+      actor: KERNEL,
+    })
+  expect(await observe(B)).toBe('moved')
+  expect(await observeUsed(C)).toBe('rejected')
+  // A waiver on another branch is ignored: the base in use B still rejects.
+  await accept('other')
+  expect(await observeUsed(E)).toBe('rejected')
+  // Waived on main, B no longer rejects a target that does not descend from it.
+  await accept('main')
+  expect(await observeUsed(E)).toBe('moved')
+  // Any other non-ancestor baseline (the accepted target) still rejects.
+  expect(await observeUsed(D)).toBe('rejected')
+  const facts = (await readBuildFacts(store, BUILD)).value
+  expect(facts.state.targetRewrite?.payload).toEqual({ branch: 'main', previousSha: E, sha: D })
+})
+
+test('an idle observation of a waived leaf reads zero event rows', async () => {
+  await waivedTargetObservationReadBudget()
+}, 60_000)
