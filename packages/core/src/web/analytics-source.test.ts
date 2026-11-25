@@ -183,3 +183,64 @@ test('a timeline read racing a change never caches the stale value', async () =>
 test('analytics read a bounded, change-proportional set of saved values', async () => {
   await webAnalyticsReadBudget()
 }, 120_000)
+
+test('a failed timeline read holds the request until its sibling reads settle', async () => {
+  const position = { value: '1' }
+  const { reader } = cannedReader(position)
+  const record = (slug: string) => ({ slug, repo: REPO, createdAt: '', updatedAt: '' })
+  const timeline = (category: string) => ({
+    version: 1,
+    cursor: 0,
+    value: { kind: 'work', segments: [{ category, start: '', state: 'open' }] } as never,
+  })
+  let reached!: () => void
+  let release!: () => void
+  const siblingStarted = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let stale = true
+  reader.listBuildsPage = async () => ({ builds: [record('a'), record('b')], next: null })
+  reader.listBuildsChangedSince = async () => ({
+    position: position.value,
+    builds: [{ slug: 'b', position: position.value }],
+  })
+  reader.getBuild = async (slug) => record(slug)
+  const base = reader.getReducerValue
+  reader.getReducerValue = async (scope, request) => {
+    if (scope.kind !== 'build') return base(scope, request)
+    if (scope.slug === 'a') {
+      await siblingStarted
+      throw new Error('temporary store failure')
+    }
+    if (!stale) return timeline('implement')
+    stale = false
+    reached()
+    await held
+    return timeline('plan')
+  }
+  const source = new WebAnalyticsSource(reader, REPO)
+  const failing = source.analytics(query('outcome=all&kind=all'))
+  const outcome = failing.then(
+    () => 'answered',
+    (error: Error) => error.message,
+  )
+  await siblingStarted
+  // Build b changes while its old read is still in flight.
+  position.value = '2'
+  const fresh = source.timeline('b')
+  // Long enough for the next request to run if the failed one let it.
+  const flush = async () => {
+    for (let i = 0; i < 200; i++) await Promise.resolve()
+  }
+  await flush()
+  release()
+  expect(await outcome).toBe('temporary store failure')
+  const category = async (row: Promise<{ segments: { category: string }[] } | null>) =>
+    (await row)?.segments[0]?.category
+  expect(await category(fresh)).toBe('implement')
+  await flush()
+  expect(await category(source.timeline('b'))).toBe('implement')
+})
