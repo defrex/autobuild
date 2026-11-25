@@ -196,10 +196,17 @@ bun add -d --exact @defrex/autobuild@1.0.0-beta.0
 ## Tell issue reporters it shipped
 
 Issues close when their PR merges, which is before the fix is installable. After
-a **stable** release, comment on every GitHub issue that release resolves, so
-whoever filed it (a person, or an agent working in another project) learns
-which version to install. This is part of the release: do it without being
-asked, and report what you posted.
+a **stable** release, comment on every resolved GitHub issue that someone
+*reported*, so the reporter learns which version to install. This is part of
+the release: do it without being asked, and report what you posted.
+
+The audience is reporters, not Autobuild itself. This repository's tickets are
+GitHub issues too. Any issue carrying the `autobuild` label was filed by
+Autobuild or its operator as build work, so it never gets a comment, however
+many of them a release closes. Do not infer anything from the author. A report
+filed under @defrex's account usually comes from the Autobuild operator agent
+of another project using this one. Those reporters are effectively customers,
+and they get the comment like anyone else.
 
 Skip this for prereleases. The stable release that follows consumes the same
 changelog entries and notifies once.
@@ -222,14 +229,17 @@ while read -r pr; do
     | unique | .[]'
 done | sort -un |
 while read -r issue; do
-  gh issue view "$issue" --json number,state,stateReason,author,url,comments --jq \
-    "\"#\(.number) \(.state) \(.stateReason) by \(.author.login) \(.url) notified=\([.comments[].body | select(contains(\"/releases/tag/$V\"))] | length)\""
+  gh issue view "$issue" --json number,state,stateReason,author,url,labels,comments --jq \
+    "\"#\(.number) \(.state) \(.stateReason) by \(.author.login) \(.url) autobuild=\([.labels[].name] | index(\"autobuild\") != null) notified=\([.comments[].body | select(contains(\"/releases/tag/$V\"))] | length)\""
 done
 ```
 
 Comment on an issue only when all of these hold:
 
 - Its URL is an issue, not a pull request (`Refs #N` can name a PR).
+- `autobuild=false`. An issue with the `autobuild` label is Autobuild's own
+  ticket, so skip it silently and leave it out of the report. Only its count
+  belongs in the report.
 - It is `CLOSED` with reason `COMPLETED`. An issue that is still open was only
   partly addressed (`Refs`), so it gets no comment; name it in your report
   instead. An issue closed as not planned gets none either.
@@ -250,8 +260,8 @@ Keep the release URL in the body exactly as shown: it is the marker the
 the maintainer's account; a maintainer posting by hand drops it. Do not
 reopen, close, relabel or otherwise change the issue.
 
-Finish by telling the maintainer which issues were notified, which were
-skipped, and why.
+Finish by telling the maintainer which reported issues were notified, which
+were skipped and why, and how many `autobuild`-labelled issues were ignored.
 
 Build entries live in `.changelog/<PR-number>.md`; nobody edits Unreleased by
 hand for a build. Existing Unreleased entries remain compatibility inputs for
