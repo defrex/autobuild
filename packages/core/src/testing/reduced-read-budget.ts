@@ -8006,6 +8006,11 @@ export async function agentContextReadBudget(): Promise<void> {
   const { encodeAgentContext, readAgentContext, AGENT_CONTEXT_ARTIFACT } = await import(
     '../store/agent-context'
   )
+  const { buildRegistry } = await import('../operator/registry')
+  const canonical = async () => ({
+    version: '0.0.0-budget',
+    skills: [{ installName: 'ab-x', files: [{ path: 'SKILL.md', content: '# x' }] }],
+  })
   const head = 'a'.repeat(40)
   const unchangedHeadCost = async (events: number) => {
     const store = new MemoryBuildStore()
@@ -8084,17 +8089,44 @@ export async function agentContextReadBudget(): Promise<void> {
         metadata: { digest: encoded.digest },
       })
     }
-    const metrics = await measureStoreReads(store, async () => {
+    const measure = async (read: () => Promise<unknown>) => {
+      const metrics = await measureStoreReads(store, async () => {
+        await read()
+      })
+      const calls = Object.fromEntries(
+        Object.entries(metrics.calls).filter(([name]) => name !== 'repoState'),
+      )
+      return { calls, rows: metrics.rows + metrics.repoRows }
+    }
+    const record = await measure(async () => {
       expect((await readAgentContext(store, repo))?.meta.revision).toBe(revisions - 1)
     })
-    const calls = Object.fromEntries(
-      Object.entries(metrics.calls).filter(([name]) => name !== 'repoState'),
-    )
-    return { calls, rows: metrics.rows + metrics.repoRows }
+    // The context tools serve the same record: one latest-revision read each.
+    const registry = buildRegistry({ store, canonicalSkills: canonical })
+    const list = await measure(() => registry.call('context.list', { repo }))
+    const read = await measure(() => registry.call('context.read', { repo, path: 'AGENTS.md' }))
+    return { record, list, read }
   }
-  const one = await latestCost(1)
-  expect(one).toEqual({ calls: { getRepoArtifact: 1 }, rows: 0 })
-  expect(await latestCost(1_000)).toEqual(one)
+  const one = { calls: { getRepoArtifact: 1 }, rows: 0 }
+  expect(await latestCost(1)).toEqual({ record: one, list: one, read: one })
+  expect(await latestCost(1_000)).toEqual({ record: one, list: one, read: one })
+
+  // With no record: the same one (null) read, then the injected bundle.
+  const empty = new MemoryBuildStore()
+  await empty.ensureRepo('agent-context-none')
+  const registry = buildRegistry({ store: empty, canonicalSkills: canonical })
+  for (const [name, input] of [
+    ['context.list', { repo: 'agent-context-none' }],
+    ['context.read', { repo: 'agent-context-none', path: '.agents/skills/ab-x/SKILL.md' }],
+  ] as const) {
+    const metrics = await measureStoreReads(empty, async () => {
+      await registry.call(name, input)
+    })
+    const calls = Object.fromEntries(
+      Object.entries(metrics.calls).filter(([call]) => call !== 'repoState'),
+    )
+    expect({ calls, rows: metrics.rows + metrics.repoRows }).toEqual(one)
+  }
 }
 
 /** Count the build records and digest entries callers receive from a memory
