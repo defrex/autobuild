@@ -3,7 +3,10 @@ import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { MemoryBuildStore } from '../store/memory'
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { manualClock } from '../testing/fixed'
-import { operatorSandboxCallReadBudget } from '../testing/reduced-read-budget'
+import {
+  operatorSandboxCallReadBudget,
+  operatorSandboxStatusReadBudget,
+} from '../testing/reduced-read-budget'
 import type { OperatorSandboxService } from './sandbox'
 import { createOperatorSandboxResolver, SandboxUnavailableError } from './sandbox-resolver'
 
@@ -18,6 +21,17 @@ test('a sandbox call costs the same store reads at 1 and 1,000 effective-config 
   for (const run of [one, many]) {
     expect(run.issued).toBe(1)
     expect(run.composed).toBe(1)
+  }
+})
+
+test('sandbox.status costs the same at 10 and 5,000 journal events and reads no rows when unchanged', async () => {
+  const short = await operatorSandboxStatusReadBudget({ history: 10 })
+  const long = await operatorSandboxStatusReadBudget({ history: 5000 })
+  expect(long.callVector).toEqual(short.callVector)
+  expect(long.rows).toBe(short.rows)
+  for (const run of [short, long]) {
+    expect(run.repoRows).toBe(0)
+    expect(run.appended).toBe(0)
   }
 })
 

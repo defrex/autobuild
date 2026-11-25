@@ -118,18 +118,22 @@ describe('createHostedOperatorSandboxService', () => {
     // The git-worktree provider publishes through host git from the sandbox
     // worktree, so with the forge wired every sandbox tool serves.
     expect(tools.sort()).toEqual([
+      'sandbox.close',
       'sandbox.exec',
+      'sandbox.open',
       'sandbox.publish',
       'sandbox.read_file',
+      'sandbox.refresh',
       'sandbox.reset',
       'sandbox.start',
+      'sandbox.status',
       'sandbox.wait',
       'sandbox.write_file',
     ])
     expect(service.canPublish).toBe(true)
   })
 
-  test('composes the vercel-sandbox builtin with an OIDC credential: seven tools and canPublish true', async () => {
+  test('composes the vercel-sandbox builtin with an OIDC credential: every sandbox tool and canPublish true', async () => {
     const forge = new FakeForge()
     const { store, service } = await compose({
       workspace: 'vercel-sandbox',
@@ -139,11 +143,15 @@ describe('createHostedOperatorSandboxService', () => {
     const registry = buildRegistry({ store, sandbox: service })
     const tools = sandboxToolNames(registry.entries)
     expect(tools.sort()).toEqual([
+      'sandbox.close',
       'sandbox.exec',
+      'sandbox.open',
       'sandbox.publish',
       'sandbox.read_file',
+      'sandbox.refresh',
       'sandbox.reset',
       'sandbox.start',
+      'sandbox.status',
       'sandbox.wait',
       'sandbox.write_file',
     ])
