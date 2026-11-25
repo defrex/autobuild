@@ -140,8 +140,11 @@ test('published pages keep navigation on-site and link only declared repository 
       'docs/configuration-overview.md',
       ['docs/configuration.md#local-overrides-autobuildlocaltoml'],
     ],
-    ['docs/dispatcher.md', ['docs/configuration.md#policy']],
-    ['docs/operating.md', ['docs/operator-api.md', 'docs/configuration.md#hooks']],
+    ['docs/dispatcher.md', ['docs/configuration.md#policy', 'docs/operator-api.md#agent-context']],
+    [
+      'docs/operating.md',
+      ['docs/operator-api.md', 'docs/operator-api.md#agent-context', 'docs/configuration.md#hooks'],
+    ],
     [
       'docs/optimization-nodes.md',
       [
