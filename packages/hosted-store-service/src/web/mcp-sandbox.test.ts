@@ -172,6 +172,7 @@ const PARITY_INPUTS: Record<string, Record<string, unknown>> = {
   'repository.forge_clear': { ...ref, forge: 'github', reason: 'parity' },
   'repository.status': ref,
   'repository.events': { ...ref, waitSeconds: 0, filter: 'all' },
+  'repository.attention': ref,
   'repository.settings': { ...ref, setting: 'intake', enabled: true },
   'repository.bulk_control': { ...ref, action: 'resume' },
   'harvest.status': ref,

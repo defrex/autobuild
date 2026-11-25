@@ -474,10 +474,7 @@ test('every repository attention type resolves through a specific tool', () => {
   ]
   for (const [event, tool] of cases) {
     const resolve = repositoryEventResolution(event as RepositoryEvent, REPO)
-    expect({ type: event.type, tool: resolve[0]!.tool }).toEqual({
-      type: event.type,
-      tool,
-    })
+    expect([event.type, resolve[0]!.tool as string]).toEqual([event.type, tool])
     expect(resolve[0]!.note).not.toBe(UNMAPPED_EVENT_NOTE)
   }
 })
