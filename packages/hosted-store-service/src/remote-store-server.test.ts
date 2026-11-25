@@ -254,6 +254,29 @@ describe('wire robustness', () => {
     })
   })
 
+  test('open-builds answers before the existence gate and only for GET', async () => {
+    const backing = new MemoryBuildStore()
+    const server = createStoreServer({ store: backing })
+    const call = (method: string) =>
+      server.fetch(
+        new Request('http://store.test/repos/acme%2Fopen/open-builds', { method, headers }),
+      )
+    const empty = await call('GET')
+    expect(empty.status).toBe(200)
+    expect(await empty.json()).toEqual([])
+    const post = await call('POST')
+    expect(post.status).toBe(404)
+    expect(await post.json()).toMatchObject({
+      kind: 'not-found',
+      error: 'no route: POST /repos/:repo/open-builds',
+    })
+    await backing.createBuild(sampleBuildInput('open-1', { repo: 'acme/open' }))
+    const { store } = bridge({ store: backing })
+    expect(await store.listOpenBuilds('acme/open')).toEqual(
+      await backing.listOpenBuilds('acme/open'),
+    )
+  })
+
   test('unknown routes → 404 {kind: "not-found"}', async () => {
     const server = createStoreServer({ store: new MemoryBuildStore() })
     const response = await server.fetch(new Request('http://store.test/nope'))
