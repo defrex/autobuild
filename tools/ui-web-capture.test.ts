@@ -22,13 +22,16 @@ const PAGES = [
   'build-waiting',
   'build-finished',
   'build-missing',
+  'analytics',
+  'analytics-all',
+  'analytics-empty',
   'unknown',
 ]
 
 test('every page is captured at both grounds and both widths', () => {
   const variants = uiWebVariants()
-  expect(variants).toHaveLength(36)
-  expect(new Set(variants.map((v) => v.id)).size).toBe(36)
+  expect(variants).toHaveLength(48)
+  expect(new Set(variants.map((v) => v.id)).size).toBe(48)
   for (const v of variants) expect(v.id).toMatch(/^[a-z0-9-]+$/)
   const keys = new Set(variants.map((v) => `${v.page}|${v.ground}|${v.width}`))
   for (const page of PAGES)

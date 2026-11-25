@@ -5,7 +5,8 @@
  *   bun run capture:ui-web
  *
  * Renders the catalog and every `ab web` page over the scripted fixtures in
- * `packages/ui/src/app/fixtures.ts`, at both grounds and at desktop and phone
+ * `packages/ui/src/app/fixtures.ts`, the analytics and timeline JSON routes
+ * included, at both grounds and at desktop and phone
  * widths, in a fresh headless Chromium per variant. Each variant records its
  * cumulative layout shift before it is screenshot, and the run fails when any
  * exceeds `CLS_THRESHOLD`. Outputs land in `.ab/ui-web-frames/`: PNGs,
@@ -23,6 +24,7 @@ import type { WebAssetManifest } from '../packages/core/src/web/protocol'
 import { startWebServer } from '../packages/core/src/web/server'
 import { buildWebBundle } from '../packages/ui/src/app/build'
 import {
+  analyticsFixture,
   attentionArrivedFrame,
   BLOCKED_SLUG,
   movedFrame,
@@ -30,6 +32,7 @@ import {
   overviewFrame,
   RUNNING_SLUG,
   stateChangedFrame,
+  timelineFixture,
   WAITING_SLUG,
 } from '../packages/ui/src/app/fixtures'
 import {
@@ -61,8 +64,9 @@ export interface UiWebPage {
   page: string
   /** Server path for app pages; absent for the file:// catalog. */
   path?: string
-  /** `reserve`: wait for the loaded page to replace its masked twin. */
-  settle: 'catalog' | 'reserve' | 'load'
+  /** `reserve`: wait for the loaded page to replace its masked twin, and
+   * its timeline to load. `charts`: wait for the analytics charts to load. */
+  settle: 'catalog' | 'reserve' | 'charts' | 'load'
   /** Measurement window after settling, in ms. */
   windowMs: number
   /** Publish the live-change frames once settled. */
@@ -84,6 +88,10 @@ export const PAGES: readonly UiWebPage[] = [
     settle: 'reserve',
     windowMs: 1500,
   },
+  { page: 'analytics', path: '/analytics', settle: 'charts', windowMs: 1500 },
+  // Running builds too, so open segments grow with the clock.
+  { page: 'analytics-all', path: '/analytics?outcome=all', settle: 'charts', windowMs: 1500 },
+  { page: 'analytics-empty', path: '/analytics?kind=node', settle: 'charts', windowMs: 1500 },
   { page: 'unknown', path: '/no-such-page', settle: 'load', windowMs: 1500 },
 ]
 
@@ -277,8 +285,9 @@ export interface UiWebFixtureServer {
 }
 
 /**
- * The real `ab web` server over the branch's freshly built client and a
- * push-mode hub holding the base overview. No store is read.
+ * The real `ab web` server over the branch's freshly built client, a
+ * push-mode hub holding the base overview, and the analytics and timeline
+ * routes answered from fixtures. No store is read.
  */
 export async function startUiWebFixtureServer(): Promise<UiWebFixtureServer> {
   const files = await buildWebBundle()
@@ -293,6 +302,10 @@ export async function startUiWebFixtureServer(): Promise<UiWebFixtureServer> {
     allowedHosts: loopbackHosts('127.0.0.1'),
     repositoryLabel: 'github.com/acme/app',
     hub,
+    analytics: () => ({
+      analytics: async (query) => analyticsFixture(query),
+      timeline: async (slug) => timelineFixture(slug),
+    }),
     manifest,
     readAsset: (path) => {
       const bytes = files.get(path)
@@ -458,6 +471,8 @@ const SETTLE_STATE = `(() => ({
   reserve: !!document.querySelector('[data-ansi="reserve"]'),
   loaded: !!document.querySelector('[data-ansi="reserve"][data-ready]'),
   masked: document.querySelectorAll('[data-ansi="masked"]').length,
+  skeletons: document.querySelectorAll('[data-skeleton]').length,
+  charts: !!document.querySelector('[data-ansi="step-durations"]:not([data-skeleton])'),
 }))()`
 
 const TWO_FRAMES =
@@ -486,7 +501,13 @@ async function settle(page: Page, kind: UiWebPage['settle']): Promise<void> {
   await waitFor(page, 'document load', (s) => s.ready === 'complete')
   await page.evaluate('document.fonts.ready.then(() => true)')
   if (kind === 'reserve')
-    await waitFor(page, 'the loaded page', (s) => s.loaded === true && s.masked === 0)
+    await waitFor(
+      page,
+      'the loaded page',
+      (s) => s.loaded === true && s.masked === 0 && s.skeletons === 0,
+    )
+  if (kind === 'charts')
+    await waitFor(page, 'the loaded charts', (s) => s.charts === true && s.skeletons === 0)
   await page.evaluate(TWO_FRAMES)
 }
 

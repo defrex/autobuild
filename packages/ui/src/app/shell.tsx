@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { WebFrame } from '../../../core/src/web/protocol'
+import type { WebBuildTimeline, WebFrame } from '../../../core/src/web/protocol'
 import { Masthead, PageNav } from '../components/composites'
 import { StateWord, type ThemeChoice, ThemeMenu } from '../components/display'
 import { Masked, Reserve } from '../components/motion'
 import { motion } from '../tokens'
-import { BuildPage } from './build-page'
+import { AnalyticsPage } from './analytics'
+import { timelineLive } from './analytics-model'
+import { BuildPage, buildPageFetch, type TimelineState } from './build-page'
+import { useClock } from './clock'
 import { fallbackFrame } from './fallback'
+import { useApi } from './fetch'
 import { OverviewPage, type PageProps } from './overview'
-import { type Route, route } from './routes'
+import { ANALYTICS_PATH, type Route, route } from './routes'
 
 /* Literal of THEME_STORAGE_KEY in packages/core/src/web/protocol.ts; the
    bundle imports core only as types. */
@@ -50,27 +54,20 @@ function ticking(frame: WebFrame | undefined): boolean {
   )
 }
 
-/** The viewer's clock, re-rendered once a second only while a timer runs.
- * It never fetches. */
-function useNow(frame: WebFrame | undefined): number {
-  const [now, setNow] = useState(() => Date.now())
-  const active = ticking(frame)
-  useEffect(() => {
-    if (!active) return
-    setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [active])
-  return now
-}
-
 const PLACEHOLDER_MS = Number.parseFloat(motion.layout)
+
+type FramePage = Extract<Route, { page: 'overview' | 'build' }>
 
 function Page({
   route: r,
+  timeline,
   ...props
-}: PageProps & { route: Extract<Route, { page: 'overview' | 'build' }> }) {
-  return r.page === 'build' ? <BuildPage slug={r.slug} {...props} /> : <OverviewPage {...props} />
+}: PageProps & { route: FramePage; timeline: TimelineState }) {
+  return r.page === 'build' ? (
+    <BuildPage slug={r.slug} timeline={timeline} {...props} />
+  ) : (
+    <OverviewPage {...props} />
+  )
 }
 
 /**
@@ -87,7 +84,7 @@ function Main({
   frame,
   seq,
 }: {
-  route: Extract<Route, { page: 'overview' | 'build' }>
+  route: FramePage
   hint: WebFrame | undefined
   frame: WebFrame | undefined
   seq: number
@@ -95,7 +92,15 @@ function Main({
   const [settled, setSettled] = useState<{ frame: WebFrame; seq: number } | undefined>(undefined)
   const [placeholderMounted, setPlaceholderMounted] = useState(true)
   const fallback = useMemo(() => fallbackFrame(r), [r])
-  const now = useNow(frame ?? hint)
+  // One timeline read for the page and its masked twin, so loading never
+  // fetches twice.
+  const read = r.page === 'build' ? buildPageFetch(frame, r.slug) : undefined
+  const timeline = useApi<WebBuildTimeline>(read?.url, read?.key)
+  const row = timeline.data?.row
+  const now = useClock(
+    ticking(frame ?? hint) ||
+      (timeline.error === undefined && row !== undefined && timelineLive(row)),
+  )
   const ready = settled !== undefined
   useEffect(() => {
     if (!ready) return
@@ -115,6 +120,7 @@ function Main({
               frame={masked.frame}
               seq={masked.seq}
               now={now}
+              timeline={timeline}
               onSettled={(s) => {
                 if (frame !== undefined && s === seq && settled === undefined)
                   setSettled({ frame, seq })
@@ -124,9 +130,18 @@ function Main({
         )
       }
     >
-      {ready && frame !== undefined && <Page route={r} frame={frame} seq={seq} now={now} />}
+      {ready && frame !== undefined && (
+        <Page route={r} frame={frame} seq={seq} now={now} timeline={timeline} />
+      )}
     </Reserve>
   )
+}
+
+/** The nav item a route sits under: a build page under the Overview that
+ * lists it. */
+export function navCurrent(r: Route, path: string): string {
+  if (r.page === 'analytics') return ANALYTICS_PATH
+  return r.page === 'unknown' ? path : '/'
 }
 
 export function AppShell({
@@ -152,8 +167,11 @@ export function AppShell({
         aside={<ThemeMenu value={theme} onValueChange={setTheme} />}
       />
       <PageNav
-        items={[{ href: '/', label: 'Overview' }]}
-        current={r.page === 'unknown' ? path : '/'}
+        items={[
+          { href: '/', label: 'Overview' },
+          { href: ANALYTICS_PATH, label: 'Analytics' },
+        ]}
+        current={navCurrent(r, path)}
         controls={
           header !== undefined && (header.repositoryPaused || header.drained) ? (
             <>
@@ -168,6 +186,8 @@ export function AppShell({
           <p data-ansi="slack">
             No page at this address. The Overview at / lists this repository's builds.
           </p>
+        ) : r.page === 'analytics' ? (
+          <AnalyticsPage position={frame?.position} />
         ) : (
           <Main route={r} hint={hint} frame={frame} seq={seq} />
         )}

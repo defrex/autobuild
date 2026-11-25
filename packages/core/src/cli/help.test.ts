@@ -222,7 +222,7 @@ describe('layered CLI help catalog', () => {
         'As for ab web; valid only with --web',
         'only the URL announcement line',
         'under --plain or without a TTY the web',
-        'It adds no store reads',
+        'Dashboard frames add no store',
         'binds before the repository lease',
         'keeps working across automatic runtime upgrades',
         '--web cannot be combined with --once',
