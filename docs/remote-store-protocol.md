@@ -716,11 +716,12 @@ waits apply. There is no push transport; a held request is the whole mechanism.
 Repository journals are separate resources with independent event sequences,
 artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
-repository to exist. An unknown repository returns `404 not-found` — with one
-carve-out: the build-digest batch read of this section is keyed to build
-records, not the repository journal record, so it authorizes the project credential
-but answers `200` (possibly empty) even for an unknown repository, a repository
-without a journal record, or a repository without builds.
+repository to exist. An unknown repository returns `404 not-found` — with two
+carve-outs: the build-digest and open-build batch reads of this section are
+keyed to build records, not the repository journal record, so they authorize the
+project credential but answer `200` (possibly empty) even for an unknown
+repository, a repository without a journal record, or a repository without
+builds.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
@@ -736,6 +737,7 @@ without a journal record, or a repository without builds.
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
 | `listRepoArtifacts` | `GET /repos/{repo}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
+| `listOpenBuilds` | `GET /repos/{repo}/open-builds` | none | `200` + `[{"record", "digest"}]`, a build record and its `BuildDigest` for every open build of the repository (possibly empty), ordered by `createdAt` and then slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
 | `releaseRepoLease` | `POST /repos/{repo}/lease/release` | holder request | `200 {"ok": true}`; a wrong holder is a successful no-op |
@@ -836,6 +838,18 @@ moved — a stale peer is now rejected at the handshake (`409 conflict`) instead
 This is the same discipline the transport's supported-window rules promise:
 wire shapes that independently implemented servers must reproduce update this
 document and the protocol version together.
+
+An open build is one whose latest terminal fact is not `build.completed`:
+queued, running, paused, blocked and settled-awaiting-merge builds, plus
+aborted builds whose cleanup has not finished. The server maintains the set
+in the same transaction that inserts a build or appends its
+`build.completed`, `build.aborted` or `build.reopened`, so answering costs one
+entry per open build and never grows with settled history. Operator reads of
+active work use it. The route is additive and keeps the protocol version. A
+server without it answers the generic `no route` `404`, or its
+repository-existence gate's `unknown repo` `404` for a journal-less
+repository; a client surfaces either as a typed capability error and never
+answers from `build-digests` or the build list instead.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded
@@ -1573,8 +1587,9 @@ Four shipped behaviors do not add `BuildStore` routes:
   not a deeper backing-store transaction or migration check. The example shows anonymous health on the 1.3 line; an admitted same-line protocol-7 probe sees 7 instead.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact
-deletion, or server deployment API. The one repo-scoped batch read is the
-build-digest route of section 4; no other batch-read route exists.
+deletion, or server deployment API. The repo-scoped batch reads are the
+build-digest and open-build routes of section 4; no other batch-read route
+exists.
 
 ## 12. Conformance
 

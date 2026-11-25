@@ -1101,7 +1101,8 @@ validation alone, so the client enforces the advertised limit before uploading.
 ### 7.2 Interface and adapters
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,
-`getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`, `subscribe`.
+`getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`, `listOpenBuilds`,
+`subscribe`.
 A build stream also exposes `appendIfCurrent(expectedSeq, event)`: one atomic
 compare-and-append that returns no event when the stream has advanced. It is a
 narrow coordination primitive for deterministic event-log deduplication under
@@ -1201,12 +1202,11 @@ headers, or available backend.
 `subscribe` is specced in the interface; the current implementation is polling
 `getEvents(since)`. True push comes later.
 
-Operator UIs additionally have a repository-scoped batch read,
-`getRepoBuildDigests(repo)`: the projection of every build's log onto its
+The dispatcher and harvest runner additionally have a repository-scoped batch
+read, `getRepoBuildDigests(repo)`: the projection of every build's log onto its
 terminal fact, its `observation.recorded` occurrences with their event
 timestamps, and the ts of its latest `pr.merged`, derived from the event log on
-each call. It lets a dashboard snapshot gate rows without reading the full
-history of finished builds (§16.1), and it backs the harvest-launch pressure gate (dispatcher and harvest runner alike): launch
+each call. It backs the harvest-launch pressure gate (dispatcher and harvest runner alike): launch
 decisions evaluate from digests and the repository journal alone, so
 gate-evaluation cost is flat in accumulated build history, with the full
 per-build scan paid only when a gate actually trips and a scan packet is built.
@@ -1215,6 +1215,23 @@ parent moves ever named, so the dispatcher finds a node's child builds from
 digests and reads full facts only for builds that name that node. Optimization
 nodes add an `optimization` signal from which the dispatcher's proposer stage
 selects work (§13.1.1).
+
+Operator reads of active work use `listOpenBuilds(repo)` instead: the records
+and persisted digests of the repository's open builds, ordered by creation
+time and slug. A build is open while its latest terminal fact is not
+`build.completed`, so the set holds queued, running, paused, blocked and
+settled-awaiting-merge builds, plus aborted builds whose cleanup saga has not
+finished. Every adapter maintains the set in the transaction that inserts a
+build or appends its `build.completed`, `build.aborted` or `build.reopened`;
+the SQL adapters use triggers, so every append path and every older binary
+writing the same database keeps it exact. A database that predates the set is
+backfilled once, when its migration creates it; no read path backfills.
+`builds.list` (active and queued), `merges.list`, the dashboard snapshot
+(§16.1) and `repository.status` capacity read it, so their cost follows open
+builds and never settled history. `builds.list --all` is an explicit history
+read and still lists every build. A remote server without the operation
+answers a typed capability failure, and the client never falls back to
+listing every build or the digest batch.
 
 Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
@@ -4839,8 +4856,8 @@ records the header identity sent by each published client. Remote clients never
 reconstruct named answers from event logs. Catalog identity travels in response
 header `x-autobuild-catalog-identity`; strict JSON bodies remain exactly
 `{version, cursor, value}`. Missing/malformed headers do not reject an answer.
-Repository digest batches are also canonical, with no client discovery or
-per-build fallback.
+Repository digest batches and open-build listings are also canonical, with no
+client discovery or per-build fallback.
 A service omits identity for a backend without one. This guarantee excludes
 readers predating this contract and does not widen the supported client window.
 

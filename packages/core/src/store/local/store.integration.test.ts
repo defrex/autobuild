@@ -15,7 +15,7 @@ import { Database } from 'bun:sqlite'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { humanActor } from '../../events/envelope'
+import { DISPATCHER, humanActor, KERNEL } from '../../events/envelope'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { manualClock } from '../../testing/fixed'
 import {
@@ -254,6 +254,43 @@ describe('SqliteBuildStore durability', () => {
       } finally {
         await store.close()
       }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('opening a pre-open-builds file backfills the open set once, and later opens never backfill', async () => {
+    const root = await freshRoot()
+    try {
+      const repo = sampleBuildInput('probe').repo
+      const slugs = async (store: SqliteBuildStore) =>
+        (await store.listOpenBuilds(repo)).map(({ record }) => record.slug).sort()
+      const first = openLocalStore(root)
+      for (const slug of ['queued', 'done', 'aborted'])
+        await first.createBuild(sampleBuildInput(slug))
+      await first.append('done', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      await first.append('aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+      await first.close()
+      // Simulate a file written before the open-build set existed.
+      const legacy = new Database(join(root, 'autobuild.sqlite'))
+      legacy.exec(`DROP TRIGGER builds_open_insert; DROP TRIGGER events_open_completed;
+        DROP TRIGGER events_open_rederive; DROP TABLE open_builds`)
+      legacy.close()
+
+      let reopened = openLocalStore(root)
+      expect(await slugs(reopened)).toEqual(['aborted', 'queued'])
+      await reopened.close()
+      // A row removed by hand stays removed: only table creation backfills.
+      const edit = new Database(join(root, 'autobuild.sqlite'))
+      edit.exec(`DELETE FROM open_builds WHERE slug = 'queued'`)
+      edit.close()
+      reopened = openLocalStore(root)
+      expect(await slugs(reopened)).toEqual(['aborted'])
+      await reopened.close()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
