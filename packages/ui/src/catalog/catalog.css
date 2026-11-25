@@ -23,7 +23,8 @@
 }
 [data-catalog="toc"] {
   display: flex;
-  gap: var(--space-lg);
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-lg);
   padding: var(--space-sm) 0;
   font-family: var(--mono);
   font-size: var(--fs-machine);
