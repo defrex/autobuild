@@ -4,6 +4,7 @@ import { TicketRevisionConflict } from './revision'
 import { TicketIssueLinksUnsupported } from './issue-links'
 import { TicketPriorityUnsupported } from './priority'
 import { ticketLifecycle } from './lifecycle'
+import { TicketSearchCursorInvalid, TicketSearchUnsupported } from './search'
 import type { TicketsConfig } from '../../config/schema'
 import type {
   DependencyState,
@@ -14,6 +15,8 @@ import type {
   TicketListing,
   TicketPage,
   TicketPageListing,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketUpdate,
   TicketMutation,
@@ -45,11 +48,14 @@ import {
   TICKET_TARGETING_PROBE_NODE,
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
   ticketListingWireSchema,
   ticketPageWireSchema,
+  ticketSearchPageWireSchema,
   ticketWireSchema,
   ticketStatesWireSchema,
   ticketStateCountsWireSchema,
@@ -112,10 +118,10 @@ export class HostedTicketPagingError extends Error {
   }
 }
 
-/** Full TicketSource client for a hosted Autobuild service. Targeted listing
- * and native paging are each declared only after a response from the service
- * has carried its echo; product code obtains the source through
- * `createTicketSource`, whose construction-time response settles both. */
+/** Full TicketSource client for a hosted Autobuild service. Targeted listing,
+ * native paging and search are each declared only after a response from the
+ * service has carried its echo; product code obtains the source through
+ * `createTicketSource`, whose construction-time response settles all three. */
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
   readonly integrationTree = true
@@ -134,6 +140,9 @@ export class HostedTicketSource implements TicketSource {
   private pagingSupport: boolean | undefined
   private readonly paged = (criteria: TicketCriteria, page: TicketPage) =>
     this.pagedListing(criteria, page)
+  /** Unknown until a response settles it; see `noteCapabilities`. */
+  private searchSupport: boolean | undefined
+  private readonly searched = (query: TicketSearchQuery) => this.searchPage(query)
 
   constructor(options: HostedTicketSourceOptions) {
     this.requestedIds = hostedRequestedIds(options.teamKey)
@@ -182,6 +191,13 @@ export class HostedTicketSource implements TicketSource {
     return this.pagingSupport === true ? this.paged : undefined
   }
 
+  /** Present only once the service has positively advertised `search`; while
+   * support is unknown or refused, callers refuse with `TicketSearchUnsupported`
+   * before any request. There is never a listing fallback. */
+  get search(): TicketSource['search'] {
+    return this.searchSupport === true ? this.searched : undefined
+  }
+
   /** Settles targeted-listing support before any observation runs: free when a
    * response already settled it, otherwise one `list-targeting` probe for a
    * node id that can never exist. Throws when the answer is inconclusive. */
@@ -199,7 +215,8 @@ export class HostedTicketSource implements TicketSource {
   }
 
   /** Any response carrying an echo declares that capability; an ok response
-   * without it comes from a service predating `list-targeting` or `list-page`.
+   * without it comes from a service predating `list-targeting`, `list-page` or
+   * `search`.
    * A non-ok response without it (a gateway page, say) proves nothing. */
   private noteCapabilities(response: Response): void {
     if (response.headers.get(TICKET_TARGETING_HEADER) === TICKET_TARGETING_CAPABILITY)
@@ -208,6 +225,9 @@ export class HostedTicketSource implements TicketSource {
     if (response.headers.get(TICKET_PAGING_HEADER) === TICKET_PAGING_CAPABILITY)
       this.pagingSupport = true
     else if (response.ok) this.pagingSupport = false
+    if (response.headers.get(TICKET_SEARCH_HEADER) === TICKET_SEARCH_CAPABILITY)
+      this.searchSupport = true
+    else if (response.ok) this.searchSupport = false
   }
 
   private async send(operation: string, input: unknown): Promise<Response> {
@@ -226,6 +246,7 @@ export class HostedTicketSource implements TicketSource {
         [TICKET_POLICY_CREATE_LABELS_HEADER]: TICKET_POLICY_CREATE_LABELS_CAPABILITY,
         [TICKET_TARGETING_HEADER]: TICKET_TARGETING_CAPABILITY,
         [TICKET_PAGING_HEADER]: TICKET_PAGING_CAPABILITY,
+        [TICKET_SEARCH_HEADER]: TICKET_SEARCH_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       },
@@ -278,6 +299,15 @@ export class HostedTicketSource implements TicketSource {
           'ticket service predates paged listing (list-page); upgrade the service',
         )
       }
+      // Likewise for search, which never falls back to a listing.
+      if (
+        operation === 'search' &&
+        (response.status === 404 || response.status === 400) &&
+        response.headers.get(TICKET_SEARCH_HEADER) !== TICKET_SEARCH_CAPABILITY
+      ) {
+        this.searchSupport = false
+        throw new TicketSearchUnsupported(this.name)
+      }
       // A service predating createLabels or the roles refuses them with its
       // strict policy schema and never echoes the capability header.
       if (
@@ -317,6 +347,9 @@ export class HostedTicketSource implements TicketSource {
               ? body.error
               : 'ticket service cannot page this ticket source',
           )
+        if (body.code === 'search-unsupported') throw new TicketSearchUnsupported(this.name)
+        if (body.code === 'search-cursor-invalid')
+          throw new TicketSearchCursorInvalid(this.name, String(body.cursor ?? ''))
         message = errorBodySchema.parse(body).error
         // A server predating issue links or priority refuses the unknown key with
         // its strict request schema and never echoes the capability header.
@@ -339,7 +372,9 @@ export class HostedTicketSource implements TicketSource {
           error instanceof TicketRevisionConflict ||
           error instanceof TicketIssueLinksUnsupported ||
           error instanceof TicketPriorityUnsupported ||
-          error instanceof HostedTicketPagingError
+          error instanceof HostedTicketPagingError ||
+          error instanceof TicketSearchUnsupported ||
+          error instanceof TicketSearchCursorInvalid
         )
           throw error
         // Keep the status-only safe fallback for non-protocol responses.
@@ -417,6 +452,35 @@ export class HostedTicketSource implements TicketSource {
         `ticket service answered ${listing.tickets.length} tickets of ${listing.total} for limit ${page.limit} at offset ${offset}`,
       )
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
+  }
+
+  /** One `search` request per page; the service's hits and cursor are canonical. */
+  private async searchPage(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    const page = await this.request(
+      'search',
+      {
+        text: query.text,
+        ...(query.state !== undefined ? { state: query.state } : {}),
+        ...(query.labels !== undefined ? { labels: query.labels } : {}),
+        limit: query.limit,
+        ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+      },
+      {
+        parse: (value: unknown) => {
+          const parsed = ticketSearchPageWireSchema.safeParse(value)
+          if (!parsed.success)
+            throw new Error(
+              `ticket service answered an invalid search page: ${parsed.error.message}`,
+            )
+          return parsed.data
+        },
+      },
+    )
+    if (page.tickets.length > query.limit)
+      throw new Error(
+        `ticket service answered an invalid search page: ${page.tickets.length} hits for limit ${query.limit}`,
+      )
+    return page
   }
 
   async listStates() {
