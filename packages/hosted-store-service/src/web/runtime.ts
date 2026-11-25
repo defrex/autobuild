@@ -88,7 +88,8 @@ export function routeWebRequest(
 let mcp: ReturnType<typeof createMcpEndpoint> | undefined
 /** The MCP endpoint (AUT-341) — the tool registry over Streamable HTTP on
  * the same origin, authorized by Better Auth's MCP plugin and executed
- * through the operator protocol in-process. */
+ * through the operator protocol in-process. Serves both `/mcp` and the
+ * per-repository `/mcp/<host>/<path>` URLs (#1224). */
 export function mcpEndpoint() {
   mcp ??= createMcpEndpoint({
     config: parseWebAuthEnv(process.env),
@@ -97,6 +98,7 @@ export function mcpEndpoint() {
     storeSecret: process.env.AB_STORE_SECRET?.trim() ?? '',
     delegate: (request) => hostedService().fetch(request),
     entries: hostedService().operatorTools,
+    sandboxListed: (repo) => hostedService().listsSandboxTools(repo),
   })
   return mcp
 }

@@ -71,7 +71,8 @@ See [remote store authority](../../docs/remote-store-protocol.md#7-authenticatio
   normalized repository origins. The durable registry is authoritative after
   import; edits and restarts never resurrect removed projects.
 - `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
-  binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
+  binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. Per-repository
+  resources are `<resource>/<host>/<path>`. See the
   [self-hosting guide's variables](SELF-HOSTING.md#service-variables).
 
 Removing an email blocks its next gateway request even if its database-backed

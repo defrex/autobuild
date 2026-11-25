@@ -2196,6 +2196,14 @@ repo-gated `sandbox.*` tools are listed when the deployment can host operator
 sandboxes, and each call is refused with a typed reason when the repository's
 latest deposited effective config does not enable them.
 
+Each registered project also has a per-repository binding at
+`<resource>/<host><path>`, derived from its identity. It serves the same table
+for that one repository: its tool schemas omit `repo`, it offers no
+`repositories.list`, and it lists `sandbox.*` only when that repository's
+latest deposited effective config enables `[orchestrator]`, with one bounded
+latest-artifact read per listing. Its tokens are bound to their RFC 8707
+resource: it accepts only tokens issued for it or for `/mcp`.
+
 ### 8.10 Hosted project connection
 
 `ab connect <service-url>` requests owner browser approval for the normalized
