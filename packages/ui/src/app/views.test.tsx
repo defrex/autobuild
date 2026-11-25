@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Masked } from '../components/motion'
-import { BuildPage } from './build-page'
+import { type AnalyticsView, analyticsBlocks, GANTT_ROWS } from './analytics'
+import { FIRST_PAGE, olderPage, timelineLive, type WebAnalytics } from './analytics-model'
+import { BuildPage, buildPageBlocks, buildPageFetch, type TimelineState } from './build-page'
 import { fallbackFrame } from './fallback'
 import {
   attentionArrivedFrame,
@@ -17,6 +19,7 @@ import { parseFrameHint } from './hint'
 import { overviewBlocks, OverviewPage } from './overview'
 import { MAX_ELAPSED_MS, noteSizer, stepModel } from './rows'
 import { buildHref, route } from './routes'
+import { navCurrent } from './shell'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
 const overview = (frame = overviewFrame()) => html(<OverviewPage frame={frame} now={NOW} seq={1} />)
@@ -148,4 +151,172 @@ test('routes and hints parse', () => {
   expect(parseFrameHint('[1]')).toBeUndefined()
   expect(parseFrameHint('3')).toBeUndefined()
   expect(parseFrameHint(null)).toBeUndefined()
+})
+
+describe('analytics', () => {
+  const closedSegment = (category: string, minutes: number) => ({
+    category,
+    start: new Date(NOW - (minutes + 5) * 60_000).toISOString(),
+    end: new Date(NOW - 5 * 60_000).toISOString(),
+    durationMs: minutes * 60_000,
+    opened: { type: 'x', seq: 1 },
+    state: 'closed' as const,
+  })
+  const answer = (rows = 2, next: string | null = 'c2'): WebAnalytics => ({
+    query: { window: '7d', outcome: 'merged', kind: 'leaf' },
+    position: '9',
+    windowStart: '2026-11-17T00:00:00.000Z',
+    durations: [
+      {
+        step: 'plan',
+        count: 3,
+        meanMs: 60_000,
+        p50Ms: 50_000,
+        p90Ms: 90_000,
+        p99Ms: 99_000,
+        totalMs: 180_000,
+      },
+      {
+        step: 'verify:unit',
+        count: 3,
+        meanMs: 30_000,
+        p50Ms: 20_000,
+        p90Ms: 40_000,
+        p99Ms: 50_000,
+        totalMs: 90_000,
+      },
+    ],
+    gantt: {
+      rows: Array.from({ length: rows }, (_, i) => ({
+        slug: `build-${i}`,
+        ticketId: `#${100 + i}`,
+        title: `Build ${i}`,
+        kind: 'work' as const,
+        outcome: 'merged',
+        segments: [closedSegment('plan', 4), closedSegment('verify:unit', 2)],
+      })),
+      next,
+    },
+  })
+  const on = { filters() {}, page() {}, axis() {}, mode() {}, expanded() {} }
+  const view = (overrides: Partial<AnalyticsView> = {}): AnalyticsView => ({
+    data: answer(),
+    current: true,
+    error: undefined,
+    filters: { window: '7d', outcome: 'merged', kind: 'leaf' },
+    cursor: FIRST_PAGE,
+    axis: 'clock',
+    mode: 'per-run',
+    now: NOW,
+    expanded: [],
+    on,
+    ...overrides,
+  })
+  const render = (v: AnalyticsView) =>
+    html(
+      <div>
+        {analyticsBlocks(v).map((block) => (
+          <div key={block.key}>{block.node}</div>
+        ))}
+      </div>,
+    )
+  const keys = (v: AnalyticsView) => analyticsBlocks(v).map((block) => block.key)
+
+  test('skeletons hold a full page before the first answer; the charts replace them', () => {
+    const loading = render(view({ data: undefined, current: false }))
+    expect(loading).toContain('--gantt-reserve-rows:25')
+    expect(loading.split('data-ansi="gantt-skeleton-row"').length - 1).toBe(GANTT_ROWS)
+    expect(loading).toContain('data-skeleton=""')
+    const loaded = render(view())
+    expect(loaded).toContain('--gantt-reserve-rows:25')
+    expect(loaded).toContain('Build 1')
+    expect(loaded).toContain('data-ansi="step-durations"')
+    expect(loaded).toContain('Time per run, last 7 days, merged leaf builds')
+    for (const label of ['plan', 'verify', 'finalize', 'queued', 'ticket wait', 'awaiting merge'])
+      expect(loaded).toContain(`</span>${label}</li>`)
+  })
+
+  test('chart keys change with the answered query and the axis, never with the measure', () => {
+    const base = keys(view())
+    expect(keys(view({ mode: 'total' }))).toEqual(base)
+    const switched = keys(view({ axis: 'relative' }))
+    expect(switched.filter((key) => !base.includes(key))).toEqual([
+      expect.stringMatching(/^gantt:.*:relative$/),
+    ])
+    const wider = answer()
+    wider.query = { ...wider.query, window: '30d' }
+    expect(keys(view({ data: wider }))).not.toEqual(base)
+    const cells = (markup: string) => markup.match(/<th scope="col"/g)?.length
+    expect(cells(render(view({ mode: 'total' })))).toBe(cells(render(view())))
+  })
+
+  test('an empty page says so; paging actions hold their place when they cannot act', () => {
+    const empty = render(view({ data: answer(0, null) }))
+    expect(empty).toContain('No build matching these filters was active in this window.')
+    expect(empty).toContain('<a data-ansi="word-action" aria-disabled="true">Newer</a>')
+    expect(empty).toContain('<a data-ansi="word-action" aria-disabled="true">Older</a>')
+    const second = render(view({ cursor: olderPage(FIRST_PAGE, 'c2') }))
+    expect(second).toContain('href="#newer"')
+    expect(second).toContain('href="#older"')
+    expect(second).toContain('page 2')
+    const failed = render(view({ data: undefined, current: false, error: 'Store read failed: x' }))
+    expect(failed).toContain('Store read failed: x')
+  })
+
+  test('a refresh that fails after an answer shows its message, not the stale charts', () => {
+    const stale = view({ error: 'incompatible reducer stepDurations' })
+    const markup = render(stale)
+    expect(markup.split('incompatible reducer stepDurations').length - 1).toBe(2)
+    expect(markup).not.toContain('Build 1')
+    expect(markup).not.toContain('data-ansi="step-durations"')
+    expect(markup).toContain('<a data-ansi="word-action" aria-disabled="true">Older</a>')
+    expect(keys(stale)).toContain('gantt:error')
+  })
+})
+
+describe('build page timeline', () => {
+  const open = {
+    category: 'implement',
+    start: new Date(NOW - 60_000).toISOString(),
+    durationMs: 0,
+    opened: { type: 'implement.started', seq: 3 },
+    state: 'open' as const,
+  }
+  const row = { slug: 'older-build', kind: 'work' as const, segments: [open] }
+
+  test('the timeline comes last, skeleton first, and shows for a build the frame omits', () => {
+    const blocks = (timeline?: TimelineState) =>
+      buildPageBlocks({
+        frame: { position: '7' },
+        slug: 'older-build',
+        now: NOW,
+        ...(timeline !== undefined ? { timeline } : {}),
+      })
+    const loading = blocks({ data: undefined, error: undefined })
+    expect(loading.map((b) => b.key)).toEqual(['missing', 'h:timeline', 'timeline'])
+    expect(html(<div>{loading.at(-1)!.node}</div>)).toContain('data-skeleton=""')
+    const loaded = html(<div>{blocks({ data: { row }, error: undefined }).at(-1)!.node}</div>)
+    expect(loaded).toContain('data-open=""')
+    expect(loaded).toContain('data-expanded')
+    expect(timelineLive(row)).toBe(true)
+    // A later refresh failing replaces the chart with its message.
+    const refreshFailed = html(
+      <div>{blocks({ data: { row }, error: 'Store read failed: down' }).at(-1)!.node}</div>,
+    )
+    expect(refreshFailed).toContain('Store read failed: down')
+    expect(refreshFailed).not.toContain('data-open=""')
+    expect(buildPageFetch({ position: '7' }, 'a/b')).toEqual({
+      url: '/api/builds/a%2Fb/timeline',
+      key: '7',
+    })
+    expect(buildPage(RUNNING_SLUG).indexOf('Timeline')).toBeGreaterThan(
+      buildPage(RUNNING_SLUG).indexOf('>Ticket<'),
+    )
+  })
+
+  test('the analytics route has its own nav entry', () => {
+    expect(route('/analytics')).toEqual({ page: 'analytics' })
+    expect(navCurrent({ page: 'analytics' }, '/analytics')).toBe('/analytics')
+    expect(navCurrent({ page: 'build', slug: 'x' }, '/builds/x')).toBe('/')
+  })
 })

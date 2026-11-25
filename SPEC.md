@@ -4441,7 +4441,8 @@ recurring reads, made only while a browser is subscribed:
 | Cold start: first read, repository reset | `buildRoster`, the per-build reads for each live build and each aborted entry among the roster's newest finished builds | O(live builds), independent of history |
 
 No read grows with history, build count or tab count, and nothing is read
-while no browser is connected. `ab web` never lists builds or reads events. A
+while no browser is connected. The overview never lists builds, analytics
+requests read one listing page, and nothing reads events. A
 remote store that lacks the roster or the feed fails the read with its typed
 error and never falls back to either. Until the dispatcher records an
 effective configuration the frame has no `overview` and makes no build read.
@@ -4451,11 +4452,17 @@ dispatcher mode and the attention list. The terminal dashboard renders the
 same values. For `ab web` the dispatcher mode is `running`, `stopped` or
 `handoff`, never `viewer`.
 
-The UI has two pages. The overview at `/` shows the dispatcher mode, capacity,
-the attention list, and the active, queued and recently finished build rows.
-The build page at `/builds/<slug>` shows one build's header, ticket, phase,
-steps and attention. Both render the frame's shared projection values and
-update from the event stream. The page HTML carries the hub's current frame as
+The UI has three pages. The overview at `/` shows the dispatcher mode,
+capacity, the attention list, and the active, queued and recently finished
+build rows. The build page at `/builds/<slug>` shows one build's header,
+ticket, phase, steps and attention, then its timeline. The analytics page at
+`/analytics` shows where build time goes (RFC 0007 §7): a Gantt of builds,
+one row per build coloured by phase and wait, and a step-duration table with
+each step's mean, P50, P90 and P99 per run, or its total time. A window (24
+hours, 7 days by default, 30 days, or all retained history) and filters for
+outcome (merged by default, or all) and kind (leaf by default, node or all)
+apply to both charts. The overview and build page render the frame's shared
+projection values and update from the event stream. The page HTML carries the hub's current frame as
 a layout hint, which the page renders masked as its loading skeleton, never as
 facts. A page request reads nothing while the hub holds a frame; otherwise it
 waits for the hub's one shared read to deliver its first frame, data or a
@@ -4463,9 +4470,46 @@ failure notice, bounded at 10 s. Live changes never move on-screen content:
 reserved slots take timer ticks and step changes, and any other change fades
 out, relayouts and fades back in from its first changed block.
 
+Analytics and build timelines are explicit reads, never pushed or polled
+(RFC 0007 §9.3). Two read-only JSON routes serve them:
+`GET /api/analytics?window=&outcome=&kind=&page=` answers both charts for
+one query, and `GET /api/builds/<slug>/timeline` answers one build's
+`buildTimeline` value. Every frame carries the repository change position it
+was read at; the page fetches on load and on every query change, and fetches
+again only when a frame's position differs from the one its last answer was
+asked at. An unknown value answers 400, an unknown build 404, a server
+without an open store 503, and a store failure, including a remote server too
+old to filter the listing, 502 with its message; nothing falls back to an
+unfiltered listing or to events.
+
+The Gantt's page is 25 builds matching the filters that the store wrote to
+during the window (`listBuildsPage` with `activeSince`), most recently active
+first. That set includes builds whose only write in the window was not an
+event, such as an artifact or a lease release. The window starts where the
+step-duration rollup's read does: UTC midnight of the first day the window
+overlaps, or the retention cutoff for all retained history. One analytics
+source per server process serializes requests and keeps settled timelines in
+memory, so its reads are:
+
+| Occurrence | Reads | Cost |
+|---|---|---|
+| Every request | `getRepoChangePosition` | 1 call, 0 event rows |
+| Position moved since the last request | `listBuildsChangedSince` | 1 call; the builds it names leave the timeline cache |
+| New query, page or UTC day | the `stepDurations` rollup value, one `listBuildsPage` | 2 calls, at most 26 index entries, 0 event rows |
+| Per listed build not in memory | its saved `buildTimeline` value | at most 25 per page, that build's new rows only |
+| Timeline request, build not in memory | `getBuild`, its saved `buildTimeline` value | 2 calls |
+
+A repeated request on the same UTC day while nothing changed costs one
+`getRepoChangePosition`.
+
 `ab dispatch --web` serves the same server from the dispatcher process, in
-push mode: the hub owns no refresh loop and adds no store reads. Its frames
-carry the repository header and notice, not the overview. It shows the
+push mode: the hub owns no refresh loop. Its frames carry the repository
+header, notice and change position, not the overview. Frames from the
+dashboard frontend carry the position its refresh already sampled and add no
+store reads. A kernel-only dispatcher's journal refresh samples none, so
+while a browser is connected each of its frames reads one
+`getRepoChangePosition`, and nothing while none is. Analytics and timeline
+requests are explicit reads once its store is open, and answer 503 before. It shows the
 repository facts that a refresh the dispatcher already makes has read: the
 frontend's refresh loop under a TTY, the kernel's repository-view journal
 refreshes in plain mode (so frames update at the dispatcher's tick cadence),

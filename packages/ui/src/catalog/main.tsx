@@ -694,6 +694,31 @@ function Charts() {
         <h3>Eighty builds over six days</h3>
         <Gantt builds={many.slice(0, 25)} now={NOW} axis={axis} label="Builds, page 1 of 4" />
       </Grounds>
+      <Grounds stacked>
+        <h3>A sparse page holds a full page's height</h3>
+        <Gantt
+          builds={few.slice(0, 3)}
+          now={NOW}
+          axis={axis}
+          label="Builds, page 4"
+          reserveRows={8}
+        />
+      </Grounds>
+      <Grounds stacked>
+        <h3>No build matches</h3>
+        <Gantt
+          builds={[]}
+          now={NOW}
+          axis={axis}
+          label="Builds, page 1"
+          reserveRows={4}
+          empty={
+            <EmptySentence>
+              No build matching these filters was active in this window.
+            </EmptySentence>
+          }
+        />
+      </Grounds>
       <div data-catalog="toolbar">
         <Choice
           label="Measure"

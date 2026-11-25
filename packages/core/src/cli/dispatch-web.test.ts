@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { repositoryReadFactsReducer } from '../kernel/read-facts'
+import { MemoryBuildStore } from '../store/memory'
 import { projectRepositoryFrame } from '../web/repository-source'
 import { WebPortInUseError, webServerUrl, type WebServerStarter } from '../web/server'
 import { DISPATCH_LAUNCH_CONTEXT_ENV } from './dispatch-launch-contract'
@@ -96,4 +97,87 @@ test('a successor waits for the pinned port, stays silent, and gives up with one
   expect(held.calls.binds).toBe(SUCCESSOR_BIND_ATTEMPTS)
   expect(held.err).toHaveLength(1)
   expect(held.err[0]).toStartWith('ab dispatch: web UI unavailable after handoff:')
+})
+
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+}
+
+test('analytics answer once a store is attached; frames carry the change position', async () => {
+  const ok = harness(0)
+  let analytics: (() => unknown) | undefined
+  const start: WebServerStarter = async (opts) => {
+    analytics = opts.analytics
+    return ok.base.start(opts)
+  }
+  const web = (await startDispatchWeb({
+    ...ok.base,
+    start,
+    options: { port: 0, json: true },
+    env: {},
+  }))!
+  expect(analytics!()).toBeUndefined()
+  const facts = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+  const received: string[] = []
+  web.hub.subscribe((json) => received.push(json))
+  const frame = (position?: string) =>
+    JSON.stringify({
+      ...projectRepositoryFrame('/checkout', facts).frame,
+      ...(position !== undefined ? { position } : {}),
+    })
+
+  // No store: published as is, with no read.
+  web.publishFacts(facts)
+  // A build-only change leaves the header alone and still pushes a frame.
+  web.publishFacts(facts, '5')
+  web.publishFacts(facts, '6')
+  expect(received).toEqual([frame(), frame('5'), frame('6')])
+
+  // The kernel path reads one position per frame, single-flight, only while
+  // a browser is connected; a failed read still publishes.
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/checkout')
+  let reads = 0
+  let fail = false
+  let release: (() => void) | undefined
+  const read = store.getRepoChangePosition.bind(store)
+  store.getRepoChangePosition = async (repo) => {
+    reads++
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
+    if (fail) throw new Error('store down')
+    return read(repo)
+  }
+  web.attachStore(store)
+  expect(analytics!()).toBeDefined()
+  const position = await read('/checkout')
+  const later = { ...facts, config: { ...facts.config, run: 'run-1' } }
+  web.publishFacts(facts)
+  web.publishFacts(later)
+  expect(reads).toBe(1)
+  release!()
+  await flush()
+  expect(received.at(-1)).toBe(
+    JSON.stringify({ ...projectRepositoryFrame('/checkout', later).frame, position }),
+  )
+  fail = true
+  web.publishFacts(facts)
+  release!()
+  await flush()
+  expect(received.at(-1)).toBe(frame())
+  expect(reads).toBe(2)
+
+  const idle = harness(0)
+  const quiet = (await startDispatchWeb({
+    ...idle.base,
+    options: { port: 0, json: true },
+    env: {},
+  }))!
+  quiet.attachStore(store)
+  quiet.publishFacts(facts)
+  expect(reads).toBe(2)
+
+  await web.close()
+  expect(analytics!()).toBeUndefined()
 })

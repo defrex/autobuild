@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { createWebHandler, loopbackHosts, requestHostName, type WebHandlerOptions } from './http'
 import { WebModelHub } from './hub'
 import type { WebAssetManifest, WebFrameSource } from './protocol'
+import { BuildFeedValidationError } from '../store/build-feed'
 import { FakeRefreshScheduler } from '../testing/refresh-scheduler'
 
 const manifest: WebAssetManifest = {
@@ -314,4 +315,49 @@ test('the bound renders the page without a hint, and an abort stops the wait', a
   gate.settle().resolve('after')
   await hub.join()
   expect(hub.subscribers).toBe(0)
+})
+
+test('the JSON routes pass the parsed query or slug to the source and answer no-store JSON', async () => {
+  const seen: unknown[] = []
+  const analytics = {
+    analytics: async (query: unknown) => {
+      seen.push(query)
+      if ((query as { page?: string }).page === 'bad')
+        throw new BuildFeedValidationError('malformed cursor')
+      if ((query as { page?: string }).page === 'down') throw new Error('connection reset')
+      return { ok: true } as never
+    },
+    timeline: async (slug: string) => {
+      seen.push(slug)
+      return slug === 'a/b' ? ({ slug } as never) : null
+    },
+  }
+  const { request, source } = setup({ analytics: () => analytics })
+  const answer = await request('/api/analytics?window=30d&kind=all')
+  expect(answer.status).toBe(200)
+  expect(answer.headers.get('content-type')).toBe('application/json')
+  expect(answer.headers.get('cache-control')).toBe('no-store')
+  expect(await answer.json()).toEqual({ ok: true })
+  expect(await (await request('/api/builds/a%2Fb/timeline')).json()).toEqual({
+    row: { slug: 'a/b' },
+  })
+  expect(seen).toEqual([{ window: '30d', outcome: 'merged', kind: 'all' }, 'a/b'])
+  const status = async (path: string, init?: RequestInit) => (await request(path, init)).status
+  expect(await status('/api/analytics?window=1y')).toBe(400)
+  expect(await status('/api/analytics?page=bad')).toBe(400)
+  expect(await status('/api/analytics?page=down')).toBe(502)
+  expect(await status('/api/builds/missing/timeline')).toBe(404)
+  expect(await status('/api/builds/%E0%A4%A/timeline')).toBe(404)
+  expect(await status('/api/elsewhere')).toBe(404)
+  expect(await status('/api/analytics', { host: 'evil.example' } as never)).toBe(403)
+  seen.length = 0
+  expect(await status('/api/analytics', { method: 'HEAD' })).toBe(200)
+  expect(await status('/api/builds/a/timeline', { method: 'HEAD' })).toBe(200)
+  expect(seen).toEqual([])
+  expect(source.reads).toBe(0)
+  expect(await status('/analytics')).toBe(200)
+
+  const closed = setup({ analytics: () => undefined })
+  expect((await closed.request('/api/analytics')).status).toBe(503)
+  expect((await setup().request('/api/builds/a/timeline')).status).toBe(503)
 })
