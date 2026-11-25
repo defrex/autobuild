@@ -13,6 +13,7 @@ Every action below is sessionless, records a human-authored fact, and accepts
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
 | Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts leaves at `plan`; nodes recollect and verify. |
 | Re-import an amended ticket | `ab answer <slug> --revise-spec-from-ticket` | Reads the build's recorded ticket and performs the same revision. |
+| Accept a rewritten target | `ab answer <slug> --accept-target` | Answers only a `target-rewritten` escalation; the build's own commits restack onto the current target. See [A rewritten target](#a-rewritten-target). |
 | Abandon the build | `ab abort <slug> [--to ready] [--reason <text>]` | Irrevocably requests abort; cleanup returns the ticket to Triage, or with `--to ready` to Ready with its blockers kept, and then reports `ticket.handed-back`. Ready requires the current ticket to meet the spec standard; otherwise cleanup returns it to Triage, and the comment and event name the requested destination and the missing parts. An [optimization attempt](optimization-nodes.md#landing-and-settlement) is the exception: its abort settles `aborted`, ignores `--to`, reports no `ticket.handed-back`, and the node moves the ticket to Rejected after cleanup. |
 
 The dashboard's blocked-build `r` shortcut requests an inline answer step that
@@ -43,6 +44,25 @@ janitor escalation is the exception: its ordinary retries continue across
 startup, a successful attempt closes it unanswered, and a bare retry only brings
 the next attempt forward. Startup still recovers unblocked work and acknowledges
 pending operator commands.
+
+## A rewritten target
+
+When a leaf's target branch is force-pushed so that it no longer descends
+from the build's base, Autobuild never adopts it on top of the build's work by
+itself:
+
+- A build with no work of its own (no published head, no PR, no commits beyond
+  its base) is reprovisioned from the current target by its next runner and
+  continues without an answer.
+- A build with work raises one escalation whose question begins `target main
+  was rewritten`, naming the rejected base, the new target head and the build's
+  own commits. Later rewrites of the same base raise nothing new.
+
+Answer it with `ab answer <slug> --accept-target` to restack those commits onto
+the current target before any further verification, or abort the build. Other
+answer forms skip this escalation. If the accept finds unpublished local
+commits that no open phase owns, it is refused with a fresh escalation listing
+them.
 
 ## Ending a ticket wait
 

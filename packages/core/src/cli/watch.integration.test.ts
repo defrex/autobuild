@@ -3507,9 +3507,14 @@ test('retained expired lease with abnormal stop never reports loss', async () =>
   expect(records.filter((r) => r.event?.type === 'dispatcher.run-stopped')).toHaveLength(1)
 })
 
-test('a fresh watch reports current upstream rewrite with branch and both immutable SHAs', async () => {
+test("a fresh watch reports a node's current upstream rewrite with branch and both immutable SHAs", async () => {
   const store = makeStore()
   await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: { source: 'file', id: 'N' }, repo: REPO, baseBranch: 'main', kind: 'node' },
+  })
   await store.append('b1', {
     actor: DISPATCHER,
     type: 'target.rewritten',
@@ -3529,6 +3534,65 @@ test('a fresh watch reports current upstream rewrite with branch and both immuta
     previousSha: 'a'.repeat(40),
     sha: 'b'.repeat(40),
   })
+})
+
+test('default rewrite attention is once per episode for a node and never for a leaf', async () => {
+  const [A, B, C, D] = ['a', 'b', 'c', 'd'].map((c) => c.repeat(40)) as [
+    string,
+    string,
+    string,
+    string,
+  ]
+  const rewrites = [
+    [A, B],
+    [A, C],
+    [A, D],
+    [B, C],
+  ] as const
+  const run = async (events?: readonly string[]) => {
+    const store = makeStore()
+    for (const slug of ['node', 'leaf']) {
+      await seedRunningBuild(store, slug)
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'file', id: slug },
+          repo: REPO,
+          baseBranch: 'main',
+          ...(slug === 'node' ? { kind: 'node' as const } : {}),
+        },
+      })
+    }
+    let tick = 0
+    const h = harness(store, {
+      onTick: async () => {
+        const next = rewrites[tick++]
+        if (next === undefined) return
+        for (const slug of ['node', 'leaf'])
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'target.rewritten',
+            payload: { branch: 'main', previousSha: next[0], sha: next[1] },
+          })
+      },
+    })
+    await abWatch({
+      ...h.base,
+      slugs: ['node', 'leaf'],
+      timeout: '6',
+      ...(events ? { events } : {}),
+    })
+    return h.out
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.event?.type === 'target.rewritten')
+      .map((record) => [record.build, record.event.payload.previousSha, record.event.payload.sha])
+  }
+  expect(await run()).toEqual([
+    ['node', A, B],
+    ['node', B, C],
+  ])
+  expect(await run(['target.rewritten'])).toHaveLength(8)
 })
 
 test('expired hosted watch resume is terminal and never replays the prefix', async () => {
