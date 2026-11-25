@@ -158,6 +158,14 @@ export const repositoryEventEnvelopeWireSchema = z.object({
 })
 export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSchema)
 
+/** `POST repos/:repo/events/conditional`: the repository journal's
+ * compare-and-append. `201` carries the envelope, `200 null` a miss. */
+export const conditionalRepoEventBodySchema = z.object({
+  expectedSeq: z.number().int().nonnegative(),
+  event: eventWriteWireSchema,
+})
+export const conditionalRepoEventResponseSchema = repositoryEventEnvelopeWireSchema.nullable()
+
 /** `GET repos/:repo/high-water`: the journal's greatest assigned seq. */
 export const repoChangePositionSchema = z.object({
   position: z.string().regex(/^(0|[1-9][0-9]*)$/),

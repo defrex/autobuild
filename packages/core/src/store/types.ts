@@ -576,6 +576,19 @@ export interface BuildStore extends BoundedEventReads {
     repo: string,
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>>
+  /** Atomically append one validated repository event only when the
+   * repository journal's current sequence equals `expectedSeq` (0 for an
+   * empty journal). Returns null when the journal has advanced; a miss must
+   * not mutate the journal or the stream timestamp. Invalid events and
+   * unknown repositories reject as `appendRepo` does. The repository mirror
+   * of the build log's `appendIfCurrent`: the operator sandbox service
+   * records a background attempt's outcome through it exactly once across
+   * processes. */
+  appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null>
   appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],

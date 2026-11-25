@@ -1116,7 +1116,11 @@ narrow coordination primitive for deterministic event-log deduplication under
 concurrent processors; the event stream remains authoritative, with no
 snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
 ordinary event validation, unknown builds reject, and a comparison miss leaves
-the log and build timestamps untouched.
+the log and build timestamps untouched. The repository journal exposes the
+same primitive as `appendRepoIfCurrent(repo, expectedSeq, event)`, and a
+session log as `appendSessionEventIfCurrent`; the operator sandbox service
+records a background attempt's outcome through the repository form so that
+exactly one process records it.
 Node branch writers use separate `claimNodeWriter`, `renewNodeWriter`, and
 `releaseNodeWriter` operations. Claim permits an absent, expired, or same-holder
 lease; renewal requires the same unexpired holder, and release is holder-checked.
@@ -4820,8 +4824,34 @@ each session owner's sandbox. `sandbox.open` returns at once and starts
 provisioning or resuming in the background of the serving process, journaling
 `provisioning` and then the attempt's outcome; every other tool refuses typed
 `sandbox-not-ready`, naming the state, until the environment is live, and
-never provisions. `sandbox.status` is a read-only, bounded poll: one reduced
-repository read plus one provider probe, with no write. `sandbox.close` stops
+never provisions. `sandbox.status` is a bounded poll: one reduced repository
+read plus one provider probe. Its only write records a finished background
+attempt's outcome the journal still lacks, exactly once across processes,
+through the repository compare-and-append; a `provisioning` journal whose
+provider reports no environment, with no attempt in the serving process, is
+failed once its grace period passes. Failure evidence in the provider is
+destroyed only after the journal records the failure: `sandbox.open` probes
+first and records a reported failure before the provider may replace the
+environment, refusing with nothing discarded when it cannot.
+
+On `vercel-sandbox` the provisioning state lives in the guest, so any
+process can read it with one probe. `sandbox.open` returns after a lookup, at
+most one probe and one update. The short host-driven phase (create, checkout,
+credential scrub, Bun, system provisioning, distribution) runs in the serving
+process's background seam (`waitUntil`, Next's `after()` on a hosted
+deployment); the slow tail (dependency install, runtimes, setup, marker) runs
+as one detached guest command, bounded by the session timer rather than the
+function limit. The sandbox is created and resumed with a provider timeout of
+`[orchestrator.sandbox].idleMinutes`, and every tool call extends it, so the
+provider's own timer stops an idle sandbox with no dispatcher tick; the
+dispatcher's idle settlement remains a second stop. A timer-stopped sandbox
+refuses tools as `stopped` until `sandbox.open` resumes it with its committed
+and uncommitted state intact; `sandbox.status` never resumes one. A failed
+environment is kept, stopped by its timer or by `sandbox.close`, until the
+next `sandbox.open` records the failure and replaces it, or until
+`sandbox.reset` or release.
+
+`sandbox.close` stops
 the environment and keeps its checkout (`closed`); `sandbox.refresh`
 fast-forwards a clean checkout to the current base head (`refreshed`, which
 moves the publication base) and refuses a dirty or diverged one unchanged. A session owner's work

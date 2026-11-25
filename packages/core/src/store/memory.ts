@@ -1147,6 +1147,31 @@ export class MemoryBuildStore implements BuildStore {
     return envelope
   }
 
+  async appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null> {
+    const state = this.repoState(repo)
+    validateExpectedSeq(expectedSeq)
+    const validated = validateRepositoryEventWrite(event)
+    // No await between comparison and mutation: one atomic critical section.
+    if (state.events.length !== expectedSeq) return null
+    const envelope = {
+      repo,
+      seq: expectedSeq + 1,
+      ts: this.now(),
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+      compatibility: validated.compatibility,
+    } as RepositoryEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as RepositoryEvent)
+    this.advanceRepo(repo)
+    state.record.updatedAt = envelope.ts
+    return envelope
+  }
+
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],

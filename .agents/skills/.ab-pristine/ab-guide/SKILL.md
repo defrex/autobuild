@@ -1820,7 +1820,7 @@ explicit session wake writes are durable facts and do not execute turns.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it. |
+| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the operator sandbox stops, keeping its snapshot; a later sandbox.open resumes it. On vercel-sandbox the provider's own timer stops it, and every tool call extends that timer, so no dispatcher tick is needed; the dispatcher tick's janitor also stops an environment whose journal evidence is older, so it is no longer the only idle stop. |
 | `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
 
 The credential-free rule is structural, not advisory: the environment receives
@@ -1834,9 +1834,12 @@ Lifecycle an operator agent should follow:
 
 - **Open, then poll.** `sandbox.open` returns at once with state
   `provisioning`, `resuming`, `ready` or `failed`; provisioning runs in the
-  background of the serving process. Poll `sandbox.status` (read-only, safe to
+  background of the serving process. On vercel-sandbox the slow tail
+  (dependency install, runtimes, setup) runs detached inside the sandbox, so
+  it is not bound by the serving request. Poll `sandbox.status` (safe to
   repeat; it also reports the checkout head and the recorded base head) until
-  it reports `ready`.
+  it reports `ready`. Its only write records a finished attempt's outcome,
+  exactly once, whichever process observes it.
 - **Not ready refuses.** Until then `sandbox.exec`, `start`, `read_file`,
   `write_file`, `publish` and `refresh` refuse with code `sandbox-not-ready`
   and a `state` field (`absent`, `provisioning`, `resuming`, `stopped` or
@@ -1852,6 +1855,18 @@ Lifecycle an operator agent should follow:
 - **Reset is.** `sandbox.reset` discards everything and re-provisions from the
   current base head in the background, returning the `sandbox.open` result;
   poll `sandbox.status` again.
+- **Idle stops.** An idle environment stops after `idleMinutes` without a
+  sandbox tool call, keeping its checkout. On vercel-sandbox the provider's
+  own timer stops it and every tool call extends that timer, so no dispatcher
+  tick is needed; the dispatcher janitor is a second stop, no longer the only
+  one. A stopped environment refuses tools with `sandbox-not-ready` (`stopped`)
+  until `sandbox.open` resumes it with its committed and uncommitted work
+  intact. `sandbox.status` never resumes it, so a failure recorded inside a
+  stopped sandbox surfaces through the next `sandbox.open`, which reports it
+  with its original stage. A failed environment is kept (stopped by its timer
+  or `sandbox.close`) until the next `sandbox.open` records the failure and
+  re-provisions; if that record cannot be written, open refuses with "nothing
+  was discarded; call sandbox.open again".
 - A workspace provider without this lifecycle answers `sandbox.open`,
   `status`, `close`, `refresh` and `reset` with code `sandbox-unsupported`.
 
@@ -1899,8 +1914,9 @@ Where the tools are served:
   Vercel Sandbox provider. That needs the deployment's Vercel credential and
   `GITHUB_TOKEN` or `GH_TOKEN`. The forge token is the git read credential,
   injected only by the host-side egress transform on upload-pack requests; the
-  guest never sees it. `sandbox-not-ready` and
-  `sandbox-unsupported` apply here as they do locally.
+  guest never sees it. `sandbox-not-ready` applies here as it does locally;
+  the Vercel Sandbox provider implements the whole lifecycle, so
+  `sandbox-unsupported` does not arise on a deployment.
 - **A hosted per-repository URL** (`/mcp/<host><path>`) lists `sandbox.*` only
   when that repository's latest deposited effective config enables
   `[orchestrator]`. Calls keep the same typed codes.
