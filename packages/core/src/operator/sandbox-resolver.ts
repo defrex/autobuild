@@ -188,20 +188,22 @@ export function createOperatorSandboxResolver(
         return cached.service
       }
       const config = gate.config
-      if (options.preflight !== undefined) {
-        try {
-          await options.preflight({
-            repo,
-            config,
-            ...(credentials !== undefined ? { credentials } : {}),
-          })
-        } catch (error) {
-          if (error instanceof SandboxUnavailableError) throw error
-          await report(error)
-          throw unavailable(repo, error)
-        }
-      }
+      // Preflight runs inside the cached pending operation, so concurrent
+      // first calls share one preflight and one composition.
       const service = (async () => {
+        if (options.preflight !== undefined) {
+          try {
+            await options.preflight({
+              repo,
+              config,
+              ...(credentials !== undefined ? { credentials } : {}),
+            })
+          } catch (error) {
+            if (error instanceof SandboxUnavailableError) throw error
+            await report(error)
+            throw unavailable(repo, error)
+          }
+        }
         let token: string
         try {
           token = await storeToken(repo)

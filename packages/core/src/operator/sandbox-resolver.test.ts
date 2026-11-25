@@ -214,8 +214,13 @@ describe('cache keys', () => {
     expect(composed.map((entry) => entry.storeToken)).toEqual(['token-1', 'token-2', 'token-2'])
   })
 
-  test('concurrent first calls compose once', async () => {
-    const { resolver, composed, issued } = await fixture()
+  test.each([
+    ['without', undefined],
+    ['with', () => {}],
+  ])('concurrent first calls compose once %s a preflight', async (_label, preflight) => {
+    const { resolver, composed, issued } = await fixture(
+      preflight !== undefined ? { preflight } : {},
+    )
     const [a, b] = await Promise.all([resolver.resolve(REPO), resolver.resolve(REPO)])
     expect(a).toBe(b)
     expect(composed).toHaveLength(1)
