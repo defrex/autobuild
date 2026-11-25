@@ -184,6 +184,7 @@ The operation names and `input` values are:
 | `list-ready` | `{labels?: string[], state?: string}` | `TicketListing` |
 | `list-targeting` | `{nodeId: string}` | `TicketListing` of every state |
 | `list-page` | `{criteria: {labels?, state?}, page: {limit, offset?, order?}}` | `TicketPageListing` (`{tickets, diagnostics, total}`) |
+| `search` | `{text, state?, labels?, limit, cursor?}` | `{tickets: {id, title, state?, labels, kind, target?}[], cursor?, diagnostics}` |
 | `get` | `{id}` | `Ticket \| null` |
 | `claim` | `{id}` | `{claimed: boolean}` |
 | `comment` | `{id, body}` | `{ok: true}` |
@@ -482,3 +483,42 @@ listing takes the `list-ready` path by that explicit decision.
 
 The capability is additive. It does not change the remote BuildStore protocol
 version, and released clients, which never send `list-page`, are unaffected.
+
+## Search
+
+`search` answers one page of compact hits from the backing source's own search,
+for duplicate checks before filing:
+
+- **Matching.** `text` is nonblank. Every whitespace-separated term must occur,
+  case-insensitively, in the title or the body; each term may hit either field.
+  `%`, `_` and `\` are literal. `state` resolves as in `list-ready` (exact, else
+  one case-insensitive match); `labels` are ANDed. Absent `state` searches every
+  state.
+- **Paging.** `limit` is an integer from 1 to 100. Order is source-defined and
+  stable across pages: the PostgreSQL backend answers newest ticket number
+  first. `cursor` is opaque; pass the previous page's `cursor` with the same
+  text and filters. It is absent on the last page.
+- **Hits.** `id`, `title`, `state`, `labels`, `kind` and `target` come from the
+  search read itself. Bodies are never returned, and there is no read per hit.
+- **Refusals.** A backing source without search answers `409` with
+  `code: "search-unsupported"`. A malformed or foreign cursor answers `400` with
+  `code: "search-cursor-invalid"` and the `cursor`. Clients report them as
+  `TicketSearchUnsupported` and `TicketSearchCursorInvalid`. The service never
+  filters a full listing instead.
+- **Authority.** `search` is an operator read: it requires project or owner
+  authority, and ticket grants and harvest delegations receive `403`.
+- **Cost.** One request per page, answered by PostgreSQL in one bounded
+  statement. Cost follows the page, not the project's ticket count.
+
+Every `/tickets/*` response, including errors, carries
+`x-autobuild-ticket-search: 1`. A current client declares `search` only after a
+response from the service has carried that header, settled on the response that
+already finishes source construction, with no extra probe. Against a service
+predating the operation (an ok response without the header) the client never
+declares `search`, so callers refuse with `TicketSearchUnsupported` before any
+request and nothing is listed. A `search` request that the service later refuses
+with `404` or `400` and no header fails with `TicketSearchUnsupported`, with no
+fallback, and the client stops declaring `search`.
+
+The capability is additive. It does not change the remote BuildStore protocol
+version, and released clients, which never send `search`, are unaffected.

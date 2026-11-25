@@ -261,9 +261,14 @@ Search is an optional API 1.11 ticket-source capability:
 every query word against titles and bodies, filters by state and labels, and
 returns compact hits with an opaque cursor; `tickets.search` and
 `ab ticket search` call it. The file source implements it with one tracker scan
-per call, and the in-memory fake used for tests implements it too. The hosted,
-GitHub and Linear sources refuse with `search-unsupported`, and nothing falls
-back to a listing. See the
+per call, and the in-memory fake used for tests implements it too. The hosted
+source searches through the service's `search` operation, which PostgreSQL
+answers with one bounded statement per page; against a service predating it,
+the hosted source refuses with `search-unsupported`. PostgreSQL search
+case-folds title and body with the ICU root collation `und-x-icu`, so a server
+built without ICU refuses search with `search-unsupported`; PostgreSQL 16 and
+later build with ICU by default. GitHub and Linear refuse with
+`search-unsupported`. Nothing falls back to a listing. See the
 [optional ticket search capability](plugin-authoring.md#optional-ticket-search-capability).
 
 Bounded state counts are another optional capability:

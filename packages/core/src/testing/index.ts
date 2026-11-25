@@ -74,8 +74,12 @@ export {
   targetedCompletenessParity,
   ticketListReadBudget,
   ticketPageReadBudget,
+  ticketSearchReadBudget,
+  ticketSearchRows,
   ticketTargetingReadBudget,
   type TicketPageFixture,
+  type TicketSearchFixture,
+  type TicketSearchRow,
   type TicketTargetingFixture,
 } from './dispatch-read-budget'
 
