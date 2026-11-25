@@ -1309,6 +1309,85 @@ export async function ticketSearchReadBudget(
     }
 }
 
+/** A fresh provider-backed source over `tickets` whose provider requests are
+ * recorded by operation; `idOf` maps a row to the id the source gave it. */
+export interface TicketSearchRequestFixture {
+  source: TicketSource
+  reset(): void
+  requests(): { operation: string }[]
+  idOf(row: TicketSearchRow): string
+}
+
+/** A search page through a provider-backed source (GitHub issue search)
+ * costs exactly one provider `search` request, filtered or not, with the
+ * same request sequence at 100 and 100,000 tickets, newest filed first; a
+ * cursor the source did not issue is refused before any request. */
+export async function ticketSearchRequestBudget(
+  fixture: (population: number, tickets: TicketSearchRow[]) => Promise<TicketSearchRequestFixture>,
+): Promise<void> {
+  const { searchTickets, searchTerms, matchesSearch, TicketSearchCursorInvalid } = await import(
+    '../ports/tickets/search'
+  )
+  const { holdsState } = await import('../ports/tickets/lifecycle')
+  const limit = 5
+  const queries = [
+    { key: 'all' },
+    { key: 'labels', labels: ['dup'] },
+    { key: 'state', state: 'Ready' },
+    { key: 'folded state', state: 'ready' },
+    { key: 'triage', state: 'Triage' },
+  ] as const
+  const sequences: string[][] = []
+  for (const population of [100, 100_000]) {
+    const tickets = ticketSearchRows(population)
+    const newestFirst = [...tickets].reverse()
+    const terms = searchTerms('NEEDLE')
+    const { source, reset, requests, idOf } = await fixture(population, tickets)
+    expect(source.search).toBeDefined()
+    const sequence: string[] = []
+    for (const query of queries) {
+      const state = 'state' in query ? query.state : undefined
+      const labels: readonly string[] = 'labels' in query ? query.labels : []
+      const expected = newestFirst
+        .filter(
+          (ticket) =>
+            (state === undefined || holdsState(ticket.state, state)) &&
+            labels.every((label) => ticket.labels.includes(label)) &&
+            matchesSearch(ticket, terms),
+        )
+        .slice(0, 2 * limit)
+        .map(idOf)
+      let cursor: string | undefined
+      const seen: string[] = []
+      for (const _page of [1, 2]) {
+        reset()
+        const page = await searchTickets(source, {
+          text: 'NEEDLE',
+          limit,
+          ...(state !== undefined ? { state } : {}),
+          ...(labels.length > 0 ? { labels: [...labels] } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        const operations = requests().map((request) => request.operation)
+        expect(operations).toEqual(['search'])
+        sequence.push(...operations)
+        expect(page.tickets).toHaveLength(limit)
+        expect(page.cursor).toBeDefined()
+        seen.push(...page.tickets.map((hit) => hit.id))
+        cursor = page.cursor
+      }
+      expect(seen).toEqual(expected)
+    }
+    reset()
+    await expect(
+      searchTickets(source, { text: 'NEEDLE', limit, cursor: 'not-a-cursor' }),
+    ).rejects.toBeInstanceOf(TicketSearchCursorInvalid)
+    expect(requests()).toEqual([])
+    sequences.push(sequence)
+  }
+  expect(sequences[1]).toEqual(sequences[0]!)
+}
+
 /** Builds one dispatcher pass's observation inputs for a node build over a
  * fresh memory store, reporting which listing path the source decided on
  * before the pass; `observe` then observes the node with those inputs. */
