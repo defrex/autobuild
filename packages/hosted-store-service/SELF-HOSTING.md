@@ -13,7 +13,8 @@ can read this file at
 ## What you deploy
 
 The service hosts the BuildStore, hosted tickets, the operator dashboard,
-sign-in and the MCP server on one origin. A deployment takes one of two shapes:
+sign-in and the MCP server on one origin. Each project also gets its own MCP
+URL, shown on its Settings tab. A deployment takes one of two shapes:
 
 - **Store-only** (the default). The deployment holds state. Each project
   dispatches from its own machine or from an origin-mode dispatcher.
@@ -258,7 +259,9 @@ Web sign-in:
 - `AB_WEB_SUPER_USER_EMAILS` (required): comma-separated super-user emails.
   These people maintain the deployment.
 - `AB_WEB_MCP_RESOURCE` (optional): the resource the MCP server binds tokens
-  to. Defaults to `<BETTER_AUTH_URL>/mcp`.
+  to. Defaults to `<BETTER_AUTH_URL>/mcp`. Per-repository resources are
+  `<resource>/<host>/<path>`; see
+  [per-repository MCP URLs](https://github.com/defrex/autobuild/blob/main/docs/operator-api.md#per-repository-mcp-urls).
 
 Retired or deprecated:
 

@@ -585,6 +585,19 @@ export async function readOrchestratorGate(
     : { enabled: false, reason: 'orchestrator-disabled' }
 }
 
+/** Whether a repository-scoped binding lists `sandbox.*` for `repo`: the
+ * same bounded gate read as a sandbox call (one repository read plus the
+ * latest effective-config artifact), with an unusable deposit reading as
+ * closed. Listing never reads events or every revision. */
+export async function sandboxToolsListed(store: BuildStore, repo: string): Promise<boolean> {
+  try {
+    return (await readOrchestratorGate(store, repo)).enabled
+  } catch (error) {
+    if (error instanceof OrchestratorConfigError) return false
+    throw error
+  }
+}
+
 /** Resolve the sandbox gate from the latest effective config; absent/disabled returns null. */
 export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
   const gate = await readOrchestratorGate(store, repo)
