@@ -413,3 +413,42 @@ test('store-kept preservation receipts and node retention fold like their forge-
     unretained: ['0'.repeat(40)],
   })
 })
+
+test('the reported dispatcher run survives accumulator persistence', async () => {
+  const { repositoryReadFactsReducer } = await import('./read-facts')
+  const { takeoverJournal, yieldedNewcomerJournal } = await import('../testing/dispatch-journals')
+  for (const [events, run] of [
+    [yieldedNewcomerJournal(), 'run-a'],
+    [takeoverJournal(), 'run-b'],
+  ] as const) {
+    let acc = repositoryReadFactsReducer.initial()
+    for (const event of events) acc = roundtrip(repositoryReadFactsReducer.advance(acc, [event]))
+    const facts = repositoryReadFactsReducer.finish(acc)
+    expect(facts).toEqual(repositoryReadFactsReducer.reduce(events))
+    expect(facts.status?.run).toBe(run)
+  }
+})
+
+test('the reported dispatcher status stays bounded as unstopped runs accumulate', async () => {
+  const { repositoryReadFactsReducer } = await import('./read-facts')
+  const { dispatchJournal } = await import('../testing/dispatch-journals')
+  const j = dispatchJournal()
+  j.start('owner')
+  j.tick('owner', 3, ['owner diagnostic'])
+  // The persisted accumulator, which carries the pending runs.
+  const size = () =>
+    JSON.stringify(
+      repositoryReadFactsReducer.advance(repositoryReadFactsReducer.initial(), j.events),
+    ).length
+  let baseline = 0
+  for (let i = 0; i < 1000; i++) {
+    j.start(`run-${String(i).padStart(4, '0')}`, i, ['warning'])
+    if (i === 31) baseline = size()
+  }
+  expect(size()).toBeLessThanOrEqual(baseline + 512)
+  expect(repositoryReadFactsReducer.reduce(j.events).status).toMatchObject({
+    run: 'owner',
+    health: 'running',
+    queued: 3,
+  })
+})

@@ -1,8 +1,12 @@
 import { expect, test } from 'bun:test'
+import { repositoryReadFactsReducer } from '../kernel/read-facts'
+import { yieldedNewcomerJournal } from '../testing/dispatch-journals'
+import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 import {
   OPERATOR_PRESENCE_UNAVAILABLE,
   projectRepositoryStatus,
   renderRepositoryStatus,
+  repositoryStatusFromFacts,
   type RepositoryStatus,
 } from './repository-status'
 const REPO = '/main/repo'
@@ -57,6 +61,21 @@ test('the event projection and the facts projection agree on forge rate limits',
   expect(renderRepositoryStatus(fromEvents)).toContain(
     `forge landing/polling paused until ${resetAt} (rate-limit cooldown)`,
   )
+})
+
+test('the event projection and the facts projection agree on warning lines across a yielded run', () => {
+  const events = yieldedNewcomerJournal()
+  const now = new Date(0)
+  const dispatcher = projectDispatcherLiveness(null, [], now)
+  const fromEvents = projectRepositoryStatus(REPO, events, dispatcher, now)
+  expect(fromEvents.warningLines).toEqual([
+    'A role warning',
+    expect.stringContaining('run-a cannot squash'),
+  ])
+  expect(
+    repositoryStatusFromFacts(REPO, repositoryReadFactsReducer.reduce(events), dispatcher, now)
+      .warningLines,
+  ).toEqual(fromEvents.warningLines)
 })
 
 test('human output renders one line distinguishing unavailable, absent and present', () => {
