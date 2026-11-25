@@ -39,6 +39,19 @@ import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/pro
  *   unreachable repository is a uniform 404 after it, so the URL is no
  *   existence oracle across organizations.
  *
+ * Agent context (#1225): the registry's `context.list` and `context.read`
+ * tools serve each repository's captured skills and agent instructions (or
+ * the canonical skills bundled with this Autobuild when none are captured).
+ * Both modes also expose one MCP prompt per skill (shared naming in
+ * `registerContextPrompts`), and append a context section to the server
+ * instructions. Instructions travel only in the `initialize` response, so the
+ * endpoint peeks at the JSON-RPC body and reads context only for an
+ * initialize: one delegated `context.list` per repository in scope (the
+ * endpoint's, or every accessible one, four at a time). Prompt indexes load
+ * only for `prompts/list` and `prompts/get`; every other request reads
+ * nothing new. All context reads go through the same attributed delegation
+ * as tool calls.
+ *
  * Token audience (RFC 8707, recorded by ./mcp-resource-binding): a token
  * issued for a per-repository URL is accepted only there; an unbound token
  * (legacy, or issued for `/mcp`) is accepted at every URL, because
@@ -78,7 +91,16 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js'
 import { OperatorApiClient, OperatorApiError } from '../operator-client'
-import type { ToolEntry } from '@defrex/autobuild/operator'
+import {
+  contextInstructions,
+  promptLabel,
+  registerContextPrompts,
+  type ContextEntry,
+  type ContextIndex,
+  type ContextPromptSource,
+  type ContextReadResult,
+  type ToolEntry,
+} from '@defrex/autobuild/operator'
 import { AUTOBUILD_VERSION, mintToken } from '@defrex/autobuild/remote-store'
 import { normalizeEmail } from './config'
 import type { WebAuth } from './auth'
@@ -118,24 +140,78 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Autobuild operator tools for the repositories this deployment serves: builds, repository and harvest controls, tickets, and operator notes.',
   'Autobuild runs builds from tickets: a dispatcher claims groomed tickets, an embedded agent implements each build through plan/implement/verify rounds, and every durable action is attributed.',
   'Call `repositories.list` first to discover which repository identities this deployment serves; every tool names its repository explicitly via `repo`.',
+  'Start with `context.list`: it names the skills and agent instructions to load before acting.',
   'Mutating tools append durable, human-attributed events under the signed-in operator who authorized this client; destructive controls are annotated.',
   'Sandbox tools act in repositories whose latest effective config does not disable `[orchestrator]`; a call for another repository is refused with a typed `sandbox-*` code that names the reason.',
   'Start each operator round with `repository.attention`: one call returns everything waiting on the operator, each item naming the tool call that resolves it; pass back its cursor next time.',
   'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`; `repository.events` after a cursor delivers repository attention such as `ticket.handed-back`.',
 ].join(' ')
 
+/** Server instructions for the deployment-wide endpoint, with the agent
+ * context section for every repository the operator can access. */
+export function deploymentMcpInstructions(context?: readonly ContextEntry[]): string {
+  return context === undefined
+    ? MCP_SERVER_INSTRUCTIONS
+    : `${MCP_SERVER_INSTRUCTIONS}\n${contextInstructions(context, { scoped: false })}`
+}
+
 /** Server instructions for a per-repository endpoint: they name its one
- * repository and say nothing about any other project. */
-export function repositoryMcpInstructions(repo: string): string {
-  return [
+ * repository and say nothing about any other project. `context`, when given,
+ * appends that repository's agent context section. */
+export function repositoryMcpInstructions(repo: string, context?: ContextEntry): string {
+  const base = [
     `Autobuild operator tools for the repository ${repo}: builds, repository and harvest controls, tickets, and operator notes.`,
     'Autobuild runs builds from tickets: a dispatcher claims groomed tickets, an embedded agent implements each build through plan/implement/verify rounds, and every durable action is attributed.',
     `This connector serves only ${repo}: every tool acts on it, and no tool takes a \`repo\` argument.`,
+    'Start with `context.list`: it names the skills and agent instructions to load before acting.',
     'Mutating tools append durable, human-attributed events under the signed-in operator who authorized this client; destructive controls are annotated.',
     "Sandbox tools are listed when this repository's latest deposited effective config enables `[orchestrator]`; a sandbox call while it does not is refused with a typed `sandbox-*` code that names the reason.",
     'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`; `repository.events` after a cursor delivers repository attention such as `ticket.handed-back`.',
   ].join(' ')
+  return context === undefined
+    ? base
+    : `${base}\n${contextInstructions([context], { scoped: true })}`
 }
+
+/** Whether a POST body is (or batches) an MCP `initialize` request — the
+ * only response that carries server instructions. Read from a clone, so the
+ * transport still reads the original; anything unparsable is false. */
+async function requestsInitialize(request: Request): Promise<boolean> {
+  if (request.method !== 'POST') return false
+  try {
+    const body = (await request.clone().json()) as unknown
+    const messages = Array.isArray(body) ? body : [body]
+    return messages.some(
+      (message) =>
+        message !== null &&
+        typeof message === 'object' &&
+        (message as { method?: unknown }).method === 'initialize',
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Run `work` over `items`, at most `limit` at a time, keeping order. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await work(items[index]!)
+    }
+  })
+  await Promise.all(lanes)
+  return results
+}
+
+/** Concurrent context reads per deployment-wide request. */
+const CONTEXT_CONCURRENCY = 4
 
 /** Remove `repo` from a JSON Schema object's properties and required list,
  * recursing into top-level union and intersection branches. */
@@ -319,6 +395,90 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
     }
   }
 
+  /** Execute one registry tool through the operator API, attributed to
+   * `current`. Throws `OperatorApiError` on a refusal. */
+  async function delegatedCall(
+    request: Request,
+    current: McpOperator,
+    repo: string,
+    toolName: string,
+    input: unknown,
+  ): Promise<unknown> {
+    const token = mintToken(options.storeSecret, {
+      version: 1,
+      internalOperator: { user: current.email, repo },
+      via: { kind: 'mcp', client: current.client },
+      exp: now().getTime() + 30_000,
+    })
+    const client = new OperatorApiClient({
+      url: config.baseURL,
+      token,
+      fetchFn: asFetch(options.delegate, request),
+    })
+    return client.callTool(repo, toolName, input)
+  }
+
+  /** The repositories a request's agent context covers: the endpoint's one,
+   * or every repository the operator can access. */
+  async function contextRepos(current: McpOperator, endpoint: McpResourceEndpoint) {
+    if (endpoint.repo !== undefined) return [endpoint.repo]
+    const principal = await access.principal(current.email)
+    return principal ? access.projects(principal) : []
+  }
+
+  /** `context.list` for each repository (bounded concurrency); a failure is
+   * that repository's error entry, never the whole request's. */
+  async function contextEntries(
+    request: Request,
+    current: McpOperator,
+    repos: readonly string[],
+  ): Promise<ContextEntry[]> {
+    return mapLimit(repos, CONTEXT_CONCURRENCY, async (repo): Promise<ContextEntry> => {
+      try {
+        const index = (await delegatedCall(request, current, repo, 'context.list', {
+          repo,
+        })) as ContextIndex | null
+        if (
+          index === null ||
+          typeof index !== 'object' ||
+          !Array.isArray(index.skills) ||
+          !Array.isArray(index.instructions) ||
+          index.load === undefined
+        )
+          return { repo, error: 'context.list returned no index' }
+        return { repo, index }
+      } catch (error) {
+        return { repo, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
+  }
+
+  /** The prompt source for one request: indexes load lazily, only for
+   * `prompts/list` and `prompts/get`. */
+  function promptSource(
+    request: Request,
+    current: McpOperator,
+    endpoint: McpResourceEndpoint,
+  ): ContextPromptSource {
+    return {
+      scoped: endpoint.repo !== undefined,
+      async indexes(label) {
+        const repos = (await contextRepos(current, endpoint)).filter(
+          (repo) => label === undefined || promptLabel(repo) === label,
+        )
+        const entries = await contextEntries(request, current, repos)
+        return entries.filter(
+          (entry): entry is { repo: string; index: ContextIndex } => 'index' in entry,
+        )
+      },
+      read: async (repo, path) =>
+        (await delegatedCall(request, current, repo, 'context.read', {
+          repo,
+          path,
+        })) as ContextReadResult,
+    }
+  }
+
   /** The one per-call closure both modes run: the operator recheck,
    * repository access, the wait clamp, the attributed delegation and failure
    * mapping. `args.repo` names the repository (the per-repository mode has
@@ -365,18 +525,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
           waitSeconds: Math.min(waitSeconds, MCP_MAX_WAIT_SECONDS),
         }
       }
-      const token = mintToken(options.storeSecret, {
-        version: 1,
-        internalOperator: { user: current.email, repo: parsed.repo },
-        via: { kind: 'mcp', client: current.client },
-        exp: now().getTime() + 30_000,
-      })
-      const client = new OperatorApiClient({
-        url: config.baseURL,
-        token,
-        fetchFn: asFetch(options.delegate, request),
-      })
-      return textResult(await client.callTool(parsed.repo, entry.name, input))
+      return textResult(await delegatedCall(request, current, parsed.repo, entry.name, input))
     } catch (error) {
       return textResult(
         error instanceof OperatorApiError
@@ -392,11 +541,16 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
     }
   }
 
-  function deploymentServer(request: Request): McpServer {
+  function deploymentServer(
+    request: Request,
+    current: McpOperator,
+    context: readonly ContextEntry[] | undefined,
+  ): McpServer {
     const server = new McpServer(
       { name: 'autobuild', version: AUTOBUILD_VERSION },
-      { instructions: MCP_SERVER_INSTRUCTIONS },
+      { instructions: deploymentMcpInstructions(context) },
     )
+    registerContextPrompts(server.server, promptSource(request, current, deployment))
     for (const entry of entries) {
       server.registerTool(
         entry.name,
@@ -436,12 +590,21 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
     return server
   }
 
-  function repositoryServer(request: Request, endpoint: McpResourceEndpoint & { repo: string }) {
+  function repositoryServer(
+    request: Request,
+    endpoint: McpResourceEndpoint & { repo: string },
+    current: McpOperator,
+    context: ContextEntry | undefined,
+  ) {
     const repo = endpoint.repo
     const server = new Server(
       { name: 'autobuild', version: AUTOBUILD_VERSION },
-      { capabilities: { tools: {} }, instructions: repositoryMcpInstructions(repo) },
+      {
+        capabilities: { tools: {}, prompts: {} },
+        instructions: repositoryMcpInstructions(repo, context),
+      },
     )
+    registerContextPrompts(server, promptSource(request, current, endpoint))
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       scopedDefinitions ??= repositoryScopedToolDefinitions(entries)
       const sandbox =
@@ -522,10 +685,21 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
         return refused(503, 'access service is unavailable')
       }
 
+      // Instructions travel only in the `initialize` response, and every
+      // request builds a fresh server, so the agent context is read only for
+      // an initialize: one `context.list` per repository in scope. Every
+      // other method (tools/list, tools/call, …) reads nothing new.
+      const context = (await requestsInitialize(request))
+        ? await contextEntries(
+            request,
+            resolved,
+            await contextRepos(resolved, endpoint).catch(() => []),
+          )
+        : undefined
       const server =
         endpoint.repo === undefined
-          ? deploymentServer(request)
-          : repositoryServer(request, { ...endpoint, repo: endpoint.repo })
+          ? deploymentServer(request, resolved, context)
+          : repositoryServer(request, { ...endpoint, repo: endpoint.repo }, resolved, context?.[0])
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

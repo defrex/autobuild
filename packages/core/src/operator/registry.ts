@@ -94,6 +94,14 @@ import {
   RouteRefusalError,
 } from './requests'
 import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
+import { readAgentContext } from '../store/agent-context'
+import {
+  contextIndex,
+  contextSource,
+  readContextFile,
+  type CanonicalSkillBundle,
+} from './agent-context-serve'
+import { defaultCanonicalSkills } from './canonical-skills'
 import type { OperatorSandboxService } from './sandbox'
 import { SandboxUnavailableError } from './sandbox-resolver'
 import {
@@ -130,6 +138,10 @@ export interface ToolContext {
    * `SandboxUnavailableError`, which maps to a typed `sandbox-<reason>`
    * refusal. */
   sandboxFor?: () => Promise<OperatorSandboxService>
+  /** The canonical skill bundle the context tools serve when a repository
+   * has no captured agent context. Default: the serving distribution's
+   * `skills/` tree, read once per process. */
+  canonicalSkills?: () => Promise<CanonicalSkillBundle>
 }
 
 /** The failure body shape the operator API emits, mapped one-to-one so a tool
@@ -270,6 +282,33 @@ const buildListInput = z.strictObject({
 const buildDetailInput = z.strictObject({ repo: repoField, slug: slugField })
 
 const ticketDetailInput = z.strictObject({ repo: repoField, id: ticketIdField })
+
+const contextListInput = z.strictObject({ repo: repoField })
+const contextReadInput = z.strictObject({
+  repo: repoField,
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'A path from context.list (e.g. ".agents/skills/ab-operate/SKILL.md" or "AGENTS.md"), or a relative link from a file you read, with `from`.',
+    ),
+  from: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'The path of the file whose relative link `path` is (e.g. ".agents/skills/ab-spec/SKILL.md" with path "../ab-guide/references/spec-standard.md").',
+    ),
+})
+
+/** The context view for one repository: its captured record (one
+ * latest-revision artifact read), else the canonical bundle. A record that
+ * fails to decode propagates; it never falls back. */
+async function contextViewFor(ctx: ToolContext, repo: string) {
+  const captured = await readAgentContext(ctx.store, repo)
+  if (captured !== null) return contextSource(captured.record, null)
+  return contextSource(null, await (ctx.canonicalSkills ?? defaultCanonicalSkills)())
+}
 
 /** Strict, padded standard base64: whole 4-character groups of the standard
  * alphabet, `=` only as one or two trailing pad characters. Buffer.from would
@@ -1647,6 +1686,29 @@ export const TOOLS: readonly ToolEntry[] = [
       })
     },
   ),
+  defineTool(
+    'context.list',
+    'Call first: the repository’s agent context — its skills (name, description, files) and its agent instructions files (AGENTS.md / CLAUDE.md, with scopes and imports), captured from the base branch, and which to load before operating and before ticket work. A repository with no captured context lists the canonical skills bundled with this Autobuild and reports agent instructions absent.',
+    contextListInput,
+    '{repo, source: "captured"|"canonical", commit, baseBranch?, version?, notice?, skills: [{name, description, paths, entry, files}], instructions: [{path, aliases, scope, imports}], imports: [{path, importedBy}], load: {beforeOperating, beforeTicketWork}}: load entries are paths for context.read.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof contextListInput>
+      return contextIndex(await contextViewFor(ctx, input.repo), input.repo)
+    },
+  ),
+  defineTool(
+    'context.read',
+    'Read one skill file or agent instructions file from the repository’s agent context, by a path from context.list or a relative link with `from`. A SKILL.md (and any skill file that mentions `ab` commands) returns with a generated preamble that maps each `ab` command it mentions to the tool that performs it, or says it has no tool; an agent instructions file returns with a preamble framing it as the repository’s own file, which takes precedence over Autobuild skills.',
+    contextReadInput,
+    '{path, kind: "skill"|"skill-file"|"instructions"|"import", skill?, scope?, source, commit, text | contentBase64, links: [{href, path}]}: text is the preamble, a "---" line, then the exact file; links are the relative links in the file that resolve to other context files.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof contextReadInput>
+      const outcome = readContextFile(await contextViewFor(ctx, input.repo), input)
+      if (outcome.kind === 'not-found')
+        throw new RouteRefusalError({ kind: 'not-found', error: outcome.message })
+      return outcome.result
+    },
+  ),
 ]
 
 // ── The registry constructor ─────────────────────────────────────────────────
@@ -1667,6 +1729,8 @@ export interface RegistryOptions {
   clock?: Clock
   /** Constrain every call to this repository identity (the `ab mcp --repo` flag). */
   allowedRepo?: string
+  /** The canonical skill loader for the context tools; tests inject one. */
+  canonicalSkills?: () => Promise<CanonicalSkillBundle>
 }
 
 export interface OperatorToolRegistry {
@@ -1844,11 +1908,13 @@ export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
       }
       const tickets = partial.tickets ?? options.tickets
       const sandbox = partial.sandbox ?? options.sandbox
+      const canonicalSkills = partial.canonicalSkills ?? options.canonicalSkills
       const ctx: ToolContext = {
         store: partial.store ?? options.store,
         ...(tickets !== undefined ? { tickets } : {}),
         ...(sandbox !== undefined ? { sandbox } : {}),
         ...(partial.sandboxFor !== undefined ? { sandboxFor: partial.sandboxFor } : {}),
+        ...(canonicalSkills !== undefined ? { canonicalSkills } : {}),
         clock: partial.clock ?? options.clock ?? systemClock,
         ...(identity !== undefined ? { identity } : {}),
         ...(partial.via !== undefined ? { via: partial.via } : {}),

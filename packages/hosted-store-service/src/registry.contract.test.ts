@@ -1552,7 +1552,15 @@ describe('agent tool registry contract', () => {
 
   test('mutators refuse without an attributed identity; reads never do', async () => {
     const world = await seedWorld()
-    const registry = buildRegistry({ store: world.store, tickets: world.backend, clock })
+    const registry = buildRegistry({
+      store: world.store,
+      tickets: world.backend,
+      clock,
+      canonicalSkills: async () => ({
+        version: '0.0.0-test',
+        skills: [{ installName: 'ab-x', files: [{ path: 'SKILL.md', content: '# x' }] }],
+      }),
+    })
     const mutators = TOOLS.filter((tool) => tool.approval === 'default').map((tool) => tool.name)
     // One minimal valid input per mutator.
     const inputs: Record<string, unknown> = {
@@ -1622,6 +1630,8 @@ describe('agent tool registry contract', () => {
       'tickets.get': { repo, id: 'AUT-1' },
       'tickets.asset.get': { repo, id: 'AUT-1', kind: 'design', name: 'reference' },
       'notes.read': { repo },
+      'context.list': { repo },
+      'context.read': { repo, path: '.agents/skills/ab-x/SKILL.md' },
     }
     await world.store.putTicketAsset(repo, 'AUT-1', {
       kind: 'design',

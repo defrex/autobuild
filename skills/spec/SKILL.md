@@ -97,6 +97,20 @@ Depart from `ab` only when the user asks for an operation outside its CLI
 surface. In that case, use the ticket tooling available in the current
 environment and tell the user what you changed.
 
+## Connected agents
+
+When you are connected over MCP, you have no shell and no `ab` CLI:
+
+- Before filing or revising a ticket, call `context.list` and read the
+  repository's agent instructions with `context.read`. They are the
+  repository's own rules and win over this skill for that repository.
+- Ground the spec in the code by exploring it in your operator sandbox
+  (`sandbox.open`, then `sandbox.exec` and `sandbox.read_file`) wherever this
+  skill says to read the code.
+- Each `ab ticket …` command here maps to a `tickets.*` tool; the preamble of
+  every `context.read` result lists the mapping for the commands the file
+  mentions.
+
 ## No argument: design spec-first
 
 Interview the user toward a conforming spec. Work the standard's four parts
@@ -259,8 +273,8 @@ Attach the folder (or a single file) to the ticket as a `design` asset:
 ab ticket attach <id> design <path> [--name <name>]
 ```
 
-A connected agent without the CLI uses `tickets.asset.attach` with the file
-bytes as base64 `entries` (`layout: "tree"` for a folder, `"file"` for one file).
+A connected agent uses `tickets.asset.attach` with the file bytes as base64
+`entries` (`layout: "tree"` for a folder, `"file"` for one file).
 
 The ticket must exist first. For a new ticket, create it in a non-ready
 staging state, attach, and check with `ab ticket show <id>` (or `tickets.get`,

@@ -61,7 +61,9 @@ const config: NextConfig = {
   // the build packs into .autobuild-dist/ (see the hosted-dispatcher package
   // README); carry it into the cron route's function bundle. Both routes
   // retain legacy operate-skill trace entries; neither executes operator
-  // turns. Next 16's Turbopack does not apply these includes, so
+  // turns. The operator and MCP routes also carry the whole canonical skills
+  // tree, which the context tools read. Next 16's Turbopack does not apply
+  // these includes, so
   // `deploy:build` and `ab-hosted-service-build` both run
   // `ab-hosted-dispatcher ship-deployment`, which appends the equivalent
   // entries and the provider plugins. Webpack uses them here.
@@ -69,7 +71,10 @@ const config: NextConfig = {
     ? {}
     : {
         '/api/dispatch': ['./.autobuild-dist/**', './skills/operate/SKILL.md'],
-        '/operator/[[...path]]': ['./skills/operate/SKILL.md'],
+        // The context tools serve the canonical skills tree at runtime (#1225).
+        '/operator/[[...path]]': ['./skills/**'],
+        '/mcp': ['./skills/**'],
+        '/mcp/[...repo]': ['./skills/**'],
       },
 }
 

@@ -152,3 +152,8 @@ export { kernelGitUnavailableDetail } from '../kernel/kernel-git'
 // The judge's self-contained launcher, for seam tests that run it against a
 // hosted store.
 export { bundleJudgeLauncher } from '../processes/judge-launcher'
+export {
+  AGENT_CONTEXT_ARTIFACT,
+  encodeAgentContext,
+  type AgentContextRecord,
+} from '../store/agent-context'

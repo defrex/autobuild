@@ -193,3 +193,18 @@ export {
   type Resolution,
 } from './attention'
 export { repositoryNeedsAttention } from '../cli/attention'
+export {
+  contextIndex,
+  contextInstructions,
+  contextPromptMessages,
+  contextPrompts,
+  contextSource,
+  promptLabel,
+  readContextFile,
+  type CanonicalSkillBundle,
+  type ContextEntry,
+  type ContextIndex,
+  type ContextPrompt,
+  type ContextReadResult,
+} from './agent-context-serve'
+export { registerContextPrompts, type ContextPromptSource } from './context-prompts'
