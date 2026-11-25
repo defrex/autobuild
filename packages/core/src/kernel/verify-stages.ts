@@ -1,6 +1,7 @@
 import { verifyStages, type VerifyConfig } from '../config/schema'
 import type { LogIndex, VerifyRecord } from './log-index'
 import type { VerifyStageState } from './verify-stage-state'
+import { acceptedRewriteBoundary } from './leaf-restack-base'
 
 /** Pure barrier selection shared by leaf and integration verification. */
 export function activeVerifyStage(
@@ -41,13 +42,17 @@ export function activeVerifyStage(
 /** A leaf's verify cycle boundary inputs (§15.6-A): the latest code-review
  * approval, reconcile completion, configuration boundary, or clean
  * wait-resume restack after a verify:* or finalize wait (SPEC §11 "Ticket
- * waits"). Results at or before it describe an older change or base. The
+ * waits"), or an accepted rewritten target's replay boundary. Results at or before it describe an older change or base. The
  * engine's stage selection and its `cycleBoundary` both read it; a node's
  * wait-resume input is always 0, since nodes declare no waits. */
 export function leafVerifyCycleInputs(
   log: Pick<
     LogIndex,
-    'code' | 'lastReconcileCompletedSeq' | 'verifyConfigBoundary' | 'waitResumeVerifyBoundary'
+    | 'code'
+    | 'lastReconcileCompletedSeq'
+    | 'verifyConfigBoundary'
+    | 'waitResumeVerifyBoundary'
+    | 'restack'
   >,
 ): number {
   return Math.max(
@@ -55,6 +60,7 @@ export function leafVerifyCycleInputs(
     log.lastReconcileCompletedSeq,
     log.verifyConfigBoundary,
     log.waitResumeVerifyBoundary,
+    acceptedRewriteBoundary(log) ?? 0,
   )
 }
 
@@ -72,7 +78,11 @@ export function leafVerifiedRestack(
     | 'restack'
   >,
 ) {
-  const replay = Math.max(log.code.latestApproveSeq, log.lastReconcileCompletedSeq)
+  const replay = Math.max(
+    log.code.latestApproveSeq,
+    log.lastReconcileCompletedSeq,
+    acceptedRewriteBoundary(log) ?? 0,
+  )
   return log.waitResumeVerifyBoundary > replay
     ? log.restack.gates[String(log.waitResumeVerifyCycle)]
     : log.restack.gates[String(replay)]

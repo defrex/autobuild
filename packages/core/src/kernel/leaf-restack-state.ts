@@ -23,6 +23,24 @@ export interface LeafRestackState {
   /** The latest pre-publication wait-resume fast-forward. */
   advanced?: EventPayload<'restack.advanced'>
   advancedAt?: number
+  /** The latest no-work rewritten-target reprovision (`target.rewrite-recovered`
+   * with `reprovisioned`): the branch was reset onto `to`. */
+  rebased?: { to: string }
+  rebasedAt?: number
+  /** The open no-work reset of a rewritten-target episode, kept until its
+   * `target.rewrite-recovered`. No observation clears it: the workspace
+   * mutation it fences may already have happened. */
+  reprovision?: EventPayload<'target.rewrite-reprovision-prepared'> & { seq: number }
+  /** The base an operator's accept-target waived for target observation, and
+   * the occurrence whose completion opens its replay boundary. */
+  rewriteWaiver?: {
+    branch: string
+    base: string
+    seq: number
+    pendingLocal?: EventPayload<'target.rewrite-recovered'>['pendingLocal']
+    /** seq of the owner's first completion after `seq`, once recorded. */
+    ownerCompletedAt?: number
+  }
   reconcileAttempt?: number
   initialVerification?: boolean
   gates: Record<string, EventPayload<'restack.completed'>>
@@ -38,6 +56,26 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         break
       case 'finalize.completed':
         state.finalizedAt = event.seq
+        noteOwnerCompletion(
+          state,
+          event.seq,
+          (owner) => owner.kind === 'phase' && owner.phase === 'finalize',
+        )
+        break
+      case 'implement.completed':
+        noteOwnerCompletion(
+          state,
+          event.seq,
+          (owner) => owner.kind === 'phase' && owner.phase === 'implement',
+        )
+        if (state.distance?.head !== event.payload.commits.head) delete state.distance
+        break
+      case 'reconcile.completed':
+        noteOwnerCompletion(
+          state,
+          event.seq,
+          (owner) => owner.kind === 'phase' && owner.phase === 'reconcile',
+        )
         break
       case 'node.parent-accepted':
         delete state.targetRewrite
@@ -46,9 +84,6 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         break
       case 'pr.opened':
         if (state.distance?.head !== event.payload.pr.headSha) delete state.distance
-        break
-      case 'implement.completed':
-        if (state.distance?.head !== event.payload.commits.head) delete state.distance
         break
       case 'restack.rewritten':
       case 'reconcile.rewritten':
@@ -62,6 +97,11 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         )
           delete state.distance
         if (event.payload.ok && event.payload.headSha !== undefined) state.postStepAt = event.seq
+        noteOwnerCompletion(
+          state,
+          event.seq,
+          (owner) => owner.kind === 'finalize-step' && owner.step === event.payload.step,
+        )
         break
       case 'target.distance':
         state.distance = event.payload
@@ -83,6 +123,27 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         delete state.distance
         state.target = { seq: event.seq, ...event.payload }
         break
+      case 'target.rewrite-reprovision-prepared':
+        state.reprovision = { ...event.payload, seq: event.seq }
+        break
+      case 'target.rewrite-recovered': {
+        const { branch, sha, base, recovery, pendingLocal } = event.payload
+        delete state.targetRewrite
+        delete state.distance
+        delete state.reprovision
+        state.target = { seq: event.seq, branch, sha }
+        if (recovery === 'reprovisioned') {
+          state.rebased = { to: sha }
+          state.rebasedAt = event.seq
+        } else
+          state.rewriteWaiver = {
+            branch,
+            base,
+            seq: event.seq,
+            ...(pendingLocal === undefined ? {} : { pendingLocal }),
+          }
+        break
+      }
       case 'publication.candidate-retired':
         if (event.payload.operation === 'restack' && state.active?.id === event.payload.id) {
           state.active = { ...state.active, id: event.payload.replacementId }
@@ -148,6 +209,24 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         break
     }
   }
+}
+
+type PendingOwner = NonNullable<EventPayload<'target.rewrite-recovered'>['pendingLocal']>['owner']
+
+/** Record the first completion of an accepted waiver's pending-local owner. */
+function noteOwnerCompletion(
+  state: LeafRestackState,
+  seq: number,
+  matches: (owner: PendingOwner) => boolean,
+): void {
+  const waiver = state.rewriteWaiver
+  if (
+    waiver?.pendingLocal !== undefined &&
+    waiver.ownerCompletedAt === undefined &&
+    seq > waiver.seq &&
+    matches(waiver.pendingLocal.owner)
+  )
+    waiver.ownerCompletedAt = seq
 }
 
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({

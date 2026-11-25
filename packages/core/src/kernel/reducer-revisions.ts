@@ -65,4 +65,11 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'sandboxStates/shape/gbrf8k4qxq': '#1223 sandbox provisioning/failed states',
   'repositoryReadFacts/shape/o7791nz2gt': '#1223 sandbox provisioning/failed states',
   'sandboxStates/fold/hjdgop7xoh': '#1223 fold sandbox lifecycle facts',
+  'build/shape/o79t0vefkb': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'leafRestack/shape/4ju65uzvg9': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'logIndex/shape/n7i96wfovf': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'build/fold/1do6v52s3p': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'leafRestack/fold/5zq9n2zlit': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'logIndex/fold/bwl7r7gjae': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'verifyDiffBase/fold/p2si2x55v7': '#1274 rewritten-target reprovision, accept waiver, episodes',
 }

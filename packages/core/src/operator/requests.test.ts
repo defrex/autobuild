@@ -63,6 +63,9 @@ describe('operator route glue re-derived for the registry', () => {
     expect(answerAction({ resolution: 'dismiss', text: undefined })).toEqual({
       action: { kind: 'answer', text: undefined, resolve: { kind: 'dismiss-finding' } },
     })
+    expect(answerAction({ resolution: 'accept-target', text: undefined })).toEqual({
+      action: { kind: 'answer', text: undefined, resolve: { kind: 'accept-target' } },
+    })
     expect(
       answerAction({ resolution: 'review-round-ceiling', ceiling: 4, text: undefined }),
     ).toEqual({ action: { kind: 'answer', text: undefined, reviewRoundCeiling: 4 } })
