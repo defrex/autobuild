@@ -781,6 +781,14 @@ for (const conflict of [false, true])
               (await store.getEvents(BUILD)).filter((e) => e.type === 'restack.prepared'),
             ).toHaveLength(before)
             expect(await git(['rev-parse', BRANCH])).toBe(previousHead)
+            // The build has published work and an open PR, so recovery
+            // escalates instead of reprovisioning, then parks on the answer.
+            expect(await runner.step()).toEqual({ kind: 'recover-target-rewrite' })
+            const escalated = (await readBuildFacts(store, BUILD)).value.state
+            expect(escalated.openEscalations).toEqual([
+              expect.objectContaining({ source: 'policy', policyCause: 'target-rewritten' }),
+            ])
+            expect(await git(['rev-parse', BRANCH])).toBe(previousHead)
             expect(await runner.step()).toEqual({ kind: 'wait', reason: 'target-rewritten' })
           }
         }
