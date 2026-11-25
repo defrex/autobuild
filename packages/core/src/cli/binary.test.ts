@@ -40,6 +40,11 @@ class FakeBoundary implements TerminalRestoreProcess {
     this.kills.push(signal)
   }
 
+  readonly exits: number[] = []
+  exit(code: number): void {
+    this.exits.push(code)
+  }
+
   emit(event: string, ...args: unknown[]): void {
     for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args)
   }
@@ -161,6 +166,37 @@ describe('dispatch process terminal restoration', () => {
     expect(boundary.kills).toEqual(['SIGTERM'])
     expect(boundary.listenerCount('SIGTERM')).toBe(0)
   })
+
+  for (const supervised of [false, true]) {
+    test(`a drained SIGQUIT ${supervised ? 'returns to the supervised generation' : 'exits 131'} instead of re-signalling`, async () => {
+      const boundary = new FakeBoundary()
+      const { terminal } = fakeTerminal()
+      let finish!: () => void
+      const drain = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+
+      const running = withDispatchTerminalRestore(
+        'dispatch',
+        terminal,
+        async () => {
+          await drain
+          return 0
+        },
+        boundary,
+        () => {},
+        { supervised },
+      )
+      boundary.emit('SIGQUIT')
+      expect(boundary.exits).toEqual([])
+
+      finish()
+      expect(await running).toBe(0)
+      expect(boundary.kills).toEqual([])
+      expect(boundary.exits).toEqual(supervised ? [] : [131])
+      expect(boundary.listenerCount('SIGQUIT')).toBe(0)
+    })
+  }
 
   test('an exit before the first paint emits no restore bytes', async () => {
     const boundary = new FakeBoundary()
