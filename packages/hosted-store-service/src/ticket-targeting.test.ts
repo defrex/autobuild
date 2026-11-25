@@ -11,6 +11,9 @@ import { FakeTicketSource, type TicketSource } from '@defrex/autobuild/plugin-sd
 import {
   HostedTicketSource,
   TICKET_PAGING_HEADER,
+  TICKET_SEARCH_HEADER,
+  TicketSearchUnsupported,
+  searchTickets,
   TICKET_TARGETING_HEADER,
   TICKET_TARGETING_PROBE_NODE,
 } from '@defrex/autobuild/hosted-tickets'
@@ -18,7 +21,10 @@ import {
   integrationNodePass,
   targetedCompletenessParity,
   ticketPageReadBudget,
+  ticketSearchReadBudget,
+  ticketSearchRows,
   ticketTargetingReadBudget,
+  type TicketSearchRow,
 } from '@defrex/autobuild/testing'
 import { PostgresTicketSource } from '@defrex/autobuild-postgres-store'
 import { createTicketServer } from './ticket-server'
@@ -221,6 +227,148 @@ function predatingPaging(fetch: Fetch): Fetch {
     return new Response(response.body, { status: response.status, headers })
   }
 }
+
+/** A PostgresTicketSource whose SQL answers only the one search statement
+ * (and the targeting probe that settles negotiation), applying in JS what the
+ * statement applies: the seed's name union, exact-then-unique folded state
+ * resolution, terms over title or body, labels, the keyset and the limit. A
+ * separate state lookup, a seed write, a count or a listing fails. */
+function searchPostgres(
+  tickets: TicketSearchRow[],
+  options: { states?: string[]; failure?: Error } = {},
+) {
+  let statements = 0
+  const existing = options.states ?? ['Triage', 'Ready', 'Doing', 'Done', 'Rejected']
+  const lowered = new Map<string, string>()
+  const lower = (value: string) => {
+    let folded = lowered.get(value)
+    if (folded === undefined) lowered.set(value, (folded = value.toLowerCase()))
+    return folded
+  }
+  const q = Object.assign(
+    async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      statements++
+      const query = parts.join('?')
+      if (query.includes('target_id = (SELECT n.id')) return []
+      if (!query.includes('strpos(lower(ab_tickets.title COLLATE "und-x-icu")'))
+        throw new Error(`unexpected ticket statement: ${query}`)
+      if (options.failure) throw options.failure
+      expect(values[0]).toBe('budget')
+      const [configured, roles, state] = values.slice(1, 4) as [string[], string[], string | null]
+      const [labels, after, , terms, limit] = values.slice(-5) as [
+        string[],
+        string | null,
+        unknown,
+        string[],
+        number,
+      ]
+      const fold = (name: string) => name.trim().toLowerCase()
+      const names = [
+        ...new Set([
+          ...existing,
+          ...configured,
+          ...roles.filter((role) => !existing.some((name) => fold(name) === fold(role))),
+        ]),
+      ]
+      const folded = names.filter((name) => name.toLowerCase() === state?.toLowerCase())
+      const resolved =
+        state === null
+          ? null
+          : names.includes(state)
+            ? state
+            : folded.length === 1
+              ? folded[0]!
+              : undefined
+      const empty = { readable_id: null, title: null, hit_state: null, labels: null }
+      if (resolved === undefined) return [{ ok: false, state_names: names, ...empty }]
+      const hits = []
+      for (let i = tickets.length - 1; i >= 0 && hits.length < limit; i--) {
+        const ticket = tickets[i]!
+        if (after !== null && ticket.number >= Number(after)) continue
+        if (resolved !== null && ticket.state !== resolved) continue
+        if (!labels.every((label) => ticket.labels.includes(label))) continue
+        if (
+          !terms.every(
+            (term) => lower(ticket.title).includes(term) || lower(ticket.body).includes(term),
+          )
+        )
+          continue
+        hits.push({
+          ok: true,
+          state_names: null,
+          readable_id: ticket.id,
+          title: ticket.title,
+          hit_state: ticket.state,
+          labels: ticket.labels,
+          kind: 'work',
+          search_number: String(ticket.number),
+          target_readable_id: null,
+        })
+      }
+      return hits.length > 0 ? hits : [{ ok: true, state_names: null, ...empty }]
+    },
+    { array: (values: unknown[]) => values },
+  )
+  const runner = {
+    run: (_pool: unknown, body: (exec: typeof q) => Promise<unknown>) => body(q),
+    tx: (_pool: unknown, body: (exec: typeof q) => Promise<unknown>) => body(q),
+  } as unknown as ConstructorParameters<typeof PostgresTicketSource>[3]
+  const source = new PostgresTicketSource(
+    {} as SQL,
+    { repo: 'budget', teamKey: 'ENG', lifecycle, rejectedState: 'Rejected' },
+    lifecycle,
+    runner,
+  )
+  return { source, statements: () => statements, reset: () => (statements = 0) }
+}
+
+/** A service predating `search`: no search echo and no such route. */
+function predatingSearch(fetch: Fetch): Fetch {
+  return async (req) => {
+    if (new URL(req.url).pathname === '/tickets/search')
+      return Response.json({ error: 'no route', kind: 'not-found' }, { status: 404 })
+    const response = await fetch(req)
+    const headers = new Headers(response.headers)
+    headers.delete(TICKET_SEARCH_HEADER)
+    return new Response(response.body, { status: response.status, headers })
+  }
+}
+
+test('a search page through client, service and Postgres costs one request and one bounded query at 100 or 100,000 tickets', async () => {
+  await ticketSearchReadBudget(async (_population, mode, tickets) => {
+    const postgres = searchPostgres(tickets)
+    const service = server(postgres.source).fetch
+    const { source, requests } = client(mode === 'native' ? service : predatingSearch(service))
+    // Production settles search on the construction-time response.
+    expect(await source.negotiateTargeting()).toBe(true)
+    return {
+      source,
+      reset: () => {
+        postgres.reset()
+        requests.length = 0
+      },
+      statements: postgres.statements,
+      requests: () => [...requests],
+    }
+  })
+})
+
+test('a server without the ICU root collation refuses search typed, after one request and one statement', async () => {
+  const failure = Object.assign(
+    new Error('collation "und-x-icu" for encoding "UTF8" does not exist'),
+    { errno: '42704' },
+  )
+  const postgres = searchPostgres(ticketSearchRows(10), { failure })
+  const { source, requests } = client(server(postgres.source).fetch)
+  await source.negotiateTargeting()
+  postgres.reset()
+  requests.length = 0
+  const refusal = await searchTickets(source, { text: 'needle', limit: 5 }).catch((error) => error)
+  expect(refusal).toBeInstanceOf(TicketSearchUnsupported)
+  expect(refusal.source).toBe('hosted')
+  expect(requests.map((request) => request.operation)).toEqual(['search'])
+  expect(postgres.statements()).toBe(1)
+})
 
 test('a paged listing through client, service and Postgres reads only its window at any project size', async () => {
   await ticketPageReadBudget(async (population, mode) => {

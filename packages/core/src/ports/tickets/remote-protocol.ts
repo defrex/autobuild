@@ -5,6 +5,7 @@ import { ticketRefSchema } from '../../ontology'
 import { refineUniqueIssues } from './issue-links'
 import { holdsState } from './lifecycle'
 import { ticketPrioritySchema } from './priority'
+import { TICKET_SEARCH_MAX_LIMIT } from './search'
 
 /** Explicit opt-in: released clients through 0.12 use strict decoders without revisions.
  * Source checkouts can share their release version, so version alone is insufficient. */
@@ -74,6 +75,13 @@ export const TICKET_TARGETING_CAPABILITY = '1'
 export const TICKET_PAGING_HEADER = 'x-autobuild-ticket-paging'
 export const TICKET_PAGING_CAPABILITY = '1'
 
+/** Services that answer `search` echo it on every ticket response, failures
+ * included. A client treats an ok response without it, or a 404/400 refusal of
+ * `search` without it, as a service predating the operation, and declares
+ * search only after a response carried it. */
+export const TICKET_SEARCH_HEADER = 'x-autobuild-ticket-search'
+export const TICKET_SEARCH_CAPABILITY = '1'
+
 /** The node id a client's `list-targeting` negotiation probe names. Hosted
  * readable ids are `<teamKey>-<n>` or legacy `ticket-<uuid>`, so it never
  * names a ticket and the probe is an indexed miss. */
@@ -120,6 +128,23 @@ export const ticketPageWireSchema = z.strictObject({
   tickets: z.array(ticketWireSchema),
   diagnostics: z.array(z.string()),
   total: z.number().int().nonnegative(),
+})
+/** `search` answers compact hits, never ticket bodies, and the next cursor. */
+export const ticketSearchHitWireSchema = z.strictObject({
+  id: z.string().min(1),
+  title: z.string(),
+  state: z.string().optional(),
+  labels: z.array(z.string()),
+  kind: z.enum(['work', 'node']),
+  target: z
+    .string()
+    .refine((v) => v.trim().length > 0)
+    .optional(),
+})
+export const ticketSearchPageWireSchema = z.strictObject({
+  tickets: z.array(ticketSearchHitWireSchema),
+  cursor: z.string().min(1).optional(),
+  diagnostics: z.array(z.string()),
 })
 export const dependencyStateWireSchema = z.strictObject({
   id: z.string(),
@@ -204,6 +229,15 @@ export const hostedTicketRequestSchemas = {
         offset: z.number().int().nonnegative().optional(),
         order: z.enum(['oldest', 'newest']).optional(),
       }),
+    }),
+  ),
+  search: envelope(
+    z.strictObject({
+      text: z.string().regex(/\S/, 'search text must be nonblank'),
+      state: z.string().min(1).optional(),
+      labels: z.array(z.string().min(1)).optional(),
+      limit: z.number().int().min(1).max(TICKET_SEARCH_MAX_LIMIT),
+      cursor: z.string().min(1).optional(),
     }),
   ),
   states: envelope(z.strictObject({})),

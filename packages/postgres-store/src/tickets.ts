@@ -6,7 +6,12 @@ import {
   validateStatePurpose,
 } from '@defrex/autobuild/hosted-tickets'
 import { seedTicketStates, lockTicketStates, readTicketStateCounts } from './ticket-states'
-import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
+import {
+  searchTerms,
+  TicketRevisionConflict,
+  TicketSearchCursorInvalid,
+  TicketSearchUnsupported,
+} from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import { normalizeIssueLinks } from '@defrex/autobuild/plugin-sdk'
 import type {
@@ -19,6 +24,9 @@ import type {
   TicketCriteria,
   TicketPage,
   TicketPageListing,
+  TicketSearchHit,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketUpdate,
   TicketStateCount,
@@ -49,6 +57,13 @@ export interface PostgresTicketContext {
    * existing state of the same name. */
   backlogState?: string
   rejectedState?: string
+}
+
+/** The ICU root collation's missing-collation failure (SQLSTATE 42704). */
+function isMissingIcuCollation(error: unknown): boolean {
+  const code =
+    (error as { errno?: string } | null)?.errno ?? (error as { code?: string } | null)?.code
+  return code === '42704' && error instanceof Error && error.message.includes('und-x-icu')
 }
 
 function requiredState(value: string, label: string): string {
@@ -345,6 +360,116 @@ export class PostgresTicketSource implements TicketSource {
       for (const row of rows) tickets.push(await this.record(q, row))
       return { tickets, diagnostics: [], total }
     })
+  }
+
+  /** Text search in exactly one bounded statement per page, state resolution
+   * included: project-scoped, every term of `searchTerms(query.text)` in the
+   * title or body, the state and label filters, a keyset cursor on the unique
+   * `ticket_number` (newest first) and `LIMIT limit + 1`. It selects only hit
+   * columns, so bodies never leave the database, and makes no per-hit read and
+   * no seed write. `query.state` resolves as `listReady` resolves it (exact,
+   * else one case-insensitive match) over the names a seed would leave:
+   * existing states, configured lifecycle names, and role names no existing
+   * state already holds case-insensitively. Unseeded names resolve without
+   * being inserted. A server without the ICU root collation refuses with
+   * `TicketSearchUnsupported` rather than answer differently from the shared
+   * matcher. */
+  async search(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    const after = this.searchCursor(query.cursor)
+    const terms = searchTerms(query.text)
+    const labels = query.labels ?? []
+    const state = query.state ?? null
+    // Roles fold onto each other as the seed folds them: first spelling wins.
+    const roles = this.roleStates.filter(
+      (name, index, all) =>
+        all.findIndex((other) => other.trim().toLowerCase() === name.trim().toLowerCase()) ===
+        index,
+    )
+    let rows: Row[]
+    try {
+      rows = await this.retry.run(
+        this.sql,
+        // `COLLATE "und-x-icu"` makes lower() ICU's root-locale full case
+        // mapping, which is what JS toLowerCase (the shared matcher) does; the
+        // database default (C or libc) folds differently. Keep both clauses;
+        // the Postgres search parity test exposes the difference. `strpos`
+        // keeps `%`, `_` and `\` literal, as `String.includes` does.
+        (q) => q`WITH existing AS (SELECT name FROM ab_ticket_states WHERE repo = ${this.repo}),
+        names AS (
+          SELECT name FROM existing
+          UNION SELECT c FROM unnest(${q.array(this.configured, 'text')}) AS c
+          UNION SELECT r FROM unnest(${q.array(roles, 'text')}) AS r
+            WHERE NOT EXISTS (SELECT 1 FROM existing e WHERE lower(btrim(e.name)) = lower(btrim(r)))),
+        resolved AS (
+          SELECT CASE
+            WHEN ${state}::text IS NULL THEN NULL
+            WHEN EXISTS (SELECT 1 FROM names WHERE name = ${state}::text) THEN ${state}::text
+            WHEN (SELECT count(*) FROM names WHERE lower(name) = lower(${state}::text)) = 1
+              THEN (SELECT name FROM names WHERE lower(name) = lower(${state}::text))
+          END AS state,
+          (${state}::text IS NULL
+            OR EXISTS (SELECT 1 FROM names WHERE name = ${state}::text)
+            OR (SELECT count(*) FROM names WHERE lower(name) = lower(${state}::text)) = 1) AS ok)
+        SELECT r.ok,
+          CASE WHEN r.ok THEN NULL ELSE ARRAY(SELECT name FROM names) END AS state_names,
+          h.readable_id, h.title, h.hit_state, h.labels, h.kind, h.search_number, h.target_readable_id
+        FROM resolved r LEFT JOIN LATERAL (
+          SELECT ab_tickets.readable_id, ab_tickets.title, ab_tickets.state AS hit_state,
+            ab_tickets.labels, ab_tickets.kind, ab_tickets.ticket_number::text AS search_number,
+            (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id
+          FROM ab_tickets
+          WHERE r.ok AND ab_tickets.repo = ${this.repo}
+            AND (r.state IS NULL OR ab_tickets.state = r.state)
+            AND ab_tickets.labels @> ${q.array(labels, 'text')}
+            AND (${after}::bigint IS NULL OR ab_tickets.ticket_number < ${after}::bigint)
+            AND NOT EXISTS (SELECT 1 FROM unnest(${q.array(terms, 'text')}) AS term
+              WHERE strpos(lower(ab_tickets.title COLLATE "und-x-icu"), term) = 0
+                AND strpos(lower(ab_tickets.body COLLATE "und-x-icu"), term) = 0)
+          ORDER BY ab_tickets.ticket_number DESC LIMIT ${query.limit + 1}) h ON true
+        ORDER BY h.search_number IS NULL, h.search_number::bigint DESC`,
+      )
+    } catch (error) {
+      if (isMissingIcuCollation(error)) throw new TicketSearchUnsupported(this.name)
+      throw error
+    }
+    const head = rows[0]
+    if (head !== undefined && head.ok === false) {
+      const names = orderStates(strings(head.state_names), [
+        this.lifecycle.triage,
+        this.lifecycle.ready,
+        this.lifecycle.doing,
+        this.lifecycle.done,
+      ])
+      resolveState(query.state!, names, 'database ticket source')
+      // Only reachable when JS and PostgreSQL case folding disagree on a name.
+      throw new Error(
+        `database ticket source: unknown state "${query.state}" — this tracker's states are ${names.join(', ')}`,
+      )
+    }
+    const hits = rows.filter((row) => row.readable_id !== null && row.readable_id !== undefined)
+    const tickets: TicketSearchHit[] = hits.slice(0, query.limit).map((row) => ({
+      id: String(row.readable_id),
+      title: String(row.title),
+      state: String(row.hit_state),
+      labels: strings(row.labels),
+      kind: row.kind === 'node' ? 'node' : 'work',
+      ...(row.target_readable_id == null ? {} : { target: String(row.target_readable_id) }),
+    }))
+    return {
+      tickets,
+      ...(hits.length > query.limit
+        ? { cursor: String(hits[query.limit - 1]!.search_number) }
+        : {}),
+      diagnostics: [],
+    }
+  }
+
+  /** The decimal `ticket_number` of the previous page's last hit. */
+  private searchCursor(cursor: string | undefined): string | null {
+    if (cursor === undefined) return null
+    if (!/^[1-9]\d*$/.test(cursor) || BigInt(cursor) > MAX_TICKET_NUMBER)
+      throw new TicketSearchCursorInvalid(this.name, cursor)
+    return cursor
   }
 
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
