@@ -49,6 +49,8 @@ Declare served model prefixes and a default. Optional tool-free `oneShot` sits b
 - Provision an absolute, writable working copy for the requested branch; return durable base evidence.
 - Resume an intact branch non-destructively, never silently re-cut from a newer base. Rematerialize a lost copy. Make release idempotent.
 - Optional `provision.publication` supplies a durable confirmed SHA and known cache tips for authoritative readback and cache repair. Preserve unknown unpublished work.
+- Optional `provision.fresh: { owner }` marks a build's first provision. A pre-existing branch of that name is not the build's work: never return it as the base unless you hold your own creation receipt for `owner` (stable across that build's retries). Cut from `baseBranch` and keep the old tip recoverable. Providers that ignore it rely on claim-time deduplication.
+- Optional `localBranchExists(repo, branch)` reports a local `refs/heads/<branch>` in the checkout you create branches in, and throws when the probe fails. Dispatch calls it only at claim time and skips such a slug. Omit it when your branches aren't local; `remoteBranchExists` covers those.
 
 ### `forge`
 
@@ -108,7 +110,8 @@ another store opened. A throw during slug selection fails that claim: no build
 is created and the ticket is handed back to retry on a later tick, never named
 without the check. A throw while diagnosing a target node leaves the plain
 pending diagnostic. Without the capability, slugs are deduplicated against the
-local store only and the dispatcher records a startup warning.
+local store, plus local branches when the workspace provider implements
+`localBranchExists`, and the dispatcher records a startup warning.
 
 Stores may expose `getNodeRewrite(node, previousHead, beforePrevious)` as a bounded point
 lookup of a durable `node.rewritten` receipt. Built-in adapters index these

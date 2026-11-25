@@ -875,8 +875,11 @@ to a deterministic title-derived name, so a failed proposal never prevents
 build creation. The dispatcher then deduplicates the base with `-2`, `-3`, …
 suffixes against the store and, when the forge can answer, against `ab/` or
 `ab-node/` build branches already on the remote, so a build never takes a
-branch another store owns. That check is not best effort: if a remote branch
-lookup fails, or the base and its `-2` … `-100` candidates are all taken, the
+branch another store owns. When the workspace provider creates branches in
+the dispatcher's local checkout, a candidate whose branch already exists
+there locally is skipped the same way, so a stale local branch left by an
+earlier build never becomes a new build's branch. That check is not best
+effort: if a remote or local branch lookup fails, or the base and its `-2` … `-100` candidates are all taken, the
 claim fails at the naming stage, no build is created, and the ticket returns
 to configured Ready under the dispatcher's preparation recovery contract
 (§3.3). The slug and its `ab/<slug>` (or `ab-node/<slug>` for a node) branch
@@ -1363,6 +1366,17 @@ The base-selection invariants make this safe with Git:
   after checkout; a provider that reuses a completed environment from a
   failed attempt records that environment's checkout, never a target head
   read separately. A target that moved since is a restack concern.
+- **A first provision never adopts a branch it did not create.** A leaf
+  build with no prior provision cuts from the base even when a branch of its
+  name already exists. A node is exempt: the kernel opens its branch before
+  any provision, and that branch holds the node's merged children. Creation is proven only by the provider's own receipt,
+  written atomically with the build's branch write once nothing foreign
+  holds the branch; ancestry is never evidence. A local provider sets the
+  old tip aside under `refs/autobuild/displaced/<branch>/<sha>` and cuts
+  from the base. A worktree that has the foreign branch checked out is
+  detached in place, and is moved under `.displaced/` when it occupies the
+  build's own path; its files are kept. Resume after a prior provision is
+  unchanged.
 - **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
   resumes the published branch. The kernel collapses and restacks at verify
   entry, at a ticket-wait resume, and after target moves while awaiting merge. The first
