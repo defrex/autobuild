@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { validateTicketTree } from './tree'
 import { ticketRevision } from './revision'
 /**
@@ -18,11 +19,15 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketListing,
+  TicketSearchHit,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketUpdate,
 } from '../types'
 import { TicketSourceRateLimitError } from '../types'
 import { validateTicketUpdate } from './update'
+import { TicketSearchCursorInvalid, searchTerms } from './search'
 import { refuseUnsupportedIssueLinks } from './issue-links'
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql'
@@ -252,6 +257,69 @@ function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | nul
   if (!cursor || seen.has(cursor)) throw new Error('linear: invalid or repeated pagination cursor')
   seen.add(cursor)
   return cursor
+}
+
+// Search: one team-filtered `issues` request per page. Linear evaluates the
+// text match itself through IssueFilter comparators, so results follow its
+// own matching and cost never grows with the team's issue count. Checked
+// against Linear's published schema
+// (https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql)
+// and documentation:
+// https://linear.app/developers/filtering (containsIgnoreCase, and/or)
+// https://linear.app/developers/pagination (first/after/endCursor)
+// https://linear.app/developers/rate-limiting (complexity).
+// `searchIssues` is rejected: its relevance-by-meaning retrieval and
+// candidate-narrowing filter can silently miss filtered matches.
+// Complexity per hit: 1.2 scalars and state + labels 1 + 50 * 1.1 + 1.2 +
+// nodeLabels 1 + 1.1 + parent 1 + .1 + 1.1 + 2.1 ≈ 65, so at the contract's
+// maximum limit of 100: 100 * 65 + wrappers < 6,600. Bodies are never selected.
+const SEARCH_LABEL_PAGE_SIZE = 50
+const SEARCH_QUERY = `query SearchIssues($filter: IssueFilter!, $first: Int!, $after: String, $nodeLabel: IssueLabelFilter!) { issues(filter: $filter, first: $first, after: $after, includeArchived: true, orderBy: createdAt) { nodes { identifier title state { name } labels(first: ${SEARCH_LABEL_PAGE_SIZE}) { nodes { name } ${PAGE_INFO} } nodeLabels: labels(filter: $nodeLabel, first: 1) { nodes { name } } parent { identifier team { key } labels(filter: $nodeLabel, first: 1) { nodes { name } } } } ${PAGE_INFO} } }`
+const SEARCH_CURSOR_PREFIX = 'linear1.'
+
+interface GqlSearchIssue {
+  identifier: string
+  title: string
+  state: { name: string } | null
+  labels: Connection<{ name: string }>
+  nodeLabels: { nodes: Array<{ name: string }> }
+  parent: {
+    identifier: string
+    team: { key: string } | null
+    labels: { nodes: Array<{ name: string }> }
+  } | null
+}
+
+/** Binds a cursor to the source's team and the normalized query. */
+function searchKey(teamKey: string, terms: string[], state: string | undefined, labels: string[]) {
+  return createHash('sha256')
+    .update(JSON.stringify([teamKey, terms, state ?? null, labels]))
+    .digest('hex')
+    .slice(0, 16)
+}
+
+function encodeSearchCursor(key: string, after: string): string {
+  return (
+    SEARCH_CURSOR_PREFIX +
+    Buffer.from(JSON.stringify({ k: key, a: after }), 'utf8').toString('base64url')
+  )
+}
+
+/** Linear's `endCursor` for this exact search, or null when the cursor is not one. */
+function decodeSearchCursor(cursor: string, key: string): string | null {
+  if (!cursor.startsWith(SEARCH_CURSOR_PREFIX)) return null
+  const encoded = cursor.slice(SEARCH_CURSOR_PREFIX.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return null
+  let payload: unknown
+  try {
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (payload === null || typeof payload !== 'object') return null
+  const { k, a } = payload as { k?: unknown; a?: unknown }
+  if (typeof k !== 'string' || typeof a !== 'string' || a.trim() === '' || k !== key) return null
+  return a
 }
 
 const DETAIL_FIELDS = `${METADATA_FIELDS} id identifier title description url priority state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} }`
@@ -562,6 +630,68 @@ export class LinearTicketSource implements TicketSource {
       after = nextCursor(data.issues.pageInfo, seen)
     } while (after !== null)
     return { tickets, diagnostics: [] }
+  }
+
+  /** One team-filtered `issues` request per page: every term must occur
+   * (Linear's `containsIgnoreCase`) in the title or the description; state and
+   * labels filter exactly as `listReady` does. Newest first, archived issues
+   * included. Never a follow-up read per hit and never a listing fallback. */
+  async search(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    const terms = [...new Set(searchTerms(query.text))]
+    const labels = [...new Set(query.labels ?? [])].sort()
+    const key = searchKey(this.teamKey, terms, query.state, labels)
+    let after: string | null = null
+    if (query.cursor !== undefined) {
+      after = decodeSearchCursor(query.cursor, key)
+      if (after === null) throw new TicketSearchCursorInvalid(this.name, query.cursor)
+    }
+    const filter: Record<string, unknown> = {
+      team: { key: { eq: this.teamKey } },
+      ...(query.state !== undefined ? { state: { name: { eq: query.state } } } : {}),
+      and: [
+        ...terms.map((term) => ({
+          or: [
+            { title: { containsIgnoreCase: term } },
+            { description: { containsIgnoreCase: term } },
+          ],
+        })),
+        ...labels.map((label) => ({
+          labels: { some: { name: { eq: label } } },
+        })),
+      ],
+    }
+    const data = await this.gql<{ issues: Connection<GqlSearchIssue> }>('search', SEARCH_QUERY, {
+      filter,
+      first: query.limit,
+      after,
+      nodeLabel: { name: { eq: 'node' } },
+    })
+    const diagnostics: string[] = []
+    const tickets = data.issues.nodes.map((issue): TicketSearchHit => {
+      if (issue.labels.pageInfo?.hasNextPage === true)
+        diagnostics.push(
+          `linear search: ${issue.identifier} has more than ${SEARCH_LABEL_PAGE_SIZE} labels; its hit lists the first ${SEARCH_LABEL_PAGE_SIZE}`,
+        )
+      const parent = issue.parent
+      const target =
+        parent !== null && parent.team?.key === this.teamKey && parent.labels.nodes.length > 0
+          ? parent.identifier
+          : undefined
+      return {
+        id: issue.identifier,
+        title: issue.title,
+        ...(issue.state?.name !== undefined ? { state: issue.state.name } : {}),
+        labels: issue.labels.nodes.map((label) => label.name),
+        kind: issue.nodeLabels.nodes.length > 0 ? 'node' : 'work',
+        ...(target !== undefined ? { target } : {}),
+      }
+    })
+    const next = nextCursor(data.issues.pageInfo, new Set())
+    return {
+      tickets,
+      ...(next !== null ? { cursor: encodeSearchCursor(key, next) } : {}),
+      diagnostics,
+    }
   }
 
   async get(id: string): Promise<Ticket | null> {

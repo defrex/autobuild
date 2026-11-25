@@ -854,12 +854,12 @@ describe('ab ticket search', () => {
     }
     const searchless = (): TicketSource =>
       Object.defineProperties(Object.create(new FakeTicketSource()), {
-        name: { value: 'linear' },
+        name: { value: 'example' },
         search: { value: undefined },
       })
     await expect(
       abTicket(['search', 'x'], { ...cliOpts(tmp), sourceFactory: searchless }),
-    ).rejects.toThrow('linear ticket source does not support search; no tickets were read')
+    ).rejects.toThrow('example ticket source does not support search; no tickets were read')
   })
 })
 
