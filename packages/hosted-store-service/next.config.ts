@@ -23,6 +23,9 @@ const config: NextConfig = {
   // the authorization server from `/.well-known/oauth-protected-resource` at
   // the resource URL's origin before falling back to path-based probes. The
   // MCP plugin serves both documents under /api/auth; rewrite them up.
+  // Per-repository MCP URLs (`/mcp/<host>/<path>`) have path-inserted
+  // protected-resource metadata below the root document; the auth handler
+  // answers those sub-paths (src/web/auth.ts authHTTPHandler).
   async headers() {
     return [
       {
@@ -44,6 +47,10 @@ const config: NextConfig = {
         {
           source: '/.well-known/oauth-protected-resource',
           destination: '/api/auth/.well-known/oauth-protected-resource',
+        },
+        {
+          source: '/.well-known/oauth-protected-resource/:path+',
+          destination: '/api/auth/.well-known/oauth-protected-resource/:path+',
         },
       ],
       afterFiles: [],

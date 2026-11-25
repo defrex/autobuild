@@ -1410,8 +1410,11 @@ fails closed inside a phase, exactly as repository-wide `ab builds` does); the
 hosted HTTP and MCP transports register from the same table. The hosted MCP
 binding registers the service's `operatorTools`, computed by the same
 `operatorToolTable` the operator server dispatches through, so advertisement
-equals dispatch. Checked-in risk classes live in `operator/annotations.ts`
-(SPEC §8.9).
+equals dispatch. Its per-repository mode (`/mcp/<host><path>`, in
+`web/mcp.ts`) serves the same table for one repository, converting each
+schema exactly as the SDK's `McpServer` does and then removing `repo`; both
+modes share one per-call closure. Checked-in risk classes live in
+`operator/annotations.ts` (SPEC §8.9).
 
 **Init and upgrade.** `packages/core/src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
@@ -2480,7 +2483,10 @@ Successful identity persistence materializes grants into member rows without
 placeholder users or invitations. Mutations and connection decisions serialize
 through the project registry singleton (after the connection row where relevant).
 Admission and project filtering read durable state on each browser request and
-MCP callback; session claims and activeOrganizationId confer no authority.
+MCP callback; session claims and activeOrganizationId confer no authority. Each
+MCP callback also checks the token's RFC 8707 resource binding
+(`web/mcp-resource-binding.ts`, one `verification` row read): a token bound to
+one per-repository URL is refused everywhere else.
 
 ## Operator presence
 

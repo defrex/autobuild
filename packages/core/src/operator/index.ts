@@ -57,6 +57,7 @@ export {
   OrchestratorConfigError,
   orchestratorConfig,
   readOrchestratorGate,
+  sandboxToolsListed,
   type OrchestratorGate,
 } from './query'
 export type { OrchestratorConfig } from '../config/schema'

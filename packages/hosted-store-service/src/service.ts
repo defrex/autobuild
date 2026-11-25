@@ -64,6 +64,7 @@ import {
   decodeEffectiveConfig,
   OperatorQueryError,
   operatorToolTable,
+  sandboxToolsListed,
   type OperatorSandboxService,
   type ToolEntry,
 } from '@defrex/autobuild/operator'
@@ -418,6 +419,11 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   /** The operator tool table this deployment serves — exactly what its
    * operator server dispatches. The MCP binding advertises this table. */
   operatorTools: readonly ToolEntry[]
+  /** Whether a repository-scoped MCP binding lists `sandbox.*` for `repo`:
+   * false without sandbox capability (no store opened), else that
+   * repository's latest deposited effective config enables `[orchestrator]`.
+   * One bounded latest-artifact read per call. */
+  listsSandboxTools(repo: string): Promise<boolean>
 } {
   const env = options.env ?? process.env
   // The deployment can host operator sandboxes when it has a public origin
@@ -903,6 +909,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     projects,
     machineAuth,
     operatorTools,
+    async listsSandboxTools(repo: string): Promise<boolean> {
+      if (sandboxCapability === undefined) return false
+      return withHostedProjectContext(() =>
+        withRepositoryReads(async () => sandboxToolsListed(await authorityStore(), repo)),
+      )
+    },
     fetch(req: Request): Promise<Response> {
       return withHostedProjectContext(() =>
         withRepositoryReads(async () => {

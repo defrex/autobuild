@@ -7954,3 +7954,35 @@ export async function agentContextReadBudget(): Promise<void> {
   expect(one).toEqual({ calls: { getRepoArtifact: 1 }, rows: 0 })
   expect(await latestCost(1_000)).toEqual(one)
 }
+
+/** The repository-scoped MCP listing gate (`sandboxToolsListed`) over a
+ * repository holding `revisions` deposited effective configs, the latest
+ * enabling `[orchestrator]`. Proves the listing cost is one repository read
+ * plus the latest artifact, independent of revision count, with no events. */
+export async function operatorSandboxListingReadBudget(opts: { revisions: number }) {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { historicalEffectiveConfig } = await import('../config/effective-artifact.fixture')
+  const { sandboxToolsListed } = await import('../operator/query')
+  const { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } = await import('../store/retention')
+  const repo = 'https://github.com/example/sandbox-listing-budget'
+  const store = new MemoryBuildStore({ retention: { maxRevisions: opts.revisions + 1 } })
+  await store.ensureRepo(repo)
+  for (let revision = 1; revision <= opts.revisions; revision++) {
+    await store.putRepoArtifact(repo, {
+      kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+      content: JSON.stringify(historicalEffectiveConfig(revision === opts.revisions)),
+    })
+  }
+  const counter = memoryStoreRequestCounter(store)
+  let listed = false
+  let rows = 0
+  try {
+    const metrics = await measureStoreReads(store, async () => {
+      listed = await sandboxToolsListed(store, repo)
+    })
+    rows = metrics.rows + metrics.repoRows
+  } finally {
+    counter.restore()
+  }
+  return { callVector: counter.vector(), rows, listed }
+}
