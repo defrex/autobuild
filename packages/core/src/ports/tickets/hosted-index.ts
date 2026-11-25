@@ -25,12 +25,22 @@ export {
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
   ticketPageWireSchema,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
+  ticketSearchPageWireSchema,
   hostedTicketContextSchema,
   hostedTicketRequestSchemas,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
+
+export {
+  searchTerms,
+  searchTickets,
+  TicketSearchCursorInvalid,
+  TicketSearchUnsupported,
+} from './search'
 
 export {
   TicketRevisionConflict,

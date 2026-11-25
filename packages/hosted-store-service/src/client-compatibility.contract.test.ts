@@ -35,6 +35,8 @@ import {
   HostedTicketSource,
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_PRIORITY_HEADER,
   TicketIssueLinksUnsupported,
@@ -1031,8 +1033,8 @@ test('a current client pages through list-ready against a server predating list-
   expect(client.listPage).toBeUndefined()
 })
 
-// Published clients never send list-page; the new operation and its echo leave
-// their frozen requests and strict decoders untouched.
+// Published clients never send list-page or search; the new operations and
+// their echoes leave their frozen requests and strict decoders untouched.
 for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
   const version = publication.version
   test(`published ${version} ticket listings are unchanged by list-page`, async () => {
@@ -1051,6 +1053,7 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
     const response = await server.fetch(req)
     expect(response.status).toBe(200)
     expect(response.headers.get(TICKET_PAGING_HEADER)).toBe(TICKET_PAGING_CAPABILITY)
+    expect(response.headers.get(TICKET_SEARCH_HEADER)).toBe(TICKET_SEARCH_CAPABILITY)
     const listing = ticket120.ticketListingWireSchema.parse(await response.json())
     expect(listing.tickets.map((ticket) => ticket.title)).toEqual(['Urgent', 'Normal'])
   })

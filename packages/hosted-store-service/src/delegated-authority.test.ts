@@ -485,6 +485,8 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
     'list-targeting': { nodeId: 'unknown' },
     // An operator listing: no grant or delegation may page.
     'list-page': { criteria: {}, page: { limit: 1 } },
+    // Search is operator authority too.
+    search: { text: 'x', limit: 1 },
     get: { id: 'unknown' },
     'dependency-states': { ids: ['unknown'] },
     states: {},
@@ -619,6 +621,7 @@ test('project and admin credentials retain every hosted ticket operation', async
     for (const [operation, input] of [
       ['list-ready', {}],
       ['list-page', { criteria: {}, page: { limit: 1 } }],
+      ['search', { text: 'Ticket', limit: 1 }],
       ['get', { id }],
       ['dependency-states', { ids: [id] }],
       ['claim', { id }],

@@ -1180,6 +1180,135 @@ export async function ticketPageReadBudget(
   }
 }
 
+/** One ticket of a search-budget population: fixed-width id and title, a body
+ * of at least 1 KiB, and strides that give each budget query more than two
+ * pages of matches. The pattern repeats every 60 numbers, so the newest
+ * matches of 100 and 100,000 tickets carry the same states and labels. */
+export interface TicketSearchRow {
+  number: number
+  id: string
+  title: string
+  body: string
+  state: string
+  labels: string[]
+}
+
+const SEARCH_PAD = 'x'.repeat(1024)
+const SEARCH_BODY = `Body ${SEARCH_PAD}`
+const SEARCH_NEEDLE_BODY = `Body with a needle in it ${SEARCH_PAD}`
+
+export function ticketSearchRows(population: number): TicketSearchRow[] {
+  return Array.from({ length: population }, (_, i) => {
+    const number = i + 1
+    const n = String(number).padStart(6, '0')
+    return {
+      number,
+      id: `ENG-${n}`,
+      title: `${number % 5 === 0 ? 'Needle' : 'ticket'} ${n}`,
+      body: number % 3 === 0 ? SEARCH_NEEDLE_BODY : SEARCH_BODY,
+      state: number % 4 < 2 ? 'Ready' : 'Triage',
+      labels: number % 2 === 0 ? ['dup'] : [],
+    }
+  })
+}
+
+/** Same shape as `TicketPageFixture`: a fresh source over `tickets`;
+ * `native` is a service answering `search`, `predating` one without it. */
+export type TicketSearchFixture = TicketPageFixture
+
+/** A search page (per operator or agent request) through a hosted service
+ * that searches costs exactly one `search` request and one bounded statement,
+ * state-filtered pages and state refusals included, and ships no bodies, at
+ * 100 and 100,000 tickets. Against a service predating search, the caller
+ * refuses with `TicketSearchUnsupported` before any request: nothing is
+ * listed. */
+export async function ticketSearchReadBudget(
+  fixture: (
+    population: number,
+    mode: 'native' | 'predating',
+    tickets: TicketSearchRow[],
+  ) => Promise<TicketSearchFixture>,
+): Promise<void> {
+  const { searchTickets, searchTerms, matchesSearch, TicketSearchUnsupported } = await import(
+    '../ports/tickets/search'
+  )
+  const populations = [100, 100_000] as const
+  const limit = 5
+  const queries = [
+    { key: 'all' },
+    { key: 'labels', labels: ['dup'] },
+    { key: 'state', state: 'Ready' },
+    { key: 'folded state', state: 'ready' },
+  ] as const
+  const bytes = new Map<string, number>()
+  for (const population of populations) {
+    const tickets = ticketSearchRows(population)
+    const newestFirst = [...tickets].reverse()
+    const terms = searchTerms('NEEDLE')
+    const { source, reset, statements, requests } = await fixture(population, 'native', tickets)
+    expect(source.search).toBeDefined()
+    for (const query of queries) {
+      const state = 'state' in query ? 'Ready' : undefined
+      const labels = 'labels' in query ? query.labels : []
+      const expected = newestFirst
+        .filter(
+          (ticket) =>
+            (state === undefined || ticket.state === state) &&
+            labels.every((label) => ticket.labels.includes(label)) &&
+            matchesSearch(ticket, terms),
+        )
+        .slice(0, 2 * limit)
+        .map((ticket) => ticket.id)
+      let cursor: string | undefined
+      const seen: string[] = []
+      for (const pageNumber of [1, 2]) {
+        reset()
+        const page = await searchTickets(source, {
+          text: 'NEEDLE',
+          limit,
+          ...('state' in query ? { state: query.state } : {}),
+          ...('labels' in query ? { labels: [...query.labels] } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        expect(requests().map((request) => request.operation)).toEqual(['search'])
+        expect(statements()).toBe(1)
+        expect(page.tickets).toHaveLength(limit)
+        expect(page.cursor).toBeDefined()
+        const size = requests().reduce((total, request) => total + request.bytes, 0)
+        // A body is at least 1 KiB, so no page of five hits shipped one.
+        expect(size).toBeLessThan(limit * 1024)
+        bytes.set(`${population}:${query.key}:${pageNumber}`, size)
+        seen.push(...page.tickets.map((hit) => hit.id))
+        cursor = page.cursor
+      }
+      expect(seen).toEqual(expected)
+    }
+    reset()
+    await expect(
+      searchTickets(source, { text: 'NEEDLE', limit, state: 'nonexistent' }),
+    ).rejects.toThrow(/unknown state "nonexistent"/)
+    expect(requests().map((request) => request.operation)).toEqual(['search'])
+    expect(statements()).toBe(1)
+
+    const predating = await fixture(population, 'predating', tickets)
+    expect(predating.source.search).toBeUndefined()
+    predating.reset()
+    await expect(searchTickets(predating.source, { text: 'NEEDLE', limit })).rejects.toBeInstanceOf(
+      TicketSearchUnsupported,
+    )
+    expect(predating.requests()).toEqual([])
+    expect(predating.statements()).toBe(0)
+  }
+  // Only the cursor's digits grow with the population.
+  const digits = String(populations[1]).length - String(populations[0]).length
+  for (const query of queries)
+    for (const pageNumber of [1, 2]) {
+      const small = bytes.get(`${populations[0]}:${query.key}:${pageNumber}`)!
+      const large = bytes.get(`${populations[1]}:${query.key}:${pageNumber}`)!
+      expect(Math.abs(large - small)).toBeLessThanOrEqual(digits)
+    }
+}
+
 /** Builds one dispatcher pass's observation inputs for a node build over a
  * fresh memory store, reporting which listing path the source decided on
  * before the pass; `observe` then observes the node with those inputs. */

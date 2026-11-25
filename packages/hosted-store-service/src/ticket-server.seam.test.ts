@@ -26,6 +26,11 @@ import {
   TicketPriorityUnsupported,
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
+  TicketSearchCursorInvalid,
+  TicketSearchUnsupported,
+  searchTickets,
 } from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
 import { withPaging } from './testing/paged-fake'
@@ -94,8 +99,10 @@ describeTicketSourceContract('HostedTicketSource (HTTP → FakeTicketSource)', a
   const { source } = harness()
   // Negotiated first, so the contract's targeting check cannot silently skip.
   expect(await source.negotiateTargeting()).toBe(true)
-  // The same response settled paging, so the shared paging fixtures cannot skip.
+  // The same response settled paging and search, so the shared paging and
+  // search fixtures cannot skip.
   expect(source.listPage).toBeDefined()
+  expect(source.search).toBeDefined()
   return {
     source,
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
@@ -942,4 +949,43 @@ test('a backend without native paging answers paging-unsupported, with no listin
     code: 'paging-unsupported',
   })
   expect(listed).toBe(0)
+})
+
+test('a backend without search answers search-unsupported, with no listing fallback', async () => {
+  let listed = 0
+  const fake = new FakeTicketSource([], { doneState: 'Done' })
+  const plain = Object.assign(Object.create(fake), {
+    search: undefined,
+    listReady: async () => {
+      listed++
+      return { tickets: [], diagnostics: [] }
+    },
+  }) as FakeTicketSource
+  const { server, source } = harness(plain)
+  const response = await server.fetch(
+    new Request('https://tickets.example/tickets/search', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        'content-type': 'application/json',
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+      body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { text: 'x', limit: 1 } }),
+    }),
+  )
+  expect(response.status).toBe(409)
+  expect(response.headers.get(TICKET_SEARCH_HEADER)).toBe(TICKET_SEARCH_CAPABILITY)
+  expect(await response.json()).toMatchObject({ kind: 'conflict', code: 'search-unsupported' })
+  expect(await source.negotiateTargeting()).toBe(true)
+  await expect(searchTickets(source, { text: 'x' })).rejects.toBeInstanceOf(TicketSearchUnsupported)
+  expect(listed).toBe(0)
+})
+
+test('a foreign search cursor maps to search-cursor-invalid through the service', async () => {
+  const { source } = harness()
+  expect(await source.negotiateTargeting()).toBe(true)
+  const error = await searchTickets(source, { text: 'x', cursor: 'foreign' }).catch((e) => e)
+  expect(error).toBeInstanceOf(TicketSearchCursorInvalid)
+  expect(error).toMatchObject({ source: 'hosted', cursor: 'foreign' })
 })
