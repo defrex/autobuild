@@ -2651,7 +2651,11 @@ durable it waits.
 
 Viewer uses the dispatch frontend with canonical repository facts for status,
 settings, harvest and migrations, bypassing the dispatch presentation event feed
-and its checkpoints. Fresh viewers reuse server reductions; idle refreshes read
+and its checkpoints. That status, like the web dashboard's and the operator
+queries', describes the run holding repository authority, or that held it last:
+an overlapping run that starts, yields and stops never replaces it. A run
+replaces it by recording a tick boundary, or by starting once it has stopped or
+before it has ticked. Fresh viewers reuse server reductions; idle refreshes read
 zero event rows. Its one ticket-source read is the header's triage count, at
 most once per 60 s. It has no child, lease, execution wiring or upgrade-release timer.
 All existing shared-store controls remain: merge/hold, build/global pause/resume,
