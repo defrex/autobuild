@@ -3826,12 +3826,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         try {
           await sandbox.stop({ signal: this.operationSignal() })
         } catch (error) {
-          if (!isInterruptedLongPoll(error)) {
-            const after = await this.facade.get(name, this.operationSignal())
-            if (after === null) return withAttempt({ outcome: 'absent' as const })
-            if (after.sessionStatus === 'running' || after.sessionStatus === 'pending') {
-              throw error
-            }
+          // A failed or interrupted stop request is not confirmation: only an
+          // authoritative re-read showing the session no longer active is.
+          // Anything else refuses, so the journal never records `closed`
+          // while the session still holds capacity.
+          const after = await this.facade.get(name, this.operationSignal())
+          if (after === null) return withAttempt({ outcome: 'absent' as const })
+          const now = after.sessionStatus
+          if (now === undefined || now === 'running' || now === 'pending') {
+            throw new SandboxOperationError(
+              'close',
+              `could not confirm operator sandbox ${name} stopped (${describeError(error)}); call sandbox.close again`,
+              { cause: error },
+            )
           }
         }
       }

@@ -437,8 +437,12 @@ class FakeSandbox implements VercelSandboxHandle {
     this.writes.push(...files)
   }
   stopTimeouts = 0
+  /** The session status a stop request leaves, even one whose response
+   * times out (the request reached the provider). */
+  stopEffect: VercelSandboxHandle['sessionStatus'] | undefined
   async stop() {
     this.stops += 1
+    if (this.stopEffect !== undefined) this.sessionStatus = this.stopEffect
     if (this.stopTimeouts > 0) {
       this.stopTimeouts -= 1
       throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' })
@@ -3603,6 +3607,23 @@ describe('operator sandbox capability', () => {
     expect(await close(pending.restart())).toEqual({ outcome: 'closed' })
     expect([pending.sandbox.stops, pending.sandbox.deletes]).toEqual([1, 0])
     expect(pending.sandbox.commands).toEqual([])
+
+    // An interrupted stop is confirmed only by a re-read: still active
+    // refuses (nothing to journal as closed); confirmed stopped closes.
+    for (const effect of [undefined, 'stopped'] as const) {
+      const timedOut = harness()
+      timedOut.adoptExisting()
+      timedOut.sandbox.sessionStatus = 'pending'
+      timedOut.sandbox.stopTimeouts = 1
+      timedOut.sandbox.stopEffect = effect
+      const result = await close(timedOut.provider).catch((error: unknown) => error)
+      if (effect === undefined) {
+        expect(result).toMatchObject({
+          stage: 'close',
+          message: expect.stringContaining('could not confirm'),
+        })
+      } else expect(result).toEqual({ outcome: 'closed' })
+    }
 
     // A failed environment is stopped, never reaped: its record survives.
     const failed = harness()
