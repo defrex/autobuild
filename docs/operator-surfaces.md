@@ -92,12 +92,12 @@ bun ab web
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
 - `--port`, `--host` and `--json` work as for `ab web` and require `--web`; `--json` changes only the URL announcement line.
-- A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation: stdout carries only the URL line, and warnings and diagnostics stay on stderr.
+- A TTY keeps the terminal dashboard, which keeps the URL right-aligned on its top line in every view, viewer mode included. Under `--plain` or without a TTY, the web UI is the only presentation: stdout carries only the URL line, and warnings and diagnostics stay on stderr.
 - Shows what the dispatcher's own refresh reads: the repository header without the overview. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
 - Frames from the terminal dashboard add no store reads. A plain dispatcher reads one change position per tick while a browser is connected, and nothing while none is.
 - Analytics and build timelines work once the dispatcher's store is open, as explicit reads.
 - Binds before the repository lease; a taken port fails dispatch before it claims anything.
-- The URL keeps working across automatic runtime upgrades and is printed once. Ctrl-C closes it. `--once` is refused.
+- The URL keeps working across automatic runtime upgrades. Only the first generation announces it on stdout; a TTY dashboard keeps showing it on its top line, successors included. Ctrl-C closes it. `--once` is refused.
 
 ### Local stdio MCP
 
@@ -181,7 +181,7 @@ another session's process; a preference does not authorize takeover.
 `ab web [--json]` is always allowed, even while a dispatcher exists: it serves a
 read-only UI without acquiring a dispatcher lease. `ab dispatch --web` serves the
 same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
-stderr. Both default to loopback. Serving beyond loopback has no access control;
+stderr; a TTY dashboard keeps it on its top line. Both default to loopback. Serving beyond loopback has no access control;
 see [operator surfaces](operator-surfaces.md) for binding and refresh details.
 
 ## Timeline and analytics

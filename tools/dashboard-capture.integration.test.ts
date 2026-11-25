@@ -8,7 +8,12 @@ import type { PipelineStep } from '../packages/core/src/cli/dashboard/model'
 import { stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
 import { projectWebParity } from '../packages/hosted-store-service/app/dashboard/view-model'
-import { type DashboardCaptureResult, FRAME_SPECS, WEBSITE_HERO_COLUMNS } from './dashboard-capture'
+import {
+  CAPTURE_WEB_URL,
+  type DashboardCaptureResult,
+  FRAME_SPECS,
+  WEBSITE_HERO_COLUMNS,
+} from './dashboard-capture'
 
 let tmp: string
 
@@ -178,6 +183,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'viewer-session-100-light',
     'ticket-wait-wide',
     'ticket-wait-detail',
+    'web-url-list',
+    'web-url-viewer-detail',
+    'web-url-narrow',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
@@ -201,7 +209,12 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id.startsWith('viewer-')) {
+    if (frame.id.startsWith('web-url-')) {
+      // The URL is whole, flush with the right edge, after at least two spaces.
+      const top = stripAnsi(frame.lines[0]!)
+      expect(top.endsWith(`  ${CAPTURE_WEB_URL}`)).toBe(true)
+      expect(cellWidth(top)).toBe(frame.terminal.columns)
+    } else if (frame.id.startsWith('viewer-')) {
       expect(frame.text).toContain('viewer')
       expect(frame.text).toContain('Ctrl-C close viewer')
       if (frame.id.startsWith('viewer-session-'))
