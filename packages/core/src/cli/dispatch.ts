@@ -159,6 +159,7 @@ import {
   type DashboardView,
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
+import { repositoryQueueDepth } from './dashboard/header'
 import {
   dashboardContentWidth,
   detailScrollLimit,
@@ -958,8 +959,6 @@ class DispatchLoop {
   private configWarnings: readonly string[] = []
   /** Deprecation notices of an autobuild.toml change that is not adopted. */
   private candidateWarnings: readonly string[] = []
-  /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
-  private queuedCount = 0
   /** Display-only triage count, sampled between ticks at most once per
    * `TRIAGE_COUNT_REFRESH_MS`. Present only for interactive dashboards and
    * frontend-status kernels; its value is undefined until a read succeeds. */
@@ -1576,7 +1575,6 @@ class DispatchLoop {
         invalidTickets: readyObservation?.invalidTickets ?? report.invalidTickets,
         ticketDiagnostics: readyObservation?.ticketDiagnostics ?? report.ticketDiagnostics,
       }
-      this.queuedCount = publishedReport.queued
       const triage = this.triageSampler?.value
       this.lastTickStatus = {
         queued: publishedReport.queued,
@@ -4308,7 +4306,7 @@ class DispatchLoop {
       buildSnapshot.builds,
       {
         repo: this.repoIdentity,
-        queued: this.queuedCount,
+        queued: repositoryQueueDepth(repositoryEvents),
         activeCount: [...buildSnapshot.states.values()].filter(
           (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
         ).length,
