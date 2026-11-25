@@ -67,6 +67,10 @@ export interface HostedOperatorSandboxOptions {
    * fails construction before any path use. */
   scratchRoot?: string
   clock?: Clock
+  /** The hosted background seam (Next's `after()`, the platform's
+   * `waitUntil`): keeps the serving function alive for a provider's host
+   * phase and its settlement after `sandbox.open` responds. */
+  background?: (work: Promise<unknown>) => void
   /** Test seam: an already-constructed forge. Production passes nothing and
    * the configured forge is built here. The forge is REQUIRED either way —
    * unlike `ab mcp`, which degrades to `canPublish: false` because its
@@ -228,6 +232,7 @@ export async function createHostedOperatorSandboxService(
       sandboxSetupCommand: config.commands.setup,
       sandboxRoot: join(scratch, 'orchestrator-sandboxes'),
       sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
+      sandboxIdleMinutes: config.orchestrator.sandbox.idleMinutes,
       orchestratorSandboxEnabled: true,
       ...(egressReadCredential !== undefined
         ? { sandboxEgressReadCredential: egressReadCredential }
@@ -241,6 +246,7 @@ export async function createHostedOperatorSandboxService(
       baseBranch: config.baseBranch,
       forge,
       ...(options.clock !== undefined ? { clock: options.clock } : {}),
+      ...(options.background !== undefined ? { background: options.background } : {}),
     })
     return Object.assign(service, { dispose })
   } catch (error) {

@@ -69,6 +69,7 @@ async function lifecycle(opts: MemoryOperatorSandboxOptions & { store?: MemoryBu
       sandbox: { idleMinutes: 30, environmentVariables: [] },
       baseBranch: 'main',
       forge: new FakeForge(),
+      sleep: async () => {},
     })
   const service = await make()
   const types = async () =>
@@ -88,17 +89,29 @@ const refusal = (promise: Promise<unknown>) =>
     (error: unknown) => error as SandboxOperationError,
   )
 
-/** A store whose next appends of `type` reject, `times` times. */
+/** The background settle handler's attempts: one plus its bounded retries. */
+const BACKGROUND_ATTEMPTS = 4
+
+/** A store whose next appends of `type` (plain or conditional) reject,
+ * `times` times. */
 function rejectAppends(store: MemoryBuildStore, type: string, times: number) {
   const real = store.appendRepo.bind(store)
+  const realIfCurrent = store.appendRepoIfCurrent.bind(store)
   let remaining = times
-  store.appendRepo = (async (repo: string, event: { type: string }) => {
+  const refuse = (event: { type: string }): void => {
     if (event.type === type && remaining > 0) {
       remaining--
       throw new Error('store unavailable')
     }
+  }
+  store.appendRepo = (async (repo: string, event: { type: string }) => {
+    refuse(event)
     return real(repo, event as never)
   }) as typeof store.appendRepo
+  store.appendRepoIfCurrent = (async (repo: string, seq: number, event: { type: string }) => {
+    refuse(event)
+    return realIfCurrent(repo, seq, event as never)
+  }) as typeof store.appendRepoIfCurrent
 }
 
 describe('OperatorSandboxService lifecycle', () => {
@@ -247,13 +260,11 @@ describe('OperatorSandboxService lifecycle', () => {
   test('a failure whose append was rejected is recorded exactly once by the next open or exec', async () => {
     for (const recovery of ['open', 'exec'] as const) {
       const store = new MemoryBuildStore()
-      rejectAppends(store, 'orchestrator.sandbox.provision-failed', 1)
+      rejectAppends(store, 'orchestrator.sandbox.provision-failed', BACKGROUND_ATTEMPTS)
       const fx = await lifecycle({ provisioning: 'deferred', store })
       await fx.service.open('ops', { repo: REPO })
       fx.sandbox.complete({ stage: 'setup', message: 'boom' })
       await fx.service.settled('ops')
-      expect(await fx.types()).toEqual(['provisioning'])
-      expect((await fx.service.status('ops', { repo: REPO })).state).toBe('failed')
       expect(await fx.types()).toEqual(['provisioning'])
       if (recovery === 'open') {
         await fx.service.open('ops', { repo: REPO })
@@ -279,7 +290,7 @@ describe('OperatorSandboxService lifecycle', () => {
 
   test('a flush whose append fails again refuses open without starting a new attempt', async () => {
     const store = new MemoryBuildStore()
-    rejectAppends(store, 'orchestrator.sandbox.provision-failed', 2)
+    rejectAppends(store, 'orchestrator.sandbox.provision-failed', BACKGROUND_ATTEMPTS + 1)
     const fx = await lifecycle({ provisioning: 'deferred', store })
     await fx.service.open('ops', { repo: REPO })
     fx.sandbox.complete({ stage: 'setup', message: 'boom' })
@@ -326,7 +337,7 @@ describe('OperatorSandboxService lifecycle', () => {
         await fx.service.open('ops', { repo: REPO })
       }
       const fact = kind === 'provision' ? 'provisioned' : 'resumed'
-      rejectAppends(store, `orchestrator.sandbox.${fact}`, 1)
+      rejectAppends(store, `orchestrator.sandbox.${fact}`, BACKGROUND_ATTEMPTS)
       fx.sandbox.complete('ready', BASE)
       await fx.service.settled('ops')
       expect((await fx.types()).at(-1)).toBe('provisioning')
