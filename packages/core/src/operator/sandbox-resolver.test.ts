@@ -6,7 +6,9 @@ import { manualClock } from '../testing/fixed'
 import {
   operatorSandboxCallReadBudget,
   operatorSandboxStatusReadBudget,
+  operatorSandboxListingReadBudget,
 } from '../testing/reduced-read-budget'
+import { sandboxToolsListed } from './query'
 import type { OperatorSandboxService } from './sandbox'
 import { createOperatorSandboxResolver, SandboxUnavailableError } from './sandbox-resolver'
 
@@ -33,6 +35,32 @@ test('sandbox.status costs the same at 10 and 5,000 journal events and reads no 
     expect(run.repoRows).toBe(0)
     expect(run.appended).toBe(0)
   }
+})
+
+test('the per-repository sandbox listing gate is one bounded read at 1 and 1,000 revisions', async () => {
+  const one = await operatorSandboxListingReadBudget({ revisions: 1 })
+  const many = await operatorSandboxListingReadBudget({ revisions: 1000 })
+  expect(many.callVector).toEqual(one.callVector)
+  expect(one.callVector.listRepoArtifacts).toBeUndefined()
+  expect(one.rows).toBe(0)
+  expect(many.rows).toBe(0)
+  expect([one.listed, many.listed]).toEqual([true, true])
+})
+
+test('the listing gate is closed for disabled, missing and invalid configs', async () => {
+  const store = new MemoryBuildStore()
+  const deposit = (repo: string, content: string) =>
+    store.putRepoArtifact(repo, { kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT, content })
+  const [disabled, missing, invalid] = ['disabled', 'missing', 'invalid'].map(
+    (name) => `https://github.com/example/${name}`,
+  ) as [string, string, string]
+  for (const repo of [disabled, missing, invalid]) await store.ensureRepo(repo)
+  await deposit(disabled, JSON.stringify(historicalEffectiveConfig(false)))
+  await deposit(invalid, '{not json')
+  expect(await sandboxToolsListed(store, disabled)).toBe(false)
+  expect(await sandboxToolsListed(store, missing)).toBe(false)
+  expect(await sandboxToolsListed(store, invalid)).toBe(false)
+  expect(await sandboxToolsListed(store, 'https://github.com/example/unknown')).toBe(false)
 })
 
 function fakeService(disposed: string[], label: string): OperatorSandboxService {
