@@ -1,4 +1,7 @@
 import type { RepositoryReadFacts } from '../store/reduced-reads'
+import type { BuildStore } from '../store/types'
+import { WebAnalyticsSource } from '../web/analytics-source'
+import { readOnlyStore } from '../web/read-only'
 import { WebModelHub } from '../web/hub'
 import { projectRepositoryFrame } from '../web/repository-source'
 import { WebPortInUseError, type StartedWebServer, type WebServerStarter } from '../web/server'
@@ -12,14 +15,24 @@ export const SUCCESSOR_BIND_ATTEMPTS = 100
 
 /**
  * The web UI a dispatcher serves in process (`ab dispatch --web`). Its hub is
- * in push mode: it reads nothing, and shows the repository facts that a
- * refresh the dispatcher already performs read from the store.
+ * in push mode and shows the repository facts that a refresh the dispatcher
+ * already performs read from the store. Frames from the dashboard frontend
+ * carry the change position that refresh sampled, so they add no read. A
+ * kernel-only dispatcher's journal refresh samples none, so while a browser
+ * is connected each of its frames reads one `getRepoChangePosition`, and
+ * nothing while nobody watches. Analytics and timeline requests are explicit
+ * reads through the attached store.
  */
 export interface DispatchWeb {
   hub: WebModelHub
   url: string
-  /** Serve the frame for facts a dispatcher refresh just read. No store call. */
-  publishFacts(facts: RepositoryReadFacts): void
+  /** Serve the frame for facts a dispatcher refresh just read, stamped with
+   * `position` when the refresh sampled one. Without one, and only while a
+   * browser is connected and a store is attached, one position read. */
+  publishFacts(facts: RepositoryReadFacts, position?: string): void
+  /** Serve analytics over `store`, once it is open. Until then the routes
+   * answer 503. A later call replaces the store. */
+  attachStore(store: BuildStore): void
   /** Stop the server and drop every connection. Idempotent. */
   close(): Promise<void>
 }
@@ -50,6 +63,9 @@ export async function startDispatchWeb(
     context?.recovery !== undefined ||
     context?.rollback !== undefined
   const hub = new WebModelHub({})
+  let analytics: WebAnalyticsSource | undefined
+  let attached: BuildStore | undefined
+  let store: BuildStore | undefined
   const sleep = opts.sleep ?? ((ms: number) => Bun.sleep(ms))
   let server: StartedWebServer | undefined
   for (let attempt = 1; server === undefined; attempt++) {
@@ -64,6 +80,7 @@ export async function startDispatchWeb(
         announce: !successor,
         stdout: opts.stdout,
         stderr: opts.stderr,
+        analytics: () => analytics,
         ...(opts.start !== undefined ? { start: opts.start } : {}),
       })
     } catch (error) {
@@ -81,11 +98,50 @@ export async function startDispatchWeb(
   }
   const started = server
   let closing: Promise<void> | undefined
+  const publish = (facts: RepositoryReadFacts, position?: string) => {
+    const frame = projectRepositoryFrame(opts.repo, facts).frame
+    hub.publish(position !== undefined ? { ...frame, position } : frame)
+  }
+  // The kernel path's position read: single-flight, latest facts win.
+  let reading = false
+  let pending: RepositoryReadFacts | undefined
+  const stampAndPublish = (facts: RepositoryReadFacts) => {
+    pending = facts
+    if (reading) return
+    const reader = store
+    if (reader === undefined) return
+    reading = true
+    void (async () => {
+      let position: string | undefined
+      try {
+        position = await reader.getRepoChangePosition(opts.repo)
+      } catch {
+        // Presentation only: the frame goes out without its refetch signal.
+      }
+      reading = false
+      const latest = pending!
+      pending = undefined
+      publish(latest, position)
+    })()
+  }
   return {
     hub,
     url: started.url,
-    publishFacts: (facts) => hub.publish(projectRepositoryFrame(opts.repo, facts).frame),
+    publishFacts: (facts, position) => {
+      if (position !== undefined || store === undefined || hub.subscribers === 0)
+        publish(facts, position)
+      else stampAndPublish(facts)
+    },
+    attachStore: (next) => {
+      if (closing !== undefined || next === attached) return
+      attached = next
+      store = readOnlyStore(next)
+      analytics = new WebAnalyticsSource(store, opts.repo)
+    },
     close: () => {
+      analytics = undefined
+      attached = undefined
+      store = undefined
       closing ??= (async () => {
         try {
           await started.stop()

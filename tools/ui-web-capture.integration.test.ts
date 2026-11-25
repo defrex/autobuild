@@ -4,7 +4,7 @@ import { FRAME_META } from '../packages/core/src/web/protocol'
 import { overviewFrame, RUNNING_SLUG } from '../packages/ui/src/app/fixtures'
 import { startUiWebFixtureServer } from './ui-web-capture'
 
-test('the fixture server serves the pages, bundle and overview stream with no store', async () => {
+test('the fixture server serves the pages, bundle, overview stream and analytics with no store', async () => {
   const server = await startUiWebFixtureServer()
   const overview = JSON.stringify(overviewFrame())
   let stopped = false
@@ -16,6 +16,10 @@ test('the fixture server serves the pages, bundle and overview stream with no st
     expect(html).toContain('github.com/acme/app')
 
     expect((await fetch(new URL(`/builds/${RUNNING_SLUG}`, server.url))).status).toBe(200)
+    const timeline = await fetch(new URL(`/api/builds/${RUNNING_SLUG}/timeline`, server.url))
+    expect(((await timeline.json()) as { row: { slug: string } }).row.slug).toBe(RUNNING_SLUG)
+    const analytics = await fetch(new URL('/api/analytics?window=7d', server.url))
+    expect(((await analytics.json()) as { gantt: { rows: unknown[] } }).gantt.rows).toHaveLength(25)
 
     for (const file of server.manifest.files) {
       const asset = await fetch(new URL(`/assets/${file.path}`, server.url))
