@@ -2,6 +2,83 @@
 
 ## Unreleased
 
+## v1.11.0 — 2026-11-25
+
+This release makes Autobuild easier to watch and control: a new web UI, served by `ab web` and `ab dispatch --web`, adds live dispatcher overview and build pages, build timelines and step-duration analytics. Hosted projects get much broader MCP support, including repository-scoped connectors, repository agent context served natively, sandbox tools from the hosted endpoint, and native ticket search across GitHub, Linear and hosted tickets for spotting duplicates. Operators now get sandboxes on by default with an explicit lifecycle, an attention digest tool, and a durable build roster with paged, filterable listings. Reliability fixes stop fresh builds from adopting stale branches, recover stranded or incompletely captured builds, and isolate local worktrees, while a large test audit cut integration-test cost without losing regression coverage.
+
+- [#1277](https://github.com/defrex/autobuild/pull/1277) — Serve repository agent context natively over MCP
+- [#1276](https://github.com/defrex/autobuild/pull/1276) — Recover leaf builds stranded by rewritten targets
+- [#1275](https://github.com/defrex/autobuild/pull/1275) — Run Vercel operator provisioning in a detached guest command
+- [#1273](https://github.com/defrex/autobuild/pull/1273) — Align build details and phone escalation sign-offs
+- [#1272](https://github.com/defrex/autobuild/pull/1272) — Restore the ghost Copy as Markdown style on docs pages
+- [#1269](https://github.com/defrex/autobuild/pull/1269) — Prevent fresh builds from adopting stale local branches
+- [#1268](https://github.com/defrex/autobuild/pull/1268) — Record missing corpus shapes for web analytics reducers
+- [#1266](https://github.com/defrex/autobuild/pull/1266) — Enable hosted operator sandboxes by default
+- [#1263](https://github.com/defrex/autobuild/pull/1263) — Add build timelines and step-duration analytics
+- [#1262](https://github.com/defrex/autobuild/pull/1262) — Add native GitHub ticket search
+- [#1260](https://github.com/defrex/autobuild/pull/1260) — Exit 131 after a graceful dispatcher SIGQUIT drain
+- [#1259](https://github.com/defrex/autobuild/pull/1259) — Add team-scoped Linear ticket search
+- [#1258](https://github.com/defrex/autobuild/pull/1258) — Add an operator attention digest tool
+- [#1256](https://github.com/defrex/autobuild/pull/1256) — Add repository-scoped MCP connectors to hosted projects
+- [#1255](https://github.com/defrex/autobuild/pull/1255) — Search hosted tickets through the remote ticket protocol
+- [#1254](https://github.com/defrex/autobuild/pull/1254) — Bound operator reads with a transactional open-build index
+- [#1253](https://github.com/defrex/autobuild/pull/1253) — Add an explicit operator sandbox lifecycle
+- [#1248](https://github.com/defrex/autobuild/pull/1248) — Capture each repository's agent context into the store
+- [#1242](https://github.com/defrex/autobuild/pull/1242) — Serve sandbox tools from the hosted MCP endpoint
+- [#1241](https://github.com/defrex/autobuild/pull/1241) — Add ticket search for duplicate detection through CLI and MCP
+- [#1240](https://github.com/defrex/autobuild/pull/1240) — Add ticket asset tools for remote ticket authors
+- [#1239](https://github.com/defrex/autobuild/pull/1239) — Filter paged build listings by kind, outcome and recent activity
+- [#1218](https://github.com/defrex/autobuild/pull/1218) — Add visual and layout-shift evidence for the web UI
+- [#1217](https://github.com/defrex/autobuild/pull/1217) — Stop MCP unit tests leaking the SSE keep-alive timer
+- [#1214](https://github.com/defrex/autobuild/pull/1214) — Add live dispatcher overview and build pages
+- [#1213](https://github.com/defrex/autobuild/pull/1213) — Build web overview frames from the roster and change feed
+- [#1204](https://github.com/defrex/autobuild/pull/1204) — Share dashboard vocabulary across terminal and web protocols
+- [#1203](https://github.com/defrex/autobuild/pull/1203) — Break the reducer-registry and build-runner import cycle
+- [#1202](https://github.com/defrex/autobuild/pull/1202) — Make pinned verify Bun available beside its resolved executable
+- [#1198](https://github.com/defrex/autobuild/pull/1198) — Detect incomplete landing captures and recover safely
+- [#1197](https://github.com/defrex/autobuild/pull/1197) — Consolidate optimization, ticket and forge scenario tests
+- [#1196](https://github.com/defrex/autobuild/pull/1196) — Add a durable build roster with bounded finished history
+- [#1195](https://github.com/defrex/autobuild/pull/1195) — Consolidate ticket tests and move in-memory cases to unit coverage
+- [#1192](https://github.com/defrex/autobuild/pull/1192) — Reduce tooling integration test cost while preserving coverage
+- [#1191](https://github.com/defrex/autobuild/pull/1191) — Audit hosted-dispatcher and sandbox integration tests
+- [#1190](https://github.com/defrex/autobuild/pull/1190) — Audit release and publish tooling tests for regression value
+- [#1186](https://github.com/defrex/autobuild/pull/1186) — Reduce hosted service integration test duplication
+- [#1185](https://github.com/defrex/autobuild/pull/1185) — Audit PostgreSQL integration tests for regression value
+- [#1184](https://github.com/defrex/autobuild/pull/1184) — Audit config, plugin and SDK tests for regression value
+- [#1183](https://github.com/defrex/autobuild/pull/1183) — Consolidate store and operator tests at cheaper seams
+- [#1182](https://github.com/defrex/autobuild/pull/1182) — Consolidate kernel integration tests at cheaper regression seams
+- [#1181](https://github.com/defrex/autobuild/pull/1181) — Consolidate runner and account tests at cheaper regression seams
+- [#1180](https://github.com/defrex/autobuild/pull/1180) — Consolidate forge port regression tests
+- [#1179](https://github.com/defrex/autobuild/pull/1179) — Consolidate dispatcher runtime regression tests
+- [#1178](https://github.com/defrex/autobuild/pull/1178) — Audit integration-node scenarios for regression value
+- [#1177](https://github.com/defrex/autobuild/pull/1177) — Add a local dispatcher ownership preference
+- [#1176](https://github.com/defrex/autobuild/pull/1176) — Trim redundant ticket and harvest CLI integration coverage
+- [#1175](https://github.com/defrex/autobuild/pull/1175) — Prune redundant installation integration tests
+- [#1174](https://github.com/defrex/autobuild/pull/1174) — Prune CLI plumbing integration tests while preserving coverage
+- [#1173](https://github.com/defrex/autobuild/pull/1173) — Audit harvest and process tests while preserving regression coverage
+- [#1172](https://github.com/defrex/autobuild/pull/1172) — Prune terminal and build-control integration tests
+- [#1171](https://github.com/defrex/autobuild/pull/1171) — Move pure status and repository-read tests to guarded unit coverage
+- [#1170](https://github.com/defrex/autobuild/pull/1170) — Consolidate redundant dispatcher recovery integration tests
+- [#1169](https://github.com/defrex/autobuild/pull/1169) — Audit build-runner integration tests for regression value
+- [#1168](https://github.com/defrex/autobuild/pull/1168) — Serve the web UI from ab dispatch --web
+- [#1163](https://github.com/defrex/autobuild/pull/1163) — Audit dispatcher scoping integration tests for regression value
+- [#1162](https://github.com/defrex/autobuild/pull/1162) — Isolate local build worktrees from checkout dependencies
+- [#1161](https://github.com/defrex/autobuild/pull/1161) — Refresh workspace dependencies after restacks change the base
+- [#1160](https://github.com/defrex/autobuild/pull/1160) — Budget optimization work in active hours and inherit node priority
+- [#1159](https://github.com/defrex/autobuild/pull/1159) — Slim hosted-service regression tests and move pure cases to unit tests
+- [#1155](https://github.com/defrex/autobuild/pull/1155) — Consolidate workspace port regression tests
+- [#1148](https://github.com/defrex/autobuild/pull/1148) — Prune redundant pipeline-core scenario tests
+- [#1142](https://github.com/defrex/autobuild/pull/1142) — Add derived reducers and build duration rollups
+- [#1141](https://github.com/defrex/autobuild/pull/1141) — Consolidate dispatch and dashboard tests for regression value
+- [#1128](https://github.com/defrex/autobuild/pull/1128) — Prune redundant watch and wait CLI integration tests
+- [#1124](https://github.com/defrex/autobuild/pull/1124) — Audit dispatcher part A tests for regression value
+- [#1118](https://github.com/defrex/autobuild/pull/1118) — Prevent GitHub blocker races during ticket creation and claim
+- [#1105](https://github.com/defrex/autobuild/pull/1105) — Add a read-only repository web server with ab web
+- [#1104](https://github.com/defrex/autobuild/pull/1104) — Speed up slow integration tests while preserving regression coverage
+- [#1103](https://github.com/defrex/autobuild/pull/1103) — Add allowlisted checkout-local configuration overrides
+- [#1101](https://github.com/defrex/autobuild/pull/1101) — Add an ordered changed-builds feed and paged build listing
+- [#1089](https://github.com/defrex/autobuild/pull/1089) — Guide agents to keep only regression-worthy tests
+
 ## v1.10.0 — 2026-11-23
 
 This release introduces optimization nodes, which let Autobuild pursue measurable objectives using paired, pinned measurement harnesses, durable pairwise judge panels, a proposer phase and objective progress shown on the dashboard and in status. Dispatcher intake gains open-PR backpressure, honors urgent priority, and lets operators start a single ticket while intake is paused, alongside a new built-in Antigravity runtime backed by the agy CLI. Settled leaf builds can now be reopened with feedback on their existing PRs, failing forge CI on finished leaves is flagged for attention, and GitHub rate limits are handled by exposing quota and pausing polling safely. Startup is faster because commands and runtimes load only when first used, and many reliability fixes keep work and history intact when Git refuses archive ref pushes.
