@@ -1331,9 +1331,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const checkConsent = (stream: BuildStream): void => {
         if (filters.length || stop) return
         const currentState = buildReducer.finish(stream.seed.build)
-        const rewrite = currentState.targetRewrite
+        const rewrite = currentState.kind === 'node' ? currentState.targetRewrite : undefined
         if (rewrite) {
-          const identity = JSON.stringify(['target.rewritten', stream.slug, rewrite.seq])
+          const identity = JSON.stringify([
+            'target.rewritten',
+            stream.slug,
+            currentState.targetRewriteSince ?? rewrite.seq,
+          ])
           if (!deliveredAttention.has(identity)) {
             deliveredAttention.add(identity)
             emit(rewrite, currentState)
@@ -1458,13 +1462,25 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
         const state = buildReducer.finish(stream.seed.build)
         stream.status = state.status
+        // By default a rewritten target wakes once per episode, and only for a
+        // node: a leaf's kernel reprovisions it or raises an escalation.
+        const repeatedRewrite =
+          !filters.length &&
+          event.type === 'target.rewritten' &&
+          (state.kind !== 'node' || event.seq !== state.targetRewriteSince)
         if (
-          matchesBuildFilter(event.type, filters) ||
+          (matchesBuildFilter(event.type, filters) && !repeatedRewrite) ||
           (!filters.length && event.type === 'restack.replayed' && event.payload.conflicted)
         )
           emit(event, state)
         if (event.type === 'target.rewritten')
-          deliveredAttention.add(JSON.stringify(['target.rewritten', stream.slug, event.seq]))
+          deliveredAttention.add(
+            JSON.stringify([
+              'target.rewritten',
+              stream.slug,
+              state.targetRewriteSince ?? event.seq,
+            ]),
+          )
         checkConsent(stream)
         checkMergeDecision(stream, state)
       }

@@ -2655,3 +2655,58 @@ describe('reopen a settled, unmerged leaf (SPEC §15.7)', () => {
     }
   })
 })
+
+describe('controlBuild — accept-target answers a target-rewritten escalation', () => {
+  async function raiseTargetRewrite(store: MemoryBuildStore, id: string): Promise<void> {
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id,
+        phase: 'setup',
+        source: 'policy',
+        policyCause: 'target-rewritten',
+        question: 'Accept the rewritten target?',
+      },
+    })
+  }
+  const answer = (store: MemoryBuildStore, action: BuildControlAction) =>
+    controlBuild({ store, repo: REPO, slug: SLUG, env: { USER: 'op' }, action })
+  const accept: BuildControlAction = { kind: 'answer', resolve: { kind: 'accept-target' } }
+
+  test('accept-target answers only the target-rewritten escalation and refuses when none is open', async () => {
+    const store = await makeStore()
+    await expect(answer(store, accept)).rejects.toMatchObject({ code: 'no-open-escalations' })
+    await raise(store, 'esc-agent', 'agent')
+    await raiseTargetRewrite(store, 'esc-target')
+    expect(await answer(store, accept)).toEqual({
+      kind: 'answered',
+      slug: SLUG,
+      count: 1,
+      resolution: 'accept-target',
+      resumed: false,
+    })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.openEscalations.map((e) => e.id)).toEqual(['esc-agent'])
+    expect(state.answeredEscalations.map((e) => [e.id, e.resolution])).toEqual([
+      ['esc-target', 'accept-target'],
+    ])
+    await store.close()
+  })
+
+  test('ordinary answers skip a target-rewritten escalation and refuse when it is the only one', async () => {
+    const store = await makeStore()
+    await raiseTargetRewrite(store, 'esc-target')
+    for (const action of [
+      { kind: 'answer', text: 'guidance' },
+      { kind: 'answer' },
+      { kind: 'answer', resolve: { kind: 'dismiss-finding' } },
+    ] satisfies BuildControlAction[])
+      await expect(answer(store, action)).rejects.toThrow('--accept-target')
+    await raise(store, 'esc-agent', 'agent')
+    expect(await answer(store, { kind: 'answer', text: 'guidance' })).toMatchObject({ count: 1 })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.openEscalations.map((e) => e.id)).toEqual(['esc-target'])
+    await store.close()
+  })
+})

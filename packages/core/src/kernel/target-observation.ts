@@ -12,7 +12,10 @@ export function assertTargetOid(sha: string): void {
 
 /** Admit only immutable forward destinations. CAS loss requires reclassification
  * against the winning accepted observation, never a blind append. Reads consume
- * reduced values only; idle polls read no event rows. */
+ * reduced values only; idle polls read no event rows. A leaf's base in use that
+ * an operator's accept-target waived (`target.rewrite-recovered` with
+ * `accepted`) is not a baseline for that branch: its own commits restack onto
+ * the target at the next replay boundary. No other baseline is waived. */
 export async function observeTarget(input: {
   store: BuildStore
   forge: Forge
@@ -54,9 +57,11 @@ export async function observeTarget(input: {
       return 'rejected'
     let previousSha: string | undefined
     const lineage: TargetLineage[] = []
+    const waiver = state.kind === 'node' ? undefined : restack.rewriteWaiver
     for (const baseline of baselines) {
       assertTargetOid(baseline)
       if (baseline === sha) continue
+      if (waiver?.branch === branch && waiver.base === baseline) continue
       if (!forge.isCommitAncestor) throw new Error('forge ancestry proof capability unavailable')
       if (!(await forge.isCommitAncestor(baseline, sha))) {
         // Scoped runners trust only the dispatcher-deposited proof for this

@@ -146,6 +146,7 @@ Answer variants:
 {"resolution":"guidance","text":"…"}
 {"resolution":"retry"}
 {"resolution":"dismiss","text":"optional audit text"}
+{"resolution":"accept-target","text":"optional audit text"}
 {"resolution":"review-round-ceiling","ceiling":4,"text":"optional guidance"}
 {"resolution":"revise-spec","origin":"body","body":"replacement spec","text":"optional guidance"}
 {"resolution":"revise-spec","origin":"ticket","body":"current amended ticket body","text":"optional guidance"}
@@ -254,7 +255,8 @@ Build control returns one of:
   a blocked build. This is a successful prompt transition but **does not append
   an event**; submit one of the answer requests next.
 - `{kind:"answered",slug,count,resolution,resumed,...}` from the answer route.
-  `resolution` is `guidance`, `retry`, `dismiss-finding`, or `revise-spec`.
+  `resolution` is `guidance`, `retry`, `dismiss-finding`, `revise-spec`, or
+  `accept-target` (answers only a leaf's target-rewritten escalation).
   Depending on the operation, the result also includes `remainingOpen`,
   `reviewRoundCeiling:{loop,value}`, `specRev`, `authorizedEarlier`, or a
   `terminalSignal` describing a terminal status, pending abort, or ended PR.
@@ -346,7 +348,8 @@ The default watch reports actionable conditions only:
 - `dispatcher.forge-degraded`: the dispatcher's own rate-limit cooldown opened, with its reset; once per episode. Extensions marked `continued` are silent.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
-- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`,
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`,
+  `target.rewritten` (a node's, once per rejected base; a leaf recovers or escalates),
   `landing.consent-revoked` (protected merge consent revoked by a reconcile's
   edits, naming the matched files and both heads),
   `pr.checks-failed` (failing forge CI at a finished leaf's live PR head, once

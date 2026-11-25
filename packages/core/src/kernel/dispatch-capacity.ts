@@ -239,10 +239,12 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
     !parkedLeaf(build, now) ||
     state.status === 'paused' ||
     state.status === 'blocked' ||
-    (state.compatibility?.decisiveFacts ?? 0) > 0 ||
-    state.targetRewrite !== undefined
+    (state.compatibility?.decisiveFacts ?? 0) > 0
   )
     return undefined
+  // A parked leaf on a rewritten target needs a runner to leave the wait: it
+  // reprovisions itself or raises its one escalation (SPEC §7.4).
+  if (state.targetRewrite !== undefined) return 'resume'
   // A ticket wait parks a leaf mid-pipeline: it asks for a slot only once the
   // wait has ended, to resume the phase that declared it.
   if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined

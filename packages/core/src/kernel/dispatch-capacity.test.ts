@@ -428,7 +428,7 @@ test('a parked leaf requests reconcile, a due restack, or verification for an un
   expect(occupiesCapacity(running, now)).toBe(true)
 })
 
-test('a deferred or target-rewritten parked leaf makes no request', () => {
+test('a deferred parked leaf makes no request; a target-rewritten one resumes unless blocked', () => {
   const deferred = finished('a', { settled: 10 })
   deferred.state.prState = 'conflicted'
   deferred.state.compatibility = { ...deferred.state.compatibility, decisiveFacts: 1 }
@@ -436,6 +436,8 @@ test('a deferred or target-rewritten parked leaf makes no request', () => {
   const rewritten = finished('b', { settled: 10 })
   rewritten.restackDue = true
   rewritten.state.targetRewrite = { type: 'target.rewritten' } as never
+  expect(slotRequest(rewritten, now)).toBe('resume')
+  rewritten.state.status = 'blocked'
   expect(slotRequest(rewritten, now)).toBeUndefined()
 })
 
