@@ -22,6 +22,13 @@ import { relaunchTarget } from './execution-relaunch'
 import { runtimeIdentity } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
 import { leafVerifiedRestack } from '../kernel/verify-stages'
+import { leafBaseInUse } from '../kernel/leaf-restack-base'
+import {
+  classifyAcceptedLocal,
+  openPublishingOwner,
+  reprovisionResume,
+  targetRewriteQuestion,
+} from '../kernel/target-rewrite-recovery'
 import { waitResumeSupersedes } from '../kernel/ticket-wait'
 import {
   deferMixedVersion,
@@ -1340,6 +1347,12 @@ export class BuildRunner {
         case 'restack':
           await this.restack(decision)
           return decision
+        case 'recover-target-rewrite':
+          await this.recoverTargetRewrite()
+          return decision
+        case 'accept-target-rewrite':
+          await this.acceptTargetRewrite(decision)
+          return decision
         case 'capture-reconcile-policy':
           await store.append(slug, {
             actor: KERNEL,
@@ -2589,8 +2602,17 @@ export class BuildRunner {
     })
   }
 
-  /** Snapshot the frozen target in a build-private ref without tracking-ref updates. */
+  /** Snapshot the frozen target in a build-private ref without tracking-ref
+   * updates, then admit it through target observation. */
   private async refreshReconcileBase(recordAccepted = false): Promise<string> {
+    const { branch, sha } = await this.snapshotTargetBase()
+    await this.admitReconcileBase(branch, sha, recordAccepted)
+    return sha
+  }
+
+  /** Snapshot the frozen target in a build-private ref without tracking-ref
+   * updates or observation: the caller decides what the snapshot means. */
+  private async snapshotTargetBase(): Promise<{ branch: string; sha: string }> {
     const baseBranch = await readBuildSelector(this.deps.store, this.deps.slug, 'baseBranch')
     if (baseBranch === undefined) {
       throw new Error(
@@ -2611,8 +2633,7 @@ export class BuildRunner {
           `${this.deps.forge.name} base snapshot did not return a commit SHA: ${JSON.stringify(sha)}`,
         )
       }
-      await this.admitReconcileBase(baseBranch, sha, recordAccepted)
-      return sha
+      return { branch: baseBranch, sha }
     }
 
     const fetchArgs = [
@@ -2641,8 +2662,278 @@ export class BuildRunner {
           `${resolved.stderr.trim() || sha || '(no output)'}`,
       )
     }
-    await this.admitReconcileBase(baseBranch, sha, recordAccepted)
-    return sha
+    return { branch: baseBranch, sha }
+  }
+
+  /** One git command in the workspace; throws on failure unless allowed. */
+  private async workspaceGit(args: string[], allowFailure = false) {
+    const result = await this.deps.exec(['git', ...args], { cwd: this.deps.workspacePath })
+    if (result.exitCode !== 0 && !allowFailure)
+      throw new Error(
+        `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || '(no output)'}`,
+      )
+    return result
+  }
+
+  private async localBranchHead(): Promise<string | undefined> {
+    const result = await this.workspaceGit(
+      ['rev-parse', '-q', '--verify', `refs/heads/${this.deps.branch}^{commit}`],
+      true,
+    )
+    return result.exitCode === 0 ? result.stdout.trim() : undefined
+  }
+
+  private async trackedTreeClean(): Promise<boolean> {
+    return (
+      (await this.workspaceGit(['status', '--porcelain', '--untracked-files=no'])).stdout.trim() ===
+      ''
+    )
+  }
+
+  /** `sha subject` of each commit in `from..to`, oldest first. */
+  private async commitsBetween(from: string, to: string) {
+    const out = (await this.workspaceGit(['log', '--reverse', '--format=%H %s', `${from}..${to}`]))
+      .stdout
+    return out
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const space = line.indexOf(' ')
+        return space < 0
+          ? { sha: line, subject: '' }
+          : { sha: line.slice(0, space), subject: line.slice(space + 1) }
+      })
+  }
+
+  private async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    const result = await this.workspaceGit(
+      ['merge-base', '--is-ancestor', ancestor, descendant],
+      true,
+    )
+    if (result.exitCode === 0) return true
+    if (result.exitCode === 1) return false
+    throw new Error(
+      `git merge-base --is-ancestor exited ${result.exitCode}: ${result.stderr.trim()}`,
+    )
+  }
+
+  /**
+   * Leave the `target-rewritten` wait (SPEC §7.4). An open no-work reset is
+   * completed forward first. Otherwise a leaf with no work of its own (no
+   * published head, no PR, no commits beyond its base in use, a clean tracked
+   * tree) is reprovisioned from the current target through a durable
+   * prepare → reset → recovered transaction; a leaf with work raises the
+   * episode's one `policy/target-rewritten` escalation.
+   */
+  private async recoverTargetRewrite(): Promise<void> {
+    const { store, slug } = this.deps
+    await this.closeProducerSessions()
+    try {
+      for (;;) {
+        const current = await readBuildFacts(store, slug)
+        const facts = current.value
+        const prepared = facts.log.restack.reprovision
+        if (prepared !== undefined) {
+          await this.resumeReprovision(prepared)
+          return
+        }
+        const rewrite = facts.log.restack.targetRewrite
+        if (rewrite === undefined) return
+        const base = facts.verifyDiffBase
+        if (base === undefined) throw new Error('missing contribution base')
+        const published = await readBuildSelector(store, slug, 'publishedBranchHead')
+        const local = await this.localBranchHead()
+        if (local === undefined) throw new Error(`missing local branch ${this.deps.branch}`)
+        const commits = await this.commitsBetween(base, local)
+        const clean = await this.trackedTreeClean()
+        if (
+          published !== undefined ||
+          facts.state.pr !== undefined ||
+          commits.length > 0 ||
+          !clean
+        ) {
+          await this.raiseTargetRewrite({
+            previousSha: rewrite.previousSha,
+            branch: rewrite.branch,
+            sha: rewrite.sha,
+            commits,
+            ...(published === undefined ? {} : { published }),
+            ...(facts.state.pr === undefined ? {} : { pr: facts.state.pr.number }),
+          })
+          return
+        }
+        const { sha } = await this.snapshotTargetBase()
+        const written = await store.appendIfCurrent(slug, current.cursor, {
+          actor: KERNEL,
+          type: 'target.rewrite-reprovision-prepared',
+          payload: {
+            branch: rewrite.branch,
+            previousSha: rewrite.previousSha,
+            base,
+            from: local,
+            sha,
+          },
+        })
+        // A concurrent observation or control: classify again from the log.
+        if (!written) continue
+        await this.assertAutomaticRewriteOwnership()
+        await this.workspaceGit(['checkout', '-q', '-B', this.deps.branch, sha])
+        await this.completeReprovision()
+        return
+      }
+    } catch (error) {
+      if (error instanceof AutomaticRewriteDeferred) return
+      throw error
+    }
+  }
+
+  /** Complete an open reprovision preparation forward, never re-classifying. */
+  private async resumeReprovision(
+    prepared: EventPayload<'target.rewrite-reprovision-prepared'>,
+  ): Promise<void> {
+    const local = await this.localBranchHead()
+    const clean = await this.trackedTreeClean()
+    switch (reprovisionResume(prepared, local, clean)) {
+      case 'complete':
+        await this.completeReprovision()
+        return
+      case 'redo': {
+        await this.assertAutomaticRewriteOwnership()
+        let sha = prepared.sha
+        const exists = async (oid: string) =>
+          (await this.workspaceGit(['cat-file', '-e', `${oid}^{commit}`], true)).exitCode === 0
+        if (!(await exists(sha))) {
+          // A fresh guest may lack the prepared commit: refresh the snapshot,
+          // else re-prepare from it with the same proven head.
+          const fresh = await this.snapshotTargetBase()
+          if (!(await exists(sha))) {
+            sha = fresh.sha
+            await this.deps.store.append(this.deps.slug, {
+              actor: KERNEL,
+              type: 'target.rewrite-reprovision-prepared',
+              payload: { ...prepared, sha },
+            })
+          }
+        }
+        await this.workspaceGit(['checkout', '-q', '-B', this.deps.branch, sha])
+        await this.completeReprovision()
+        return
+      }
+      case 'unknown':
+        await this.raiseTargetRewrite({
+          previousSha: prepared.previousSha,
+          branch: prepared.branch,
+          sha: prepared.sha,
+          commits: local === undefined ? [] : await this.commitsBetween(prepared.from, local),
+        })
+        return
+    }
+  }
+
+  /** Append the reset's completion from the open preparation, idempotently. */
+  private async completeReprovision(): Promise<void> {
+    const { store, slug } = this.deps
+    for (;;) {
+      const current = await readBuildFacts(store, slug)
+      const prepared = current.value.log.restack.reprovision
+      if (prepared === undefined) return
+      const { seq: _seq, from: _from, ...payload } = prepared
+      if (
+        await store.appendIfCurrent(slug, current.cursor, {
+          actor: KERNEL,
+          type: 'target.rewrite-recovered',
+          payload: { ...payload, recovery: 'reprovisioned' },
+        })
+      )
+        return
+    }
+  }
+
+  /** Raise the episode's one operator question (or a refused accept's). */
+  private async raiseTargetRewrite(
+    input: Omit<Parameters<typeof targetRewriteQuestion>[0], 'slug'>,
+  ): Promise<void> {
+    const { store, slug, ids } = this.deps
+    const facts = (await readBuildFacts(store, slug)).value
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: ids('esc'),
+        phase: facts.state.currentPhase?.phase ?? facts.state.lastCompletedPhase?.phase ?? 'setup',
+        source: 'policy',
+        policyCause: 'target-rewritten',
+        question: targetRewriteQuestion({ slug, ...input }),
+      },
+    } satisfies EventWrite<'escalation.raised'>)
+  }
+
+  /**
+   * Record an operator's accept-target: waive the rejected base in use and
+   * accept the current target. The engine restacks the build's published
+   * commits at the new replay boundary. Unpublished local commits inside an
+   * open publishing occurrence are named as `pendingLocal`, withholding the
+   * boundary until that occurrence publishes them; local commits nothing owns
+   * refuse the accept with a fresh escalation.
+   */
+  private async acceptTargetRewrite(
+    decision: Extract<Decision, { kind: 'accept-target-rewrite' }>,
+  ): Promise<void> {
+    const { store, slug } = this.deps
+    await this.closeProducerSessions()
+    for (;;) {
+      const current = await readBuildFacts(store, slug)
+      const facts = current.value
+      const rewrite = facts.log.restack.targetRewrite
+      const prepared = facts.log.restack.reprovision
+      if (rewrite === undefined && prepared === undefined) return
+      const previousSha = rewrite?.previousSha ?? prepared!.previousSha
+      const branch = rewrite?.branch ?? prepared!.branch
+      const base = leafBaseInUse(facts.log)
+      if (base === undefined) throw new Error('missing contribution base')
+      const { sha } = await this.snapshotTargetBase()
+      const published = await readBuildSelector(store, slug, 'publishedBranchHead')
+      const local = await this.localBranchHead()
+      if (local === undefined) throw new Error(`missing local branch ${this.deps.branch}`)
+      const verdict = classifyAcceptedLocal({
+        local,
+        published,
+        base,
+        localInPublished: published !== undefined && (await this.isAncestor(local, published)),
+        localDescends: await this.isAncestor(published ?? base, local),
+        owner: openPublishingOwner(facts.state, facts.log),
+      })
+      if (verdict.kind === 'refuse') {
+        const from = (await this.isAncestor(verdict.from, local))
+          ? verdict.from
+          : (await this.workspaceGit(['merge-base', verdict.from, local], true)).stdout.trim() ||
+            verdict.from
+        await this.raiseTargetRewrite({
+          previousSha,
+          branch,
+          sha,
+          commits: await this.commitsBetween(from, local),
+          ...(published === undefined ? {} : { published }),
+          ...(facts.state.pr === undefined ? {} : { pr: facts.state.pr.number }),
+          unowned: true,
+        })
+        return
+      }
+      const written = await store.appendIfCurrent(slug, current.cursor, {
+        actor: KERNEL,
+        type: 'target.rewrite-recovered',
+        payload: {
+          branch,
+          previousSha,
+          sha,
+          base,
+          recovery: 'accepted',
+          escalation: decision.escalation,
+          ...(verdict.kind === 'pending' ? { pendingLocal: verdict.pendingLocal } : {}),
+        },
+      })
+      if (written) return
+    }
   }
 
   private async admitReconcileBase(

@@ -279,6 +279,10 @@ export function buildControlConfirmation(result: BuildControlResult): string {
           result.resumed ? '; resume requested' : ''
         }`
       }
+      if (result.resolution === 'accept-target')
+        return `build ${result.slug}: accepted the rewritten target for ${result.count} escalation${plural}; the build's own commits restack onto it${
+          result.resumed ? '; resume requested' : ''
+        }`
       if (result.resolution === 'dismiss-finding' && (result.remainingOpen ?? 0) > 0) {
         const remaining = result.remainingOpen ?? 0
         return `build ${result.slug}: dismissed ${result.count} escalation${plural}; ${remaining} blocker${
@@ -1516,12 +1520,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'answer': {
       const usage =
-        'usage: ab answer <slug> [<text>] [--review-round-ceiling <n> | --dismiss | --revise-spec <file> | --revise-spec-from-ticket] [--store <ref>]'
+        'usage: ab answer <slug> [<text>] [--review-round-ceiling <n> | --dismiss | --revise-spec <file> | --revise-spec-from-ticket | --accept-target] [--store <ref>]'
       const parsed = parseArgs(
         rest,
         {
           store: 'value',
           dismiss: 'boolean',
+          'accept-target': 'boolean',
           'revise-spec': 'value',
           'revise-spec-from-ticket': 'boolean',
           'review-round-ceiling': 'value',
@@ -1534,6 +1539,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         parsed.flags.has('dismiss'),
         parsed.flags.has('revise-spec'),
         parsed.flags.has('revise-spec-from-ticket'),
+        parsed.flags.has('accept-target'),
       ].filter(Boolean).length
       if (resolutionFlags > 1) throw new Error(`resolution flags are mutually exclusive — ${usage}`)
       const answer = text.join(' ')
@@ -1558,15 +1564,22 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
             'cannot combine --review-round-ceiling with --dismiss; use guidance or a bare retry to answer the review-round-limit escalation',
           )
         }
+        if (parsed.flags.has('accept-target')) {
+          throw new Error(
+            'cannot combine --review-round-ceiling with --accept-target; it answers only a target-rewritten escalation',
+          )
+        }
         reviewRoundCeiling = parsedCeiling
       }
       const resolve = parsed.flags.has('dismiss')
         ? ({ kind: 'dismiss-finding' } as const)
-        : specPath !== undefined
-          ? ({ kind: 'revise-spec', body: suppliedSpecBody(specPath) } as const)
-          : parsed.flags.has('revise-spec-from-ticket')
-            ? ({ kind: 'revise-spec', body: { kind: 'ticket' } } as const)
-            : undefined
+        : parsed.flags.has('accept-target')
+          ? ({ kind: 'accept-target' } as const)
+          : specPath !== undefined
+            ? ({ kind: 'revise-spec', body: suppliedSpecBody(specPath) } as const)
+            : parsed.flags.has('revise-spec-from-ticket')
+              ? ({ kind: 'revise-spec', body: { kind: 'ticket' } } as const)
+              : undefined
       const readers =
         resolve?.kind === 'revise-spec' && resolve.body.kind === 'ticket'
           ? ticketSpecReaders(deps, slug, storeRef, 'ab answer --revise-spec-from-ticket')
