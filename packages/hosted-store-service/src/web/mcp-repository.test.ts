@@ -237,7 +237,7 @@ describe('per-repository MCP URLs', () => {
     expect((await list(narrow, REPO_URL)).status).toBe(200)
     expect((await list(narrow, OTHER_URL)).status).toBe(401)
 
-    // A refresh keeps the binding, and naming another resource is refused.
+    // A refresh keeps the binding, and naming another repository is refused.
     const clientId = (flow.client as { client_id: string }).client_id
     const refreshed = await rawTokenRequest(h, {
       grant_type: 'refresh_token',
@@ -256,6 +256,17 @@ describe('per-repository MCP URLs', () => {
     })
     expect(elsewhere.status).toBe(400)
     expect(await elsewhere.json()).toMatchObject({ error: 'invalid_target' })
+    // Naming the deployment resource on that refresh keeps the binding.
+    const kept = await rawTokenRequest(h, {
+      grant_type: 'refresh_token',
+      refresh_token: next.refresh_token!,
+      client_id: clientId,
+      resource: `${ORIGIN}/mcp`,
+    })
+    expect(kept.status).toBe(200)
+    const keptToken = ((await kept.json()) as OAuthTokens).access_token
+    expect((await list(keptToken, REPO_URL)).status).toBe(200)
+    expect((await list(keptToken, OTHER_URL)).status).toBe(401)
 
     // A code exchange naming a resource this server does not serve.
     const metadata = await discoverMetadata(h.app)

@@ -10,7 +10,8 @@
  * - before: a requested `resource` must be absent, the deployment resource,
  *   or a canonical per-repository resource under it; anything else is
  *   refused with `invalid_target`. A refresh of a bound token keeps its
- *   audience, so naming a different resource is refused the same way. A
+ *   audience whether it omits `resource` or names the deployment resource;
+ *   naming a different repository resource is refused the same way. A
  *   refresh of an unbound token may narrow it to one repository resource.
  * - after: on a successful response, a per-repository audience is written as
  *   a `verification` row keyed by the new token row's id. Absent or
