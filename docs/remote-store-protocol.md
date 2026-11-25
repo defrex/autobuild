@@ -763,6 +763,7 @@ builds.
 | `ensureRepo` | `POST /repos` | `{"repo": string}` with a nonempty id | `200` + `RepositoryRecord`; idempotently returns the existing record |
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
+| `appendRepoIfCurrent` | `POST /repos/{repo}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + repository event envelope; journal advanced: `200 null` (mirroring section 3's build compare-and-append). A server without the route answers `404`; callers report it and never fall back to an unconditional append |
 | `getRepoEvents` / `getRepositoryTail` | `GET /repos/{repo}/events?since={n}&through={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq > since`, up to the frozen head; optional `through` caps the response at `seq <= through`; `409 cursor-too-old` below `max(0, head - 1000)` |
 | `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`ticket-preparation.*`, `harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types, and cross-generation handoff correlation facts: target-prepared, yield-requested, upgrade-failed, handoff-started, terminal-released, takeover, drain-deadline, drain-settled and handoff-completed) plus the latest-only `dispatcher.ticket-scan-completed` and `dispatcher.placement-set` facts and, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
 | `getReducerSnapshot` (repo scope) | `GET /repos/{repo}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, ahead of the journal's tail, or the repository has no journal record; an unknown repository is `404`, which the shipped client also maps to `null` |
@@ -1566,8 +1567,8 @@ Beyond leases, the backing store must maintain:
 
 - per-build and per-repository monotonically assigned event sequences starting
   at 1, preserving append order and continuity across server restarts;
-- atomic build-stream conditional append, including a mutation-free stale
-  comparison result;
+- atomic build-stream and repository-journal conditional append, including a
+  mutation-free stale comparison result;
 - server-assigned event, record, artifact, lease, and heartbeat times;
 - 0-based revisions independently per resource and artifact kind, including
   distinct concurrent assignments;

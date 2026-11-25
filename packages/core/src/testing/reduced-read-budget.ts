@@ -7852,7 +7852,14 @@ export async function ticketStartReadBudget(): Promise<{
  * call, then measure a second. The call vector and rows must not depend on
  * `history`, the repeat over an unchanged journal reads zero event rows, and
  * status writes nothing. */
-export async function operatorSandboxStatusReadBudget(opts: { history: number }) {
+/** `sandbox.status`'s store cost over `history` unrelated repository facts.
+ * The default measures a steady poll after the outcome was journaled. With
+ * `settle: 'lost'` the attempt's own settle handler never fires (its
+ * `settled` promise never resolves, as when the serving process froze), so
+ * the first measured status is the one that records the outcome through the
+ * compare-and-append, `next` the poll after it (which folds that one fact
+ * into the saved value) and `steady` the poll after that. */
+export async function operatorSandboxStatusReadBudget(opts: { history: number; settle?: 'lost' }) {
   const { MemoryBuildStore } = await import('../store/memory')
   const { createOperatorSandboxService } = await import('../operator/sandbox')
   const { memoryOperatorSandbox } = await import('./memory-operator-sandbox')
@@ -7866,35 +7873,56 @@ export async function operatorSandboxStatusReadBudget(opts: { history: number })
       payload: { enabled: i % 2 === 0 },
     })
   }
-  const sandbox = memoryOperatorSandbox()
+  const lost = opts.settle === 'lost'
+  const sandbox = memoryOperatorSandbox('memory-sandbox', lost ? { provisioning: 'deferred' } : {})
+  const base = sandbox.provider.orchestratorSandbox!
   const service = await createOperatorSandboxService({
     store,
     repo,
     provider: sandbox.provider,
     sandbox: { idleMinutes: 30, environmentVariables: [] },
     baseBranch: 'main',
+    ...(lost
+      ? {
+          capability: {
+            ...base,
+            open: async (input: Parameters<typeof base.open>[0]) => {
+              const opened = await base.open(input)
+              return opened.settled === undefined
+                ? opened
+                : { status: opened.status, settled: new Promise<never>(() => {}) }
+            },
+          },
+        }
+      : {}),
   })
   const registry = buildRegistry({ store, sandbox: service })
   const ctx = { identity: 'ada@example.com' }
   await registry.call('sandbox.open', { repo }, ctx)
-  await registry.call('sandbox.status', { repo }, ctx)
-  const before = (await store.getRepoEvents(repo)).length
-  const counter = memoryStoreRequestCounter(store)
-  let metrics: StoreReadMetrics
-  try {
-    metrics = await measureStoreReads(store, async () => {
-      await registry.call('sandbox.status', { repo }, ctx)
-    })
-  } finally {
-    counter.restore()
+  if (lost) sandbox.complete('ready')
+  else await registry.call('sandbox.status', { repo }, ctx)
+  const measure = async () => {
+    const before = (await store.getRepoEvents(repo)).length
+    const counter = memoryStoreRequestCounter(store)
+    let metrics: StoreReadMetrics
+    try {
+      metrics = await measureStoreReads(store, async () => {
+        await registry.call('sandbox.status', { repo }, ctx)
+      })
+    } finally {
+      counter.restore()
+    }
+    const appended = (await store.getRepoEvents(repo)).length - before
+    return {
+      callVector: counter.vector(),
+      rows: metrics.rows,
+      repoRows: metrics.repoRows,
+      appended,
+    }
   }
-  const appended = (await store.getRepoEvents(repo)).length - before
-  return {
-    callVector: counter.vector(),
-    rows: metrics.rows,
-    repoRows: metrics.repoRows,
-    appended,
-  }
+  const first = await measure()
+  const next = await measure()
+  return { ...first, next, steady: await measure() }
 }
 
 /** One hosted sandbox tool call's store cost (#1219): the resolver's gate

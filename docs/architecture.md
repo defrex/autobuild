@@ -1018,6 +1018,17 @@ dispatcher — requires an exported token before any side effect and never consu
 a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
 injects that same token.
 
+**Vercel operator sandbox lifecycle (#1246).** `vercel-sandbox.ts` implements
+`open`/`status`/`close`/`refresh` with provisioning state in the guest under
+`VERCEL_OPERATOR_PROVISION_DIR` (`host` heartbeat, stage scripts, `tail.sh`,
+`pid`, `log`, `failed`), classified by one read-only probe in which a `failed`
+record outranks the marker. The host phase runs as a background attempt that
+the hosted service keeps alive through its `background` seam (Next's
+`after()` in `web/runtime.ts`); the tail runs detached. Sandboxes use the
+`idleMinutes` provider timeout and `sandboxHandle` extends it per tool call.
+The service (`operator/sandbox.ts`) settles outcomes through `settleOnce` and
+`recordFailure`, both bounded loops over the store's `appendRepoIfCurrent`.
+
 **Hosted sandbox lifetime.** `createHostedOperatorSandboxService` owns its default
 local scratch root and removes it on construction failure or asynchronous,
 idempotent `dispose()`. Explicit caller scratch remains caller-owned. Disposal

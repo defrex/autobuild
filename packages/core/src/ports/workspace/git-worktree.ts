@@ -21,6 +21,9 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import {
   redactSandboxMessage,
+  SANDBOX_INTERRUPTED_MESSAGE,
+  SANDBOX_REFRESH_DIRTY_MESSAGE,
+  sandboxRefreshDivergedMessage,
   SandboxOperationError,
   type OperatorSandboxExecution,
   type SandboxCommandRequest,
@@ -1335,7 +1338,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         state: 'failed',
         failure: {
           stage: 'provision',
-          message: 'provisioning was interrupted before it finished; call sandbox.open to retry',
+          message: SANDBOX_INTERRUPTED_MESSAGE,
         },
       }
     }
@@ -1392,8 +1395,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       return {
         outcome: 'refused',
         reason: 'dirty',
-        message:
-          'the sandbox checkout has uncommitted changes; commit or discard them before refreshing',
+        message: SANDBOX_REFRESH_DIRTY_MESSAGE,
       }
     }
     if (head === base || (await this.isAncestor(cwd, base, head))) {
@@ -1403,7 +1405,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       return {
         outcome: 'refused',
         reason: 'diverged',
-        message: `the checkout head ${head} has diverged from ${input.baseBranch} (${base}); a fast-forward is impossible, so rebase inside the sandbox or run sandbox.reset`,
+        message: sandboxRefreshDivergedMessage(head, input.baseBranch, base),
       }
     }
     await this.gitOrThrow(cwd, [

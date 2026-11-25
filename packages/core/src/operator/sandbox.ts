@@ -6,18 +6,25 @@
  * derives lifecycle state from the repository journal (`sandboxStates`), so
  * a later dispatcher invocation can settle what this process left behind.
  *
- * Lifecycle (#1223): `open` returns promptly. Provisioning or resuming runs
- * as a background attempt the provider owns; the service journals
- * `provisioning` when it starts and `provisioned`/`resumed` or
- * `provision-failed` when its `settled` promise resolves. Every other tool
- * passes a journal gate: it proceeds only on a `live` environment, probes the
- * provider once when the journal still says `provisioning` (reconciling a
- * journal that lags the provider, e.g. after a restart), and otherwise
- * refuses typed `not-ready` naming the state. Nothing but `open` (and
- * `reset`, which reuses it) ever starts provisioning. An outcome whose append
- * failed is kept in memory and flushed before the next mutating call; one
- * lost to a process crash before that flush is not recoverable here, and the
- * next `open` reprovisions through the provider's own state.
+ * Lifecycle (#1223, #1246): `open` returns promptly. Provisioning or
+ * resuming runs as a background attempt the provider owns; the service
+ * journals `provisioning` when it starts and `provisioned`/`resumed` or
+ * `provision-failed` once the attempt's outcome is known — from its `settled`
+ * promise in this process, or from a provider probe in any process (`status`,
+ * `open`, the gate). Every settlement goes through `settleOnce`, a bounded
+ * loop over the repository journal's compare-and-append
+ * (`appendRepoIfCurrent`), so an outcome is recorded exactly once even when
+ * several processes observe it. Every other tool passes a journal gate: it
+ * proceeds only on a `live` environment and otherwise refuses typed
+ * `not-ready` naming the state. Nothing but `open` (and `reset`, which reuses
+ * it) ever starts provisioning.
+ *
+ * Failure evidence in the provider is destroyed only after the journal
+ * authoritatively records that failure: `open` probes first and, when the
+ * provider reports `failed`, records it (`recordFailure`) before calling the
+ * provider's `open`, which may reap the failed environment. A provisioning
+ * attempt that died before its environment existed is failed by the orphan
+ * rule once its grace period passes.
  *
  * Credential freeness is structural upstream (the providers build guest
  * environments from empty records); redaction here keeps credential VALUES
@@ -26,6 +33,7 @@
 import { createHash } from 'node:crypto'
 import { humanActor } from '../events/envelope'
 import type { Via } from '../events/envelope'
+import type { RepositoryEventWrite } from '../events/repository'
 import type { Forge } from '../ports/types'
 import {
   redactSandboxMessage,
@@ -55,6 +63,24 @@ export const SANDBOX_WRITE_LIMIT_BYTES = 1_048_576
 /** Minimum journal interval between two `orchestrator.sandbox.activity`
  * facts for one environment. */
 export const SANDBOX_ACTIVITY_INTERVAL_MS = 60_000
+/** Bounded compare-and-append attempts of one settlement. A miss means the
+ * journal advanced (often through unrelated facts); exhausting them leaves
+ * the outcome in the provider for the next poll. */
+export const SANDBOX_SETTLE_ATTEMPTS = 5
+/** Grace after the latest evidence of a `provisioning` journal whose
+ * provider reports no environment and no attempt runs in this process,
+ * before the orphan rule fails it. */
+export const SANDBOX_PROVISION_ORPHAN_MS = 120_000
+/** The orphan rule's recorded failure message. */
+export const SANDBOX_ORPHAN_MESSAGE =
+  'the provisioning attempt ended before its environment was created; call sandbox.open to retry'
+/** `open`'s refusal when it could not record a failed environment before
+ * replacing it. */
+export const SANDBOX_UNRECORDED_FAILURE_MESSAGE =
+  "could not record the previous attempt's failure; nothing was discarded; call sandbox.open again"
+/** Delays between the background settle handler's retries of a failing
+ * settlement (store errors only). */
+const SETTLE_RETRY_DELAYS_MS = [500, 2_000, 2_000] as const
 
 /** Truncate one output stream to the byte bound, head-kept, with the
  * documented marker appended past the bound. Exactly-at-bound output is
@@ -175,12 +201,15 @@ export interface OperatorSandboxService {
   /** Open the caller's environment and return at once. A fresh provision or
    * a resume continues in the background of this process; poll `status`. */
   open(identity: string, input: { repo: string }): Promise<SandboxOpenResult>
-  /** Read-only, bounded poll: one reduced repository read plus one provider
-   * probe; never writes, so polling never keeps an idle environment alive. */
+  /** Bounded poll: one reduced repository read plus one provider probe. Its
+   * only write records a finished background attempt's outcome, exactly once
+   * across processes, through the repository compare-and-append; it never
+   * resumes or extends an idle environment. */
   status(identity: string, input: { repo: string }): Promise<SandboxStatusResult>
   /** Stop the environment and release its capacity, keeping the checkout; a
-   * later `open` resumes it. Cancels an in-flight attempt. `noop` when there
-   * is nothing to close. */
+   * later `open` resumes it. Cancels an in-flight attempt. A failed
+   * environment the provider kept is stopped too, its journaled failure
+   * unchanged. `noop` when there is nothing to close. */
   close(
     identity: string,
     input: { repo: string },
@@ -258,6 +287,13 @@ export interface OperatorSandboxServiceOptions {
   /** Receives a background attempt's journal-append failure. The outcome is
    * retained and flushed before the next mutating call either way. */
   report?: (error: unknown) => void
+  /** Hosted background seam (`waitUntil`, Next's `after()`): receives each
+   * attached attempt's settle promise so the serving function stays alive
+   * for the provider's host phase and its settlement. A throwing seam is
+   * reported and never fails `open`. */
+  background?: (work: Promise<unknown>) => void
+  /** Test seam for the settle handler's retry delays. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export async function createOperatorSandboxService(
@@ -273,6 +309,8 @@ export async function createOperatorSandboxService(
     )
   }
   const clock = options.clock ?? systemClock
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const canPublish = options.forge !== undefined && provider.sandboxPublication !== undefined
   await store.ensureRepo(repo)
 
@@ -366,62 +404,149 @@ export async function createOperatorSandboxService(
       throw new SandboxOperationError('exec', describeError(error), { cause: error })
     })
 
-  /** Journal one settled attempt against a `provisioning` snapshot. The fact
-   * kind comes from the journal's `pendingKind`, never from the provider;
-   * the base head from the provider's handle. A cancelled attempt records
-   * nothing (its closer journals). */
-  const journalOutcome = async (
+  type SettleResult = 'appended' | 'settled-elsewhere' | 'nothing' | 'contended'
+
+  /** The fact that settles one attempt against a `provisioning` snapshot, or
+   * undefined for an in-flight or cancelled outcome (its closer journals).
+   * The fact kind comes from the journal's `pendingKind`, never from the
+   * provider; the base head from the provider's handle. */
+  const settlementFact = (
     identity: string,
     state: SandboxEnvironmentSnapshot,
     outcome: SandboxProviderStatus,
-  ): Promise<void> => {
-    if (outcome.state === 'ready') {
-      const handle = outcome.handle ?? (await capability.describe({ repo, operator: identity }))
+    handle: SandboxEnvironmentIdentity | undefined,
+  ): RepositoryEventWrite | undefined => {
+    const actor = humanActor(identity)
+    if (outcome.state === 'ready' && handle !== undefined) {
       if (state.pendingKind === 'provision') {
-        await append(identity, 'orchestrator.sandbox.provisioned', {
-          operator: identity,
-          environmentId: state.environmentId,
-          provider: handle.provider,
-          ...(handle.sessionId !== undefined ? { sessionId: handle.sessionId } : {}),
-          workspacePath: handle.workspacePath,
-          ...(handle.baseSha !== undefined ? { baseSha: handle.baseSha } : {}),
-        })
-      } else {
-        await append(identity, 'orchestrator.sandbox.resumed', {
-          operator: identity,
-          environmentId: state.environmentId,
-          provider: handle.provider,
-          ...(handle.sessionId !== undefined ? { sessionId: handle.sessionId } : {}),
-        })
+        return {
+          actor,
+          type: 'orchestrator.sandbox.provisioned',
+          payload: {
+            operator: identity,
+            environmentId: state.environmentId,
+            provider: handle.provider,
+            ...(handle.sessionId !== undefined ? { sessionId: handle.sessionId } : {}),
+            workspacePath: handle.workspacePath,
+            ...(handle.baseSha !== undefined ? { baseSha: handle.baseSha } : {}),
+          },
+        }
       }
-      return
+      return {
+        actor,
+        type: 'orchestrator.sandbox.resumed',
+        payload: {
+          operator: identity,
+          environmentId: state.environmentId,
+          provider: handle.provider,
+          ...(handle.sessionId !== undefined ? { sessionId: handle.sessionId } : {}),
+        },
+      }
     }
-    if (outcome.state === 'absent' && outcome.cancelled === true) return
-    if (outcome.state === 'provisioning' || outcome.state === 'resuming') return
+    if (outcome.state === 'absent' && outcome.cancelled === true) return undefined
+    if (outcome.state === 'provisioning' || outcome.state === 'resuming') return undefined
+    return failureFact(identity, state.environmentId, outcome)
+  }
+
+  const failureFact = (
+    identity: string,
+    environmentId: string,
+    outcome: SandboxProviderStatus,
+  ): RepositoryEventWrite => {
     const failure = outcome.failure ?? {
       stage: 'provision' as const,
       message: `the provider reported the environment ${outcome.state} when the attempt settled`,
     }
-    await append(identity, 'orchestrator.sandbox.provision-failed', {
-      operator: identity,
-      environmentId: state.environmentId,
-      stage: failure.stage,
-      message: redactSandboxMessage(failure.message) || 'provisioning failed',
-    })
+    return {
+      actor: humanActor(identity),
+      type: 'orchestrator.sandbox.provision-failed',
+      payload: {
+        operator: identity,
+        environmentId,
+        stage: failure.stage,
+        message: redactSandboxMessage(failure.message) || 'provisioning failed',
+      },
+    }
   }
 
-  /** Close a lagging `provisioning` journal from the provider's report:
-   * `ready` → provisioned/resumed, `failed` → provision-failed. Returns true
-   * when it appended. */
-  const reconcile = async (
+  /** Record one attempt's outcome exactly once across processes: append the
+   * settling fact only while the journal still says `provisioning` for
+   * `environmentId`, and only at the sequence just read. A miss re-reads and
+   * re-checks, a bounded number of times; another process's settlement ends
+   * the loop with nothing appended. Never falls back to an unconditional
+   * append. */
+  const settleOnce = async (
     identity: string,
-    state: SandboxEnvironmentSnapshot,
+    environmentId: string,
+    outcome: SandboxProviderStatus,
+    first?: { cursor: number; value: RepositoryReadFacts },
+  ): Promise<SettleResult> => {
+    let handle: SandboxEnvironmentIdentity | undefined
+    let read = first
+    for (let attempt = 0; attempt < SANDBOX_SETTLE_ATTEMPTS; attempt += 1) {
+      const { cursor, value } = read ?? (await readRepositoryFacts(store, repo))
+      read = undefined
+      const state = operatorState(identity, value)
+      if (state?.state !== 'provisioning' || state.environmentId !== environmentId) {
+        return 'settled-elsewhere'
+      }
+      if (outcome.state === 'ready' && handle === undefined) {
+        handle = outcome.handle ?? (await capability.describe({ repo, operator: identity }))
+      }
+      const fact = settlementFact(identity, state, outcome, handle)
+      if (fact === undefined) return 'nothing'
+      if ((await store.appendRepoIfCurrent(repo, cursor, fact)) !== null) return 'appended'
+    }
+    return 'contended'
+  }
+
+  /** Make the journal authoritatively record a failure the provider reports,
+   * before anything may discard its evidence. `already-recorded` means an
+   * authoritative read shows this environment `failed`; a journal that never
+   * saw the attempt (absent or released) first gains its `provisioning` fact.
+   * Each append is conditional. */
+  const recordFailure = async (
+    identity: string,
+    environmentId: string,
+    provider: string,
+    outcome: SandboxProviderStatus,
+  ): Promise<'appended' | 'already-recorded' | 'contended'> => {
+    for (let attempt = 0; attempt < SANDBOX_SETTLE_ATTEMPTS; attempt += 1) {
+      const { cursor, value } = await readRepositoryFacts(store, repo)
+      const state = operatorState(identity, value)
+      if (state?.environmentId === environmentId && state.state === 'failed') {
+        return 'already-recorded'
+      }
+      if (state === undefined || state.environmentId !== environmentId) {
+        await store.appendRepoIfCurrent(repo, cursor, {
+          actor: humanActor(identity),
+          type: 'orchestrator.sandbox.provisioning',
+          payload: { operator: identity, environmentId, provider, kind: 'provision' },
+        })
+        continue
+      }
+      const fact = failureFact(identity, environmentId, outcome)
+      if ((await store.appendRepoIfCurrent(repo, cursor, fact)) !== null) return 'appended'
+    }
+    return 'contended'
+  }
+
+  /** The orphan rule's precondition: a `provisioning` journal whose provider
+   * reports no environment, with no attempt in this process, past the grace
+   * after its latest evidence. */
+  const orphaned = (
+    identity: string,
+    state: SandboxEnvironmentSnapshot | undefined,
     providerStatus: SandboxProviderStatus,
-  ): Promise<boolean> => {
-    if (state.state !== 'provisioning') return false
-    if (providerStatus.state !== 'ready' && providerStatus.state !== 'failed') return false
-    await journalOutcome(identity, state, providerStatus)
-    return true
+  ): boolean => {
+    if (state?.state !== 'provisioning' || providerStatus.state !== 'absent') return false
+    if (background.has(keyOf(identity))) return false
+    const last = Date.parse(state.lastEvidenceTs)
+    return Number.isFinite(last) && clock().getTime() - last > SANDBOX_PROVISION_ORPHAN_MS
+  }
+  const orphanOutcome: SandboxProviderStatus = {
+    state: 'failed',
+    failure: { stage: 'checkout', message: SANDBOX_ORPHAN_MESSAGE },
   }
 
   /** Append an outcome whose earlier append failed, before anything else on
@@ -443,8 +568,9 @@ export async function createOperatorSandboxService(
       unjournaled.delete(key)
       return facts
     }
+    let result: SettleResult
     try {
-      await journalOutcome(identity, state, entry.outcome)
+      result = await settleOnce(identity, entry.environmentId, entry.outcome)
     } catch (error) {
       throw new SandboxOperationError(
         'provision',
@@ -452,13 +578,21 @@ export async function createOperatorSandboxService(
         { cause: error },
       )
     }
+    if (result === 'contended') {
+      throw new SandboxOperationError(
+        'provision',
+        'could not journal the previous provisioning outcome: the repository journal kept advancing; retry',
+      )
+    }
     unjournaled.delete(key)
     return readFacts()
   }
 
   /** The settle handler of one attached attempt, run on the serialize chain
-   * so it orders after in-flight calls. It appends only while its entry is
-   * current and uncancelled and the journal still says `provisioning`. */
+   * so it orders after in-flight calls. It settles only while its entry is
+   * current and uncancelled; a store failure is retried a bounded number of
+   * times inside the attached promise (and so inside a hosted background
+   * window) before the outcome is retained for the next mutating call. */
   const onSettled = async (
     identity: string,
     entry: BackgroundEntry,
@@ -466,19 +600,28 @@ export async function createOperatorSandboxService(
     outcome: SandboxProviderStatus,
   ): Promise<void> => {
     const key = keyOf(identity)
-    if (background.get(key) !== entry || entry.cancelled) return
-    const state = operatorState(identity, await readFacts())
-    if (
-      state === undefined ||
-      state.state !== 'provisioning' ||
-      state.environmentId !== environmentId
-    )
+    for (let attempt = 0; ; attempt += 1) {
+      if (background.get(key) !== entry || entry.cancelled) return
+      let result: SettleResult
+      try {
+        result = await settleOnce(identity, environmentId, outcome)
+      } catch (error) {
+        const delay = SETTLE_RETRY_DELAYS_MS[attempt]
+        if (delay === undefined) {
+          unjournaled.set(key, { environmentId, outcome })
+          throw error
+        }
+        await sleep(delay)
+        continue
+      }
+      if (result === 'contended') {
+        // The evidence stays in the provider; the next poll settles it.
+        unjournaled.set(key, { environmentId, outcome })
+        throw new Error(
+          'could not journal the attempt outcome: the repository journal kept advancing',
+        )
+      }
       return
-    try {
-      await journalOutcome(identity, state, outcome)
-    } catch (error) {
-      unjournaled.set(key, { environmentId, outcome })
-      throw error
     }
   }
 
@@ -503,6 +646,11 @@ export async function createOperatorSandboxService(
         if (background.get(key)?.token === entry.token) background.delete(key)
       })
     background.set(key, entry)
+    try {
+      options.background?.(entry.promise)
+    } catch (error) {
+      options.report?.(error)
+    }
   }
 
   /** Mark any in-flight attempt cancelled before a provider teardown call. */
@@ -538,27 +686,55 @@ export async function createOperatorSandboxService(
   }
 
   /** The open path, run inside the operator's serialize chain (reset calls
-   * it while holding the chain). */
+   * it while holding the chain).
+   *
+   * Ordering is what makes reaping safe: the provider is probed first, and a
+   * `failed` report is recorded in the journal (`recordFailure`) before the
+   * provider's `open` — which may reap the failed environment and reprovision
+   * — is called. When the failure cannot be recorded, `open` refuses and
+   * nothing is discarded. */
   const openLocked = async (identity: string): Promise<SandboxOpenResult> => {
     const facts = await flushUnjournaled(identity, await readFacts())
     let state = operatorState(identity, facts)
     const described = await capability.describe({ repo, operator: identity })
-    if (state?.state === 'provisioning') {
+    const current = await probe(identity)
+    if (state !== undefined && orphaned(identity, state, current)) {
+      await settleOnce(identity, state.environmentId, orphanOutcome)
+      state = operatorState(identity, await readFacts())
+    } else if (state?.state === 'provisioning' && current.state === 'ready') {
       // A lagging journal: settle it from the provider before deciding.
-      const current = await probe(identity)
-      if (await reconcile(identity, state, current)) {
-        if (current.state === 'ready') {
-          return openReport(
-            identity,
-            current,
-            described.environmentId,
-            described.provider,
-            true,
-            state,
-          )
-        }
-        state = operatorState(identity, await readFacts())
+      const result = await settleOnce(identity, state.environmentId, current)
+      if (result === 'appended' || result === 'settled-elsewhere') {
+        return openReport(
+          identity,
+          current,
+          described.environmentId,
+          described.provider,
+          true,
+          state,
+        )
       }
+    }
+    if (current.state === 'failed') {
+      let recorded: Awaited<ReturnType<typeof recordFailure>>
+      try {
+        recorded = await recordFailure(
+          identity,
+          described.environmentId,
+          described.provider,
+          current,
+        )
+      } catch (error) {
+        throw new SandboxOperationError(
+          'provision',
+          `${SANDBOX_UNRECORDED_FAILURE_MESSAGE}: ${describeError(error)}`,
+          { cause: error },
+        )
+      }
+      if (recorded === 'contended') {
+        throw new SandboxOperationError('provision', SANDBOX_UNRECORDED_FAILURE_MESSAGE)
+      }
+      state = operatorState(identity, await readFacts())
     }
     let opened: Awaited<ReturnType<typeof capability.open>>
     try {
@@ -580,7 +756,7 @@ export async function createOperatorSandboxService(
         )
       }
       if (state?.state === 'provisioning') {
-        await reconcile(identity, state, status)
+        await settleOnce(identity, state.environmentId, status)
       } else {
         const handle = status.handle ?? described
         if (state === undefined || status.kind === 'provision') {
@@ -624,7 +800,7 @@ export async function createOperatorSandboxService(
         attach(identity, described.environmentId, settled)
       }
     } else if (status.state === 'failed' && journaled !== undefined) {
-      await journalOutcome(identity, journaled, status)
+      await settleOnce(identity, journaled.environmentId, status)
     }
     return openReport(
       identity,
@@ -644,8 +820,12 @@ export async function createOperatorSandboxService(
     let state = operatorState(identity, facts)
     if (state?.state === 'provisioning') {
       const current = await probe(identity)
-      if (!(await reconcile(identity, state, current))) {
-        throw notReady(current.state === 'ready' ? 'provisioning' : current.state)
+      if (current.state === 'ready' || current.state === 'failed') {
+        await settleOnce(identity, state.environmentId, current)
+      } else if (orphaned(identity, state, current)) {
+        await settleOnce(identity, state.environmentId, orphanOutcome)
+      } else {
+        throw notReady(current.state === 'absent' ? 'provisioning' : current.state)
       }
       state = operatorState(identity, await readFacts())
     }
@@ -719,11 +899,34 @@ export async function createOperatorSandboxService(
     async status(identity, input) {
       requireRepo(input.repo)
       requireLifecycle()
-      const state = operatorState(identity, await readFacts())
+      const read = await readRepositoryFacts(store, repo)
+      const state = operatorState(identity, read.value)
       const described = await capability.describe({ repo, operator: identity })
       const current = await probe(identity)
+      // The poll's only write: a finished attempt's outcome (or an orphaned
+      // attempt's failure) the journal still lacks, recorded exactly once.
+      // A store error or contention is reported, never thrown.
+      let orphanFailure: SandboxProviderStatus['failure']
+      if (state?.state === 'provisioning') {
+        const settling =
+          current.state === 'ready' || current.state === 'failed'
+            ? current
+            : orphaned(identity, state, current)
+              ? orphanOutcome
+              : undefined
+        if (settling !== undefined) {
+          if (settling === orphanOutcome) orphanFailure = orphanOutcome.failure
+          await serialize(keyOf(identity), () =>
+            settleOnce(identity, state.environmentId, settling, read),
+          ).catch((error: unknown) => {
+            options.report?.(error)
+          })
+        }
+      }
       let reported: SandboxLifecycleState
-      if (
+      if (orphanFailure !== undefined) {
+        reported = 'failed'
+      } else if (
         current.state === 'provisioning' ||
         current.state === 'resuming' ||
         current.state === 'failed'
@@ -738,6 +941,14 @@ export async function createOperatorSandboxService(
               : state.state === 'released'
                 ? 'absent'
                 : state.state
+      } else if (current.state === 'stopped' && state !== undefined && state.state !== 'released') {
+        // The provider's idle timer stopped it: no fact was journaled, so the
+        // journal may still say `live`. A failed journal keeps `failed`.
+        reported = state.state === 'failed' ? 'failed' : 'stopped'
+      } else if (current.state === 'absent' && state?.state === 'provisioning') {
+        // An attempt whose environment does not exist yet (inside the orphan
+        // grace, or running in this process).
+        reported = 'provisioning'
       } else {
         reported = state?.state === 'stopped' || state?.state === 'failed' ? state.state : 'absent'
       }
@@ -747,7 +958,8 @@ export async function createOperatorSandboxService(
             ? current.handle?.baseSha
             : undefined
           : state?.baseSha
-      const failure = reported === 'failed' ? (current.failure ?? state?.failure) : undefined
+      const failure =
+        reported === 'failed' ? (orphanFailure ?? current.failure ?? state?.failure) : undefined
       const headSha = current.state === 'ready' ? current.headSha : undefined
       return {
         state: reported,
@@ -769,10 +981,7 @@ export async function createOperatorSandboxService(
         const state = operatorState(identity, await flushUnjournaled(identity, await readFacts()))
         const described = await capability.describe({ repo, operator: identity })
         const inflight = cancelBackground(identity)
-        if (
-          !inflight &&
-          (state === undefined || state.state === 'stopped' || state.state === 'failed')
-        ) {
+        if (!inflight && (state === undefined || state.state === 'stopped')) {
           return { outcome: 'noop' as const, environmentId: described.environmentId }
         }
         const result = await capability
@@ -784,8 +993,20 @@ export async function createOperatorSandboxService(
         if (state === undefined) {
           return { outcome: 'noop' as const, environmentId: described.environmentId }
         }
+        if (state.state === 'failed') {
+          // A failed environment the provider kept (its failure evidence)
+          // still holds capacity: the provider stops it, never discarding the
+          // evidence. The journal keeps the authoritative `failed` record, so
+          // the next open replaces it at once.
+          return {
+            outcome: result.outcome === 'closed' ? ('closed' as const) : ('noop' as const),
+            environmentId: described.environmentId,
+          }
+        }
         // A provision that finished in the race keeps its base head.
-        if (result.attempt !== undefined) await reconcile(identity, state, result.attempt)
+        if (result.attempt !== undefined && state.state === 'provisioning') {
+          await settleOnce(identity, state.environmentId, result.attempt)
+        }
         await append(identity, 'orchestrator.sandbox.closed', {
           operator: identity,
           environmentId: described.environmentId,

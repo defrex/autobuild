@@ -85,6 +85,8 @@ async function harness(options: { withoutOrigin?: boolean; withoutForgeToken?: b
   let failCompose = false
   const listings: string[] = []
   let gate: ((repo: string) => Promise<boolean>) | undefined
+  const background = (_work: Promise<unknown>): void => {}
+  let composedBackground: unknown
   const { app, backing, service } = buildApp(env, auth, testAccess(env, testProjects(PROJECTS)), {
     serviceEnv,
     projects: PROJECTS,
@@ -102,9 +104,11 @@ async function harness(options: { withoutOrigin?: boolean; withoutForgeToken?: b
       issued.push(`${repo} ${creator}`)
       return 'sandbox-store-token'
     },
-    composeOperatorSandbox: async ({ store, repo, config }) => {
+    background,
+    composeOperatorSandbox: async ({ store, repo, config, background: seam }) => {
       if (failCompose) throw new Error('provider construction failed')
       composed++
+      composedBackground = seam
       return createOperatorSandboxService({
         store,
         repo,
@@ -147,6 +151,9 @@ async function harness(options: { withoutOrigin?: boolean; withoutForgeToken?: b
     reported,
     delegated,
     composed: () => composed,
+    /** The hosted background seam the composition received. */
+    background,
+    composedBackground: () => composedBackground,
     failCompose: (value: boolean) => {
       failCompose = value
     },
@@ -262,6 +269,8 @@ describe('hosted sandbox tools over /mcp', () => {
       // Two consecutive calls: at most one credential, one composition.
       expect(h.issued.length).toBeLessThanOrEqual(1)
       expect(h.composed()).toBe(1)
+      // The platform's background seam reaches the composition.
+      expect(h.composedBackground()).toBe(h.background)
 
       const started = await call(h.client, 'sandbox.start', { repo: ENABLED, command: 'sleep 1' })
       const { commandId } = started.body as { commandId: string }

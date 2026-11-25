@@ -92,7 +92,7 @@ export function buildApp(
     sandboxListed?: (repo: string) => Promise<boolean>
   } & Pick<
     HostedStoreServiceOptions,
-    'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError'
+    'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError' | 'background'
   > = {},
 ): {
   app: App
@@ -116,6 +116,7 @@ export function buildApp(
     ...(options.reportInternalError !== undefined
       ? { reportInternalError: options.reportInternalError }
       : {}),
+    ...(options.background !== undefined ? { background: options.background } : {}),
   })
   const endpoint = createMcpEndpoint({
     access,

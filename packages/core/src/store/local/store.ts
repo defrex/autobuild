@@ -1711,6 +1711,27 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => this.appendRepoInTx(repo, validated)) as RepositoryEventEnvelope<T>
   }
 
+  async appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null> {
+    validateExpectedSeq(expectedSeq)
+    const validated = validateRepositoryEventWrite(event)
+    return this.writeTx(() => {
+      // BEGIN IMMEDIATE serializes this comparison and append across every
+      // SQLite connection/process using the same store file.
+      this.requireRepo(repo)
+      const row = this.db
+        .select({ max: sql<number | null>`max(${repoEvents.seq})` })
+        .from(repoEvents)
+        .where(eq(repoEvents.repo, repo))
+        .get()
+      if ((row?.max ?? 0) !== expectedSeq) return null
+      return this.appendRepoInTx(repo, validated) as RepositoryEventEnvelope<T>
+    })
+  }
+
   /** See `depositInTx` for the `prune` option's meaning. */
   private depositRepoInTx(
     repo: string,
