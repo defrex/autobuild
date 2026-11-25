@@ -18,6 +18,8 @@ export function SettingsClient(props: {
   isSuperUser?: boolean
   initialSelection: string
   repositories: readonly string[]
+  /** The selected project's per-repository MCP URL, computed on the server. */
+  mcpUrl?: string
 }) {
   const router = useRouter()
   const query = useSearchParams()
@@ -122,9 +124,10 @@ export function SettingsClient(props: {
         window.location.assign('/sign-in')
       }}
     >
-      {repo ? (
+      {repo && props.mcpUrl !== undefined ? (
         <SettingsView
           key={repo}
+          mcpUrl={props.mcpUrl}
           data={state.data}
           pending={state.pending}
           error={state.writeError ?? state.readError}

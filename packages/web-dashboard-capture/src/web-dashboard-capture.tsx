@@ -1,5 +1,5 @@
 import { accountCredentialsCapture } from '../../../tools/account-credentials-capture'
-import { SETTINGS_SCENARIOS, settingsFixture } from './settings-fixtures'
+import { SETTINGS_MCP_URL, SETTINGS_SCENARIOS, settingsFixture } from './settings-fixtures'
 import { chromiumBinary, fullDocumentScreenshot } from './full-document'
 import {
   checkClientPages,
@@ -120,6 +120,9 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       height: 900,
       requires: [
         'Settings',
+        'MCP connector',
+        SETTINGS_MCP_URL,
+        name === 'mcp-copied' ? 'COPIED' : name === 'mcp-refused' ? 'REFUSED' : 'COPY',
         'Account credentials',
         ...(name === 'empty'
           ? ['No project secrets have been set.']
@@ -1594,6 +1597,7 @@ export function report(
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
     '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; confirmations are viewport captures promoted to native modals over the visible 72% ground backdrop; abort uses a square dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
+    '- [ ] The Settings MCP connector shows the mono URL in a square well beside an outlined COPY/COPIED/REFUSED word button, wraps the URL at phone width, and adds no icon.',
     "- [ ] The Queue lists the urgent ticket first with an ink URGENT status word at the row's right, legible on both grounds and clear of the title at phone width.",
     '- [ ] The no-dispatcher state shows the one factual line, `–` for Active, and no error banner at both widths.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',

@@ -92,6 +92,12 @@ const expectedLookup = (clientId: string) => ({
   where: [{ field: 'clientId', value: clientId }],
 })
 
+/** The resource-binding read operator() issues for a token row. */
+const bindingLookup = (tokenRowId: string) => ({
+  model: 'verification',
+  where: [{ field: 'identifier', value: `ab-mcp-resource:${tokenRowId}` }],
+})
+
 type CapturedLookup = ReturnType<typeof expectedLookup>
 
 /** The contract-pinning counterpart of fakeAuth: its adapter.findOne records
@@ -630,8 +636,15 @@ describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
       Promise.resolve({ name: 'Contract Canary Console' }),
     )
     await throughEndpoint(auth)
-    expect(lookups.length).toBe(2)
-    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+    // Each operator() pass (request, then callback) issues the application
+    // lookup and then exactly one resource-binding read: a single findOne on
+    // `verification` by identifier, never a cleanup-bearing helper.
+    expect(lookups).toEqual([
+      expectedLookup(CANARY_CLIENT_ID),
+      bindingLookup('t1'),
+      expectedLookup(CANARY_CLIENT_ID),
+      bindingLookup('t1'),
+    ])
   })
 
   test('a registered name flows through to the minted token’s via marker', async () => {
@@ -651,8 +664,10 @@ describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
     }
     const { auth, lookups } = capturingAuth(() => Promise.resolve(null), { session: otherSession })
     await throughEndpoint(auth)
-    expect(lookups.length).toBe(2)
-    expect(lookups[0]).toEqual(expectedLookup('another-canary-client'))
+    expect(lookups.filter((lookup) => lookup.model === 'oauthApplication')).toEqual([
+      expectedLookup('another-canary-client'),
+      expectedLookup('another-canary-client'),
+    ])
   })
 
   test('an empty-string registered name falls back to the raw clientId, with the lookup still issued', async () => {
