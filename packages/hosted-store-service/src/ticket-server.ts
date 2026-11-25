@@ -47,6 +47,11 @@ import {
   TICKET_TARGETING_CAPABILITY,
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
+  searchTickets,
+  TicketSearchCursorInvalid,
+  TicketSearchUnsupported,
   projectTicketPolicy,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
@@ -104,6 +109,14 @@ function json(status: number, body: unknown): Response {
   return Response.json(body, { status })
 }
 
+function searchUnsupported(error = 'ticket source does not support search'): Response {
+  return json(409, {
+    kind: 'conflict',
+    error,
+    code: 'search-unsupported',
+  })
+}
+
 function failure(status: number, kind: ErrorKind, error: string): Response {
   return json(status, { error, kind } satisfies ErrorBody)
 }
@@ -146,6 +159,7 @@ export function createTicketServer(options: TicketServerOptions): {
     operation: HostedTicketOperation,
   ): Promise<MachinePrincipal> {
     const principal = await authenticate(req)
+    // `list-page` and `search` are operator reads: neither read list names them.
     if (principal.kind === 'ticket-grant') {
       const read = ['get', 'list-ready', 'list-targeting', 'dependency-states', 'states'].includes(
         operation,
@@ -344,6 +358,14 @@ export function createTicketServer(options: TicketServerOptions): {
           })
         const page = await source.listPage(input.criteria, input.page)
         return json(200, { ...page, tickets: page.tickets.map(ticketResponse) })
+      }
+      case 'search': {
+        // The source's own search only; never a filtered listing, which would
+        // hide the project-sized read this operation exists to avoid. Hits are
+        // compact and not tickets, so they skip `ticketResponse`.
+        const { input } = hostedTicketRequestSchemas.search.parse(raw)
+        if (!source.search) return searchUnsupported()
+        return json(200, await searchTickets(source, input))
       }
       case 'get': {
         const request = hostedTicketRequestSchemas.get.parse(raw)
@@ -560,6 +582,14 @@ export function createTicketServer(options: TicketServerOptions): {
             error: error.message,
             code: 'priority-unsupported',
           })
+        if (error instanceof TicketSearchUnsupported) return searchUnsupported(error.message)
+        if (error instanceof TicketSearchCursorInvalid)
+          return json(400, {
+            kind: 'validation',
+            error: error.message,
+            code: 'search-cursor-invalid',
+            cursor: error.cursor,
+          })
         if (error instanceof OperatorQueryError)
           return json(409, { kind: 'conflict', error: error.message, code: error.code })
         if (error instanceof MachineAuthError || error instanceof AccessError)
@@ -605,9 +635,9 @@ export function createTicketServer(options: TicketServerOptions): {
   }
   return {
     // Every ticket response, failures included, advertises issue-link,
-    // priority, policy-role, policy create-label, targeted-listing and
-    // paged-listing support so a current client can recognize an older
-    // server's strict-schema refusal or missing route.
+    // priority, policy-role, policy create-label, targeted-listing,
+    // paged-listing and search support so a current client can recognize an
+    // older server's strict-schema refusal or missing route.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
@@ -617,6 +647,7 @@ export function createTicketServer(options: TicketServerOptions): {
       headers.set(TICKET_POLICY_CREATE_LABELS_HEADER, TICKET_POLICY_CREATE_LABELS_CAPABILITY)
       headers.set(TICKET_TARGETING_HEADER, TICKET_TARGETING_CAPABILITY)
       headers.set(TICKET_PAGING_HEADER, TICKET_PAGING_CAPABILITY)
+      headers.set(TICKET_SEARCH_HEADER, TICKET_SEARCH_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })
     },
   }
