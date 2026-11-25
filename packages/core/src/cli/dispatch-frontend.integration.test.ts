@@ -37,6 +37,7 @@ import { lazyTicketSource, type ControlTickets, type ResolvedTicketCommand } fro
 import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
 import { paintableRows } from './dashboard/live'
+import { cellWidth } from './dashboard/cells'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -1182,6 +1183,20 @@ interface SessionViewHarness {
   finish: () => Promise<void>
 }
 
+function webStub(
+  url: string,
+): NonNullable<ConstructorParameters<typeof DispatchFrontend>[0]['web']> {
+  return {
+    dispatch: {
+      hub: new WebModelHub({}),
+      url,
+      publishFacts: () => {},
+      attachStore: () => {},
+      close: async () => {},
+    },
+  }
+}
+
 async function seedSessionViewHarness(
   overrides: {
     viewer?: boolean
@@ -1192,6 +1207,8 @@ async function seedSessionViewHarness(
     wrapStore?: (store: MemoryBuildStore) => BuildStore
     columns?: number
     rows?: number
+    /** `--web`: the served URL the TTY dashboard pins to its top line. */
+    webUrl?: string
   } = {},
 ): Promise<SessionViewHarness> {
   const repo = '/session-view-repo'
@@ -1260,6 +1277,7 @@ async function seedSessionViewHarness(
     ...(overrides.refreshScheduler !== undefined
       ? { refreshScheduler: overrides.refreshScheduler }
       : {}),
+    ...(overrides.webUrl !== undefined ? { web: webStub(overrides.webUrl) } : {}),
     env: {},
     terminal: {
       write: (chunk: string) => chunks.push(chunk),
@@ -3720,6 +3738,168 @@ test.each([false, true])(
     expect(await store.getRepo('/absent-viewer')).toBeNull()
   },
 )
+
+const WEB_URL = 'http://127.0.0.1:41234/'
+
+/** The frame's first line ends with the URL in the terminal's last column. */
+function expectUrlPinned(frame: string, columns: number): void {
+  const first = frame.split('\n')[0]!
+  expect(first.endsWith(`  ${WEB_URL}`)).toBe(true)
+  expect(cellWidth(first)).toBe(columns)
+}
+
+test('--web pins the served URL to the top line of every dashboard view', async () => {
+  const h = await seedSessionViewHarness({ rows: 24, columns: 110, webUrl: WEB_URL })
+  try {
+    await waitFor(() => h.frame().includes('watched'), 'list view')
+    expect(h.frame()).toContain('Autobuild')
+    expectUrlPinned(h.frame(), 110)
+    h.press({ type: 'down' })
+    h.press({ type: 'enter' })
+    await waitFor(() => h.frame().includes('Build  watched'), 'detail view')
+    expectUrlPinned(h.frame(), 110)
+    h.press({ type: 'enter' })
+    await waitFor(() => h.frame().includes('Session  watched'), 'session view')
+    expectUrlPinned(h.frame(), 110)
+  } finally {
+    await h.finish()
+  }
+})
+
+test('--web pins the URL beside the viewer indicator', async () => {
+  const h = await seedSessionViewHarness({ viewer: true, webUrl: WEB_URL })
+  try {
+    await waitFor(() => h.frame().includes('watched'), 'viewer frame')
+    expect(h.frame().split('\n')[0]).toStartWith(' viewer')
+    expectUrlPinned(h.frame(), 100)
+  } finally {
+    await h.finish()
+  }
+})
+
+function webFrontendTerminal(chunks: string[]) {
+  const write = (chunk: string) => void chunks.push(chunk)
+  return {
+    write,
+    modes: createTerminalModeController(write, write),
+    columns: 100,
+    rows: 24,
+    interactive: true,
+  }
+}
+
+const lastFrame = (chunks: string[]) =>
+  stripAnsi(chunks.join('').split('\x1b[2J\x1b[1;1H').at(-1) ?? '')
+
+test('--web pins the URL on the viewer notice frame', async () => {
+  const signal = new AbortController()
+  const chunks: string[] = []
+  const running = new DispatchFrontend({
+    viewer: {},
+    repo: '/absent-viewer-web',
+    store: new MemoryBuildStore(),
+    storeRef: 'memory',
+    env: {},
+    once: false,
+    signal: signal.signal,
+    web: webStub(WEB_URL),
+    terminal: webFrontendTerminal(chunks),
+    input: { start: () => () => {} },
+    launchChild: () => {
+      throw new Error('child')
+    },
+  }).run()
+  try {
+    await waitFor(() => lastFrame(chunks).includes('No dispatcher has run'), 'notice frame')
+    const lines = lastFrame(chunks).split('\n')
+    expect(lines[0]).toStartWith(' viewer')
+    expectUrlPinned(lines.join('\n'), 100)
+    expect(lines[1]).toContain('No dispatcher has run for this project yet.')
+  } finally {
+    signal.abort()
+    await running
+  }
+})
+
+test.each([true, false])(
+  'the startup-failure frame carries the URL only with --web (web=%s)',
+  async (web) => {
+    const store = new MemoryBuildStore()
+    const repo = '/startup-failure-web'
+    await store.ensureRepo(repo)
+    const chunks: string[] = []
+    const completed = deferred<DispatchChildResult>()
+    const running = new DispatchFrontend({
+      repo,
+      store,
+      storeRef: 'memory',
+      env: {},
+      once: false,
+      ...(web ? { web: webStub(WEB_URL) } : {}),
+      terminal: webFrontendTerminal(chunks),
+      input: { start: () => () => {} },
+      launchChild: ({ run }) => ({
+        completed: store
+          .appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-stopped',
+            payload: { run, outcome: 'abnormal', error: 'config invalid' },
+          })
+          .then(() => completed.promise),
+        async stop() {},
+      }),
+    }).run()
+    try {
+      await waitFor(
+        () => lastFrame(chunks).includes('dispatcher stopped unexpectedly'),
+        'startup-failure frame',
+      )
+      const frame = lastFrame(chunks).replace(/\n$/, '')
+      if (web) {
+        expect(frame.split('\n')).toHaveLength(1)
+        expect(frame).toStartWith('dispatcher stopped unexpectedly: config invalid')
+        expectUrlPinned(frame, 100)
+      } else expect(frame).toBe('dispatcher stopped unexpectedly: config invalid')
+    } finally {
+      completed.resolve({ outcome: 'abnormal', exitCode: 1 })
+      await expect(running).rejects.toThrow('dispatcher kernel abnormal')
+    }
+  },
+)
+
+test('plain output stays plain with --web', async () => {
+  const output: string[] = []
+  await new DispatchFrontend({
+    viewer: {},
+    repo: '/absent-viewer-plain-web',
+    store: new MemoryBuildStore(),
+    storeRef: 'memory',
+    env: {},
+    once: true,
+    plainOutput: (line) => output.push(line),
+    web: webStub(WEB_URL),
+    terminal: {
+      write: () => {},
+      columns: 100,
+      rows: 24,
+      interactive: false,
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    input: {
+      start: () => {
+        throw new Error('input')
+      },
+    },
+    launchChild: () => {
+      throw new Error('child')
+    },
+  }).run()
+  expect(output[0]).toBe('viewer')
+  expect(output.join('\n')).not.toContain(WEB_URL)
+})
 
 async function viewerTriageHarness(ticketSource?: () => Promise<TicketSource>) {
   const store = new MemoryBuildStore()

@@ -1835,6 +1835,36 @@ export function viewerIndicator(viewer: { dispatchedBy?: string }, width: number
   return width >= 6 && width < 9 ? 'viewer' : truncate(viewerLabel(viewer), width)
 }
 
+/**
+ * Pin the web UI's `url` to the right end of a composed frame's first line.
+ *
+ * The URL ends in the terminal's last column; the rest of the line keeps its
+ * gutters and is truncated first so that at least two spaces separate it from
+ * the URL. The line's leading label (gutter, selection marker, first word) is
+ * never cut: when the line cannot hold that label plus the whole URL, the
+ * frame is returned unchanged, so a partial URL is never painted. The URL is
+ * emitted as plain contiguous text, so terminals that detect URLs can make it
+ * clickable. Only `lines[0]` changes; the frame never gains a line.
+ */
+export function pinTopLineUrl(
+  lines: readonly string[],
+  url: string,
+  terminalWidth: number,
+): string[] {
+  const first = lines[0]
+  if (first === undefined || url === '' || terminalWidth <= 0) return [...lines]
+  const urlWidth = cellWidth(url)
+  const budget = terminalWidth - urlWidth - 2
+  const plain = stripAnsi(first)
+  const label = /^\s*(?:> )?\S+/.exec(plain)?.[0] ?? /^\s*/.exec(plain)?.[0] ?? ''
+  const labelWidth = cellWidth(label)
+  const need = visibleLength(first) <= budget ? labelWidth : labelWidth + 1
+  if (budget < need) return [...lines]
+  const left = truncate(first, budget)
+  const gap = terminalWidth - visibleLength(left) - urlWidth
+  return [`${left}${' '.repeat(gap)}${url}`, ...lines.slice(1)]
+}
+
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
   const terminalWidth = Math.max(0, opts.width)
   const contentWidth = dashboardContentWidth(terminalWidth)
