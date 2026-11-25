@@ -2321,8 +2321,8 @@ provider-specific API/MCP calls:
   duplicates before `create`. `--limit` (default 20, at most 100) sizes a page
   and `--cursor` continues from the previous page's cursor. `--json` emits
   `{tickets, cursor?, diagnostics}`, identical to MCP `tickets.search`. Sources
-  without search exit nonzero naming themselves and list nothing. The file and
-  hosted sources search; GitHub and Linear refuse, and the hosted source
+  without search exit nonzero naming themselves and list nothing. The file,
+  hosted and Linear sources search; GitHub refuses, and the hosted source
   refuses against a service predating search.
 - `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
   labeled metadata and the body verbatim, so it can read a stored spec back.
