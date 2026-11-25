@@ -2811,7 +2811,15 @@ export class BuildRunner {
             await this.deps.store.append(this.deps.slug, {
               actor: KERNEL,
               type: 'target.rewrite-reprovision-prepared',
-              payload: { ...prepared, sha },
+              // The reduced preparation also carries its seq: name each
+              // payload field so the strict schema sees only the fact.
+              payload: {
+                branch: prepared.branch,
+                previousSha: prepared.previousSha,
+                base: prepared.base,
+                from: prepared.from,
+                sha,
+              },
             })
           }
         }

@@ -104,9 +104,9 @@ function planStops(h: () => E2eHarness, heads: string[], stops = 1): SkillHandle
   return handlers
 }
 
-/** A store whose first `target.rewrite-recovered` append fails after the
- * reset ran, as a runner dying between the checkout and its record would. */
-function failFirstRecovered() {
+/** A store whose first append of `type` fails, as a runner dying around
+ * that write would: before it lands, or with `landed` right after it. */
+function failFirst(type: AbEvent['type'], landed = false) {
   let armed = true
   return async (backing: import('../store/memory').MemoryBuildStore) => {
     const store: BuildStore = new Proxy(backing, {
@@ -115,11 +115,10 @@ function failFirstRecovered() {
           return (slug: string) => backing.scopeBuild.call(store as typeof backing, slug)
         if (key === 'appendIfCurrent')
           return async (...args: Parameters<BuildStore['appendIfCurrent']>) => {
-            if (armed && args[2].type === 'target.rewrite-recovered') {
-              armed = false
-              throw new Error('injected: runner died after the reset')
-            }
-            return target.appendIfCurrent(...args)
+            if (!armed || args[2].type !== type) return target.appendIfCurrent(...args)
+            armed = false
+            if (landed) await target.appendIfCurrent(...args)
+            throw new Error(`injected: runner died around ${type}`)
           }
         const value = Reflect.get(target, key, target)
         return typeof value === 'function' ? value.bind(target) : value
@@ -128,6 +127,9 @@ function failFirstRecovered() {
     return { storeRef: 'memory', store }
   }
 }
+
+/** The reset died after its checkout, before the completion record. */
+const failFirstRecovered = () => failFirst('target.rewrite-recovered')
 
 /** Dispatch, stop at plan with main rewritten, observe the rewrite and
  * answer the stopping question; the next tick runs recovery. */
@@ -198,6 +200,47 @@ test('a reset interrupted before its record completes forward on the prepared ta
   expect(ofType(events, 'plan.started').at(-1)!.seq).toBeGreaterThan(recovered[0]!.seq)
   const moved = ofType(events, 'target.moved').filter((e) => e.seq > recovered[0]!.seq)
   expect(moved.map((e) => e.payload.sha)).toContain(forward)
+  expect(state?.prState).toBe('open')
+}, 120_000)
+
+test('a reset interrupted before its checkout re-prepares when the prepared commit is gone', async () => {
+  const heads: string[] = []
+  let harness: E2eHarness | undefined
+  const h = await makeHarness({
+    handlers: planStops(() => harness!, heads),
+    tickets: [readyTicket('T-A')],
+    storeAdapter: failFirst('target.rewrite-reprovision-prepared', true),
+  })
+  harness = h
+  harnesses.push(h)
+  const slug = await stoppedOnRewrite(h)
+  await tickAndRun(h).catch(() => undefined)
+  let events = await h.events(slug)
+  const [prepared] = ofType(events, 'target.rewrite-reprovision-prepared')
+  expect(prepared).toBeDefined()
+  expect(ofType(events, 'target.rewrite-recovered')).toEqual([])
+  // main is rewritten again, and the workspace, like a fresh guest, no
+  // longer holds the prepared commit; no snapshot can fetch it back.
+  const main = await rewriteMain(h, 'rewritten once more')
+  await git(['update-ref', '-d', `refs/autobuild/reconcile/${slug}/base`], h.origin)
+  await git(['reflog', 'expire', '--expire=now', '--all'], h.origin)
+  await git(['gc', '-q', '--prune=now'], h.origin)
+  await expect(
+    git(['cat-file', '-e', `${prepared!.payload.sha}^{commit}`], h.origin),
+  ).rejects.toThrow()
+  const state = await tickAndRun(h)
+  expect(h.cliErrors).toEqual([])
+  events = await h.events(slug)
+  const preparations = ofType(events, 'target.rewrite-reprovision-prepared')
+  expect(preparations.map((e) => e.payload)).toEqual([
+    prepared!.payload,
+    { ...prepared!.payload, sha: main },
+  ])
+  expect(ofType(events, 'target.rewrite-recovered').map((e) => e.payload)).toEqual([
+    expect.objectContaining({ recovery: 'reprovisioned', sha: main }),
+  ])
+  expect(targetEscalations(events)).toEqual([])
+  expect(heads).toEqual([main])
   expect(state?.prState).toBe('open')
 }, 120_000)
 
