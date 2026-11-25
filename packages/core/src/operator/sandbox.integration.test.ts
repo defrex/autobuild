@@ -65,6 +65,7 @@ async function fixture(opts?: {
     baseBranch: 'main',
     ...(opts?.forge !== undefined ? { forge: opts.forge } : {}),
     ...(opts?.clock !== undefined ? { clock: opts.clock } : {}),
+    sleep: async () => {},
   })
   for (const operator of opts?.open ?? ['ops']) await openReady(service, operator, source)
   return {
@@ -403,14 +404,14 @@ describe('OperatorSandboxService', () => {
 
   test('restart: a fresh service reconciles a lagging provisioning journal from the provider', async () => {
     const store = new MemoryBuildStore()
-    const realAppend = store.appendRepo.bind(store)
+    const realAppend = store.appendRepoIfCurrent.bind(store)
     let rejectProvisioned = true
-    store.appendRepo = (async (repo: string, event: { type: string }) => {
+    store.appendRepoIfCurrent = (async (repo: string, seq: number, event: { type: string }) => {
       if (rejectProvisioned && event.type === 'orchestrator.sandbox.provisioned') {
         throw new Error('store unavailable')
       }
-      return realAppend(repo, event as never)
-    }) as typeof store.appendRepo
+      return realAppend(repo, seq, event as never)
+    }) as typeof store.appendRepoIfCurrent
     const first = await fixture({ store, open: [] })
     try {
       await openReady(first.service, 'ops', first.repo)

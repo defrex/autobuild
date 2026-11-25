@@ -34,7 +34,14 @@ import {
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxEnvironmentIdentity,
+  type SandboxProviderStatus,
+  type SandboxProvisionStage,
+  type SandboxRefreshResult,
   type SandboxWaitResult,
+  redactSandboxMessage,
+  SANDBOX_INTERRUPTED_MESSAGE,
+  SANDBOX_REFRESH_DIRTY_MESSAGE,
+  sandboxRefreshDivergedMessage,
 } from './operator-sandbox'
 import type {
   BuildExecution,
@@ -186,9 +193,12 @@ export interface VercelSandboxHandle {
   stop(opts?: { signal?: AbortSignal }): Promise<unknown>
   delete(opts?: { signal?: AbortSignal }): Promise<void>
   update(
-    params: { networkPolicy: NetworkPolicy },
+    params: { networkPolicy?: NetworkPolicy; timeout?: number },
     opts?: { signal?: AbortSignal },
   ): Promise<unknown>
+  /** Add `duration` ms to the running session's lifetime (SDK
+   * `extendTimeout`: additive, never a set). */
+  extendTimeout(duration: number, opts?: { signal?: AbortSignal }): Promise<void>
 }
 
 export type VercelSandboxCreateInput = {
@@ -1275,6 +1285,201 @@ async function effectiveArchive(
   return (await resolveDistributionArchive()).archive
 }
 
+// ── Operator sandbox provisioning state (#1246) ─────────────────────────────
+//
+// A hosted deployment composes the provider per warm function instance and
+// may freeze it after the response, so provisioning state lives in the
+// guest, where any process can read it with one probe command. The host
+// phase (create, checkout, scrub, Bun, system provisioning, distribution)
+// runs in the caller's background; the slow tail (dependencies, runtimes,
+// setup, marker) runs as one detached guest command bounded only by the
+// session timer.
+
+/** The guest directory holding one fresh provision's state, outside the
+ * checkout: `host` (`<step> <guest epoch seconds>`, the host phase's
+ * heartbeat), one `stage-NN-<name>.sh` per tail stage, `tail.sh`, the
+ * tail's `pid`, `stage`, `log` and `failed` files, and `resuming` (the guest
+ * epoch at which a runtime refresh of a provisioned environment started),
+ * which outranks the success marker until that refresh succeeds. */
+export const VERCEL_OPERATOR_PROVISION_DIR = `${VERCEL_AUTOBUILD_PATH}/operator-provision`
+/** Heartbeat age after which a host phase with no running tail counts as
+ * interrupted: above the 300-second hosted function limit, and every host
+ * step refreshes the heartbeat. A host step longer than this on a long-lived
+ * local `ab mcp` can be judged interrupted by another process; the journal's
+ * compare-and-append still settles it once and the next open recovers. */
+export const VERCEL_OPERATOR_HOST_STALE_SECONDS = 600
+/** Grace after the `launched` heartbeat for the detached tail to record its
+ * pid before a missing tail counts as interrupted. */
+export const VERCEL_OPERATOR_LAUNCH_GRACE_SECONDS = 30
+
+/** Host-phase heartbeat steps. `launched` follows the tail launch. */
+type OperatorHostStep = 'checkout' | 'provision' | 'launched'
+
+const PROVISION_STAGES: readonly SandboxProvisionStage[] = [
+  'checkout',
+  'setup',
+  'environment',
+  'resume',
+  'provision',
+]
+
+/** One classified probe of an operator sandbox's guest state. Rows are
+ * checked in order and the first match wins: a recorded failure always
+ * outranks an older success marker. */
+export type VercelOperatorProbe =
+  | { kind: 'failed'; record: string; log: string }
+  | { kind: 'resuming'; ageSeconds: number }
+  | {
+      kind: 'ready'
+      marker: { baseSha?: string }
+      headSha?: string
+      bunVersion?: string
+      distribution?: string
+    }
+  | { kind: 'running'; stage?: string }
+  | { kind: 'host'; step: string; ageSeconds: number }
+  | { kind: 'none' }
+
+/** The read-only probe, run as `sh -c <script> probe <dir> <marker>
+ * <workspace> <bun> <distribution marker>` with no environment. File
+ * contents ride base64-encoded so the parser never sees raw guest bytes;
+ * ages come from the guest clock. */
+export const VERCEL_OPERATOR_PROBE_SCRIPT = [
+  'd=$1',
+  'enc() { base64 | tr -d "\\n"; }',
+  'if [ -f "$d/failed" ]; then',
+  '  echo "result failed"',
+  '  printf "failed %s\\n" "$(head -c 4096 "$d/failed" | enc)"',
+  '  printf "log %s\\n" "$(tail -c 4096 "$d/log" 2>/dev/null | enc)"',
+  '  exit 0',
+  'fi',
+  'if [ -f "$d/resuming" ]; then',
+  '  echo "result resuming"',
+  '  printf "resuming %s\\n" "$(head -n 1 "$d/resuming")"',
+  '  printf "now %s\\n" "$(date +%s)"',
+  '  exit 0',
+  'fi',
+  'if [ -f "$2" ]; then',
+  '  echo "result ready"',
+  '  printf "marker %s\\n" "$(head -c 4096 "$2" | enc)"',
+  '  printf "head %s\\n" "$(git -C "$3" rev-parse HEAD 2>/dev/null)"',
+  '  printf "bun %s\\n" "$("$4" --version 2>/dev/null | head -n 1)"',
+  '  printf "distribution %s\\n" "$(head -n 1 "$5" 2>/dev/null)"',
+  '  exit 0',
+  'fi',
+  'pid=$(cat "$d/pid" 2>/dev/null)',
+  'if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q tail.sh "/proc/$pid/cmdline" 2>/dev/null; then',
+  '  echo "result running"',
+  '  printf "stage %s\\n" "$(head -n 1 "$d/stage" 2>/dev/null)"',
+  '  exit 0',
+  'fi',
+  'if [ -f "$d/host" ]; then',
+  '  echo "result host"',
+  '  printf "host %s\\n" "$(head -n 1 "$d/host")"',
+  '  printf "now %s\\n" "$(date +%s)"',
+  '  exit 0',
+  'fi',
+  'echo "result none"',
+].join('\n')
+
+/** Parse the probe's `key value` lines. Unparseable output is `none`. */
+export function parseVercelOperatorProbe(stdout: string): VercelOperatorProbe {
+  const fields = new Map<string, string>()
+  for (const line of stdout.split('\n')) {
+    const space = line.indexOf(' ')
+    if (space > 0) fields.set(line.slice(0, space), line.slice(space + 1).trim())
+  }
+  const decode = (value: string | undefined): string =>
+    value === undefined || value === '' ? '' : Buffer.from(value, 'base64').toString('utf8')
+  const optional = (value: string | undefined): string | undefined =>
+    value === undefined || value === '' ? undefined : value
+  switch (fields.get('result')) {
+    case 'failed':
+      return {
+        kind: 'failed',
+        record: decode(fields.get('failed')),
+        log: decode(fields.get('log')),
+      }
+    case 'ready': {
+      let marker: { baseSha?: string } = {}
+      try {
+        const parsed = JSON.parse(decode(fields.get('marker'))) as { baseSha?: unknown }
+        if (typeof parsed?.baseSha === 'string' && /^[0-9a-f]{40,64}$/.test(parsed.baseSha))
+          marker = { baseSha: parsed.baseSha }
+      } catch {
+        // A legacy empty marker records no base head.
+      }
+      const headSha = optional(fields.get('head'))
+      const bunVersion = optional(fields.get('bun'))
+      const distribution = optional(fields.get('distribution'))
+      return {
+        kind: 'ready',
+        marker,
+        ...(headSha !== undefined && /^[0-9a-f]{40,64}$/.test(headSha) ? { headSha } : {}),
+        ...(bunVersion !== undefined ? { bunVersion } : {}),
+        ...(distribution !== undefined ? { distribution } : {}),
+      }
+    }
+    case 'resuming': {
+      const since = Number(fields.get('resuming'))
+      const now = Number(fields.get('now'))
+      return {
+        kind: 'resuming',
+        ageSeconds:
+          Number.isFinite(since) && Number.isFinite(now) && fields.get('resuming') !== ''
+            ? Math.max(0, now - since)
+            : 0,
+      }
+    }
+    case 'running': {
+      const stage = optional(fields.get('stage'))
+      return { kind: 'running', ...(stage !== undefined ? { stage } : {}) }
+    }
+    case 'host': {
+      const [step = '', at = ''] = (fields.get('host') ?? '').split(/\s+/)
+      const now = Number(fields.get('now'))
+      const then = Number(at)
+      const ageSeconds =
+        Number.isFinite(now) && Number.isFinite(then) && at !== '' ? Math.max(0, now - then) : 0
+      return { kind: 'host', step, ageSeconds }
+    }
+    default:
+      return { kind: 'none' }
+  }
+}
+
+/** The file-safe form of a runtime name inside a tail stage name. */
+function tailRuntimeName(runtime: string): string {
+  return runtime.replace(/[^A-Za-z0-9._-]+/g, '_')
+}
+
+/** Single-quote one value for a POSIX shell. */
+function shellQuote(value: string): string {
+  return `'${value.split("'").join(`'\\''`)}'`
+}
+
+/** A host-phase failure, already recorded in the guest when `created`. */
+class OperatorHostFailure extends Error {
+  override readonly name = 'OperatorHostFailure'
+  constructor(
+    readonly failure: { stage: SandboxProvisionStage; message: string },
+    readonly created: boolean,
+    cause: unknown,
+  ) {
+    super(failure.message, { cause })
+  }
+}
+
+/** A host phase stopped by `close` or `release`. */
+class OperatorAttemptCancelled extends Error {
+  override readonly name = 'OperatorAttemptCancelled'
+  constructor(readonly created: boolean) {
+    super('operator sandbox provisioning was cancelled')
+  }
+}
+
+const DEPENDENCY_INSTALL_COMMAND = `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`
+
 export interface VercelSandboxProviderOptions {
   delegateCredential?: typeof delegateCredential
   config: VercelSandboxConfig
@@ -1325,6 +1530,11 @@ export interface VercelSandboxProviderOptions {
    * environment is otherwise always built from an empty record — never the
    * process environment — so no credential can leak in. */
   sandboxEnvironmentVariables?: readonly string[]
+  /** `[orchestrator.sandbox].idleMinutes` (default 30): the provider timeout
+   * an operator sandbox is created and resumed with, extended by every tool
+   * call, so the provider's own timer stops an idle sandbox. Build and
+   * harvest workspaces keep `timeoutSeconds`. */
+  sandboxIdleMinutes?: number
   /** Internal deployment composition only, never user configuration: the git
    * read credential of a hosted deployment's fallback operator sandbox. It is
    * placed only in the host-side upload-pack egress transform (GET
@@ -1427,19 +1637,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       observe: (identity) =>
         this.withPolicyLock(identity.workspaceRef, () => this.observeExecution(identity)),
     }
-    const lifecycleUnsupported = (): Promise<never> =>
-      Promise.reject(
-        new SandboxOperationError(
-          'unsupported',
-          'the vercel-sandbox provider does not implement the operator sandbox lifecycle (open/status/close/refresh)',
-        ),
-      )
     this.orchestratorSandbox = {
-      lifecycleSupported: false,
-      open: lifecycleUnsupported,
-      status: lifecycleUnsupported,
-      close: lifecycleUnsupported,
-      refresh: lifecycleUnsupported,
+      lifecycleSupported: true,
+      open: (input) => this.openOperator(input),
+      status: (input) => this.statusOperator(input),
+      close: (input) => this.closeOperator(input),
+      refresh: (handle, input) =>
+        this.withPolicyLock(handle.environmentId, () => this.refreshOperator(handle, input)),
       describe: (input) => this.describeOperatorSandbox(input),
       ensure: (input) => this.ensureOperatorSandbox(input),
       exec: (handle, request) => this.sandboxExec(handle, request),
@@ -2661,23 +2865,24 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
   }
 
-  /** Provision-or-resume. A persistent sandbox auto-resumes on the first SDK
-   * call that needs a running session, so the reuse path brings Bun to the
-   * pin and re-checks the distribution marker as the build paths do, then leaves
-   * the session running for the tool call. A fresh provision runs the same
-   * chain as a build workspace and ends by running the repository's setup
-   * command; it leaves the environment running too (the tool call follows
-   * immediately; the idle settlement stops it later). */
+  /** Provision-or-resume, blocking: the provider's own primitive for tests
+   * and callers without a journal. A persistent sandbox auto-resumes on the
+   * first SDK call that needs a running session, so the reuse path applies
+   * the idle timeout and network policy, brings Bun to the pin and re-checks
+   * the distribution marker as the build paths do. A fresh provision runs the
+   * host phase, then waits for the detached tail and probes its outcome; a
+   * failure reaps the environment, because `ensure` has no journal to
+   * publish its evidence to and its caller holds the error. */
   private async ensureOperatorSandbox(input: {
     repo: string
     operator: string
     baseBranch: string
   }): Promise<SandboxEnvironmentIdentity> {
-    const origin = cleanGithubOrigin(await this.origin())
-    const name = sandboxEnvironmentName(origin.url, input.operator)
+    const { origin, name } = await this.operatorName(input.operator)
     const distributionIdentity = await this.identityStamp()
     let sandbox = await this.facade.get(name, this.operationSignal())
     if (sandbox !== null) {
+      await this.applyOperatorSession(sandbox, name)
       const marker = await sandbox.runCommand({
         cmd: 'test',
         args: ['-f', VERCEL_PROVISIONED_MARKER],
@@ -2745,56 +2950,488 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         }
       }
     }
-    const head = await this.remoteBranchHead(input.baseBranch, `remote base ${input.baseBranch}`)
-    if (head === null) {
-      throw new SandboxOperationError('provision', `remote base ${input.baseBranch} does not exist`)
+    const failEnsure = async (
+      failure: { stage: SandboxProvisionStage; message: string },
+      created: boolean,
+      cause?: unknown,
+    ): Promise<never> => {
+      if (created) {
+        // Nothing unrecorded or half-built survives a blocking provision.
+        try {
+          await this.reap(name)
+        } catch (deleteError) {
+          throw new AggregateError(
+            [cause ?? new Error(failure.message), deleteError],
+            `operator sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
+          )
+        }
+      }
+      throw new SandboxOperationError(
+        failure.stage === 'environment' ? 'environment' : 'provision',
+        failure.message,
+        cause === undefined ? undefined : { cause },
+      )
     }
-    // The deployment-fallback operator sandbox (egress read credential) is
-    // created without a git source and clones in the guest: its credential
-    // reaches only the upload-pack egress transform, never the Vercel source
-    // API. Every other provision keeps the configured source clone.
-    const guestClone = this.options.egressReadCredential !== undefined
-    const username =
-      guestClone || this.options.config.gitUsernameEnv === undefined
-        ? undefined
-        : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
-    const password =
-      guestClone || this.options.config.gitPasswordEnv === undefined
-        ? undefined
-        : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
-    const readAuth = guestClone
-      ? this.uploadPackAuthorization()
-      : password === undefined
-        ? undefined
-        : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
-    sandbox = await this.facade.create({
-      name,
-      ...(guestClone
-        ? {}
-        : {
-            source: {
-              type: 'git' as const,
-              url: origin.url,
-              revision: head,
-              ...(username !== undefined && password !== undefined ? { username, password } : {}),
-            },
-          }),
-      image: this.options.config.image,
-      resources: { vcpus: this.options.config.vcpus },
-      timeout: this.options.config.timeoutSeconds * 1000,
-      persistent: true,
-      ...(this.options.config.region !== undefined ? { region: this.options.config.region } : {}),
-      ...(this.options.config.failoverRegions.length > 0
-        ? { failoverRegions: this.options.config.failoverRegions }
-        : {}),
-      ...(this.options.config.snapshotExpirationSeconds === undefined
-        ? {}
-        : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
-      networkPolicy: uploadPackPolicy(origin, readAuth),
-      keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
+    let launched: Awaited<ReturnType<typeof this.runOperatorHostPhase>>
+    try {
+      launched = await this.runOperatorHostPhase({ origin, name, baseBranch: input.baseBranch })
+    } catch (error) {
+      if (error instanceof OperatorHostFailure)
+        return failEnsure(error.failure, error.created, error)
+      throw error
+    }
+    if (launched.outcome === 'concurrent') {
+      throw new SandboxOperationError(
+        'provision',
+        `operator sandbox ${name} is being provisioned by another process`,
+      )
+    }
+    const deadline = Date.now() + this.idleMs()
+    await waitForCommandExit(launched.command, () => Date.now() > deadline)
+    const probe = await this.probeOperator(launched.sandbox)
+    if (probe.kind !== 'ready') {
+      return failEnsure(
+        probe.kind === 'failed' ? this.probeFailure(probe) : this.interruptedFailure(),
+        true,
+      )
+    }
+    const sessionId = launched.sandbox.currentSession?.().sessionId
+    return {
+      provider: this.name,
+      environmentId: name,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      workspacePath: VERCEL_WORKSPACE_PATH,
+      baseSha: launched.baseSha,
+    }
+  }
+
+  // ── Operator sandbox lifecycle (#1246) ─────────────────────────────────
+  //
+  // `open` returns after a `get`, at most one probe and one `update`; the
+  // host phase runs as this process's background attempt (which a hosted
+  // caller keeps alive with its background seam) and launches the detached
+  // tail. `status` reads the session status first and never runs a guest
+  // command on a session that is not running: a guest command would resume
+  // it. Failure evidence in the guest is reaped only by `open` (after the
+  // service recorded the failure), `release`, or a blocking `ensure`.
+
+  private readonly operatorInflight = new Map<
+    string,
+    {
+      kind: 'provision' | 'resume'
+      promise: Promise<SandboxProviderStatus>
+      abort: AbortController
+    }
+  >()
+  private readonly operatorFailures = new Map<
+    string,
+    { stage: SandboxProvisionStage; message: string }
+  >()
+
+  /** The operator sandbox's provider idle timeout, in milliseconds. */
+  private idleMs(): number {
+    return (this.options.sandboxIdleMinutes ?? 30) * 60_000
+  }
+
+  private async operatorName(
+    operator: string,
+  ): Promise<{ origin: ReturnType<typeof cleanGithubOrigin>; name: string }> {
+    const origin = cleanGithubOrigin(await this.origin())
+    return { origin, name: sandboxEnvironmentName(origin.url, operator) }
+  }
+
+  /** Every credential value a provisioning message could carry, removed:
+   * forwarded guest values, the upload-pack authorization and git password,
+   * then the forbidden host names' values. */
+  private redactOperatorMessage(message: string): string {
+    let env: Record<string, string> = {}
+    try {
+      env = this.sandboxEnv()
+    } catch {
+      // A missing forwarded value has no value to redact.
+    }
+    let redacted = redactRuntimeError(message, env)
+    const secrets: string[] = []
+    try {
+      const authorization = this.uploadPackAuthorization()
+      if (authorization !== undefined) {
+        secrets.push(authorization, authorization.slice('Basic '.length))
+      }
+    } catch {
+      // An unresolvable credential pair cannot appear in the message.
+    }
+    if (this.options.egressReadCredential !== undefined) {
+      secrets.push(this.options.egressReadCredential.password)
+    }
+    const passwordEnv = this.options.config.gitPasswordEnv
+    if (passwordEnv !== undefined) secrets.push(this.options.env[passwordEnv] ?? '')
+    for (const secret of secrets.sort((a, b) => b.length - a.length)) {
+      if (secret !== '') redacted = redacted.split(secret).join('[REDACTED]')
+    }
+    return redactSandboxMessage(redacted)
+  }
+
+  /** Apply the idle timeout and the current network policy to an operator
+   * sandbox: a resumed session then runs with the idle timeout, and the
+   * upload-pack transform carries the deployment's current read credential. */
+  private async applyOperatorSession(sandbox: VercelSandboxHandle, name: string): Promise<void> {
+    const { policy } = await this.normalNetworkPolicy(name)
+    await sandbox.update(
+      { timeout: this.idleMs(), networkPolicy: policy },
+      { signal: this.operationSignal() },
+    )
+  }
+
+  /** Extend the running session so it outlives `max(idleMs, boundMs)` from
+   * now. The SDK's `extendTimeout` adds to the lifetime, so only the deficit
+   * is requested. A failed extension is swallowed: it can only let the
+   * sandbox stop sooner, which is cost-safe, and the next call extends. */
+  private async extendOperatorTimer(sandbox: VercelSandboxHandle, boundMs: number): Promise<void> {
+    const expiresAt = sandbox.sessionExpiresAt
+    if (expiresAt === undefined) return
+    const deficit = Date.now() + Math.max(this.idleMs(), boundMs) - expiresAt
+    if (deficit <= 0) return
+    try {
+      await sandbox.extendTimeout(deficit, { signal: this.operationSignal() })
+    } catch {
+      // Cost-safe: see above.
+    }
+  }
+
+  private async probeOperator(sandbox: VercelSandboxHandle): Promise<VercelOperatorProbe> {
+    const stdout = await readableCommand(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        VERCEL_OPERATOR_PROBE_SCRIPT,
+        'probe',
+        VERCEL_OPERATOR_PROVISION_DIR,
+        VERCEL_PROVISIONED_MARKER,
+        VERCEL_WORKSPACE_PATH,
+        VERCEL_BUN_EXECUTABLE,
+        VERCEL_DISTRIBUTION_VERSION_MARKER,
+      ],
       signal: this.operationSignal(),
     })
+    return parseVercelOperatorProbe(stdout)
+  }
+
+  private async heartbeat(sandbox: VercelSandboxHandle, step: OperatorHostStep): Promise<void> {
+    await commandOrThrow(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        'printf "%s %s\\n" "$1" "$(date +%s)" > "$2"',
+        'heartbeat',
+        step,
+        `${VERCEL_OPERATOR_PROVISION_DIR}/host`,
+      ],
+      signal: this.operationSignal(),
+    })
+  }
+
+  /** Best-effort: record a failure in the guest `failed` file, the durable
+   * evidence any later process reads. The message is already redacted. */
+  private async writeOperatorFailure(
+    sandbox: VercelSandboxHandle,
+    failure: { stage: SandboxProvisionStage; message: string },
+  ): Promise<void> {
     try {
+      await sandbox.runCommand({
+        cmd: 'sh',
+        args: [
+          '-c',
+          'mkdir -p "$1" && printf "%s\\n%s\\n" "$2" "$3" > "$1/failed"',
+          'failed',
+          VERCEL_OPERATOR_PROVISION_DIR,
+          failure.stage,
+          failure.message,
+        ],
+        signal: this.operationSignal(),
+      })
+    } catch {
+      // The in-process record and the journal remain.
+    }
+  }
+
+  /** The failure a `failed` probe records: a host or resume record carries
+   * its stage and message verbatim; a tail record names its step, mapped onto
+   * the existing stages with the redacted log tail as detail. */
+  private probeFailure(probe: Extract<VercelOperatorProbe, { kind: 'failed' }>): {
+    stage: SandboxProvisionStage
+    message: string
+  } {
+    const [first = '', ...rest] = probe.record.split('\n')
+    const step = first.trim()
+    const recorded = rest.join('\n').trim()
+    if (recorded !== '') {
+      return {
+        stage: (PROVISION_STAGES as readonly string[]).includes(step)
+          ? (step as SandboxProvisionStage)
+          : 'provision',
+        message: this.redactOperatorMessage(recorded),
+      }
+    }
+    const detail = this.redactOperatorMessage(probe.log.trim()) || '(no output)'
+    if (step === 'setup') {
+      return { stage: 'setup', message: `operator sandbox setup failed: ${detail}` }
+    }
+    if (step === 'dependencies') {
+      return { stage: 'provision', message: `dependency install failed: ${detail}` }
+    }
+    const runtime = /^runtime-(.+)-(install|preflight)$/.exec(step)
+    if (runtime !== null) {
+      const group = currentRuntimeReferences(this.options.runtimeReferences).find(
+        (candidate) => tailRuntimeName(candidate.runtime) === runtime[1],
+      )
+      return {
+        stage: 'provision',
+        message:
+          group === undefined
+            ? `runtime ${runtime[1]} ${runtime[2]} failed: ${detail}`
+            : `runtime ${displayName(group.runtime)} ${runtime[2]} failed (selected by ${group.references.join(', ')}); fix workspace.config.runtimeProvisioning.${group.runtime}.${runtime[2]}: ${detail}`,
+      }
+    }
+    return {
+      stage: 'provision',
+      message: `operator sandbox provisioning step ${step || '(unknown)'} failed: ${detail}`,
+    }
+  }
+
+  /** An interrupted provision: the host heartbeat's step names the stage. */
+  private interruptedFailure(step?: string): {
+    stage: SandboxProvisionStage
+    message: string
+  } {
+    if (step === 'checkout' || step === 'provision') {
+      return {
+        stage: step,
+        message: `provisioning was interrupted during ${step}; call sandbox.open to retry`,
+      }
+    }
+    return { stage: 'provision', message: SANDBOX_INTERRUPTED_MESSAGE }
+  }
+
+  private readyStatus(
+    name: string,
+    sandbox: VercelSandboxHandle,
+    probe: Extract<VercelOperatorProbe, { kind: 'ready' }>,
+    kind?: 'provision' | 'resume',
+  ): SandboxProviderStatus {
+    const sessionId = sandbox.currentSession?.().sessionId
+    return {
+      state: 'ready',
+      handle: {
+        provider: this.name,
+        environmentId: name,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        workspacePath: VERCEL_WORKSPACE_PATH,
+        ...(probe.marker.baseSha !== undefined ? { baseSha: probe.marker.baseSha } : {}),
+      },
+      ...(probe.headSha !== undefined ? { headSha: probe.headSha } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+    }
+  }
+
+  /** Classify a running session's probe. `inFlight` marks a provision some
+   * process is still driving (a running tail, a fresh host heartbeat, or a
+   * tail launched within its grace). */
+  private classifyOperatorProbe(
+    name: string,
+    sandbox: VercelSandboxHandle,
+    probe: VercelOperatorProbe,
+  ): { status: SandboxProviderStatus; inFlight: boolean } {
+    switch (probe.kind) {
+      case 'failed':
+        return { status: { state: 'failed', failure: this.probeFailure(probe) }, inFlight: false }
+      case 'ready':
+        return { status: this.readyStatus(name, sandbox, probe), inFlight: false }
+      case 'resuming':
+        // Some process is refreshing the toolchain under the old marker.
+        if (probe.ageSeconds < VERCEL_OPERATOR_HOST_STALE_SECONDS) {
+          return { status: { state: 'resuming' }, inFlight: true }
+        }
+        return {
+          status: {
+            state: 'failed',
+            failure: {
+              stage: 'resume',
+              message: 'resuming was interrupted before it finished; call sandbox.open to retry',
+            },
+          },
+          inFlight: false,
+        }
+      case 'running':
+        return { status: { state: 'provisioning' }, inFlight: true }
+      case 'host': {
+        const grace =
+          probe.step === 'launched'
+            ? VERCEL_OPERATOR_LAUNCH_GRACE_SECONDS
+            : VERCEL_OPERATOR_HOST_STALE_SECONDS
+        if (probe.ageSeconds < grace) return { status: { state: 'provisioning' }, inFlight: true }
+        return {
+          status: { state: 'failed', failure: this.interruptedFailure(probe.step) },
+          inFlight: false,
+        }
+      }
+      case 'none':
+        return {
+          status: { state: 'failed', failure: this.interruptedFailure() },
+          inFlight: false,
+        }
+    }
+  }
+
+  /** The detached tail's files: one stage script per step, then the runner.
+   * Every stage command is byte-identical to the host-driven chain it
+   * replaces; the files carry no environment values (forwarded values ride
+   * only in the launch's env record). */
+  private operatorTailFiles(baseSha: string): { path: string; content: Uint8Array }[] {
+    const stages: { name: string; script: string }[] = [
+      { name: 'dependencies', script: DEPENDENCY_INSTALL_COMMAND },
+    ]
+    const references = currentRuntimeReferences(this.options.runtimeReferences)
+    for (const group of [...references].sort((left, right) =>
+      left.runtime < right.runtime ? -1 : left.runtime > right.runtime ? 1 : 0,
+    )) {
+      const provisioning = this.options.config.runtimeProvisioning?.[group.runtime]
+      if (provisioning === undefined) {
+        throw new Error(
+          `runtime ${displayName(group.runtime)} selected by ${group.references.join(', ')} has no provisioning; add [workspace.config.runtimeProvisioning.${tomlKey(group.runtime)}] with install and preflight commands`,
+        )
+      }
+      for (const step of ['install', 'preflight'] as const) {
+        stages.push({
+          name: `runtime-${tailRuntimeName(group.runtime)}-${step}`,
+          script: provisioning[step],
+        })
+      }
+    }
+    const setupCommand = this.options.setupCommand
+    if (setupCommand !== undefined && setupCommand.trim() !== '') {
+      stages.push({ name: 'setup', script: `${this.sandboxPathPrefix()}${setupCommand}` })
+    }
+    stages.push({
+      name: 'marker',
+      script: `printf '%s' ${shellQuote(JSON.stringify({ baseSha }))} > ${shellQuote(VERCEL_PROVISIONED_MARKER)}`,
+    })
+    const dir = VERCEL_OPERATOR_PROVISION_DIR
+    const files = stages.map((stage, index) => ({
+      name: stage.name,
+      file: `stage-${String(index + 1).padStart(2, '0')}-${stage.name}.sh`,
+      script: stage.script,
+    }))
+    const runner = [
+      `d=${shellQuote(dir)}`,
+      'echo $$ > "$d/pid"',
+      'run() {',
+      '  printf "%s\\n" "$1" > "$d/stage"',
+      '  printf "== %s\\n" "$1" >> "$d/log"',
+      '  if ! sh "$d/$2" >> "$d/log" 2>&1; then',
+      '    printf "%s\\n" "$1" > "$d/failed"',
+      '    exit 1',
+      '  fi',
+      '}',
+      ...files.map((stage) => `run ${shellQuote(stage.name)} ${shellQuote(stage.file)}`),
+      '',
+    ].join('\n')
+    return [
+      ...files.map((stage) => ({
+        path: `${dir}/${stage.file}`,
+        content: new Uint8Array(Buffer.from(`${stage.script}\n`)),
+      })),
+      { path: `${dir}/tail.sh`, content: new Uint8Array(Buffer.from(runner)) },
+    ]
+  }
+
+  /** The host phase of one fresh provision: create with the idle timeout,
+   * check out and scrub, provision Bun, system steps and the distribution,
+   * write the tail files and launch the detached tail. Each step rewrites
+   * the guest heartbeat first. A failure after create writes the guest
+   * `failed` record and leaves the sandbox for its idle timer — the evidence
+   * must outlive this process until the journal holds it. */
+  private async runOperatorHostPhase(input: {
+    origin: ReturnType<typeof cleanGithubOrigin>
+    name: string
+    baseBranch: string
+    signal?: AbortSignal
+  }): Promise<
+    | { outcome: 'launched'; sandbox: VercelSandboxHandle; command: VercelCommand; baseSha: string }
+    | { outcome: 'concurrent' }
+  > {
+    const { origin, name, signal } = input
+    const checkpoint = (): void => {
+      if (signal?.aborted) throw new OperatorAttemptCancelled(sandbox !== undefined)
+    }
+    let step: OperatorHostStep = 'checkout'
+    let sandbox: VercelSandboxHandle | undefined
+    try {
+      const distributionIdentity = await this.identityStamp()
+      const head = await this.remoteBranchHead(input.baseBranch, `remote base ${input.baseBranch}`)
+      if (head === null) throw new Error(`remote base ${input.baseBranch} does not exist`)
+      // The deployment-fallback operator sandbox (egress read credential) is
+      // created without a git source and clones in the guest: its credential
+      // reaches only the upload-pack egress transform, never the Vercel
+      // source API. Every other provision keeps the configured source clone.
+      const guestClone = this.options.egressReadCredential !== undefined
+      const username =
+        guestClone || this.options.config.gitUsernameEnv === undefined
+          ? undefined
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
+      const password =
+        guestClone || this.options.config.gitPasswordEnv === undefined
+          ? undefined
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
+      const readAuth = guestClone
+        ? this.uploadPackAuthorization()
+        : password === undefined
+          ? undefined
+          : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+      checkpoint()
+      try {
+        sandbox = await this.facade.create({
+          name,
+          ...(guestClone
+            ? {}
+            : {
+                source: {
+                  type: 'git' as const,
+                  url: origin.url,
+                  revision: head,
+                  ...(username !== undefined && password !== undefined
+                    ? { username, password }
+                    : {}),
+                },
+              }),
+          image: this.options.config.image,
+          resources: { vcpus: this.options.config.vcpus },
+          timeout: this.idleMs(),
+          persistent: true,
+          ...(this.options.config.region !== undefined
+            ? { region: this.options.config.region }
+            : {}),
+          ...(this.options.config.failoverRegions.length > 0
+            ? { failoverRegions: this.options.config.failoverRegions }
+            : {}),
+          ...(this.options.config.snapshotExpirationSeconds === undefined
+            ? {}
+            : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
+          networkPolicy: uploadPackPolicy(origin, readAuth),
+          keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
+          signal: this.operationSignal(),
+        })
+      } catch (error) {
+        // A concurrent instance that created the same name first owns this
+        // provision; anything else is this attempt's failure.
+        const existing = await this.facade.get(name, this.operationSignal()).catch(() => null)
+        if (existing !== null) return { outcome: 'concurrent' }
+        throw error
+      }
+      this.origins.set(name, origin)
+      this.sessions.set(name, sandbox)
+      await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_OPERATOR_PROVISION_DIR] })
+      await this.heartbeat(sandbox, 'checkout')
+      checkpoint()
       if (guestClone) {
         await guestCloneCheckout(sandbox, origin.url, head)
       } else {
@@ -2818,84 +3455,491 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         if (result.exitCode !== 0 && result.exitCode !== 5)
           throw new Error(`failed to scrub git config ${key}`)
       }
-      await provisionBun(sandbox, this.options.config.image)
-      await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-      const archive = await this.archiveBytes()
-      await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
-      // Repository dependencies precede the setup command; the fixed
-      // bootstrap is the same one build provisioning runs.
+      checkpoint()
+      step = 'provision'
+      await this.heartbeat(sandbox, 'provision')
+      await provisionBun(sandbox, this.options.config.image, signal)
+      checkpoint()
+      await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [], signal)
+      checkpoint()
+      await installDistribution(
+        sandbox,
+        await this.archiveBytes(),
+        distributionIdentity,
+        this.operationSignal(),
+      )
+      checkpoint()
+      await sandbox.writeFiles(this.operatorTailFiles(head), { signal: this.operationSignal() })
+      // Forwarded values are demanded only when a runtime or setup stage
+      // runs, as in the host-driven chain this replaces.
+      const setup = this.options.setupCommand
+      const env =
+        currentRuntimeReferences(this.options.runtimeReferences).length > 0 ||
+        (setup !== undefined && setup.trim() !== '')
+          ? this.sandboxEnv()
+          : {}
+      checkpoint()
+      const command = (await sandbox.runCommand({
+        cmd: 'sh',
+        args: [`${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
+        cwd: VERCEL_WORKSPACE_PATH,
+        env,
+        detached: true,
+        signal: this.operationSignal(),
+      })) as VercelCommand
+      step = 'launched'
+      await this.heartbeat(sandbox, 'launched')
+      await this.extendOperatorTimer(sandbox, 0)
+      return { outcome: 'launched', sandbox, command, baseSha: head }
+    } catch (error) {
+      if (error instanceof OperatorAttemptCancelled || signal?.aborted) {
+        throw new OperatorAttemptCancelled(sandbox !== undefined)
+      }
+      const failure = {
+        stage:
+          error instanceof SandboxOperationError && error.stage === 'environment'
+            ? ('environment' as const)
+            : step === 'checkout'
+              ? ('checkout' as const)
+              : ('provision' as const),
+        message:
+          this.redactOperatorMessage(error instanceof Error ? error.message : String(error)) ||
+          'operator sandbox provisioning failed',
+      }
+      if (sandbox !== undefined) await this.writeOperatorFailure(sandbox, failure)
+      throw new OperatorHostFailure(failure, sandbox !== undefined, error)
+    }
+  }
+
+  /** Register one background attempt; its body resolves, never rejects. */
+  private startOperatorAttempt(
+    name: string,
+    kind: 'provision' | 'resume',
+    body: (signal: AbortSignal) => Promise<SandboxProviderStatus>,
+  ): { status: SandboxProviderStatus; settled: Promise<SandboxProviderStatus> } {
+    const abort = new AbortController()
+    const entry = {
+      kind,
+      abort,
+      promise: Promise.resolve<SandboxProviderStatus>({ state: 'absent' }),
+    }
+    this.operatorInflight.set(name, entry)
+    entry.promise = (async (): Promise<SandboxProviderStatus> => {
+      try {
+        return await body(abort.signal)
+      } catch (error) {
+        const failure = {
+          stage: kind === 'resume' ? ('resume' as const) : ('provision' as const),
+          message:
+            this.redactOperatorMessage(error instanceof Error ? error.message : String(error)) ||
+            'operator sandbox provisioning failed',
+        }
+        this.operatorFailures.set(name, failure)
+        return { state: 'failed', failure }
+      } finally {
+        if (this.operatorInflight.get(name) === entry) this.operatorInflight.delete(name)
+      }
+    })()
+    return {
+      status: { state: kind === 'resume' ? 'resuming' : 'provisioning', kind },
+      settled: entry.promise,
+    }
+  }
+
+  /** A fresh provision, replacing `stale` first when given. Settles
+   * `provisioning` once the tail is launched: the tail's outcome is observed
+   * later through the probe. */
+  private async freshOperatorAttempt(
+    input: { baseBranch: string },
+    origin: ReturnType<typeof cleanGithubOrigin>,
+    name: string,
+    stale: VercelSandboxHandle | undefined,
+    signal: AbortSignal,
+  ): Promise<SandboxProviderStatus> {
+    if (stale !== undefined) {
+      // The journal already records this environment's failure (the
+      // service's precondition for calling open). Replace the evidence with
+      // a checkout heartbeat first, so a concurrent probe reads the
+      // replacement as in flight rather than as the old failure.
+      try {
+        await stale.runCommand({
+          cmd: 'sh',
+          args: [
+            '-c',
+            'mkdir -p "$1" && rm -f "$1/failed" "$1/resuming" "$1/pid" "$2" && printf "checkout %s\\n" "$(date +%s)" > "$1/host"',
+            'replace',
+            VERCEL_OPERATOR_PROVISION_DIR,
+            VERCEL_PROVISIONED_MARKER,
+          ],
+          signal: this.operationSignal(),
+        })
+      } catch {
+        // The reap below removes it either way.
+      }
+      this.sessions.set(name, stale)
+      try {
+        await this.reap(name)
+      } catch (error) {
+        const failure = {
+          stage: 'checkout' as const,
+          message: this.redactOperatorMessage(
+            `could not replace the previous environment: ${describeError(error)}`,
+          ),
+        }
+        this.operatorFailures.set(name, failure)
+        return { state: 'failed', failure }
+      }
+    }
+    if (signal.aborted) return { state: 'absent', cancelled: true }
+    try {
+      await this.runOperatorHostPhase({
+        origin,
+        name,
+        baseBranch: input.baseBranch,
+        signal,
+      })
+      return { state: 'provisioning', kind: 'provision' }
+    } catch (error) {
+      if (error instanceof OperatorAttemptCancelled) {
+        if (error.created) await this.reap(name).catch(() => {})
+        return { state: 'absent', cancelled: true }
+      }
+      if (error instanceof OperatorHostFailure) {
+        this.operatorFailures.set(name, error.failure)
+        return { state: 'failed', failure: error.failure }
+      }
+      throw error
+    }
+  }
+
+  /** Bring a provisioned environment's Bun and distribution to the current
+   * pin, then report it ready. A failure is recorded in the guest first
+   * (stage `resume`), superseding the marker. */
+  private async refreshOperatorRuntime(
+    sandbox: VercelSandboxHandle,
+    name: string,
+    probe: Extract<VercelOperatorProbe, { kind: 'ready' }>,
+  ): Promise<SandboxProviderStatus> {
+    try {
+      // Every process's probe reads the refresh as in flight (outranking the
+      // old marker) until it succeeds; a failure supersedes it with `failed`.
       await commandOrThrow(sandbox, {
         cmd: 'sh',
         args: [
           '-c',
-          `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
+          'mkdir -p "$1" && printf "%s\\n" "$(date +%s)" > "$1/resuming"',
+          'resuming',
+          VERCEL_OPERATOR_PROVISION_DIR,
         ],
-        cwd: VERCEL_WORKSPACE_PATH,
+        signal: this.operationSignal(),
       })
-      // Runtime provisioning precedes the setup command, exactly as the build
-      // chain orders it. The guest env is the sandbox-forwarded set only: a
-      // runtime provisioning command that needs a build-workspace variable
-      // must have that name added to [orchestrator].sandbox.environmentVariables.
-      const runtimeReferences = currentRuntimeReferences(this.options.runtimeReferences)
-      if (runtimeReferences.length > 0) {
-        await bootstrapRuntimes(
+      await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
+      const identity = await this.identityStamp()
+      if (probe.distribution !== identity) {
+        await installDistribution(
           sandbox,
-          this.options.config,
-          this.sandboxEnv(),
-          runtimeReferences,
-          true,
+          await this.archiveBytes(),
+          identity,
           this.operationSignal(),
         )
       }
-      const setupCommand = this.options.setupCommand
-      if (setupCommand !== undefined && setupCommand.trim() !== '') {
-        await readableCommand(sandbox, {
-          cmd: 'sh',
-          args: ['-c', `${this.sandboxPathPrefix()}${setupCommand}`],
-          cwd: VERCEL_WORKSPACE_PATH,
-          env: this.sandboxEnv(),
-        })
-      }
       await commandOrThrow(sandbox, {
-        cmd: 'touch',
-        args: [VERCEL_PROVISIONED_MARKER],
+        cmd: 'sh',
+        args: ['-c', 'rm -f "$1/resuming"', 'resumed', VERCEL_OPERATOR_PROVISION_DIR],
+        signal: this.operationSignal(),
       })
     } catch (error) {
-      // Nothing unrecorded or half-built survives: reap the half-provisioned
-      // environment through the same sessions.set + reap pattern as builds.
-      try {
-        this.sessions.set(name, sandbox)
-        await this.reap(name)
-      } catch (deleteError) {
-        throw new AggregateError(
-          [error, deleteError],
-          `operator sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
+      const failure = {
+        stage: 'resume' as const,
+        message:
+          this.redactOperatorMessage(error instanceof Error ? error.message : String(error)) ||
+          'operator sandbox resume failed',
+      }
+      await this.writeOperatorFailure(sandbox, failure)
+      this.operatorFailures.set(name, failure)
+      return { state: 'failed', failure }
+    }
+    await this.extendOperatorTimer(sandbox, 0)
+    this.sessions.set(name, sandbox)
+    return this.readyStatus(name, sandbox, probe, 'resume')
+  }
+
+  /** Resume a stopped environment: the only path that recovers evidence
+   * from a stopped sandbox, because status never resumes one. A recorded
+   * failure settles with its recorded stage and message; nothing is reaped
+   * here. */
+  private async resumeOperatorAttempt(
+    sandbox: VercelSandboxHandle,
+    name: string,
+  ): Promise<SandboxProviderStatus> {
+    await this.applyOperatorSession(sandbox, name)
+    let probe = await this.probeOperator(sandbox)
+    if (probe.kind === 'resuming') {
+      // The stop ended that refresh; this attempt redoes it.
+      await commandOrThrow(sandbox, {
+        cmd: 'sh',
+        args: ['-c', 'rm -f "$1/resuming"', 'resumed', VERCEL_OPERATOR_PROVISION_DIR],
+        signal: this.operationSignal(),
+      })
+      probe = await this.probeOperator(sandbox)
+    }
+    if (probe.kind === 'ready') return this.refreshOperatorRuntime(sandbox, name, probe)
+    if (probe.kind === 'running') return { state: 'provisioning', kind: 'provision' }
+    const failure =
+      probe.kind === 'failed'
+        ? this.probeFailure(probe)
+        : this.interruptedFailure(probe.kind === 'host' ? probe.step : undefined)
+    this.operatorFailures.set(name, failure)
+    return { state: 'failed', failure }
+  }
+
+  private async openOperator(input: {
+    repo: string
+    operator: string
+    baseBranch: string
+  }): Promise<{ status: SandboxProviderStatus; settled?: Promise<SandboxProviderStatus> }> {
+    const { origin, name } = await this.operatorName(input.operator)
+    return this.withPolicyLock(name, async () => {
+      const inflight = this.operatorInflight.get(name)
+      if (inflight !== undefined) {
+        return {
+          status: {
+            state: inflight.kind === 'resume' ? 'resuming' : 'provisioning',
+            kind: inflight.kind,
+          },
+          settled: inflight.promise,
+        }
+      }
+      this.operatorFailures.delete(name)
+      const sandbox = await this.facade.get(name, this.operationSignal())
+      if (sandbox === null) {
+        return this.startOperatorAttempt(name, 'provision', (signal) =>
+          this.freshOperatorAttempt(input, origin, name, undefined, signal),
         )
       }
-      throw error instanceof SandboxOperationError
-        ? error
-        : new SandboxOperationError(
-            'provision',
-            error instanceof Error ? error.message : String(error),
-            { cause: error },
+      const session = sandbox.sessionStatus
+      if (session === undefined || session === 'running') {
+        await this.applyOperatorSession(sandbox, name)
+        const probe = await this.probeOperator(sandbox)
+        if (probe.kind === 'ready') {
+          if (
+            probe.bunVersion === VERCEL_BUN_VERSION &&
+            probe.distribution === (await this.identityStamp())
+          ) {
+            await this.extendOperatorTimer(sandbox, 0)
+            this.sessions.set(name, sandbox)
+            return { status: this.readyStatus(name, sandbox, probe, 'resume') }
+          }
+          return this.startOperatorAttempt(name, 'resume', () =>
+            this.refreshOperatorRuntime(sandbox, name, probe),
           )
+        }
+        if (this.classifyOperatorProbe(name, sandbox, probe).inFlight) {
+          // Another process's provision or refresh is in flight.
+          return {
+            status:
+              probe.kind === 'resuming'
+                ? { state: 'resuming', kind: 'resume' }
+                : { state: 'provisioning', kind: 'provision' },
+          }
+        }
+        // A failed, interrupted or marker-less environment. The service
+        // calls open only after the journal records its failure, so its
+        // evidence may now be replaced.
+        return this.startOperatorAttempt(name, 'provision', (signal) =>
+          this.freshOperatorAttempt(input, origin, name, sandbox, signal),
+        )
+      }
+      if (session === 'pending') return { status: { state: 'resuming', kind: 'resume' } }
+      return this.startOperatorAttempt(name, 'resume', () =>
+        this.resumeOperatorAttempt(sandbox, name),
+      )
+    })
+  }
+
+  private async statusOperator(input: {
+    repo: string
+    operator: string
+  }): Promise<SandboxProviderStatus> {
+    const { name } = await this.operatorName(input.operator)
+    const inflight = this.operatorInflight.get(name)
+    if (inflight !== undefined) {
+      return { state: inflight.kind === 'resume' ? 'resuming' : 'provisioning' }
     }
-    this.origins.set(name, origin)
-    const sessionId = sandbox.currentSession?.().sessionId
-    this.sessions.set(name, sandbox)
-    return {
-      provider: this.name,
-      environmentId: name,
-      ...(sessionId !== undefined ? { sessionId } : {}),
-      workspacePath: VERCEL_WORKSPACE_PATH,
-      baseSha: head,
+    const failure = this.operatorFailures.get(name)
+    if (failure !== undefined) return { state: 'failed', failure }
+    const sandbox = await this.facade.get(name, this.operationSignal())
+    if (sandbox === null) return { state: 'absent' }
+    // Never a guest command on a session that is not running: it would
+    // resume it.
+    const session = sandbox.sessionStatus
+    if (session === 'pending') return { state: 'resuming' }
+    if (session !== undefined && session !== 'running') return { state: 'stopped' }
+    const { status, inFlight } = this.classifyOperatorProbe(
+      name,
+      sandbox,
+      await this.probeOperator(sandbox),
+    )
+    // Only a provision in flight keeps the timer alive; polling a ready,
+    // idle environment never does.
+    if (inFlight) await this.extendOperatorTimer(sandbox, 0)
+    return status
+  }
+
+  private async closeOperator(input: {
+    repo: string
+    operator: string
+    environmentId: string
+  }): Promise<{ outcome: 'closed' | 'absent'; attempt?: SandboxProviderStatus }> {
+    const { name } = await this.operatorName(input.operator)
+    let attempt: SandboxProviderStatus | undefined
+    const inflight = this.operatorInflight.get(name)
+    if (inflight !== undefined) {
+      inflight.abort.abort()
+      attempt = await inflight.promise
     }
+    return this.withPolicyLock(name, async () => {
+      const withAttempt = <T extends object>(result: T) =>
+        attempt === undefined ? result : { ...result, attempt }
+      const sandbox = await this.facade.get(name, this.operationSignal())
+      if (sandbox === null) return withAttempt({ outcome: 'absent' as const })
+      if (attempt?.cancelled === true) return withAttempt({ outcome: 'absent' as const })
+      const session = sandbox.sessionStatus
+      const running = session === undefined || session === 'running'
+      if (running && attempt === undefined) {
+        const probe = await this.probeOperator(sandbox)
+        const { status, inFlight } = this.classifyOperatorProbe(name, sandbox, probe)
+        if (inFlight && probe.kind !== 'resuming') {
+          // Closing an in-flight provision is a user-requested cancel; a
+          // refresh of a provisioned checkout is stopped, never discarded.
+          this.sessions.set(name, sandbox)
+          await this.reap(name)
+          return { outcome: 'absent' as const, attempt: { state: 'absent', cancelled: true } }
+        }
+        if (status.state === 'failed') attempt = status
+      }
+      // Stopping releases capacity and keeps the snapshot — and with it any
+      // failure evidence, which a later open recovers. A pending session
+      // (another process resuming it) is stopped too, without a guest
+      // command: it would otherwise start and hold capacity until its timer.
+      if (running || session === 'pending') {
+        try {
+          await sandbox.stop({ signal: this.operationSignal() })
+        } catch (error) {
+          // A failed or interrupted stop request is not confirmation: only an
+          // authoritative re-read showing the session no longer active is.
+          // Anything else refuses, so the journal never records `closed`
+          // while the session still holds capacity.
+          const after = await this.facade.get(name, this.operationSignal())
+          if (after === null) return withAttempt({ outcome: 'absent' as const })
+          const now = after.sessionStatus
+          if (now === undefined || now === 'running' || now === 'pending') {
+            throw new SandboxOperationError(
+              'close',
+              `could not confirm operator sandbox ${name} stopped (${describeError(error)}); call sandbox.close again`,
+              { cause: error },
+            )
+          }
+        }
+      }
+      this.sessions.delete(name)
+      return withAttempt({ outcome: 'closed' as const })
+    })
+  }
+
+  private async refreshOperator(
+    handle: SandboxEnvironmentIdentity,
+    input: { repo: string; baseBranch: string },
+  ): Promise<SandboxRefreshResult> {
+    const base = await this.remoteBranchHead(input.baseBranch, `remote base ${input.baseBranch}`)
+    if (base === null) {
+      throw new SandboxOperationError('refresh', `remote base ${input.baseBranch} does not exist`)
+    }
+    const sandbox = await this.sandboxHandle(handle)
+    const git = (args: string[], env?: Record<string, string>) =>
+      sandbox.runCommand({
+        cmd: 'git',
+        args,
+        cwd: VERCEL_WORKSPACE_PATH,
+        ...(env !== undefined ? { env } : {}),
+        signal: this.operationSignal(),
+      }) as Promise<VercelCommand>
+    const status = await readableCommand(sandbox, {
+      cmd: 'git',
+      args: ['status', '--porcelain'],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    if (status.trim() !== '') {
+      return { outcome: 'refused', reason: 'dirty', message: SANDBOX_REFRESH_DIRTY_MESSAGE }
+    }
+    const head = (
+      await readableCommand(sandbox, {
+        cmd: 'git',
+        args: ['rev-parse', 'HEAD'],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+    ).trim()
+    // No credential rides the fetch: the upload-pack egress transform
+    // authenticates it.
+    const fetched = await git(['fetch', '--quiet', 'origin', input.baseBranch], {
+      GIT_TERMINAL_PROMPT: '0',
+    })
+    if (fetched.exitCode !== 0) {
+      const stderr = (await fetched.stderr?.().catch(() => '')) ?? ''
+      throw new SandboxOperationError(
+        'refresh',
+        this.redactOperatorMessage(
+          `git fetch origin ${input.baseBranch} exited ${fetched.exitCode}: ${stderr.trim() || '(no output)'}`,
+        ),
+      )
+    }
+    const isAncestor = async (ancestor: string, descendant: string): Promise<boolean> => {
+      const result = await git(['merge-base', '--is-ancestor', ancestor, descendant])
+      if (result.exitCode === 0) return true
+      if (result.exitCode === 1) return false
+      throw new SandboxOperationError(
+        'refresh',
+        `git merge-base --is-ancestor ${ancestor} ${descendant} exited ${result.exitCode}`,
+      )
+    }
+    if (head === base || (await isAncestor(base, head))) {
+      return { outcome: 'current', headSha: head, baseSha: base, previousHeadSha: head }
+    }
+    if (!(await isAncestor(head, base))) {
+      return {
+        outcome: 'refused',
+        reason: 'diverged',
+        message: sandboxRefreshDivergedMessage(head, input.baseBranch, base),
+      }
+    }
+    await readableCommand(sandbox, {
+      cmd: 'git',
+      args: ['-c', 'advice.detachedHead=false', 'checkout', '--quiet', '--detach', base],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    await commandOrThrow(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        'printf %s "$1" > "$2"',
+        'marker',
+        JSON.stringify({ baseSha: base }),
+        VERCEL_PROVISIONED_MARKER,
+      ],
+    })
+    return { outcome: 'refreshed', headSha: base, baseSha: base, previousHeadSha: head }
   }
 
   /** Resolve the live handle behind a journal-carried environment id. A
-   * missing environment is a typed `not-found`; the persistent sandbox
-   * auto-resumes on the first SDK call that needs a session. */
-  private async sandboxHandle(handle: SandboxEnvironmentIdentity): Promise<VercelSandboxHandle> {
+   * missing environment is a typed `not-found`; a session the provider timer
+   * stopped refuses typed `not-ready` (`stopped`) rather than resuming
+   * inline — `sandbox.open` resumes it. A running session's timer is
+   * extended to cover `boundMs` (the call's own wait bound) or the idle
+   * timeout, whichever is longer. */
+  private async sandboxHandle(
+    handle: SandboxEnvironmentIdentity,
+    boundMs = 0,
+  ): Promise<VercelSandboxHandle> {
     const sandbox = await this.facade.get(handle.environmentId, this.operationSignal())
     if (sandbox === null) {
       throw new SandboxOperationError(
@@ -2903,6 +3947,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         `operator sandbox ${handle.environmentId} no longer exists`,
       )
     }
+    const session = sandbox.sessionStatus
+    if (session !== undefined && session !== 'running') {
+      const state = session === 'pending' ? 'resuming' : 'stopped'
+      throw new SandboxOperationError(
+        'not-ready',
+        state === 'resuming'
+          ? 'operator sandbox is resuming; poll sandbox.status until it reports ready'
+          : 'operator sandbox is stopped; call sandbox.open and poll sandbox.status until it reports ready',
+        { state },
+      )
+    }
+    await this.extendOperatorTimer(sandbox, boundMs)
     this.sessions.set(handle.environmentId, sandbox)
     return sandbox
   }
@@ -2963,11 +4019,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     handle: SandboxEnvironmentIdentity,
     request: SandboxCommandRequest,
   ): Promise<SandboxCommandResult> {
-    const sandbox = await this.sandboxHandle(handle)
     const timeoutSeconds = Math.min(
       Math.max(request.timeoutSeconds ?? 120, 1),
       SANDBOX_MAX_WAIT_SECONDS,
     )
+    const sandbox = await this.sandboxHandle(handle, timeoutSeconds * 1000 + 60_000)
     const command = await this.sandboxLaunch(sandbox, request)
     const deadline = Date.now() + timeoutSeconds * 1000
     let exit: { exitCode: number }
@@ -3012,8 +4068,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     handle: SandboxEnvironmentIdentity,
     input: { commandId: string; waitSeconds: number },
   ): Promise<SandboxWaitResult> {
-    const sandbox = await this.sandboxHandle(handle)
     const waitSeconds = Math.min(Math.max(input.waitSeconds, 0), SANDBOX_MAX_WAIT_SECONDS)
+    const sandbox = await this.sandboxHandle(handle, waitSeconds * 1000 + 60_000)
     const lookup = await sandbox.getCommand(input.commandId, { signal: this.operationSignal() })
     if (lookup.exitCode !== null) {
       const [stdout, stderr] = await Promise.all([
@@ -3141,6 +4197,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }): Promise<{
     snapshots: { outcome: 'confirmed' | 'unknown'; deleted?: number; error?: string }
   }> {
+    // An in-flight attempt is cancelled and awaited before the teardown.
+    const inflight = this.operatorInflight.get(input.environmentId)
+    if (inflight !== undefined) {
+      inflight.abort.abort()
+      await inflight.promise
+    }
+    this.operatorFailures.delete(input.environmentId)
     const reap = await this.reap(input.environmentId)
     return {
       snapshots: {

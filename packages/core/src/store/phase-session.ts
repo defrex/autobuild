@@ -442,6 +442,15 @@ export function scopeLocalStoreToPhaseSession(
       authorizeActor('appendRepo', event.actor)
       return store.appendRepo(repo, event)
     },
+    async appendRepoIfCurrent<T extends RepositoryEventType>(
+      repo: string,
+      expectedSeq: number,
+      event: RepositoryEventWrite<T>,
+    ): Promise<RepositoryEventEnvelope<T> | null> {
+      own('appendRepoIfCurrent', 'repo', repo)
+      authorizeActor('appendRepoIfCurrent', event.actor)
+      return store.appendRepoIfCurrent(repo, expectedSeq, event)
+    },
     async appendRepoWithArtifacts<T extends RepositoryEventType>(
       repo: string,
       artifacts: ArtifactInput[],
@@ -730,6 +739,7 @@ const JUDGE_REFUSED: Record<
   removeOperatorPresence: 'write',
   listOperatorPresence: 'read',
   appendRepo: 'write',
+  appendRepoIfCurrent: 'write',
   appendRepoWithArtifacts: 'write',
   getRepoEvents: 'read',
   getRepoStateEvents: 'read',

@@ -158,6 +158,7 @@ import {
   openBuildListSchema,
   changedBuildsSchema,
   conditionalEventResponseSchema,
+  conditionalRepoEventResponseSchema,
   conditionalSessionEventResponseSchema,
   decodeBase64,
   depositsResponseSchema,
@@ -888,6 +889,20 @@ export class RemoteBuildStore implements BuildStore {
       validateRepositoryEventWrite(event),
     )
     return envelope as unknown as RepositoryEventEnvelope<T>
+  }
+
+  async appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null> {
+    const envelope = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/events/conditional`,
+      conditionalRepoEventResponseSchema,
+      { expectedSeq, event: validateRepositoryEventWrite(event) },
+    )
+    return envelope as unknown as RepositoryEventEnvelope<T> | null
   }
 
   async appendRepoWithArtifacts<T extends RepositoryEventType>(

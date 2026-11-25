@@ -85,6 +85,9 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
         accounts: opts.accounts,
         setupCommand: opts.sandboxSetupCommand,
         sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
+        ...(opts.sandboxIdleMinutes !== undefined
+          ? { sandboxIdleMinutes: opts.sandboxIdleMinutes }
+          : {}),
         ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
         ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
         ...(opts.refusedArchive !== undefined ? { refusedArchive: opts.refusedArchive } : {}),

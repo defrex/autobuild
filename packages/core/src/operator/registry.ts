@@ -1537,7 +1537,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.status',
-    "Report your operator sandbox's lifecycle state without changing anything: absent, provisioning, resuming, ready, stopped, or failed, plus the checkout head and the base head recorded at provisioning (or the last refresh or reset). Safe to poll; it never keeps an idle environment alive.",
+    "Report your operator sandbox's lifecycle state: absent, provisioning, resuming, ready, stopped, or failed, plus the checkout head and the base head recorded at provisioning (or the last refresh or reset). Its only write records a finished background attempt's outcome, exactly once. Safe to poll; it never resumes a stopped environment or keeps an idle one alive.",
     sandboxStatusInput,
     "{state, environmentId, provider, headSha?, baseSha?, failure?, lastEvidenceAt?}: the lifecycle state, the checkout head when ready, the recorded base head, a failed attempt's {stage, message}, and the latest journaled evidence time.",
     async (raw, ctx) => {

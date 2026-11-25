@@ -8,6 +8,7 @@ import { createOrganizationHandler } from './organizations'
 import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
 import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
 import { createConnectionHandler } from '../connections'
+import { after } from 'next/server'
 import { createHostedStoreService } from '../service'
 import { parseWebAuthEnv } from './config'
 import { webAuth } from './auth'
@@ -18,6 +19,16 @@ let service: ReturnType<typeof createHostedStoreService> | undefined
 export function hostedService() {
   service ??= createHostedStoreService({
     env: process.env,
+    // An operator sandbox's host phase and settlement outlive the
+    // `sandbox.open` response inside the request's `after()` window (the
+    // platform's waitUntil); the slow tail runs detached in the sandbox.
+    background: (work) => {
+      try {
+        after(() => work)
+      } catch {
+        // Outside a request scope: the work floats on its own.
+      }
+    },
   })
   return service
 }

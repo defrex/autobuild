@@ -3774,6 +3774,65 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('appendRepoIfCurrent (atomic repository compare-and-append)', () => {
+      const tickStarted = (run: string): RepositoryEventWrite<'dispatcher.tick-started'> => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run },
+      })
+
+      test('appends at the current sequence; a stale sequence appends nothing and leaves updatedAt', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.ensureRepo('repo-cas')
+          clock.advance(1000)
+          expect((await store.appendRepoIfCurrent('repo-cas', 0, tickStarted('a')))?.seq).toBe(1)
+          const before = await store.getRepo('repo-cas')
+          clock.advance(1000)
+          expect(await store.appendRepoIfCurrent('repo-cas', 0, tickStarted('b'))).toBeNull()
+          expect(await store.getRepo('repo-cas')).toEqual(before)
+          expect((await store.appendRepoIfCurrent('repo-cas', 1, tickStarted('c')))?.seq).toBe(2)
+          expect((await store.getRepoEvents('repo-cas')).map((event) => event.seq)).toEqual([1, 2])
+        })
+      })
+
+      test('two contenders for one sequence produce exactly one winner', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('repo-cas-race')
+          const results = await Promise.all([
+            store.appendRepoIfCurrent('repo-cas-race', 0, tickStarted('a')),
+            store.appendRepoIfCurrent('repo-cas-race', 0, tickStarted('b')),
+          ])
+          expect(results.filter((result) => result !== null)).toHaveLength(1)
+          expect((await store.getRepoEvents('repo-cas-race')).map((event) => event.seq)).toEqual([
+            1,
+          ])
+        })
+      })
+
+      test('invalid events and unknown repositories reject without writes', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('repo-cas-invalid')
+          const invalid = {
+            actor: DISPATCHER,
+            type: 'no.such-type',
+            payload: {},
+          } as unknown as RepositoryEventWrite
+          expect(
+            await store
+              .appendRepoIfCurrent('repo-cas-invalid', 0, invalid)
+              .catch((error: unknown) => error),
+          ).toBeInstanceOf(Error)
+          expect(
+            await store
+              .appendRepoIfCurrent('repo-cas-ghost', 0, tickStarted('a'))
+              .catch((error: unknown) => error),
+          ).toBeInstanceOf(Error)
+          expect(await store.getRepoEvents('repo-cas-invalid')).toEqual([])
+        })
+      })
+    })
+
     describe('append validation (the enforced ontology, §8)', () => {
       test('unknown event type throws EventValidationError and appends nothing', async () => {
         await withStore(factory, undefined, async (store) => {
