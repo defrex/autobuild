@@ -8249,3 +8249,297 @@ export async function rollupRemoteReadBudget(opts: {
   expect(made).toEqual(Array(3).fill(`/repos/${encodeURIComponent(opts.repo)}/rollup-values`))
   expect(opts.eventRows()).toBe(0)
 }
+
+/** One measured analytics request: the store calls the source made, by
+ * method, its build-scope reads by slug, its listing options, and the event
+ * rows the store read to answer. */
+export interface WebAnalyticsReadCost {
+  calls: Record<string, number>
+  timelines: string[]
+  listings: import('../store/build-feed').BuildPageOptions[]
+  rows: number
+  repoRows: number
+  read: { slug: string; seq: number }[]
+}
+
+/**
+ * The web analytics source costs what changed (SPEC §14, RFC 0007 §9.3): at
+ * 100 and at 10,000 builds, with the rollup and timelines already saved, a
+ * request reads one rollup value, one filtered listing page and at most 25
+ * saved timelines; a repeat reads only the change position; settled
+ * timelines are served from memory; a UTC day rolling over re-reads the
+ * rollup and the listing but no timeline; a live change re-reads exactly the
+ * changed build; a repository-only change reads one feed query; and no
+ * request reads an event row it did not need or any history. Returns each
+ * size's measured costs.
+ */
+export async function webAnalyticsReadBudget(): Promise<
+  Record<number, Record<string, WebAnalyticsReadCost>>
+> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { WebAnalyticsSource, GANTT_PAGE_SIZE } = await import('../web/analytics-source')
+  const { agentActor } = await import('../events/envelope')
+  const { manualClock } = await import('./fixed')
+  type Store = import('../store/memory').MemoryBuildStore
+  type Query = import('../web/protocol').WebAnalyticsQuery
+  const repo = 'web-analytics-budget/repo'
+  const defaults: Query = { window: '7d', outcome: 'merged', kind: 'leaf' }
+  const everything: Query = { window: '7d', outcome: 'all', kind: 'all' }
+  const MIN = 60_000
+
+  const seedBuild = async (
+    store: Store,
+    clock: ReturnType<typeof manualClock>,
+    slug: string,
+    opts: { kind?: 'node'; outcome?: 'merged' | 'closed-unmerged' },
+  ) => {
+    await store.createBuild({
+      slug,
+      repo,
+      ticket: { source: 'file', id: slug, title: `Build ${slug}` },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'file', id: slug },
+          repo,
+          baseBranch: 'main',
+          ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
+        },
+      },
+    })
+    await store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    clock.advance(MIN)
+    if (opts.outcome === undefined) return
+    await store.append(slug, {
+      actor: agentActor('plan', 'session'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: opts.outcome },
+    })
+    clock.advance(MIN)
+  }
+
+  const results: Record<number, Record<string, WebAnalyticsReadCost>> = {}
+  for (const n of [100, 10_000]) {
+    const clock = manualClock('2026-10-01T00:00:00.000Z')
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    // Most builds are old, half of them unmerged: the default filters are rare.
+    const old = n - 47
+    for (let i = 0; i < old; i++)
+      await seedBuild(store, clock, `old-${String(i).padStart(5, '0')}`, {
+        outcome: i % 2 === 0 ? 'merged' : 'closed-unmerged',
+      })
+    // Four merged leaves whose plan closed on the window's first day.
+    clock.set('2026-11-13T12:00:00.000Z')
+    const edge = Array.from({ length: 4 }, (_, i) => `edge-${i}`)
+    for (const slug of edge) await seedBuild(store, clock, slug, { outcome: 'merged' })
+    // Thirty recent merged leaves, interleaved with merged nodes and closed leaves.
+    clock.set('2026-11-20T10:00:00.000Z')
+    const recent: string[] = []
+    for (let i = 0; i < 30; i++) {
+      const slug = `recent-${String(i).padStart(2, '0')}`
+      recent.push(slug)
+      await seedBuild(store, clock, slug, { outcome: 'merged' })
+      if (i % 6 === 0) {
+        await seedBuild(store, clock, `node-${i}`, { kind: 'node', outcome: 'merged' })
+        await seedBuild(store, clock, `closed-${i}`, { outcome: 'closed-unmerged' })
+      }
+    }
+    // Three live builds, created last.
+    const live = ['live-0', 'live-1', 'live-2']
+    for (const slug of live) await seedBuild(store, clock, slug, {})
+    clock.set('2026-11-20T23:30:00.000Z')
+    // The canonical values exist before any request: every key the budget
+    // asks for, and through them every build's saved timeline.
+    for (const args of [
+      { outcome: 'merged', kind: 'leaf' },
+      { outcome: 'merged', kind: 'node' },
+      { outcome: 'all', kind: 'all' },
+    ])
+      await store.getReducerValue({ kind: 'rollup', repo }, { reducer: 'stepDurations', args })
+
+    const calls: { name: string; args: unknown[] }[] = []
+    const reader = new Proxy(store, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          calls.push({ name: String(key), args })
+          return Reflect.apply(value, target, args)
+        }
+      },
+    })
+    const source = new WebAnalyticsSource(reader, repo, { clock: () => clock().getTime() })
+    const measure = async <T>(run: () => Promise<T>): Promise<[T, WebAnalyticsReadCost]> => {
+      calls.length = 0
+      let answer!: T
+      const metrics = await measureStoreReads(store, async () => {
+        answer = await run()
+      })
+      const cost: WebAnalyticsReadCost = {
+        calls: {},
+        timelines: [],
+        listings: [],
+        rows: metrics.rows,
+        repoRows: metrics.repoRows,
+        read: metrics.read,
+      }
+      for (const call of calls) {
+        cost.calls[call.name] = (cost.calls[call.name] ?? 0) + 1
+        const scope = call.args[0] as { kind?: string; slug?: string }
+        if (call.name === 'getReducerValue' && scope.kind === 'build')
+          cost.timelines.push(scope.slug!)
+        if (call.name === 'listBuildsPage')
+          cost.listings.push(call.args[1] as import('../store/build-feed').BuildPageOptions)
+      }
+      return [answer, cost]
+    }
+    const slugs = (answer: import('../web/protocol').WebAnalytics) =>
+      answer.gantt.rows.map((row) => row.slug)
+    const count = (answer: import('../web/protocol').WebAnalytics) =>
+      answer.durations.find((step) => step.step === 'plan')?.count ?? 0
+    const costs: Record<string, WebAnalyticsReadCost> = {}
+
+    // (a) A fresh source's first request.
+    const [first, firstCost] = await measure(() => source.analytics(defaults))
+    expect(firstCost.calls).toEqual({
+      getRepoChangePosition: 1,
+      getReducerValue: 1 + GANTT_PAGE_SIZE,
+      listBuildsPage: 1,
+    })
+    expect(firstCost.listings).toEqual([
+      {
+        limit: 25,
+        activeSince: '2026-11-13T00:00:00.000Z',
+        outcome: 'merged',
+        kind: 'leaf',
+      },
+    ])
+    expect(slugs(first)).toEqual([...recent].reverse().slice(0, 25))
+    expect(first.windowStart).toBe('2026-11-13T00:00:00.000Z')
+    expect(count(first)).toBe(recent.length + edge.length)
+    costs.first = firstCost
+
+    // (a′) Other filters: one listing each, a full page when 25 match.
+    const [nodes, nodeCost] = await measure(() => source.analytics({ ...defaults, kind: 'node' }))
+    expect(nodeCost.calls.listBuildsPage).toBe(1)
+    expect(nodes.gantt.rows.every((row) => row.kind === 'node')).toBe(true)
+    expect(nodes.gantt.rows).toHaveLength(5)
+    expect(nodeCost.listings[0]).toEqual({
+      limit: 25,
+      activeSince: '2026-11-13T00:00:00.000Z',
+      outcome: 'merged',
+      kind: 'node',
+    })
+    const [all, allCost] = await measure(() => source.analytics(everything))
+    expect(allCost.calls.listBuildsPage).toBe(1)
+    expect(allCost.timelines.length).toBeLessThanOrEqual(GANTT_PAGE_SIZE)
+    expect(all.gantt.rows).toHaveLength(GANTT_PAGE_SIZE)
+    expect(slugs(all).slice(0, 3)).toEqual([...live].reverse())
+    expect(allCost.listings[0]).toEqual({ limit: 25, activeSince: '2026-11-13T00:00:00.000Z' })
+    costs.node = nodeCost
+    costs.all = allCost
+
+    // (b) The same request again: only the change position.
+    const [, repeat] = await measure(() => source.analytics(defaults))
+    expect(repeat.calls).toEqual({ getRepoChangePosition: 1 })
+    costs.repeat = repeat
+
+    // (c) Page 2 reads its own timelines once; a repeat reads none.
+    const [page2, page2Cost] = await measure(() =>
+      source.analytics({ ...defaults, page: first.gantt.next! }),
+    )
+    expect(slugs(page2)).toEqual([...[...recent].reverse().slice(25), ...[...edge].reverse()])
+    expect(page2Cost.timelines.sort()).toEqual(slugs(page2).sort())
+    const [, page2Again] = await measure(() =>
+      source.analytics({ ...defaults, page: first.gantt.next! }),
+    )
+    expect(page2Again.timelines).toEqual([])
+    costs.page2 = page2Cost
+    costs.page2Again = page2Again
+
+    // (d) Another window: one rollup and one listing, no timeline read.
+    const [, wider] = await measure(() => source.analytics({ ...defaults, window: '30d' }))
+    expect(wider.calls).toEqual({
+      getRepoChangePosition: 1,
+      getReducerValue: 1,
+      listBuildsPage: 1,
+    })
+    costs.wider = wider
+
+    // (d′) A UTC midnight with no write moves the window.
+    clock.set('2026-11-21T00:30:00.000Z')
+    const [nextDay, nextDayCost] = await measure(() => source.analytics(defaults))
+    expect(nextDayCost.calls).toEqual({
+      getRepoChangePosition: 1,
+      getReducerValue: 1,
+      listBuildsPage: 1,
+    })
+    expect(nextDay.windowStart).toBe('2026-11-14T00:00:00.000Z')
+    expect(count(nextDay)).toBe(recent.length)
+    const [, sameDay] = await measure(() => source.analytics(defaults))
+    expect(sameDay.calls).toEqual({ getRepoChangePosition: 1 })
+    costs.nextDay = nextDayCost
+    costs.sameDay = sameDay
+
+    // (e) A live build gains an event: one feed query, that build re-read.
+    await source.analytics(everything)
+    clock.advance(MIN)
+    await store.append(live[2]!, {
+      actor: agentActor('plan', 'session'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    const [changed, changedCost] = await measure(() => source.analytics(everything))
+    expect(changedCost.calls.listBuildsChangedSince).toBe(1)
+    expect(changedCost.timelines).toEqual([live[2]!])
+    expect(changedCost.read.every((row) => row.slug === live[2])).toBe(true)
+    expect(changed.gantt.rows[0]!.segments.find((s) => s.category === 'plan')?.state).toBe('closed')
+    costs.changed = changedCost
+
+    // (f) A repository event alone: one feed query, nothing re-read.
+    await store.appendRepo(repo, {
+      actor: humanActor('budget'),
+      type: 'dispatcher.pause-set',
+      payload: { enabled: false },
+    })
+    const [, repository] = await measure(() => source.analytics(everything))
+    expect(repository.calls).toEqual({ getRepoChangePosition: 1, listBuildsChangedSince: 1 })
+    costs.repository = repository
+
+    // (g) A cached build's timeline: only the change position.
+    const [row, cached] = await measure(() => source.timeline(recent[0]!))
+    expect(row?.slug).toBe(recent[0])
+    expect(cached.calls).toEqual({ getRepoChangePosition: 1 })
+    costs.timeline = cached
+
+    for (const [name, cost] of Object.entries(costs)) {
+      if (name !== 'changed') expect(cost.rows).toBe(0)
+      expect(cost.repoRows).toBe(0)
+      for (const call of Object.keys(cost.calls))
+        expect([
+          'getRepoChangePosition',
+          'listBuildsChangedSince',
+          'listBuildsPage',
+          'getReducerValue',
+          'getBuild',
+        ]).toContain(call)
+    }
+    results[n] = costs
+  }
+  const flat = ({ calls, timelines, rows, repoRows }: WebAnalyticsReadCost) => ({
+    calls,
+    timelines,
+    rows,
+    repoRows,
+  })
+  for (const name of Object.keys(results[100]!))
+    expect(flat(results[10_000]![name]!)).toEqual(flat(results[100]![name]!))
+  return results
+}

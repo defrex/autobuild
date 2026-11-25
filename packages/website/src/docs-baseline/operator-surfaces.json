@@ -4,13 +4,13 @@
   "title": "Operator surfaces",
   "group": "reference",
   "description": "Watch and act through the terminal, CLI, local stdio MCP, or Operator API with your operator agent.",
-  "textHash": "4dc17792bce07f1e15b9a75ddcd22b634999cec52b8edbdeb022953fa4f49a8d",
+  "textHash": "3d72455ac0aba439a05f86734dfe6d819d8da7e7f14f09dffbb230270d8aa3d9",
   "headings": [
     "Responsibility",
     "Shipped arrangements",
     "Writing your own",
     "Dispatcher ownership",
-    "Timeline and analytics vocabulary"
+    "Timeline and analytics"
   ],
   "code": [
     "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
