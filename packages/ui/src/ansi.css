@@ -636,9 +636,17 @@ a:hover {
 [data-ansi="row-line"] {
   margin: 0;
 }
+/* Build-page sections align beneath the row title (DESIGN.md Layout). */
+[data-ansi="title-aligned"] {
+  display: flow-root;
+  padding-inline-start: calc(var(--idcol) + var(--gutter));
+}
 @media (max-width: 720px) {
   [data-ansi="build-row"] {
     grid-template-columns: 1fr;
+  }
+  [data-ansi="title-aligned"] {
+    padding-inline-start: 0;
   }
 }
 
