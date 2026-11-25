@@ -26,6 +26,11 @@
  * The legacy operate-skill trace entries remain for packaging compatibility.
  * Neither route executes operator turns; external harnesses load their own
  * instructions. Removing these redundant entries is independent cleanup.
+ *
+ * The whole canonical `skills/` tree is appended to the operator route and
+ * both MCP routes (`/mcp`, `/mcp/[...repo]`): the context tools read it at
+ * runtime to serve the canonical skills to a repository with no captured
+ * agent context (#1225).
  */
 import { createHash } from 'node:crypto'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -39,6 +44,8 @@ export interface EnsureOptions {
   manifest?: string
   /** Legacy canonical operate skill entry carried for packaging compatibility. */
   skill?: string
+  /** The canonical skills tree the context tools serve at runtime. */
+  skills?: string
   log?: (message: string) => void
 }
 
@@ -54,6 +61,8 @@ export interface EnsureResult {
   skill: string
   /** Route names whose trace got the skill appended ('dispatch', 'operator'). */
   skillAppended: string[]
+  /** Route names whose trace gained skills-tree entries ('operator', 'mcp', 'mcp-repository'). */
+  skillsAppended: string[]
 }
 
 const DIST_DIRECTORY = '.autobuild-dist'
@@ -61,6 +70,24 @@ const TRACE_FILE = 'route.js.nft.json'
 const ROUTE_DIRECTORY = join('server', 'app', 'api', 'dispatch')
 /** The operator HTTP route; retained legacy skill trace entry. */
 const OPERATOR_ROUTE_DIRECTORY = join('server', 'app', 'operator', '[[...path]]')
+/** The routes whose context tools read the canonical skills tree. */
+const SKILLS_ROUTES = [
+  { name: 'operator', directory: OPERATOR_ROUTE_DIRECTORY },
+  { name: 'mcp', directory: join('server', 'app', 'mcp') },
+  { name: 'mcp-repository', directory: join('server', 'app', 'mcp', '[...repo]') },
+]
+
+/** Every regular file under `dir`, sorted. */
+async function treeFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) files.push(...(await treeFiles(path)))
+    else if (entry.isFile()) files.push(path)
+  }
+  return files
+}
 
 /** The `/api/dispatch` route's Next.js trace file under a project. */
 export function dispatchTracePath(root: string, distDir = '.next'): string {
@@ -124,6 +151,7 @@ export async function ensureDistributionArchiveInTrace({
   distDir = '.next',
   manifest = distributionManifestPath(),
   skill = distributionPath('skills', 'operate', 'SKILL.md'),
+  skills = distributionPath('skills'),
   log = (message) => console.log(message),
 }: EnsureOptions = {}): Promise<EnsureResult> {
   const archive = await findArchive(root)
@@ -202,6 +230,36 @@ export async function ensureDistributionArchiveInTrace({
         `${skillMissing ? 'appended to' : 'already present in'} ${trace}`,
     )
   }
+  let skillFiles: string[] = []
+  try {
+    skillFiles = await treeFiles(skills)
+  } catch {
+    skillFiles = []
+  }
+  if (skillFiles.length === 0)
+    throw new Error(
+      `missing canonical skills tree ${skills} — the context tools serve it at runtime`,
+    )
+  const skillsAppended: string[] = []
+  for (const route of SKILLS_ROUTES) {
+    const trace = join(root, distDir, route.directory, TRACE_FILE)
+    const files = await readTrace(trace)
+    const added = skillFiles
+      .map((file) => relative(dirname(trace), file))
+      .filter((entry) => !files.includes(entry))
+    if (added.length > 0) {
+      const parsed = JSON.parse(await readFile(trace, 'utf8'))
+      await writeFile(
+        trace,
+        `${JSON.stringify({ ...parsed, files: [...files, ...added] }, null, 2)}\n`,
+      )
+      skillsAppended.push(route.name)
+    }
+    log(
+      `canonical skills tree (${skillFiles.length} files) ` +
+        `${added.length > 0 ? `appended ${added.length} entries to` : 'already present in'} ${trace}`,
+    )
+  }
   return {
     archive,
     bytes: (await stat(archive)).size,
@@ -212,6 +270,7 @@ export async function ensureDistributionArchiveInTrace({
     manifestAppended,
     skill,
     skillAppended,
+    skillsAppended,
   }
 }
 

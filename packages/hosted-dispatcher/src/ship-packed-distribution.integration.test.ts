@@ -13,6 +13,10 @@ afterEach(async () => {
 
 const TRACE_DIRECTORY = join('.next', 'server', 'app', 'api', 'dispatch')
 const OPERATOR_TRACE_DIRECTORY = join('.next', 'server', 'app', 'operator', '[[...path]]')
+const MCP_TRACE_DIRECTORIES = [
+  join('.next', 'server', 'app', 'mcp'),
+  join('.next', 'server', 'app', 'mcp', '[...repo]'),
+]
 
 async function fixture(
   archives: string[],
@@ -22,6 +26,7 @@ async function fixture(
     withSkill?: boolean
     /** Omit the operator route's trace file entirely (the missing-trace test). */
     skipOperatorTrace?: boolean
+    skipMcpTraces?: boolean
   } = {},
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'ab-ship-dist-'))
@@ -52,6 +57,15 @@ async function fixture(
       )
     }
   }
+  // The context-serving MCP routes carry the canonical skills tree.
+  if (trace !== undefined && opts.skipMcpTraces !== true)
+    for (const directory of MCP_TRACE_DIRECTORIES) {
+      await mkdir(join(root, directory), { recursive: true })
+      await writeFile(
+        join(root, directory, 'route.js.nft.json'),
+        JSON.stringify({ version: 1, files: [] }),
+      )
+    }
   if (opts.operatorTrace !== undefined) {
     await mkdir(join(root, OPERATOR_TRACE_DIRECTORY), { recursive: true })
     await writeFile(
@@ -63,6 +77,7 @@ async function fixture(
 }
 
 const skillOf = (root: string) => join(root, 'skills', 'operate', 'SKILL.md')
+const skillsOf = (root: string) => join(root, 'skills')
 
 const manifestOf = (root: string) => join(root, 'package.json')
 
@@ -76,6 +91,7 @@ describe('ship-packed-distribution', () => {
       root,
       manifest: manifestOf(root),
       skill: skillOf(root),
+      skills: skillsOf(root),
       log: (message) => lines.push(message),
     })
     const traceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
@@ -107,6 +123,7 @@ describe('ship-packed-distribution', () => {
       root,
       manifest: manifestOf(root),
       skill: skillOf(root),
+      skills: skillsOf(root),
       log: (message) => lines.push(message),
     })
     expect(rerun.appended).toBe(false)
@@ -132,6 +149,7 @@ describe('ship-packed-distribution', () => {
         root,
         manifest: manifestOf(root),
         skill: skillOf(root),
+        skills: skillsOf(root),
       }),
     ).rejects.toThrow('expected exactly one archive')
   })
@@ -161,6 +179,7 @@ describe('ship-packed-distribution', () => {
       root,
       manifest: manifestOf(root),
       skill: skillOf(root),
+      skills: skillsOf(root),
       log: () => {},
     })
     const { files } = JSON.parse(await readFile(traceFile, 'utf8'))
@@ -180,6 +199,7 @@ describe('ship-packed-distribution', () => {
         root,
         manifest: join(root, 'absent.json'),
         skill: skillOf(root),
+        skills: skillsOf(root),
       }),
     ).rejects.toThrow('missing distribution manifest')
   })
@@ -189,6 +209,7 @@ describe('ship-packed-distribution', () => {
     const result = await ensureDistributionArchiveInTrace({
       root,
       skill: skillOf(root),
+      skills: skillsOf(root),
       log: () => {},
     })
     const traceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
@@ -213,6 +234,7 @@ describe('ship-packed-distribution', () => {
       root,
       manifest: manifestOf(root),
       skill: skillOf(root),
+      skills: skillsOf(root),
       log: () => {},
     })
     // Per-route idempotence: the operator trace is untouched; the dispatch
@@ -237,6 +259,7 @@ describe('ship-packed-distribution — operate skill (AUT-342)', () => {
         root,
         manifest: manifestOf(root),
         skill: skillOf(root),
+        skills: skillsOf(root),
       }),
     ).rejects.toThrow('missing canonical operate skill')
   })
@@ -248,7 +271,55 @@ describe('ship-packed-distribution — operate skill (AUT-342)', () => {
         root,
         manifest: manifestOf(root),
         skill: skillOf(root),
+        skills: skillsOf(root),
       }),
     ).rejects.toThrow('operator/[[...path]]/route.js.nft.json')
+  })
+})
+
+describe('ship-packed-distribution — canonical skills tree (#1225)', () => {
+  test('appends every skills file to the operator and both MCP traces, idempotently', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { operatorTrace: [] })
+    await mkdir(join(root, 'skills', 'guide', 'references'), { recursive: true })
+    const reference = join(root, 'skills', 'guide', 'references', 'spec-standard.md')
+    await writeFile(reference, '# standard\n')
+    const options = {
+      root,
+      manifest: manifestOf(root),
+      skill: skillOf(root),
+      skills: skillsOf(root),
+      log: () => {},
+    }
+    const result = await ensureDistributionArchiveInTrace(options)
+    expect(result.skillsAppended).toEqual(['operator', 'mcp', 'mcp-repository'])
+    for (const directory of [OPERATOR_TRACE_DIRECTORY, ...MCP_TRACE_DIRECTORIES]) {
+      const trace = join(root, directory, 'route.js.nft.json')
+      const { files } = JSON.parse(await readFile(trace, 'utf8'))
+      for (const file of [skillOf(root), reference])
+        expect(
+          files.filter((entry: string) => entry === relative(join(trace, '..'), file)),
+        ).toHaveLength(1)
+    }
+    const dispatch = JSON.parse(
+      await readFile(join(root, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'),
+    )
+    expect(dispatch.files).not.toContain(relative(join(root, TRACE_DIRECTORY), reference))
+    expect((await ensureDistributionArchiveInTrace(options)).skillsAppended).toEqual([])
+  })
+
+  test('throws loudly when an MCP route trace file is missing', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], {
+      operatorTrace: [],
+      skipMcpTraces: true,
+    })
+    await expect(
+      ensureDistributionArchiveInTrace({
+        root,
+        manifest: manifestOf(root),
+        skill: skillOf(root),
+        skills: skillsOf(root),
+        log: () => {},
+      }),
+    ).rejects.toThrow('mcp/route.js.nft.json')
   })
 })

@@ -325,6 +325,18 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'context.list': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
+  'context.read': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
 } as const satisfies Record<string, ToolAnnotationsTableEntry>
 
 export type OperatorToolName = keyof typeof OPERATOR_TOOL_ANNOTATIONS

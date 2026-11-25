@@ -19,6 +19,8 @@ Your operator agent keeps work moving through `ab` or MCP. Under your instructio
 - **A local coding agent** at the repository root with the installed `ab-operate` skill, using the CLI or `bun ab mcp` (operator tools over stdio).
 - **An API client** using the authenticated [Operator API contract](operator-api.md).
 
+An agent connected over MCP has no checkout of its own. It calls `context.list` first, then loads `ab-operate` and the repository's agent instructions with `context.read` or the matching MCP prompt; see [agent context](operator-api.md#agent-context).
+
 We recommend the same model as your reviewer roles, since the agent interprets findings and escalation answers.
 
 ## Give the agent memory
