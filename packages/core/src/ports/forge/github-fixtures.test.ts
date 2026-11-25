@@ -247,3 +247,66 @@ export const isProbe = (call: ApiCall) =>
 /** GraphQL mutations, excluding the availability probe. */
 export const graphqlCalls = (calls: ApiCall[]) =>
   calls.filter((call) => call.path === 'graphql' && !isProbe(call))
+
+/** A GitHub Git Data API (commits, trees, blobs) answering from one commit's
+ * flat tree listing. Recursive listings with more than `recursiveLimit`
+ * entries, and direct listings with more than `directLimit`, come back
+ * `truncated` like GitHub's. */
+export function gitDataTransport(input: {
+  commit: string
+  entries: readonly import('../types').ForgeTreeEntry[]
+  blobs: ReadonlyMap<string, Uint8Array>
+  recursiveLimit?: number
+  directLimit?: number
+}) {
+  const calls: string[] = []
+  const rootOid = 'f'.repeat(40)
+  const dirOf = new Map<string, string>([[rootOid, '']])
+  for (const entry of input.entries) if (entry.type === 'tree') dirOf.set(entry.oid, entry.path)
+  const below = (dir: string, recursive: boolean) =>
+    input.entries
+      .filter((entry) => {
+        if (dir !== '' && !entry.path.startsWith(`${dir}/`)) return false
+        const rest = dir === '' ? entry.path : entry.path.slice(dir.length + 1)
+        return recursive || !rest.includes('/')
+      })
+      .map((entry) => ({
+        path: dir === '' ? entry.path : entry.path.slice(dir.length + 1),
+        mode: entry.mode,
+        type: entry.type,
+        sha: entry.oid,
+        ...(entry.size !== undefined ? { size: entry.size } : {}),
+      }))
+  const transport: GitHubRequest = async (method, path, opts) => {
+    const recursive = opts?.query?.recursive === '1'
+    calls.push(`${method} ${path}${recursive ? '?recursive=1' : ''}`)
+    const [, kind, id] = /\/git\/(commits|trees|blobs)\/([^/]+)$/.exec(path) ?? []
+    if (kind === 'commits' && id === input.commit)
+      return { status: 200, headers: {}, json: { sha: id, tree: { sha: rootOid } } }
+    if (kind === 'trees' && id !== undefined && dirOf.has(id)) {
+      const tree = below(dirOf.get(id)!, recursive)
+      const limit = recursive ? input.recursiveLimit : input.directLimit
+      const truncated = limit !== undefined && tree.length > limit
+      return {
+        status: 200,
+        headers: {},
+        json: { sha: id, truncated, tree: truncated ? tree.slice(0, limit) : tree },
+      }
+    }
+    const bytes = kind === 'blobs' && id !== undefined ? input.blobs.get(id) : undefined
+    if (bytes !== undefined) {
+      // GitHub wraps base64 content at 60 columns.
+      const content = (
+        Buffer.from(bytes)
+          .toString('base64')
+          .match(/.{1,60}/g) ?? []
+      ).join('\n')
+      return { status: 200, headers: {}, json: { sha: id, encoding: 'base64', content } }
+    }
+    throw new GitHubApiError(404, 'Not Found', { message: 'Not Found' })
+  }
+  return {
+    calls,
+    forge: new GitHubForge({ transport, repository: 'acme/app' }),
+  }
+}

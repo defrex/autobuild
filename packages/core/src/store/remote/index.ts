@@ -85,3 +85,7 @@ export type { DispatchPlacementFact } from '../../events/repository'
 
 export { readDispatchPlacement } from '../reduced-reads'
 export * from '../event-reads'
+
+// Sizes the dispatcher's agent-context deposits are held to; the hosted
+// service's artifact ceiling must admit both.
+export { AGENT_CONTEXT_CACHE_SLOT_PAYLOAD, AGENT_CONTEXT_MAX_BYTES } from '../agent-context'
