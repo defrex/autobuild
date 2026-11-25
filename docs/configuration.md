@@ -3998,7 +3998,9 @@ value fails the tool call that needs it, named as a typed `environment` error.
 On a hosted deployment:
 
 - **Listing.** `/mcp` lists every `sandbox.*` tool whenever the deployment has
-  a public origin. Listing reads nothing from the store.
+  a public origin. Listing reads nothing from the store. A per-repository MCP
+  URL lists them only when that repository's latest deposited effective config
+  also enables `[orchestrator]`, at one latest-artifact read per listing.
 - **Gate.** Each call reads the repository's latest deposited effective config.
   A closed gate is a typed refusal instead of a missing tool:
   `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,

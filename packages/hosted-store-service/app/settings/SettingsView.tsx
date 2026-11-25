@@ -4,8 +4,13 @@ import { useState } from 'react'
 import { SECRET_NAME_EXPLANATION, validateSecretName } from '@defrex/autobuild/secret-name'
 import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { ConfirmDialog } from '../dashboard/ConfirmDialog'
+import { type CopyState, McpConnector } from './McpConnector'
 
 export interface SettingsViewProps {
+  /** This project's per-repository MCP URL. */
+  mcpUrl: string
+  /** Fixed copy state, for capture and tests. */
+  mcpCopyState?: CopyState
   data?: ProjectSettings
   pending?: string
   error?: string
@@ -81,6 +86,8 @@ function SecretForm({
   )
 }
 export function SettingsView({
+  mcpUrl,
+  mcpCopyState,
   data,
   pending,
   error,
@@ -92,16 +99,25 @@ export function SettingsView({
   return (
     <section className="settings-page">
       <h2>Settings</h2>
-      <p>
-        Project secrets are shared by this project. Values are write-only and are never shown again.
-      </p>
-      {error && removing === undefined && (
-        <p className="alert" role="alert">
-          {error}
+      <section className="section">
+        <h3>MCP connector</h3>
+        <p>
+          Add this URL to an agent harness to connect it as this project's operator. The harness
+          asks you to sign in the first time it connects.
         </p>
-      )}
+        <McpConnector url={mcpUrl} {...(mcpCopyState ? { initialState: mcpCopyState } : {})} />
+      </section>
       <section className="section">
         <h3>Secrets</h3>
+        <p>
+          Project secrets are shared by this project. Values are write-only and are never shown
+          again.
+        </p>
+        {error && removing === undefined && (
+          <p className="alert" role="alert">
+            {error}
+          </p>
+        )}
         {!data ? (
           <p className="slack">Loading project secrets.</p>
         ) : (

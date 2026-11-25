@@ -6,6 +6,7 @@ import { testProjects } from './projects'
 import { expect } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import {
+  auth as sdkAuth,
   exchangeAuthorization,
   registerClient,
   startAuthorization,
@@ -23,6 +24,7 @@ import { createHostedStoreService, type HostedStoreServiceOptions } from '../ser
 import { createWebAuth, type WebAuth } from '../web/auth'
 import { parseWebAuthEnv } from '../web/config'
 import { createMcpEndpoint } from '../web/mcp'
+import { repositoryMcpResource } from '../web/mcp-resource'
 
 export const ORIGIN = 'https://operator.example'
 export const REPO = 'https://github.com/owner/repo'
@@ -85,6 +87,9 @@ export function buildApp(
     projects?: string[]
     /** Observes every request the MCP endpoint delegates to the service. */
     onDelegate?: (request: Request) => void
+    /** Replaces the per-repository sandbox listing gate (default: the
+     * service's `listsSandboxTools`). */
+    sandboxListed?: (repo: string) => Promise<boolean>
   } & Pick<
     HostedStoreServiceOptions,
     'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError'
@@ -123,6 +128,7 @@ export function buildApp(
       return service.fetch(request)
     },
     entries: service.operatorTools,
+    sandboxListed: options.sandboxListed ?? ((repo) => service.listsSandboxTools(repo)),
   })
   const app: App = async (request) => {
     const url = new URL(request.url)
@@ -133,8 +139,11 @@ export function buildApp(
     if (url.pathname === '/.well-known/oauth-protected-resource') {
       return auth.handler(rewrite(request, '/api/auth/.well-known/oauth-protected-resource'))
     }
+    if (url.pathname.startsWith('/.well-known/oauth-protected-resource/')) {
+      return auth.handler(rewrite(request, `/api/auth${url.pathname}`))
+    }
     if (url.pathname.startsWith('/api/auth/')) return auth.handler(request)
-    if (url.pathname === '/mcp') return endpoint.fetch(request)
+    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) return endpoint.fetch(request)
     return Response.json({ error: `no route: ${request.method} ${url.pathname}` }, { status: 404 })
   }
   return { app, backing, service }
@@ -389,18 +398,117 @@ export async function authorizeFlow(
   return tokens
 }
 
+/** The per-repository MCP URL the test deployment serves for `repo`. */
+export function perRepositoryURL(repo: string = REPO): string {
+  return repositoryMcpResource(`${ORIGIN}/mcp`, repo)
+}
+
+/** The signed-in operator visits an authorization URL and consents;
+ * returns the authorization code the redirect carries. */
+export async function approveAuthorization(
+  app: App,
+  cookie: string,
+  authorizationUrl: URL,
+): Promise<string> {
+  authorizationUrl.searchParams.set('prompt', 'consent')
+  const authorizeResponse = await app(
+    new Request(authorizationUrl, { headers: { cookie }, redirect: 'manual' }),
+  )
+  expect(authorizeResponse.status).toBe(302)
+  const consentCode = new URL(authorizeResponse.headers.get('location')!, ORIGIN).searchParams.get(
+    'consent_code',
+  )
+  const consentResponse = await app(
+    new Request(`${ORIGIN}/api/auth/oauth2/consent`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ accept: true, consent_code: consentCode }),
+    }),
+  )
+  expect(consentResponse.status).toBe(200)
+  const { redirectURI } = (await consentResponse.json()) as { redirectURI: string }
+  return new URL(redirectURI).searchParams.get('code')!
+}
+
+/** Authorize from the server URL alone, as a standard MCP client does: the
+ * SDK's top-level `auth()` discovers metadata from the URL, registers
+ * dynamically, and starts authorization; the signed-in operator consents;
+ * `auth()` then exchanges the code. Returns the tokens and the token
+ * request bodies the client sent. */
+export async function authorizeWithDiscovery(
+  app: App,
+  cookie: string,
+  serverUrl: string,
+): Promise<{
+  tokens: OAuthTokens
+  client: OAuthClientInformationMixed
+  tokenRequests: URLSearchParams[]
+  challenge: string | null
+}> {
+  const tokenRequests: URLSearchParams[] = []
+  const base = routerFetch(app)
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init)
+    if (new URL(request.url).pathname === '/api/auth/mcp/token')
+      tokenRequests.push(new URLSearchParams(await request.clone().text()))
+    return base(request)
+  }) as typeof fetch
+  const unauthenticated = await app(
+    new Request(serverUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    }),
+  )
+  expect(unauthenticated.status).toBe(401)
+  const challenge = unauthenticated.headers.get('www-authenticate')
+  const metadataUrl = /resource_metadata="([^"]+)"/.exec(challenge ?? '')?.[1]
+  let authorizationUrl: URL | undefined
+  const authProvider = provider()
+  authProvider.redirectToAuthorization = (url: URL) => {
+    authorizationUrl = url
+  }
+  const resourceMetadataUrl = metadataUrl === undefined ? undefined : new URL(metadataUrl)
+  expect(
+    await sdkAuth(authProvider, {
+      serverUrl,
+      ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
+      fetchFn,
+    }),
+  ).toBe('REDIRECT')
+  const code = await approveAuthorization(app, cookie, authorizationUrl!)
+  expect(
+    await sdkAuth(authProvider, {
+      serverUrl,
+      authorizationCode: code,
+      ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
+      fetchFn,
+    }),
+  ).toBe('AUTHORIZED')
+  return {
+    tokens: (await authProvider.tokens())!,
+    client: (await authProvider.clientInformation())!,
+    tokenRequests,
+    challenge,
+  }
+}
+
 /** An MCP SDK client connected over Streamable HTTP with pre-loaded tokens. */
 export async function connectClient(
   app: App,
   tokens: OAuthTokens,
   clientInformation: OAuthClientInformationMixed,
+  serverUrl: string = `${ORIGIN}/mcp`,
 ): Promise<Client> {
   const authProvider = provider()
   authProvider.saveTokens(tokens)
   if (clientInformation !== undefined) authProvider.saveClientInformation(clientInformation)
   const mcpClient = new Client({ name: 'e2e-mcp-client', version: '1.0.0' })
   await mcpClient.connect(
-    new StreamableHTTPClientTransport(new URL(`${ORIGIN}/mcp`), {
+    new StreamableHTTPClientTransport(new URL(serverUrl), {
       authProvider,
       fetch: routerFetch(app),
     }),
@@ -408,8 +516,8 @@ export async function connectClient(
   return mcpClient
 }
 
-export function toolsListRequest(token: string, id: number): Request {
-  return new Request(`${ORIGIN}/mcp`, {
+export function toolsListRequest(token: string, id: number, url = `${ORIGIN}/mcp`): Request {
+  return new Request(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

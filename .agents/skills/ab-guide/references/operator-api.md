@@ -201,6 +201,45 @@ on the latest deposited effective config. A closed gate is a `409 refusal`
 with code `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,
 `sandbox-effective-config-invalid` or `sandbox-backend-unavailable`.
 
+### Per-repository MCP URLs
+
+Beside the deployment-wide `/mcp`, each registered project has its own MCP
+URL. Adding it to an agent harness connects that harness to one repository.
+
+| | `/mcp` | `/mcp/<host><path>` |
+|---|---|---|
+| URL | `<resource>` | `<resource>/<host><path>`, e.g. `https://ops.example/mcp/github.com/acme/widgets` for `https://github.com/acme/widgets` |
+| Tool schemas | every tool requires `repo` | no `repo` field; the URL's repository is supplied |
+| `repositories.list` | offered | not offered |
+| A `repo` argument | names the repository | equal to the URL's repository is ignored; any other is a `validation` result |
+| `sandbox.*` listed | when the deployment can host sandboxes | also needs the repository's latest deposited effective config to enable `[orchestrator]` (one latest-artifact read per listing) |
+| Instructions | describe the deployment | name only that repository |
+
+`<resource>` is `AB_WEB_MCP_RESOURCE`, by default `<origin>/mcp`. The URL is
+derived from the repository identity, so it is stable across deploys and
+sign-ins, and only its canonical spelling is served: a trailing slash, `.git`
+or an encoded character is `404`. An unregistered project, or one the signed-in
+operator cannot reach, is also `404`, checked after authentication. Admission
+and repository access are rechecked on every tool call, and writes carry the
+same operator and `via` attribution as `/mcp`.
+
+OAuth is discovered from the URL alone. Its protected-resource metadata lives at
+the RFC 9728 path-inserted location,
+`<origin>/.well-known/oauth-protected-resource/mcp/<host><path>`, and names the
+per-repository URL as its `resource`. The token endpoint honors RFC 8707
+`resource`:
+
+- A token issued for a per-repository URL is accepted only there. At another
+  project's URL or at `/mcp` it gets `401` with `error="invalid_token"`, so
+  the client signs in again for that URL.
+- A token issued for `/mcp`, or without a `resource`, is accepted at every URL.
+- Refreshing a per-repository token keeps its resource. Naming a different
+  resource on that refresh is refused with `invalid_target`.
+- Refreshing a `/mcp` or resource-less token may name one per-repository URL.
+  The new token is then bound to that URL only.
+- Any request naming a resource this deployment does not serve is refused
+  with `invalid_target`.
+
 ### Success results
 
 Build control returns one of:
