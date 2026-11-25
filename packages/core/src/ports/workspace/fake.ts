@@ -44,6 +44,7 @@ export interface ProvisionRecord {
   repo: string
   baseBranch: string
   branch: string
+  fresh?: { owner: string }
 }
 
 export type FakeWorkspaceMode = 'filesystem' | 'logical'
@@ -197,10 +198,19 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     this.branchHeads.set(branch, sha)
   }
 
+  /** Test seam: local branches `localBranchExists` reports, independent of
+   * `branchHeads` so tests that set a head keep their slugs. */
+  readonly localBranches = new Set<string>()
+
+  async localBranchExists(_repo: string, branch: string): Promise<boolean> {
+    return this.localBranches.has(branch)
+  }
+
   async provision(opts: {
     repo: string
     baseBranch: string
     branch: string
+    fresh?: { owner: string }
   }): Promise<WorkspaceProvisionResult> {
     const failure = this.failures.get('provision')
     if (failure) throw failure

@@ -656,6 +656,361 @@ describe('GitWorktreeProvider', () => {
   })
 })
 
+describe('GitWorktreeProvider fresh first provision (#1261)', () => {
+  let tmp: string
+  let upstream: string
+  let repo: string
+  let root: string
+  let own: string
+  let provider: GitWorktreeProvider
+  const branch = 'ab/x'
+
+  /** One fault per matching command, without running it; everything else
+   * (including stdin) reaches real git. */
+  function failOnce(match: (cmd: string[]) => boolean, stderr = 'injected failure'): Exec {
+    let fired = false
+    return async (cmd, opts) => {
+      if (!fired && match(cmd)) {
+        fired = true
+        return { stdout: '', stderr, exitCode: 1 }
+      }
+      return spawnExec(cmd, { ...opts })
+    }
+  }
+  const has = (cmd: string[], ...parts: string[]) => parts.every((part) => cmd.includes(part))
+  const rev = (ref: string) =>
+    run(['git', 'rev-parse', '--verify', '--quiet', ref], repo).catch(() => '')
+  const receipts = async () =>
+    run(
+      ['git', 'for-each-ref', '--format=%(refname)', `refs/autobuild/provision/${branch}/created/`],
+      repo,
+    )
+  /** A commit main does not descend from. */
+  const sideCommit = () =>
+    run(['git', 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'stale'], repo)
+  async function advanceMain(): Promise<string> {
+    const sha = await commitFile(upstream, `f-${crypto.randomUUID()}`, 'x\n', 'advance main')
+    await run(['git', 'push', '-q', 'origin', 'main'], upstream)
+    return sha
+  }
+
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'ab-git-worktree-fresh-'))
+    const remote = join(tmp, 'remote.git')
+    upstream = join(tmp, 'upstream')
+    repo = join(tmp, 'repo')
+    root = join(tmp, 'worktrees')
+    await mkdir(remote, { recursive: true })
+    await mkdir(root, { recursive: true })
+    await run(['git', 'init', '--bare', '-q', '-b', 'main'], remote)
+    await initRepo(upstream)
+    await run(['git', 'remote', 'add', 'origin', remote], upstream)
+    await run(['git', 'push', '-q', '-u', 'origin', 'main'], upstream)
+    await run(['git', 'clone', '-q', remote, repo], tmp)
+    own = join(await realpath(root), 'ab-x')
+    provider = new GitWorktreeProvider({ root })
+  })
+
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true })
+  })
+
+  test('a stale unattached branch is archived and replaced by a fresh cut from the base', async () => {
+    const stale = await sideCommit()
+    await run(['git', 'update-ref', `refs/heads/${branch}`, stale], repo)
+    await run(['git', 'update-ref', `refs/remotes/origin/${branch}`, stale], repo)
+    const main = await advanceMain()
+
+    const handle = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+
+    expect(handle.path).toBe(own)
+    expect(handle.base).toEqual({ source: 'remote', sha: main })
+    expect(await rev(`refs/heads/${branch}`)).toBe(main)
+    expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(main)
+    expect(await rev(`refs/autobuild/displaced/${branch}/${stale}`)).toBe(stale)
+  })
+
+  test('a branch checked out outside the root is detached in place with its files kept', async () => {
+    const stale = await sideCommit()
+    await run(['git', 'update-ref', `refs/heads/${branch}`, stale], repo)
+    const outside = join(tmp, 'outside')
+    await run(['git', 'worktree', 'add', '-q', outside, branch], repo)
+    await writeFile(join(outside, 'README.md'), 'edited\n')
+    await writeFile(join(outside, 'untracked.txt'), 'mine\n')
+    const main = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+
+    const handle = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+
+    expect(handle.path).toBe(own)
+    expect(handle.base.sha).toBe(main)
+    expect(await registrationCount(repo, await realpath(outside))).toBe(1)
+    await expect(run(['git', 'symbolic-ref', '-q', 'HEAD'], outside)).rejects.toThrow()
+    expect(await run(['git', 'rev-parse', 'HEAD'], outside)).toBe(stale)
+    expect(await readFile(join(outside, 'README.md'), 'utf8')).toBe('edited\n')
+    expect(await readFile(join(outside, 'untracked.txt'), 'utf8')).toBe('mine\n')
+    expect(await rev(`refs/autobuild/displaced/${branch}/${stale}`)).toBe(stale)
+  })
+
+  test("an owner's interrupted creation is adopted; another owner's receipt is not ownership; release spends receipts", async () => {
+    const first = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    const base = first.base.sha
+    await advanceMain()
+
+    // Lost `workspace.provisioned` append: same owner, same worktree.
+    const again = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    expect(again.path).toBe(first.path)
+    expect(again.base).toEqual({ source: 'existing', sha: base })
+
+    // Crash after the ref transaction, before `worktree add`.
+    await run(['git', 'worktree', 'remove', '--force', first.path], repo)
+    const readded = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    expect(readded.path).toBe(own)
+    expect(readded.base).toEqual({ source: 'existing', sha: base })
+
+    // A different build's fresh provision displaces the same branch.
+    await run(['git', 'worktree', 'remove', '--force', readded.path], repo)
+    const other = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o2' },
+    })
+    expect(other.base.source).toBe('remote')
+    expect(other.base.sha).not.toBe(base)
+    expect(await rev(`refs/autobuild/displaced/${branch}/${base}`)).toBe(base)
+
+    await provider.release(other)
+    expect(await receipts()).toBe('')
+  })
+
+  test('an attempt interrupted before the ref transaction leaves no receipt and never certifies a foreign worktree', async () => {
+    for (const fault of [
+      (cmd: string[]) => has(cmd, 'update-ref', '--no-deref', 'HEAD'),
+      (cmd: string[]) => has(cmd, 'worktree', 'move'),
+    ]) {
+      // A foreign worktree on `ab/x` at the build's own path, at current main.
+      const tip = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+      await run(['git', 'worktree', 'add', '-q', '-b', branch, own, tip], repo)
+      await writeFile(join(own, 'README.md'), 'foreign edit\n')
+
+      const faulty = new GitWorktreeProvider({ root, exec: failOnce(fault) })
+      await expect(
+        faulty.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+      ).rejects.toThrow(/injected failure/)
+      expect(await receipts()).toBe('')
+
+      const main = await advanceMain()
+      const handle = await provider.provision({
+        repo,
+        baseBranch: 'main',
+        branch,
+        fresh: { owner: 'o1' },
+      })
+      expect(handle.base).toEqual({ source: 'remote', sha: main })
+      const displaced = join(await realpath(root), '.displaced', 'ab-x', tip)
+      expect(await run(['git', 'rev-parse', 'HEAD'], displaced)).toBe(tip)
+      expect(await readFile(join(displaced, 'README.md'), 'utf8')).toBe('foreign edit\n')
+
+      // Reset for the next fault.
+      await provider.release(handle)
+      await run(['git', 'worktree', 'remove', '--force', displaced], repo)
+      await run(['git', 'branch', '-D', branch], repo)
+    }
+  })
+
+  test('a failed ref transaction changes nothing and the retry cuts fresh', async () => {
+    const main = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+    await run(['git', 'update-ref', `refs/heads/${branch}`, main], repo)
+    const faulty = new GitWorktreeProvider({
+      root,
+      exec: failOnce((cmd) => has(cmd, 'update-ref', '--stdin')),
+    })
+    await expect(
+      faulty.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+    ).rejects.toThrow(/injected failure/)
+    expect(await rev(`refs/heads/${branch}`)).toBe(main)
+    expect(await receipts()).toBe('')
+
+    const advanced = await advanceMain()
+    const handle = await faulty.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    expect(handle.base).toEqual({ source: 'remote', sha: advanced })
+    expect(await rev(`refs/autobuild/displaced/${branch}/${main}`)).toBe(main)
+  })
+
+  test('a crash after creation is resumed as own creation, even after main advances', async () => {
+    const faulty = new GitWorktreeProvider({
+      root,
+      exec: failOnce((cmd) => has(cmd, 'worktree', 'add')),
+    })
+    await expect(
+      faulty.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+    ).rejects.toThrow(/injected failure/)
+    const created = await rev(`refs/heads/${branch}`)
+    expect(await rev(`refs/autobuild/provision/${branch}/created/o1`)).toBe(created)
+
+    await advanceMain()
+    const handle = await faulty.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    expect(handle.path).toBe(own)
+    expect(handle.base).toEqual({ source: 'existing', sha: created })
+  })
+
+  test('foreign registrations at the build path move under .displaced, locks and edits kept; resume ignores them', async () => {
+    // An old merged build's worktree: an ancestor of main, with an edit.
+    const old = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+    await run(['git', 'worktree', 'add', '-q', '-b', branch, own, old], repo)
+    await writeFile(join(own, 'README.md'), 'old edit\n')
+    const main = await advanceMain()
+
+    const handle = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'new' },
+    })
+    expect(handle.path).toBe(own)
+    expect(handle.base).toEqual({ source: 'remote', sha: main })
+    const displaced = join(await realpath(root), '.displaced', 'ab-x', old)
+    expect(await run(['git', 'rev-parse', 'HEAD'], displaced)).toBe(old)
+    await expect(run(['git', 'symbolic-ref', '-q', 'HEAD'], displaced)).rejects.toThrow()
+    expect(await readFile(join(displaced, 'README.md'), 'utf8')).toBe('old edit\n')
+    expect(await rev(`refs/autobuild/displaced/${branch}/${old}`)).toBe(old)
+
+    // Resume after a release is ordinary and never sees the displaced copy.
+    const work = await commitFile(handle.path, 'work.txt', 'work\n', 'build work')
+    await provider.release(handle)
+    const resumed = await provider.provision({ repo, baseBranch: 'main', branch })
+    expect(resumed.path).toBe(own)
+    expect(resumed.base).toEqual({ source: 'existing', sha: work })
+
+    // A locked foreign registration with commits not on main.
+    await provider.release(resumed)
+    const lockedBranch = 'ab/y'
+    const lockedPath = join(await realpath(root), 'ab-y')
+    await run(['git', 'worktree', 'add', '-q', '-b', lockedBranch, lockedPath, 'main'], repo)
+    const unmerged = await commitFile(lockedPath, 'y.txt', 'y\n', 'unmerged')
+    await run(['git', 'worktree', 'lock', lockedPath], repo)
+    const fresh = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch: lockedBranch,
+      fresh: { owner: 'new' },
+    })
+    expect(fresh.path).toBe(lockedPath)
+    expect(fresh.base.sha).toBe(main)
+    const lockedAside = join(await realpath(root), '.displaced', 'ab-y', unmerged)
+    expect(await run(['git', 'rev-parse', 'HEAD'], lockedAside)).toBe(unmerged)
+    const list = await run(['git', 'worktree', 'list', '--porcelain'], repo)
+    const block = list.split('\n\n').find((entry) => entry.startsWith(`worktree ${lockedAside}\n`))
+    expect(block).toContain('locked')
+  })
+
+  test('a worktree git refuses to move falls back to rename plus repair, surviving an interruption and a prune', async () => {
+    const old = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+    await run(['git', 'worktree', 'add', '-q', '-b', branch, own, old], repo)
+    await writeFile(join(own, 'kept.txt'), 'kept\n')
+    await writeFile(join(own, 'staged.txt'), 'staged only\n')
+    await run(['git', 'add', 'staged.txt'], own)
+    // Git always refuses to move this worktree; the first repair fails.
+    let repairFailures = 1
+    const exec: Exec = async (cmd, opts) => {
+      if (has(cmd, 'worktree', 'move')) {
+        return {
+          stdout: '',
+          stderr: 'fatal: working trees containing submodules cannot be moved or removed',
+          exitCode: 128,
+        }
+      }
+      if (has(cmd, 'worktree', 'repair') && repairFailures-- > 0) {
+        return { stdout: '', stderr: 'injected failure', exitCode: 1 }
+      }
+      return spawnExec(cmd, { ...opts })
+    }
+    const faulty = new GitWorktreeProvider({ root, exec })
+    await expect(
+      faulty.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+    ).rejects.toThrow(/injected failure/)
+    // Another build's provision or release prunes in between.
+    await run(['git', 'worktree', 'prune'], repo)
+
+    const handle = await faulty.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+      fresh: { owner: 'o1' },
+    })
+    expect(handle.path).toBe(own)
+    const displaced = join(await realpath(root), '.displaced', 'ab-x', old)
+    expect(await registrationCount(repo, displaced)).toBe(1)
+    expect(await readFile(join(displaced, 'kept.txt'), 'utf8')).toBe('kept\n')
+    expect(await run(['git', 'show', ':staged.txt'], displaced)).toBe('staged only')
+    expect(await run(['git', 'rev-parse', 'HEAD'], displaced)).toBe(old)
+    const list = await run(['git', 'worktree', 'list', '--porcelain'], repo)
+    const block = list.split('\n\n').find((entry) => entry.startsWith(`worktree ${displaced}\n`))
+    expect(block).not.toContain('locked')
+  })
+
+  test('a seam that drops stdin fails loudly instead of committing an empty transaction', async () => {
+    const stale = await sideCommit()
+    await run(['git', 'update-ref', `refs/heads/${branch}`, stale], repo)
+    const dropping = new GitWorktreeProvider({
+      root,
+      exec: (cmd, { stdin: _dropped, ...opts }) => spawnExec(cmd, opts),
+    })
+    await expect(
+      dropping.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+    ).rejects.toThrow(/ref transaction left refs\/heads\/ab\/x/)
+    expect(await rev(`refs/heads/${branch}`)).toBe(stale)
+  })
+
+  test('spawnExec delivers stdin only when given', async () => {
+    const hashed = await spawnExec(['git', 'hash-object', '--stdin'], { stdin: 'x\n' })
+    expect(hashed.stdout.trim()).toBe('587be6b4c3f93f93c489c0111bba5596147a26cb')
+    const empty = await spawnExec(['git', 'hash-object', '--stdin'], {})
+    expect(empty.stdout.trim()).toBe('e69de29bb2d1d6434b8b29ae775ad8c2e48c5391')
+  })
+
+  test('localBranchExists answers for local branches and throws when the probe fails', async () => {
+    expect(await provider.localBranchExists(repo, 'main')).toBe(true)
+    expect(await provider.localBranchExists(repo, branch)).toBe(false)
+    await expect(provider.localBranchExists(join(tmp, 'missing'), branch)).rejects.toThrow()
+  })
+})
+
 describe('GitWorktreeProvider operator sandbox', () => {
   let repo: string
   let root: string
