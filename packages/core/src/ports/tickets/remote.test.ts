@@ -32,6 +32,8 @@ import {
   TICKET_TARGETING_PROBE_NODE,
   TICKET_PAGING_HEADER,
   TICKET_PAGING_CAPABILITY,
+  TICKET_SEARCH_HEADER,
+  TICKET_SEARCH_CAPABILITY,
   dependencyStatesWireSchema,
   successWireSchema,
   ticketStateCountsWireSchema,
@@ -52,6 +54,7 @@ import {
   type HostedTicketFetch,
 } from './remote'
 import type { TicketSource } from '../types'
+import { TicketSearchCursorInvalid, TicketSearchUnsupported } from './search'
 import { ticketsSchema } from '../../config/schema'
 
 // ── The fake fetch ───────────────────────────────────────────────────────────
@@ -201,6 +204,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-policy-roles': '1',
         'x-autobuild-ticket-targeting': '1',
         'x-autobuild-ticket-paging': '1',
+        'x-autobuild-ticket-search': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -1009,5 +1013,89 @@ describe('hosted native paging negotiation', () => {
       'the hosted ticket source does not support an assignee gate',
     )
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('hosted search negotiation', () => {
+  const ECHO = { [TICKET_SEARCH_HEADER]: TICKET_SEARCH_CAPABILITY }
+  const NO_ROUTE = errorBodySchema.parse({ error: 'no route', kind: 'not-found' })
+  const HIT = { id: 'ENG-42', title: 'Rate-limit auth', state: 'Ready', labels: [], kind: 'work' }
+  const QUERY = { text: 'rate', state: 'Ready', labels: ['autobuild'], limit: 1, cursor: '9' }
+
+  async function searchSource(responses: CannedResponse[]) {
+    const made = makeSource([{ body: OK, headers: ECHO }, ...responses])
+    await made.source.comment('ENG-1', 'settle')
+    expect(made.source.search).toBeDefined()
+    made.calls.length = 0
+    return made
+  }
+
+  test('a fresh source declares no search and has made no request', () => {
+    const { source, calls } = makeSource([])
+    expect(source.search).toBeUndefined()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('an ok response without the echo leaves search undeclared', async () => {
+    const { source } = makeSource([{ body: OK }])
+    await source.comment('ENG-1', 'x')
+    expect(source.search).toBeUndefined()
+  })
+
+  test('a declared search posts the query and returns the service page', async () => {
+    const answer = { tickets: [HIT], cursor: '42', diagnostics: [] }
+    const { source, calls } = await searchSource([{ body: answer, headers: ECHO }])
+    expect(await source.search!(QUERY)).toEqual(answer)
+    expect(calls.map((call) => call.url)).toEqual(['https://tickets.example/tickets/search'])
+    expect(calls[0]!.body).toEqual({ context: CONTEXT, input: QUERY })
+    expect(hostedTicketRequestSchemas.search.parse(calls[0]!.body).input).toEqual(QUERY)
+  })
+
+  test.each([404, 400])(
+    'a declared search refused %i without the echo refuses typed, with no listing fallback',
+    async (status) => {
+      const { source, calls } = await searchSource([{ status, body: NO_ROUTE }])
+      const error = await rejectionOf(source.search!(QUERY))
+      expect(error).toBeInstanceOf(TicketSearchUnsupported)
+      expect((error as TicketSearchUnsupported).source).toBe('hosted')
+      expect(source.search).toBeUndefined()
+      expect(calls).toHaveLength(1)
+    },
+  )
+
+  test('a search-unsupported answer refuses typed and keeps search declared', async () => {
+    const { source } = await searchSource([
+      {
+        status: 409,
+        body: { kind: 'conflict', error: 'no search', code: 'search-unsupported' },
+        headers: ECHO,
+      },
+    ])
+    expect(await rejectionOf(source.search!(QUERY))).toBeInstanceOf(TicketSearchUnsupported)
+    expect(source.search).toBeDefined()
+  })
+
+  test('a search-cursor-invalid answer rejects with the cursor', async () => {
+    const { source } = await searchSource([
+      {
+        status: 400,
+        body: { kind: 'validation', error: 'bad', code: 'search-cursor-invalid', cursor: '9' },
+        headers: ECHO,
+      },
+    ])
+    const error = await rejectionOf(source.search!(QUERY))
+    expect(error).toBeInstanceOf(TicketSearchCursorInvalid)
+    expect((error as TicketSearchCursorInvalid).cursor).toBe('9')
+    expect((error as TicketSearchCursorInvalid).source).toBe('hosted')
+  })
+
+  test.each([
+    ['more hits than the limit', { tickets: [HIT, HIT], diagnostics: [] }],
+    ['a full ticket body', { tickets: [{ ...HIT, body: 'x' }], diagnostics: [] }],
+  ] as const)('an answer with %s fails as an invalid search page', async (_name, body) => {
+    const { source } = await searchSource([{ body, headers: ECHO }])
+    expect((await rejectionOf(source.search!(QUERY))).message).toStartWith(
+      'ticket service answered an invalid search page',
+    )
   })
 })

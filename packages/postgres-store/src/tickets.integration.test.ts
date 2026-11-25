@@ -1434,3 +1434,130 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl) {
+  // The shared matcher (JS toLowerCase + String.includes) is the reference; a
+  // C or libc default collation folds these drafts differently.
+  test('search matches the shared matcher on real SQL, non-ASCII case folding included', async () => {
+    const { FakeTicketSource, TicketSearchUnsupported } = await import(
+      '@defrex/autobuild/plugin-sdk'
+    )
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const lifecycle = { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' }
+    const source = db.source({ repo: 'search', teamKey: 'ENG', lifecycle })
+    const fake = new FakeTicketSource([], { doneState: 'Done' })
+    const drafts: [string, string, string, string[]][] = [
+      ['ÉCOLE NORMALE', 'plain', 'Ready', []],
+      ['ΟΔΟΣ ΕΝΑ', 'plain', 'Ready', ['dup']],
+      ['İstanbul trip', 'plain', 'Triage', []],
+      ['STRAẞE', 'plain', 'Done', ['dup']],
+      ['Plain', 'Body mentions ÜBERGRÖSSE here', 'Ready', []],
+      ['Rate LIMIT auth', 'token BUCKET', 'Ready', ['dup']],
+      ['percent 100% done', 'plain', 'Triage', []],
+      ['snake a_b case', 'back\\slash', 'Done', []],
+      ['aXb and 1000 done', 'plain', 'Ready', ['dup']],
+    ]
+    try {
+      for (const [title, body, state, labels] of drafts) {
+        await source.create({ title, body, labels }, { state })
+        await fake.create({ title, body, labels }, { state })
+      }
+      const titles = async (
+        target: typeof source | typeof fake,
+        query: { text: string; state?: string; labels?: string[] },
+      ) => {
+        const found: string[] = []
+        let cursor: string | undefined
+        do {
+          const page = await target.search!({
+            ...query,
+            limit: 2,
+            ...(cursor !== undefined ? { cursor } : {}),
+          })
+          found.push(...page.tickets.map((hit) => hit.title))
+          cursor = page.cursor
+        } while (cursor !== undefined)
+        return found.sort()
+      }
+      const [probe] = await db.sql`SELECT lower(${'ÉCOLE ΟΔΟΣ İstanbul'} COLLATE "C") AS c`
+      expect(probe.c).not.toBe('ÉCOLE ΟΔΟΣ İstanbul'.toLowerCase())
+      const icu = await db.sql`SELECT lower(${'ÉCOLE ΟΔΟΣ İstanbul'} COLLATE "und-x-icu") AS icu`
+        .then((rows: { icu: string }[]) => rows[0]!.icu)
+        .catch(() => undefined)
+      if (icu === undefined) {
+        await expect(source.search({ text: 'école', limit: 2 })).rejects.toBeInstanceOf(
+          TicketSearchUnsupported,
+        )
+        return
+      }
+      expect(icu).toBe('ÉCOLE ΟΔΟΣ İstanbul'.toLowerCase())
+      const queries = [
+        { text: 'école' },
+        { text: 'οδος' },
+        { text: 'οδοσ' },
+        { text: 'istanbul' },
+        { text: 'straße' },
+        { text: 'übergrösse' },
+        { text: 'limit bucket' },
+        { text: '100%' },
+        { text: '0% done' },
+        { text: 'a_b' },
+        { text: '\\' },
+        { text: 'done', labels: ['dup'] },
+        { text: 'plain', state: 'Ready' },
+        { text: 'e', state: 'Done', labels: ['dup'] },
+      ]
+      for (const query of queries)
+        expect(await titles(source, query)).toEqual(await titles(fake, query))
+      // Matches the expectation, not only the fake: these folds differ under C and libc.
+      expect(await titles(source, { text: 'οδος' })).toEqual(['ΟΔΟΣ ΕΝΑ'])
+      expect(await titles(source, { text: 'οδοσ' })).toEqual([])
+      expect(await titles(source, { text: 'istanbul' })).toEqual([])
+      expect(await titles(source, { text: 'a_b' })).toEqual(['snake a_b case'])
+      await expect(source.search({ text: 'x', limit: 1, cursor: '0' })).rejects.toThrow(
+        'invalid search cursor',
+      )
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+
+  test('search resolves its state filter as listReady does, in its own statement, seeding nothing', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const lifecycle = { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' }
+    try {
+      const fresh = db.source({ repo: 'fresh', teamKey: 'ENG', lifecycle, backlogState: 'Icebox' })
+      // Configured and role names resolve before any seed, and stay unseeded.
+      expect((await fresh.search({ text: 'x', state: 'Ready', limit: 1 })).tickets).toEqual([])
+      expect((await fresh.search({ text: 'x', state: 'icebox', limit: 1 })).tickets).toEqual([])
+      expect(await db.sql`SELECT name FROM ab_ticket_states WHERE repo = 'fresh'`).toHaveLength(0)
+
+      const source = db.source({ repo: 'states', teamKey: 'ENG', lifecycle })
+      const ticket = await source.create({ title: 'Needle', body: 'Body' }, { state: 'Ready' })
+      const hits = (state: string) =>
+        source
+          .search({ text: 'needle', state, limit: 5 })
+          .then((page) => page.tickets.map((hit) => hit.id))
+      expect(await hits('ready')).toEqual([ticket.ref.id])
+      expect(await hits('Ready')).toEqual([ticket.ref.id])
+      const refusal = (promise: Promise<unknown>) =>
+        promise.then(
+          () => '',
+          (error: Error) => error.message,
+        )
+      for (const state of ['nonexistent', 'parked']) {
+        if (state === 'parked')
+          await db.sql`INSERT INTO ab_ticket_states (repo, name) VALUES ('states', 'Parked'), ('states', 'PARKED')`
+        const listed = await refusal(source.listReady({ state }))
+        expect(listed).toMatch(state === 'parked' ? /ambiguous state/ : /unknown state/)
+        expect(await refusal(source.search({ text: 'needle', state, limit: 5 }))).toBe(listed)
+      }
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+}
