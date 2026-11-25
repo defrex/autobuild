@@ -39,7 +39,11 @@ import {
   toolOutputPart,
   truncationPart,
 } from '../packages/core/src/ports/runner/stream-parts'
-import { renderDashboard, stripAnsi } from '../packages/core/src/cli/dashboard/render'
+import {
+  pinTopLineUrl,
+  renderDashboard,
+  stripAnsi,
+} from '../packages/core/src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../packages/core/src/cli/terminal'
 import { createTerminalModeController } from '../packages/core/src/cli/terminal-restore'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../packages/core/src/events/envelope'
@@ -108,6 +112,8 @@ export interface FrameSpec {
   }
   standby?: string
   availableUpgrade?: string
+  /** `--web`: pin this served URL to the top line, as the TTY frontend does. */
+  webUrl?: string
   /** Frame-specific evidence this capture exists to show. */
   requires?: readonly string[]
   /** Evidence that must never appear in this frame. */
@@ -196,6 +202,8 @@ const HAPPY_FORBIDDEN = [
 /** Terminal width of the website hero frame; `packages/website` lays the
  * frame out at exactly this many cells. */
 export const WEBSITE_HERO_COLUMNS = 133
+
+export const CAPTURE_WEB_URL = 'http://127.0.0.1:41234/'
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
   ...[180, 100].map((columns) => ({
@@ -659,6 +667,33 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'waiting on CAP-API, CAP-SCHEMA — needs the new API schema',
       'r answers the wait and ends it early',
     ],
+  },
+  // `--web` frames: the served URL pinned to the right end of the top line.
+  {
+    id: 'web-url-list',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 32,
+    webUrl: CAPTURE_WEB_URL,
+    requires: ['Autobuild', CAPTURE_WEB_URL],
+  },
+  {
+    id: 'web-url-viewer-detail',
+    scenario: 'mixed',
+    columns: 100,
+    rows: 30,
+    viewer: { dispatchedBy: 'app.autobuild.run' },
+    detail: { slug: 'plan-blocked-dashboard', scroll: 0 },
+    webUrl: CAPTURE_WEB_URL,
+    requires: ['viewer · dispatched by app.autobuild.run', CAPTURE_WEB_URL],
+  },
+  {
+    id: 'web-url-narrow',
+    scenario: 'mixed',
+    columns: 60,
+    rows: 50,
+    webUrl: CAPTURE_WEB_URL,
+    requires: [CAPTURE_WEB_URL, '~'],
   },
 ]
 
@@ -2176,10 +2211,12 @@ async function capturePaint(
           : {}),
         ...(spec.resume !== undefined ? { resumeInput: spec.resume } : {}),
       }
-      const lines = renderDashboard(presented, {
+      const rendered = renderDashboard(presented, {
         ...options,
         now: RENDER_NOW,
       })
+      const lines =
+        spec.webUrl === undefined ? rendered : pinTopLineUrl(rendered, spec.webUrl, spec.columns)
       capturedModel = presented
       captured = [...lines]
       return lines
