@@ -4431,9 +4431,11 @@ sampling. Repository polling advances from the last observed sequence rather
 than replaying the growing journal on every frame. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and ask the child to stop; repeated
 signals remain graceful while a dispatcher tick is crossing the ticket-claim
-boundary. The frontend reaps the child before finishing, and for SIGHUP,
-SIGQUIT, or SIGTERM only then restores the default disposition by re-signalling
-itself. A child also stops when its terminal-owning parent dies. A timed-out
+boundary. The frontend reaps the child before finishing, and for SIGHUP or
+SIGTERM it only then restores the default disposition by re-signalling itself.
+A drained SIGQUIT stop instead exits with status 131 (128 + 3), because
+SIGQUIT's default action dumps core. A launcher-supervised generation reports
+that stop through its stopped exit and leaves the 131 to the launcher. A child also stops when its terminal-owning parent dies. A timed-out
 child is terminated unless such a tick is open, in which case that tick first
 reaches a recoverable durable boundary. The run-stopped fact and frontend result
 distinguish a graceful drain, an actual forced termination requested by the

@@ -7,7 +7,11 @@ import {
   type SourceLaunch,
 } from './dispatch-upgrade-source'
 import { parseDispatchArgs } from './dispatch-args'
-import { operatorStopped, restoreLauncherTerminal } from './dispatch-launch-stop'
+import {
+  drainedLauncherExit,
+  operatorStopped,
+  restoreLauncherTerminal,
+} from './dispatch-launch-stop'
 import { watchPresentationJob } from './dispatch-presentation-job'
 import { dirname, basename, resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -590,6 +594,5 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     for (const root of protectedRoots) releasePreparedRuntime(root)
     pruneRuntimes(dirname(dirname(runtime.root)))
   }
-  if (signal && signal !== 'SIGINT') process.kill(process.pid, signal)
-  return signal === 'SIGINT' ? 0 : publicCode
+  return drainedLauncherExit(signal, publicCode)
 }

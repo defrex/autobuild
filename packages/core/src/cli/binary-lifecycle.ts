@@ -33,10 +33,11 @@ export async function withDispatchTerminalRestore<T>(
   run: () => Promise<T>,
   boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
   requestStop: (signal: NodeJS.Signals) => void = () => {},
+  options: { supervised?: boolean } = {},
 ): Promise<T> {
   const hook =
     command === 'dispatch'
-      ? installTerminalRestoreHook(terminal.modes, boundary, requestStop)
+      ? installTerminalRestoreHook(terminal.modes, boundary, requestStop, options)
       : undefined
   try {
     return await run()
