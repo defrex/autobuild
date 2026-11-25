@@ -112,6 +112,16 @@ Each ticket is `<id>.md`: TOML frontmatter between `+++` fences carrying `id`
 and `title` (and optional `labels`, `blockedBy`, `issueLinks` and `priority`), then the body — which is
 the spec.
 
+## Connected agents
+
+Connected over MCP, you have no shell and no `ab` CLI. Each `ab ticket …`
+command below maps to a `tickets.*` tool, and every `context.read` result's
+preamble lists the mapping for the file it returns. Before filing or revising,
+call `context.list` and read the repository's agent instructions with
+`context.read`: they win over this skill for that repository. Ground a ticket
+in the code by exploring it in your operator sandbox (`sandbox.open`, then
+`sandbox.exec` and `sandbox.read_file`).
+
 ## Create a ticket
 
 Search for duplicates first:
