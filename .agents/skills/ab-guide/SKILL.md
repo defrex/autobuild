@@ -3888,8 +3888,10 @@ standalone web serving reads nothing while no browser is connected. While a tab 
 open, `ab web` starts its overview from the build roster, reading live builds and
 recently aborted builds that may still be cleaning up. It then reads only changed
 builds, and only the repository change position while idle. Analytics and
-timelines are explicit reads: one rollup value, one listing page and at most 25
-saved timelines per new answer, refetched only when the change position moves.
+timelines are explicit reads, fetched on load and on each filter, window or page
+change, and again for the same query only when the change position moves. A new
+analytics answer reads one rollup value, one listing page and at most 25 saved
+timelines; a build timeline not in memory reads the build and its saved timeline.
 `ab dispatch --web` shows the repository header without the overview. Its
 terminal-dashboard frames add no reads; a plain dispatcher reads one change
 position per tick while a browser is connected; analytics requests are explicit

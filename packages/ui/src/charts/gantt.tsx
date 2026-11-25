@@ -10,7 +10,15 @@ import {
   type WaterfallData,
   visibleWaterfallRows,
 } from '@ui-sdk/react/waterfall'
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Placeholder } from '../components/display'
 import { usePresence } from '../components/motion'
 import { type SegmentCategory, segmentStyle } from '../tokens'
@@ -43,6 +51,23 @@ interface Props {
 }
 
 const segmentName = (segment: Segment) => segment.step ?? segmentLabel[segment.category]
+
+/** A step name with a line-break opportunity after each colon, so a narrow
+ * label column wraps `verify:integration` at the colon, not mid-word. */
+function breakable(name: string): ReactNode {
+  const parts = name.split(':')
+  return parts.map((part, i) => (
+    // biome-ignore lint/suspicious/noArrayIndexKey: fixed split of one name
+    <Fragment key={i}>
+      {part}
+      {i < parts.length - 1 && (
+        <>
+          :<wbr />
+        </>
+      )}
+    </Fragment>
+  ))
+}
 
 const reserve = (rows: number | undefined) =>
   rows === undefined ? undefined : ({ '--gantt-reserve-rows': String(rows) } as CSSProperties)
@@ -135,7 +160,8 @@ export function Gantt({
         })),
       }
     })
-    // An empty page still draws an axis over a one-hour span.
+    // An empty page keeps the axis row's height over a nominal span, but
+    // labels no ticks: there is no time to place them at.
     if (items.length === 0) return { items, range: [0, 3600_000] as [number, number], origin }
     return { items, range: [lo, hi] as [number, number], origin }
   }, [builds, now, axis])
@@ -185,7 +211,7 @@ export function Gantt({
         <WaterfallHeaderRow>
           <WaterfallColumnHeader>Build</WaterfallColumnHeader>
           <WaterfallColumnHeader aria-label="Timeline">
-            <WaterfallAxis maxTicks={6} />
+            {items.length > 0 && <WaterfallAxis maxTicks={6} />}
           </WaterfallColumnHeader>
         </WaterfallHeaderRow>
         {rows.map(({ item, parent }) => {
@@ -235,7 +261,7 @@ export function Gantt({
               data-exiting={closing.includes(parent) ? '' : undefined}
             >
               <WaterfallRowHeader>
-                <span data-ansi="segment-name">{segmentName(segment)}</span>
+                <span data-ansi="segment-name">{breakable(segmentName(segment))}</span>
                 {segment.round !== undefined && <span data-ansi="round"> r{segment.round}</span>}
                 <span data-ansi="elapsed">
                   {' '}

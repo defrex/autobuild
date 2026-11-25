@@ -795,7 +795,10 @@ a:hover {
 }
 [data-ansi="bar-mark"] {
   position: absolute;
-  inset-block: 9px;
+  /* A fixed height, centred, so a row whose label wraps keeps a bar. */
+  inset-block: 0;
+  height: 10px;
+  margin-block: auto;
   inset-inline-start: var(--waterfall-start);
   width: max(2px, var(--waterfall-size));
 }
@@ -983,7 +986,8 @@ a:hover {
 [data-ansi="track"] [data-marker] {
   position: absolute;
   inset-inline-start: 0;
-  translate: calc(var(--fraction) * 100cqi) 0;
+  /* Less its own width, so the largest value's marker ends inside the track. */
+  translate: calc(var(--fraction) * (100cqi - 2px)) 0;
   width: 2px;
   background: var(--ink);
   transition:
@@ -1028,16 +1032,80 @@ a:hover {
   vertical-align: -0.1em;
   background: var(--ink);
 }
+/* At phone width each step is a ruled block: its name and bar across the
+   width, then its figures four to a line, each under its own column label,
+   so nothing scrolls sideways and both modes keep the same cells. */
+@media (max-width: 720px) {
+  [data-ansi="step-durations"],
+  [data-ansi="step-durations"] :is(caption, thead, tbody) {
+    display: block;
+  }
+  [data-ansi="step-durations"] tr {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding-block: 5px;
+    border-bottom: var(--stroke-rule) solid var(--rule);
+  }
+  [data-ansi="step-durations"] :is(th, td) {
+    padding: 2px var(--space-xs);
+    border-bottom: 0;
+    min-width: 0;
+  }
+  [data-ansi="step-durations"]
+    tr
+    > :is(:first-child, [data-ansi="bar-head"], [data-ansi="bar-cell"]) {
+    grid-column: 1 / -1;
+  }
+  [data-ansi="step-durations"] thead th:nth-child(n + 3) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  [data-ansi="step-durations"] [data-ansi="num"] {
+    text-align: start;
+  }
+  /* Block placeholders hold exactly one line each, as the loaded figures do;
+     inline ones would add a baseline's descent to every line. */
+  [data-ansi="step-durations"][data-skeleton] [data-ansi="placeholder"] {
+    display: grid;
+  }
+  [data-ansi="step-durations"] td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--slack);
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+  [data-ansi="bar-head"] {
+    width: auto;
+  }
+  [data-ansi="bar-cell"] {
+    min-width: 0;
+  }
+}
 
 @media (max-width: 720px) {
   [data-ansi="gantt"] [data-slot="waterfall"] {
-    grid-template-columns: 6.5rem minmax(0, 1fr);
+    grid-template-columns: 7.5rem minmax(0, 1fr);
   }
   [data-ansi="gantt-title"] {
     display: none;
   }
   [data-ansi="gantt"] [data-slot="waterfall-row-header"] {
-    padding-inline: calc((var(--waterfall-level, 1) - 1) * 1rem) var(--space-xs);
+    padding-inline: calc((var(--waterfall-level, 1) - 1) * 0.5rem) var(--space-xs);
+  }
+  /* A segment's name, round and time wrap inside the narrow label column
+     instead of running over its bar. */
+  [data-ansi="gantt"] [data-slot="waterfall-row-header"]:has([data-ansi="segment-name"]) {
+    flex-wrap: wrap;
+    row-gap: 0;
+    white-space: normal;
+  }
+  [data-ansi="segment-name"] {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   [data-ansi="gantt"] [data-slot="waterfall-tick"]:nth-child(even) {
     display: none;

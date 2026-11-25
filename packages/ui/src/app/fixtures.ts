@@ -1,15 +1,28 @@
 /**
  * Hand-written projection values for the web pages: a representative
- * overview and the frames that change it. Valid against the shared
+ * overview and the frames that change it, plus the analytics answers and
+ * build timelines the JSON routes serve. Valid against the shared
  * projection's types, never produced by calling core, so the views test,
  * the catalog and the layout probe share one scripted frame source.
  */
 import type { StepText } from '../../../core/src/cli/dashboard/row-text'
-import type { WebBuildRow, WebFinishedRow, WebFrame } from '../../../core/src/web/protocol'
+import type { TimelineSegment } from '../../../core/src/cli/dashboard/timeline'
+import type { StepDurationStat } from '../../../core/src/kernel/step-durations'
+import type {
+  WebAnalytics,
+  WebAnalyticsQuery,
+  WebBuildRow,
+  WebFinishedRow,
+  WebFrame,
+  WebTimelineRow,
+} from '../../../core/src/web/protocol'
+import { NOW as CATALOG_NOW, fixtureBuilds as catalogBuilds } from '../catalog/fixtures'
+import { stepStats } from '../charts/model'
 
 export const NOW = Date.UTC(2026, 10, 24, 15, 0, 0)
 
 const MIN = 60_000
+const DAY = 24 * 60 * MIN
 
 const done = (label: string, ms: number): StepText => ({
   label,
@@ -333,4 +346,204 @@ export function timedFrame(base: number, elapsedMs: number): WebFrame {
         : step,
     )
   })
+}
+
+// ── Analytics and timelines ─────────────────────────────────────────────
+
+type SegmentSpec = [
+  category: string,
+  minutes: number,
+  extra?: Pick<TimelineSegment, 'round' | 'attempt'>,
+]
+
+/** Segments laid end to end so the last one ends at `endAt`, or is still
+ * open there when `open`. */
+function laidOut(specs: readonly SegmentSpec[], endAt: number, open = false): TimelineSegment[] {
+  let t = endAt - specs.reduce((sum, [, minutes]) => sum + minutes * MIN, 0)
+  return specs.map(([category, minutes, extra], i) => {
+    const start = t
+    t += minutes * MIN
+    const last = open && i === specs.length - 1
+    return {
+      category,
+      start: new Date(start).toISOString(),
+      ...(last ? {} : { end: new Date(t).toISOString() }),
+      durationMs: last ? 0 : minutes * MIN,
+      opened: { type: 'fixture.opened', seq: 2 * i + 1 },
+      ...(last ? {} : { closed: { type: 'fixture.closed', seq: 2 * i + 2 } }),
+      ...extra,
+      state: last ? 'open' : 'closed',
+    }
+  })
+}
+
+const pageRow = (row: WebBuildRow, segments: TimelineSegment[]): WebTimelineRow => ({
+  slug: row.slug,
+  ...(row.ticketId !== undefined ? { ticketId: row.ticketId } : {}),
+  ...(row.ticketUrl !== undefined ? { ticketUrl: row.ticketUrl } : {}),
+  title: row.title,
+  kind: 'work',
+  createdAt: segments[0]!.start,
+  segments,
+})
+
+/** The build pages' own timelines: the running build on its second verify
+ * attempt, the blocked one escalated, the waiting one on its tickets, and the
+ * finished one merged. Any other slug has no build. */
+export function timelineFixture(slug: string): WebTimelineRow | null {
+  switch (slug) {
+    case RUNNING_SLUG:
+      return pageRow(
+        running,
+        laidOut(
+          [
+            ['queued', 3],
+            ['plan', 6, { round: 1 }],
+            ['plan-review', 3, { round: 1 }],
+            ['implement', 23, { round: 1 }],
+            ['code-review', 5, { round: 1 }],
+            ['verify:unit', 5, { attempt: 1 }],
+            ['implement', 8, { round: 2 }],
+            ['code-review', 4, { round: 2 }],
+            ['verify:unit', 4.2, { attempt: 2 }],
+          ],
+          NOW,
+          true,
+        ),
+      )
+    case BLOCKED_SLUG:
+      return pageRow(
+        blocked,
+        laidOut(
+          [
+            ['queued', 2],
+            ['plan', 7, { round: 1 }],
+            ['plan-review', 4, { round: 1 }],
+            ['implement', 22, { round: 1 }],
+            ['escalated', 41, { round: 1 }],
+          ],
+          NOW,
+          true,
+        ),
+      )
+    case WAITING_SLUG:
+      return pageRow(
+        waiting,
+        laidOut(
+          [
+            ['queued', 1],
+            ['plan', 5, { round: 1 }],
+            ['plan-review', 3, { round: 1 }],
+            ['ticket-wait', 50],
+          ],
+          NOW,
+          true,
+        ),
+      )
+    case finishedRows[0]!.slug: {
+      const segments = laidOut(
+        [
+          ['queued', 6],
+          ['plan', 9, { round: 1 }],
+          ['plan-review', 4, { round: 1 }],
+          ['implement', 34, { round: 1 }],
+          ['code-review', 7, { round: 1 }],
+          ['verify:unit', 6, { attempt: 1 }],
+          ['verify:integration', 11, { attempt: 1 }],
+          ['finalize', 2],
+          ['awaiting-merge', 18],
+        ],
+        Date.parse(finishedRows[0]!.completedAt),
+      )
+      return {
+        slug: finishedRows[0]!.slug,
+        ticketId: '#1077',
+        title: 'Back off when the GitHub cooldown is exhausted',
+        kind: 'work',
+        outcome: 'merged',
+        createdAt: segments[0]!.start,
+        segments,
+      }
+    }
+    default:
+      return null
+  }
+}
+
+/** The catalog's seeded builds moved to this file's clock, as served rows:
+ * the newest two still implementing, the rest merged. */
+const analyticsRows: WebTimelineRow[] = catalogBuilds(30).map((b) => {
+  const shift = NOW - CATALOG_NOW
+  const segments = b.segments.map((s, i): TimelineSegment => {
+    const start = s.start + shift
+    const end = s.end === undefined ? undefined : s.end + shift
+    return {
+      category: s.step ?? s.category,
+      start: new Date(start).toISOString(),
+      ...(end !== undefined ? { end: new Date(end).toISOString() } : {}),
+      durationMs: end === undefined ? 0 : end - start,
+      opened: { type: 'fixture.opened', seq: 2 * i + 1 },
+      ...(end !== undefined ? { closed: { type: 'fixture.closed', seq: 2 * i + 2 } } : {}),
+      ...(s.round !== undefined ? { round: s.round } : {}),
+      state: end === undefined ? 'open' : 'closed',
+    }
+  })
+  return {
+    slug: b.slug,
+    ticketId: b.ticket,
+    title: b.title,
+    kind: 'work',
+    ...(b.outcome === 'merged' ? { outcome: 'merged' } : {}),
+    createdAt: segments[0]!.start,
+    segments,
+  }
+})
+
+const WINDOW_DAYS: Record<WebAnalyticsQuery['window'], number | undefined> = {
+  '24h': 1,
+  '7d': 7,
+  '30d': 30,
+  all: undefined,
+}
+
+/** `GET /api/analytics` over the seeded builds: the filters select rows,
+ * the Gantt pages them 25 at a time, and the step table is computed from
+ * the selected rows' closed segments. Node builds: none. */
+export function analyticsFixture(query: WebAnalyticsQuery): WebAnalytics {
+  const days = WINDOW_DAYS[query.window]
+  const windowStart =
+    days === undefined ? Date.parse(analyticsRows.at(-1)!.segments[0]!.start) : NOW - days * DAY
+  const selected = analyticsRows.filter(
+    (row) =>
+      query.kind !== 'node' &&
+      (query.outcome === 'all' || row.outcome === 'merged') &&
+      Date.parse(row.segments.at(-1)!.end ?? new Date(NOW).toISOString()) >= windowStart,
+  )
+  const offset = query.page === undefined ? 0 : Number(query.page)
+  const next = offset + 25 < selected.length ? String(offset + 25) : null
+  const by = new Map<string, number[]>()
+  for (const row of selected)
+    for (const s of row.segments) {
+      if (s.state !== 'closed' || Date.parse(s.end!) < windowStart) continue
+      by.set(s.category, [...(by.get(s.category) ?? []), s.durationMs])
+    }
+  const durations: StepDurationStat[] = [...by].map(([step, ms]) => {
+    const s = stepStats(step, 'queued', ms)
+    return {
+      step,
+      count: s.count,
+      meanMs: s.mean,
+      p50Ms: s.p50,
+      p90Ms: s.p90,
+      p99Ms: s.p99,
+      totalMs: s.total,
+    }
+  })
+  return {
+    query,
+    position: 'fixture-position',
+    windowStart: new Date(windowStart).toISOString(),
+    durations,
+    gantt: { rows: selected.slice(offset, offset + 25), next },
+  }
 }

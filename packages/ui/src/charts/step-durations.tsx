@@ -107,25 +107,27 @@ export function StepDurations({
                 ))}
               </span>
             </td>
-            <td data-ansi="num" data-measure="per-run">
+            <td data-ansi="num" data-measure="per-run" data-label="Mean">
               {formatDuration(s.mean)}
             </td>
-            <td data-ansi="num" data-measure="per-run">
+            <td data-ansi="num" data-measure="per-run" data-label="P50">
               {formatDuration(s.p50)}
             </td>
-            <td data-ansi="num" data-measure="per-run">
+            <td data-ansi="num" data-measure="per-run" data-label="P90">
               {formatDuration(s.p90)}
             </td>
-            <td data-ansi="num" data-measure="per-run">
+            <td data-ansi="num" data-measure="per-run" data-label="P99">
               {formatDuration(s.p99)}
             </td>
-            <td data-ansi="num" data-measure="total">
+            <td data-ansi="num" data-measure="total" data-label="Total">
               {formatDuration(s.total)}
             </td>
-            <td data-ansi="num" data-measure="total">
+            <td data-ansi="num" data-measure="total" data-label="Share">
               {grand ? `${Math.round((s.total / grand) * 100)}%` : '–'}
             </td>
-            <td data-ansi="num">{s.count}</td>
+            <td data-ansi="num" data-label="Runs">
+              {s.count}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -133,9 +135,10 @@ export function StepDurations({
   )
 }
 
-/** The table's geometry for a known number of steps. */
+/** The table's geometry for a known number of steps. Its cells carry the
+ * same column labels, which phone width shows above each figure. */
 export function StepDurationsSkeleton({ rows }: { rows: number }) {
-  const cells = ['mean', 'p50', 'p90', 'p99', 'total', 'share', 'runs']
+  const cells = ['Mean', 'P50', 'P90', 'P99', 'Total', 'Share', 'Runs']
   return (
     <table data-ansi="step-durations" data-skeleton="">
       <caption>
@@ -167,7 +170,7 @@ export function StepDurationsSkeleton({ rows }: { rows: number }) {
               <span data-ansi="track" />
             </td>
             {cells.map((c) => (
-              <td key={c} data-ansi="num">
+              <td key={c} data-ansi="num" data-label={c}>
                 <Placeholder width="7ch" mono />
               </td>
             ))}

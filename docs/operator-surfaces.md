@@ -83,7 +83,11 @@ bun ab web
   - A build page (`/builds/<slug>`) shows an active or queued build's ticket, phase, steps and attention. A recently finished build's page shows only its outcome, kind and completion time, because the roster keeps no finished tickets. Every build page ends with that build's timeline, including builds the overview does not list.
   - Analytics (`/analytics`) shows the Gantt of builds and the step-duration table; see [Timeline and analytics](#timeline-and-analytics).
   - Pages update live and offer no actions.
-- Analytics and timelines are explicit reads from `/api/analytics` and `/api/builds/<slug>/timeline`. A request reads the change position, plus one rollup value, one listing page and at most 25 saved timelines when its answer is not already in memory. A page fetches again only when the change position moves, never on a timer.
+- Analytics and timelines are explicit reads from `/api/analytics` and `/api/builds/<slug>/timeline`, never polled:
+  - A page fetches on load and on every filter, window or page change. For the same query, it fetches again only when the change position moves.
+  - Every request reads the change position. When the position has moved, it also reads the changed-builds feed, and the builds the feed names leave the in-memory timeline cache.
+  - An analytics answer that is not in memory reads one rollup value, one listing page and at most 25 saved timelines (only the builds not in memory).
+  - A build timeline that is not in memory reads the build and its saved timeline.
 
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
