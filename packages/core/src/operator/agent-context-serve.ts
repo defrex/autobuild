@@ -397,12 +397,17 @@ function mappingLines(text: string): string[] {
 
 function skillPreamble(view: ContextView, file: ContextFile, text: string): string {
   const instructions = view.instructions.map((entry) => `\`${entry.path}\``)
+  const mapping = mappingLines(text)
   return [
     PREAMBLE_HEAD,
     `Skill \`${file.skill}\` (\`${file.path}\`): ${sourceLine(view)}.`,
     'You are connected over MCP. You have no shell and no `ab` CLI: act through the operator tools.',
-    ...mappingLines(text),
-    'A command marked for the sandbox runs there: `sandbox.open`, poll `sandbox.status` until ready, then `sandbox.exec`.',
+    ...mapping,
+    ...(mapping.some((line) => line.includes('inside the sandbox'))
+      ? [
+          'A command marked for the sandbox runs there: `sandbox.open`, poll `sandbox.status` until ready, then `sandbox.exec`.',
+        ]
+      : []),
     view.source === 'captured'
       ? `Where this repository's agent instructions conflict with this skill, the instructions win for this repository: ${instructions.length > 0 ? instructions.join(', ') : 'none captured'}.`
       : "Where this repository's agent instructions conflict with this skill, the instructions win for this repository: none captured.",
