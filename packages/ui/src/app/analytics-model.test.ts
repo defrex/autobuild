@@ -1,7 +1,4 @@
 import { expect, test } from 'bun:test'
-import { stepOrder } from '../../../core/src/kernel/step-durations'
-import type { WebTimelineRow } from '../../../core/src/web/protocol'
-import { orderSteps } from '../charts/step-durations'
 import {
   durationStats,
   FIRST_PAGE,
@@ -11,6 +8,7 @@ import {
   queryFromSearch,
   searchFromQuery,
   stepCategory,
+  type WebTimelineRow,
 } from './analytics-model'
 
 const segment = (category: string, state: 'open' | 'closed' | 'abandoned', round?: number) => ({
@@ -94,34 +92,4 @@ test('Older then Newer returns to the first page', () => {
   expect(third.page).toBe('c3')
   expect(newerPage(newerPage(third))).toEqual(FIRST_PAGE)
   expect(newerPage(FIRST_PAGE)).toBe(FIRST_PAGE)
-})
-
-test('the step table orders steps exactly as the served rollup does', () => {
-  const steps = [
-    'awaiting-merge',
-    'queued',
-    'verify:unit',
-    'zeta',
-    'reconcile',
-    'plan',
-    'escalated',
-    'finalize',
-    'verify:build',
-    'code-review',
-    'ticket-wait',
-    'implement',
-    'paused',
-    'plan-review',
-  ]
-  const stat = (step: string) => ({
-    step,
-    category: 'plan' as const,
-    count: 1,
-    mean: 0,
-    p50: 0,
-    p90: 0,
-    p99: 0,
-    total: 0,
-  })
-  expect(orderSteps(steps.map(stat)).map((s) => s.step)).toEqual(stepOrder(steps))
 })

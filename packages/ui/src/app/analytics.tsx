@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { WebAnalytics } from '../../../core/src/web/protocol'
 import { Gantt, type GanttAxis, GanttSkeleton } from '../charts/gantt'
 import { type DurationMode, StepDurations, StepDurationsSkeleton } from '../charts/step-durations'
@@ -60,9 +60,11 @@ export interface AnalyticsView {
   mode: DurationMode
   now: number
   expanded: string[]
+  /** Changes apply to the latest state, never to the closure a shown block
+   * captured, so a control clicked mid-transition keeps the other filters. */
   on: {
-    filters(next: AnalyticsFilters): void
-    page(next: PageCursor): void
+    filters(patch: Partial<AnalyticsFilters>): void
+    page(change: (cursor: PageCursor) => PageCursor): void
     axis(next: GanttAxis): void
     mode(next: DurationMode): void
     expanded(next: string[]): void
@@ -115,7 +117,9 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
     {
       key: 'controls',
       node: (
-        <div data-app="controls">
+        // A slot: a choice's moving indicator is the control's own feedback,
+        // never a reason to fade the page.
+        <div data-app="controls" data-flow-slot="">
           {control(
             'Window',
             filters.window,
@@ -125,7 +129,7 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
               { value: '30d', label: '30 days' },
               { value: 'all', label: 'All retained' },
             ],
-            (window) => on.filters({ ...filters, window }),
+            (window) => on.filters({ window }),
           )}
           {control(
             'Outcome',
@@ -134,7 +138,7 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
               { value: 'merged', label: 'Merged' },
               { value: 'all', label: 'All' },
             ],
-            (outcome) => on.filters({ ...filters, outcome }),
+            (outcome) => on.filters({ outcome }),
           )}
           {control(
             'Kind',
@@ -144,7 +148,7 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
               { value: 'node', label: 'Node' },
               { value: 'all', label: 'All' },
             ],
-            (kind) => on.filters({ ...filters, kind }),
+            (kind) => on.filters({ kind }),
           )}
           {control(
             'Time axis',
@@ -174,17 +178,14 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
     {
       key: 'pager',
       node: (
-        <p data-app="pager">
+        <p data-app="pager" data-flow-slot="">
           <span data-ansi="slack">Most recently active first, page {pageNumber}</span>
           <span data-app="pager-actions">
-            {pagerAction(
-              'Newer',
-              cursor.stack.length > 0 ? () => on.page(newerPage(cursor)) : undefined,
-            )}
+            {pagerAction('Newer', cursor.stack.length > 0 ? () => on.page(newerPage) : undefined)}
             {pagerAction(
               'Older',
               view.current && data?.gantt.next != null
-                ? () => on.page(olderPage(cursor, data.gantt.next!))
+                ? () => on.page((c) => olderPage(c, data.gantt.next!))
                 : undefined,
             )}
           </span>
@@ -266,6 +267,12 @@ export function AnalyticsPage({ position }: { position: string | undefined }) {
   const [axis, setAxis] = useState<GanttAxis>('clock')
   const [mode, setMode] = useState<DurationMode>('per-run')
   const [expanded, setExpanded] = useState<string[]>([])
+  // The URL keeps the filters, so a reload shows the same question.
+  useEffect(() => {
+    const search = searchFromQuery(filters, location.search)
+    if (search !== location.search)
+      history.replaceState(history.state, '', `${location.pathname}${search}`)
+  }, [filters])
   const url = analyticsUrl(filters, cursor.page)
   const state = useApi<WebAnalytics>(url, position)
   const live = state.data?.gantt.rows.some(timelineLive) ?? false
@@ -283,14 +290,9 @@ export function AnalyticsPage({ position }: { position: string | undefined }) {
         now,
         expanded,
         on: {
-          filters: (next) => {
-            setFilters(next)
+          filters: (patch) => {
+            setFilters((previous) => ({ ...previous, ...patch }))
             setCursor(FIRST_PAGE)
-            history.replaceState(
-              history.state,
-              '',
-              `${location.pathname}${searchFromQuery(next, location.search)}`,
-            )
           },
           page: setCursor,
           axis: setAxis,

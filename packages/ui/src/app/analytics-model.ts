@@ -1,5 +1,11 @@
 import type { StepDurationStat } from '../../../core/src/kernel/step-durations'
-import type { WebAnalyticsQuery, WebTimelineRow } from '../../../core/src/web/protocol'
+import type {
+  WebAnalytics,
+  WebAnalyticsQuery,
+  WebTimelineRow,
+} from '../../../core/src/web/protocol'
+
+export type { WebAnalytics, WebTimelineRow }
 import type { BuildTimeline, Segment, StepStats } from '../charts/model'
 import { type SegmentCategory, segmentStyle } from '../tokens'
 

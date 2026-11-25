@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { WebAnalytics } from '../../../core/src/web/protocol'
 import { Masked } from '../components/motion'
 import { type AnalyticsView, analyticsBlocks, GANTT_ROWS } from './analytics'
-import { FIRST_PAGE, olderPage, timelineLive } from './analytics-model'
+import { FIRST_PAGE, olderPage, timelineLive, type WebAnalytics } from './analytics-model'
 import { BuildPage, buildPageBlocks, buildPageFetch, type TimelineState } from './build-page'
 import { fallbackFrame } from './fallback'
 import {
