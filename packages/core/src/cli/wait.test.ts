@@ -4,6 +4,7 @@
  * in `wait.integration.test.ts`.
  */
 import { describe, expect, test } from 'bun:test'
+import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import { currentDeferralObservationReducer } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
@@ -167,4 +168,41 @@ test("a node's current upstream rewrite satisfies attention after restart and cl
   })
   facts = (await readBuildFacts(store, 'b1')).value
   expect(matchState(conditions, facts.state)).toBeNull()
+})
+
+test('wait attention wakes on a node rewrite once per episode and never on a leaf rewrite', () => {
+  const [A, B, C] = ['a', 'b', 'c'].map((c) => c.repeat(40))
+  const at = (seq: number, type: string, payload: unknown) =>
+    ({
+      build: 'b',
+      seq,
+      ts: '2026-11-25T00:00:00.000Z',
+      actor: DISPATCHER,
+      type,
+      payload,
+    }) as AbEvent
+  const created = (kind?: 'node') =>
+    at(1, 'build.created', {
+      ticket: { source: 'file', id: 'A' },
+      repo: '/r',
+      baseBranch: 'main',
+      ...(kind ? { kind } : {}),
+    })
+  const first = at(2, 'target.rewritten', { branch: 'main', previousSha: A, sha: B })
+  const repeat = at(3, 'target.rewritten', { branch: 'main', previousSha: A, sha: C })
+  const { conditions } = parseConditions(['attention'], [])
+  const matched = (log: AbEvent[]) =>
+    matchEvent(log.at(-1)!, conditions, [], {
+      state: reduceBuild(log),
+      deferral: currentDeferralObservationReducer.reduce(log),
+    })
+  expect(matched([created('node'), first])).toBe('attention')
+  expect(matched([created(), first])).toBeNull()
+  const nodeRepeat = [created('node'), first, repeat]
+  expect(
+    matchEvent(repeat, conditions, [], {
+      state: { ...reduceBuild(nodeRepeat), targetRewrite: undefined },
+      deferral: currentDeferralObservationReducer.reduce(nodeRepeat),
+    }),
+  ).toBeNull()
 })

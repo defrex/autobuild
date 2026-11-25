@@ -35,7 +35,9 @@ import {
 import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
-import { logIndexReducer } from './log-index'
+import { indexLog, logIndexReducer } from './log-index'
+import { acceptedRewriteBoundary } from './leaf-restack-base'
+import { openPublishingOwner } from './target-rewrite-recovery'
 import { activeVerifyStage, leafVerifyCycleInputs } from './verify-stages'
 
 const BUILD = 'auth-rate-limit'
@@ -4890,5 +4892,234 @@ describe('decideNext: a reopened settled leaf', () => {
         kind: 'acknowledge',
         command: 'abort',
       })
+  })
+})
+
+describe('decideNext: a leaf on a rewritten target (SPEC §7.4)', () => {
+  const A = 'a'.repeat(40)
+  const B = 'b'.repeat(40)
+  const C = 'c'.repeat(40)
+  const rewritten = (previousSha = A, sha = B) =>
+    ev('target.rewritten', { branch: 'main', previousSha, sha }, DISPATCHER)
+  const raise = (id: string, phase: PayloadInput<'escalation.raised'>['phase'] = 'setup') =>
+    ev(
+      'escalation.raised',
+      { id, phase, source: 'policy', policyCause: 'target-rewritten', question: 'q' },
+      KERNEL,
+    )
+  const answer = (id: string, resolution: 'accept-target' | 'retry') =>
+    ev('escalation.answered', { id, answer: 'a', resolution }, humanActor('aron'))
+  const prepared = () =>
+    ev('target.rewrite-reprovision-prepared', {
+      branch: 'main',
+      previousSha: A,
+      base: A,
+      from: A,
+      sha: B,
+    })
+  const accepted = (pendingLocal?: PayloadInput<'target.rewrite-recovered'>['pendingLocal']) =>
+    ev('target.rewrite-recovered', {
+      branch: 'main',
+      previousSha: A,
+      sha: B,
+      base: A,
+      recovery: 'accepted',
+      escalation: 'e1',
+      ...(pendingLocal ? { pendingLocal } : {}),
+    })
+  const seqOf = (log: AbEvent[], type: AbEvent['type']) => log.findLast((e) => e.type === type)!.seq
+
+  test('the episode decides recover, waits on its open escalation and accepts on accept-target', () => {
+    const base = [...prelude(), ...planApproved(), rewritten()]
+    expect(decide(base)).toEqual({ kind: 'recover-target-rewrite' })
+    // A repeated rewrite of the same baseline stays the same episode.
+    expect(decide([...base, raise('e1'), rewritten(A, C)])).toEqual(wait('target-rewritten'))
+    expect(decide([...base, raise('e1'), answer('e1', 'accept-target')])).toEqual({
+      kind: 'accept-target-rewrite',
+      escalation: 'e1',
+    })
+    // Any other answer re-classifies once.
+    expect(decide([...base, raise('e1'), answer('e1', 'retry')])).toEqual({
+      kind: 'recover-target-rewrite',
+    })
+  })
+
+  test("an earlier episode's accept does not count, and a node keeps waiting", () => {
+    const earlier = [
+      ...prelude(),
+      rewritten(),
+      raise('e1'),
+      answer('e1', 'accept-target'),
+      ev('target.moved', { branch: 'main', sha: A }, DISPATCHER),
+      rewritten(A, C),
+    ]
+    expect(decide(earlier)).toEqual({ kind: 'recover-target-rewrite' })
+    const node = toLog([
+      ev('build.created', {
+        ticket: { source: 'file', id: 'N' },
+        repo: 'defrex/app',
+        baseBranch: 'main',
+        kind: 'node',
+      }),
+      rewritten(),
+    ])
+    expect(decideNext(node, config)).toEqual(wait('target-rewritten'))
+  })
+
+  test('an open no-work reset is completed before phase work even after the rewrite cleared', () => {
+    const base = [
+      ...prelude(),
+      rewritten(),
+      prepared(),
+      ev('target.moved', { branch: 'main', sha: A }, DISPATCHER),
+    ]
+    expect(reduceBuild(toLog(base)).targetRewrite).toBeUndefined()
+    expect(decide(base)).toEqual({ kind: 'recover-target-rewrite' })
+    expect(decide([...base, raise('e1')])).toEqual(wait('target-rewritten'))
+    expect(decide([...base, raise('e1'), answer('e1', 'accept-target')])).toEqual({
+      kind: 'accept-target-rewrite',
+      escalation: 'e1',
+    })
+    // The completion clears the preparation; the plan loop resumes.
+    expect(
+      decide([
+        ...base,
+        ev('target.rewrite-recovered', {
+          branch: 'main',
+          previousSha: A,
+          sha: B,
+          base: A,
+          recovery: 'reprovisioned',
+        }),
+      ]),
+    ).toEqual(runPhase('plan', 1))
+  })
+
+  test('an accept on a verified leaf restacks onto the target and re-verifies from the first step', () => {
+    const verified = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyAllPass(1),
+      rewritten(),
+      raise('e1'),
+      answer('e1', 'accept-target'),
+      accepted(),
+    ]
+    const log = toLog(verified)
+    const boundary = seqOf(log, 'target.rewrite-recovered')
+    expect(decideNext(log, config)).toEqual({
+      kind: 'restack',
+      trigger: 'verify-entry',
+      cycle: boundary,
+    })
+    const restacked = toLog([
+      ...verified,
+      ev('restack.completed', { ...leafTransaction, cycle: boundary, headSha: 'f'.repeat(40) }),
+    ])
+    expect(decideNextFromFacts(reduceBuild(restacked), indexLog(restacked), config)).toEqual({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun tsc --noEmit',
+      attempt: 2,
+    })
+    expect(reduceBuild(restacked).verify.cycleSince).toBe(boundary)
+  })
+
+  test('pending local work withholds the boundary until its owner publishes', () => {
+    const failed = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, false),
+      ev('implement.started', { round: 2 }),
+      rewritten(),
+      raise('e1', 'implement'),
+      answer('e1', 'accept-target'),
+      accepted({ head: C, owner: { kind: 'phase', phase: 'implement' } }),
+    ]
+    // The pending implement round resumes; no early restack.
+    expect(decide(failed)).toEqual(runPhase('implement', 2))
+    const published = toLog([
+      ...failed,
+      ev('implement.completed', {
+        round: 2,
+        commits: { base: A, head: C },
+        artifact: { kind: 'implement-notes', rev: 1 },
+      }),
+    ])
+    const completedAt = seqOf(published, 'implement.completed')
+    expect(acceptedRewriteBoundary(indexLog(published))).toBe(completedAt)
+    expect(acceptedRewriteBoundary(indexLog(toLog(failed)))).toBeUndefined()
+    expect(reduceBuild(published).verify.cycleSince).toBe(completedAt)
+  })
+
+  test('an interrupted finalize post-step owns its local commit, then restacks', () => {
+    const steps = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyAllPass(1),
+      ev('finalize.started', {}),
+      ev('finalize.completed', { pr: PR }),
+      ev('finalize.step-started', { step: 'release-notes' }),
+    ]
+    const startedSeq = toLog(steps).length
+    const owned = [
+      ...steps,
+      rewritten(),
+      raise('e1', 'finalize'),
+      answer('e1', 'accept-target'),
+      accepted({ head: C, owner: { kind: 'finalize-step', step: 'release-notes', startedSeq } }),
+    ]
+    const log = toLog(owned)
+    expect(openPublishingOwner(reduceBuild(log), indexLog(log))).toEqual({
+      kind: 'finalize-step',
+      step: 'release-notes',
+      startedSeq,
+    })
+    expect(decideNext(log, config)).toEqual({
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'ab-release-notes' },
+    })
+    const done = toLog([
+      ...owned,
+      ev('finalize.step-completed', { step: 'release-notes', ok: true, headSha: C }),
+    ])
+    expect(decideNext(done, config)).toEqual({
+      kind: 'restack',
+      trigger: 'verify-entry',
+      cycle: seqOf(done, 'finalize.step-completed'),
+    })
+  })
+
+  test('a target-rewrite raise never suppresses another policy guard for the same phase', () => {
+    const exhausted = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, false),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'approve'),
+      ...verifyRun('types', 2, false),
+      ...implementRound(3, 'sha-r3'),
+      ...codeReview(3, 'approve'),
+      ...verifyRun('types', 3, false),
+      rewritten(),
+      raise('e1', 'verify:types'),
+      answer('e1', 'accept-target'),
+      accepted(),
+    ]
+    expect(decide(exhausted)).toMatchObject({
+      kind: 'raise-escalation',
+      source: 'policy',
+      policyCause: 'verify-failure-limit',
+      phase: 'verify:types',
+    })
   })
 })
