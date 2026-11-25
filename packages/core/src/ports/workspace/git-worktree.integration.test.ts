@@ -939,17 +939,34 @@ describe('GitWorktreeProvider fresh first provision (#1261)', () => {
     expect(block).toContain('locked')
   })
 
-  test('a worktree git refuses to move falls back to rename plus repair', async () => {
+  test('a worktree git refuses to move falls back to rename plus repair, surviving an interruption and a prune', async () => {
     const old = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
     await run(['git', 'worktree', 'add', '-q', '-b', branch, own, old], repo)
     await writeFile(join(own, 'kept.txt'), 'kept\n')
-    const faulty = new GitWorktreeProvider({
-      root,
-      exec: failOnce(
-        (cmd) => has(cmd, 'worktree', 'move'),
-        'fatal: working trees containing submodules cannot be moved or removed',
-      ),
-    })
+    await writeFile(join(own, 'staged.txt'), 'staged only\n')
+    await run(['git', 'add', 'staged.txt'], own)
+    // Git always refuses to move this worktree; the first repair fails.
+    let repairFailures = 1
+    const exec: Exec = async (cmd, opts) => {
+      if (has(cmd, 'worktree', 'move')) {
+        return {
+          stdout: '',
+          stderr: 'fatal: working trees containing submodules cannot be moved or removed',
+          exitCode: 128,
+        }
+      }
+      if (has(cmd, 'worktree', 'repair') && repairFailures-- > 0) {
+        return { stdout: '', stderr: 'injected failure', exitCode: 1 }
+      }
+      return spawnExec(cmd, { ...opts })
+    }
+    const faulty = new GitWorktreeProvider({ root, exec })
+    await expect(
+      faulty.provision({ repo, baseBranch: 'main', branch, fresh: { owner: 'o1' } }),
+    ).rejects.toThrow(/injected failure/)
+    // Another build's provision or release prunes in between.
+    await run(['git', 'worktree', 'prune'], repo)
+
     const handle = await faulty.provision({
       repo,
       baseBranch: 'main',
@@ -960,7 +977,11 @@ describe('GitWorktreeProvider fresh first provision (#1261)', () => {
     const displaced = join(await realpath(root), '.displaced', 'ab-x', old)
     expect(await registrationCount(repo, displaced)).toBe(1)
     expect(await readFile(join(displaced, 'kept.txt'), 'utf8')).toBe('kept\n')
+    expect(await run(['git', 'show', ':staged.txt'], displaced)).toBe('staged only')
     expect(await run(['git', 'rev-parse', 'HEAD'], displaced)).toBe(old)
+    const list = await run(['git', 'worktree', 'list', '--porcelain'], repo)
+    const block = list.split('\n\n').find((entry) => entry.startsWith(`worktree ${displaced}\n`))
+    expect(block).not.toContain('locked')
   })
 
   test('a seam that drops stdin fails loudly instead of committing an empty transaction', async () => {

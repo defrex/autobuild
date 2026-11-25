@@ -10,7 +10,13 @@ import { publishBranch, remoteBranchHead, refreshBranchCache } from '../forge/gi
  */
 import { lstat, mkdir, realpath, rename } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
-import { readFile as fsReadFile, rm, stat, writeFile as fsWriteFile } from 'node:fs/promises'
+import {
+  readdir,
+  readFile as fsReadFile,
+  rm,
+  stat,
+  writeFile as fsWriteFile,
+} from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import {
@@ -187,6 +193,22 @@ interface WorktreeSelection {
   /** Every registration attached to the requested branch anywhere, plus a
    * detached registration at one of its deterministic paths. */
   holders: WorktreeEntry[]
+}
+
+/** Foreign registrations set aside at first provision live under
+ * `<chosen root>/.displaced/<leaf>/<head>`. */
+const DISPLACED_DIR = '.displaced'
+/** The lock reason, and the admin-directory record, of a relocation in flight. */
+const DISPLACEMENT_LOCK = 'autobuild: relocating a displaced worktree'
+const RELOCATION_RECORD = 'autobuild-relocation'
+
+async function readOptional(path: string): Promise<string | undefined> {
+  try {
+    return await fsReadFile(path, 'utf8')
+  } catch (error) {
+    if (missing(error)) return undefined
+    throw error
+  }
 }
 
 /** Where fresh-provision creation receipts for `branch` live. */
@@ -550,13 +572,15 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     const { repo, baseBranch, branch } = opts
     // Fails with git's stderr for a missing path or a non-repo directory.
     await this.gitOrThrow(repo, ['rev-parse', '--git-dir'])
-    // Drop registrations whose directories were deleted out-of-band, so
-    // re-provision after a hand-cleaned sandbox still succeeds.
-    await this.gitOrThrow(repo, ['worktree', 'prune'])
-
     const layout = await this.layout(repo)
     const leaf = sanitizeBranch(branch)
     const chosenDir = await canonicalize(layout.chosen)
+    // Finish an interrupted rename-based displacement before pruning, so its
+    // registration (index, merge state) is never mistaken for a deleted one.
+    await this.recoverDisplaced(repo, join(chosenDir, DISPLACED_DIR, leaf))
+    // Drop registrations whose directories were deleted out-of-band, so
+    // re-provision after a hand-cleaned sandbox still succeeds.
+    await this.gitOrThrow(repo, ['worktree', 'prune'])
     let worktreePath = join(chosenDir, leaf)
     const roots = layout.legacy !== undefined ? [chosenDir, layout.legacy] : [chosenDir]
     const worktrees = await this.findWorktrees(
@@ -834,7 +858,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         await this.moveAside(
           repo,
           holder.path,
-          join(chosenDir, '.displaced', leaf, head ?? 'unknown'),
+          join(chosenDir, DISPLACED_DIR, leaf, head ?? 'unknown'),
         )
       }
     }
@@ -914,12 +938,71 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
     await mkdir(dirname(dest), { recursive: true })
     const moved = await this.git(repo, ['worktree', 'move', '--force', '--force', from, dest])
-    if (moved.exitCode === 0) return
+    if (moved.exitCode === 0) {
+      // An earlier interrupted fallback may have left its lock and record.
+      await this.recoverDisplaced(repo, dirname(dest))
+      return
+    }
     if (!/submodule/i.test(moved.stderr)) {
       throw new GitError(['-C', repo, 'worktree', 'move', '--force', '--force', from, dest], moved)
     }
+    // A rename and the repair that follows are two steps. Until the repair
+    // lands, the registration points at a missing path and any `worktree
+    // prune` (this provider's or another build's) would delete its admin
+    // directory, index and merge state. Lock it and leave a relocation record
+    // first; `recoverDisplaced` finishes an interrupted relocation.
+    const admin = (await this.gitOrThrow(from, ['rev-parse', '--absolute-git-dir'])).stdout.trim()
+    const lock = await readOptional(join(admin, 'locked'))
+    const ownLock = lock === undefined || lock.trim() === DISPLACEMENT_LOCK
+    if (lock === undefined) {
+      await this.gitOrThrow(repo, ['worktree', 'lock', '--reason', DISPLACEMENT_LOCK, from])
+    }
+    await fsWriteFile(join(admin, RELOCATION_RECORD), JSON.stringify({ dest, unlock: ownLock }))
     await rename(from, dest)
+    await this.finishRelocation(repo, dest, admin, ownLock)
+  }
+
+  /** Repair the moved registration, drop this provider's lock, then the record. */
+  private async finishRelocation(
+    repo: string,
+    dest: string,
+    admin: string,
+    unlock: boolean,
+  ): Promise<void> {
     await this.gitOrThrow(repo, ['worktree', 'repair', dest])
+    if (unlock && (await readOptional(join(admin, 'locked')))?.trim() === DISPLACEMENT_LOCK) {
+      await this.gitOrThrow(repo, ['worktree', 'unlock', dest])
+    }
+    await rm(join(admin, RELOCATION_RECORD), { force: true })
+  }
+
+  /** Finish every relocation under `dir` that `moveAside` started and did not
+   * complete: only a copy whose admin directory still holds a record naming
+   * exactly that copy is repaired. */
+  private async recoverDisplaced(repo: string, dir: string): Promise<void> {
+    let names: string[]
+    try {
+      names = await readdir(dir)
+    } catch (error) {
+      if (missing(error)) return
+      throw error
+    }
+    for (const name of names) {
+      const path = join(dir, name)
+      const link = await readOptional(join(path, '.git'))
+      const admin = link?.match(/^gitdir: (.+)$/m)?.[1]?.trim()
+      if (admin === undefined) continue
+      const raw = await readOptional(join(admin, RELOCATION_RECORD))
+      if (raw === undefined) continue
+      let record: { dest?: unknown; unlock?: unknown }
+      try {
+        record = JSON.parse(raw) as typeof record
+      } catch {
+        continue
+      }
+      if (record.dest !== path) continue
+      await this.finishRelocation(repo, path, admin, record.unlock === true)
+    }
   }
 
   /** Discover only registrations relevant to the requested branch. Attached
