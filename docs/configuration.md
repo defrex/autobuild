@@ -3992,7 +3992,7 @@ Dispatcher releases older than the hosted default deposit an explicit
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 - **Local override:** Committed only: set in autobuild.toml.
 
-**Description:** Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it.
+**Description:** Minutes without a sandbox tool call after which the operator sandbox stops, keeping its snapshot; a later sandbox.open resumes it. On vercel-sandbox the provider's own timer stops it, and every tool call extends that timer, so no dispatcher tick is needed; the dispatcher tick's janitor also stops an environment whose journal evidence is older, so it is no longer the only idle stop.
 
 **Constraints:** safe integer; > 0
 
@@ -4034,14 +4034,26 @@ provisioned.
 Lifecycle:
 
 - **Open, then poll.** `sandbox.open` returns at once and provisions or
-  resumes in the background; poll the read-only `sandbox.status` until it
-  reports `ready`.
+  resumes in the background; poll `sandbox.status` until it reports `ready`.
+  Status is a bounded poll whose only write records a finished background
+  outcome, once.
 - **Not ready refuses.** Until then other sandbox tools refuse with
   `sandbox-not-ready`, naming the `state`.
 - **Close and refresh keep work.** `sandbox.close` stops the environment and
   keeps the checkout; `sandbox.refresh` fast-forwards a clean checkout to the
   current base head and refuses a dirty or diverged one.
 - **Reset discards it.** `sandbox.reset` re-provisions in the background.
+- **Idle stops.** On vercel-sandbox the provider's timer stops an idle
+  environment after `idleMinutes`, and every tool call extends it; the
+  dispatcher janitor is a second stop. A stopped environment refuses with
+  `sandbox-not-ready` (`stopped`) until `sandbox.open` resumes it intact. The
+  slow provisioning tail (dependencies, runtimes, setup) runs inside the
+  sandbox, not in the serving request.
+- **Failures are kept until recorded.** A failed environment is stopped by its
+  timer or by `sandbox.close`, never discarded, until the next `sandbox.open`
+  records its failure and re-provisions, or until `sandbox.reset`. A failure
+  inside a stopped sandbox surfaces through `sandbox.open`, because
+  `sandbox.status` never resumes a sandbox.
 - A provider without the lifecycle answers `sandbox-unsupported`.
 
 Tool bounds: `sandbox.exec` waits at most 300 seconds; stdout and stderr are

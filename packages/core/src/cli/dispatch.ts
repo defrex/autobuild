@@ -755,6 +755,7 @@ async function defaultWire(
     sandboxSetupCommand: config.commands.setup,
     sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
+    sandboxIdleMinutes: config.orchestrator.sandbox.idleMinutes,
     orchestratorSandboxEnabled: orchestratorEnabled(config, opts.orchestratorHost ?? 'local'),
     ...providerSeams,
     ...(refusedArchive !== undefined ? { refusedArchive } : {}),

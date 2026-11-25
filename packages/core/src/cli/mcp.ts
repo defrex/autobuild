@@ -251,6 +251,7 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
           sandboxSetupCommand: mcpConfig.commands.setup,
           sandboxRoot: join(context.localStateRoot, 'orchestrator-sandboxes'),
           sandboxEnvironmentVariables: mcpConfig.orchestrator.sandbox.environmentVariables,
+          sandboxIdleMinutes: mcpConfig.orchestrator.sandbox.idleMinutes,
           orchestratorSandboxEnabled: true,
         })
         // The forge is needed only for sandbox.publish; a construction

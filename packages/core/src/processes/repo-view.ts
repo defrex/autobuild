@@ -570,6 +570,19 @@ export class RepoViewStore implements BuildStore {
     }
     return result
   }
+  async appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null> {
+    const result = await this.backing.appendRepoIfCurrent(repo, expectedSeq, event)
+    if (result === null) return null
+    if (repo === this.repo) {
+      this.foldJournalAppend(result as RepositoryEvent)
+      return this.refreshCommitted(result)
+    }
+    return result
+  }
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],

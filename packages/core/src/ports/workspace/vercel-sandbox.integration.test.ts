@@ -23,7 +23,12 @@ import {
 } from './distribution-archive'
 import { spawnExec, type Exec } from './git-worktree'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
-import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
+import {
+  SANDBOX_FORBIDDEN_ENV,
+  SANDBOX_INTERRUPTED_MESSAGE,
+  SANDBOX_REFRESH_DIRTY_MESSAGE,
+  SandboxOperationError,
+} from './operator-sandbox'
 import {
   sandboxEnvironmentName,
   VERCEL_AUTOBUILD_PATH,
@@ -33,6 +38,9 @@ import {
   VERCEL_BUN_VERSION,
   VERCEL_DISTRIBUTION_VERSION_MARKER,
   VERCEL_LIFETIME_MARGIN_MS,
+  VERCEL_OPERATOR_PROBE_SCRIPT,
+  VERCEL_OPERATOR_PROVISION_DIR,
+  parseVercelOperatorProbe,
   VERCEL_PROVISIONED_MARKER,
   VERCEL_PROVISION_ESTIMATE_MS,
   VERCEL_WORKSPACE_PATH,
@@ -56,6 +64,12 @@ import { agentActor, DISPATCHER } from '../../events/envelope'
 import { sequentialIds } from '../../ids'
 import { FakeForge } from '../forge/fake'
 import { MemoryBuildStore } from '../../store/memory'
+import {
+  createOperatorSandboxService,
+  SANDBOX_ORPHAN_MESSAGE,
+  SANDBOX_PROVISION_ORPHAN_MS,
+  SANDBOX_UNRECORDED_FAILURE_MESSAGE,
+} from '../../operator/sandbox'
 
 const SHA = 'a'.repeat(40)
 
@@ -129,6 +143,96 @@ class FakeSandbox implements VercelSandboxHandle {
    * creates one, exactly as the provider's SDK contract describes. */
   readonly snapshots: VercelSnapshotInfo[] = []
 
+  // ── Operator provisioning guest state (#1246) ──
+  /** Every `update` carrying a timeout, in ms. */
+  readonly timeoutUpdates: number[] = []
+  /** Every `extendTimeout` duration, in ms. */
+  readonly extensions: number[] = []
+  extendFailure: Error | undefined
+  /** The guest `failed` record; written by a host failure command or a
+   * failing tail. */
+  failedContent: string | undefined
+  /** The provisioned marker's content (`provisioned` is its existence). */
+  markerContent = ''
+  /** Whether the detached tail is alive (`running`) when probed. */
+  tailRunning = false
+  /** A runtime refresh in progress (`resuming` record), by age. */
+  resumingAgeSeconds: number | undefined
+  /** When set, a matching command waits for the returned promise first: a
+   * slow guest step another process can observe meanwhile. */
+  commandGate: ((params: Record<string, unknown>) => Promise<void> | undefined) | undefined
+  /** The `host` heartbeat: its step and age in guest seconds. */
+  hostHeartbeat: { step: string; ageSeconds: number } | undefined
+  /** The tail's log, read back by a failed probe. */
+  logTail = ''
+  /** How the next launched tail ends: completes (default), keeps running,
+   * or fails at the named stage with `logTail` as its output. */
+  tailOutcome: 'complete' | 'running' | { failAt: string } = 'complete'
+  tailLaunches = 0
+  probes = 0
+  /** When set, any guest command on a session that is not running fails
+   * the test: a guest command would resume a persistent sandbox. */
+  guardStopped = false
+  /** When set, a guest command on a stopped session resumes it, as the
+   * SDK's persistent sandboxes do. */
+  autoResume = false
+  /** The command count at each `update`: an update before any guest
+   * command of a resume shows the idle timeout applied first. */
+  readonly updateAtCommand: number[] = []
+  /** Answers a `git` command before the defaults (refresh's guest git). */
+  gitResponder:
+    | ((args: string[]) => { exitCode: number; stdout?: string; stderr?: string } | undefined)
+    | undefined
+
+  /** The probe's output for the current guest state, in the real script's
+   * precedence: failed, marker, running tail, host heartbeat, none. */
+  private probeOutput(): string {
+    const b64 = (value: string) => Buffer.from(value).toString('base64')
+    if (this.failedContent !== undefined)
+      return `result failed\nfailed ${b64(this.failedContent)}\nlog ${b64(this.logTail)}\n`
+    if (this.resumingAgeSeconds !== undefined)
+      return `result resuming\nresuming 1000\nnow ${1000 + this.resumingAgeSeconds}\n`
+    if (this.provisioned)
+      return [
+        'result ready',
+        `marker ${b64(this.markerContent)}`,
+        `head ${this.head ?? ''}`,
+        `bun ${this.bunVersion ?? ''}`,
+        `distribution ${this.distributionVersion ?? ''}`,
+        '',
+      ].join('\n')
+    if (this.tailRunning) return 'result running\nstage dependencies\n'
+    if (this.hostHeartbeat !== undefined)
+      return `result host\nhost ${this.hostHeartbeat.step} 1000\nnow ${1000 + this.hostHeartbeat.ageSeconds}\n`
+    return 'result none\n'
+  }
+
+  /** The base head the written marker stage records. */
+  private writtenMarker(): string {
+    const stage = [...this.writes].reverse().find((write) => write.path.endsWith('-marker.sh'))
+    const match = /\{"baseSha":"[0-9a-f]+"\}/.exec(
+      Buffer.from(stage?.content ?? new Uint8Array()).toString('utf8'),
+    )
+    return match?.[0] ?? ''
+  }
+
+  /** Reset the guest state a fresh create starts from. */
+  resetGuest(): void {
+    this.failedContent = undefined
+    this.resumingAgeSeconds = undefined
+    this.markerContent = ''
+    this.tailRunning = false
+    this.hostHeartbeat = undefined
+    this.logTail = ''
+    this.provisioned = false
+  }
+
+  async extendTimeout(duration: number) {
+    this.extensions.push(duration)
+    if (this.extendFailure !== undefined) throw this.extendFailure
+    if (this.sessionExpiresAt !== undefined) this.sessionExpiresAt += duration
+  }
+
   currentSession() {
     return { sessionId: 'session-1' }
   }
@@ -182,7 +286,72 @@ class FakeSandbox implements VercelSandboxHandle {
   }
 
   async runCommand(params: Record<string, unknown>) {
+    if (this.guardStopped && this.sessionStatus !== undefined && this.sessionStatus !== 'running') {
+      throw new Error(`guest command ${String(params.cmd)} on a ${this.sessionStatus} session`)
+    }
+    if (this.autoResume && this.sessionStatus === 'stopped') this.sessionStatus = 'running'
     this.commands.push(params)
+    const gate = this.commandGate?.(params)
+    if (gate !== undefined) await gate
+    const label = (params.args as string[] | undefined)?.[2]
+    if (params.cmd === 'sh' && (params.args as string[])?.[0] === '-c') {
+      const args = params.args as string[]
+      if (label === 'probe') {
+        this.probes += 1
+        const output = this.probeOutput()
+        return { exitCode: 0, stdout: async () => output, stderr: async () => '' }
+      }
+      if (label === 'resuming') {
+        this.resumingAgeSeconds = 0
+        return { exitCode: 0 }
+      }
+      if (label === 'resumed') {
+        this.resumingAgeSeconds = undefined
+        return { exitCode: 0 }
+      }
+      if (label === 'heartbeat') {
+        this.hostHeartbeat = { step: args[3]!, ageSeconds: 0 }
+        return { exitCode: 0 }
+      }
+      if (label === 'failed') {
+        this.failedContent = `${args[4]}\n${args[5]}\n`
+        return { exitCode: 0 }
+      }
+      if (label === 'replace') {
+        this.failedContent = undefined
+        this.resumingAgeSeconds = undefined
+        this.provisioned = false
+        this.hostHeartbeat = { step: 'checkout', ageSeconds: 0 }
+        return { exitCode: 0 }
+      }
+      if (label === 'marker') {
+        this.markerContent = args[3]!
+        this.provisioned = true
+        return { exitCode: 0 }
+      }
+    }
+    if (
+      params.cmd === 'sh' &&
+      params.detached === true &&
+      ((params.args as string[])?.[0] ?? '').endsWith('/tail.sh')
+    ) {
+      this.tailLaunches += 1
+      const outcome = this.tailOutcome
+      if (outcome === 'running') this.tailRunning = true
+      else if (outcome === 'complete') {
+        this.markerContent = this.writtenMarker()
+        this.provisioned = true
+      } else this.failedContent = `${outcome.failAt}\n`
+    }
+    if (params.cmd === 'git' && this.gitResponder !== undefined) {
+      const answer = this.gitResponder(params.args as string[])
+      if (answer !== undefined)
+        return {
+          exitCode: answer.exitCode,
+          stdout: async () => answer.stdout ?? '',
+          stderr: async () => answer.stderr ?? '',
+        }
+    }
     if (this.failCommand?.(params))
       return {
         exitCode: 1,
@@ -268,8 +437,12 @@ class FakeSandbox implements VercelSandboxHandle {
     this.writes.push(...files)
   }
   stopTimeouts = 0
+  /** The session status a stop request leaves, even one whose response
+   * times out (the request reached the provider). */
+  stopEffect: VercelSandboxHandle['sessionStatus'] | undefined
   async stop() {
     this.stops += 1
+    if (this.stopEffect !== undefined) this.sessionStatus = this.stopEffect
     if (this.stopTimeouts > 0) {
       this.stopTimeouts -= 1
       throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' })
@@ -288,7 +461,13 @@ class FakeSandbox implements VercelSandboxHandle {
     this.deletes += 1
     if (this.deleteFailure !== undefined) throw this.deleteFailure
   }
-  async update(params: { networkPolicy: NetworkPolicy }, opts?: { signal?: AbortSignal }) {
+  async update(
+    params: { networkPolicy?: NetworkPolicy; timeout?: number },
+    opts?: { signal?: AbortSignal },
+  ) {
+    if (params.timeout !== undefined) this.timeoutUpdates.push(params.timeout)
+    this.updateAtCommand.push(this.commands.length)
+    if (params.networkPolicy === undefined) return
     this.policies.push(params.networkPolicy)
     this.policySignals.push(opts?.signal)
     const isPublicationPolicy = JSON.stringify(params.networkPolicy).includes('git-receive-pack')
@@ -340,6 +519,7 @@ function harness(
     /** Operator-sandbox options threaded to the provider constructor. */
     setupCommand?: string
     sandboxEnvironmentVariables?: readonly string[]
+    sandboxIdleMinutes?: number
     /** Construct the provider WITHOUT the `distributionIdentity` seam, so
      * `identityStamp()`'s default path — `distributionStampFor(archiveBytes())`
      * over the injected `packageArchive` — executes and the provider's default
@@ -369,6 +549,9 @@ function harness(
   let createInput: Record<string, unknown> | undefined
   let created = false
   let creates = 0
+  /** Deletes before the latest create: a recreated environment is live. */
+  let deletesAtCreate = 0
+  let createFailure: Error | undefined
   /** The identity stamp the provider's seam currently resolves; mutable so a
    * test can model a dispatcher upgrade after provisioning. */
   const identityState = { current: '1.2.3' }
@@ -382,8 +565,13 @@ function harness(
     get:
       options.facadeGet ??
       (async () =>
-        created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null),
+        created && (sandbox.deletes === deletesAtCreate || sandbox.remainAfterDelete)
+          ? sandbox
+          : null),
     create: async (input) => {
+      if (createFailure !== undefined) throw createFailure
+      if (sandbox.deletes !== deletesAtCreate) sandbox.resetGuest()
+      deletesAtCreate = sandbox.deletes
       created = true
       creates += 1
       createInput = input
@@ -494,6 +682,9 @@ function harness(
       ...(options.sandboxEnvironmentVariables !== undefined
         ? { sandboxEnvironmentVariables: options.sandboxEnvironmentVariables }
         : {}),
+      ...(options.sandboxIdleMinutes !== undefined
+        ? { sandboxIdleMinutes: options.sandboxIdleMinutes }
+        : {}),
       runtimeReferences:
         options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
       ...(options.refusedArchive !== undefined ? { refusedArchive: options.refusedArchive } : {}),
@@ -512,6 +703,17 @@ function harness(
     },
     get creates() {
       return creates
+    },
+    /** Make the next creates reject (a provider failure before any sandbox
+     * exists). */
+    set createFailure(error: Error | undefined) {
+      createFailure = error
+    },
+    /** Model a concurrent instance's environment: `get` resolves it while
+     * this instance's create fails. */
+    adoptExisting() {
+      created = true
+      deletesAtCreate = sandbox.deletes
     },
     /** The seam's current identity stamp; assign to model a dispatcher
      * upgrade between provider calls. */
@@ -3129,66 +3331,645 @@ describe('operator sandbox capability', () => {
     expect(h.creates).toBe(0)
   })
 
-  test('fresh provision runs the build chain from the base head with runtime provisioning, then the setup command', async () => {
-    const h = harness({ provisionRuntimes: true, setupCommand: 'echo setup-ran' })
-    const identity = await h.provider.orchestratorSandbox.ensure({
-      repo: '/repo',
-      operator: OPERATOR,
-      baseBranch: 'main',
-    })
-    expect(identity.environmentId).toBe(
-      sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
-    )
-    expect((h.createInput!.source as { revision: string }).revision).toBe(SHA)
-    expect(h.createInput!.name).toBe(identity.environmentId)
-    expect(h.createInput!.persistent).toBe(true)
-    // No read credential configured: the network policy is the allow-all
-    // default; the read credential itself only ever appears inside the
-    // policy transform, never as a guest variable.
-    expect(h.createInput!.networkPolicy).toBe('allow-all')
-    const setup = h.sandbox.commands.find(
-      (command) =>
-        command.cmd === 'sh' &&
-        ((command.args as string[])?.[1] as string | undefined)?.endsWith('echo setup-ran'),
-    )
-    expect(setup).toBeDefined()
-    expect(setup!.cwd).toBe(VERCEL_WORKSPACE_PATH)
-    // The toolchain PATH rides as a shell prefix — the only channel where
-    // `$PATH` expands — never as a literal inside the env record.
-    expect((setup!.args as string[])[1]).toBe(`${PATH_PREFIX}echo setup-ran`)
-    expect((setup!.env as Record<string, string>)!.PATH).toBeUndefined()
-    const marker = h.sandbox.commands.findIndex((command) => command.cmd === 'touch')
-    const setupIndex = h.sandbox.commands.indexOf(setup!)
-    expect(setupIndex).toBeLessThan(marker)
-    expect(h.sandbox.provisioned).toBe(true)
+  const NAME = sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR)
+  const IDLE_MS = 30 * 60_000
+  type Provider = ReturnType<typeof harness>['provider']
+  const open = (provider: Provider) =>
+    provider.orchestratorSandbox.open({ repo: '/repo', operator: OPERATOR, baseBranch: 'main' })
+  const status = (provider: Provider) =>
+    provider.orchestratorSandbox.status({ repo: '/repo', operator: OPERATOR })
+  const ensure = (provider: Provider) =>
+    provider.orchestratorSandbox.ensure({ repo: '/repo', operator: OPERATOR, baseBranch: 'main' })
+  /** The text of every file the provider wrote into the guest. */
+  const written = (h: ReturnType<typeof harness>) =>
+    h.sandbox.writes.map((write) => ({
+      path: write.path,
+      text: Buffer.from(write.content).toString('utf8'),
+    }))
 
-    const shStrings = h.sandbox.commands.map(
-      (command): string =>
-        ((command.args as string[] | undefined)?.[1] as string | undefined) ??
-        (command.cmd as string),
-    )
-    const indexOf = (needle: string): number => {
-      const found = shStrings.findIndex((value: string) => value.includes(needle))
-      expect(found).toBeGreaterThanOrEqual(0)
-      return found
+  test('open on an absent environment returns at once, runs the host phase and launches one detached tail', async () => {
+    const h = harness({ provisionRuntimes: true, setupCommand: 'echo setup-ran' })
+    h.sandbox.tailOutcome = 'running'
+    expect(h.provider.orchestratorSandbox.lifecycleSupported).toBe(true)
+    const opened = await open(h.provider)
+    expect(opened.status).toEqual({ state: 'provisioning', kind: 'provision' })
+    expect(await opened.settled).toEqual({ state: 'provisioning', kind: 'provision' })
+    expect(h.createInput!.timeout).toBe(IDLE_MS)
+    expect((h.createInput!.source as { revision: string }).revision).toBe(SHA)
+    expect(h.sandbox.tailLaunches).toBe(1)
+    const launch = h.sandbox.commands.find((command) => command.detached === true)!
+    expect(launch).toMatchObject({
+      cmd: 'sh',
+      args: [`${VERCEL_OPERATOR_PROVISION_DIR}/tail.sh`],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    // Stage files in order: dependencies, runtimes sorted (install before
+    // preflight), the setup command behind the PATH prefix, then the marker.
+    const stages = written(h).filter((file) => /\/stage-\d+-/.test(file.path))
+    expect(stages.map((file) => file.path.split('/').at(-1))).toEqual([
+      'stage-01-dependencies.sh',
+      'stage-02-runtime-pi-install.sh',
+      'stage-03-runtime-pi-preflight.sh',
+      'stage-04-runtime-plugin-install.sh',
+      'stage-05-runtime-plugin-preflight.sh',
+      'stage-06-setup.sh',
+      'stage-07-marker.sh',
+    ])
+    expect(stages[1]!.text).toBe('install-pi@0.84.4\n')
+    expect(stages[5]!.text).toBe(`${PATH_PREFIX}echo setup-ran\n`)
+    expect(stages[6]!.text).toContain(JSON.stringify({ baseSha: SHA }))
+    // Nothing of the tail runs host-driven; build-workspace variables never
+    // enter the guest.
+    const hostDriven = JSON.stringify(h.sandbox.commands.filter((c) => c.detached !== true))
+    for (const needle of ['install-pi', 'echo setup-ran', 'frozen-lockfile'])
+      expect(hostDriven).not.toContain(needle)
+    expect(launch.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
+    expectCredentialFree([...h.sandbox.commands, ...written(h)])
+
+    // While the tail runs, status reports provisioning and extends the timer.
+    h.sandbox.sessionExpiresAt = Date.now() + 1_000
+    expect(await status(h.provider)).toEqual({ state: 'provisioning' })
+    expect(h.sandbox.extensions).toHaveLength(1)
+    // Once the tail wrote the marker, any instance reports ready.
+    h.sandbox.tailRunning = false
+    h.sandbox.provisioned = true
+    h.sandbox.markerContent = JSON.stringify({ baseSha: SHA })
+    for (const provider of [h.provider, h.restart()]) {
+      expect(await status(provider)).toMatchObject({
+        state: 'ready',
+        handle: { environmentId: NAME, baseSha: SHA },
+        headSha: SHA,
+      })
     }
-    // The build chain's order (runtimes sorted by name): each runtime's
-    // install then preflight, all before the repository setup command.
-    const piInstall = indexOf('install-pi@0.84.4')
-    const piPreflight = indexOf('pi --version 0.84.4')
-    const pluginInstall = indexOf('install-plugin@abc123')
-    const pluginPreflight = indexOf('plugin --version 1.2.3')
-    expect(piInstall).toBeLessThan(piPreflight)
-    expect(piPreflight).toBeLessThan(pluginInstall)
-    expect(pluginInstall).toBeLessThan(pluginPreflight)
-    expect(pluginPreflight).toBeLessThan(setupIndex)
-    // The one env rule: build-workspace forwarded variables (the harness's
-    // ANTHROPIC_API_KEY) never enter a sandbox guest command — a runtime
-    // provisioning command needing one must have it added to
-    // [orchestrator].sandbox.environmentVariables instead.
-    const runtimeCommand = h.sandbox.commands[piInstall]!
-    expect(runtimeCommand.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
-    expectCredentialFree(h.sandbox.commands)
+    expect(h.sandbox.extensions).toHaveLength(1)
+  })
+
+  test('a tail failure reports its mapped stage and a redacted log tail', async () => {
+    for (const [failAt, stage, prefix] of [
+      ['dependencies', 'provision', 'dependency install failed: '],
+      ['runtime-pi-install', 'provision', 'runtime "pi" install failed (selected by '],
+      ['setup', 'setup', 'operator sandbox setup failed: '],
+    ] as const) {
+      const h = harness({
+        provisionRuntimes: true,
+        setupCommand: 'echo setup',
+        sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+        accountEnv: { MY_TOOL_CONFIG: 'forwarded-value', ANTHROPIC_API_KEY: 'runtime-secret' },
+      })
+      h.sandbox.tailOutcome = { failAt }
+      h.sandbox.logTail = 'boom forwarded-value'
+      await (await open(h.provider)).settled
+      const reported = await h.restart().orchestratorSandbox.status({
+        repo: '/repo',
+        operator: OPERATOR,
+      })
+      expect(reported.state).toBe('failed')
+      expect(reported.failure?.stage).toBe(stage)
+      expect(reported.failure?.message).toStartWith(prefix)
+      expect(reported.failure?.message).toContain('boom [REDACTED]')
+    }
+  })
+
+  test('a host-phase failure is recorded in the guest and never reaped', async () => {
+    for (const [fail, stage] of [
+      [(params: Record<string, unknown>) => params.cmd === 'npm', 'provision'],
+      [
+        (params: Record<string, unknown>) => (params.args as string[])?.[2] === 'relocate',
+        'checkout',
+      ],
+      [undefined, 'environment'],
+    ] as const) {
+      const h = harness(
+        fail === undefined
+          ? { setupCommand: 'echo setup', sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'] }
+          : {},
+      )
+      h.sandbox.failCommand = fail
+      const settled = await (await open(h.provider)).settled
+      expect(settled).toMatchObject({ state: 'failed', failure: { stage } })
+      expect(h.sandbox.failedContent).toStartWith(`${stage}\n`)
+      expect(h.sandbox.deletes).toBe(0)
+      expect(h.sandbox.stops).toBe(0)
+      expect(await status(h.restart())).toEqual(settled!)
+    }
+  })
+
+  test('an interrupted host phase maps its heartbeat step; a fresh heartbeat is in flight', async () => {
+    const h = harness()
+    h.adoptExisting()
+    const cases = [
+      [{ step: 'provision', ageSeconds: 601 }, 'failed', 'provision'],
+      [{ step: 'checkout', ageSeconds: 601 }, 'failed', 'checkout'],
+      [{ step: 'provision', ageSeconds: 5 }, 'provisioning', undefined],
+      [{ step: 'launched', ageSeconds: 5 }, 'provisioning', undefined],
+      [{ step: 'launched', ageSeconds: 31 }, 'failed', 'provision'],
+    ] as const
+    for (const [heartbeat, state, stage] of cases) {
+      h.sandbox.hostHeartbeat = { ...heartbeat }
+      const reported = await status(h.provider)
+      expect(reported.state).toBe(state)
+      expect(reported.failure?.stage).toBe(stage)
+    }
+    h.sandbox.hostHeartbeat = { step: 'checkout', ageSeconds: 601 }
+    expect((await status(h.provider)).failure?.message).toContain('interrupted during checkout')
+    h.sandbox.hostHeartbeat = undefined
+    expect((await status(h.provider)).failure?.message).toBe(SANDBOX_INTERRUPTED_MESSAGE)
+  })
+
+  test('a create that loses to a concurrent instance settles provisioning without a reap', async () => {
+    const h = harness()
+    h.facade.create = async () => {
+      h.adoptExisting()
+      throw new Error('sandbox name already exists')
+    }
+    expect(await (await open(h.provider)).settled).toEqual({
+      state: 'provisioning',
+      kind: 'provision',
+    })
+    expect(h.sandbox.deletes).toBe(0)
+  })
+
+  test('open resumes a stopped environment with the idle timeout first and never re-provisions it', async () => {
+    const h = harness()
+    await ensure(h.provider)
+    h.sandbox.sessionStatus = 'stopped'
+    h.sandbox.autoResume = true
+    const before = h.sandbox.commands.length
+    const opened = await open(h.restart())
+    expect(opened.status).toEqual({ state: 'resuming', kind: 'resume' })
+    expect(await opened.settled).toMatchObject({
+      state: 'ready',
+      kind: 'resume',
+      handle: { baseSha: SHA },
+    })
+    expect(h.sandbox.timeoutUpdates.at(-1)).toBe(IDLE_MS)
+    expect(h.sandbox.updateAtCommand.at(-1)).toBe(before)
+    expect(h.creates).toBe(1)
+    const resumed = JSON.stringify(h.sandbox.commands.slice(before))
+    for (const needle of ['clone', 'relocate', 'checkout', 'reset']) {
+      expect(resumed).not.toContain(needle)
+    }
+    // A stopped environment without a marker or a failure record settles
+    // the interrupted failure its heartbeat names, and is not reaped.
+    h.sandbox.sessionStatus = 'stopped'
+    h.sandbox.provisioned = false
+    h.sandbox.hostHeartbeat = { step: 'provision', ageSeconds: 5 }
+    expect(await (await open(h.restart())).settled).toMatchObject({
+      state: 'failed',
+      failure: { stage: 'provision', message: expect.stringContaining('interrupted during') },
+    })
+    expect(h.sandbox.deletes).toBe(0)
+  })
+
+  test('a provider-timer stop reports stopped and refuses tool calls without a guest command', async () => {
+    const h = harness()
+    const identity = await ensure(h.provider)
+    h.sandbox.sessionStatus = 'stopped'
+    h.sandbox.guardStopped = true
+    const before = h.sandbox.commands.length
+    expect(await status(h.provider)).toEqual({ state: 'stopped' })
+    for (const call of [
+      h.provider.orchestratorSandbox.exec(identity, { command: 'true' }),
+      h.provider.orchestratorSandbox.readFile(identity, 'a.txt'),
+    ]) {
+      expect(await call.catch((error: unknown) => error)).toMatchObject({
+        stage: 'not-ready',
+        state: 'stopped',
+      })
+    }
+    expect(h.sandbox.commands.length).toBe(before)
+  })
+
+  test('each tool call extends the timer by its deficit, never past need, and survives a failed extension', async () => {
+    const h = harness({ sandboxIdleMinutes: 1 })
+    const identity = await ensure(h.provider)
+    h.sandbox.extensions.length = 0
+    h.sandbox.sessionExpiresAt = Date.now() + 10_000
+    await h.provider.orchestratorSandbox.exec(identity, { command: 'true', timeoutSeconds: 300 })
+    // The exec bound (300 s + 60 s) outranks the 60 s idle timeout.
+    expect(h.sandbox.extensions).toHaveLength(1)
+    expect(h.sandbox.extensions[0]!).toBeGreaterThanOrEqual(350_000)
+    expect(h.sandbox.extensions[0]!).toBeLessThan(351_000)
+    // Already extended past the idle need: nothing more is requested.
+    await h.provider.orchestratorSandbox.writeFile(identity, 'a.txt', new Uint8Array([1]))
+    expect(h.sandbox.extensions).toHaveLength(1)
+    h.sandbox.sessionExpiresAt = Date.now() + 10_000
+    await h.provider.orchestratorSandbox.writeFile(identity, 'a.txt', new Uint8Array([1]))
+    expect(h.sandbox.extensions[1]!).toBeGreaterThanOrEqual(50_000)
+    expect(h.sandbox.extensions[1]!).toBeLessThan(51_000)
+    h.sandbox.sessionExpiresAt = Date.now()
+    h.sandbox.extendFailure = new Error('extension refused')
+    expect(await h.provider.orchestratorSandbox.exec(identity, { command: 'true' })).toMatchObject({
+      exitCode: 0,
+    })
+  })
+
+  test('close stops a ready or failed environment, cancels an in-flight provision, and reports absence', async () => {
+    const ready = harness()
+    await ensure(ready.provider)
+    expect(
+      await ready.provider.orchestratorSandbox.close({
+        repo: '/repo',
+        operator: OPERATOR,
+        environmentId: NAME,
+      }),
+    ).toEqual({ outcome: 'closed' })
+    expect([ready.sandbox.stops, ready.sandbox.deletes]).toEqual([1, 0])
+
+    const close = (provider: Provider) =>
+      provider.orchestratorSandbox.close({ repo: '/repo', operator: OPERATOR, environmentId: NAME })
+    expect(await close(harness().provider)).toEqual({ outcome: 'absent' })
+
+    // This process's attempt: aborted before it created anything.
+    const inProcess = harness()
+    const opening = await open(inProcess.provider)
+    expect(await close(inProcess.provider)).toEqual({
+      outcome: 'absent',
+      attempt: { state: 'absent', cancelled: true },
+    })
+    expect(await opening.settled).toEqual({ state: 'absent', cancelled: true })
+
+    // Another process's tail in flight: a user-requested cancel reaps it.
+    const elsewhere = harness()
+    elsewhere.adoptExisting()
+    elsewhere.sandbox.tailRunning = true
+    expect(await close(elsewhere.provider)).toEqual({
+      outcome: 'absent',
+      attempt: { state: 'absent', cancelled: true },
+    })
+    expect(elsewhere.sandbox.deletes).toBe(1)
+
+    // Another process's resume still pending: stopped, with no guest command.
+    const pending = harness()
+    pending.adoptExisting()
+    pending.sandbox.sessionStatus = 'pending'
+    pending.sandbox.guardStopped = true
+    expect(await close(pending.restart())).toEqual({ outcome: 'closed' })
+    expect([pending.sandbox.stops, pending.sandbox.deletes]).toEqual([1, 0])
+    expect(pending.sandbox.commands).toEqual([])
+
+    // An interrupted stop is confirmed only by a re-read: still active
+    // refuses (nothing to journal as closed); confirmed stopped closes.
+    for (const effect of [undefined, 'stopped'] as const) {
+      const timedOut = harness()
+      timedOut.adoptExisting()
+      timedOut.sandbox.sessionStatus = 'pending'
+      timedOut.sandbox.stopTimeouts = 1
+      timedOut.sandbox.stopEffect = effect
+      const result = await close(timedOut.provider).catch((error: unknown) => error)
+      if (effect === undefined) {
+        expect(result).toMatchObject({
+          stage: 'close',
+          message: expect.stringContaining('could not confirm'),
+        })
+      } else expect(result).toEqual({ outcome: 'closed' })
+    }
+
+    // A failed environment is stopped, never reaped: its record survives.
+    const failed = harness()
+    failed.adoptExisting()
+    failed.sandbox.failedContent = 'setup\n'
+    expect(await close(failed.provider)).toMatchObject({
+      outcome: 'closed',
+      attempt: { state: 'failed', failure: { stage: 'setup' } },
+    })
+    expect([failed.sandbox.stops, failed.sandbox.deletes]).toEqual([1, 0])
+    expect(failed.sandbox.failedContent).toBe('setup\n')
+  })
+
+  test('refresh fetches in the guest without a credential and fast-forwards a clean checkout', async () => {
+    const NEW = 'b'.repeat(40)
+    let main = SHA
+    const h = harness({ mainSha: () => main })
+    const identity = await ensure(h.provider)
+    main = NEW
+    let porcelain = ''
+    let head = SHA
+    let ancestry: Record<string, number> = { [`${NEW} ${SHA}`]: 1, [`${SHA} ${NEW}`]: 0 }
+    h.sandbox.gitResponder = (args) => {
+      if (args[0] === 'status') return { exitCode: 0, stdout: porcelain }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: `${head}\n` }
+      if (args[0] === 'fetch') return { exitCode: 0 }
+      if (args[0] === 'merge-base') return { exitCode: ancestry[`${args[2]} ${args[3]}`] ?? 1 }
+      return undefined
+    }
+    const refresh = () =>
+      h.provider.orchestratorSandbox.refresh(identity, { repo: '/repo', baseBranch: 'main' })
+    expect(await refresh()).toEqual({
+      outcome: 'refreshed',
+      headSha: NEW,
+      baseSha: NEW,
+      previousHeadSha: SHA,
+    })
+    const fetch = h.sandbox.commands.find((command) => (command.args as string[])?.[0] === 'fetch')!
+    expect(fetch.args).toEqual(['fetch', '--quiet', 'origin', 'main'])
+    expect(fetch.env).toEqual({ GIT_TERMINAL_PROMPT: '0' })
+    expect(h.sandbox.markerContent).toBe(JSON.stringify({ baseSha: NEW }))
+    head = NEW
+    expect((await refresh()).outcome).toBe('current')
+    head = 'c'.repeat(40)
+    ancestry = {}
+    expect(await refresh()).toMatchObject({ outcome: 'refused', reason: 'diverged' })
+    porcelain = ' M src/a.ts\n'
+    expect(await refresh()).toEqual({
+      outcome: 'refused',
+      reason: 'dirty',
+      message: SANDBOX_REFRESH_DIRTY_MESSAGE,
+    })
+  })
+
+  test('a private repository fetch rides the upload-pack transform on create and on every open', async () => {
+    for (const credential of ['configured', 'egress'] as const) {
+      const secret = 'read-secret'
+      const basic = Buffer.from(`x-access-token:${secret}`).toString('base64')
+      const h = harness(
+        credential === 'configured'
+          ? {
+              gitCredentialEnv: { username: 'READ_USER', password: 'READ_PASSWORD' },
+              accountEnv: { READ_USER: 'x-access-token', READ_PASSWORD: secret },
+            }
+          : { egressReadCredential: { username: 'x-access-token', password: secret } },
+      )
+      await (await open(h.provider)).settled
+      await open(h.provider)
+      for (const policy of [h.createInput!.networkPolicy, h.sandbox.policies.at(-1)]) {
+        const routes = (policy as { allow: Record<string, unknown[]> }).allow['github.com']!
+        expect(JSON.stringify(routes)).toContain(`Basic ${basic}`)
+        expect(routes.map((route) => JSON.stringify((route as { match: unknown }).match))).toEqual([
+          expect.stringContaining('/acme/app.git/info/refs'),
+          expect.stringContaining('/acme/app.git/git-upload-pack'),
+        ])
+      }
+      const guest = [...h.sandbox.commands, ...written(h)]
+      for (const value of [secret, basic]) expect(JSON.stringify(guest)).not.toContain(value)
+      expectCredentialFree(guest)
+    }
+  })
+
+  // ── Service over the provider: durable evidence across processes ──
+  const REPO_ID = 'https://github.com/acme/app.git'
+  const serviceOver = (provider: Provider, store: MemoryBuildStore, clock?: () => Date) =>
+    createOperatorSandboxService({
+      store,
+      repo: REPO_ID,
+      provider,
+      sandbox: { idleMinutes: 30, environmentVariables: [] },
+      baseBranch: 'main',
+      sleep: async () => {},
+      ...(clock !== undefined ? { clock } : {}),
+    })
+  /** Every settlement append on `store` throws (a store outage) or misses
+   * (a journal that keeps advancing) until the returned restore runs. */
+  const breakSettlements = (store: MemoryBuildStore, mode: 'throw' | 'miss') => {
+    const real = store.appendRepoIfCurrent.bind(store)
+    store.appendRepoIfCurrent = (async () => {
+      if (mode === 'throw') throw new Error('store unavailable')
+      return null
+    }) as typeof store.appendRepoIfCurrent
+    return () => {
+      store.appendRepoIfCurrent = real
+    }
+  }
+  const journal = async (store: MemoryBuildStore) =>
+    (await store.getRepoEvents(REPO_ID)).map((event) =>
+      event.type.replace('orchestrator.sandbox.', ''),
+    )
+  const failures = async (store: MemoryBuildStore) =>
+    (await store.getRepoEvents(REPO_ID))
+      .filter((event) => event.type === 'orchestrator.sandbox.provision-failed')
+      .map((event) => {
+        const { stage, message } = event.payload as { stage: string; message: string }
+        return { stage, message }
+      })
+  const ref = { repo: REPO_ID }
+
+  test('a host failure whose journal append was lost is settled once by a fresh instance, then replaced by open', async () => {
+    const h = harness()
+    h.sandbox.failCommand = (params) => params.cmd === 'npm'
+    const store = new MemoryBuildStore()
+    const restore = breakSettlements(store, 'throw')
+    const first = await serviceOver(h.provider, store)
+    expect((await first.open('ops', ref)).state).toBe('provisioning')
+    await first.settled('ops')
+    expect(await journal(store)).toEqual(['provisioning'])
+    restore()
+    h.sandbox.failCommand = undefined
+    const second = await serviceOver(h.restart(), store)
+    expect(await second.status('ops', ref)).toMatchObject({
+      state: 'failed',
+      failure: { stage: 'provision', message: expect.stringContaining('could not provision Bun') },
+    })
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
+    expect(h.sandbox.deletes).toBe(0)
+    await second.open('ops', ref)
+    await second.settled('ops')
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed', 'provisioning'])
+    expect([h.sandbox.deletes, h.creates]).toEqual([1, 2])
+  })
+
+  test('a create failure whose append was lost is failed by the orphan rule after its grace, once', async () => {
+    const h = harness()
+    h.createFailure = new Error('quota exceeded')
+    const store = new MemoryBuildStore()
+    const restore = breakSettlements(store, 'throw')
+    const first = await serviceOver(h.provider, store)
+    await first.open('ops', ref)
+    await first.settled('ops')
+    restore()
+    h.createFailure = undefined
+    let now = Date.now()
+    const clock = () => new Date(now)
+    const second = await serviceOver(h.restart(), store, clock)
+    expect((await second.status('ops', ref)).state).toBe('provisioning')
+    expect(await journal(store)).toEqual(['provisioning'])
+    now += SANDBOX_PROVISION_ORPHAN_MS + 1_000
+    expect(await second.status('ops', ref)).toMatchObject({
+      state: 'failed',
+      failure: { stage: 'checkout', message: SANDBOX_ORPHAN_MESSAGE },
+    })
+    await (await serviceOver(h.restart(), store, clock)).status('ops', ref)
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
+  })
+
+  test('open never reaps an environment whose failure it could not record', async () => {
+    const h = harness({ setupCommand: 'echo setup' })
+    h.sandbox.tailOutcome = { failAt: 'setup' }
+    const store = new MemoryBuildStore()
+    const service = await serviceOver(h.provider, store)
+    await service.open('ops', ref)
+    await service.settled('ops')
+    const restore = breakSettlements(store, 'miss')
+    expect(await service.open('ops', ref).catch((error: unknown) => error)).toMatchObject({
+      stage: 'provision',
+      message: SANDBOX_UNRECORDED_FAILURE_MESSAGE,
+    })
+    expect([h.sandbox.deletes, h.creates, h.sandbox.failedContent]).toEqual([0, 1, 'setup\n'])
+    restore()
+    await service.open('ops', ref)
+    await service.settled('ops')
+    expect(await failures(store)).toEqual([
+      { stage: 'setup', message: expect.stringContaining('operator sandbox setup failed') },
+    ])
+    expect([h.sandbox.deletes, h.creates]).toEqual([1, 2])
+  })
+
+  for (const [label, arrange, stage, message] of [
+    [
+      'setup',
+      (h: ReturnType<typeof harness>) => {
+        h.sandbox.tailOutcome = { failAt: 'setup' }
+        h.sandbox.logTail = '== setup\nsetup broke'
+      },
+      'setup',
+      'operator sandbox setup failed: == setup\nsetup broke',
+    ],
+    [
+      'Bun host step',
+      (h: ReturnType<typeof harness>) => {
+        h.sandbox.failCommand = (params) => params.cmd === 'npm'
+      },
+      'provision',
+      'could not provision Bun',
+    ],
+  ] as const) {
+    test(`an unpublished ${label} failure in a timer-stopped sandbox is recovered by open with its recorded stage`, async () => {
+      const h = harness({ setupCommand: 'echo setup' })
+      arrange(h)
+      const store = new MemoryBuildStore()
+      const restore = breakSettlements(store, 'throw')
+      const first = await serviceOver(h.provider, store)
+      await first.open('ops', ref)
+      await first.settled('ops')
+      restore()
+      h.sandbox.failCommand = undefined
+      h.sandbox.sessionStatus = 'stopped'
+      h.sandbox.autoResume = true
+      const second = await serviceOver(h.restart(), store)
+      const before = h.sandbox.commands.length
+      expect((await second.status('ops', ref)).state).toBe('stopped')
+      expect(h.sandbox.commands.length).toBe(before)
+      expect((await second.open('ops', ref)).state).toBe('resuming')
+      await second.settled('ops')
+      expect(await failures(store)).toEqual([{ stage, message: expect.stringContaining(message) }])
+      expect(h.sandbox.deletes).toBe(0)
+      await second.open('ops', ref)
+      await second.settled('ops')
+      expect([h.sandbox.deletes, h.creates]).toEqual([1, 2])
+    })
+  }
+
+  test('a resume failure supersedes an older marker for every later observer', async () => {
+    const h = harness()
+    await ensure(h.provider)
+    h.sandbox.bunVersion = '1.4.0'
+    h.sandbox.bunInstallVersion = '1.4.0'
+    const store = new MemoryBuildStore()
+    const restore = breakSettlements(store, 'throw')
+    const first = await serviceOver(h.provider, store)
+    expect((await first.open('ops', ref)).state).toBe('resuming')
+    await first.settled('ops')
+    expect([h.sandbox.provisioned, h.sandbox.failedContent?.split('\n')[0]]).toEqual([
+      true,
+      'resume',
+    ])
+    restore()
+    const second = await serviceOver(h.restart(), store)
+    expect(await second.status('ops', ref)).toMatchObject({
+      state: 'failed',
+      failure: { stage: 'resume' },
+    })
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
+  })
+
+  for (const outcome of ['resumed', 'failed'] as const) {
+    test(`another process polling during a runtime refresh sees resuming, then the refresh ${outcome}`, async () => {
+      const h = harness()
+      await ensure(h.provider)
+      h.sandbox.bunVersion = '1.4.0'
+      if (outcome === 'failed') h.sandbox.bunInstallVersion = '1.4.0'
+      let release!: () => void
+      let entered!: () => void
+      const reached = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const installing = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      h.sandbox.commandGate = (params) => {
+        if (params.cmd !== 'npm') return undefined
+        entered()
+        return installing
+      }
+      const store = new MemoryBuildStore()
+      const first = await serviceOver(h.provider, store)
+      expect((await first.open('ops', ref)).state).toBe('resuming')
+      await reached
+      const second = await serviceOver(h.restart(), store)
+      expect((await second.status('ops', ref)).state).toBe('resuming')
+      expect(
+        await second.exec('ops', { repo: REPO_ID, command: 'true' }).catch((error) => error),
+      ).toMatchObject({ stage: 'not-ready', state: 'resuming' })
+      release()
+      await first.settled('ops')
+      const facts = await journal(store)
+      expect(facts).toEqual([
+        'provisioning',
+        outcome === 'resumed' ? 'resumed' : 'provision-failed',
+      ])
+      expect((await second.status('ops', ref)).state).toBe(
+        outcome === 'resumed' ? 'ready' : 'failed',
+      )
+    })
+  }
+
+  test('closing a journaled failure stops the kept environment without discarding it', async () => {
+    const h = harness({ setupCommand: 'echo setup' })
+    h.sandbox.tailOutcome = { failAt: 'setup' }
+    const store = new MemoryBuildStore()
+    const service = await serviceOver(h.provider, store)
+    await service.open('ops', ref)
+    await service.settled('ops')
+    expect((await service.status('ops', ref)).state).toBe('failed')
+    expect(await service.close('ops', ref)).toMatchObject({ outcome: 'closed' })
+    expect([h.sandbox.stops, h.sandbox.deletes, h.sandbox.failedContent]).toEqual([1, 0, 'setup\n'])
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
+  })
+
+  test('the guest probe ranks a failure above a refresh in progress above an older success marker', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-vercel-probe-'))
+    try {
+      const probe = () =>
+        parseVercelOperatorProbe(
+          Bun.spawnSync([
+            'sh',
+            '-c',
+            VERCEL_OPERATOR_PROBE_SCRIPT,
+            'probe',
+            dir,
+            join(dir, 'marker'),
+            dir,
+            join(dir, 'no-bun'),
+            join(dir, 'distribution'),
+          ]).stdout.toString(),
+        )
+      expect(probe()).toEqual({ kind: 'none' })
+      await writeFile(join(dir, 'host'), 'provision 100\n')
+      expect(probe()).toMatchObject({ kind: 'host', step: 'provision' })
+      await writeFile(join(dir, 'marker'), JSON.stringify({ baseSha: SHA }))
+      await writeFile(join(dir, 'distribution'), '1.2.3\n')
+      expect(probe()).toEqual({ kind: 'ready', marker: { baseSha: SHA }, distribution: '1.2.3' })
+      await writeFile(join(dir, 'resuming'), '100\n')
+      expect(probe()).toMatchObject({ kind: 'resuming' })
+      await writeFile(join(dir, 'failed'), 'resume\nBun pin failed\n')
+      await writeFile(join(dir, 'log'), 'tail output')
+      expect(probe()).toEqual({
+        kind: 'failed',
+        record: 'resume\nBun pin failed\n',
+        log: 'tail output',
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test('a deployment egress read credential reaches only the upload-pack transform', async () => {

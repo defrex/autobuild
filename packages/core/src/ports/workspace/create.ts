@@ -48,6 +48,9 @@ export interface CreateWorkspaceProviderOptions {
   sandboxSetupCommand?: string
   sandboxRoot?: string
   sandboxEnvironmentVariables?: readonly string[]
+  /** `[orchestrator.sandbox].idleMinutes`: the provider idle timer of an
+   * operator sandbox on providers that have one (vercel-sandbox). */
+  sandboxIdleMinutes?: number
   /** Whether `[orchestrator].enabled` is set at the call site. Gates the
    * construction-site `sandboxForbiddenEnv` check so the parse-time rule is
    * reproduced exactly (the config validation only runs when the orchestrator

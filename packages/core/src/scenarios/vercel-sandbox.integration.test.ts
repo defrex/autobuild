@@ -372,8 +372,9 @@ test.each([
       async delete() {
         this.deleted = true
       }
-      async update(params: { networkPolicy: NetworkPolicy }) {
-        this.policy = params.networkPolicy
+      async extendTimeout() {}
+      async update(params: { networkPolicy?: NetworkPolicy }) {
+        if (params.networkPolicy !== undefined) this.policy = params.networkPolicy
       }
     }
 
@@ -806,7 +807,8 @@ for (const upgrading of [false, true])
       async delete() {
         this.deleted = true
       }
-      async update(_params: { networkPolicy: NetworkPolicy }) {}
+      async update(_params: { networkPolicy?: NetworkPolicy }) {}
+      async extendTimeout() {}
     }
 
     const sandbox = new DetachedSandboxDouble()
@@ -1399,6 +1401,7 @@ async function partialSandboxFixture(opts: {
       sandboxes.delete(name)
     },
     update: async () => {},
+    extendTimeout: async () => {},
   })
   /** A provision that completes: markers persist and Bun reports the pin. */
   const healthy = (name: string) => {
@@ -1747,6 +1750,7 @@ async function boundedInvocations(slug: string) {
         sandboxes.delete(name)
       },
       update: async () => {},
+      extendTimeout: async () => {},
     }
   }
   const facade: VercelSandboxFacade = {

@@ -39,6 +39,22 @@ test('sandbox.status costs the same at 10 and 5,000 journal events and reads no 
   }
 })
 
+test('a status that records a lost outcome appends once at a bounded cost, then reads nothing', async () => {
+  const short = await operatorSandboxStatusReadBudget({ history: 10, settle: 'lost' })
+  const long = await operatorSandboxStatusReadBudget({ history: 5000, settle: 'lost' })
+  expect(long.callVector).toEqual(short.callVector)
+  for (const run of [short, long]) {
+    expect(run.appended).toBe(1)
+    expect(run.callVector.appendRepoIfCurrent).toBe(1)
+    for (const poll of [run.next, run.steady]) {
+      expect(poll.appended).toBe(0)
+      expect(poll.callVector.appendRepoIfCurrent).toBeUndefined()
+    }
+    // The next poll folds only the one recorded fact; then nothing.
+    expect([run.next.repoRows, run.steady.repoRows]).toEqual([1, 0])
+  }
+})
+
 test('the per-repository sandbox listing gate is one bounded read at 1 and 1,000 revisions', async () => {
   const one = await operatorSandboxListingReadBudget({ revisions: 1 })
   const many = await operatorSandboxListingReadBudget({ revisions: 1000 })

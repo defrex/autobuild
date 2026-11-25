@@ -98,6 +98,7 @@ const WRITES = new Set([
   'appendWithArtifactsIfCurrent',
   'putArtifact',
   'appendRepo',
+  'appendRepoIfCurrent',
   'appendRepoWithArtifacts',
   'putRepoArtifact',
   'appendSessionEvent',

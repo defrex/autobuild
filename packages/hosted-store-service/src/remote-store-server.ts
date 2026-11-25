@@ -103,6 +103,7 @@ import {
   appendStreamBodySchema,
   closeStreamBodySchema,
   conditionalEventBodySchema,
+  conditionalRepoEventBodySchema,
   conditionalSessionEventBodySchema,
   createStreamBodySchema,
   decodeBase64,
@@ -949,6 +950,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         validateRepoAdmission(body)
         const actor = enforceVia(scope, body.actor)
         return json(201, await store.appendRepo(repo, { ...body, actor } as RepositoryEventWrite))
+      }
+      case 'POST events/conditional': {
+        const body = await readBody(req, conditionalRepoEventBodySchema)
+        validateRepoAdmission(body.event)
+        const actor = enforceVia(scope, body.event.actor)
+        const event = await store.appendRepoIfCurrent(repo, body.expectedSeq, {
+          ...body.event,
+          actor,
+        } as RepositoryEventWrite)
+        return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
         if (!store.getRepositoryTail)
@@ -1862,6 +1873,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       const storeGated = [
         'GET events',
         'POST events',
+        'POST events/conditional',
         'GET high-water',
         'GET stream-seed',
         'GET harvest-history',
