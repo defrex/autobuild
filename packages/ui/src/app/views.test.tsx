@@ -236,9 +236,13 @@ describe('analytics', () => {
       expect(loaded).toContain(`</span>${label}</li>`)
   })
 
-  test('chart keys change with the answered query, never with the axis or the measure', () => {
+  test('chart keys change with the answered query and the axis, never with the measure', () => {
     const base = keys(view())
-    expect(keys(view({ axis: 'relative', mode: 'total' }))).toEqual(base)
+    expect(keys(view({ mode: 'total' }))).toEqual(base)
+    const switched = keys(view({ axis: 'relative' }))
+    expect(switched.filter((key) => !base.includes(key))).toEqual([
+      expect.stringMatching(/^gantt:.*:relative$/),
+    ])
     const wider = answer()
     wider.query = { ...wider.query, window: '30d' }
     expect(keys(view({ data: wider }))).not.toEqual(base)

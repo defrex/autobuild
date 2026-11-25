@@ -108,9 +108,10 @@ function pagerAction(label: string, act: (() => void) | undefined) {
 
 /**
  * The analytics page as keyed flow blocks: controls, the Gantt and the step
- * table. Chart keys carry the answered query, so a window, filter or page
- * change is a layout transaction, while the axis and the measure keep their
- * keys and move only through the charts' own transitions. Pure.
+ * table. Chart keys carry the answered query, and the Gantt's its axis, so a
+ * window, filter, page or axis change is a layout transaction. The measure
+ * keeps its key: the table's bars scale and its markers slide by transform,
+ * which moves nothing in layout. Pure.
  */
 export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
   const { data, filters, cursor, on } = view
@@ -207,7 +208,9 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
     const rows = failed || data === undefined ? [] : data.gantt.rows.map(ganttTimeline)
     const empty = failed ? view.error : 'No build matching these filters was active in this window.'
     blocks.push({
-      key: failed ? 'gantt:error' : `gantt:${queryKey(data!.query, data!.query.page)}`,
+      // The axis is in the key: a switch moves every bar and tick, so it is
+      // a layout transaction (fade, commit hidden, fade in), never a slide.
+      key: failed ? 'gantt:error' : `gantt:${queryKey(data!.query, data!.query.page)}:${view.axis}`,
       node: (
         <div data-flow-slot="">
           <Gantt
