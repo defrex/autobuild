@@ -1289,9 +1289,12 @@ It follows one dispatch run's repository facts incrementally through
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
 intervals. In local execution mode the header's triage count comes from the
-reduced `DispatchStatus` (`status.triage`), exactly like the queue depth, so a
-frontend refresh reads neither the ticket source nor any extra store value for
-it; viewer mode differs, as described below. The supervised
+reduced `DispatchStatus` (`status.triage`); viewer mode differs, as described
+below. The queue depth in every mode comes from the reduced repository facts'
+latest ticket scan (`facts.scan.queued`, via `repositoryQueueDepth` in
+`packages/core/src/cli/dashboard/header.ts`), whichever run recorded it, so a
+run that starts and yields cannot displace it. In both cases a frontend
+refresh reads neither the ticket source nor any extra store value. The supervised
 kernel child (`frontendStatus`) samples the count through
 `TriageCountSampler` (`packages/core/src/cli/triage-count-sampler.ts`): the
 watch loop pokes it at startup and after each tick returns, so it reads at

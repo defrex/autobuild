@@ -35,7 +35,7 @@ import {
   type CurrentBuildFacts,
   type RepositoryReadFacts,
 } from '../../store/reduced-reads'
-import { dispatchWarningLines } from './header'
+import { dispatchWarningLines, repositoryQueueDepth } from './header'
 import {
   projectBuild,
   projectBuildFromFacts,
@@ -218,7 +218,8 @@ export function projectRowWithEnrichment(
 
 /**
  * The dashboard header for one repository frame: the queue and capacity
- * terms every frontend shows. `states` are the visible builds' reductions;
+ * terms every frontend shows. The queue term is the latest ticket scan's
+ * depth (`repositoryQueueDepth`), never one dispatcher run's status. `states` are the visible builds' reductions;
  * acknowledged aborts and integration nodes do not count as active.
  */
 export function repositoryDashboardHeader(input: {
@@ -237,7 +238,7 @@ export function repositoryDashboardHeader(input: {
   return {
     repo: input.repo,
     ...(input.standby !== undefined ? { standby: input.standby } : {}),
-    queued: status.queued ?? 0,
+    queued: repositoryQueueDepth(repositoryFacts),
     activeCount: [...input.states].filter(
       (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
     ).length,

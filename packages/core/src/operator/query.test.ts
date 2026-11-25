@@ -21,6 +21,11 @@ import {
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
 import { MemoryBuildStore } from '../store/memory'
+import { readRepositoryFacts } from '../store/reduced-reads'
+import { repositoryReadFactsReducer } from '../kernel/read-facts'
+import { repositoryQueueDepth } from '../cli/dashboard/header'
+import { repositoryDashboardHeader } from '../cli/dashboard/poll'
+import { projectRepositoryFrame } from '../web/repository-source'
 import type { Artifact, BuildStore, Clock } from '../store/types'
 import {
   buildDashboardFromProjected,
@@ -110,6 +115,28 @@ async function publishRun(
       pid: run === 'old' ? 100 : 200,
       effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
       roleWarnings,
+    },
+  })
+}
+
+/** The ticket scan a dispatcher records before it publishes a tick: the
+ * repository's queue depth, whichever run recorded it. */
+async function recordTicketScan(store: MemoryBuildStore, queued: number): Promise<void> {
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-scan-completed',
+    payload: {
+      startedAt: clock().toISOString(),
+      readinessFingerprint: 'ready',
+      criteriaFingerprint: 'criteria',
+      mode: 'admission',
+      queued,
+      invalidTickets: 0,
+      ticketDiagnostics: [],
+      dependencyBlocked: 0,
+      dependencyDiagnostics: [],
+      creationWithheld: 0,
+      creationDiagnostics: [],
     },
   })
 }
@@ -318,6 +345,7 @@ describe('operator query wiring', () => {
     const store = new MemoryBuildStore({ clock })
     await publishRun(store, 'old', config(1, 2), ['old warning'])
     await publishRun(store, 'new', config(7, 11), ['role warning'])
+    await recordTicketScan(store, 4)
     await store.appendRepo(REPO, {
       actor: DISPATCHER,
       type: 'dispatcher.tick-completed',
@@ -659,7 +687,7 @@ command = "postgres"
       projected,
       {
         repo: opts.repo,
-        queued: status.queued ?? 0,
+        queued: repositoryEvents.scan?.queued ?? 0,
         activeCount,
         capacity: config.capacity,
         ...(status.triage !== undefined ? { triage: status.triage } : {}),
@@ -722,6 +750,7 @@ command = "postgres"
   async function seedDashboardStore(extraDoneBuilds = 0): Promise<MemoryBuildStore> {
     const store = new MemoryBuildStore({ clock })
     await publishRun(store, 'new', config(7, 11), ['role warning'])
+    await recordTicketScan(store, 2)
     await store.appendRepo(REPO, {
       actor: DISPATCHER,
       type: 'dispatcher.tick-completed',
@@ -1077,6 +1106,78 @@ command = "postgres"
       repositoryPaused: true,
       defaultAutoMerge: false,
       harvestPaused: snapshot.model.harvestPaused,
+    })
+  })
+
+  describe('queue count (#1278)', () => {
+    /** Every surface's queue count for the repository's current facts: the
+     * shared helper, the terminal/overview header, the web repository frame,
+     * and the operator dashboard. */
+    async function queueCounts(store: MemoryBuildStore): Promise<number[]> {
+      const facts = (await readRepositoryFacts(store, REPO)).value
+      return [
+        repositoryQueueDepth(facts),
+        repositoryDashboardHeader({
+          repo: REPO,
+          status: facts.status!,
+          config: config(7, 11),
+          repositoryFacts: facts,
+          capacityBuilds: [],
+          states: [],
+          now,
+        }).queued,
+        projectRepositoryFrame(REPO, facts).frame.repository?.queued ?? -1,
+        (await getOperatorDashboard({ store, repo: REPO, clock })).model.queued,
+      ]
+    }
+
+    async function tick(store: MemoryBuildStore, run: string, queued: number) {
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: {
+          run,
+          queued,
+          counters,
+          janitorDiagnostics: [],
+          ticketDiagnostics: [],
+          creationDiagnostics: [],
+          dependencyDiagnostics: [],
+        },
+      })
+    }
+
+    test('a run that starts, yields, and stops cannot displace the lease holder’s scan', async () => {
+      const store = new MemoryBuildStore({ clock })
+      await publishRun(store, 'holder', config(7, 11))
+      await recordTicketScan(store, 11)
+      await tick(store, 'holder', 11)
+      await publishRun(store, 'yielded', config(7, 11))
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-yielded',
+        payload: { run: 'yielded', holder: 'holder' },
+      })
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run: 'yielded', outcome: 'normal' },
+      })
+      // The scenario reproduces the bug: the reduced status is the yielded run's.
+      expect((await readRepositoryFacts(store, REPO)).value.status?.queued).not.toBe(11)
+      expect(await queueCounts(store)).toEqual([11, 11, 11, 11])
+
+      // A later scan, as after a claim, is what every surface reports next.
+      await recordTicketScan(store, 10)
+      expect(await queueCounts(store)).toEqual([10, 10, 10, 10])
+    })
+
+    test('a repository with no recorded ticket scan reports 0, whatever a tick published', async () => {
+      expect(repositoryQueueDepth(repositoryReadFactsReducer.reduce([]))).toBe(0)
+      const store = new MemoryBuildStore({ clock })
+      await publishRun(store, 'holder', config(7, 11))
+      await tick(store, 'holder', 5)
+      expect(await queueCounts(store)).toEqual([0, 0, 0, 0])
     })
   })
 

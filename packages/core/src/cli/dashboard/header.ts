@@ -24,6 +24,16 @@ export function dispatchWarningLines(status: Readonly<DispatchStatus>): string[]
   ]
 }
 
+/**
+ * The ready-queue depth every frontend shows: the queued count of the latest
+ * completed ticket scan in the repository's reduced facts, whichever
+ * dispatcher run recorded it. A run that starts and yields cannot displace
+ * it. 0 before any scan.
+ */
+export function repositoryQueueDepth(facts: Pick<RepositoryReadFacts, 'scan'>): number {
+  return facts.scan?.queued ?? 0
+}
+
 /** The repository-scope members of a dashboard model. */
 export type DashboardRepositoryHeader = Pick<
   DashboardModel,

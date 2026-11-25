@@ -2726,7 +2726,9 @@ the configured source's bounded state count itself, at most once per 60 s
 while it runs. It keeps its last good value through failed reads and through
 headless ticks that publish no count, and shows `–` until its first read
 succeeds or when the source has no state counts (Linear). `queue` is the
-ready-ticket queue depth, and `active` is occupied capacity (every unfinished
+ready-ticket queue depth measured by the latest completed ticket scan,
+whichever dispatcher run recorded it (0 before any scan), so an overlapping
+run that starts and yields cannot displace it. `active` is occupied capacity (every unfinished
 build except one waiting on tickets, plus finished builds running work again)
 against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports

@@ -237,7 +237,11 @@ resident launcher, execution configuration/plugins, account admission and kernel
 wiring. It never takes or renews a repository lease, starts a child, writes
 dispatch lifecycle facts, or runs intake scans, janitor, sweep, harvest or builds.
 Canonical repository facts supply the observed dispatcher's status and effective
-configuration, independent of the viewer's operator correlation identity. With no
+configuration, independent of the viewer's operator correlation identity. Every
+frontend's queue count (the terminal dashboard in both modes, the web repository
+header and overview, and the operator dashboard) is the queued depth of the latest
+`dispatcher.ticket-scan-completed` in the repository's reduced facts, whichever run
+recorded it, and 0 before any scan. With no
 configuration the display waits, polling bounded canonical state. Fresh viewers
 reuse saved server reductions; missing presentation caches never trigger event
 history reconstruction. Idle polls read zero event rows. Its one ticket-source

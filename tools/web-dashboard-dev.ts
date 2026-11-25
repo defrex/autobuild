@@ -258,12 +258,32 @@ async function replayScenario({
       },
     }),
   )
+  // Every frontend's queue count is the latest ticket scan's depth, which a
+  // real dispatcher records before it publishes the tick.
+  const queued = builds.filter((b) => !b.lease).length
+  await target.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-scan-completed',
+    payload: {
+      startedAt: new Date().toISOString(),
+      readinessFingerprint: 'web-dev',
+      criteriaFingerprint: 'web-dev',
+      mode: 'admission',
+      queued,
+      invalidTickets: 0,
+      ticketDiagnostics: [],
+      dependencyBlocked: 0,
+      dependencyDiagnostics: [],
+      creationWithheld: 0,
+      creationDiagnostics: [],
+    },
+  })
   await target.appendRepo(repo, {
     actor: DISPATCHER,
     type: 'dispatcher.tick-completed',
     payload: {
       run,
-      queued: builds.filter((b) => !b.lease).length,
+      queued,
       counters: Object.fromEntries(
         [
           'merged',
