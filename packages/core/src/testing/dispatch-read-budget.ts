@@ -1309,6 +1309,82 @@ export async function ticketSearchReadBudget(
     }
 }
 
+/** A provider-backed source over `tickets`, counting provider requests: each
+ * entry is one request's sent and received byte sizes. */
+export interface TicketSearchRequestFixture {
+  source: TicketSource
+  reset(): void
+  requests(): Array<{ request: number; response: number }>
+}
+
+/** A search page through a provider-backed source (Linear, for one) costs
+ * exactly one provider request, ships no bodies, returns the shared matcher's
+ * newest-first matches, and costs the same bytes at 100 and 100,000 tickets. */
+export async function ticketSearchRequestBudget(
+  fixture: (population: number, tickets: TicketSearchRow[]) => Promise<TicketSearchRequestFixture>,
+): Promise<void> {
+  const { searchTickets, searchTerms, matchesSearch } = await import('../ports/tickets/search')
+  const populations = [100, 100_000] as const
+  const limit = 5
+  const queries = [
+    { key: 'all' },
+    { key: 'labels', labels: ['dup'] },
+    { key: 'state', state: 'Ready' },
+  ] as const
+  const sizes = new Map<string, { request: number; response: number }>()
+  for (const population of populations) {
+    const tickets = ticketSearchRows(population)
+    const newestFirst = [...tickets].reverse()
+    const terms = searchTerms('NEEDLE')
+    const { source, reset, requests } = await fixture(population, tickets)
+    for (const query of queries) {
+      const state = 'state' in query ? query.state : undefined
+      const labels: readonly string[] = 'labels' in query ? query.labels : []
+      const expected = newestFirst
+        .filter(
+          (ticket) =>
+            (state === undefined || ticket.state === state) &&
+            labels.every((label) => ticket.labels.includes(label)) &&
+            matchesSearch(ticket, terms),
+        )
+        .slice(0, 2 * limit)
+        .map((ticket) => ticket.id)
+      let cursor: string | undefined
+      const seen: string[] = []
+      for (const pageNumber of [1, 2]) {
+        reset()
+        const page = await searchTickets(source, {
+          text: 'NEEDLE',
+          limit,
+          ...(state !== undefined ? { state } : {}),
+          ...(labels.length > 0 ? { labels: [...labels] } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        const sent = requests()
+        expect(sent).toHaveLength(1)
+        expect(page.tickets).toHaveLength(limit)
+        expect(page.cursor).toBeDefined()
+        // A body is at least 1 KiB, so no page of five hits shipped one.
+        expect(sent[0]!.response).toBeLessThan(limit * 1024)
+        sizes.set(`${population}:${query.key}:${pageNumber}`, sent[0]!)
+        seen.push(...page.tickets.map((hit) => hit.id))
+        cursor = page.cursor
+      }
+      expect(seen).toEqual(expected)
+    }
+  }
+  // Only a cursor's digits may grow with the population; cursors may be
+  // encoded, so allow the encoded width of those digits.
+  const digits = 2 * (String(populations[1]).length - String(populations[0]).length)
+  for (const query of queries)
+    for (const pageNumber of [1, 2]) {
+      const small = sizes.get(`${populations[0]}:${query.key}:${pageNumber}`)!
+      const large = sizes.get(`${populations[1]}:${query.key}:${pageNumber}`)!
+      expect(Math.abs(large.request - small.request)).toBeLessThanOrEqual(digits)
+      expect(Math.abs(large.response - small.response)).toBeLessThanOrEqual(digits)
+    }
+}
+
 /** Builds one dispatcher pass's observation inputs for a node build over a
  * fresh memory store, reporting which listing path the source decided on
  * before the pass; `observe` then observes the node with those inputs. */

@@ -75,10 +75,12 @@ export {
   ticketListReadBudget,
   ticketPageReadBudget,
   ticketSearchReadBudget,
+  ticketSearchRequestBudget,
   ticketSearchRows,
   ticketTargetingReadBudget,
   type TicketPageFixture,
   type TicketSearchFixture,
+  type TicketSearchRequestFixture,
   type TicketSearchRow,
   type TicketTargetingFixture,
 } from './dispatch-read-budget'
