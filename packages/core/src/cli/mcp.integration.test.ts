@@ -254,9 +254,13 @@ test('with [orchestrator] enabled the seven sandbox tools advertise and one roun
   const client = await connect()
   try {
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(TOOL_NAMES + 7)
+    expect(tools).toHaveLength(TOOL_NAMES + 11)
     const names = tools.map((tool) => tool.name).sort()
     for (const name of [
+      'sandbox.open',
+      'sandbox.status',
+      'sandbox.close',
+      'sandbox.refresh',
       'sandbox.exec',
       'sandbox.start',
       'sandbox.wait',
@@ -278,6 +282,30 @@ test('with [orchestrator] enabled the seven sandbox tools advertise and one roun
       idempotentHint: false,
     })
 
+    const repoArg = { repo: await realpath(tmp) }
+    const notReady = await client.callTool({
+      name: 'sandbox.exec',
+      arguments: { ...repoArg, command: 'true' },
+    })
+    expect(notReady.isError).toBe(true)
+    expect(JSON.parse((notReady.content as { text: string }[])[0]!.text)).toMatchObject({
+      code: 'sandbox-not-ready',
+      state: 'absent',
+    })
+    const opened = await client.callTool({ name: 'sandbox.open', arguments: repoArg })
+    expect(JSON.parse((opened.content as { text: string }[])[0]!.text)).toMatchObject({
+      state: 'provisioning',
+    })
+    for (let attempt = 0; ; attempt++) {
+      const status = await client.callTool({ name: 'sandbox.status', arguments: repoArg })
+      const state = (
+        JSON.parse((status.content as { text: string }[])[0]!.text) as { state: string }
+      ).state
+      if (state === 'ready') break
+      expect(state).toBe('provisioning')
+      expect(attempt).toBeLessThan(200)
+      await Bun.sleep(50)
+    }
     const roundTrip = await client.callTool({
       name: 'sandbox.exec',
       arguments: { repo: await realpath(tmp), command: 'echo round-trip' },

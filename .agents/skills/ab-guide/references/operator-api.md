@@ -190,7 +190,8 @@ closed table `ab mcp` serves over stdio): the body is the tool's validated input
 included and required to equal the URL's repository — and the response is the
 registry result verbatim. The verified operator token supplies the acting
 identity and, when minted with one, the `via` attribution marker; the body
-never does. Failures keep the shared `{kind,error,code?,progress?}` shape:
+never does. Failures keep the shared `{kind,error,code?,progress?,state?}` shape
+(`state` names the sandbox lifecycle state on a `sandbox-not-ready` refusal):
 validation is `400`, auth `403`, not-found `404`, conflict and refusal `409`,
 internal `500`. The route adds no authority of its own — it is the registry
 behind the token check — so a tool available here is exactly the deployment's
