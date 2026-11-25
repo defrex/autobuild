@@ -1871,6 +1871,9 @@ Where the tools are served:
 
   A new deposit takes effect on the next call. `sandbox-not-ready` and
   `sandbox-unsupported` apply here as they do locally.
+- **A hosted per-repository URL** (`/mcp/<host><path>`) lists `sandbox.*` only
+  when that repository's latest deposited effective config enables
+  `[orchestrator]`. Calls keep the same typed codes.
 
 ### `[upgrade]`
 
