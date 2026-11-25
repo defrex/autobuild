@@ -14,11 +14,15 @@ import { readFile as fsReadFile, rm, stat, writeFile as fsWriteFile } from 'node
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import {
+  redactSandboxMessage,
   SandboxOperationError,
   type OperatorSandboxExecution,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxEnvironmentIdentity,
+  type SandboxProviderStatus,
+  type SandboxProvisionStage,
+  type SandboxRefreshResult,
   type SandboxWaitResult,
 } from './operator-sandbox'
 import type {
@@ -193,6 +197,18 @@ function parseWorktreeList(porcelain: string): WorktreeEntry[] {
   return entries
 }
 
+/** The provisioning marker written into a finished operator sandbox. */
+const SANDBOX_MARKER = '.autobuild-sandbox-provisioned'
+const SHA_PATTERN = /^[0-9a-f]{40,64}$/i
+
+/** A provision attempt stopped by `close` or `release`; not a failure. */
+class SandboxCancelledError extends Error {
+  override readonly name = 'SandboxCancelledError'
+  constructor() {
+    super('operator sandbox provisioning was cancelled')
+  }
+}
+
 export class GitWorktreeProvider implements WorkspaceProvider {
   readonly name = 'git-worktree'
   readonly orchestratorSandbox: OperatorSandboxExecution
@@ -252,6 +268,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       opts.exitDrainGraceMs ?? GitWorktreeProvider.DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS
     this.exec = opts.exec ?? spawnExec
     this.orchestratorSandbox = {
+      lifecycleSupported: true,
+      open: (input) => this.openSandbox(input),
+      status: (input) => this.sandboxStatus(input),
+      close: (input) => this.closeSandbox(input),
+      refresh: (handle, input) => this.refreshSandbox(handle, input),
       describe: (input) => Promise.resolve(this.sandboxIdentity(input.repo, input.operator)),
       ensure: (input) => this.ensureSandbox(input),
       exec: (handle, request) => this.sandboxExec(handle, request),
@@ -748,12 +769,22 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return parseWorktreeList(list.stdout).some((entry) => resolve(entry.path) === resolve(path))
   }
 
-  private async ensureSandbox(input: {
-    repo: string
-    operator: string
-    baseBranch: string
-  }): Promise<SandboxEnvironmentIdentity> {
+  /** Blocking provision primitive. `onStage` reports `checkout` before the
+   * base is resolved and the worktree added, and `setup` before the setup
+   * command; `signal` cancels between steps and kills a running setup, and a
+   * cancelled attempt removes its half worktree and throws
+   * `SandboxCancelledError`. The marker records the selected base head as
+   * JSON `{"baseSha":"<sha>"}` so a later process can recover it. */
+  private async ensureSandbox(
+    input: {
+      repo: string
+      operator: string
+      baseBranch: string
+    },
+    control: { onStage?: (stage: SandboxProvisionStage) => void; signal?: AbortSignal } = {},
+  ): Promise<SandboxEnvironmentIdentity> {
     const identity = this.sandboxIdentity(input.repo, input.operator)
+    const { signal } = control
     if (await this.isRegisteredWorktree(identity.environmentId, input.repo)) {
       // Pre-existing sandboxes provisioned before the info/exclude write
       // landed (AUT-580) keep an unexcluded marker; write the exclusion on
@@ -763,8 +794,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       await this.excludeProvisioningMarker(identity.workspacePath)
       return identity
     }
+    control.onStage?.('checkout')
+    if (signal?.aborted) throw new SandboxCancelledError()
     await mkdir(this.sandboxRoot, { recursive: true })
     const baseHead = await this.resolveCommit(input.repo, `refs/heads/${input.baseBranch}`)
+    if (signal?.aborted) throw new SandboxCancelledError()
     await this.gitOrThrow(input.repo, [
       'worktree',
       'add',
@@ -773,18 +807,27 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       baseHead,
     ])
     try {
+      if (signal?.aborted) throw new SandboxCancelledError()
       await this.excludeProvisioningMarker(identity.workspacePath)
-      const marker = join(identity.workspacePath, '.autobuild-sandbox-provisioned')
+      const marker = join(identity.workspacePath, SANDBOX_MARKER)
       const provisioned = await stat(marker).then(
         () => true,
         () => false,
       )
       if (!provisioned && this.setupCommand !== undefined && this.setupCommand.trim() !== '') {
+        control.onStage?.('setup')
+        if (signal?.aborted) throw new SandboxCancelledError()
         // The setup command runs with the same credential-free guest
         // environment as every tool exec — never the host environment
         // wholesale, or a setup script would be a second route to build
         // state. Unbounded: provisioning may install for a long time.
-        const result = await this.spawnSandboxCommand(this.setupCommand, identity.workspacePath)
+        const result = await this.spawnSandboxCommand(
+          this.setupCommand,
+          identity.workspacePath,
+          undefined,
+          signal,
+        )
+        if (signal?.aborted) throw new SandboxCancelledError()
         if (result.exitCode !== 0) {
           throw new SandboxOperationError(
             'provision',
@@ -792,14 +835,240 @@ export class GitWorktreeProvider implements WorkspaceProvider {
           )
         }
       }
-      await fsWriteFile(marker, '')
+      if (signal?.aborted) throw new SandboxCancelledError()
+      await fsWriteFile(marker, JSON.stringify({ baseSha: baseHead }))
     } catch (error) {
       // A half-provisioned worktree is removed so the next call starts over.
       await this.git(input.repo, ['worktree', 'remove', '--force', identity.environmentId])
       await this.git(input.repo, ['worktree', 'prune'])
+      await rm(identity.environmentId, { recursive: true, force: true }).catch(() => {})
       throw error
     }
     return { ...identity, baseSha: baseHead }
+  }
+
+  /** The provisioning marker's recorded metadata: `null` when the marker is
+   * missing, `{}` for a legacy empty or unparseable marker. */
+  private async readSandboxMarker(workspacePath: string): Promise<{ baseSha?: string } | null> {
+    let content: string
+    try {
+      content = await fsReadFile(join(workspacePath, SANDBOX_MARKER), 'utf8')
+    } catch {
+      return null
+    }
+    try {
+      const parsed = JSON.parse(content) as { baseSha?: unknown }
+      return typeof parsed?.baseSha === 'string' && SHA_PATTERN.test(parsed.baseSha)
+        ? { baseSha: parsed.baseSha }
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  // ── Operator sandbox lifecycle (#1223) ─────────────────────────
+  //
+  // `open` starts provisioning as an in-process background attempt; `status`
+  // probes the in-flight map, the recorded failure, and the worktree plus its
+  // marker; `close` cancels an attempt and kills detached commands but keeps
+  // the checkout; `refresh` fast-forwards a clean detached checkout.
+
+  private readonly sandboxInflight = new Map<
+    string,
+    {
+      kind: 'provision' | 'resume'
+      promise: Promise<SandboxProviderStatus>
+      abort: AbortController
+    }
+  >()
+  private readonly sandboxFailures = new Map<
+    string,
+    { stage: SandboxProvisionStage; message: string }
+  >()
+
+  private async openSandbox(input: {
+    repo: string
+    operator: string
+    baseBranch: string
+  }): Promise<{
+    status: SandboxProviderStatus
+    settled?: Promise<SandboxProviderStatus>
+  }> {
+    const identity = this.sandboxIdentity(input.repo, input.operator)
+    const id = identity.environmentId
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight !== undefined) {
+      return {
+        status: {
+          state: inflight.kind === 'resume' ? 'resuming' : 'provisioning',
+          kind: inflight.kind,
+        },
+        settled: inflight.promise,
+      }
+    }
+    if (await this.isRegisteredWorktree(id, input.repo)) {
+      const marker = await this.readSandboxMarker(identity.workspacePath)
+      if (marker !== null) {
+        // Keeps the AUT-580 heal on the reuse path.
+        await this.excludeProvisioningMarker(identity.workspacePath)
+        this.sandboxFailures.delete(id)
+        const headSha = await this.resolveOptionalCommit(identity.workspacePath, 'HEAD')
+        return {
+          status: {
+            state: 'ready',
+            handle: {
+              ...identity,
+              ...(marker.baseSha !== undefined ? { baseSha: marker.baseSha } : {}),
+            },
+            kind: 'resume',
+            ...(headSha !== null ? { headSha } : {}),
+          },
+        }
+      }
+      // An interrupted provision: start over.
+      await this.git(input.repo, ['worktree', 'remove', '--force', id])
+      await this.git(input.repo, ['worktree', 'prune'])
+    }
+    this.sandboxFailures.delete(id)
+    const abort = new AbortController()
+    const entry = {
+      kind: 'provision' as const,
+      abort,
+      promise: Promise.resolve<SandboxProviderStatus>({ state: 'absent' }),
+    }
+    this.sandboxInflight.set(id, entry)
+    entry.promise = (async (): Promise<SandboxProviderStatus> => {
+      let stage: SandboxProvisionStage = 'checkout'
+      try {
+        const handle = await this.ensureSandbox(input, {
+          signal: abort.signal,
+          onStage: (next) => {
+            stage = next
+          },
+        })
+        const headSha = await this.resolveOptionalCommit(handle.workspacePath, 'HEAD')
+        return {
+          state: 'ready',
+          handle,
+          kind: 'provision',
+          ...(headSha !== null ? { headSha } : {}),
+        }
+      } catch (error) {
+        if (error instanceof SandboxCancelledError) return { state: 'absent', cancelled: true }
+        const failure = {
+          stage:
+            error instanceof SandboxOperationError && error.stage === 'environment'
+              ? ('environment' as const)
+              : stage,
+          message:
+            redactSandboxMessage(error instanceof Error ? error.message : String(error)) ||
+            'operator sandbox provisioning failed',
+        }
+        this.sandboxFailures.set(id, failure)
+        return { state: 'failed', failure }
+      } finally {
+        if (this.sandboxInflight.get(id) === entry) this.sandboxInflight.delete(id)
+      }
+    })()
+    return { status: { state: 'provisioning', kind: 'provision' }, settled: entry.promise }
+  }
+
+  private async sandboxStatus(input: {
+    repo: string
+    operator: string
+  }): Promise<SandboxProviderStatus> {
+    const identity = this.sandboxIdentity(input.repo, input.operator)
+    const id = identity.environmentId
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight !== undefined) {
+      return { state: inflight.kind === 'resume' ? 'resuming' : 'provisioning' }
+    }
+    const failure = this.sandboxFailures.get(id)
+    if (failure !== undefined) return { state: 'failed', failure }
+    if (!(await this.isRegisteredWorktree(id, input.repo))) return { state: 'absent' }
+    const marker = await this.readSandboxMarker(identity.workspacePath)
+    if (marker === null) {
+      return {
+        state: 'failed',
+        failure: {
+          stage: 'provision',
+          message: 'provisioning was interrupted before it finished; call sandbox.open to retry',
+        },
+      }
+    }
+    const headSha = await this.resolveOptionalCommit(identity.workspacePath, 'HEAD')
+    return {
+      state: 'ready',
+      handle: { ...identity, ...(marker.baseSha !== undefined ? { baseSha: marker.baseSha } : {}) },
+      ...(headSha !== null ? { headSha } : {}),
+    }
+  }
+
+  /** Abort an in-flight attempt and wait for it to finish its own cleanup. */
+  private async cancelSandboxAttempt(id: string): Promise<SandboxProviderStatus | undefined> {
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight === undefined) return undefined
+    inflight.abort.abort()
+    return inflight.promise
+  }
+
+  private async closeSandbox(input: {
+    repo: string
+    operator: string
+    environmentId: string
+  }): Promise<{ outcome: 'closed' | 'absent'; attempt?: SandboxProviderStatus }> {
+    const id = resolve(input.environmentId)
+    const attempt = await this.cancelSandboxAttempt(id)
+    for (const child of this.sandboxChildren.values()) {
+      if (child.environmentId !== id || child.exitCode !== null) continue
+      try {
+        child.proc.kill('SIGTERM')
+      } catch {
+        /* already exited */
+      }
+    }
+    const kept =
+      (await this.isRegisteredWorktree(id, input.repo)) &&
+      (await this.readSandboxMarker(id)) !== null
+    return { outcome: kept ? 'closed' : 'absent', ...(attempt !== undefined ? { attempt } : {}) }
+  }
+
+  private async refreshSandbox(
+    handle: SandboxEnvironmentIdentity,
+    input: { repo: string; baseBranch: string },
+  ): Promise<SandboxRefreshResult> {
+    const cwd = handle.workspacePath
+    const base = await this.resolveCommit(input.repo, `refs/heads/${input.baseBranch}`)
+    const head = await this.resolveCommit(cwd, 'HEAD')
+    const status = await this.gitOrThrow(cwd, ['status', '--porcelain'])
+    if (status.stdout.trim() !== '') {
+      return {
+        outcome: 'refused',
+        reason: 'dirty',
+        message:
+          'the sandbox checkout has uncommitted changes; commit or discard them before refreshing',
+      }
+    }
+    if (head === base || (await this.isAncestor(cwd, base, head))) {
+      return { outcome: 'current', headSha: head, baseSha: base, previousHeadSha: head }
+    }
+    if (!(await this.isAncestor(cwd, head, base))) {
+      return {
+        outcome: 'refused',
+        reason: 'diverged',
+        message: `the checkout head ${head} has diverged from ${input.baseBranch} (${base}); a fast-forward is impossible, so rebase inside the sandbox or run sandbox.reset`,
+      }
+    }
+    await this.gitOrThrow(cwd, [
+      '-c',
+      'advice.detachedHead=false',
+      'checkout',
+      '--quiet',
+      '--detach',
+      base,
+    ])
+    await fsWriteFile(join(cwd, SANDBOX_MARKER), JSON.stringify({ baseSha: base }))
+    return { outcome: 'refreshed', headSha: base, baseSha: base, previousHeadSha: head }
   }
 
   /** Idempotently exclude the provisioning marker in the worktree's
@@ -815,7 +1084,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * failure string — the fake workspace uses for the same case, keeping
    * the two workspace-port implementations aligned. */
   private async excludeProvisioningMarker(workspacePath: string): Promise<void> {
-    const markerName = '.autobuild-sandbox-provisioned'
+    const markerName = SANDBOX_MARKER
     const exclude = await this.gitOrThrow(workspacePath, [
       'rev-parse',
       '--git-path',
@@ -844,11 +1113,15 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * guest environment (an empty record plus the host PATH and the forwarded
    * names — never the host environment wholesale). `timeoutSeconds` bounds
    * the child and kills it past the bound; undefined runs unbounded (the
-   * setup command may install for a long time). */
+   * setup command may install for a long time). `signal` runs the command
+   * in its own process group (`setsid`) and, on abort, sends the group
+   * SIGTERM and SIGKILL after a 2 s grace, so a cancelled setup and the
+   * children it forked stop together. */
   private async spawnSandboxCommand(
     command: string,
     cwd: string,
     timeoutSeconds?: number,
+    signal?: AbortSignal,
   ): Promise<SandboxCommandResult> {
     const proc = Bun.spawn(['sh', '-c', command], {
       cwd,
@@ -856,7 +1129,31 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       env: this.sandboxEnv(),
+      ...(signal !== undefined ? { detached: true } : {}),
     })
+    if (signal !== undefined) {
+      const killGroup = (sig: NodeJS.Signals): void => {
+        try {
+          process.kill(-proc.pid, sig)
+        } catch {
+          try {
+            proc.kill(sig)
+          } catch {
+            /* already exited */
+          }
+        }
+      }
+      const onAbort = (): void => {
+        killGroup('SIGTERM')
+        const escalate = setTimeout(() => {
+          if (proc.exitCode === null && proc.signalCode === null) killGroup('SIGKILL')
+        }, 2_000)
+        void proc.exited.then(() => clearTimeout(escalate))
+      }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+      void proc.exited.then(() => signal.removeEventListener('abort', onAbort))
+    }
     if (timeoutSeconds === undefined) {
       const [stdout, stderr, exitCode] = await Promise.all([
         new Response(proc.stdout).text(),
@@ -947,6 +1244,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       stdout: string
       stderr: string
       exitCode: number | null
+      /** The environment the command runs in, so `close` can stop it. */
+      environmentId: string
     }
   >()
 
@@ -1054,7 +1353,13 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       env: this.sandboxEnv(),
     })
     const commandId = `sbcmd-${randomBytes(8).toString('hex')}`
-    this.sandboxChildren.set(commandId, { proc, stdout: '', stderr: '', exitCode: null })
+    this.sandboxChildren.set(commandId, {
+      proc,
+      stdout: '',
+      stderr: '',
+      exitCode: null,
+      environmentId: resolve(handle.environmentId),
+    })
     this.evictFinishedBeyondCap()
     this.trackChildStreams(commandId, { proc })
     return { commandId }
@@ -1146,6 +1451,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     environmentId: string
   }): Promise<{ snapshots: { outcome: 'confirmed' } }> {
     const path = resolve(input.environmentId)
+    await this.cancelSandboxAttempt(path)
+    this.sandboxFailures.delete(path)
     const repo = this.repos.get(path) ?? (await this.discoverRepo(path)) ?? input.repo
     const removed = await this.git(repo, ['worktree', 'remove', '--force', path])
     if (

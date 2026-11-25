@@ -1155,6 +1155,198 @@ describe('GitWorktreeProvider operator sandbox', () => {
     })
   })
 
+  describe('lifecycle (#1223)', () => {
+    const plainProvider = () =>
+      new GitWorktreeProvider({ root, sandboxRoot, envSource: { PATH: process.env.PATH ?? '' } })
+
+    test('open provisions in the background; the base head survives in the marker for a fresh provider', async () => {
+      const main = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+      const opened = await provider.orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      expect(opened.status).toEqual({ state: 'provisioning', kind: 'provision' })
+      const settled = await opened.settled!
+      expect(settled).toMatchObject({
+        state: 'ready',
+        kind: 'provision',
+        handle: { baseSha: main },
+      })
+      expect(await provider.orchestratorSandbox.status({ repo, operator: 'ops' })).toMatchObject({
+        state: 'ready',
+        headSha: main,
+        handle: { baseSha: main },
+      })
+      const reopened = await provider.orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      expect(reopened.settled).toBeUndefined()
+      expect(reopened.status).toMatchObject({
+        state: 'ready',
+        kind: 'resume',
+        handle: { baseSha: main },
+      })
+      expect(
+        await plainProvider().orchestratorSandbox.status({ repo, operator: 'ops' }),
+      ).toMatchObject({
+        state: 'ready',
+        handle: { baseSha: main },
+      })
+      // A legacy empty marker is ready with no recorded base.
+      await writeFile(join(settled.handle!.workspacePath, '.autobuild-sandbox-provisioned'), '')
+      const legacy = await plainProvider().orchestratorSandbox.status({ repo, operator: 'ops' })
+      expect(legacy.state).toBe('ready')
+      expect(legacy.handle?.baseSha).toBeUndefined()
+    })
+
+    test('a failing setup settles failed and removes the half worktree; an interrupted provision reopens', async () => {
+      const failing = new GitWorktreeProvider({
+        root,
+        sandboxRoot,
+        setupCommand: 'echo broken >&2; exit 7',
+        envSource: { PATH: process.env.PATH ?? '' },
+      })
+      const opened = await failing.orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      const settled = await opened.settled!
+      expect(settled).toMatchObject({ state: 'failed', failure: { stage: 'setup' } })
+      expect(settled.failure?.message).toContain('broken')
+      const identity = await failing.orchestratorSandbox.describe({ repo, operator: 'ops' })
+      expect(existsSync(identity.workspacePath)).toBe(false)
+      expect((await failing.orchestratorSandbox.status({ repo, operator: 'ops' })).state).toBe(
+        'failed',
+      )
+
+      const plain = plainProvider()
+      await (await plain.orchestratorSandbox.open({ repo, operator: 'ops', baseBranch: 'main' }))
+        .settled
+      await rm(join(identity.workspacePath, '.autobuild-sandbox-provisioned'))
+      expect(
+        await plainProvider().orchestratorSandbox.status({ repo, operator: 'ops' }),
+      ).toMatchObject({
+        state: 'failed',
+        failure: { stage: 'provision', message: expect.stringContaining('interrupted') },
+      })
+      const retried = await plain.orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      expect(retried.status.state).toBe('provisioning')
+      expect((await retried.settled!).state).toBe('ready')
+    })
+
+    test('close cancels an in-flight setup, kills its process, and leaves no checkout', async () => {
+      const pidFile = join(sandboxRoot, 'setup.pid')
+      const hanging = new GitWorktreeProvider({
+        root,
+        sandboxRoot,
+        setupCommand: 'echo $$ > ../setup.pid; exec sleep 60',
+        envSource: { PATH: process.env.PATH ?? '' },
+      })
+      const opened = await hanging.orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      expect(opened.status.state).toBe('provisioning')
+      for (let i = 0; i < 200 && !existsSync(pidFile); i++) await Bun.sleep(25)
+      const pid = Number((await readFile(pidFile, 'utf8')).trim())
+      const identity = await hanging.orchestratorSandbox.describe({ repo, operator: 'ops' })
+      const started = Date.now()
+      const closed = await hanging.orchestratorSandbox.close({
+        repo,
+        operator: 'ops',
+        environmentId: identity.environmentId,
+      })
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(closed).toEqual({ outcome: 'absent', attempt: { state: 'absent', cancelled: true } })
+      expect(() => process.kill(pid, 0)).toThrow()
+      expect(await run(['git', 'worktree', 'list', '--porcelain'], repo)).not.toContain(
+        identity.environmentId,
+      )
+      expect(existsSync(identity.workspacePath)).toBe(false)
+      expect(await opened.settled!).toEqual({ state: 'absent', cancelled: true })
+      expect((await hanging.orchestratorSandbox.status({ repo, operator: 'ops' })).state).toBe(
+        'absent',
+      )
+      const fresh = await plainProvider().orchestratorSandbox.open({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      })
+      expect((await fresh.settled!).state).toBe('ready')
+    })
+
+    test('close stops running detached commands and keeps the checkout', async () => {
+      const plain = plainProvider()
+      const ready = await (
+        await plain.orchestratorSandbox.open({ repo, operator: 'ops', baseBranch: 'main' })
+      ).settled!
+      const handle = ready.handle!
+      const { commandId } = await plain.orchestratorSandbox.start(handle, { command: 'sleep 30' })
+      expect(
+        await plain.orchestratorSandbox.close({
+          repo,
+          operator: 'ops',
+          environmentId: handle.environmentId,
+        }),
+      ).toEqual({ outcome: 'closed' })
+      expect(
+        (await plain.orchestratorSandbox.wait(handle, { commandId, waitSeconds: 5 })).state,
+      ).toBe('exited')
+      expect(existsSync(join(handle.workspacePath, 'README.md'))).toBe(true)
+    })
+
+    test('refresh fast-forwards, reports current, and refuses dirty or diverged checkouts unchanged', async () => {
+      const plain = plainProvider()
+      const ready = await (
+        await plain.orchestratorSandbox.open({ repo, operator: 'ops', baseBranch: 'main' })
+      ).settled!
+      const handle = ready.handle!
+      const before = await run(['git', 'rev-parse', 'HEAD'], handle.workspacePath)
+      const advanced = await commitFile(repo, 'next.txt', 'next\n', 'advance main')
+      expect(await plain.orchestratorSandbox.refresh(handle, { repo, baseBranch: 'main' })).toEqual(
+        {
+          outcome: 'refreshed',
+          headSha: advanced,
+          baseSha: advanced,
+          previousHeadSha: before,
+        },
+      )
+      expect(await run(['git', 'rev-parse', 'HEAD'], handle.workspacePath)).toBe(advanced)
+      expect(
+        (await plain.orchestratorSandbox.refresh(handle, { repo, baseBranch: 'main' })).outcome,
+      ).toBe('current')
+
+      await writeFile(join(handle.workspacePath, 'scratch.txt'), 'wip\n')
+      expect(
+        await plain.orchestratorSandbox.refresh(handle, { repo, baseBranch: 'main' }),
+      ).toMatchObject({
+        outcome: 'refused',
+        reason: 'dirty',
+      })
+      expect(existsSync(join(handle.workspacePath, 'scratch.txt'))).toBe(true)
+      await rm(join(handle.workspacePath, 'scratch.txt'))
+
+      const local = await commitFile(handle.workspacePath, 'local.txt', 'local\n', 'local work')
+      await commitFile(repo, 'later.txt', 'later\n', 'advance main again')
+      expect(
+        await plain.orchestratorSandbox.refresh(handle, { repo, baseBranch: 'main' }),
+      ).toMatchObject({
+        outcome: 'refused',
+        reason: 'diverged',
+      })
+      expect(await run(['git', 'rev-parse', 'HEAD'], handle.workspacePath)).toBe(local)
+    })
+  })
+
   test('sandboxPublication pushes an exact sha to one branch against a real temp origin', async () => {
     // A bare origin so the push has a real network-style destination; the
     // worktree's origin remote carries the host's local forge configuration

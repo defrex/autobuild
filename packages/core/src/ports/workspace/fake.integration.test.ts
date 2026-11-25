@@ -154,6 +154,67 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     expect((await git(identity.workspacePath, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(expected)
   })
 
+  test('lifecycle: open settles ready, close keeps the checkout, refresh fast-forwards from a git source (#1223)', async () => {
+    await git(source, ['init', '-q', '-b', 'main'])
+    await git(source, ['config', 'user.email', 't@t.invalid'])
+    await git(source, ['config', 'user.name', 't'])
+    await git(source, ['add', '-A'])
+    await git(source, ['commit', '-q', '-m', 'seed'])
+    const opened = await provider.orchestratorSandbox.open({
+      repo: source,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    expect(opened.status.state).toBe('provisioning')
+    const ready = await opened.settled!
+    expect(ready.state).toBe('ready')
+    const handle = ready.handle!
+    expect(
+      await provider.orchestratorSandbox.close({
+        repo: source,
+        operator: 'ops',
+        environmentId: handle.environmentId,
+      }),
+    ).toEqual({ outcome: 'closed' })
+    await writeFile(join(source, 'next.txt'), 'next\n')
+    await git(source, ['add', '-A'])
+    await git(source, ['commit', '-q', '-m', 'advance'])
+    const advanced = (await git(source, ['rev-parse', 'refs/heads/main'])).stdout.trim()
+    expect(
+      await provider.orchestratorSandbox.refresh(handle, { repo: source, baseBranch: 'main' }),
+    ).toMatchObject({
+      outcome: 'refreshed',
+      headSha: advanced,
+      baseSha: advanced,
+    })
+  })
+
+  test('lifecycle: close cancels a hanging setup and removes the copied checkout (#1223)', async () => {
+    const hanging = new FakeWorkspaceProvider({
+      sandboxRoot: join(tmp, 'sandboxes-hang'),
+      sandboxSetupCommand: 'exec sleep 60',
+      envSource: { PATH: process.env.PATH ?? '' },
+    })
+    const opened = await hanging.orchestratorSandbox.open({
+      repo: source,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const identity = await hanging.orchestratorSandbox.describe({ repo: source, operator: 'ops' })
+    for (let i = 0; i < 200 && hanging.sandboxExecEnvironments.length === 0; i++)
+      await Bun.sleep(25)
+    const started = Date.now()
+    const closed = await hanging.orchestratorSandbox.close({
+      repo: source,
+      operator: 'ops',
+      environmentId: identity.environmentId,
+    })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(closed.attempt).toEqual({ state: 'absent', cancelled: true })
+    expect(await opened.settled!).toEqual({ state: 'absent', cancelled: true })
+    expect(await Bun.file(join(identity.workspacePath, 'README.md')).exists()).toBe(false)
+  })
+
   test('every recorded guest environment holds only PATH and forwarded names', async () => {
     const recording = new FakeWorkspaceProvider({
       sandboxRoot: join(tmp, 'sandboxes-fwd'),
