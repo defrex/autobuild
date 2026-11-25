@@ -4,6 +4,8 @@ import { TicketSourceRateLimitError } from '../types'
 import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
 import { TicketIssueLinksUnsupported } from './issue-links'
 import { TicketRevisionUnsupported, mutateTicketIfRevision, ticketRevision } from './revision'
+import { TicketSearchCursorInvalid, type TicketSearchInput, searchTickets } from './search'
+import { type TicketSearchRow, ticketSearchRequestBudget } from '../../testing/dispatch-read-budget'
 
 interface RecordedCall {
   url: string
@@ -3003,5 +3005,245 @@ describe('Linear priority', () => {
       }),
     ).rejects.toBeInstanceOf(TicketRevisionUnsupported)
     expect(calls).toHaveLength(0)
+  })
+})
+
+/** A Linear `issues` endpoint that evaluates the search filter it is sent over
+ * `rows` (oldest first; answered newest first). Unknown filter keys throw, so
+ * the fake cannot quietly agree with a filter shape Linear would not read. */
+function fakeLinearSearch(rows: TicketSearchRow[]) {
+  let sizes: Array<{ request: number; response: number }> = []
+  const comparator = (value: unknown, op: string): string => {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length !== 1 || entries[0]![0] !== op)
+      throw new Error(`fakeLinearSearch: unsupported comparator ${JSON.stringify(value)}`)
+    return String(entries[0]![1])
+  }
+  const matches = (row: TicketSearchRow, filter: Record<string, unknown>): boolean =>
+    Object.entries(filter).every(([key, value]) => {
+      const nested = value as Record<string, unknown>
+      switch (key) {
+        case 'team':
+          return comparator(nested.key, 'eq') === 'ENG'
+        case 'state':
+          return row.state === comparator(nested.name, 'eq')
+        case 'and':
+          return (value as Record<string, unknown>[]).every((f) => matches(row, f))
+        case 'or':
+          return (value as Record<string, unknown>[]).some((f) => matches(row, f))
+        case 'title':
+        case 'description': {
+          const term = comparator(value, 'containsIgnoreCase').toLowerCase()
+          return (key === 'title' ? row.title : row.body).toLowerCase().includes(term)
+        }
+        case 'labels':
+          return row.labels.includes(comparator((nested.some as { name: unknown }).name, 'eq'))
+        default:
+          throw new Error(`fakeLinearSearch: unsupported filter key ${key}`)
+      }
+    })
+  const fetchFn: LinearFetch = async (_url, init) => {
+    const { query, variables } = JSON.parse(init.body) as {
+      query: string
+      variables: { filter: Record<string, unknown>; first: number; after: string | null }
+    }
+    if (!/includeArchived: true, orderBy: createdAt/.test(query))
+      throw new Error('fakeLinearSearch: expected an archived, createdAt-ordered issues read')
+    const hits: TicketSearchRow[] = []
+    let started = variables.after === null
+    for (let i = rows.length - 1; i >= 0 && hits.length <= variables.first; i--) {
+      const row = rows[i]!
+      if (!started) {
+        started = row.id === variables.after
+        continue
+      }
+      if (matches(row, variables.filter)) hits.push(row)
+    }
+    const page = hits.slice(0, variables.first)
+    const body = {
+      data: {
+        issues: {
+          nodes: page.map((row) => ({
+            identifier: row.id,
+            title: row.title,
+            state: { name: row.state },
+            labels: connection(row.labels.map((name) => ({ name }))),
+            nodeLabels: { nodes: [] },
+            parent: null,
+          })),
+          pageInfo: {
+            hasNextPage: hits.length > variables.first,
+            endCursor: page.at(-1)?.id ?? null,
+          },
+        },
+      },
+    }
+    sizes.push({ request: init.body.length, response: JSON.stringify(body).length })
+    return { ok: true, status: 200, json: async () => body }
+  }
+  return {
+    fetchFn,
+    reset: () => {
+      sizes = []
+    },
+    requests: () => [...sizes],
+  }
+}
+
+function searchIssue(over: Record<string, unknown> = {}) {
+  return {
+    identifier: 'ENG-1',
+    title: 'Auth rate limits',
+    state: { name: 'Ready' },
+    labels: connection([{ name: 'a' }, { name: 'b' }]),
+    nodeLabels: { nodes: [] },
+    parent: null,
+    ...over,
+  }
+}
+
+describe('Linear search', () => {
+  test('one team-filtered issues request maps compact hits without bodies', async () => {
+    const node = { nodes: [{ name: 'node' }] }
+    const { fetchFn, calls } = fakeLinear([
+      response([
+        searchIssue({
+          identifier: 'ENG-3',
+          state: null,
+          labels: connection([{ name: 'node' }, { name: 'a' }]),
+          nodeLabels: node,
+        }),
+        searchIssue({
+          identifier: 'ENG-4',
+          parent: { identifier: 'ENG-3', team: { key: 'ENG' }, labels: node },
+        }),
+        searchIssue({
+          identifier: 'ENG-5',
+          parent: { identifier: 'OPS-1', team: { key: 'OPS' }, labels: node },
+        }),
+        searchIssue({
+          identifier: 'ENG-6',
+          parent: { identifier: 'ENG-2', team: { key: 'ENG' }, labels: { nodes: [] } },
+        }),
+      ] as never),
+    ])
+    const page = await searchTickets(makeSource(fetchFn), {
+      text: 'Auth  RATE auth',
+      state: 'Ready',
+      labels: ['b', 'a', 'b'],
+    })
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.query).toContain('includeArchived: true, orderBy: createdAt')
+    expect(call.query).not.toContain('description')
+    const term = (t: string) => ({
+      or: [{ title: { containsIgnoreCase: t } }, { description: { containsIgnoreCase: t } }],
+    })
+    const label = (name: string) => ({ labels: { some: { name: { eq: name } } } })
+    expect(call.variables).toEqual({
+      filter: {
+        team: { key: { eq: 'ENG' } },
+        state: { name: { eq: 'Ready' } },
+        and: [term('auth'), term('rate'), label('a'), label('b')],
+      },
+      first: 20,
+      after: null,
+      nodeLabel: { name: { eq: 'node' } },
+    })
+    const title = 'Auth rate limits'
+    expect(page).toEqual({
+      tickets: [
+        { id: 'ENG-3', title, labels: ['node', 'a'], kind: 'node' },
+        { id: 'ENG-4', title, state: 'Ready', labels: ['a', 'b'], kind: 'work', target: 'ENG-3' },
+        { id: 'ENG-5', title, state: 'Ready', labels: ['a', 'b'], kind: 'work' },
+        { id: 'ENG-6', title, state: 'Ready', labels: ['a', 'b'], kind: 'work' },
+      ],
+      diagnostics: [],
+    })
+  })
+
+  test('cursors round-trip Linear pages and foreign cursors are refused before any request', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      response([searchIssue()] as never, true, 'c1'),
+      response([searchIssue({ identifier: 'ENG-0' })] as never),
+    ])
+    const source = makeSource(fetchFn)
+    const query = { text: 'auth', state: 'Ready', labels: ['a'], limit: 1 }
+    const first = await searchTickets(source, query)
+    expect(first.cursor).toStartWith('linear1.')
+    const last = await searchTickets(source, { ...query, cursor: first.cursor })
+    expect(calls[1]!.variables.after).toBe('c1')
+    expect(last.cursor).toBeUndefined()
+
+    const ops = fakeLinear([response([searchIssue()] as never, true, 'c1')])
+    const opsCursor = (
+      await searchTickets(
+        new LinearTicketSource({ apiKey: 'k', teamKey: 'OPS', fetchFn: ops.fetchFn }),
+        query,
+      )
+    ).cursor!
+    const encode = (payload: unknown) =>
+      `linear1.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`
+    const refused: Array<[string, TicketSearchInput]> = [
+      ['5', query],
+      ['garbage', query],
+      [`linear2.${first.cursor!.slice(8)}`, query],
+      ['linear1.!!!', query],
+      [encode({ k: 'x' }), query],
+      [encode([1, 2]), query],
+      [first.cursor!, { ...query, text: 'other' }],
+      [first.cursor!, { ...query, state: 'Triage' }],
+      [first.cursor!, { ...query, labels: ['b'] }],
+      [opsCursor, query],
+    ]
+    for (const [cursor, q] of refused) {
+      const none = fakeLinear([])
+      const error = await rejectionOf(searchTickets(makeSource(none.fetchFn), { ...q, cursor }))
+      expect(error).toBeInstanceOf(TicketSearchCursorInvalid)
+      expect(none.calls).toHaveLength(0)
+    }
+  })
+
+  test('one Linear request per page at 100 and 100,000 issues, matching the shared matcher', async () => {
+    await ticketSearchRequestBudget(async (_population, rows) => {
+      const fake = fakeLinearSearch(rows)
+      return { source: makeSource(fake.fetchFn), reset: fake.reset, requests: fake.requests }
+    })
+  })
+
+  test('label overflow lists the first 50 with a diagnostic and no follow-up read', async () => {
+    const labels = Array.from({ length: 50 }, (_, i) => ({ name: `l${i}` }))
+    const { fetchFn, calls } = fakeLinear([
+      response([
+        searchIssue({
+          labels: connection(labels, true, 'more'),
+          nodeLabels: { nodes: [{ name: 'node' }] },
+        }),
+      ] as never),
+    ])
+    const page = await searchTickets(makeSource(fetchFn), { text: 'auth' })
+    expect(calls).toHaveLength(1)
+    expect(page.tickets[0]).toMatchObject({ kind: 'node', labels: labels.map((l) => l.name) })
+    expect(page.diagnostics).toEqual([
+      'linear search: ENG-1 has more than 50 labels; its hit lists the first 50',
+    ])
+  })
+
+  test('a maximum page stays within the complexity budget', async () => {
+    const { fetchFn, calls } = fakeLinear([response([])])
+    await searchTickets(makeSource(fetchFn), { text: 'auth', limit: 100 })
+    expect(requestedComplexity(calls[0]!)).toBeLessThan(8000)
+  })
+
+  test('a rate-limited search rejects after one request with no listing fallback', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        status: 400,
+        body: { errors: [{ message: 'limit', extensions: { code: 'RATELIMITED' } }] },
+      },
+    ])
+    const error = await rejectionOf(searchTickets(makeSource(fetchFn), { text: 'auth' }))
+    expect(error).toBeInstanceOf(TicketSourceRateLimitError)
+    expect(calls).toHaveLength(1)
   })
 })
