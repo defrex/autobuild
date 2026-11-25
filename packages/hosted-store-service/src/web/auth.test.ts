@@ -184,9 +184,12 @@ describe('discovery HTTP adapter', () => {
     expect(received?.headers.get('x-canary')).toBe('yes')
     expect(await received?.text()).toBe('payload')
     expect(await request.text()).toBe('payload')
+    // Sub-paths are per-repository metadata; anything non-canonical is 404
+    // without reaching the provider.
+    received = undefined
     const near = new Request(`${ORIGIN}/.well-known/oauth-protected-resource/extra`)
-    await handler(near)
-    expect(received).toBe(near)
+    expect((await handler(near)).status).toBe(404)
+    expect(received).toBeUndefined()
   })
 
   test('corrects only successful provider metadata, preserves headers and propagates failures', async () => {
@@ -211,6 +214,46 @@ describe('discovery HTTP adapter', () => {
         throw new Error('upstream')
       }, 'good')(request),
     ).rejects.toThrow('upstream')
+  })
+})
+
+describe('per-repository protected-resource metadata', () => {
+  test('each canonical sub-path describes its repository resource; others are 404', async () => {
+    const auth = createWebAuth(testEnv, {
+      access: testAccess(testEnv),
+      database: memoryAdapter({ verification: [], jwks: [] }),
+    })
+    const get = (path: string) => auth.handler(new Request(`${ORIGIN}${path}`))
+    const root = await get('/.well-known/oauth-protected-resource')
+    const rootBody = (await root.json()) as Record<string, unknown>
+    expect(rootBody.resource).toBe(`${ORIGIN}/mcp`)
+    for (const [path, resource] of [
+      ['/.well-known/oauth-protected-resource/mcp/github.com/owner/repo', 'github.com/owner/repo'],
+      // The Next.js rewrite delivers the /api/auth spelling.
+      [
+        '/api/auth/.well-known/oauth-protected-resource/mcp/github.com/owner/repo',
+        'github.com/owner/repo',
+      ],
+      // A repository path segment named `organization` is still described.
+      [
+        '/.well-known/oauth-protected-resource/mcp/git.example/organization/repo',
+        'git.example/organization/repo',
+      ],
+    ] as const) {
+      const response = await get(path)
+      expect(response.status, path).toBe(200)
+      expect(response.headers.get('content-type')).toContain('application/json')
+      expect(await response.json()).toEqual({ ...rootBody, resource: `${ORIGIN}/mcp/${resource}` })
+    }
+    for (const path of [
+      '/.well-known/oauth-protected-resource/mcp/github.com/owner/repo/',
+      '/.well-known/oauth-protected-resource/mcp/github.com/owner/repo.git',
+      '/.well-known/oauth-protected-resource/mcp/github.com/owner%2Frepo',
+      '/.well-known/oauth-protected-resource/github.com/owner/repo',
+      '/.well-known/oauth-protected-resource/mcp/',
+    ]) {
+      expect((await get(path)).status, path).toBe(404)
+    }
   })
 })
 

@@ -462,8 +462,16 @@ descriptions apply.
 
 This section applies when an external agent harness connects to the operator
 registry through MCP. With a shell and the `ab` CLI, use the section above.
-Follow each advertised tool schema, including its repository arguments; do not
-assume repository identity is injected into calls.
+Which repository you act on depends on the connector:
+
+- **Per-repository connector** (a URL such as `<origin>/mcp/github.com/acme/widgets`,
+  copied from the project's Settings tab): it serves that one repository. Its
+  tools have no `repo` argument; do not add one, because a `repo` naming
+  another repository is refused.
+- **Deployment-wide connector** (`<origin>/mcp`): every tool requires `repo`.
+  Call `repositories.list` to find the identities you can reach.
+
+Either way, follow each advertised tool schema exactly.
 
 ### How you run
 
