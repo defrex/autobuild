@@ -649,8 +649,10 @@ identical observations append nothing. `dispatch-frontend.ts` owns only terminal
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;
 persistent frontend and child handlers keep repeated signals graceful until the
-kernel child is reaped, after which a non-SIGINT terminating signal is replayed
-in the frontend. A parent-liveness watch remains the detached-kernel fallback.
+kernel child is reaped, after which SIGHUP and SIGTERM are replayed in the
+frontend, while a drained SIGQUIT exits 131 rather than dumping core. A
+supervised generation returns SIGQUIT through `GENERATION_EXITS.stopped` and
+the launcher exits 131. A parent-liveness watch remains the detached-kernel fallback.
 The repository record carries constant-size, lease-holder-fenced tick telemetry:
 `beginRepoTick` opens the unsafe boundary, and `finishRepoTick` atomically closes
 it and appends selected tick facts. Unchanged standing ticket counts and diagnostics do

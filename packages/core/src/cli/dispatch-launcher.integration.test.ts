@@ -40,14 +40,8 @@ for (const signal of GENERATION_SIGNALS)
     const checkout = await launchCheckout()
     const storePath = join(checkout, '.autobuild', `store-${signal}`)
     const store = openLocalStore(storePath)
-    // SIGQUIT's default action dumps core; the test needs only the signal,
-    // so the launcher and its generations run without core files.
     const child = Bun.spawn(
       [
-        'sh',
-        '-c',
-        'ulimit -c 0 && exec "$@"',
-        'sh',
         process.execPath,
         distributionPath('bin/ab.ts'),
         'dispatch',
@@ -100,7 +94,11 @@ for (const signal of GENERATION_SIGNALS)
         signal,
       })
       if (signal === 'SIGINT') expect(child.exitCode).toBe(0)
-      else expect(child.signalCode).toBe(signal)
+      else if (signal === 'SIGQUIT') {
+        // A drained quit never re-raises SIGQUIT, whose default dumps core.
+        expect(child.exitCode).toBe(131)
+        expect(child.signalCode).toBeNull()
+      } else expect(child.signalCode).toBe(signal)
       expect(await stderr).toBe('')
     } finally {
       if (child.exitCode === null) {

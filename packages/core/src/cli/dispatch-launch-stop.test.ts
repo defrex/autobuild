@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { GENERATION_SIGNALS } from './dispatch-launch-contract'
-import { holdDrainedStop, operatorStopped, restoreLauncherTerminal } from './dispatch-launch-stop'
+import {
+  drainedLauncherExit,
+  holdDrainedStop,
+  operatorStopped,
+  restoreLauncherTerminal,
+} from './dispatch-launch-stop'
 
 const RESTORES = ['\x1b[?1004l', '\x1b[<1u', '\x1b[?2004l', '\x1b[?1049l', '\x1b[?25h']
 
@@ -19,12 +24,41 @@ describe('operatorStopped', () => {
   test('a generation dying of the launcher signal is the requested stop', () => {
     expect(operatorStopped('SIGINT', 'SIGINT')).toBe(true)
     expect(operatorStopped('SIGTERM', 'SIGTERM')).toBe(true)
+    // A previous-release generation still dies of a re-raised SIGQUIT.
+    expect(operatorStopped('SIGQUIT', 'SIGQUIT')).toBe(true)
   })
 
   test('any other signal death remains a failure', () => {
     expect(operatorStopped(undefined, 'SIGINT')).toBe(false)
     expect(operatorStopped('SIGINT', 'SIGKILL')).toBe(false)
     expect(operatorStopped('SIGINT', null)).toBe(false)
+  })
+})
+
+describe('drainedLauncherExit', () => {
+  const boundary = () => {
+    const kills: NodeJS.Signals[] = []
+    return { kills, pid: 7, kill: (_pid: number, signal: NodeJS.Signals) => kills.push(signal) }
+  }
+
+  test('SIGQUIT exits 131 and SIGINT exits 0 without re-signalling', () => {
+    for (const [signal, code] of [
+      ['SIGQUIT', 131],
+      ['SIGINT', 0],
+      [undefined, 3],
+    ] as const) {
+      const b = boundary()
+      expect(drainedLauncherExit(signal, 3, b)).toBe(code)
+      expect(b.kills).toEqual([])
+    }
+  })
+
+  test('SIGHUP and SIGTERM are re-delivered', () => {
+    for (const signal of ['SIGHUP', 'SIGTERM'] as const) {
+      const b = boundary()
+      drainedLauncherExit(signal, 1, b)
+      expect(b.kills).toEqual([signal])
+    }
   })
 })
 

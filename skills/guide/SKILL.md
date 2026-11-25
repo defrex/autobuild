@@ -397,8 +397,9 @@ The distinctions that change an administrator's answer:
   to the Store, so a slow claim or agent turn cannot delay a keypress. Repository
   reads advance incrementally. SIGINT, SIGHUP, SIGQUIT, and SIGTERM restore the
   terminal immediately, drain and reap the child, and keep repeated signals
-  graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
-  termination is replayed only after that drain. Durable normal/forced/abnormal
+  graceful until an open claim tick reaches a recoverable boundary; after that
+  drain SIGHUP and SIGTERM are replayed, while SIGQUIT exits 131 instead of
+  dumping core. Durable normal/forced/abnormal
   evidence retains available process detail, and parent-death detection prevents
   a detached kernel. Resident checkout dispatch selects viewer or local execution before running a filesystem-only
   launcher that snapshots the invoking installation and its installed production
