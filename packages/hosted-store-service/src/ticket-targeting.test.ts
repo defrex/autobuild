@@ -239,12 +239,6 @@ function searchPostgres(
 ) {
   let statements = 0
   const existing = options.states ?? ['Triage', 'Ready', 'Doing', 'Done', 'Rejected']
-  const lowered = new Map<string, string>()
-  const lower = (value: string) => {
-    let folded = lowered.get(value)
-    if (folded === undefined) lowered.set(value, (folded = value.toLowerCase()))
-    return folded
-  }
   const q = Object.assign(
     async (parts: TemplateStringsArray, ...values: unknown[]) => {
       statements++
@@ -289,7 +283,8 @@ function searchPostgres(
         if (!labels.every((label) => ticket.labels.includes(label))) continue
         if (
           !terms.every(
-            (term) => lower(ticket.title).includes(term) || lower(ticket.body).includes(term),
+            (term) =>
+              ticket.title.toLowerCase().includes(term) || ticket.body.toLowerCase().includes(term),
           )
         )
           continue
