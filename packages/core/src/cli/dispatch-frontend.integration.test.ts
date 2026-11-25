@@ -3175,6 +3175,8 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
     writes++
   }
   const hub = new WebModelHub({})
+  // Every frame the frontend publishes carries the position its read sampled.
+  const published: (string | undefined)[] = []
   const frontend = new DispatchFrontend({
     repo,
     store,
@@ -3185,7 +3187,8 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
       dispatch: {
         hub,
         url: 'http://127.0.0.1:1/',
-        publishFacts: () => {},
+        publishFacts: (_facts, position) => void published.push(position),
+        attachStore: () => {},
         close: async () => {
           webClosed++
         },
@@ -3257,6 +3260,8 @@ test('handoff release retries a failed durable acknowledgement without reacquiri
       'retried terminal release',
     )
     expect(attempts).toBe(2)
+    expect(published.length).toBeGreaterThan(0)
+    for (const position of published) expect(position).toMatch(/^(0|[1-9][0-9]*)$/)
     completed.resolve({ outcome: 'normal', exitCode: 0 })
     await running
     expect(writes).toBe(writesAtRelease)
