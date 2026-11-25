@@ -3938,7 +3938,7 @@ existing effective-config artifacts remain readable without changing stored byte
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 - **Local override:** Committed only: set in autobuild.toml.
 
-**Description:** Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it.
+**Description:** Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it.
 
 **Constraints:** safe integer; > 0
 
@@ -3975,12 +3975,26 @@ deferral, not an oversight. Concretely, the shared names above are rejected
 when the config is parsed, plugin-declared extras are rejected when the
 provider is constructed (dispatch and `ab mcp`), and `ab init --validate`
 re-checks both sets after plugins load, before any infrastructure is
-provisioned. Tool bounds:
-`sandbox.exec` waits at most 300 seconds; stdout and stderr are each truncated
-at 65,536 bytes with a `[truncated by autobuild: output exceeded 65536 bytes]`
-marker; `sandbox.reset` and archiving your last session are
-destructive (reset re-provisions from the current base head); there is at most
-one environment per user and repository.
+provisioned.
+
+Lifecycle:
+
+- **Open, then poll.** `sandbox.open` returns at once and provisions or
+  resumes in the background; poll the read-only `sandbox.status` until it
+  reports `ready`.
+- **Not ready refuses.** Until then other sandbox tools refuse with
+  `sandbox-not-ready`, naming the `state`.
+- **Close and refresh keep work.** `sandbox.close` stops the environment and
+  keeps the checkout; `sandbox.refresh` fast-forwards a clean checkout to the
+  current base head and refuses a dirty or diverged one.
+- **Reset discards it.** `sandbox.reset` re-provisions in the background.
+- A provider without the lifecycle answers `sandbox-unsupported`.
+
+Tool bounds: `sandbox.exec` waits at most 300 seconds; stdout and stderr are
+each truncated at 65,536 bytes with a
+`[truncated by autobuild: output exceeded 65536 bytes]` marker; `sandbox.reset`
+and archiving your last session are destructive; there is at most one
+environment per user and repository.
 
 <!-- config-fragment:orchestrator -->
 ```toml
