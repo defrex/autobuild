@@ -59,7 +59,11 @@ export {
   readOrchestratorGate,
   type OrchestratorGate,
 } from './query'
-export type { OrchestratorConfig } from '../config/schema'
+export {
+  orchestratorEnabled,
+  type OrchestratorConfig,
+  type OrchestratorHost,
+} from '../config/schema'
 export { randomIds } from '../ids'
 export type { Config } from '../config/schema'
 export {

@@ -40,11 +40,13 @@ import {
 const ENABLED = 'https://github.com/owner/enabled'
 const DISABLED = 'https://github.com/owner/disabled'
 const MISSING = 'https://github.com/owner/missing'
-const PROJECTS = [ENABLED, DISABLED, MISSING]
+/** Deposits no `[orchestrator]` table: the hosted default enables it. */
+const DEFAULTED = 'https://github.com/owner/defaulted'
+const PROJECTS = [ENABLED, DISABLED, MISSING, DEFAULTED]
 const OPERATOR = 'ada@example.com'
 
 /** The deposited artifact shape: step configs flatten into their section. */
-function effectiveConfig(enabled: boolean): string {
+function effectiveConfig(enabled: boolean | undefined): string {
   const { verify, finalize, ...root } = parseConfig(`
 [tickets]
 source = "file"
@@ -53,9 +55,7 @@ readyState = "ready"
 steps = []
 [finalize]
 steps = []
-[orchestrator]
-enabled = ${enabled}
-`)
+${enabled === undefined ? '' : `[orchestrator]\nenabled = ${enabled}\n`}`)
   return JSON.stringify({
     ...root,
     verify: { steps: verify.steps, ...verify.stepConfigs },
@@ -63,10 +63,17 @@ enabled = ${enabled}
   })
 }
 
-async function harness(options: { withoutOrigin?: boolean } = {}) {
+async function harness(options: { withoutOrigin?: boolean; withoutForgeToken?: boolean } = {}) {
   const env: Record<string, string> = { ...baseEnv, AB_WEB_REPOSITORIES: PROJECTS.join(',') }
-  const serviceEnv: Record<string, string> = { ...env }
+  // The deposits are git-worktree configs, so the service preflights the
+  // deployment's Vercel fallback provider credentials.
+  const serviceEnv: Record<string, string> = {
+    ...env,
+    VERCEL_OIDC_TOKEN: 'deployment-oidc',
+    GITHUB_TOKEN: 'deployment-forge-token',
+  }
   if (options.withoutOrigin) delete serviceEnv.BETTER_AUTH_URL
+  if (options.withoutForgeToken) delete serviceEnv.GITHUB_TOKEN
   const auth = buildAuth(env)
   const sandbox = memoryOperatorSandbox()
   const forge = new FakeForge()
@@ -104,6 +111,7 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
   for (const [repo, enabled] of [
     [ENABLED, true],
     [DISABLED, false],
+    [DEFAULTED, undefined],
   ] as const) {
     await backing.ensureRepo(repo)
     await backing.putRepoArtifact(repo, {
@@ -289,6 +297,30 @@ describe('hosted sandbox tools over /mcp', () => {
       h.failCompose(true)
       expect(await code(ENABLED)).toMatchObject({ code: 'sandbox-backend-unavailable' })
       expect(h.reported.map(String)).toEqual(['Error: provider construction failed'])
+    } finally {
+      await h.client.close()
+    }
+  })
+
+  test('a deposit without [orchestrator] is served: the hosted default', async () => {
+    const h = await harness()
+    try {
+      const opened = await call(h.client, 'sandbox.open', { repo: DEFAULTED })
+      expect(opened).toMatchObject({ isError: false, body: { state: 'ready' } })
+      expect(h.composed()).toBe(1)
+    } finally {
+      await h.client.close()
+    }
+  })
+
+  test('a deployment missing its forge token refuses typed and composes nothing', async () => {
+    const h = await harness({ withoutForgeToken: true })
+    try {
+      const refused = await call(h.client, 'sandbox.exec', { repo: DEFAULTED, command: 'ls' })
+      expect(refused.body).toMatchObject({ code: 'sandbox-credentials-missing' })
+      expect(JSON.stringify(refused.body)).toContain('GITHUB_TOKEN or GH_TOKEN')
+      expect(h.composed()).toBe(0)
+      expect(h.issued).toHaveLength(0)
     } finally {
       await h.client.close()
     }

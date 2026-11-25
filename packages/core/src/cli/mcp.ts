@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadConfig } from '../config/load'
-import type { Config } from '../config/schema'
+import { orchestratorEnabled, type Config } from '../config/schema'
 import type { Via } from '../events/envelope'
 import { defaultTriageState } from '../processes/dispatcher'
 import { createWorkspaceProvider } from '../ports/workspace/create'
@@ -238,7 +238,7 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
         }
         throw error
       }
-      if (mcpConfig.orchestrator.enabled) {
+      if (orchestratorEnabled(mcpConfig, 'local')) {
         const plugins = await loadPlugins(mcpConfig.plugins, context.checkout)
         const provider = await createWorkspaceProvider(mcpConfig.workspace, {
           registry: plugins,

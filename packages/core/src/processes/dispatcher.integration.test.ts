@@ -176,6 +176,7 @@ function harness(
     repoOrigin?: string
     /** Trusted publication settlement seam (AUT-328 release guard). */
     settlePublication?: (slug: string) => Promise<void>
+    orchestratorHost?: 'hosted' | 'local'
   } = {},
 ) {
   const clock = opts.clock ?? manualClock()
@@ -224,6 +225,7 @@ function harness(
     forge: opts.dispatchForge ?? forge,
     missingAccounts: opts.missingAccounts,
     config: parseConfig(withReadyState(opts.toml ?? '')),
+    ...(opts.orchestratorHost !== undefined ? { orchestratorHost: opts.orchestratorHost } : {}),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
     ...(opts.repairBuildConfig ? { repairBuildConfig: opts.repairBuildConfig } : {}),
     repo: opts.repo ?? REPO,
@@ -8361,6 +8363,15 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     })
   }
 
+  test('a hosted dispatcher settles an idle sandbox when [orchestrator] is unset', async () => {
+    const h = harness({ orchestratorHost: 'hosted' })
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    expect(report.sandboxIdleStops).toBe(1)
+  })
+
+  // `disabled` leaves `[orchestrator]` unset on the default (local) host.
   for (const stage of ['disabled', 'capability-less'] as const) {
     test(`a ${stage} orchestrator sandbox stage is a no-op`, async () => {
       const h = harness(stage === 'disabled' ? {} : { toml: '[orchestrator]\nenabled = true\n' })

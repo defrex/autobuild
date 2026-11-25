@@ -283,7 +283,7 @@ import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
  * execution lease before launch; the child renews that same-holder lease.
  */
 import { createHash } from 'node:crypto'
-import type { Config } from '../config/schema'
+import { orchestratorEnabled, type Config, type OrchestratorHost } from '../config/schema'
 import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
@@ -889,6 +889,9 @@ export interface TickOpts {
 export type LaunchRunnerResult = 'scheduled' | 'already-active'
 
 export interface DispatcherDeps {
+  /** Where `[orchestrator].enabled` is resolved for idle settlement
+   * (`orchestratorEnabled`). Default `local`. */
+  orchestratorHost?: OrchestratorHost
   /** Whether this process currently holds repository authority (SPEC §12).
    * Synchronous and without I/O. Absent means always true. When false, the
    * tick starts no further unit of work, and its durable new-work writes are
@@ -2726,15 +2729,19 @@ export class Dispatcher {
    * — never a stop, since this dispatcher cannot reach a provider it is not
    * wired to — and if the old provider returns, the next sandbox.open
    * re-provisions and re-brackets the environment, so the disposition is
-   * reachable again. The stage is a no-op unless `[orchestrator]` is
-   * enabled and the wired provider hosts the capability; `unsupported`
+   * reachable again. The stage is a no-op unless `[orchestrator]` resolves
+   * enabled for this dispatcher's host (`orchestratorEnabled` with
+   * `orchestratorHost`) and the wired provider hosts the capability; `unsupported`
    * providers (local worktrees) are skipped silently. */
   private async settleOrchestratorSandboxes(
     report: TickReport,
     opts: TickOpts = {},
   ): Promise<void> {
     const config = this.deps.config
-    if (config.orchestrator?.enabled !== true) return
+    // Test configs may omit the table entirely; production configs always
+    // carry it after parsing.
+    if (config.orchestrator === undefined) return
+    if (!orchestratorEnabled(config, this.deps.orchestratorHost ?? 'local')) return
     const capability = this.deps.workspaces.orchestratorSandbox
     if (capability === undefined) return
     const providerName = this.deps.workspaces.name
