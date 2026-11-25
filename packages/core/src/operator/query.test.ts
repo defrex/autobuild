@@ -1489,6 +1489,8 @@ test('operator reads of active work cost the same however many builds have settl
     landings: open,
     dashboard: open,
     status: open,
+    attention: { records: 6, digests: 6 },
     capacity: open,
+    attentionAtHead: { records: 6, digests: 6 },
   })
 })

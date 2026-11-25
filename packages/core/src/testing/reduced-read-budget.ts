@@ -5201,6 +5201,40 @@ export async function repositoryEventsReadBudget() {
     hasMore: false,
   })
   expect(counter.rows).toBe(0)
+  // The attention digest pages the same backlog through the same bounded,
+  // disjoint reads and never touches the unbounded journal either.
+  ranges.length = 0
+  const digested: unknown[] = []
+  let digestPages = 0
+  cursor = 0
+  for (;;) {
+    const page = (await registry.call('repository.attention', { repo, cursor })) as {
+      events: {
+        items: { event: { type: string }; resolve: { tool: string }[] }[]
+        cursor: number
+        hasMore: boolean
+      }
+    }
+    digestPages++
+    for (const item of page.events.items) {
+      digested.push(item.event)
+      if (item.event.type === 'ticket.handed-back')
+        expect(item.resolve[0]!.tool).toBe('tickets.move')
+    }
+    cursor = page.events.cursor
+    if (!page.events.hasMore) break
+  }
+  expect(digested).toEqual(delivered)
+  expect(digestPages).toBe(pages)
+  expect(ranges).toHaveLength(pages)
+  expect(ranges.every((range) => range.rows <= REPOSITORY_EVENTS_PAGE)).toBe(true)
+  ranges.forEach((range, index) => {
+    if (index > 0) expect(range.since).toBe(ranges[index - 1]!.since + ranges[index - 1]!.rows)
+  })
+  counter.reset()
+  await registry.call('repository.attention', { repo, cursor })
+  await registry.call('repository.attention', { repo })
+  expect(counter.rows).toBe(0)
   return pages
 }
 
@@ -8064,6 +8098,7 @@ function memoryListingEntryCounter(store: import('../store/memory').MemoryBuildS
 export async function openBuildListingReadBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
   const { listOperatorLandings } = await import('../operator/landings')
+  const { getOperatorAttention } = await import('../operator/attention')
   const { readRepositoryCapacity } = await import('../cli/repository-status')
   const repo = 'open-listing-budget'
   const now = new Date(1000)
@@ -8156,6 +8191,7 @@ export async function openBuildListingReadBudget() {
     landings: (store: BuildStore) => listOperatorLandings({ store, repo }),
     dashboard: (store: BuildStore) => getOperatorDashboard({ store, repo, clock: () => now }),
     status: (store: BuildStore) => getRepositoryStatus(store, repo, now),
+    attention: (store: BuildStore) => getOperatorAttention({ store, repo, now }),
     history: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'all', now }),
   }
   let baseline: Record<string, { records: number; digests: number }> | undefined
@@ -8166,7 +8202,10 @@ export async function openBuildListingReadBudget() {
       const facts = (await readRepositoryFacts(store, repo)).value
       const capacity = (target: BuildStore) =>
         readRepositoryCapacity(target, repo, facts, artifact, now)
-      const all = { ...surfaces, capacity }
+      const head = await store.getRepoHighWater(repo)
+      const attentionAtHead = (target: BuildStore) =>
+        getOperatorAttention({ store: target, repo, cursor: head, now })
+      const all = { ...surfaces, capacity, attentionAtHead }
       // Warm-up: every once-per-key reduction happens here. The seeded
       // surfaces answer real work, so the counted reads are meaningful.
       for (const run of Object.values(all)) await run(store)
@@ -8175,6 +8214,10 @@ export async function openBuildListingReadBudget() {
         (await surfaces.dashboard(store)).model.builds.map((build) => build.slug).sort(),
       ).toEqual(['open-aborted', 'open-consent', 'open-queued'])
       expect((await surfaces.status(store)).capacity).toBeDefined()
+      const digest = await surfaces.attention(store)
+      expect(digest.merges.map((merge) => merge.slug)).toEqual(['open-consent'])
+      expect(digest.escalations).toEqual([])
+      expect(JSON.stringify(digest)).not.toMatch(/open-aborted|settled-/)
       const rows = memoryRepositoryReadCounter(store, repo)
       const entries = memoryListingEntryCounter(store)
       const vectors: Record<string, { records: number; digests: number }> = {}

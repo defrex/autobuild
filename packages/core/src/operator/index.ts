@@ -179,4 +179,12 @@ export {
 export { clearForgeDegradation } from './control'
 
 export { readRepositoryAttentionPage, REPOSITORY_EVENTS_PAGE } from './repository-events'
+export {
+  dispatcherAttention,
+  getOperatorAttention,
+  repositoryEventResolution,
+  waitingReasons,
+  type OperatorAttention,
+  type Resolution,
+} from './attention'
 export { repositoryNeedsAttention } from '../cli/attention'
