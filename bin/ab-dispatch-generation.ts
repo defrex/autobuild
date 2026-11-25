@@ -86,7 +86,9 @@ try {
   )
   try {
     const { runDirectBinary } = await import('../packages/core/src/cli/binary-direct')
-    const result = await runDirectBinary(process.argv.slice(2))
+    // Supervised: a drained SIGQUIT returns here and exits
+    // GENERATION_EXITS.stopped, which every v1 launcher reads as a stop.
+    const result = await runDirectBinary(process.argv.slice(2), undefined, { supervised: true })
     holdDrainedStop(() => process.exit(result === 0 ? GENERATION_EXITS.stopped : result))
     code =
       result === 0

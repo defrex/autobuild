@@ -8,6 +8,7 @@ import {
   KITTY_KEYBOARD_MODE,
   TERMINATING_SIGNALS,
   type TerminalRestoreProcess,
+  type TerminatingSignal,
 } from './terminal-restore'
 
 class FakeProcess implements TerminalRestoreProcess {
@@ -31,6 +32,11 @@ class FakeProcess implements TerminalRestoreProcess {
     expect(pid).toBe(this.pid)
     expect(this.listenerCount(signal)).toBe(0)
     this.actions.push(`kill:${signal}`)
+  }
+
+  exit(code: number): void {
+    for (const signal of TERMINATING_SIGNALS) expect(this.listenerCount(signal)).toBe(0)
+    this.actions.push(`exit:${code}`)
   }
 
   emit(event: string, ...args: unknown[]): void {
@@ -153,8 +159,17 @@ describe('process terminal restore hook', () => {
     expect(emergency).toEqual([ALTERNATE_SCREEN_MODE.restore, HIDDEN_CURSOR_MODE.restore])
   })
 
-  for (const signal of TERMINATING_SIGNALS) {
-    test(`${signal} restores immediately and replays only after the dispatch drain`, () => {
+  const drainOutcomes: Array<[TerminatingSignal, boolean, string | undefined]> = [
+    ['SIGHUP', false, 'kill:SIGHUP'],
+    ['SIGTERM', false, 'kill:SIGTERM'],
+    ['SIGTERM', true, 'kill:SIGTERM'],
+    // SIGQUIT's default action dumps core: exit 131, or return to the
+    // supervised generation entry, which reports its stopped exit.
+    ['SIGQUIT', false, 'exit:131'],
+    ['SIGQUIT', true, undefined],
+  ]
+  for (const [signal, supervised, outcome] of drainOutcomes) {
+    test(`${signal}${supervised ? ' (supervised)' : ''} restores immediately and acts only after the dispatch drain`, () => {
       const boundary = new FakeProcess()
       const emergency: string[] = []
       const requested: NodeJS.Signals[] = []
@@ -165,8 +180,11 @@ describe('process terminal restore hook', () => {
           boundary.actions.push(`restore:${JSON.stringify(chunk)}`)
         },
       )
-      const hook = installTerminalRestoreHook(modes, boundary, (received) =>
-        requested.push(received),
+      const hook = installTerminalRestoreHook(
+        modes,
+        boundary,
+        (received) => requested.push(received),
+        { supervised },
       )
       modes.enter(BRACKETED_PASTE_MODE)
 
@@ -175,11 +193,13 @@ describe('process terminal restore hook', () => {
 
       expect(emergency).toEqual([BRACKETED_PASTE_MODE.restore])
       expect(requested).toEqual([signal])
-      expect(boundary.actions.some((action) => action === `kill:${signal}`)).toBe(false)
+      expect(boundary.actions.some((action) => /^(kill|exit):/.test(action))).toBe(false)
       expect(boundary.listenerCount(signal)).toBe(1)
 
       hook.close()
-      expect(boundary.actions.at(-1)).toBe(`kill:${signal}`)
+      const terminal = boundary.actions.filter((action) => /^(kill|exit):/.test(action))
+      expect(terminal).toEqual(outcome === undefined ? [] : [outcome])
+      if (outcome !== undefined) expect(boundary.actions.at(-1)).toBe(outcome)
       expect(boundary.listenerCount('exit')).toBe(0)
       expect(boundary.listenerCount('uncaughtExceptionMonitor')).toBe(0)
       expect(boundary.listenerCount('SIGINT')).toBe(0)
