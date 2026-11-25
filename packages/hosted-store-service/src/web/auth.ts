@@ -4,6 +4,12 @@ import { createAuthMiddleware } from 'better-auth/api'
 import { jwt, mcp, organization } from 'better-auth/plugins'
 import { Pool } from 'pg'
 import { clientNameProblem } from './client-name-policy'
+import { mcpResourceBindingPlugin } from './mcp-resource-binding'
+import {
+  isMetadataSubPath,
+  repositoryFromMetadataPath,
+  repositoryMcpResource,
+} from './mcp-resource'
 import { normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
 /** Admission policy is deliberately exported so provider callbacks can be
@@ -126,6 +132,11 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
           ],
         },
       } satisfies BetterAuthPlugin,
+      // The pinned 1.4.18 MCP plugin ignores RFC 8707 `resource` on
+      // /mcp/token and stores no audience, so per-repository MCP URLs
+      // (#1224) bind each token to its resource here. Keyed to the same
+      // exact endpoint path as the client-name policy above.
+      mcpResourceBindingPlugin(config),
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
       // and protected resource for /mcp; the jwt companion signs its tokens
       // and serves /api/auth/jwks. The HTTP adapter below corrects the pinned
@@ -174,6 +185,7 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       auth.handler,
       mcpPluginOptions(config, options)?.oidcConfig?.metadata?.jwks_uri ??
         `${config.baseURL}/api/auth/jwks`,
+      { mcpResource: config.mcpResource },
     ),
   }
 }
@@ -187,13 +199,46 @@ export function webAuth(): WebAuth {
 }
 
 /** Adapt public discovery rewrites and the pinned MCP metadata bug in the
- * published package, so every production HTTP caller gets the same contract. */
+ * published package, so every production HTTP caller gets the same contract.
+ *
+ * Protected-resource metadata sub-paths (RFC 9728 path insertion) describe
+ * per-repository MCP resources (#1224): a canonical
+ * `/.well-known/oauth-protected-resource<mcp path>/<host>/<path>` answers the
+ * root document with `resource` replaced by that repository's MCP URL; any
+ * other sub-path is 404. No registry read happens here, so the answer is no
+ * existence oracle and costs nothing. This runs before the `organization`
+ * segment guard, so a repository path containing that segment still has
+ * its metadata. */
 export function authHTTPHandler(
   handler: (request: Request) => Promise<Response>,
   jwksURI: string,
+  options: { mcpResource?: string } = {},
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     const url = new URL(request.url)
+    if (isMetadataSubPath(url.pathname)) {
+      const repo =
+        options.mcpResource === undefined
+          ? undefined
+          : repositoryFromMetadataPath(options.mcpResource, url.pathname)
+      if (repo === undefined) return new Response(null, { status: 404 })
+      const root = await handler(
+        new Request(`${url.origin}/api/auth/.well-known/oauth-protected-resource`, {
+          method: request.method,
+          headers: request.headers,
+        }),
+      )
+      if (request.method !== 'GET' || !root.ok) return root
+      const headers = new Headers(root.headers)
+      headers.delete('content-length')
+      return new Response(
+        JSON.stringify({
+          ...(await root.json()),
+          resource: repositoryMcpResource(options.mcpResource!, repo),
+        }),
+        { status: root.status, statusText: root.statusText, headers },
+      )
+    }
     // Decode repeatedly to reject encoded separators and nested encodings before
     // the provider router gets any opportunity to canonicalize the path.
     let path = url.pathname

@@ -123,7 +123,10 @@ export { REDUCER_REVISIONS } from '../kernel/reducer-revisions'
 export { projectReducerValue } from '../store/reducer-value-validation'
 
 export { placementReadBudget } from './reduced-read-budget'
-export { operatorSandboxCallReadBudget } from './reduced-read-budget'
+export {
+  operatorSandboxCallReadBudget,
+  operatorSandboxListingReadBudget,
+} from './reduced-read-budget'
 export {
   memoryOperatorSandbox,
   MEMORY_SANDBOX_BASE_SHA,
