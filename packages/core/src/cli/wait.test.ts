@@ -127,9 +127,19 @@ test('attention backlog recognizes a conflicted replay and ignores a clean repla
   ).toBeNull()
 })
 
-test('current upstream rewrite satisfies attention after restart and clears on safe observation', async () => {
+test("a node's current upstream rewrite satisfies attention after restart and clears on safe observation", async () => {
   const store = new MemoryBuildStore({ clock: steppingClock() })
   await store.createBuild({ slug: 'b1', repo: '/main/repo' })
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: { source: 'file', id: 'N' },
+      repo: '/main/repo',
+      baseBranch: 'main',
+      kind: 'node',
+    },
+  })
   await store.append('b1', {
     actor: KERNEL,
     type: 'runner.attached',
