@@ -2250,9 +2250,10 @@ dispatchers but not store-owned state. Separate local stores each see only their
   whose `ab/` or `ab-node/` branch already exists on the remote (when its forge
   supports `remoteBranchExists`) or locally in its checkout (when its workspace
   provider, such as git-worktree, supports `localBranchExists`), but two stores
-  that claim the same name before either pushes can still collide. A build's
-  first provision never adopts an existing branch: it cuts from the base and
-  keeps the old tip under `refs/autobuild/displaced/<branch>/<sha>`.
+  that claim the same name before either pushes can still collide. A leaf
+  build's first provision never adopts an existing branch: it cuts from the
+  base and keeps the old tip under `refs/autobuild/displaced/<branch>/<sha>`.
+  A node's branch, which the kernel opens before any provision, is its own.
 
 ## Connect a project
 

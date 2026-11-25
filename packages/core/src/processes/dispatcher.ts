@@ -6853,10 +6853,13 @@ export class Dispatcher {
       facts.replacedHeads,
     )
     const local = this.deps.forge.name === 'local-git'
-    // A build's first provision never adopts a pre-existing branch (#1261).
+    // A leaf's first provision never adopts a pre-existing branch (#1261).
+    // A node is exempt: the kernel opens its branch before any provision and
+    // children merge into it, so that branch is the node's own work.
     // `owner` is unique to this build (an earlier same-slug build in another
     // store has another creation time) and stable across its retries.
     const fresh =
+      facts.state.kind !== 'node' &&
       facts.workspaceGenerations === 0 &&
       input.revision === undefined &&
       input.generation === undefined &&

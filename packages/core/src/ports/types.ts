@@ -735,8 +735,8 @@ export interface WorkspaceProvider {
      * any doubt, it throws `WorkspaceCleanupRequired` as for any incomplete
      * environment. Never expose an unverified environment. */
     adoptAbandoned?: boolean
-    /** The build has no prior `workspace.provisioned` or cleanup-required
-     * fact. A pre-existing branch of this name is not the build's work and
+    /** The leaf build has no prior `workspace.provisioned` or cleanup-required
+     * fact (never set for a node, whose branch the kernel opens itself). A pre-existing branch of this name is not the build's work and
      * must never become its base, unless the provider holds its own creation
      * receipt for `owner`. `owner` matches `^[A-Za-z0-9_-]{1,64}$`, is unique
      * to the build and stable across its retries. A local provider cuts from

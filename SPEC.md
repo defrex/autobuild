@@ -1366,9 +1366,10 @@ The base-selection invariants make this safe with Git:
   after checkout; a provider that reuses a completed environment from a
   failed attempt records that environment's checkout, never a target head
   read separately. A target that moved since is a restack concern.
-- **A first provision never adopts a branch it did not create.** A build
-  with no prior provision cuts from the base even when a branch of its name
-  already exists. Creation is proven only by the provider's own receipt,
+- **A first provision never adopts a branch it did not create.** A leaf
+  build with no prior provision cuts from the base even when a branch of its
+  name already exists. A node is exempt: the kernel opens its branch before
+  any provision, and that branch holds the node's merged children. Creation is proven only by the provider's own receipt,
   written atomically with the build's branch write once nothing foreign
   holds the branch; ancestry is never evidence. A local provider sets the
   old tip aside under `refs/autobuild/displaced/<branch>/<sha>` and cuts
