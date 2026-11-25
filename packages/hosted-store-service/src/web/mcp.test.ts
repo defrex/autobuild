@@ -97,6 +97,7 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
       // Server instructions summarize how Autobuild works and point at the
       // repository listing.
       expect(MCP_SERVER_INSTRUCTIONS).toContain('repositories.list')
+      expect(MCP_SERVER_INSTRUCTIONS).toContain('repository.attention')
 
       const listing = await mcpClient.callTool({ name: 'repositories.list', arguments: {} })
       expect((listing.content as { text: string }[])[0]!.text).toBe(

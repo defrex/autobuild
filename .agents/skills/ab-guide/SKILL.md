@@ -3604,7 +3604,9 @@ MCP `repository.events` is a connected agent's repository attention watch: it
 reads at most 256 journal positions after its cursor, with an optional wait of
 at most 30 seconds, and by default returns exactly the repository records this
 default watch reports. Its cursor advances past filtered events; omit it once
-for a baseline, and treat `cursor-too-old` as above.
+for a baseline, and treat `cursor-too-old` as above. MCP `repository.attention`
+returns the current attention digest, every item naming its resolving tool,
+with the same cursor rules.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the

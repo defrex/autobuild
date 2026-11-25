@@ -133,6 +133,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: true,
     approval: 'never',
   },
+  'repository.attention': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
   'repository.settings': {
     readOnlyHint: false,
     destructiveHint: false,
