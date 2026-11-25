@@ -67,6 +67,7 @@ import {
   sandboxToolsListed,
   type OperatorSandboxService,
   type ToolEntry,
+  type CanonicalSkillBundle,
 } from '@defrex/autobuild/operator'
 import {
   createHostedOperatorSandboxService,
@@ -99,6 +100,9 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  /** The canonical skill loader the context tools serve for a repository
+   * with no captured agent context; tests inject one. */
+  canonicalSkills?: () => Promise<CanonicalSkillBundle>
   syncPlacement?: (repo: string, desired: DispatchPlacementFact) => Promise<DispatchPlacement>
   openSecrets?: (env: HostedStoreEnv) => Promise<ProjectSecretsManagement>
   secretMembership?: (user: string, repo: string) => Promise<boolean>
@@ -807,6 +811,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           },
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
           ...(sandboxResolver !== undefined ? { sandboxResolver } : {}),
+          ...(options.canonicalSkills !== undefined
+            ? { canonicalSkills: options.canonicalSkills }
+            : {}),
           ...shared,
         })
         return (req: Request) =>

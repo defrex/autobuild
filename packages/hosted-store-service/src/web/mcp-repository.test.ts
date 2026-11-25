@@ -125,8 +125,8 @@ describe('per-repository MCP URLs', () => {
     const { tokens: wide, client } = await deploymentToken(h)
     const deployment = await connectClient(h.app, wide, client)
     try {
-      expect(scoped.getInstructions()).toBe(repositoryMcpInstructions(REPO))
-      expect(deployment.getInstructions()).toBe(MCP_SERVER_INSTRUCTIONS)
+      expect(scoped.getInstructions()!.startsWith(repositoryMcpInstructions(REPO))).toBe(true)
+      expect(deployment.getInstructions()!.startsWith(MCP_SERVER_INSTRUCTIONS)).toBe(true)
       const instructions = scoped.getInstructions()!
       expect(instructions).toContain(REPO)
       for (const absent of ['repositories.list', 'this deployment serves', OTHER])
@@ -169,6 +169,8 @@ describe('per-repository MCP URLs', () => {
     const scoped = await connectClient(h.app, flow.tokens, flow.client, REPO_URL)
     const { tokens: wide, client } = await deploymentToken(h)
     const deployment = await connectClient(h.app, wide, client)
+    // Each initialize read its agent context; only tool calls count below.
+    h.delegated.length = 0
     try {
       const status = await call(scoped, 'repository.status')
       expect(status.isError).toBe(false)
