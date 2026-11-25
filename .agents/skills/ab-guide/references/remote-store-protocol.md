@@ -716,11 +716,12 @@ waits apply. There is no push transport; a held request is the whole mechanism.
 Repository journals are separate resources with independent event sequences,
 artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
-repository to exist. An unknown repository returns `404 not-found` — with one
-carve-out: the build-digest batch read of this section is keyed to build
-records, not the repository journal record, so it authorizes the project credential
-but answers `200` (possibly empty) even for an unknown repository, a repository
-without a journal record, or a repository without builds.
+repository to exist. An unknown repository returns `404 not-found` — with two
+carve-outs: the build-digest and open-build batch reads of this section are
+keyed to build records, not the repository journal record, so they authorize the
+project credential but answer `200` (possibly empty) even for an unknown
+repository, a repository without a journal record, or a repository without
+builds.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
@@ -1586,8 +1587,9 @@ Four shipped behaviors do not add `BuildStore` routes:
   not a deeper backing-store transaction or migration check. The example shows anonymous health on the 1.3 line; an admitted same-line protocol-7 probe sees 7 instead.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact
-deletion, or server deployment API. The one repo-scoped batch read is the
-build-digest route of section 4; no other batch-read route exists.
+deletion, or server deployment API. The repo-scoped batch reads are the
+build-digest and open-build routes of section 4; no other batch-read route
+exists.
 
 ## 12. Conformance
 
