@@ -42,7 +42,11 @@ import { readHookProgress } from '../processes/hooks'
 import type { BuildStore, RepositoryArtifact } from '../store/types'
 import type { LocalOverrideRecord } from '../config/local'
 import { readBuildFacts } from '../store/reduced-reads'
-import { forgeReadinessWarnings, reduceDispatchStatus } from '../kernel/dispatch-status'
+import {
+  foldReportedDispatch,
+  forgeReadinessWarnings,
+  initialReportedDispatch,
+} from '../kernel/dispatch-status'
 import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 import {
   formatDispatcherIdentity,
@@ -360,11 +364,9 @@ export function projectRepositoryStatus(
   }
   publications.reverse()
   const active = reduceTicketSourceHealth(events)
-  const latestRun = events.findLast((event) => event.type === 'dispatcher.run-started')
-  const runStatus =
-    latestRun?.type === 'dispatcher.run-started'
-      ? reduceDispatchStatus(events, latestRun.payload.run)
-      : undefined
+  const reported = initialReportedDispatch()
+  for (const event of events) foldReportedDispatch(reported, event)
+  const runStatus = reported.run ? reported.status : undefined
   const warningLines = runStatus
     ? [...runStatus.roleWarnings, ...forgeReadinessWarnings(runStatus)]
     : []

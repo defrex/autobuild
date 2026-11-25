@@ -72,4 +72,6 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'leafRestack/fold/5zq9n2zlit': '#1274 rewritten-target reprovision, accept waiver, episodes',
   'logIndex/fold/bwl7r7gjae': '#1274 rewritten-target reprovision, accept waiver, episodes',
   'verifyDiffBase/fold/p2si2x55v7': '#1274 rewritten-target reprovision, accept waiver, episodes',
+  'repositoryReadFacts/shape/mggr8x6l5z': '#1279 reported dispatcher run tracks pending runs',
+  'repositoryReadFacts/fold/vvcfmd23zp': '#1279 status describes the authority run',
 }
