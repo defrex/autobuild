@@ -25,6 +25,7 @@ import {
   type SandboxRefreshResult,
   type SandboxWaitResult,
 } from './operator-sandbox'
+import { groupAlive, terminateProcessGroup } from './process-group'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -885,6 +886,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     string,
     { stage: SandboxProvisionStage; message: string }
   >()
+  /** environmentId → process groups of its detached commands, kept past
+   * `wait` consuming a command's result (a finished command can leave
+   * background children). Groups with no live member are pruned on every
+   * `start`, so the set stays bounded by the live groups. */
+  private readonly sandboxGroups = new Map<string, Set<number>>()
 
   private async openSandbox(input: {
     repo: string
@@ -1019,13 +1025,17 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   }): Promise<{ outcome: 'closed' | 'absent'; attempt?: SandboxProviderStatus }> {
     const id = resolve(input.environmentId)
     const attempt = await this.cancelSandboxAttempt(id)
-    for (const child of this.sandboxChildren.values()) {
-      if (child.environmentId !== id || child.exitCode !== null) continue
-      try {
-        child.proc.kill('SIGTERM')
-      } catch {
-        /* already exited */
-      }
+    // Every detached command leads its own process group; stop each whole
+    // group (a finished leader can leave background children running) and
+    // confirm it is gone before reporting the environment closed.
+    const groups = [...(this.sandboxGroups.get(id) ?? [])]
+    this.sandboxGroups.delete(id)
+    const stopped = await Promise.all(groups.map((pgid) => terminateProcessGroup(pgid)))
+    if (stopped.includes(false)) {
+      throw new SandboxOperationError(
+        'close',
+        'a detached sandbox command survived SIGKILL; the environment is not stopped',
+      )
     }
     const kept =
       (await this.isRegisteredWorktree(id, input.repo)) &&
@@ -1114,9 +1124,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * names — never the host environment wholesale). `timeoutSeconds` bounds
    * the child and kills it past the bound; undefined runs unbounded (the
    * setup command may install for a long time). `signal` runs the command
-   * in its own process group (`setsid`) and, on abort, sends the group
-   * SIGTERM and SIGKILL after a 2 s grace, so a cancelled setup and the
-   * children it forked stop together. */
+   * in its own process group (`setsid`) and, on abort, terminates the whole
+   * group with SIGTERM then SIGKILL, escalating on the group's liveness
+   * rather than the shell's exit, so a cancelled setup and the children it
+   * forked stop together and release the output pipes this call awaits. */
   private async spawnSandboxCommand(
     command: string,
     cwd: string,
@@ -1131,36 +1142,25 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       env: this.sandboxEnv(),
       ...(signal !== undefined ? { detached: true } : {}),
     })
+    let onAbort: (() => void) | undefined
     if (signal !== undefined) {
-      const killGroup = (sig: NodeJS.Signals): void => {
-        try {
-          process.kill(-proc.pid, sig)
-        } catch {
-          try {
-            proc.kill(sig)
-          } catch {
-            /* already exited */
-          }
-        }
-      }
-      const onAbort = (): void => {
-        killGroup('SIGTERM')
-        const escalate = setTimeout(() => {
-          if (proc.exitCode === null && proc.signalCode === null) killGroup('SIGKILL')
-        }, 2_000)
-        void proc.exited.then(() => clearTimeout(escalate))
-      }
+      onAbort = () => void terminateProcessGroup(proc.pid)
       if (signal.aborted) onAbort()
       else signal.addEventListener('abort', onAbort, { once: true })
-      void proc.exited.then(() => signal.removeEventListener('abort', onAbort))
     }
     if (timeoutSeconds === undefined) {
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      return { exitCode: exitCode ?? -1, stdout, stderr }
+      try {
+        // A child that keeps the pipes open keeps this pending, and the abort
+        // listener armed, until the group is gone.
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+        return { exitCode: exitCode ?? -1, stdout, stderr }
+      } finally {
+        if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
+      }
     }
     const timer = AbortSignal.timeout(timeoutSeconds * 1000)
     const exitedOrTimeout = Promise.race([
@@ -1244,8 +1244,6 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       stdout: string
       stderr: string
       exitCode: number | null
-      /** The environment the command runs in, so `close` can stop it. */
-      environmentId: string
     }
   >()
 
@@ -1345,20 +1343,26 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   ): Promise<{ commandId: string }> {
     const cwd =
       request.cwd === undefined ? handle.workspacePath : join(handle.workspacePath, request.cwd)
+    // Its own process group (`setsid`), so `close` can stop the command and
+    // everything it forked.
     const proc = Bun.spawn(['sh', '-c', request.command], {
       cwd,
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
       env: this.sandboxEnv(),
+      detached: true,
     })
+    const environmentGroups = this.sandboxGroups.get(resolve(handle.environmentId)) ?? new Set()
+    for (const pgid of environmentGroups) if (!groupAlive(pgid)) environmentGroups.delete(pgid)
+    environmentGroups.add(proc.pid)
+    this.sandboxGroups.set(resolve(handle.environmentId), environmentGroups)
     const commandId = `sbcmd-${randomBytes(8).toString('hex')}`
     this.sandboxChildren.set(commandId, {
       proc,
       stdout: '',
       stderr: '',
       exitCode: null,
-      environmentId: resolve(handle.environmentId),
     })
     this.evictFinishedBeyondCap()
     this.trackChildStreams(commandId, { proc })

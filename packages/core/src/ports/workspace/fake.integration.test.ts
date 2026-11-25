@@ -169,6 +169,12 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     const ready = await opened.settled!
     expect(ready.state).toBe('ready')
     const handle = ready.handle!
+    await provider.orchestratorSandbox.start(handle, {
+      command: 'trap "" TERM; sleep 60 & echo $! > ../child.pid; wait',
+    })
+    const childPid = join(tmp, 'sandboxes', 'child.pid')
+    for (let i = 0; i < 200 && !(await Bun.file(childPid).exists()); i++) await Bun.sleep(25)
+    const child = Number((await Bun.file(childPid).text()).trim())
     expect(
       await provider.orchestratorSandbox.close({
         repo: source,
@@ -176,6 +182,7 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
         environmentId: handle.environmentId,
       }),
     ).toEqual({ outcome: 'closed' })
+    expect(() => process.kill(child, 0)).toThrow()
     await writeFile(join(source, 'next.txt'), 'next\n')
     await git(source, ['add', '-A'])
     await git(source, ['commit', '-q', '-m', 'advance'])
@@ -192,7 +199,9 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
   test('lifecycle: close cancels a hanging setup and removes the copied checkout (#1223)', async () => {
     const hanging = new FakeWorkspaceProvider({
       sandboxRoot: join(tmp, 'sandboxes-hang'),
-      sandboxSetupCommand: 'exec sleep 60',
+      // The leader shell dies on SIGTERM; its child ignores it and holds the
+      // output pipes until the group is killed.
+      sandboxSetupCommand: `sh -c 'trap "" TERM; echo $$ > ../hang.pid; exec sleep 60' & wait`,
       envSource: { PATH: process.env.PATH ?? '' },
     })
     const opened = await hanging.orchestratorSandbox.open({
@@ -201,8 +210,9 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
       baseBranch: 'main',
     })
     const identity = await hanging.orchestratorSandbox.describe({ repo: source, operator: 'ops' })
-    for (let i = 0; i < 200 && hanging.sandboxExecEnvironments.length === 0; i++)
-      await Bun.sleep(25)
+    const hangPid = join(tmp, 'sandboxes-hang', 'hang.pid')
+    for (let i = 0; i < 200 && !(await Bun.file(hangPid).exists()); i++) await Bun.sleep(25)
+    const setupChild = Number((await Bun.file(hangPid).text()).trim())
     const started = Date.now()
     const closed = await hanging.orchestratorSandbox.close({
       repo: source,
@@ -211,6 +221,7 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     })
     expect(Date.now() - started).toBeLessThan(5_000)
     expect(closed.attempt).toEqual({ state: 'absent', cancelled: true })
+    expect(() => process.kill(setupChild, 0)).toThrow()
     expect(await opened.settled!).toEqual({ state: 'absent', cancelled: true })
     expect(await Bun.file(join(identity.workspacePath, 'README.md')).exists()).toBe(false)
   })

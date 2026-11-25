@@ -1247,7 +1247,9 @@ describe('GitWorktreeProvider operator sandbox', () => {
       const hanging = new GitWorktreeProvider({
         root,
         sandboxRoot,
-        setupCommand: 'echo $$ > ../setup.pid; exec sleep 60',
+        // The shell leading the group dies on SIGTERM; its child ignores it
+        // and keeps the output pipes open, so only a group SIGKILL frees it.
+        setupCommand: `sh -c 'trap "" TERM; echo $$ > ../setup.pid; exec sleep 60' & wait`,
         envSource: { PATH: process.env.PATH ?? '' },
       })
       const opened = await hanging.orchestratorSandbox.open({
@@ -1284,13 +1286,32 @@ describe('GitWorktreeProvider operator sandbox', () => {
       expect((await fresh.settled!).state).toBe('ready')
     })
 
-    test('close stops running detached commands and keeps the checkout', async () => {
+    test('close stops every process detached commands forked and keeps the checkout', async () => {
       const plain = plainProvider()
       const ready = await (
         await plain.orchestratorSandbox.open({ repo, operator: 'ops', baseBranch: 'main' })
       ).settled!
       const handle = ready.handle!
-      const { commandId } = await plain.orchestratorSandbox.start(handle, { command: 'sleep 30' })
+      const pidOf = async (file: string) => {
+        const path = join(sandboxRoot, file)
+        for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(25)
+        return Number((await readFile(path, 'utf8')).trim())
+      }
+      // A waited child that ignores SIGTERM, and a background child of a
+      // command whose result `wait` already consumed.
+      const { commandId } = await plain.orchestratorSandbox.start(handle, {
+        command: 'trap "" TERM; sleep 60 & echo $! > ../stubborn.pid; wait',
+      })
+      const orphaned = await plain.orchestratorSandbox.start(handle, {
+        command: 'sleep 60 > /dev/null 2>&1 & echo $! > ../orphan.pid',
+      })
+      const stubborn = await pidOf('stubborn.pid')
+      const orphan = await pidOf('orphan.pid')
+      const consumed = await plain.orchestratorSandbox.wait(handle, {
+        commandId: orphaned.commandId,
+        waitSeconds: 5,
+      })
+      expect(consumed.state).toBe('exited')
       expect(
         await plain.orchestratorSandbox.close({
           repo,
@@ -1298,6 +1319,8 @@ describe('GitWorktreeProvider operator sandbox', () => {
           environmentId: handle.environmentId,
         }),
       ).toEqual({ outcome: 'closed' })
+      expect(() => process.kill(stubborn, 0)).toThrow()
+      expect(() => process.kill(orphan, 0)).toThrow()
       expect(
         (await plain.orchestratorSandbox.wait(handle, { commandId, waitSeconds: 5 })).state,
       ).toBe('exited')

@@ -32,6 +32,7 @@ import {
   type SandboxRefreshResult,
   type SandboxWaitResult,
 } from './operator-sandbox'
+import { groupAlive, terminateProcessGroup } from './process-group'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -282,7 +283,6 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       stdout: string
       stderr: string
       exitCode: number | null
-      environmentId: string
     }
   >()
 
@@ -394,28 +394,25 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           command: this.sandboxSetupCommand,
           env: this.sandboxEnv(),
         })
+        // Its own process group, so a cancel stops setup and its children
+        // together and releases the pipes awaited below (mirrors the real
+        // provider).
         const proc = Bun.spawn(['sh', '-c', this.sandboxSetupCommand], {
           cwd: identity.workspacePath,
           stdin: 'ignore',
           stdout: 'pipe',
           stderr: 'pipe',
           env: this.sandboxEnv(),
+          detached: true,
         })
-        const onAbort = (): void => {
-          try {
-            proc.kill('SIGKILL')
-          } catch {
-            /* already exited */
-          }
-        }
+        const onAbort = (): void => void terminateProcessGroup(proc.pid)
         if (signal?.aborted) onAbort()
         else signal?.addEventListener('abort', onAbort, { once: true })
         const [stdout, stderr, exitCode] = await Promise.all([
           new Response(proc.stdout).text(),
           new Response(proc.stderr).text(),
           proc.exited,
-        ])
-        signal?.removeEventListener('abort', onAbort)
+        ]).finally(() => signal?.removeEventListener('abort', onAbort))
         if (signal?.aborted) throw new SandboxCancelledError()
         if (exitCode !== 0) {
           throw new SandboxOperationError(
@@ -452,6 +449,9 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     string,
     { stage: SandboxProvisionStage; message: string }
   >()
+  /** environmentId → process groups of its detached commands; dead groups
+   * are pruned on every `start`. */
+  private readonly sandboxGroups = new Map<string, Set<number>>()
 
   /** The marker's recorded metadata: `null` when missing, `{}` when legacy. */
   private async readSandboxMarker(workspacePath: string): Promise<{ baseSha?: string } | null> {
@@ -607,13 +607,14 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     environmentId: string
   }): Promise<{ outcome: 'closed' | 'absent'; attempt?: SandboxProviderStatus }> {
     const attempt = await this.cancelSandboxAttempt(input.environmentId)
-    for (const child of this.sandboxChildren.values()) {
-      if (child.environmentId !== input.environmentId || child.exitCode !== null) continue
-      try {
-        child.proc.kill('SIGTERM')
-      } catch {
-        /* already exited */
-      }
+    const groups = [...(this.sandboxGroups.get(input.environmentId) ?? [])]
+    this.sandboxGroups.delete(input.environmentId)
+    const stopped = await Promise.all(groups.map((pgid) => terminateProcessGroup(pgid)))
+    if (stopped.includes(false)) {
+      throw new SandboxOperationError(
+        'close',
+        'a detached sandbox command survived SIGKILL; the environment is not stopped',
+      )
     }
     const kept =
       this.mode === 'filesystem' && (await this.readSandboxMarker(input.environmentId)) !== null
@@ -811,14 +812,18 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       env,
+      detached: true,
     })
+    const environmentGroups = this.sandboxGroups.get(handle.environmentId) ?? new Set()
+    for (const pgid of environmentGroups) if (!groupAlive(pgid)) environmentGroups.delete(pgid)
+    environmentGroups.add(proc.pid)
+    this.sandboxGroups.set(handle.environmentId, environmentGroups)
     const commandId = `sbcmd-${Math.random().toString(36).slice(2, 12)}`
     const tracked = {
       proc,
       stdout: '',
       stderr: '',
       exitCode: null as number | null,
-      environmentId: handle.environmentId,
     }
     this.sandboxChildren.set(commandId, tracked)
     void (async () => {
