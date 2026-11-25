@@ -16,6 +16,7 @@ import type {
   ArtifactInput,
   ArtifactMeta,
   BuildDigest,
+  OpenBuild,
   BuildRecord,
   BuildStore,
   NewBuildInput,
@@ -266,6 +267,9 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoBuildDigests', repo))
+    },
+    listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+      return Promise.reject(new SessionScopeError(scope, 'listOpenBuilds', repo))
     },
     putRepoArtifact(repo: string, _artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
       return Promise.reject(new SessionScopeError(scope, 'putRepoArtifact', repo))

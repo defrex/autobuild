@@ -3,7 +3,6 @@ import {
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
 import type { BuildStore } from '../store/types'
-import { readBuildDigests } from '../store/reduced-reads'
 import { withOperatorView } from './read-view'
 import { projectTree, type ConsentQueueEntry } from '../cli/dashboard/tree'
 
@@ -13,14 +12,11 @@ export async function listOperatorLandings(opts: {
   repo: string
 }): Promise<ConsentQueueEntry[]> {
   return withOperatorView(opts.store, opts.repo, 'builds', async (view) => {
-    const records = await view.listBuilds()
-    const digests = await readBuildDigests(view, opts.repo)
     const entries: ConsentQueueEntry[] = []
-    for (const record of records) {
+    // Only nonterminal builds can await consent; the open listing never
+    // reads a settled build.
+    for (const { record, digest } of await view.listOpenBuilds(opts.repo)) {
       if (record.repo !== opts.repo) continue
-      const digest = digests.get(record.slug)
-      if (!digest)
-        throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
       if (digest.terminal !== undefined) continue
       const facts = await view.buildFacts(record.slug)
       const artifact = facts.state.landing?.decision

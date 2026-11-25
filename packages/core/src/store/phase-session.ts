@@ -33,6 +33,7 @@ import type {
   ArtifactInput,
   ArtifactMeta,
   BuildDigest,
+  OpenBuild,
   BuildRecord,
   BuildStore,
   NewBuildInput,
@@ -496,6 +497,10 @@ export function scopeLocalStoreToPhaseSession(
       own('getRepoBuildDigests', 'repo', repo)
       return store.getRepoBuildDigests(repo)
     },
+    async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+      own('listOpenBuilds', 'repo', repo)
+      return store.listOpenBuilds(repo)
+    },
     async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
       own('putRepoArtifact', 'repo', repo)
       return store.putRepoArtifact(repo, artifact)
@@ -693,6 +698,7 @@ const JUDGE_REFUSED: Record<
   getEvents: 'read',
   getNodeRewrite: 'read',
   getRepoBuildDigests: 'read',
+  listOpenBuilds: 'read',
   putArtifact: 'write',
   getArtifact: 'read',
   getLatestArtifactMeta: 'read',

@@ -16,6 +16,7 @@ import type {
   ArtifactInput,
   ArtifactMeta,
   BuildDigest,
+  OpenBuild,
   BuildRecord,
   BuildScopedStore,
   BuildStore,
@@ -293,6 +294,9 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoBuildDigests', repo))
+    },
+    listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listOpenBuilds', repo))
     },
     putRepoArtifact(repo: string, _artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
       return Promise.reject(new BuildScopeError(scope, 'putRepoArtifact', repo))

@@ -117,6 +117,32 @@ test('metadata invalidates on writes and refresh detects foreign completion', as
   expect((await view.getRepoBuildDigests('repo')).get('build')?.terminal).toBe('done')
 })
 
+test('the open listing is served within an epoch and re-read after a write or refresh', async () => {
+  const { store, view } = await setup()
+  let reads = 0
+  const listOpenBuilds = store.listOpenBuilds.bind(store)
+  store.listOpenBuilds = async (repo) => {
+    reads++
+    return listOpenBuilds(repo)
+  }
+  const slugs = async () => (await view.listOpenBuilds('repo')).map(({ record }) => record.slug)
+  await view.refreshOpen()
+  expect(await slugs()).toEqual(['build'])
+  expect(reads).toBe(1)
+  await view.append('build', {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+  expect(await slugs()).toEqual([])
+  expect(reads).toBe(2)
+  await store.createBuild({ slug: 'foreign', repo: 'repo' })
+  expect(await slugs()).toEqual([])
+  await view.refreshOpen()
+  expect(await slugs()).toEqual(['foreign'])
+  expect(reads).toBe(3)
+})
+
 test('raw cursor reads pass through event output, independently of facts', async () => {
   const { store, view } = await setup()
   const first = await store.append('build', { actor: KERNEL, type: 'build.paused', payload: {} })

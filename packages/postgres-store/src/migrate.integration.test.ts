@@ -1,7 +1,7 @@
 import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
-import { CONTRACT_T0, MemoryBlobStore } from '@defrex/autobuild/plugin-sdk'
+import { CONTRACT_T0, MemoryBlobStore, sampleBuildInput } from '@defrex/autobuild/plugin-sdk'
 
 import {
   AUTH_SCHEMA_CHECKSUM,
@@ -219,6 +219,43 @@ if (testUrl) {
         await migratePostgres(harness.url)
         const repaired = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
         await repaired.close()
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('backfills the open-build set once, when the migration creates it', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await migratePostgres(harness.url)
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        const repo = 'acme/open'
+        for (const slug of ['queued', 'done', 'aborted'])
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+        await store.append('done', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+        await store.append('aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+        await store.close()
+        const open = async () =>
+          (
+            (await sql`SELECT slug FROM open_builds WHERE repo = ${repo} ORDER BY slug`) as {
+              slug: string
+            }[]
+          ).map((row) => row.slug)
+        expect(await open()).toEqual(['aborted', 'queued'])
+        // A database that predates the table is backfilled by the migration.
+        await sql`DROP TABLE open_builds`
+        await migratePostgres(harness.url)
+        expect(await open()).toEqual(['aborted', 'queued'])
+        // Once the table exists no later migration backfills it again.
+        await sql`DELETE FROM open_builds WHERE slug = 'queued'`
+        await migratePostgres(harness.url)
+        expect(await open()).toEqual(['aborted'])
       } finally {
         await sql.close()
         await harness.cleanup()
@@ -641,7 +678,7 @@ if (testUrl) {
 import { readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
+import { DISPATCHER, KERNEL, parseConfig } from '@defrex/autobuild/testing'
 import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
 import { TICKET_SCHEMA_V1_DDL, TICKET_SCHEMA_V1_CHECKSUM, assertTicketSchema } from './schema'
 import { openPostgresTicketDatabase } from './tickets'
