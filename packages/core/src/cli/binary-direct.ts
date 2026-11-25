@@ -46,6 +46,7 @@ import {
 export async function runDirectBinary(
   argv: string[],
   resolveDashboardRenderer?: DashboardRendererResolver,
+  options: { supervised?: boolean } = {},
 ): Promise<number> {
   const command = argv[0]
   // Version identity is installation-local and offline; do not inspect even a
@@ -112,6 +113,7 @@ export async function runDirectBinary(
           }),
         process as unknown as TerminalRestoreProcess,
         (signal) => controller.abort(signal),
+        options,
       )
       return watchTermination ? await watchTermination.complete(code) : code
     } finally {

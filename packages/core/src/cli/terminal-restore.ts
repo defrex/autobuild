@@ -113,15 +113,27 @@ export const TERMINATING_SIGNALS = [
   'SIGTERM',
 ] as const satisfies readonly NodeJS.Signals[]
 
+export type TerminatingSignal = (typeof TERMINATING_SIGNALS)[number]
+
+/**
+ * 128 + SIGQUIT's number. A drained SIGQUIT stop reports through this exit
+ * status instead of re-signalling, because SIGQUIT's default action dumps core
+ * and nothing crashed.
+ */
+export const DRAINED_QUIT_EXIT = 131
+
 export interface TerminalRestoreProcess {
   readonly pid: number
   on(event: string, listener: (...args: unknown[]) => void): unknown
   removeListener(event: string, listener: (...args: unknown[]) => void): unknown
   kill(pid: number, signal: NodeJS.Signals): unknown
+  exit(code: number): unknown
 }
 
 export interface TerminalRestoreHook {
-  /** Restore active modes, remove this hook's listeners, then replay a captured signal. */
+  /** Restore active modes, remove this hook's listeners, then replay a captured
+   * SIGHUP or SIGTERM. A captured SIGQUIT exits {@link DRAINED_QUIT_EXIT}
+   * instead, or returns normally when supervised. */
   close(): void
 }
 
@@ -129,15 +141,19 @@ export interface TerminalRestoreHook {
  * Install the synchronous process-boundary fallback used only by `ab dispatch`.
  * SIGINT is deliberately absent: raw Ctrl-C and the binary's AbortController
  * retain the dashboard's normal final-frame teardown. Other terminating signals
- * restore immediately but are replayed only after the async dispatch drain.
+ * restore immediately and take effect only after the async dispatch drain:
+ * SIGHUP and SIGTERM are replayed, while SIGQUIT exits 131 rather than dumping
+ * core. A `supervised` generation does not act on SIGQUIT at all; its entry
+ * reports the stop through the launcher contract's stopped exit.
  */
 export function installTerminalRestoreHook(
   modes: TerminalModeController,
   boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
-  requestStop: (signal: (typeof TERMINATING_SIGNALS)[number]) => void = () => {},
+  requestStop: (signal: TerminatingSignal) => void = () => {},
+  options: { supervised?: boolean } = {},
 ): TerminalRestoreHook {
   let closed = false
-  let pendingSignal: (typeof TERMINATING_SIGNALS)[number] | undefined
+  let pendingSignal: TerminatingSignal | undefined
   const registrations: Array<[string, (...args: unknown[]) => void]> = []
 
   const restore = (): void => {
@@ -173,9 +189,18 @@ export function installTerminalRestoreHook(
       // without depending on another promise turn or stream drain.
       restore()
       remove()
-      // Replay only after the supervised child has drained and the handlers are
-      // gone, preserving the operating system's terminating-signal semantics.
-      if (pendingSignal !== undefined) boundary.kill(boundary.pid, pendingSignal)
+      // Act only after the supervised child has drained and the handlers are
+      // gone. SIGHUP and SIGTERM replay to keep the operating system's
+      // terminating-signal semantics; SIGQUIT's default action dumps core, so
+      // a drained quit exits 131 instead.
+      if (pendingSignal === undefined) return
+      if (pendingSignal === 'SIGQUIT') {
+        // A supervised generation returns the drain's result: its entry exits
+        // GENERATION_EXITS.stopped and the launcher owns the public 131.
+        if (!options.supervised) boundary.exit(DRAINED_QUIT_EXIT)
+        return
+      }
+      boundary.kill(boundary.pid, pendingSignal)
     },
   }
 }
