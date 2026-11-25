@@ -47,6 +47,7 @@ import {
   type RepositoryReadFacts,
 } from '../store/reduced-reads'
 import type { BuildRecord, BuildStore } from '../store/types'
+import { mapBounded } from './bounded'
 import { type WebFrame, type WebFrameSource, WebReadFencedError } from './protocol'
 import { projectRepositoryFrame } from './repository-source'
 
@@ -63,9 +64,6 @@ export type OverviewFrameReader = Pick<
   | 'listStreams'
   | 'getArtifact'
 >
-
-/** Builds read at once during a cold start or a large poll. */
-const BUILD_READ_CONCURRENCY = 8
 
 /** One visible build: everything its row and capacity facts need, so a
  * config change re-projects it without reading. */
@@ -126,7 +124,11 @@ export class OverviewFrameSource implements WebFrameSource {
     const position = await reader.getRepoChangePosition(this.repo)
     if (this.cached !== undefined && position === this.gate) return this.cached
     const facts = (await readRepositoryFacts(reader, this.repo)).value
-    const repository = projectRepositoryFrame(this.repo, facts)
+    const projected = projectRepositoryFrame(this.repo, facts)
+    // The position is the browser's refetch signal for explicit reads
+    // (analytics, build timelines), so every frame carries the one it was
+    // read at, even when nothing else in it changed.
+    const repository = { ...projected, frame: { ...projected.frame, position } }
     const ref = facts.status?.effectiveConfig
     if (ref === undefined) {
       // No overview without a recorded config, and so no build reads.
@@ -303,19 +305,6 @@ async function readRoster(reader: OverviewFrameReader, repo: string): Promise<Bu
     { reducer: 'buildRoster' },
   )
   return value as unknown as BuildRosterValue
-}
-
-async function mapBounded<T, R>(items: readonly T[], read: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const at = next++
-      results[at] = await read(items[at]!)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(BUILD_READ_CONCURRENCY, items.length) }, worker))
-  return results
 }
 
 /** Gate every reader call on `admitted`. */

@@ -7,13 +7,15 @@ export interface Segment {
   /** Absent while the segment is still open. */
   end?: number
   round?: number
+  /** The full step name when it is finer than the category (`verify:unit`). */
+  step?: string
 }
 
 export interface BuildTimeline {
   slug: string
   ticket: string
   title: string
-  outcome: 'merged' | 'aborted' | 'running'
+  outcome: 'merged' | 'closed' | 'aborted' | 'running'
   segments: Segment[]
 }
 
