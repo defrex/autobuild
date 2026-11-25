@@ -4037,13 +4037,21 @@ only a dispatcher this session started may be cleanly stopped on request.
 `ab web [--json]` always permits a read-only browser surface without a dispatcher
 lease. `ab dispatch --web` serves the same UI with the dispatcher; `--plain`
 keeps the URL on stdout and diagnostics on stderr. Loopback binding is the default;
-non-loopback serving has no access control. The overview and build detail show progress. Shared UI catalog charts demonstrate
-Gantt clock axes (actual times) and relative axes (aligned starts), repeated rounds,
-parallel segments and explicit waits. Step-duration charts compare per-run means
-and percentiles or total accumulated time. These catalog views do not imply
-dedicated production analytics routes or filters. Open tabs share refresh work;
+non-loopback serving has no access control. The overview and build detail show progress,
+and each build page ends with that build's timeline. The analytics page
+(`/analytics`) shows a Gantt of builds active in a window (24 hours, 7 days,
+30 days or all retained history), 25 to a page, on a clock or from-start axis,
+and step durations as per-run mean and percentiles or total time; outcome
+(merged or all) and kind (leaf, node or all) filters apply to both. Open tabs share refresh work;
 standalone web serving reads nothing while no browser is connected. While a tab is
 open, `ab web` starts its overview from the build roster, reading live builds and
 recently aborted builds that may still be cleaning up. It then reads only changed
-builds, and only the repository change position while idle.
-`ab dispatch --web` adds no reads and shows the repository header without the overview.
+builds, and only the repository change position while idle. Analytics and
+timelines are explicit reads, fetched on load and on each filter, window or page
+change, and again for the same query only when the change position moves. A new
+analytics answer reads one rollup value, one listing page and at most 25 saved
+timelines; a build timeline not in memory reads the build and its saved timeline.
+`ab dispatch --web` shows the repository header without the overview. Its
+terminal-dashboard frames add no reads; a plain dispatcher reads one change
+position per tick while a browser is connected; analytics requests are explicit
+reads once its store is open.

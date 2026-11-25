@@ -41,9 +41,15 @@ interface Shape {
 function build(i: number, startAt: number, shape: Shape, rand: () => number): BuildTimeline {
   const segs: Segment[] = []
   let t = startAt
-  const push = (category: SegmentCategory, minutes: number, round?: number) => {
+  const push = (category: SegmentCategory, minutes: number, round?: number, step?: string) => {
     const end = t + Math.max(0.3, minutes) * MIN
-    segs.push({ category, start: t, end, ...(round !== undefined ? { round } : {}) })
+    segs.push({
+      category,
+      start: t,
+      end,
+      ...(round !== undefined ? { round } : {}),
+      ...(step !== undefined ? { step } : {}),
+    })
     t = end
   }
   const live = () => shape.live !== undefined && segs.at(-1)?.category === shape.live
@@ -61,10 +67,10 @@ function build(i: number, startAt: number, shape: Shape, rand: () => number): Bu
     push('code-review', 4 + rand() * 10, r)
   }
   if (!live()) {
-    push('verify', 6 + rand() * 14)
+    push('verify', 6 + rand() * 14, undefined, 'verify:unit')
     if (shape.reconcile) {
       push('reconcile', 3 + rand() * 6)
-      push('verify', 6 + rand() * 10)
+      push('verify', 6 + rand() * 10, undefined, 'verify:unit')
     }
     push('finalize', 1 + rand() * 3)
     push('awaiting-merge', 3 + rand() * 40)

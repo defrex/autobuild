@@ -47,19 +47,21 @@ applicability again, and do not edit product code.
 
    The capture builds the branch's `ab web` client in memory, serves it from
    the real web server over the scripted fixtures in
-   `packages/ui/src/app/fixtures.ts` (no store), builds the catalog, and loads
+   `packages/ui/src/app/fixtures.ts` (no store; the analytics and timeline
+   JSON routes answer from the same fixtures), builds the catalog, and loads
    each page in a fresh Chromium profile at the light and dark grounds and at
-   1440 and 390 px: 9 pages, 36 variants. `overview-live` publishes three live
-   frames (an in-place state change, an attention item arriving near the top,
-   rows moving between sections) and shows the final moved state; the other
-   pages measure start-up. Each variant's cumulative layout shift is read
+   1440 and 390 px: 12 pages, 48 variants. Build pages settle once their
+   timeline has loaded, and `analytics*` pages once both charts have.
+   `overview-live` publishes three live frames (an in-place state change, an
+   attention item arriving near the top, rows moving between sections) and
+   shows the final moved state; the other pages measure start-up. Each variant's cumulative layout shift is read
    before its screenshot. Outputs land in `.ab/ui-web-frames/`:
    `frames.json`, `verify-report.md` and the PNGs.
 4. Read `.ab/ui-web-frames/verify-report.md` and `frames.json`. Each of these
    is a failure:
    - a capture failure: a nonzero exit with an **Infrastructure failure**
      section, or a missing report
-   - a missing variant: fewer than 36 entries, or any page × ground × width
+   - a missing variant: fewer than 48 entries, or any page × ground × width
      absent
    - a missing or unopenable PNG or part
    - a multi-part entry whose `parts` are not `index` 1..`count` with rows
@@ -73,9 +75,11 @@ applicability again, and do not edit product code.
    across it.
 6. Judge the frames against `DESIGN.md` and the build spec; there are no paired
    reference PNGs for this UI. Check both grounds really differ, the packaged
-   faces render, build pages show the intended build (or the "not here" and
-   unknown-address states), nothing scrolls sideways or clips at 390 px, and
-   `overview-live` shows the moved state. Append observations for each
+   faces render, build pages show the intended build and its timeline (or the
+   "not here" and unknown-address states), the analytics pages show the
+   charts for their filters (`analytics-empty` its empty state), nothing
+   scrolls sideways or clips at 390 px, and `overview-live` shows the moved
+   state. Append observations for each
    acceptance criterion and each frame, plus an explicit verdict, to the
    report's **Visual verdict** section.
 7. Only after every check passes, attach every variant, generating one call per
