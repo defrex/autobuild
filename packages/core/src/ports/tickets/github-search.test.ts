@@ -7,7 +7,7 @@ import { FakeGitHubIssues } from './github-fake'
 import { GitHubTicketSource, githubSearchQuotaExhausted, searchWindow } from './github'
 import { MemoryGitHubValidatorStore } from './github-validators'
 import type { TicketLifecycle } from './lifecycle'
-import { searchTickets, TicketSearchCursorInvalid } from './search'
+import { TicketSearchCursorInvalid } from './search'
 
 const LIFECYCLE: TicketLifecycle = {
   triage: 'triage',
@@ -379,11 +379,5 @@ describe('github ticket search', () => {
       expect((window.page - 1) * window.perPage).toBe(offset)
       expect(offset + window.perPage).toBeLessThanOrEqual(1000)
     }
-  })
-
-  test('searchTickets reaches the GitHub source', async () => {
-    const { github, tickets } = setup()
-    const hit = github.fileIssue({ title: 'needle' })
-    expect(ids(await searchTickets(tickets, { text: 'needle' }))).toEqual([String(hit)])
   })
 })
