@@ -283,6 +283,30 @@ describe('incremental reads', () => {
     expect(since).toEqual([roster.position])
   })
 
+  test('a change that leaves every row alone still makes a new frame, by its position', async () => {
+    const { store, source, first, take } = await started()
+    await store.append('live-0', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner-live-0', host: 'test' },
+    })
+    const next = await source.read()
+    const { position: before, ...rest } = first.frame
+    const { position: after, ...unchanged } = next.frame
+    expect(unchanged).toEqual(rest)
+    expect(after).toBe(await store.getRepoChangePosition(REPO))
+    expect(after).not.toBe(before)
+    expect(take()).toEqual(
+      [
+        'getRepoChangePosition',
+        'getRepo',
+        'getReducerValue:repo',
+        'listBuildsChangedSince',
+        ...buildReads('live-0'),
+      ].sort(),
+    )
+  })
+
   test('a change to one live build reads that build only, without the roster', async () => {
     const { store, source, take } = await started()
     await store.append('live-0', { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })

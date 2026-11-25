@@ -1,3 +1,9 @@
+import { BuildFeedValidationError } from '../store/build-feed'
+import {
+  AnalyticsQueryError,
+  parseAnalyticsQuery,
+  type WebAnalyticsSource,
+} from './analytics-source'
 import type { WebModelHub } from './hub'
 import { renderPage } from './page'
 import { PAGE_FRAME_WAIT_MS, WEB_EVENTS, type WebAssetManifest } from './protocol'
@@ -33,7 +39,13 @@ export interface WebHandlerOptions {
   /** How long a page request waits for the hub's first frame, and the timer
    * that bounds it. Defaults to `PAGE_FRAME_WAIT_MS` on real timers. */
   pageWait?: { ms: number; timer: HeartbeatTimer }
+  /** The analytics and timeline reads; absent, or answering undefined while
+   * a dispatcher's store is not open yet, makes those routes answer 503. */
+  analytics?: () => WebAnalyticsPort | undefined
 }
+
+/** What the JSON routes call: `WebAnalyticsSource`, or a test double. */
+export type WebAnalyticsPort = Pick<WebAnalyticsSource, 'analytics' | 'timeline'>
 
 /** The slice of Bun's server the handler uses. */
 export interface WebServerHandle {
@@ -102,6 +114,58 @@ function eventHeaders(): HeadersInit {
   }
 }
 
+function json(status: number, body: unknown, head = false): Response {
+  return new Response(head ? null : JSON.stringify(body), {
+    status,
+    headers: { ...common, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  })
+}
+
+const API_PREFIX = '/api/'
+const TIMELINE_ROUTE = /^\/api\/builds\/([^/]+)\/timeline$/u
+
+/**
+ * The read-only JSON routes. `HEAD` builds headers only and reads nothing.
+ * Validation failures answer 400, an unknown build or route 404, a server
+ * without a store 503, and any store failure, including a typed remote
+ * incompatibility, 502 with its message: nothing falls back to another read.
+ */
+async function api(
+  url: URL,
+  head: boolean,
+  source: (() => WebAnalyticsPort | undefined) | undefined,
+): Promise<Response> {
+  const path = url.pathname
+  const timeline = TIMELINE_ROUTE.exec(path)
+  let slug: string | undefined
+  if (timeline !== null) {
+    try {
+      slug = decodeURIComponent(timeline[1]!)
+    } catch {
+      return json(404, { error: 'not found' }, head)
+    }
+    if (slug === '') return json(404, { error: 'not found' }, head)
+  } else if (path !== '/api/analytics') return json(404, { error: 'not found' }, head)
+  const reads = source?.()
+  if (reads === undefined)
+    return json(503, { error: 'Analytics are unavailable until the store is open.' }, head)
+  try {
+    if (slug === undefined) {
+      const query = parseAnalyticsQuery(url.searchParams)
+      if (head) return json(200, null, true)
+      return json(200, await reads.analytics(query))
+    }
+    if (head) return json(200, null, true)
+    const row = await reads.timeline(slug)
+    return row === null ? json(404, { error: `no build ${slug}` }) : json(200, { row })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (error instanceof AnalyticsQueryError || error instanceof BuildFeedValidationError)
+      return json(400, { error: message }, head)
+    return json(502, { error: `Store read failed: ${message}` })
+  }
+}
+
 function text(status: number, body: string, extra: HeadersInit = {}): Response {
   return new Response(body, {
     status,
@@ -110,8 +174,8 @@ function text(status: number, body: string, extra: HeadersInit = {}): Response {
 }
 
 /**
- * The read-only request handler: the page, the committed assets and one
- * event stream. Only `GET` and `HEAD` are accepted, and `HEAD` builds
+ * The read-only request handler: the page, the committed assets, one event
+ * stream and the analytics JSON routes. Only `GET` and `HEAD` are accepted, and `HEAD` builds
  * headers only, so it never reads an asset or joins the refresh loop.
  */
 export function createWebHandler(opts: WebHandlerOptions): WebHandler {
@@ -129,7 +193,10 @@ export function createWebHandler(opts: WebHandlerOptions): WebHandler {
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return text(405, 'ab web is read-only', { Allow: 'GET, HEAD' })
     const head = request.method === 'HEAD'
-    const path = new URL(request.url).pathname
+    const url = new URL(request.url)
+    const path = url.pathname
+
+    if (path.startsWith(API_PREFIX)) return api(url, head, opts.analytics)
 
     if (path.startsWith('/assets/')) {
       let name: string

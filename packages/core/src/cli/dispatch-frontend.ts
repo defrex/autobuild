@@ -216,7 +216,9 @@ export class DispatchFrontend {
    * operator action. High-frequency dispatcher status is folded from deltas;
    * the feed retains standby identities only, and dashboard facts come from
    * the canonical repository facts. */
-  private async advanceRepository(sampledPosition?: string): Promise<void> {
+  /** Returns the change position a viewer's facts were read at; a kernel
+   * frontend samples none here. */
+  private async advanceRepository(sampledPosition?: string): Promise<string | undefined> {
     if (this.opts.viewer) {
       const position = sampledPosition ?? (await this.reader.getRepoChangePosition(this.opts.repo))
       if (
@@ -228,7 +230,7 @@ export class DispatchFrontend {
         this.viewerReadAt = this.clock().getTime()
       }
       this.dispatchStatus = this.viewerFacts!.status ?? reduceDispatchStatus([], this.runId)
-      return
+      return position
     }
     const refresh = this.eventRefreshTail.then(async () => {
       const delta = await this.repositoryFeed.refresh(false)
@@ -238,6 +240,7 @@ export class DispatchFrontend {
     })
     this.eventRefreshTail = refresh.catch(() => {})
     await refresh
+    return undefined
   }
 
   private async report(message: string, level: 'info' | 'warning' = 'info'): Promise<void> {
@@ -438,7 +441,7 @@ export class DispatchFrontend {
               this.repositoryFeed.present ? true : undefined,
             )
           ).value
-        this.opts.web?.dispatch.publishFacts(repositoryFacts)
+        this.opts.web?.dispatch.publishFacts(repositoryFacts, sampledPosition)
         const upgrades = repositoryFacts.upgrades
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
@@ -497,7 +500,7 @@ export class DispatchFrontend {
       const slug = this.abortConfirmation.slug
       if (!validAbortConfirmation(snapshot.states.get(slug))) {
         await this.dismissStaleAbortConfirmation(slug)
-        await this.advanceRepository()
+        const position = await this.advanceRepository()
         repositoryFacts = (
           await readRepositoryFacts(
             this.reader,
@@ -505,7 +508,7 @@ export class DispatchFrontend {
             this.repositoryFeed.present ? true : undefined,
           )
         ).value
-        this.opts.web?.dispatch.publishFacts(repositoryFacts)
+        this.opts.web?.dispatch.publishFacts(repositoryFacts, position)
         upgrades = repositoryFacts.upgrades
         status = this.dispatchStatus
       }

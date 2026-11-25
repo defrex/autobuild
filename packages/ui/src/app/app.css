@@ -17,6 +17,35 @@ html {
   padding: var(--space-sm) 0;
   max-width: var(--measure);
 }
+/* The analytics page's control line: each choice under its own term. */
+[data-app="controls"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-lg);
+  padding: var(--space-sm) 0;
+}
+[data-app="control"] {
+  display: grid;
+  gap: var(--space-xs);
+  justify-items: start;
+}
+[data-app="control-label"] {
+  color: var(--slack);
+  font-size: var(--fs-machine);
+}
+/* The Gantt's page line; both actions always hold their place. */
+[data-app="pager"] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: var(--space-sm) 0;
+}
+[data-app="pager-actions"] {
+  display: flex;
+  gap: var(--space-lg);
+}
 /* The build page's sign-off regions sit between ruled blocks. */
 [data-ansi="flow-block"] > [data-ansi="sign-off"] {
   margin: var(--space-md) 0 0;

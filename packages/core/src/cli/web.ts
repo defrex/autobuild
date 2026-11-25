@@ -2,7 +2,8 @@ import type { RefreshScheduler } from './dashboard/refresh'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 import { WebModelHub } from '../web/hub'
-import { loopbackHosts } from '../web/http'
+import { WebAnalyticsSource } from '../web/analytics-source'
+import { loopbackHosts, type WebAnalyticsPort } from '../web/http'
 import { repositoryLabel } from '../web/page'
 import { readOnlyStore } from '../web/read-only'
 import { OverviewFrameSource } from '../web/overview-source'
@@ -32,6 +33,8 @@ export interface ServeRepositoryWebOpts {
   stderr: (line: string) => void
   /** Test seam; defaults to binding a real socket. */
   start?: WebServerStarter
+  /** The analytics routes' reads; undefined answers 503. */
+  analytics?: () => WebAnalyticsPort | undefined
 }
 
 /** Bind the web server over `hub`, warn when `--host` widened it beyond
@@ -47,6 +50,7 @@ export async function serveRepositoryWeb(opts: ServeRepositoryWebOpts): Promise<
     hostname,
     port: opts.port,
     command: opts.command,
+    ...(opts.analytics !== undefined ? { analytics: opts.analytics } : {}),
   })
   if (widened)
     opts.stderr(
@@ -104,9 +108,11 @@ export async function abWeb(opts: AbWebOpts): Promise<void> {
             `ab web: store read failed: ${error instanceof Error ? error.message : error}`,
           ),
       })
+      const analytics = new WebAnalyticsSource(reader, repo)
       const server = await serveRepositoryWeb({
         hub,
         repo,
+        analytics: () => analytics,
         ...(opts.host !== undefined ? { host: opts.host } : {}),
         port: opts.port ?? 0,
         json: opts.json,
