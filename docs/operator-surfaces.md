@@ -76,15 +76,26 @@ bun ab web
 - Reads nothing from the store while no browser is connected; open tabs share one refresh loop.
 - While idle, each poll reads only the repository change position.
 - A fresh process starts the overview from the build roster. It reads each live build plus each aborted build among the roster's 10 newest finished builds, to show aborts still cleaning up. An older abort still cleaning up appears at its next change. Startup never scans history.
-- A build change reads that build only, plus one roster read when a build starts, finishes or aborts. It never lists builds or reads event history.
-- A remote store server too old to serve the roster or the changed-builds feed fails the read with a typed error instead of falling back.
-- Pages: the overview (`/`) shows the dispatcher's mode, capacity, what needs attention, and active, queued and recently finished builds. Each row links to its build page (`/builds/<slug>`). An active or queued build's page shows its ticket, phase, steps and attention; a recently finished build's page shows only its outcome, kind and completion time, because the roster keeps no finished tickets. Build pages cover the builds the overview lists, not older history. Both pages update live and offer no actions.
+- A build change reads that build only, plus one roster read when a build starts, finishes or aborts. The overview never lists builds, and nothing reads event history.
+- A remote store server too old to serve the roster, the changed-builds feed or the filtered listing fails the read with a typed error instead of falling back.
+- Pages:
+  - The overview (`/`) shows the dispatcher's mode, capacity, what needs attention, and active, queued and recently finished builds. Each row links to its build page.
+  - A build page (`/builds/<slug>`) shows an active or queued build's ticket, phase, steps and attention. A recently finished build's page shows only its outcome, kind and completion time, because the roster keeps no finished tickets. Every build page ends with that build's timeline, including builds the overview does not list.
+  - Analytics (`/analytics`) shows the Gantt of builds and the step-duration table; see [Timeline and analytics](#timeline-and-analytics).
+  - Pages update live and offer no actions.
+- Analytics and timelines are explicit reads from `/api/analytics` and `/api/builds/<slug>/timeline`, never polled:
+  - A page fetches on load and on every filter, window or page change. For the same query, it fetches again only when the change position moves.
+  - Every request reads the change position. When the position has moved, it also reads the changed-builds feed, and the builds the feed names leave the in-memory timeline cache.
+  - An analytics answer that is not in memory reads one rollup value, one listing page and at most 25 saved timelines (only the builds not in memory).
+  - A build timeline that is not in memory reads the build and its saved timeline.
 
 `ab dispatch --web` and `ab dispatch --viewer --web` serve the same UI from the dispatcher or viewer process:
 
 - `--port`, `--host` and `--json` work as for `ab web` and require `--web`; `--json` changes only the URL announcement line.
 - A TTY keeps the terminal dashboard. Under `--plain` or without a TTY, the web UI is the only presentation: stdout carries only the URL line, and warnings and diagnostics stay on stderr.
-- Adds no store reads: it shows what the dispatcher's own refresh reads, the repository header without the overview. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
+- Shows what the dispatcher's own refresh reads: the repository header without the overview. In plain mode the page updates each dispatcher tick (`--interval`, default 10 s).
+- Frames from the terminal dashboard add no store reads. A plain dispatcher reads one change position per tick while a browser is connected, and nothing while none is.
+- Analytics and build timelines work once the dispatcher's store is open, as explicit reads.
 - Binds before the repository lease; a taken port fails dispatch before it claims anything.
 - The URL keeps working across automatic runtime upgrades and is printed once. Ctrl-C closes it. `--once` is refused.
 
@@ -173,18 +184,21 @@ same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
 stderr. Both default to loopback. Serving beyond loopback has no access control;
 see [operator surfaces](operator-surfaces.md) for binding and refresh details.
 
-## Timeline and analytics vocabulary
+## Timeline and analytics
 
-The overview and build detail show repository and build progress. The shared UI
-chart components and their catalog demonstrate Gantt timelines with clock axes
-(align actual times across builds) and relative axes (align each build's start).
-Repeated phase rounds remain separate segments; parallel work may overlap.
-Queued, ticket-wait, paused, escalated and awaiting-merge segments show waiting
-rather than execution. Open segments extend to the observation time.
+The analytics page (`/analytics`) shows where build time goes. A window and two filters apply to both charts:
 
-Step-duration charts distinguish per-run distributions (mean and percentile
-markers) from total accumulated time across runs. Totals reveal where work adds
-up; a slow individual run and a large total answer different questions. These
-charts are currently available in the shared UI catalog, not dedicated production
-analytics routes or filter pages. This vocabulary does not imply those routes
-have shipped.
+| Control | Choices |
+|---|---|
+| Window | 24 hours, 7 days (default), 30 days, all retained history (400 days) |
+| Outcome | merged (default), all |
+| Kind | leaf (default), node, all |
+
+- **Gantt.** One row per build, coloured by phase and wait, 25 builds to a page, most recently active first. A page holds builds the store wrote to during the window, including writes that are not events, such as an artifact or a lease release. Newer and Older page through them.
+- **Axis.** Clock aligns actual times across builds; from start aligns each build's start.
+- **Rows.** A build expands into one row per segment. Hovering a segment, or focusing its bar, shows its step, round, build, start, end and duration.
+- **Segments.** Repeated phase rounds stay separate segments, and parallel verify steps may overlap. Queued, ticket-wait, paused, escalated and awaiting-merge segments show waiting rather than execution. Open segments grow with the clock.
+- **Step durations.** Steps in pipeline order, waits last. Per run shows the mean bar with P50, P90 and P99 markers; total time shows the summed time and its share. Totals reveal where work adds up; a slow run and a large total answer different questions.
+- **Build timeline.** Each build page ends with the same chart for that build, expanded to its segments.
+
+The window starts at UTC midnight of the first day it overlaps, the same day the step-duration rollup reads from.
