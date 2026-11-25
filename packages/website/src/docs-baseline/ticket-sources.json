@@ -4,7 +4,7 @@
   "title": "Tickets",
   "group": "reference",
   "description": "Configure file, Linear, hosted, or GitHub tickets and implement a ticket-source adapter.",
-  "textHash": "a2b8514d3588b543f0f1a757df5768f883b4d7b2b4d63ffd86fbcea1ae2b97d2",
+  "textHash": "b59b6617e736162e34cd005483ef9ca735dcf76d5eed1bb25a3617f4277cc046",
   "headings": [
     "Responsibility",
     "Creation labels",
