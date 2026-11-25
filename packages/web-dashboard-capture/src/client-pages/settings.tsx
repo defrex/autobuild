@@ -6,5 +6,11 @@ mountClientPage({
   route: '/settings',
   pathname: '/settings',
   query: OPERATOR_QUERY,
-  render: () => <SettingsClient key={OPERATOR_PAGE.initialSelection} {...OPERATOR_PAGE} />,
+  render: () => (
+    <SettingsClient
+      key={OPERATOR_PAGE.initialSelection}
+      {...OPERATOR_PAGE}
+      mcpUrl={`https://operator.example/mcp/${OPERATOR_PAGE.initialSelection.replace(/^https:\/\//, '')}`}
+    />
+  ),
 })
