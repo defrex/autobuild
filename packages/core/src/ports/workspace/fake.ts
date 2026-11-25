@@ -22,12 +22,17 @@ import {
 import { dirname, join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import {
+  redactSandboxMessage,
   SandboxOperationError,
   type OperatorSandboxExecution,
   type SandboxCommandResult,
   type SandboxEnvironmentIdentity,
+  type SandboxProviderStatus,
+  type SandboxProvisionStage,
+  type SandboxRefreshResult,
   type SandboxWaitResult,
 } from './operator-sandbox'
+import { groupAlive, terminateProcessGroup } from './process-group'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -42,6 +47,17 @@ export interface ProvisionRecord {
 }
 
 export type FakeWorkspaceMode = 'filesystem' | 'logical'
+
+const SANDBOX_MARKER = '.autobuild-sandbox-provisioned'
+const SHA_PATTERN = /^[0-9a-f]{40,64}$/i
+
+/** A provision attempt stopped by `close` or `release`; not a failure. */
+class SandboxCancelledError extends Error {
+  override readonly name = 'SandboxCancelledError'
+  constructor() {
+    super('operator sandbox provisioning was cancelled')
+  }
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -120,6 +136,11 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     this.sandboxEnvironmentVariables = opts.sandboxEnvironmentVariables ?? []
     this.sandboxEnvSource = opts.envSource ?? {}
     this.orchestratorSandbox = {
+      lifecycleSupported: true,
+      open: (input) => this.openSandbox(input),
+      status: (input) => this.sandboxStatus(input),
+      close: (input) => this.closeSandbox(input),
+      refresh: (handle, input) => this.refreshSandbox(handle, input),
       describe: (input) => Promise.resolve(this.sandboxIdentity(input.repo, input.operator)),
       ensure: (input) => this.ensureSandbox(input),
       exec: (handle, request) => this.sandboxExec(handle, request),
@@ -257,7 +278,12 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   /** Serialization probe: in-flight exec recording, for overlap tests. */
   private readonly sandboxChildren = new Map<
     string,
-    { proc: ReturnType<typeof Bun.spawn>; stdout: string; stderr: string; exitCode: number | null }
+    {
+      proc: ReturnType<typeof Bun.spawn>
+      stdout: string
+      stderr: string
+      exitCode: number | null
+    }
   >()
 
   private sandboxIdentity(repo: string, operator: string): SandboxEnvironmentIdentity {
@@ -285,13 +311,17 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     return env
   }
 
-  private async ensureSandbox(input: {
-    repo: string
-    operator: string
-    baseBranch: string
-  }): Promise<SandboxEnvironmentIdentity> {
+  private async ensureSandbox(
+    input: {
+      repo: string
+      operator: string
+      baseBranch: string
+    },
+    control: { onStage?: (stage: SandboxProvisionStage) => void; signal?: AbortSignal } = {},
+  ): Promise<SandboxEnvironmentIdentity> {
     const identity = this.sandboxIdentity(input.repo, input.operator)
-    if (await pathExists(join(identity.workspacePath, '.autobuild-sandbox-provisioned'))) {
+    const { signal } = control
+    if (await pathExists(join(identity.workspacePath, SANDBOX_MARKER))) {
       // Pre-existing sandboxes provisioned before the info/exclude write
       // landed (AUT-580) keep an unexcluded marker; write the exclusion on
       // every ensure, mirroring GitWorktreeProvider, so the publish
@@ -306,10 +336,13 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         'the logical fake mode has no filesystem to host an operator sandbox',
       )
     }
+    control.onStage?.('checkout')
+    if (signal?.aborted) throw new SandboxCancelledError()
     await mkdir(dirname(identity.workspacePath), { recursive: true })
     await rm(identity.workspacePath, { recursive: true, force: true })
     await cp(input.repo, identity.workspacePath, { recursive: true })
     try {
+      if (signal?.aborted) throw new SandboxCancelledError()
       // Real git checkout (publish-service parity): the three git checks the
       // publish service runs through capability.exec (rev-parse, status,
       // merge-base) must work against the fake exactly as against the real
@@ -353,24 +386,34 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       }
       const baseSha = head.stdout.trim()
       this.sandboxBaseBranches.set(identity.environmentId, input.baseBranch)
+      if (signal?.aborted) throw new SandboxCancelledError()
       if (this.sandboxSetupCommand !== undefined && this.sandboxSetupCommand.trim() !== '') {
+        control.onStage?.('setup')
         this.sandboxExecEnvironments.push({
           op: 'setup',
           command: this.sandboxSetupCommand,
           env: this.sandboxEnv(),
         })
+        // Its own process group, so a cancel stops setup and its children
+        // together and releases the pipes awaited below (mirrors the real
+        // provider).
         const proc = Bun.spawn(['sh', '-c', this.sandboxSetupCommand], {
           cwd: identity.workspacePath,
           stdin: 'ignore',
           stdout: 'pipe',
           stderr: 'pipe',
           env: this.sandboxEnv(),
+          detached: true,
         })
+        const onAbort = (): void => void terminateProcessGroup(proc.pid)
+        if (signal?.aborted) onAbort()
+        else signal?.addEventListener('abort', onAbort, { once: true })
         const [stdout, stderr, exitCode] = await Promise.all([
           new Response(proc.stdout).text(),
           new Response(proc.stderr).text(),
           proc.exited,
-        ])
+        ]).finally(() => signal?.removeEventListener('abort', onAbort))
+        if (signal?.aborted) throw new SandboxCancelledError()
         if (exitCode !== 0) {
           throw new SandboxOperationError(
             'provision',
@@ -383,12 +426,275 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       // excludeProvisioningMarker: that helper is the info/exclude exclusion
       // logic alone (the early-return heal runs it too), while this write is
       // provisioning-specific.
-      await fsWriteFile(join(identity.workspacePath, '.autobuild-sandbox-provisioned'), '')
+      if (signal?.aborted) throw new SandboxCancelledError()
+      await fsWriteFile(join(identity.workspacePath, SANDBOX_MARKER), JSON.stringify({ baseSha }))
       return { ...identity, baseSha }
     } catch (error) {
       await rm(identity.workspacePath, { recursive: true, force: true })
       throw error
     }
+  }
+
+  // ── Operator sandbox lifecycle (#1223), mirroring GitWorktreeProvider ──
+
+  private readonly sandboxInflight = new Map<
+    string,
+    {
+      kind: 'provision' | 'resume'
+      promise: Promise<SandboxProviderStatus>
+      abort: AbortController
+    }
+  >()
+  private readonly sandboxFailures = new Map<
+    string,
+    { stage: SandboxProvisionStage; message: string }
+  >()
+  /** environmentId → process groups of its detached commands; dead groups
+   * are pruned on every `start`. */
+  private readonly sandboxGroups = new Map<string, Set<number>>()
+
+  /** The marker's recorded metadata: `null` when missing, `{}` when legacy. */
+  private async readSandboxMarker(workspacePath: string): Promise<{ baseSha?: string } | null> {
+    let content: string
+    try {
+      content = await fsReadFile(join(workspacePath, SANDBOX_MARKER), 'utf8')
+    } catch {
+      return null
+    }
+    try {
+      const parsed = JSON.parse(content) as { baseSha?: unknown }
+      return typeof parsed?.baseSha === 'string' && SHA_PATTERN.test(parsed.baseSha)
+        ? { baseSha: parsed.baseSha }
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  private async sandboxHead(workspacePath: string): Promise<string | undefined> {
+    const head = await this.runSandboxGit(workspacePath, ['rev-parse', 'HEAD'])
+    return head.exitCode === 0 && head.stdout.trim() !== '' ? head.stdout.trim() : undefined
+  }
+
+  private async openSandbox(input: {
+    repo: string
+    operator: string
+    baseBranch: string
+  }): Promise<{
+    status: SandboxProviderStatus
+    settled?: Promise<SandboxProviderStatus>
+  }> {
+    const identity = this.sandboxIdentity(input.repo, input.operator)
+    const id = identity.environmentId
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight !== undefined) {
+      return {
+        status: {
+          state: inflight.kind === 'resume' ? 'resuming' : 'provisioning',
+          kind: inflight.kind,
+        },
+        settled: inflight.promise,
+      }
+    }
+    const marker =
+      this.mode === 'filesystem' ? await this.readSandboxMarker(identity.workspacePath) : null
+    if (marker !== null) {
+      await this.excludeProvisioningMarker(identity.workspacePath)
+      this.sandboxFailures.delete(id)
+      const headSha = await this.sandboxHead(identity.workspacePath)
+      return {
+        status: {
+          state: 'ready',
+          handle: {
+            ...identity,
+            ...(marker.baseSha !== undefined ? { baseSha: marker.baseSha } : {}),
+          },
+          kind: 'resume',
+          ...(headSha !== undefined ? { headSha } : {}),
+        },
+      }
+    }
+    this.sandboxFailures.delete(id)
+    const abort = new AbortController()
+    const entry = {
+      kind: 'provision' as const,
+      abort,
+      promise: Promise.resolve<SandboxProviderStatus>({ state: 'absent' }),
+    }
+    this.sandboxInflight.set(id, entry)
+    entry.promise = (async (): Promise<SandboxProviderStatus> => {
+      let stage: SandboxProvisionStage = 'provision'
+      try {
+        const handle = await this.ensureSandbox(input, {
+          signal: abort.signal,
+          onStage: (next) => {
+            stage = next
+          },
+        })
+        const headSha = await this.sandboxHead(handle.workspacePath)
+        return {
+          state: 'ready',
+          handle,
+          kind: 'provision',
+          ...(headSha !== undefined ? { headSha } : {}),
+        }
+      } catch (error) {
+        if (error instanceof SandboxCancelledError) {
+          await rm(id, { recursive: true, force: true })
+          return { state: 'absent', cancelled: true }
+        }
+        const failure = {
+          stage:
+            error instanceof SandboxOperationError && error.stage === 'environment'
+              ? ('environment' as const)
+              : stage,
+          message:
+            redactSandboxMessage(error instanceof Error ? error.message : String(error)) ||
+            'operator sandbox provisioning failed',
+        }
+        this.sandboxFailures.set(id, failure)
+        return { state: 'failed', failure }
+      } finally {
+        if (this.sandboxInflight.get(id) === entry) this.sandboxInflight.delete(id)
+      }
+    })()
+    return { status: { state: 'provisioning', kind: 'provision' }, settled: entry.promise }
+  }
+
+  private async sandboxStatus(input: {
+    repo: string
+    operator: string
+  }): Promise<SandboxProviderStatus> {
+    const identity = this.sandboxIdentity(input.repo, input.operator)
+    const id = identity.environmentId
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight !== undefined) {
+      return { state: inflight.kind === 'resume' ? 'resuming' : 'provisioning' }
+    }
+    const failure = this.sandboxFailures.get(id)
+    if (failure !== undefined) return { state: 'failed', failure }
+    if (this.mode !== 'filesystem' || !(await pathExists(identity.workspacePath))) {
+      return { state: 'absent' }
+    }
+    const marker = await this.readSandboxMarker(identity.workspacePath)
+    if (marker === null) {
+      return {
+        state: 'failed',
+        failure: {
+          stage: 'provision',
+          message: 'provisioning was interrupted before it finished; call sandbox.open to retry',
+        },
+      }
+    }
+    const headSha = await this.sandboxHead(identity.workspacePath)
+    return {
+      state: 'ready',
+      handle: { ...identity, ...(marker.baseSha !== undefined ? { baseSha: marker.baseSha } : {}) },
+      ...(headSha !== undefined ? { headSha } : {}),
+    }
+  }
+
+  private async cancelSandboxAttempt(id: string): Promise<SandboxProviderStatus | undefined> {
+    const inflight = this.sandboxInflight.get(id)
+    if (inflight === undefined) return undefined
+    inflight.abort.abort()
+    return inflight.promise
+  }
+
+  private async closeSandbox(input: {
+    repo: string
+    operator: string
+    environmentId: string
+  }): Promise<{ outcome: 'closed' | 'absent'; attempt?: SandboxProviderStatus }> {
+    const attempt = await this.cancelSandboxAttempt(input.environmentId)
+    const groups = [...(this.sandboxGroups.get(input.environmentId) ?? [])]
+    this.sandboxGroups.delete(input.environmentId)
+    const stopped = await Promise.all(groups.map((pgid) => terminateProcessGroup(pgid)))
+    if (stopped.includes(false)) {
+      throw new SandboxOperationError(
+        'close',
+        'a detached sandbox command survived SIGKILL; the environment is not stopped',
+      )
+    }
+    const kept =
+      this.mode === 'filesystem' && (await this.readSandboxMarker(input.environmentId)) !== null
+    return { outcome: kept ? 'closed' : 'absent', ...(attempt !== undefined ? { attempt } : {}) }
+  }
+
+  /** The base head comes from the source repository when it is a git
+   * repository (fetched into the checkout), else the checkout's own base
+   * branch; then the same clean/ancestor/diverged rules as the real
+   * provider apply. */
+  private async refreshSandbox(
+    handle: SandboxEnvironmentIdentity,
+    input: { repo: string; baseBranch: string },
+  ): Promise<SandboxRefreshResult> {
+    const cwd = handle.workspacePath
+    let base: string | undefined
+    if (await pathExists(join(input.repo, '.git'))) {
+      const fetched = await this.runSandboxGit(cwd, [
+        'fetch',
+        '--quiet',
+        input.repo,
+        `refs/heads/${input.baseBranch}`,
+      ])
+      if (fetched.exitCode !== 0) {
+        throw new SandboxOperationError(
+          'refresh',
+          `operator sandbox could not fetch ${input.baseBranch}: ${fetched.stderr.trim() || `exit ${fetched.exitCode}`}`,
+        )
+      }
+      const resolved = await this.runSandboxGit(cwd, ['rev-parse', 'FETCH_HEAD'])
+      base = resolved.stdout.trim()
+    } else {
+      const resolved = await this.runSandboxGit(cwd, [
+        'rev-parse',
+        `refs/heads/${input.baseBranch}`,
+      ])
+      base = resolved.stdout.trim()
+    }
+    const head = await this.sandboxHead(cwd)
+    if (base === '' || head === undefined) {
+      throw new SandboxOperationError('refresh', 'operator sandbox could not resolve its heads')
+    }
+    const status = await this.runSandboxGit(cwd, ['status', '--porcelain'])
+    if (status.stdout.trim() !== '') {
+      return {
+        outcome: 'refused',
+        reason: 'dirty',
+        message:
+          'the sandbox checkout has uncommitted changes; commit or discard them before refreshing',
+      }
+    }
+    const isAncestor = async (ancestor: string, descendant: string): Promise<boolean> =>
+      (await this.runSandboxGit(cwd, ['merge-base', '--is-ancestor', ancestor, descendant]))
+        .exitCode === 0
+    if (head === base || (await isAncestor(base, head))) {
+      return { outcome: 'current', headSha: head, baseSha: base, previousHeadSha: head }
+    }
+    if (!(await isAncestor(head, base))) {
+      return {
+        outcome: 'refused',
+        reason: 'diverged',
+        message: `the checkout head ${head} has diverged from ${input.baseBranch} (${base}); a fast-forward is impossible`,
+      }
+    }
+    const moved = await this.runSandboxGit(cwd, [
+      '-c',
+      'advice.detachedHead=false',
+      'checkout',
+      '--quiet',
+      '--detach',
+      base,
+    ])
+    if (moved.exitCode !== 0) {
+      throw new SandboxOperationError(
+        'refresh',
+        `operator sandbox could not check out ${base}: ${moved.stderr.trim() || `exit ${moved.exitCode}`}`,
+      )
+    }
+    await fsWriteFile(join(cwd, SANDBOX_MARKER), JSON.stringify({ baseSha: base }))
+    return { outcome: 'refreshed', headSha: base, baseSha: base, previousHeadSha: head }
   }
 
   /** Idempotently exclude the provisioning marker in the checkout's
@@ -415,12 +721,12 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       (content) => content,
       () => '',
     )
-    if (!existingExclude.split('\n').includes('.autobuild-sandbox-provisioned')) {
+    if (!existingExclude.split('\n').includes(SANDBOX_MARKER)) {
       const prefix =
         existingExclude === '' || existingExclude.endsWith('\n')
           ? existingExclude
           : `${existingExclude}\n`
-      await fsWriteFile(excludePath, `${prefix}.autobuild-sandbox-provisioned\n`)
+      await fsWriteFile(excludePath, `${prefix}${SANDBOX_MARKER}\n`)
     }
   }
 
@@ -506,9 +812,19 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       env,
+      detached: true,
     })
+    const environmentGroups = this.sandboxGroups.get(handle.environmentId) ?? new Set()
+    for (const pgid of environmentGroups) if (!groupAlive(pgid)) environmentGroups.delete(pgid)
+    environmentGroups.add(proc.pid)
+    this.sandboxGroups.set(handle.environmentId, environmentGroups)
     const commandId = `sbcmd-${Math.random().toString(36).slice(2, 12)}`
-    const tracked = { proc, stdout: '', stderr: '', exitCode: null as number | null }
+    const tracked = {
+      proc,
+      stdout: '',
+      stderr: '',
+      exitCode: null as number | null,
+    }
     this.sandboxChildren.set(commandId, tracked)
     void (async () => {
       const decoder = new TextDecoder()
@@ -595,6 +911,8 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     environmentId: string
   }): Promise<{ snapshots: { outcome: 'confirmed' } }> {
     this.sandboxReleases.push({ ...input })
+    await this.cancelSandboxAttempt(input.environmentId)
+    this.sandboxFailures.delete(input.environmentId)
     await rm(input.environmentId, { recursive: true, force: true })
     return { snapshots: { outcome: 'confirmed' } }
   }

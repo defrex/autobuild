@@ -22,16 +22,26 @@ import {
 
 const mkdtemp = ownTempDirectories(afterEach)
 
+/** Open the operator's sandbox and wait for the background provision. */
+async function openReady(service: OperatorSandboxService, identity: string, repo: string) {
+  const opened = await service.open(identity, { repo })
+  await service.settled(identity)
+  return opened
+}
+
 async function fixture(opts?: {
   clock?: () => Date
   setupCommand?: string
   environmentVariables?: string[]
   forge?: FakeForge
+  /** Operators opened (and settled) before the test body; default `ops`. */
+  open?: readonly string[]
+  store?: MemoryBuildStore
 }) {
   const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-fake-'))
   const source = await mkdtemp(join(tmpdir(), 'ab-sandbox-src-'))
   await Bun.write(join(source, 'README.md'), 'hello\n')
-  const store = new MemoryBuildStore({ clock: opts?.clock })
+  const store = opts?.store ?? new MemoryBuildStore({ clock: opts?.clock })
   const provider = new FakeWorkspaceProvider({
     root: join(workspaces, 'wt'),
     sandboxRoot: join(workspaces, 'sb'),
@@ -56,12 +66,14 @@ async function fixture(opts?: {
     ...(opts?.forge !== undefined ? { forge: opts.forge } : {}),
     ...(opts?.clock !== undefined ? { clock: opts.clock } : {}),
   })
+  for (const operator of opts?.open ?? ['ops']) await openReady(service, operator, source)
   return {
     store,
     provider,
     service,
     forge: opts?.forge,
     repo: source,
+    workspaces,
     async cleanup() {
       await store.close()
       await rm(workspaces, { recursive: true, force: true })
@@ -75,22 +87,31 @@ function facts(fx: { store: MemoryBuildStore; repo: string }) {
 }
 
 describe('OperatorSandboxService', () => {
-  test('first call provisions and journals; later calls reuse without new facts', async () => {
-    const fx = await fixture()
+  test('open provisions in the background and journals; later calls reuse without new facts', async () => {
+    const fx = await fixture({ open: [] })
     try {
-      await fx.service.exec('ops', { repo: fx.repo, command: 'echo one' })
+      const opened = await fx.service.open('ops', { repo: fx.repo })
+      expect(opened.state).toBe('provisioning')
+      await fx.service.settled('ops')
       const first = await facts(fx)
       // The provisioned fact is itself the first activity evidence; the
-      // 60 s rate limit suppresses an activity fact on the same call.
-      expect(first.map((event) => event.type)).toEqual(['orchestrator.sandbox.provisioned'])
-      expect(first[0]!.actor).toEqual({ kind: 'human', user: 'ops' })
-      expect(first[0]!.payload).toMatchObject({
+      // 60 s rate limit suppresses an activity fact on the next call.
+      expect(first.map((event) => event.type)).toEqual([
+        'orchestrator.sandbox.provisioning',
+        'orchestrator.sandbox.provisioned',
+      ])
+      expect(first[1]!.actor).toEqual({ kind: 'human', user: 'ops' })
+      expect(first[1]!.payload).toMatchObject({
         operator: 'ops',
         provider: 'fake',
         workspacePath: expect.any(String),
+        baseSha: expect.stringMatching(/^[0-9a-f]{40}$/),
       })
+      await fx.service.exec('ops', { repo: fx.repo, command: 'echo one' })
       await fx.service.exec('ops', { repo: fx.repo, command: 'echo two' })
-      expect(await facts(fx)).toHaveLength(1)
+      expect(await facts(fx)).toHaveLength(2)
+      expect(await fx.service.open('ops', { repo: fx.repo })).toMatchObject({ state: 'ready' })
+      expect(await facts(fx)).toHaveLength(2)
     } finally {
       await fx.cleanup()
     }
@@ -221,7 +242,7 @@ describe('OperatorSandboxService', () => {
   })
 
   test('different operators do not serialize against each other', async () => {
-    const fx = await fixture()
+    const fx = await fixture({ open: ['ops-a', 'ops-b'] })
     try {
       const first = fx.service.exec('ops-a', { repo: fx.repo, command: 'sleep 0.4 && echo a' })
       const second = fx.service.exec('ops-b', { repo: fx.repo, command: 'echo b' })
@@ -270,15 +291,20 @@ describe('OperatorSandboxService', () => {
       const before = await facts(fx)
       expect(before.at(-1)!.type).toBe('orchestrator.sandbox.stopped')
       now += 10 * 60 * 1000
-      await fx.service.exec('ops', { repo: fx.repo, command: 'echo resumed' })
+      const refused = await fx.service
+        .exec('ops', { repo: fx.repo, command: 'echo resumed' })
+        .catch((error: unknown) => error as SandboxOperationError)
+      expect(refused).toMatchObject({ stage: 'not-ready', state: 'stopped' })
+      expect((await fx.service.open('ops', { repo: fx.repo })).state).toBe('ready')
       const types = (await facts(fx)).map((event) => event.type)
       expect(types.at(-1)).toBe('orchestrator.sandbox.resumed')
+      await fx.service.exec('ops', { repo: fx.repo, command: 'echo resumed' })
     } finally {
       await fx.cleanup()
     }
   })
 
-  test('reset journals reset → released → provisioned and re-copies from source', async () => {
+  test('reset journals reset → released → provisioning → provisioned and re-copies from source', async () => {
     const fx = await fixture()
     try {
       await fx.service.exec('ops', { repo: fx.repo, command: 'echo one' })
@@ -292,11 +318,13 @@ describe('OperatorSandboxService', () => {
         content: 'dirty',
         encoding: 'utf8',
       })
-      await fx.service.reset('ops', { repo: fx.repo })
+      expect((await fx.service.reset('ops', { repo: fx.repo })).state).toBe('provisioning')
+      await fx.service.settled('ops')
       const types = (await facts(fx)).map((event) => event.type)
-      expect(types.slice(-3)).toEqual([
+      expect(types.slice(-4)).toEqual([
         'orchestrator.sandbox.reset',
         'orchestrator.sandbox.released',
+        'orchestrator.sandbox.provisioning',
         'orchestrator.sandbox.provisioned',
       ])
       // The destructive reset re-copied from the source: the scratch file is
@@ -319,7 +347,7 @@ describe('OperatorSandboxService', () => {
         operator: 'ops',
         snapshots: { outcome: 'confirmed' },
       })
-      expect(await facts(fx)).toHaveLength(2) // provisioned, released
+      expect(await facts(fx)).toHaveLength(3) // provisioning, provisioned, released
 
       const before = (await facts(fx)).length
       await fx.service.release('nobody', { repo: fx.repo })
@@ -347,6 +375,83 @@ describe('OperatorSandboxService', () => {
       expect((error as SandboxOperationError).stage).toBe('reset')
     } finally {
       await fx.cleanup()
+    }
+  })
+
+  test('a failing setup becomes a background provision-failed fact and a status failure', async () => {
+    const fx = await fixture({ open: [], setupCommand: 'echo setup-broke >&2; exit 3' })
+    try {
+      expect((await openReady(fx.service, 'ops', fx.repo)).state).toBe('provisioning')
+      const failed = (await facts(fx)).at(-1)!
+      expect(failed.type).toBe('orchestrator.sandbox.provision-failed')
+      expect(failed.payload).toMatchObject({
+        stage: 'setup',
+        message: expect.stringContaining('setup-broke'),
+      })
+      expect(await fx.service.status('ops', { repo: fx.repo })).toMatchObject({
+        state: 'failed',
+        failure: { stage: 'setup' },
+      })
+      const refused = await fx.service
+        .exec('ops', { repo: fx.repo, command: 'true' })
+        .catch((error: unknown) => error as SandboxOperationError)
+      expect(refused).toMatchObject({ stage: 'not-ready', state: 'failed' })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('restart: a fresh service reconciles a lagging provisioning journal from the provider', async () => {
+    const store = new MemoryBuildStore()
+    const realAppend = store.appendRepo.bind(store)
+    let rejectProvisioned = true
+    store.appendRepo = (async (repo: string, event: { type: string }) => {
+      if (rejectProvisioned && event.type === 'orchestrator.sandbox.provisioned') {
+        throw new Error('store unavailable')
+      }
+      return realAppend(repo, event as never)
+    }) as typeof store.appendRepo
+    const first = await fixture({ store, open: [] })
+    try {
+      await openReady(first.service, 'ops', first.repo)
+      expect((await facts(first)).map((event) => event.type)).toEqual([
+        'orchestrator.sandbox.provisioning',
+      ])
+      rejectProvisioned = false
+      // A new process: a fresh provider and service with no in-process state.
+      const provider = new FakeWorkspaceProvider({
+        root: join(first.workspaces, 'wt'),
+        sandboxRoot: join(first.workspaces, 'sb'),
+        envSource: { PATH: process.env.PATH ?? '' },
+      })
+      const second = await createOperatorSandboxService({
+        store,
+        repo: first.repo,
+        provider,
+        sandbox: { idleMinutes: 30, environmentVariables: [] },
+        baseBranch: 'main',
+        forge: new FakeForge(),
+      })
+      await second.exec('ops', {
+        repo: first.repo,
+        command: 'echo change >> README.md && git add README.md && git commit -q -m change',
+      })
+      const provisioned = (await facts(first)).find(
+        (event) => event.type === 'orchestrator.sandbox.provisioned',
+      )!
+      const baseSha = (provisioned.payload as { baseSha?: string }).baseSha
+      const identity = await provider.orchestratorSandbox.describe({
+        repo: first.repo,
+        operator: 'ops',
+      })
+      const seed = await provider.orchestratorSandbox.exec(identity, {
+        command: 'git rev-parse HEAD~1',
+      })
+      expect(baseSha).toBe(seed.stdout.trim())
+      const published = await second.publish('ops', { repo: first.repo, title: 'Fix' })
+      expect(published.sha).toMatch(/^[0-9a-f]{40}$/)
+    } finally {
+      await first.cleanup()
     }
   })
 
@@ -444,6 +549,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
       expect(baseSha).toMatch(/^[0-9a-f]{40}$/)
 
       await fx.service.reset('ops', { repo: fx.repo })
+      await fx.service.settled('ops')
       const reprovisioned = (await factsOf(fx))
         .filter((event) => event.type === 'orchestrator.sandbox.provisioned')
         .at(-1)!
@@ -595,7 +701,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
       // operator ('legacy'). A stray commit under the wrong operator would be
       // inert here — publish's reset-required check (no recorded baseSha)
       // precedes any head comparison — but the exercise stays under 'legacy'.
-      await fx.service.exec('legacy', { repo: fx.repo, command: 'true' })
+      await openReady(fx.service, 'legacy', fx.repo)
       await commitChange(fx, 'legacy')
       // Pre-existing-environment journal: a second provisioned fact written
       // before baseSha was recorded — operatorState takes .at(-1), so the
@@ -616,21 +722,21 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
         },
       })
       // Reproduce the pre-exclusion-era worktree: strip the marker line the
-      // provisioning-time info/exclude write had put there. This exec's own
-      // ensure runs before the strip, so the strip is the last thing that
-      // touches the file before publish.
+      // provisioning-time info/exclude write had put there; the strip is the
+      // last thing that touches the file before publish.
       await fx.service.exec('legacy', {
         repo: fx.repo,
         command:
           'sed -i "/autobuild-sandbox-provisioned/d" "$(git rev-parse --git-path info/exclude)"',
       })
+      // sandbox.open heals the exclusion on the reuse path (AUT-580).
+      expect((await fx.service.open('legacy', { repo: fx.repo })).state).toBe('ready')
 
       const error = await fx.service
         .publish('legacy', { repo: fx.repo, title: 'Fix' })
         .catch((e: unknown) => e as unknown as SandboxOperationError)
-      // Publish's ensure heals the exclusion on the early-return path, so
-      // the dirty check passes and the no-baseSha diagnostic surfaces —
-      // not the misleading uncommitted-changes refusal.
+      // The healed exclusion lets the dirty check pass, so the no-baseSha
+      // diagnostic surfaces — not the misleading uncommitted-changes refusal.
       expect(error).toBeInstanceOf(SandboxOperationError)
       expect((error as SandboxOperationError).message).toMatch(
         /reset required|no recorded base head/,
@@ -710,6 +816,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
 
   test('refuses with a reset-required message when the journal has no baseSha', async () => {
     const fx = await forgeFx()
+    await openReady(fx.service, 'legacy', fx.repo)
     try {
       // Pre-existing environment: a provisioned fact written before this
       // build carried no baseSha.
@@ -785,7 +892,9 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   })
 
   test('a foreign repo is refused before any provider traffic', async () => {
-    const fx = await forgeFx()
+    const fx = (await fixture({ forge: new FakeForge(), open: [] })) as Awaited<
+      ReturnType<typeof forgeFx>
+    >
     try {
       const error = await fx.service
         .publish('ops', { repo: 'other/repo', title: 'Fix' })
@@ -802,7 +911,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   })
 
   test('a foreign repo refusal on exec keeps the exec stage', async () => {
-    const fx = await forgeFx()
+    const fx = await fixture({ open: [] })
     try {
       const error = await fx.service
         .exec('ops', { repo: 'other/repo', command: 'true' })
@@ -920,6 +1029,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
       // → a fresh baseSha).
       await Bun.write(join(fx.repo, 'merged.txt'), 'from merge\n')
       await fx.service.reset('ops', { repo: fx.repo })
+      await fx.service.settled('ops')
       const reprovisioned = (await factsOf(fx))
         .filter((event) => event.type === 'orchestrator.sandbox.provisioned')
         .at(-1)!

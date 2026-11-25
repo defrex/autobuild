@@ -1387,7 +1387,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       observe: (identity) =>
         this.withPolicyLock(identity.workspaceRef, () => this.observeExecution(identity)),
     }
+    const lifecycleUnsupported = (): Promise<never> =>
+      Promise.reject(
+        new SandboxOperationError(
+          'unsupported',
+          'the vercel-sandbox provider does not implement the operator sandbox lifecycle (open/status/close/refresh)',
+        ),
+      )
     this.orchestratorSandbox = {
+      lifecycleSupported: false,
+      open: lifecycleUnsupported,
+      status: lifecycleUnsupported,
+      close: lifecycleUnsupported,
+      refresh: lifecycleUnsupported,
       describe: (input) => this.describeOperatorSandbox(input),
       ensure: (input) => this.ensureOperatorSandbox(input),
       exec: (handle, request) => this.sandboxExec(handle, request),
