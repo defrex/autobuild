@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.11.1 — 2026-11-25
+
+This release makes the dashboards more informative and more reliable. Repository status now reports the authoritative dispatcher run, so the run it shows is the one actually in charge. Every dashboard now shows the queue depth from the latest ticket scan, giving a consistent view of pending work. The terminal dashboard also keeps the web UI URL on screen so it's always easy to find.
+
+- [#1287](https://github.com/defrex/autobuild/pull/1287) — Report the authoritative dispatcher run in repository status
+- [#1286](https://github.com/defrex/autobuild/pull/1286) — Keep the web UI URL visible on the terminal dashboard
+- [#1285](https://github.com/defrex/autobuild/pull/1285) — Show the latest ticket scan's queue depth in every dashboard
+
 ## v1.11.0 — 2026-11-25
 
 This release makes Autobuild easier to watch and control: a new web UI, served by `ab web` and `ab dispatch --web`, adds live dispatcher overview and build pages, build timelines and step-duration analytics. Hosted projects get much broader MCP support, including repository-scoped connectors, repository agent context served natively, sandbox tools from the hosted endpoint, and native ticket search across GitHub, Linear and hosted tickets for spotting duplicates. Operators now get sandboxes on by default with an explicit lifecycle, an attention digest tool, and a durable build roster with paged, filterable listings. Reliability fixes stop fresh builds from adopting stale branches, recover stranded or incompletely captured builds, and isolate local worktrees, while a large test audit cut integration-test cost without losing regression coverage.

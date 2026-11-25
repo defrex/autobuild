@@ -143,5 +143,16 @@
     "provenance": {
       "tag": "v1.11.0"
     }
+  },
+  {
+    "version": "1.11.1",
+    "publishedAt": "2026-11-25T22:03:27.248Z",
+    "protocol": "7",
+    "contract": "1.11.1.json",
+    "projects": true,
+    "catalogIdentity": "6c30d0893e9b12b2f8105fc1918e08ebfe0b67755ee7593b6afc7cb5070b379a",
+    "provenance": {
+      "tag": "v1.11.1"
+    }
   }
 ]
