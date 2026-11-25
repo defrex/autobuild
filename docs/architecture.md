@@ -1387,12 +1387,18 @@ changed-builds feed, through the poll cache's shared row and header helpers
 (`readRowEnrichment`, `projectRowWithEnrichment`, `repositoryDashboardHeader`
 in `cli/dashboard/poll.ts`), so the terminal and the web project rows the same
 way.
+`web/analytics-source.ts` answers the `/api/analytics` and
+`/api/builds/<slug>/timeline` routes in `web/http.ts` from the `stepDurations`
+rollup, one filtered `listBuildsPage` page and saved `buildTimeline` values,
+evicting its in-memory timelines by the changed-builds feed.
 The `ab web` pages in
 `packages/ui/src/app/` render the frame's projection values, import browser-safe
 values from `vocabulary.ts` (step timers and the verified progress label) so
 both frontends share those terms, use the page's embedded frame as
 a masked skeleton, and apply each frame through `StableFlow`'s layout
-transactions.
+transactions. `packages/ui/src/app/analytics.tsx` is the analytics page; it and
+the build page's timeline fetch the JSON routes when the frame's change
+position moves.
 
 The memory adapter maintains independent bigint counters; SQLite and PostgreSQL
 increment `repo_change_positions` transactionally through triggers on build,

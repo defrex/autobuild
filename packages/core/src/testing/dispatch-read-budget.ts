@@ -15,6 +15,7 @@ import { projectRepositoryFrame } from '../web/repository-source'
 import { finishedOutcomeText } from '../cli/dashboard/vocabulary'
 import { measureStoreReads } from './reduced-read-budget'
 import type { WebServerStarter } from '../web/server'
+import type { WebFrame } from '../web/protocol'
 import { startDispatchWeb, type DispatchWeb } from '../cli/dispatch-web'
 import { abDispatch } from '../cli/dispatch'
 import { FakeForge } from '../ports/forge/fake'
@@ -1165,7 +1166,9 @@ class WebSubscribers {
       expect(this.early.slice(this.early.length - list.length)).toEqual(list)
     }
     const facts = (await readRepositoryFacts(store, repo)).value
-    expect(this.early.at(-1)).toBe(JSON.stringify(projectRepositoryFrame(repo, facts).frame))
+    // The change position is the browser's refetch signal, stamped on top.
+    const { position: _position, ...last } = JSON.parse(this.early.at(-1)!) as WebFrame
+    expect(last).toEqual(JSON.parse(JSON.stringify(projectRepositoryFrame(repo, facts).frame)))
   }
 }
 
@@ -1182,12 +1185,16 @@ interface ParityContext {
 }
 
 /**
- * `ab dispatch --web` adds no store reads (RFC 0007 §4.4, §9.3). In each mode
- * the same script runs twice on fresh, identical repositories, once without
- * the web UI and once with one subscriber from the start and ten joining
- * mid-run. The store-call histograms and journal rows must be equal, and the
- * frame the web serves must be the repository frame for the repository's
- * facts: `ab dispatch --web` pushes the header and notice, not the overview.
+ * `ab dispatch --web` adds no store reads beyond its frames' change position
+ * (RFC 0007 §4.4, §9.3). In each mode the same script runs twice on fresh,
+ * identical repositories, once without the web UI and once with one
+ * subscriber from the start and ten joining mid-run. The store-call
+ * histograms and journal rows must be equal, except that the kernel path,
+ * whose journal refresh samples no position, reads one
+ * `getRepoChangePosition` per frame it publishes to a connected browser; the
+ * frontends pass the position their refresh sampled. The frame the web
+ * serves must be the repository frame for the repository's facts: `ab
+ * dispatch --web` pushes the header and notice, not the overview.
  */
 async function webPresentationParity(store: BuildStore, backing: BuildStore): Promise<void> {
   const slices = countJournalSlices(backing)
@@ -1197,6 +1204,7 @@ async function webPresentationParity(store: BuildStore, backing: BuildStore): Pr
     run: (context: ParityContext) => Promise<void>,
   ) => {
     const results: { calls: Record<string, number>; rows: number }[] = []
+    let frames = 0
     for (const withWeb of [false, true]) {
       const repo = `https://github.com/budget/web-parity-${mode}-${withWeb ? 'web' : 'plain'}`
       await backing.ensureRepo(repo)
@@ -1228,12 +1236,26 @@ async function webPresentationParity(store: BuildStore, backing: BuildStore): Pr
         join: () => subscribers?.join(),
       })
       const rows = slices?.rows() ?? 0
-      if (withWeb) await subscribers!.expectConsistent(store, repo)
+      if (withWeb) {
+        await subscribers!.expectConsistent(store, repo)
+        frames = subscribers!.early.length
+      }
       const calls = counter.histogram()
       // The frontend's upgrade-release check runs on a wall-clock timer, not
       // per refresh, so a slow run may add one; it is not a presentation read.
       delete calls['getReducerValue:repo:dispatchUpgrade']
       results.push({ calls, rows })
+    }
+    if (mode === 'kernel') {
+      const position = (result: { calls: Record<string, number> }) => {
+        const count = result.calls.getRepoChangePosition ?? 0
+        delete result.calls.getRepoChangePosition
+        return count
+      }
+      const added = position(results[1]!) - position(results[0]!)
+      // At most one per published frame; at least one, so the signal is real.
+      expect(added).toBeGreaterThan(0)
+      expect(added).toBeLessThanOrEqual(frames)
     }
     expect({ mode, ...results[1] }).toEqual({ mode, ...results[0] })
   }

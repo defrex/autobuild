@@ -1,30 +1,33 @@
 import type { CSSProperties } from 'react'
 import { Placeholder } from '../components/display'
-import { type SegmentCategory, segmentStyle } from '../tokens'
+import { segmentStyle } from '../tokens'
 import { formatDuration, type StepStats } from './model'
 
 export type DurationMode = 'per-run' | 'total'
 
-const pipelineOrder: SegmentCategory[] = [
-  'queued',
-  'plan',
-  'plan-review',
-  'implement',
-  'code-review',
-  'verify',
-  'reconcile',
-  'finalize',
-  'awaiting-merge',
-  'ticket-wait',
-  'paused',
-  'escalated',
-]
+/* Literals of TIMELINE_PHASE_STEPS, TIMELINE_LATE_PHASE_STEPS and
+   TIMELINE_WAIT_STEPS in packages/core/src/cli/dashboard/timeline.ts; this
+   package imports core only as types. A unit test holds them equal. */
+const phases = ['plan', 'plan-review', 'implement', 'code-review']
+const late = ['finalize', 'reconcile']
+const waits = ['queued', 'escalated', 'paused', 'ticket-wait', 'awaiting-merge']
 
-/** Steps in pipeline order, so rows never reorder when the measure or the
- * window changes. Verify steps keep their configured order by name. */
+function rank(step: string): number {
+  const phase = phases.indexOf(step)
+  if (phase >= 0) return phase
+  if (step.startsWith('verify:') || step === 'verify') return 10
+  if (late.includes(step)) return 20 + late.indexOf(step)
+  if (waits.includes(step)) return 30 + waits.indexOf(step)
+  return 100
+}
+
+/** Steps in the served rollup's pipeline order: phases, `verify:*` by name,
+ * finalize, reconcile, then waits; unknown steps last by name. Rows never
+ * reorder when the measure or the window changes. */
 export function orderSteps(steps: readonly StepStats[]): StepStats[] {
-  const rank = (s: StepStats) => pipelineOrder.indexOf(s.category)
-  return [...steps].sort((a, b) => rank(a) - rank(b) || a.step.localeCompare(b.step))
+  return [...steps].sort(
+    (a, b) => rank(a.step) - rank(b.step) || (a.step < b.step ? -1 : a.step > b.step ? 1 : 0),
+  )
 }
 
 /** One bar per step. Per-run: the bar is the mean, ticks mark P50, P90 and
