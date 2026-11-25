@@ -326,13 +326,20 @@ export interface BuildDetail extends BuildSummary {
   restack?: LeafRestackStatus
   /** The open `target.rewritten` wait. `adoptedBase` is set when the
    * rewritten-from commit is a base the build's first local provision adopted
-   * from a pre-existing branch, a wait only abort clears (#1261). */
+   * from a pre-existing branch (#1261). A leaf's `recovery` says how it leaves
+   * the wait: `pending` until its next runner reprovisions it (no work) or
+   * escalates (work), `escalated` while its target-rewritten escalation is
+   * open. Nodes carry none. */
   targetRewrite?: {
     branch: string
     previousSha: string
     sha: string
     adoptedBase?: { branch: string; sha: string }
+    recovery?: 'pending' | 'escalated'
   }
+  /** An open no-work reset of a rewritten-target episode whose rewrite has
+   * since cleared: the next runner start completes it. */
+  targetReprovision?: { branch: string; sha: string }
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Frozen forge issue links with effective intent; omitted when none. */
@@ -581,9 +588,14 @@ function nodeLandingDeferred(state: BuildState): { landingDeferred?: string } {
 function targetRewriteDetail(
   state: BuildState,
   firstWorkspace: BuildFacts['firstWorkspace'],
-): Pick<BuildDetail, 'targetRewrite'> {
+  restack: BuildFacts['log']['restack'] | undefined,
+): Pick<BuildDetail, 'targetRewrite' | 'targetReprovision'> {
   const rewrite = state.targetRewrite?.payload
-  if (rewrite === undefined) return {}
+  const prepared = state.kind === 'node' ? undefined : restack?.reprovision
+  if (rewrite === undefined)
+    return prepared === undefined
+      ? {}
+      : { targetReprovision: { branch: prepared.branch, sha: prepared.sha } }
   const first = firstWorkspace?.payload
   const adopted =
     state.kind !== 'node' &&
@@ -597,6 +609,15 @@ function targetRewriteDetail(
       previousSha: rewrite.previousSha,
       sha: rewrite.sha,
       ...(adopted ? { adoptedBase: { branch: first.branch, sha: first.base.sha } } : {}),
+      ...(state.kind === 'node'
+        ? {}
+        : {
+            recovery: state.openEscalations.some(
+              (e) => e.source === 'policy' && e.policyCause === 'target-rewritten',
+            )
+              ? ('escalated' as const)
+              : ('pending' as const),
+          }),
     },
   }
 }
@@ -694,7 +715,7 @@ export function detailFromFacts(
         }
       : {}),
     ...(state.profile !== undefined ? { profile: { ...state.profile } } : {}),
-    ...targetRewriteDetail(state, facts.firstWorkspace),
+    ...targetRewriteDetail(state, facts.firstWorkspace, facts.log?.restack),
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
@@ -1122,12 +1143,22 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     const target = safeStatusText(rewrite.branch)
     const previous = rewrite.previousSha.slice(0, 7)
     const current = rewrite.sha.slice(0, 7)
-    lines.push(
+    const cause =
       rewrite.adoptedBase !== undefined
-        ? `  waiting:  target-rewritten — base ${previous} was adopted from pre-existing branch ${safeStatusText(rewrite.adoptedBase.branch)} at first provision, not cut from ${target}; ${target} at ${current} does not descend from it and the build cannot be restacked. Abort it; a re-dispatched build cuts a fresh branch.`
-        : `  waiting:  target ${target} rewritten ${previous} → ${current}; automatic adoption withheld until the target returns or the build is aborted`,
+        ? `  waiting:  target-rewritten — base ${previous} was adopted from pre-existing branch ${safeStatusText(rewrite.adoptedBase.branch)} at first provision, not cut from ${target}; ${target} at ${current} does not descend from it`
+        : `  waiting:  target ${target} rewritten ${previous} → ${current}`
+    lines.push(
+      rewrite.recovery === 'pending'
+        ? `${cause}; the next runner start reprovisions the build from ${target} if it has no work of its own, else escalates`
+        : rewrite.recovery === 'escalated'
+          ? `${cause}; the build has its own work; answer ab answer ${safeStatusText(d.slug)} --accept-target to restack it onto ${target}, or abort`
+          : `${cause}; automatic adoption withheld until the target returns or the build is aborted`,
     )
   }
+  if (d.targetReprovision !== undefined)
+    lines.push(
+      `  recovering: reset to ${safeStatusText(d.targetReprovision.branch)} at ${d.targetReprovision.sha.slice(0, 7)} prepared; the next runner start completes it`,
+    )
   if (d.restack !== undefined)
     lines.push(
       `  restack:  ${d.restack.trigger} onto ${d.restack.onto.slice(0, 7)} — ${d.restack.state}${d.restack.regenerated ? ` (regenerated: ${d.restack.regenerated.join(', ')})` : ''}`,

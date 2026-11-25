@@ -42,6 +42,8 @@ export const buildEventPolicy = {
   'target.rewritten': 'decisive',
   'target.rewrite-cleared': 'decisive',
   'target.moved': 'decisive',
+  'target.rewrite-reprovision-prepared': 'decisive',
+  'target.rewrite-recovered': 'decisive',
   // Advisory although merge-rule path predicates decide on it: a decisive
   // unknown type would make an older runtime in a hot-upgrade fleet defer
   // every kernel decision on the build. An older runtime cannot parse a

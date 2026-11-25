@@ -185,6 +185,10 @@ export interface LogIndex {
   /** Post-restart `finalize.step-completed` steps, ok true OR false —
    * post-steps are failure-tolerant (§5), so any completion counts. */
   finalizeStepsDone: Set<string>
+  /** The finalize post-step started after this scope's `finalize.completed`
+   * and not yet completed: the occurrence that owns any local commit made
+   * inside it. A post-step does not set the build's current phase. */
+  openFinalizeStep?: { step: string; seq: number }
   /** Latest `pr.conflicted` (full log — the epilogue is restart-orthogonal);
    * only its seq is needed for policy/dedupe. Its baseSha is detection-time
    * evidence, not the reconcile merge target (§15.7). */
@@ -242,6 +246,7 @@ export type LogIndexCandidate =
   | { kind: 'verify-completed'; record: VerifyRecord }
   | { kind: 'finalize-completed'; seq: number }
   | { kind: 'finalize-step'; seq: number; step: string }
+  | { kind: 'finalize-step-started'; seq: number; step: string }
   | { kind: 'reconcile-completed'; seq: number }
   | { kind: 'config-superseded'; seq: number }
   | { kind: 'wait-resume-restacked'; seq: number; cycle: number }
@@ -467,6 +472,13 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
           step: event.payload.step,
         })
         break
+      case 'finalize.step-started':
+        acc.candidates.push({
+          kind: 'finalize-step-started',
+          seq: event.seq,
+          step: event.payload.step,
+        })
+        break
 
       case 'pr.conflicted':
         acc.lastConflict = { seq: event.seq }
@@ -587,6 +599,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   let waitResumeVerifyCycle = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
+  let openFinalizeStep: LogIndex['openFinalizeStep']
 
   const roundRecord = (loop: LoopIndex, r: number): RoundRecord => {
     if (r > loop.maxRound) loop.maxRound = r
@@ -673,9 +686,14 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
         break
       case 'finalize-completed':
         finalizeCompleted = true
+        openFinalizeStep = undefined
         break
       case 'finalize-step':
         finalizeStepsDone.add(candidate.step)
+        if (openFinalizeStep?.step === candidate.step) openFinalizeStep = undefined
+        break
+      case 'finalize-step-started':
+        if (finalizeCompleted) openFinalizeStep = { step: candidate.step, seq: candidate.seq }
         break
       case 'reconcile-completed':
         lastReconcileCompletedSeq = candidate.seq
@@ -764,6 +782,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     lastImplementCompletedSeq,
     finalizeCompleted,
     finalizeStepsDone,
+    ...(openFinalizeStep === undefined ? {} : { openFinalizeStep }),
     lastConflict,
     conflictReconcileStarted: acc.conflictReconcileStarted,
     lastReconcileCompleted,
