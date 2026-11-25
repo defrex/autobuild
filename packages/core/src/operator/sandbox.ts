@@ -207,8 +207,9 @@ export interface OperatorSandboxService {
    * resumes or extends an idle environment. */
   status(identity: string, input: { repo: string }): Promise<SandboxStatusResult>
   /** Stop the environment and release its capacity, keeping the checkout; a
-   * later `open` resumes it. Cancels an in-flight attempt. `noop` when there
-   * is nothing to close. */
+   * later `open` resumes it. Cancels an in-flight attempt. A failed
+   * environment the provider kept is stopped too, its journaled failure
+   * unchanged. `noop` when there is nothing to close. */
   close(
     identity: string,
     input: { repo: string },
@@ -980,10 +981,7 @@ export async function createOperatorSandboxService(
         const state = operatorState(identity, await flushUnjournaled(identity, await readFacts()))
         const described = await capability.describe({ repo, operator: identity })
         const inflight = cancelBackground(identity)
-        if (
-          !inflight &&
-          (state === undefined || state.state === 'stopped' || state.state === 'failed')
-        ) {
+        if (!inflight && (state === undefined || state.state === 'stopped')) {
           return { outcome: 'noop' as const, environmentId: described.environmentId }
         }
         const result = await capability
@@ -994,6 +992,16 @@ export async function createOperatorSandboxService(
           })
         if (state === undefined) {
           return { outcome: 'noop' as const, environmentId: described.environmentId }
+        }
+        if (state.state === 'failed') {
+          // A failed environment the provider kept (its failure evidence)
+          // still holds capacity: the provider stops it, never discarding the
+          // evidence. The journal keeps the authoritative `failed` record, so
+          // the next open replaces it at once.
+          return {
+            outcome: result.outcome === 'closed' ? ('closed' as const) : ('noop' as const),
+            environmentId: described.environmentId,
+          }
         }
         // A provision that finished in the race keeps its base head.
         if (result.attempt !== undefined && state.state === 'provisioning') {

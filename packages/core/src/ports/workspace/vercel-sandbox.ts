@@ -1297,8 +1297,10 @@ async function effectiveArchive(
 
 /** The guest directory holding one fresh provision's state, outside the
  * checkout: `host` (`<step> <guest epoch seconds>`, the host phase's
- * heartbeat), one `stage-NN-<name>.sh` per tail stage, `tail.sh`, and the
- * tail's `pid`, `stage`, `log` and `failed` files. */
+ * heartbeat), one `stage-NN-<name>.sh` per tail stage, `tail.sh`, the
+ * tail's `pid`, `stage`, `log` and `failed` files, and `resuming` (the guest
+ * epoch at which a runtime refresh of a provisioned environment started),
+ * which outranks the success marker until that refresh succeeds. */
 export const VERCEL_OPERATOR_PROVISION_DIR = `${VERCEL_AUTOBUILD_PATH}/operator-provision`
 /** Heartbeat age after which a host phase with no running tail counts as
  * interrupted: above the 300-second hosted function limit, and every host
@@ -1326,6 +1328,7 @@ const PROVISION_STAGES: readonly SandboxProvisionStage[] = [
  * outranks an older success marker. */
 export type VercelOperatorProbe =
   | { kind: 'failed'; record: string; log: string }
+  | { kind: 'resuming'; ageSeconds: number }
   | {
       kind: 'ready'
       marker: { baseSha?: string }
@@ -1348,6 +1351,12 @@ export const VERCEL_OPERATOR_PROBE_SCRIPT = [
   '  echo "result failed"',
   '  printf "failed %s\\n" "$(head -c 4096 "$d/failed" | enc)"',
   '  printf "log %s\\n" "$(tail -c 4096 "$d/log" 2>/dev/null | enc)"',
+  '  exit 0',
+  'fi',
+  'if [ -f "$d/resuming" ]; then',
+  '  echo "result resuming"',
+  '  printf "resuming %s\\n" "$(head -n 1 "$d/resuming")"',
+  '  printf "now %s\\n" "$(date +%s)"',
   '  exit 0',
   'fi',
   'if [ -f "$2" ]; then',
@@ -1409,6 +1418,17 @@ export function parseVercelOperatorProbe(stdout: string): VercelOperatorProbe {
         ...(headSha !== undefined && /^[0-9a-f]{40,64}$/.test(headSha) ? { headSha } : {}),
         ...(bunVersion !== undefined ? { bunVersion } : {}),
         ...(distribution !== undefined ? { distribution } : {}),
+      }
+    }
+    case 'resuming': {
+      const since = Number(fields.get('resuming'))
+      const now = Number(fields.get('now'))
+      return {
+        kind: 'resuming',
+        ageSeconds:
+          Number.isFinite(since) && Number.isFinite(now) && fields.get('resuming') !== ''
+            ? Math.max(0, now - since)
+            : 0,
       }
     }
     case 'running': {
@@ -3226,6 +3246,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         return { status: { state: 'failed', failure: this.probeFailure(probe) }, inFlight: false }
       case 'ready':
         return { status: this.readyStatus(name, sandbox, probe), inFlight: false }
+      case 'resuming':
+        // Some process is refreshing the toolchain under the old marker.
+        if (probe.ageSeconds < VERCEL_OPERATOR_HOST_STALE_SECONDS) {
+          return { status: { state: 'resuming' }, inFlight: true }
+        }
+        return {
+          status: {
+            state: 'failed',
+            failure: {
+              stage: 'resume',
+              message: 'resuming was interrupted before it finished; call sandbox.open to retry',
+            },
+          },
+          inFlight: false,
+        }
       case 'running':
         return { status: { state: 'provisioning' }, inFlight: true }
       case 'host': {
@@ -3531,7 +3566,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           cmd: 'sh',
           args: [
             '-c',
-            'mkdir -p "$1" && rm -f "$1/failed" "$1/pid" "$2" && printf "checkout %s\\n" "$(date +%s)" > "$1/host"',
+            'mkdir -p "$1" && rm -f "$1/failed" "$1/resuming" "$1/pid" "$2" && printf "checkout %s\\n" "$(date +%s)" > "$1/host"',
             'replace',
             VERCEL_OPERATOR_PROVISION_DIR,
             VERCEL_PROVISIONED_MARKER,
@@ -3586,6 +3621,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     probe: Extract<VercelOperatorProbe, { kind: 'ready' }>,
   ): Promise<SandboxProviderStatus> {
     try {
+      // Every process's probe reads the refresh as in flight (outranking the
+      // old marker) until it succeeds; a failure supersedes it with `failed`.
+      await commandOrThrow(sandbox, {
+        cmd: 'sh',
+        args: [
+          '-c',
+          'mkdir -p "$1" && printf "%s\\n" "$(date +%s)" > "$1/resuming"',
+          'resuming',
+          VERCEL_OPERATOR_PROVISION_DIR,
+        ],
+        signal: this.operationSignal(),
+      })
       await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
       const identity = await this.identityStamp()
       if (probe.distribution !== identity) {
@@ -3596,6 +3643,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           this.operationSignal(),
         )
       }
+      await commandOrThrow(sandbox, {
+        cmd: 'sh',
+        args: ['-c', 'rm -f "$1/resuming"', 'resumed', VERCEL_OPERATOR_PROVISION_DIR],
+        signal: this.operationSignal(),
+      })
     } catch (error) {
       const failure = {
         stage: 'resume' as const,
@@ -3621,7 +3673,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     name: string,
   ): Promise<SandboxProviderStatus> {
     await this.applyOperatorSession(sandbox, name)
-    const probe = await this.probeOperator(sandbox)
+    let probe = await this.probeOperator(sandbox)
+    if (probe.kind === 'resuming') {
+      // The stop ended that refresh; this attempt redoes it.
+      await commandOrThrow(sandbox, {
+        cmd: 'sh',
+        args: ['-c', 'rm -f "$1/resuming"', 'resumed', VERCEL_OPERATOR_PROVISION_DIR],
+        signal: this.operationSignal(),
+      })
+      probe = await this.probeOperator(sandbox)
+    }
     if (probe.kind === 'ready') return this.refreshOperatorRuntime(sandbox, name, probe)
     if (probe.kind === 'running') return { state: 'provisioning', kind: 'provision' }
     const failure =
@@ -3674,8 +3735,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           )
         }
         if (this.classifyOperatorProbe(name, sandbox, probe).inFlight) {
-          // Another process's provision is in flight.
-          return { status: { state: 'provisioning', kind: 'provision' } }
+          // Another process's provision or refresh is in flight.
+          return {
+            status:
+              probe.kind === 'resuming'
+                ? { state: 'resuming', kind: 'resume' }
+                : { state: 'provisioning', kind: 'provision' },
+          }
         }
         // A failed, interrupted or marker-less environment. The service
         // calls open only after the journal records its failure, so its
@@ -3741,13 +3807,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       const session = sandbox.sessionStatus
       const running = session === undefined || session === 'running'
       if (running && attempt === undefined) {
-        const { status, inFlight } = this.classifyOperatorProbe(
-          name,
-          sandbox,
-          await this.probeOperator(sandbox),
-        )
-        if (inFlight) {
-          // Closing an in-flight provision is a user-requested cancel.
+        const probe = await this.probeOperator(sandbox)
+        const { status, inFlight } = this.classifyOperatorProbe(name, sandbox, probe)
+        if (inFlight && probe.kind !== 'resuming') {
+          // Closing an in-flight provision is a user-requested cancel; a
+          // refresh of a provisioned checkout is stopped, never discarded.
           this.sessions.set(name, sandbox)
           await this.reap(name)
           return { outcome: 'absent' as const, attempt: { state: 'absent', cancelled: true } }

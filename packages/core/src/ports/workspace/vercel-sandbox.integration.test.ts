@@ -156,6 +156,11 @@ class FakeSandbox implements VercelSandboxHandle {
   markerContent = ''
   /** Whether the detached tail is alive (`running`) when probed. */
   tailRunning = false
+  /** A runtime refresh in progress (`resuming` record), by age. */
+  resumingAgeSeconds: number | undefined
+  /** When set, a matching command waits for the returned promise first: a
+   * slow guest step another process can observe meanwhile. */
+  commandGate: ((params: Record<string, unknown>) => Promise<void> | undefined) | undefined
   /** The `host` heartbeat: its step and age in guest seconds. */
   hostHeartbeat: { step: string; ageSeconds: number } | undefined
   /** The tail's log, read back by a failed probe. */
@@ -185,6 +190,8 @@ class FakeSandbox implements VercelSandboxHandle {
     const b64 = (value: string) => Buffer.from(value).toString('base64')
     if (this.failedContent !== undefined)
       return `result failed\nfailed ${b64(this.failedContent)}\nlog ${b64(this.logTail)}\n`
+    if (this.resumingAgeSeconds !== undefined)
+      return `result resuming\nresuming 1000\nnow ${1000 + this.resumingAgeSeconds}\n`
     if (this.provisioned)
       return [
         'result ready',
@@ -212,6 +219,7 @@ class FakeSandbox implements VercelSandboxHandle {
   /** Reset the guest state a fresh create starts from. */
   resetGuest(): void {
     this.failedContent = undefined
+    this.resumingAgeSeconds = undefined
     this.markerContent = ''
     this.tailRunning = false
     this.hostHeartbeat = undefined
@@ -283,6 +291,8 @@ class FakeSandbox implements VercelSandboxHandle {
     }
     if (this.autoResume && this.sessionStatus === 'stopped') this.sessionStatus = 'running'
     this.commands.push(params)
+    const gate = this.commandGate?.(params)
+    if (gate !== undefined) await gate
     const label = (params.args as string[] | undefined)?.[2]
     if (params.cmd === 'sh' && (params.args as string[])?.[0] === '-c') {
       const args = params.args as string[]
@@ -290,6 +300,14 @@ class FakeSandbox implements VercelSandboxHandle {
         this.probes += 1
         const output = this.probeOutput()
         return { exitCode: 0, stdout: async () => output, stderr: async () => '' }
+      }
+      if (label === 'resuming') {
+        this.resumingAgeSeconds = 0
+        return { exitCode: 0 }
+      }
+      if (label === 'resumed') {
+        this.resumingAgeSeconds = undefined
+        return { exitCode: 0 }
       }
       if (label === 'heartbeat') {
         this.hostHeartbeat = { step: args[3]!, ageSeconds: 0 }
@@ -301,6 +319,7 @@ class FakeSandbox implements VercelSandboxHandle {
       }
       if (label === 'replace') {
         this.failedContent = undefined
+        this.resumingAgeSeconds = undefined
         this.provisioned = false
         this.hostHeartbeat = { step: 'checkout', ageSeconds: 0 }
         return { exitCode: 0 }
@@ -3832,7 +3851,61 @@ describe('operator sandbox capability', () => {
     expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
   })
 
-  test('the guest probe ranks a failure record above an older success marker', async () => {
+  for (const outcome of ['resumed', 'failed'] as const) {
+    test(`another process polling during a runtime refresh sees resuming, then the refresh ${outcome}`, async () => {
+      const h = harness()
+      await ensure(h.provider)
+      h.sandbox.bunVersion = '1.4.0'
+      if (outcome === 'failed') h.sandbox.bunInstallVersion = '1.4.0'
+      let release!: () => void
+      let entered!: () => void
+      const reached = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const installing = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      h.sandbox.commandGate = (params) => {
+        if (params.cmd !== 'npm') return undefined
+        entered()
+        return installing
+      }
+      const store = new MemoryBuildStore()
+      const first = await serviceOver(h.provider, store)
+      expect((await first.open('ops', ref)).state).toBe('resuming')
+      await reached
+      const second = await serviceOver(h.restart(), store)
+      expect((await second.status('ops', ref)).state).toBe('resuming')
+      expect(
+        await second.exec('ops', { repo: REPO_ID, command: 'true' }).catch((error) => error),
+      ).toMatchObject({ stage: 'not-ready', state: 'resuming' })
+      release()
+      await first.settled('ops')
+      const facts = await journal(store)
+      expect(facts).toEqual([
+        'provisioning',
+        outcome === 'resumed' ? 'resumed' : 'provision-failed',
+      ])
+      expect((await second.status('ops', ref)).state).toBe(
+        outcome === 'resumed' ? 'ready' : 'failed',
+      )
+    })
+  }
+
+  test('closing a journaled failure stops the kept environment without discarding it', async () => {
+    const h = harness({ setupCommand: 'echo setup' })
+    h.sandbox.tailOutcome = { failAt: 'setup' }
+    const store = new MemoryBuildStore()
+    const service = await serviceOver(h.provider, store)
+    await service.open('ops', ref)
+    await service.settled('ops')
+    expect((await service.status('ops', ref)).state).toBe('failed')
+    expect(await service.close('ops', ref)).toMatchObject({ outcome: 'closed' })
+    expect([h.sandbox.stops, h.sandbox.deletes, h.sandbox.failedContent]).toEqual([1, 0, 'setup\n'])
+    expect(await journal(store)).toEqual(['provisioning', 'provision-failed'])
+  })
+
+  test('the guest probe ranks a failure above a refresh in progress above an older success marker', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-vercel-probe-'))
     try {
       const probe = () =>
@@ -3855,6 +3928,8 @@ describe('operator sandbox capability', () => {
       await writeFile(join(dir, 'marker'), JSON.stringify({ baseSha: SHA }))
       await writeFile(join(dir, 'distribution'), '1.2.3\n')
       expect(probe()).toEqual({ kind: 'ready', marker: { baseSha: SHA }, distribution: '1.2.3' })
+      await writeFile(join(dir, 'resuming'), '100\n')
+      expect(probe()).toMatchObject({ kind: 'resuming' })
       await writeFile(join(dir, 'failed'), 'resume\nBun pin failed\n')
       await writeFile(join(dir, 'log'), 'tail output')
       expect(probe()).toEqual({
