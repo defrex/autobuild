@@ -1163,8 +1163,9 @@ command = "postgres"
         type: 'dispatcher.run-stopped',
         payload: { run: 'yielded', outcome: 'normal' },
       })
-      // The scenario reproduces the bug: the reduced status is the yielded run's.
-      expect((await readRepositoryFacts(store, REPO)).value.status?.queued).not.toBe(11)
+      // Since #1279 the reduced status also stays on the holder; the queue
+      // depth no longer depends on it either way.
+      expect((await readRepositoryFacts(store, REPO)).value.status?.run).toBe('holder')
       expect(await queueCounts(store)).toEqual([11, 11, 11, 11])
 
       // A later scan, as after a claim, is what every surface reports next.
