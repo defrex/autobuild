@@ -324,6 +324,15 @@ export interface BuildDetail extends BuildSummary {
   /** A work build's open or latest restack: why it ran (its trigger), the
    * target base it moves onto, and where it stands. */
   restack?: LeafRestackStatus
+  /** The open `target.rewritten` wait. `adoptedBase` is set when the
+   * rewritten-from commit is a base the build's first local provision adopted
+   * from a pre-existing branch, a wait only abort clears (#1261). */
+  targetRewrite?: {
+    branch: string
+    previousSha: string
+    sha: string
+    adoptedBase?: { branch: string; sha: string }
+  }
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Frozen forge issue links with effective intent; omitted when none. */
@@ -545,6 +554,10 @@ export function detail(
         .filter((event) => event.type === 'observation.recorded')
         .map((event) => event.payload),
       open: openExecution(events),
+      firstWorkspace: events.find(
+        (event): event is Extract<AbEvent, { type: 'workspace.provisioned' }> =>
+          event.type === 'workspace.provisioned',
+      ),
     },
     now,
     eventCount === undefined ? undefined : events.slice(-eventCount),
@@ -563,6 +576,31 @@ function nodeLandingDeferred(state: BuildState): { landingDeferred?: string } {
   return reason === undefined ? {} : { landingDeferred: reason }
 }
 
+/** The open target rewrite, naming a base adopted from a pre-existing branch
+ * at the build's first local provision. */
+function targetRewriteDetail(
+  state: BuildState,
+  firstWorkspace: BuildFacts['firstWorkspace'],
+): Pick<BuildDetail, 'targetRewrite'> {
+  const rewrite = state.targetRewrite?.payload
+  if (rewrite === undefined) return {}
+  const first = firstWorkspace?.payload
+  const adopted =
+    state.kind !== 'node' &&
+    first !== undefined &&
+    first.base.source === 'existing' &&
+    first.remote !== true &&
+    first.base.sha === rewrite.previousSha
+  return {
+    targetRewrite: {
+      branch: rewrite.branch,
+      previousSha: rewrite.previousSha,
+      sha: rewrite.sha,
+      ...(adopted ? { adoptedBase: { branch: first.branch, sha: first.base.sha } } : {}),
+    },
+  }
+}
+
 /** An optimization node's slot-holding conditions, from its reduced digest. */
 function optimizationDetail(
   state: BuildState,
@@ -579,7 +617,7 @@ function optimizationDetail(
 export function detailFromFacts(
   record: BuildRecord,
   facts: Pick<BuildFacts, 'state' | 'open'> &
-    Partial<Pick<BuildFacts, 'log' | 'runnerAttaches'>> & {
+    Partial<Pick<BuildFacts, 'log' | 'runnerAttaches' | 'firstWorkspace'>> & {
       observations: BuildState['observations']
     },
   now: Date,
@@ -656,6 +694,7 @@ export function detailFromFacts(
         }
       : {}),
     ...(state.profile !== undefined ? { profile: { ...state.profile } } : {}),
+    ...targetRewriteDetail(state, facts.firstWorkspace),
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
@@ -1078,6 +1117,17 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
         ? `  waiting on: ${safeStatusText(ticketWaitText(d.wait, d.slug))}`
         : `  waiting:  ${safeStatusText(ticketWaitText(d.wait, d.slug))}`,
     )
+  if (d.targetRewrite !== undefined) {
+    const rewrite = d.targetRewrite
+    const target = safeStatusText(rewrite.branch)
+    const previous = rewrite.previousSha.slice(0, 7)
+    const current = rewrite.sha.slice(0, 7)
+    lines.push(
+      rewrite.adoptedBase !== undefined
+        ? `  waiting:  target-rewritten — base ${previous} was adopted from pre-existing branch ${safeStatusText(rewrite.adoptedBase.branch)} at first provision, not cut from ${target}; ${target} at ${current} does not descend from it and the build cannot be restacked. Abort it; a re-dispatched build cuts a fresh branch.`
+        : `  waiting:  target ${target} rewritten ${previous} → ${current}; automatic adoption withheld until the target returns or the build is aborted`,
+    )
+  }
   if (d.restack !== undefined)
     lines.push(
       `  restack:  ${d.restack.trigger} onto ${d.restack.onto.slice(0, 7)} — ${d.restack.state}${d.restack.regenerated ? ` (regenerated: ${d.restack.regenerated.join(', ')})` : ''}`,
