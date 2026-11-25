@@ -6853,9 +6853,26 @@ export class Dispatcher {
       facts.replacedHeads,
     )
     const local = this.deps.forge.name === 'local-git'
+    // A build's first provision never adopts a pre-existing branch (#1261).
+    // `owner` is unique to this build (an earlier same-slug build in another
+    // store has another creation time) and stable across its retries.
+    const fresh =
+      facts.workspaceGenerations === 0 &&
+      input.revision === undefined &&
+      input.generation === undefined &&
+      input.baseBranch !== input.branch &&
+      facts.created !== undefined
+        ? {
+            owner: createHash('sha256')
+              .update(`${slug}\0${facts.created.ts}`)
+              .digest('hex')
+              .slice(0, 32),
+          }
+        : undefined
     try {
       const handle = await this.deps.workspaces.provision({
         ...input,
+        ...(fresh !== undefined ? { fresh } : {}),
         restoration,
         ...(facts.replacedHeads.length ? { restorationReplaced: facts.replacedHeads } : {}),
         // Store reads happen only while provisioning a build whose receipt
@@ -10824,17 +10841,25 @@ export class Dispatcher {
     return verdict
   }
 
-  /** Valid bounded base, deduped with -2/-3/… against this store's builds and,
+  /** Valid bounded base, deduped with -2/-3/… against this store's builds,
    * when the forge can answer, against build branches already on the remote
-   * (another store's builds, AUT-1106). Claim-time only; a forge failure fails
-   * the naming stage and the claim is handed back. */
+   * (another store's builds, AUT-1106), and, when the workspace provider
+   * creates branches in a local checkout, against local branches there: a
+   * stale local `ab/<slug>` must never become a new build's branch (#1261).
+   * Claim-time only; a probe failure fails the naming stage and the claim is
+   * handed back. */
   private async uniqueSlug(base: string, prefix: 'ab' | 'ab-node'): Promise<string> {
     const forge = this.deps.forge
     const exists = forge.remoteBranchExists
+    const workspaces = this.deps.workspaces
+    const local = workspaces.localBranchExists
+    const checkout = this.deps.checkout ?? this.deps.repo
     for (let n = 1; n <= MAX_SLUG_CANDIDATES; n += 1) {
       const slug = n === 1 ? base : `${base}-${n}`
       if ((await this.store.getBuild(slug)) !== null) continue
-      if (exists !== undefined && (await exists.call(forge, `${prefix}/${slug}`))) continue
+      const branch = `${prefix}/${slug}`
+      if (exists !== undefined && (await exists.call(forge, branch))) continue
+      if (local !== undefined && (await local.call(workspaces, checkout, branch))) continue
       return slug
     }
     throw new Error(`no free slug for ${base} after ${MAX_SLUG_CANDIDATES} candidates`)
