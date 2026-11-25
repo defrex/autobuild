@@ -5,7 +5,9 @@
  * Each call reads the repository's LATEST deposited effective config (one
  * repository read plus the latest artifact row, never a listing of every
  * revision) and refuses with a typed `SandboxUnavailableError` when the gate
- * is closed. An open gate returns one composed backend per repository, keyed
+ * is closed. This resolver is the hosted binding's gate by definition, so it
+ * resolves `[orchestrator].enabled` for the `hosted` host: an unset value is
+ * enabled, only an explicit `enabled = false` closes the gate. An open gate returns one composed backend per repository, keyed
  * by effective-config revision and a caller-supplied credential key, reused
  * across calls. The repo-scoped store token the composition needs is cached
  * separately and renewed only near expiry, so a recomposition (new revision,
@@ -29,6 +31,7 @@ export type SandboxUnavailableReason =
   | 'orchestrator-disabled'
   | 'effective-config-invalid'
   | 'backend-unavailable'
+  | 'credentials-missing'
 
 /** A sandbox call cannot be served for this repository. The registry maps it
  * to a `sandbox-<reason>` refusal, so a caller sees why, never `unknown tool`. */
@@ -64,6 +67,14 @@ export interface OperatorSandboxResolverOptions {
   /** The part of the request credentials composition depends on. A change
    * recomposes the backend. Default: none (`''`). */
   credentialKey?(credentials?: SandboxRequestCredentials): string
+  /** Runs on a cache miss, before any store token is issued. A thrown
+   * `SandboxUnavailableError` refuses the call unchanged and unreported, so a
+   * deployment missing what composition needs never mints a credential. */
+  preflight?(input: {
+    repo: string
+    config: Config
+    credentials?: SandboxRequestCredentials
+  }): void | Promise<void>
   compose(input: {
     repo: string
     config: Config
@@ -149,7 +160,7 @@ export function createOperatorSandboxResolver(
     async resolve(repo, credentials) {
       let gate: Awaited<ReturnType<typeof readOrchestratorGate>>
       try {
-        gate = await readOrchestratorGate(options.store, repo)
+        gate = await readOrchestratorGate(options.store, repo, 'hosted')
       } catch (error) {
         if (error instanceof OrchestratorConfigError) {
           throw new SandboxUnavailableError(
@@ -164,11 +175,11 @@ export function createOperatorSandboxResolver(
         throw gate.reason === 'orchestrator-disabled'
           ? new SandboxUnavailableError(
               'orchestrator-disabled',
-              `repository "${repo}" does not enable [orchestrator] in its latest deposited effective config; set \`[orchestrator] enabled = true\` and let the dispatcher deposit it`,
+              `repository "${repo}" disables [orchestrator] in its latest deposited effective config (\`enabled = false\`, or a dispatcher release that predates the hosted default and writes it explicitly); remove \`enabled = false\` or upgrade, and let the dispatcher deposit it again`,
             )
           : new SandboxUnavailableError(
               'no-effective-config',
-              `repository "${repo}" has no deposited effective config; sandbox tools need a dispatcher run with \`[orchestrator] enabled = true\``,
+              `repository "${repo}" has no deposited effective config; sandbox tools need a dispatcher run to deposit one`,
             )
       }
       const key = keyOf(credentials)
@@ -177,7 +188,22 @@ export function createOperatorSandboxResolver(
         return cached.service
       }
       const config = gate.config
+      // Preflight runs inside the cached pending operation, so concurrent
+      // first calls share one preflight and one composition.
       const service = (async () => {
+        if (options.preflight !== undefined) {
+          try {
+            await options.preflight({
+              repo,
+              config,
+              ...(credentials !== undefined ? { credentials } : {}),
+            })
+          } catch (error) {
+            if (error instanceof SandboxUnavailableError) throw error
+            await report(error)
+            throw unavailable(repo, error)
+          }
+        }
         let token: string
         try {
           token = await storeToken(repo)
@@ -193,6 +219,9 @@ export function createOperatorSandboxResolver(
             ...(credentials !== undefined ? { credentials } : {}),
           })
         } catch (error) {
+          // A composition that already refuses with a typed reason (a
+          // missing deployment credential, say) keeps it.
+          if (error instanceof SandboxUnavailableError) throw error
           await report(error)
           throw unavailable(repo, error)
         }

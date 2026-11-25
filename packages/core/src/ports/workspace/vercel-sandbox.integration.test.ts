@@ -349,6 +349,10 @@ function harness(
     defaultIdentityStamp?: boolean
     /** Host-side fallback after a refused guest archive push. */
     refusedArchive?: (ref: string, sha: string) => Promise<void>
+    /** The deployment-fallback egress read credential. */
+    egressReadCredential?: { username: string; password: string }
+    /** A configured private-clone credential pair. */
+    gitCredentialEnv?: { username: string; password: string }
     /** Overrides the store's credential delegation; e.g. to record targets. */
     delegateCredential?: (
       storeRef: string,
@@ -442,6 +446,12 @@ function harness(
         failoverRegions: [],
         environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN', ...(options.forwarded ?? [])],
         provisioning: options.provisioning ?? [],
+        ...(options.gitCredentialEnv !== undefined
+          ? {
+              gitUsernameEnv: options.gitCredentialEnv.username,
+              gitPasswordEnv: options.gitCredentialEnv.password,
+            }
+          : {}),
         ...(options.provisionRuntimes
           ? {
               runtimeProvisioning: {
@@ -487,6 +497,9 @@ function harness(
       runtimeReferences:
         options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
       ...(options.refusedArchive !== undefined ? { refusedArchive: options.refusedArchive } : {}),
+      ...(options.egressReadCredential !== undefined
+        ? { egressReadCredential: options.egressReadCredential }
+        : {}),
     })
   const provider = makeProvider()
   return {
@@ -3176,6 +3189,72 @@ describe('operator sandbox capability', () => {
     const runtimeCommand = h.sandbox.commands[piInstall]!
     expect(runtimeCommand.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
     expectCredentialFree(h.sandbox.commands)
+  })
+
+  test('a deployment egress read credential reaches only the upload-pack transform', async () => {
+    const secret = 'deploy-forge-secret'
+    const basic = Buffer.from(`x-access-token:${secret}`).toString('base64')
+    const h = harness({ egressReadCredential: { username: 'x-access-token', password: secret } })
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const input = h.createInput!
+    expect(Object.hasOwn(input, 'source')).toBe(false)
+    const uploadPackOnly = {
+      allow: {
+        '*': [],
+        'github.com': [
+          {
+            match: {
+              method: ['GET'],
+              path: { exact: '/acme/app.git/info/refs' },
+              queryString: [{ key: { exact: 'service' }, value: { exact: 'git-upload-pack' } }],
+            },
+            transform: [{ headers: { authorization: `Basic ${basic}` } }],
+          },
+          {
+            match: { method: ['POST'], path: { exact: '/acme/app.git/git-upload-pack' } },
+            transform: [{ headers: { authorization: `Basic ${basic}` } }],
+          },
+        ],
+      },
+    }
+    expect(input.networkPolicy).toEqual(uploadPackOnly)
+    const { networkPolicy: _policy, ...rest } = input
+    for (const value of [secret, basic]) expect(JSON.stringify(rest)).not.toContain(value)
+    // The guest clones the bare origin itself; no credential rides argv or env.
+    expect(h.sandbox.commands).toContainEqual({
+      cmd: 'git',
+      args: ['clone', '--no-checkout', 'https://github.com/acme/app.git', VERCEL_WORKSPACE_PATH],
+      env: { GIT_TERMINAL_PROMPT: '0' },
+    })
+    expect(h.sandbox.commands).toContainEqual({
+      cmd: 'git',
+      args: ['-C', VERCEL_WORKSPACE_PATH, 'checkout', '--detach', SHA],
+    })
+    for (const value of [secret, basic]) {
+      expect(JSON.stringify(h.sandbox.commands)).not.toContain(value)
+    }
+    expectCredentialFree(h.sandbox.commands)
+    // A later policy reset (publication restores the normal policy) keeps the
+    // same two transforms and nothing broader.
+    await h.provider.publication.publish({
+      ref: identity.environmentId,
+      sha: SHA,
+      branch: 'ab/remote-build',
+    })
+    expect(h.sandbox.policies.at(-1)).toEqual(uploadPackOnly)
+  })
+
+  test('an egress read credential and a configured gitPasswordEnv are mutually exclusive', () => {
+    expect(() =>
+      harness({
+        egressReadCredential: { username: 'x-access-token', password: 'deploy-forge-secret' },
+        gitCredentialEnv: { username: 'READ_USER', password: 'READ_PASSWORD' },
+      }),
+    ).toThrow('not both')
   })
 
   test('reuse re-checks the marker only, omits baseSha, and a stale distribution is refreshed', async () => {

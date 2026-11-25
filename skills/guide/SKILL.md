@@ -1782,8 +1782,13 @@ restart-classified.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `enabled` | `false` | boolean | Enables external sandbox tools, archive cleanup and dispatcher idle settlement. |
+| `enabled` | unset: on when hosted, off locally | boolean | Enables external sandbox tools, archive cleanup and dispatcher idle settlement. An explicit value wins on every host. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
+
+Unset `enabled` resolves per host: a hosted deployment serves the sandbox tools,
+while local `ab mcp`, dispatch and `ab init` leave them off. Dispatcher releases
+older than this default deposit an explicit `enabled = false`, so their
+projects stay off until they upgrade.
 
 The removed runner settings `model`, `invocationBudgetSeconds`, `approvals` and
 repository-default `wake` are rejected in new config. Historical effective
@@ -1852,7 +1857,7 @@ commit, and the PR; a refused or failed attempt is journaled too.
 Where the tools are served:
 
 - **Local `ab mcp`** reads the checkout's config at startup. It lists the
-  `sandbox.*` tools only when `[orchestrator]` is enabled and the backend
+  `sandbox.*` tools only when `[orchestrator] enabled = true` and the backend
   builds; `sandbox.publish` also needs a forge and provider publication.
 - **Hosted `/mcp`** lists every `sandbox.*` tool whenever the deployment can
   host operator sandboxes. Each call is checked against the repository's latest
@@ -1861,12 +1866,19 @@ Where the tools are served:
 
   | Code | Reason |
   |---|---|
-  | `sandbox-orchestrator-disabled` | The latest effective config does not set `[orchestrator] enabled = true`. |
+  | `sandbox-orchestrator-disabled` | The latest effective config sets `enabled = false` (older releases write it explicitly). |
   | `sandbox-no-effective-config` | No dispatcher has deposited an effective config for the repository. |
   | `sandbox-effective-config-invalid` | The latest deposited effective config cannot be read. |
+  | `sandbox-credentials-missing` | The project's provider cannot host a sandbox and the deployment lacks Vercel or forge credentials; the message names which. |
   | `sandbox-backend-unavailable` | The sandbox backend could not be built. |
 
-  A new deposit takes effect on the next call. `sandbox-not-ready` and
+  A new deposit takes effect on the next call. Only `vercel-sandbox` can host
+  a sandbox on a deployment, so a project with any other workspace provider,
+  such as `git-worktree` dispatched locally, gets one from the deployment's
+  Vercel Sandbox provider. That needs the deployment's Vercel credential and
+  `GITHUB_TOKEN` or `GH_TOKEN`. The forge token is the git read credential,
+  injected only by the host-side egress transform on upload-pack requests; the
+  guest never sees it. `sandbox-not-ready` and
   `sandbox-unsupported` apply here as they do locally.
 
 ### `[upgrade]`

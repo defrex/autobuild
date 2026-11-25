@@ -53,6 +53,12 @@ export interface CreateWorkspaceProviderOptions {
    * reproduced exactly (the config validation only runs when the orchestrator
    * is enabled). */
   orchestratorSandboxEnabled?: boolean
+  /** Builtin-only internal deployment composition, consumed only by
+   * `vercel-sandbox` and never passed to plugin factories: the git read
+   * credential a hosted deployment's fallback operator sandbox uses. The
+   * provider places it only in the host-side upload-pack egress transform,
+   * never in a create `source`, a guest command, or the guest env. */
+  sandboxEgressReadCredential?: { username: string; password: string }
 }
 
 export interface WorkspaceRuntime {

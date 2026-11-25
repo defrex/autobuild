@@ -1218,9 +1218,11 @@ export type TicketsConfig = z.infer<typeof ticketsSchema>
 
 // ── [orchestrator] ──────────────────────────────────────────────────────────
 //
-// The operator-agent gate (AUT-340). Absent table ≡ disabled: with `enabled =
-// false` (the default) the sandbox registry tools are absent from every
-// binding and no environment is ever provisioned.
+// The operator-agent gate (AUT-340). `enabled` has no schema default: an
+// unset value resolves per host through `orchestratorEnabled` (enabled when a
+// hosted deployment serves the project, disabled for local hosts). When the
+// resolved gate is off, the sandbox registry tools are absent from the binding
+// and no environment is ever provisioned.
 
 export const orchestratorSandboxSchema = z.strictObject({
   /** Idle minutes without a sandbox tool call before the dispatcher tick's
@@ -1242,21 +1244,37 @@ documentFields(orchestratorSandboxSchema, {
 })
 documentSchema(orchestratorSandboxSchema.shape.environmentVariables, {
   constraints:
-    'When enabled, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.',
+    'Unless `enabled = false`, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.',
 })
 export type OrchestratorSandboxConfig = z.infer<typeof orchestratorSandboxSchema>
 
 export const orchestratorSchema = z.strictObject({
-  enabled: z.boolean().default(false),
+  /** Unset resolves per host through `orchestratorEnabled`. Kept `undefined`
+   * (no default) so a deposited effective config can tell "absent" from an
+   * explicit `false`. */
+  enabled: z.boolean().optional(),
   sandbox: orchestratorSandboxSchema.prefault({}),
 })
 
 documentFields(orchestratorSchema, {
   enabled:
-    'Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses.',
+    'Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses. Unset: enabled when served by a hosted deployment, disabled for local `ab mcp`, dispatch and init; an explicit value wins on every host.',
   sandbox: 'Sandbox behavior knobs.',
 })
 export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
+
+/** Where `[orchestrator]` is being resolved: a hosted deployment serving the
+ * project, or a local host (`ab mcp`, local dispatch, init validation). */
+export type OrchestratorHost = 'hosted' | 'local'
+
+/** The one place `[orchestrator].enabled` is resolved: an explicit value wins;
+ * an absent value is enabled on a hosted deployment, disabled on local hosts. */
+export function orchestratorEnabled(
+  config: { readonly orchestrator: Pick<OrchestratorConfig, 'enabled'> },
+  host: OrchestratorHost,
+): boolean {
+  return config.orchestrator.enabled ?? host === 'hosted'
+}
 
 // ── Whole file ───────────────────────────────────────────────────────────────
 
@@ -1911,7 +1929,12 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
   // `createWorkspaceProvider` (construction) and `validateInitReadiness`
   // (init validation), both of which run after plugin load; no site loads
   // plugins earlier to widen parse-time coverage.
-  if (config.orchestrator.enabled) {
+  //
+  // No host is known at parse time, so the check resolves the gate for the
+  // most permissive host, `hosted`: it runs unless `enabled = false`. A config
+  // that never names `enabled` is enabled once a hosted deployment serves it,
+  // so its forwarded names must already be valid here.
+  if (orchestratorEnabled(config, 'hosted')) {
     const providerForbidden =
       BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)?.sandboxForbiddenEnv ?? []
     config.orchestrator.sandbox.environmentVariables.forEach((name, index) => {

@@ -11,6 +11,7 @@ import { GitHubApiError } from '../ports/forge/github-transport'
 import { MemoryBuildStore } from '../store/memory'
 import { buildRegistry } from './registry'
 import { createHostedOperatorSandboxService, remoteBranchHeadFromForge } from './sandbox-host'
+import { SandboxUnavailableError } from './sandbox-resolver'
 
 const services: Array<{ dispose(): Promise<void> }> = []
 afterEach(async () => {
@@ -53,6 +54,8 @@ steps = []
 }
 
 const OIDC_ENV = { VERCEL_OIDC_TOKEN: 'header-oidc-token' }
+/** The deployment credentials the Vercel fallback provider needs. */
+const FALLBACK_ENV = { ...OIDC_ENV, GITHUB_TOKEN: 'deployment-forge-token' }
 
 async function compose(opts: {
   workspace: 'git-worktree' | 'vercel-sandbox'
@@ -111,12 +114,14 @@ describe('remoteBranchHeadFromForge', () => {
 })
 
 describe('createHostedOperatorSandboxService', () => {
-  test('composes the git-worktree builtin without store requirements or network', async () => {
-    const { store, service } = await compose({ workspace: 'git-worktree' })
+  test('a git-worktree config composes the deployment vercel-sandbox fallback', async () => {
+    const { store, service } = await compose({
+      workspace: 'git-worktree',
+      forge: new FakeForge(),
+      env: FALLBACK_ENV,
+    })
     const registry = buildRegistry({ store, sandbox: service })
     const tools = sandboxToolNames(registry.entries)
-    // The git-worktree provider publishes through host git from the sandbox
-    // worktree, so with the forge wired every sandbox tool serves.
     expect(tools.sort()).toEqual([
       'sandbox.close',
       'sandbox.exec',
@@ -177,6 +182,14 @@ describe('createHostedOperatorSandboxService', () => {
     )
   })
 
+  test('a git-worktree config without deployment credentials refuses credentials-missing', async () => {
+    const error = await compose({ workspace: 'git-worktree', forge: new FakeForge() }).catch(
+      (caught: unknown) => caught,
+    )
+    expect(error).toBeInstanceOf(SandboxUnavailableError)
+    expect((error as SandboxUnavailableError).reason).toBe('credentials-missing')
+  })
+
   test('an injected forge whose table lacks remoteBranchSha fails construction naming the forge', async () => {
     const capabilityLess = {} as unknown as FakeForge
     await expect(
@@ -184,7 +197,7 @@ describe('createHostedOperatorSandboxService', () => {
         store: new MemoryBuildStore(),
         repo: REPO,
         config: compositionConfig('git-worktree'),
-        env: {},
+        env: FALLBACK_ENV,
         storeRef: STORE_REF,
         storeToken: STORE_TOKEN,
         forge: capabilityLess,
@@ -192,7 +205,7 @@ describe('createHostedOperatorSandboxService', () => {
     ).rejects.toThrow('the configured forge "github" does not resolve remote branch heads')
   })
 
-  test('a plugin-provider config fails construction with the provider-not-found message', async () => {
+  test('a plugin-provider config also composes the deployment fallback', async () => {
     const config = parseConfig(`
 [workspace]
 provider = "from-some-plugin"
@@ -204,17 +217,17 @@ steps = []
 [finalize]
 steps = []
 `)
-    await expect(
-      createHostedOperatorSandboxService({
-        store: new MemoryBuildStore(),
-        repo: REPO,
-        config,
-        env: {},
-        storeRef: STORE_REF,
-        storeToken: STORE_TOKEN,
-        forge: new FakeForge(),
-      }),
-    ).rejects.toThrow('unknown workspace provider "from-some-plugin"')
+    const service = await createHostedOperatorSandboxService({
+      store: new MemoryBuildStore(),
+      repo: REPO,
+      config,
+      env: FALLBACK_ENV,
+      storeRef: STORE_REF,
+      storeToken: STORE_TOKEN,
+      forge: new FakeForge(),
+    })
+    services.push(service)
+    expect(service.canPublish).toBe(true)
   })
 
   test('an unknown configured forge fails construction naming it', async () => {
@@ -235,7 +248,7 @@ steps = []
         store: new MemoryBuildStore(),
         repo: REPO,
         config,
-        env: {},
+        env: FALLBACK_ENV,
         storeRef: STORE_REF,
         storeToken: STORE_TOKEN,
       }),
@@ -257,7 +270,7 @@ test('default scratch lifetime, construction rejection, and caller-owned scratch
       import {readdir,mkdir,stat} from 'node:fs/promises';
       import {tmpdir} from 'node:os';
       const options={store:new MemoryBuildStore(),repo:'https://github.com/acme/widgets',
-        config:parseConfig('[tickets]\\nsource="file"\\nreadyState="ready"'),env:{},storeRef:'https://store.test',storeToken:'token',forge:new FakeForge()};
+        config:parseConfig('[tickets]\\nsource="file"\\nreadyState="ready"'),env:{VERCEL_OIDC_TOKEN:'oidc',GITHUB_TOKEN:'forge'},storeRef:'https://store.test',storeToken:'token',forge:new FakeForge()};
       const service=await createHostedOperatorSandboxService(options);
       const names=await readdir(tmpdir());
       if(names.length!==1 || !names[0].startsWith('autobuild-sandbox-host-'))throw Error('missing default root');
@@ -269,6 +282,10 @@ test('default scratch lifetime, construction rejection, and caller-owned scratch
         if(!String(error).includes('remote branch heads'))throw error;
       }
       if((await readdir(tmpdir())).length)throw Error('construction leaked');
+      try {await createHostedOperatorSandboxService({...options,env:{}});throw Error('must reject')} catch(error) {
+        if(error?.reason!=='credentials-missing')throw error;
+      }
+      if((await readdir(tmpdir())).length)throw Error('credential refusal leaked');
       const scratchRoot=tmpdir()+'/caller'; await mkdir(scratchRoot);
       const caller=await createHostedOperatorSandboxService({...options,scratchRoot});
       await caller.dispose(); await stat(scratchRoot);
