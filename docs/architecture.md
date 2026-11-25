@@ -325,7 +325,10 @@ control, Harvest, and dispatcher run correlations. Lease metadata and clocks sta
 outside event reducers: liveness combines durable run facts with the current
 repository record and observation time, including an older lease holder hidden
 by a newer run. The shared repository value keeps a bounded recent-run window, including the
-latest started and stopped runs. Fresh invocations use those shared facts for
+latest started and stopped runs. Its dispatch status (`foldReportedDispatch` in
+`kernel/dispatch-status.ts`) describes the run holding authority rather than the
+latest started: a start waits as one of at most 16 pending runs while a live,
+ticked run is reported, and replaces it only by recording a tick boundary. Fresh invocations use those shared facts for
 first-tick publication, liveness and supervision without creating a cold
 parameterized cache. Older holder correlations can use `dispatcherRunFacts` for
 the requested historical run. A never-started fresh invocation does not request
