@@ -1,5 +1,9 @@
 import { NO_DISPATCHER_RUN_LINE } from '../cli/dashboard/configuration'
-import { dispatchWarningLines, projectRepositoryHeader } from '../cli/dashboard/header'
+import {
+  dispatchWarningLines,
+  projectRepositoryHeader,
+  repositoryQueueDepth,
+} from '../cli/dashboard/header'
 import type { RepositoryReadFacts } from '../store/reduced-reads'
 import type { WebFrame } from './protocol'
 
@@ -18,7 +22,7 @@ export function projectRepositoryFrame(
   const { header } = projectRepositoryHeader(
     {
       repo,
-      queued: status?.queued ?? 0,
+      queued: repositoryQueueDepth(facts),
       ...(status?.triage !== undefined ? { triage: status.triage } : {}),
       ...(status?.availableUpgrade !== undefined
         ? { availableUpgrade: status.availableUpgrade }
