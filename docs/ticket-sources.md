@@ -267,8 +267,12 @@ answers with one bounded statement per page; against a service predating it,
 the hosted source refuses with `search-unsupported`. PostgreSQL search
 case-folds title and body with the ICU root collation `und-x-icu`, so a server
 built without ICU refuses search with `search-unsupported`; PostgreSQL 16 and
-later build with ICU by default. GitHub and Linear refuse with
-`search-unsupported`. Nothing falls back to a listing. See the
+later build with ICU by default. The Linear source answers each page with one
+GraphQL `issues` request filtered to the configured team: every query word must
+match the title or description through Linear's `containsIgnoreCase`, newest
+first, archived issues included. A hit lists at most 50 labels, with a
+diagnostic beyond that. GitHub refuses with `search-unsupported`. Nothing falls
+back to a listing. See the
 [optional ticket search capability](plugin-authoring.md#optional-ticket-search-capability).
 
 Bounded state counts are another optional capability:
