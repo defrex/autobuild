@@ -433,6 +433,27 @@ repository records the CLI default watch reports, or every event with
 advances past filtered events. Omitting `cursor` returns no events and a
 baseline cursor; an expired cursor fails with `code: "cursor-too-old"`.
 
+The MCP `repository.attention` tool is a connected agent's first call of each
+operator round. It takes `{repo, cursor?}` and returns everything currently
+waiting on the operator:
+
+| Section | Contents |
+|---|---|
+| `escalations` | Open builds with open escalations, as `builds.get` reports them; wait-only builds are excluded |
+| `merges` | The `merges.list` entries, each with its build's PR |
+| `events` | The `repository.events` attention page after `cursor`: `{items, cursor, hasMore}` |
+| `waiting` | Builds `paused`, `stalled`, failing node verification (`verification-failed`) or failing forge CI (`ci-failing`), each with a `detail` |
+| `dispatcher` | No holder, a current upgrade failure, a rollback hold or a forge cooldown, from `repository.status` |
+
+Every item carries `resolve: [{tool, input, by, note?}]`, primary first: a real
+registry tool and a partial input. `by: "human"` marks a condition no agent call
+fixes; the named tool reads the evidence to report. Cursor rules match
+`repository.events`: an omitted cursor returns no events and a baseline cursor
+beside every current-state section, and an expired cursor fails with
+`code: "cursor-too-old"`. The call never waits. Its cost is bounded: one open-build
+listing pass, the `repository.status` reads and at most 256 journal positions,
+with zero event rows when nothing changed.
+
 
 Hosted ticket tools resolve independent project ticket policy, including its
 backlog and rejected roles for role moves, before legacy uploaded configuration. Queue, detail, state discovery and mutations work before any build
