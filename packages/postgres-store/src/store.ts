@@ -1457,6 +1457,24 @@ export class PostgresBuildStore implements BuildStore {
     )) as RepositoryEventEnvelope<T>
   }
 
+  async appendRepoIfCurrent<T extends RepositoryEventType>(
+    repo: string,
+    expectedSeq: number,
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T> | null> {
+    validateExpectedSeq(expectedSeq)
+    const validated = validateRepositoryEventWrite(event)
+    return this.tx(async (q) => {
+      // The row lock serializes this comparison with every repository append
+      // (transaction-scoped: the pooled URL forbids session state).
+      await this.lockRepo(q, repo)
+      const tails: Row[] =
+        await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`
+      if (num(tails[0]?.seq) !== expectedSeq) return null
+      return (await this.appendRepoLocked(q, repo, validated, true)) as RepositoryEventEnvelope<T>
+    })
+  }
+
   private async depositRepoLocked(
     q: Exec,
     repo: string,

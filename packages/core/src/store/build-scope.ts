@@ -251,6 +251,13 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     ): Promise<RepositoryEventEnvelope<T>> {
       return Promise.reject(new BuildScopeError(scope, 'appendRepo', repo))
     },
+    appendRepoIfCurrent<T extends RepositoryEventType>(
+      repo: string,
+      _expectedSeq: number,
+      _event: RepositoryEventWrite<T>,
+    ): Promise<RepositoryEventEnvelope<T> | null> {
+      return Promise.reject(new BuildScopeError(scope, 'appendRepoIfCurrent', repo))
+    },
     appendRepoWithArtifacts<T extends RepositoryEventType>(
       repo: string,
       _artifacts: ArtifactInput[],
