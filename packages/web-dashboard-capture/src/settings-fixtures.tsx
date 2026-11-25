@@ -9,7 +9,12 @@ export const SETTINGS_SCENARIOS = [
   'pending',
   'refused',
   'remove',
+  'mcp-copied',
+  'mcp-refused',
 ] as const
+/** A long, realistic per-repository MCP URL, so phone width shows it wrap. */
+export const SETTINGS_MCP_URL =
+  'https://autobuild.example.com/mcp/github.com/example-organization/repository-with-a-long-name'
 /** The project settings the secrets endpoint answers for a scenario. */
 export function settingsData(state: string): ProjectSettings {
   return {
@@ -91,6 +96,9 @@ export function settingsFixture(id: string) {
       controls={null}
     >
       <SettingsView
+        mcpUrl={SETTINGS_MCP_URL}
+        {...(state === 'mcp-copied' ? { mcpCopyState: 'copied' as const } : {})}
+        {...(state === 'mcp-refused' ? { mcpCopyState: 'refused' as const } : {})}
         data={data}
         pending={state === 'pending' ? '' : undefined}
         error={

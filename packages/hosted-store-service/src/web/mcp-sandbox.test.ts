@@ -34,6 +34,7 @@ import {
   connectClient,
   discoverMetadata,
   dynamicRegister,
+  perRepositoryURL,
   seedUser,
 } from '../testing/mcp-oauth'
 
@@ -75,9 +76,15 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
   const delegated: string[] = []
   let composed = 0
   let failCompose = false
+  const listings: string[] = []
+  let gate: ((repo: string) => Promise<boolean>) | undefined
   const { app, backing, service } = buildApp(env, auth, testAccess(env, testProjects(PROJECTS)), {
     serviceEnv,
     projects: PROJECTS,
+    sandboxListed: (repo) => {
+      listings.push(repo)
+      return gate!(repo)
+    },
     reportInternalError: (error) => {
       reported.push(error)
     },
@@ -101,6 +108,7 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
       })
     },
   })
+  gate = (repo) => service.listsSandboxTools(repo)
   for (const [repo, enabled] of [
     [ENABLED, true],
     [DISABLED, false],
@@ -118,6 +126,9 @@ async function harness(options: { withoutOrigin?: boolean } = {}) {
   const client = await connectClient(app, tokens, registered)
   return {
     env,
+    listings,
+    /** A client on `repo`'s per-repository URL, with the same token. */
+    scoped: (repo: string) => connectClient(app, tokens, registered, perRepositoryURL(repo)),
     app,
     backing,
     service,
@@ -324,12 +335,50 @@ describe('hosted sandbox tools over /mcp', () => {
     }
   })
 
+  test('a per-repository URL lists sandbox tools only when its latest config enables them', async () => {
+    const h = await harness()
+    const clients: Client[] = []
+    try {
+      const listed = async (repo: string) => {
+        const client = await h.scoped(repo)
+        clients.push(client)
+        const before = h.listings.length
+        const { tools } = await client.listTools()
+        // One bounded gate read per listing.
+        expect(h.listings.slice(before)).toEqual([repo])
+        return tools.filter((tool) => tool.name.startsWith('sandbox.')).map((tool) => tool.name)
+      }
+      expect((await listed(ENABLED)).sort()).toEqual([...sandboxNames].sort())
+      expect(await listed(DISABLED)).toEqual([])
+      expect(await listed(MISSING)).toEqual([])
+      // `/mcp` still lists every sandbox tool and never consults the gate.
+      const before = h.listings.length
+      const wide = (await h.client.listTools()).tools.map((tool) => tool.name)
+      expect(wide).toEqual(expect.arrayContaining(sandboxNames))
+      expect(h.listings.length).toBe(before)
+      // An unlisted sandbox call is still refused by its typed reason.
+      const exec = await call(clients[1]!, 'sandbox.exec', { command: 'ls' })
+      expect(exec.body).toMatchObject({ code: 'sandbox-orchestrator-disabled' })
+    } finally {
+      for (const client of clients) await client.close()
+      await h.client.close()
+    }
+  })
+
   test('a deployment without sandbox capability neither lists nor serves sandbox tools', async () => {
     const h = await harness({ withoutOrigin: true })
     try {
       expect(h.service.operatorTools.some((tool) => tool.name.startsWith('sandbox.'))).toBe(false)
       const { tools } = await h.client.listTools()
       expect(tools.some((tool) => tool.name.startsWith('sandbox.'))).toBe(false)
+      const scoped = await h.scoped(ENABLED)
+      try {
+        const listed = (await scoped.listTools()).tools
+        expect(listed.some((tool) => tool.name.startsWith('sandbox.'))).toBe(false)
+        expect(h.listings).toEqual([])
+      } finally {
+        await scoped.close()
+      }
       const response = await h.service.fetch(
         new Request(
           `https://operator.example/operator/v1/repos/${encodeURIComponent(ENABLED)}/tools/sandbox.exec`,
