@@ -3427,7 +3427,7 @@ describe('operator sandbox capability', () => {
       expect(h.sandbox.failedContent).toStartWith(`${stage}\n`)
       expect(h.sandbox.deletes).toBe(0)
       expect(h.sandbox.stops).toBe(0)
-      expect(await status(h.restart())).toEqual(settled)
+      expect(await status(h.restart())).toEqual(settled!)
     }
   })
 

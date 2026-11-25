@@ -9,8 +9,14 @@ import {
 } from '../testing/memory-operator-sandbox'
 import { OPERATOR_TOOL_ANNOTATIONS } from './annotations'
 import { buildRegistry, type RegistryError } from './registry'
+import { humanActor } from '../events/envelope'
+import { manualClock } from '../testing/fixed'
 import {
   createOperatorSandboxService,
+  SANDBOX_ORPHAN_MESSAGE,
+  SANDBOX_PROVISION_ORPHAN_MS,
+  SANDBOX_SETTLE_ATTEMPTS,
+  SANDBOX_UNRECORDED_FAILURE_MESSAGE,
   resolveSandboxRelativePath,
   truncateSandboxOutput,
   SANDBOX_TRUNCATION_MARKER,
@@ -415,6 +421,322 @@ describe('OperatorSandboxService lifecycle', () => {
         idempotentHint: true,
         approval: 'default',
       })
+    }
+  })
+})
+
+// ── Exactly-once settlement across processes (#1246) ──────────────────────
+
+/** One process's view of a shared store: `appendRepoIfCurrent` routed
+ * through `hook`, everything else straight to the store. */
+function storeView(
+  store: MemoryBuildStore,
+  hook: (real: MemoryBuildStore['appendRepoIfCurrent']) => MemoryBuildStore['appendRepoIfCurrent'],
+): MemoryBuildStore {
+  const conditional = hook(store.appendRepoIfCurrent.bind(store))
+  return new Proxy(store, {
+    get(target, property) {
+      if (property === 'appendRepoIfCurrent') return conditional
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+async function processOver(
+  store: MemoryBuildStore,
+  sandbox: ReturnType<typeof memoryOperatorSandbox>,
+  extra: Partial<Parameters<typeof createOperatorSandboxService>[0]> = {},
+) {
+  return createOperatorSandboxService({
+    store,
+    repo: REPO,
+    provider: sandbox.provider,
+    sandbox: { idleMinutes: 30, environmentVariables: [] },
+    baseBranch: 'main',
+    sleep: async () => {},
+    ...extra,
+  })
+}
+
+const settledTypes = async (store: MemoryBuildStore) =>
+  (await store.getRepoEvents(REPO))
+    .map((event) => event.type.replace('orchestrator.sandbox.', ''))
+    .filter((type) => ['provisioned', 'resumed', 'provision-failed'].includes(type))
+
+/** Two views whose conditional appends both run after both read: the
+ * interleaving per-process serialization cannot prevent. */
+function racingViews(store: MemoryBuildStore) {
+  let arrived = 0
+  let release!: () => void
+  const both = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const gated = (real: MemoryBuildStore['appendRepoIfCurrent']) =>
+    (async (...args: Parameters<typeof real>) => {
+      if (++arrived === 2) release()
+      if (arrived <= 2) await both
+      return real(...args)
+    }) as typeof real
+  return [storeView(store, gated), storeView(store, gated)] as const
+}
+
+describe('OperatorSandboxService settlement across processes', () => {
+  for (const outcome of ['ready', 'failed'] as const) {
+    test(`two processes' status polls record a ${outcome} outcome exactly once`, async () => {
+      const store = new MemoryBuildStore()
+      const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+      const lost = storeView(store, () => async () => {
+        throw new Error('store unavailable')
+      })
+      const opener = await processOver(lost, sandbox)
+      await opener.open('ops', { repo: REPO })
+      sandbox.complete(outcome === 'ready' ? 'ready' : { stage: 'setup', message: 'boom' })
+      await opener.settled('ops')
+      expect(await settledTypes(store)).toEqual([])
+      const [a, b] = racingViews(store)
+      const reports = await Promise.all([
+        (await processOver(a, sandbox)).status('ops', { repo: REPO }),
+        (await processOver(b, sandbox)).status('ops', { repo: REPO }),
+      ])
+      expect(reports.map((report) => report.state)).toEqual([outcome, outcome])
+      expect(await settledTypes(store)).toEqual([
+        outcome === 'ready' ? 'provisioned' : 'provision-failed',
+      ])
+    })
+  }
+
+  test("an attached settle handler racing another process's status records once", async () => {
+    const store = new MemoryBuildStore()
+    const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+    const [a, b] = racingViews(store)
+    const opener = await processOver(a, sandbox)
+    await opener.open('ops', { repo: REPO })
+    sandbox.complete('ready')
+    await Promise.all([
+      opener.settled('ops'),
+      (await processOver(b, sandbox)).status('ops', { repo: REPO }),
+    ])
+    expect(await settledTypes(store)).toEqual(['provisioned'])
+  })
+
+  test('contention re-reads and settles; exhausted attempts append nothing and settle on the next poll', async () => {
+    for (const misses of [2, Number.POSITIVE_INFINITY]) {
+      const store = new MemoryBuildStore()
+      const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+      const opener = await processOver(
+        storeView(store, () => async () => null),
+        sandbox,
+      )
+      await opener.open('ops', { repo: REPO })
+      sandbox.complete('ready')
+      await opener.settled('ops')
+      let injected = 0
+      const contended = storeView(
+        store,
+        (real) =>
+          (async (...args: Parameters<typeof real>) => {
+            if (injected++ < misses) {
+              await store.appendRepo(REPO, {
+                actor: humanActor('someone'),
+                type: 'dispatcher.intake-set',
+                payload: { enabled: true },
+              })
+            }
+            return real(...args)
+          }) as typeof real,
+      )
+      const reported: unknown[] = []
+      const poller = await processOver(contended, sandbox, {
+        report: (error) => reported.push(error),
+      })
+      expect((await poller.status('ops', { repo: REPO })).state).toBe('ready')
+      if (misses === 2) {
+        expect(await settledTypes(store)).toEqual(['provisioned'])
+      } else {
+        expect(injected).toBe(SANDBOX_SETTLE_ATTEMPTS)
+        expect(await settledTypes(store)).toEqual([])
+        await (await processOver(store, sandbox)).status('ops', { repo: REPO })
+        expect(await settledTypes(store)).toEqual(['provisioned'])
+      }
+    }
+  })
+
+  test('the background handler retries a failing settlement inside its attached promise', async () => {
+    const store = new MemoryBuildStore()
+    rejectAppends(store, 'orchestrator.sandbox.provisioned', 2)
+    const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+    const service = await processOver(store, sandbox)
+    await service.open('ops', { repo: REPO })
+    sandbox.complete('ready')
+    await service.settled('ops')
+    expect(await settledTypes(store)).toEqual(['provisioned'])
+  })
+
+  test('an orphaned provisioning journal is failed once after its grace', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.provisioning',
+      payload: {
+        operator: 'ops',
+        environmentId: `mem:${REPO}:ops`,
+        provider: 'mem',
+        kind: 'provision',
+      },
+    })
+    const clock = manualClock(new Date().toISOString())
+    const sandbox = memoryOperatorSandbox('mem')
+    const poller = await processOver(store, sandbox, { clock })
+    expect((await poller.status('ops', { repo: REPO })).state).toBe('provisioning')
+    expect(await settledTypes(store)).toEqual([])
+    clock.advance(SANDBOX_PROVISION_ORPHAN_MS + 1)
+    expect(await poller.status('ops', { repo: REPO })).toMatchObject({
+      state: 'failed',
+      failure: { stage: 'checkout', message: SANDBOX_ORPHAN_MESSAGE },
+    })
+    await (await processOver(store, sandbox, { clock })).status('ops', { repo: REPO })
+    expect(await settledTypes(store)).toEqual(['provision-failed'])
+  })
+
+  test('a provider-timer stop reports stopped and its refusal passes through tool calls', async () => {
+    const store = new MemoryBuildStore()
+    const sandbox = memoryOperatorSandbox('mem')
+    const base = sandbox.provider.orchestratorSandbox!
+    const refusal = new SandboxOperationError('not-ready', 'operator sandbox is stopped', {
+      state: 'stopped',
+    })
+    let stopped = false
+    const service = await processOver(store, sandbox, {
+      capability: {
+        ...base,
+        status: async (input) => (stopped ? { state: 'stopped' } : base.status(input)),
+        exec: async (handle, request) => {
+          if (stopped) throw refusal
+          return base.exec(handle, request)
+        },
+      },
+    })
+    await service.open('ops', { repo: REPO })
+    stopped = true
+    expect((await service.status('ops', { repo: REPO })).state).toBe('stopped')
+    expect(await service.exec('ops', { repo: REPO, command: 'true' }).catch((e) => e)).toBe(refusal)
+  })
+
+  test('the background seam receives each attached attempt; a throwing seam never fails open', async () => {
+    for (const throwing of [false, true]) {
+      const received: Promise<unknown>[] = []
+      const reported: unknown[] = []
+      const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+      const service = await processOver(new MemoryBuildStore(), sandbox, {
+        report: (error) => reported.push(error),
+        background: (work) => {
+          received.push(work)
+          if (throwing) throw new Error('outside a request')
+        },
+      })
+      expect((await service.open('ops', { repo: REPO })).state).toBe('provisioning')
+      expect(received).toHaveLength(1)
+      expect(reported).toHaveLength(throwing ? 1 : 0)
+      sandbox.complete('ready')
+      await received[0]
+    }
+  })
+})
+
+describe('OperatorSandboxService records a failure before the provider may reap it', () => {
+  /** The memory provider with its probe forced to `failed` and every
+   * provider `open` recorded. */
+  function failedProvider() {
+    const sandbox = memoryOperatorSandbox('mem', { provisioning: 'deferred' })
+    const base = sandbox.provider.orchestratorSandbox!
+    const opens: string[] = []
+    let failed = true
+    const capability: typeof base = {
+      ...base,
+      status: async (input) =>
+        failed
+          ? { state: 'failed', failure: { stage: 'setup', message: 'boom' } }
+          : base.status(input),
+      open: async (input) => {
+        opens.push(input.operator)
+        failed = false
+        return base.open(input)
+      },
+    }
+    return { sandbox, capability, opens }
+  }
+
+  test('open refuses without calling the provider while the failure cannot be recorded', async () => {
+    const store = new MemoryBuildStore()
+    const { sandbox, capability, opens } = failedProvider()
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.provisioning',
+      payload: {
+        operator: 'ops',
+        environmentId: `mem:${REPO}:ops`,
+        provider: 'mem',
+        kind: 'provision',
+      },
+    })
+    let contended = true
+    const view = storeView(
+      store,
+      (real) =>
+        (async (...args: Parameters<typeof real>) => {
+          if (contended) {
+            await store.appendRepo(REPO, {
+              actor: humanActor('someone'),
+              type: 'dispatcher.intake-set',
+              payload: { enabled: true },
+            })
+          }
+          return real(...args)
+        }) as typeof real,
+    )
+    const service = await processOver(view, sandbox, { capability })
+    expect(await refusal(service.open('ops', { repo: REPO }))).toMatchObject({
+      stage: 'provision',
+      message: SANDBOX_UNRECORDED_FAILURE_MESSAGE,
+    })
+    expect(opens).toEqual([])
+    expect(await settledTypes(store)).toEqual([])
+    contended = false
+    await service.open('ops', { repo: REPO })
+    expect(await settledTypes(store)).toEqual(['provision-failed'])
+    expect(opens).toEqual(['ops'])
+  })
+
+  test('an already-recorded failure opens at once; an unjournaled one gains its attempt first', async () => {
+    for (const journal of ['failed', 'absent'] as const) {
+      const store = new MemoryBuildStore()
+      const { sandbox, capability, opens } = failedProvider()
+      await store.ensureRepo(REPO)
+      const env = { operator: 'ops', environmentId: `mem:${REPO}:ops` }
+      if (journal === 'failed') {
+        for (const fact of [
+          {
+            type: 'orchestrator.sandbox.provisioning',
+            payload: { ...env, provider: 'mem', kind: 'provision' },
+          },
+          {
+            type: 'orchestrator.sandbox.provision-failed',
+            payload: { ...env, stage: 'setup', message: 'boom' },
+          },
+        ] as const) {
+          await store.appendRepo(REPO, { actor: humanActor('ops'), ...fact } as never)
+        }
+      }
+      const service = await processOver(store, sandbox, { capability })
+      await service.open('ops', { repo: REPO })
+      expect(opens).toEqual(['ops'])
+      const types = (await store.getRepoEvents(REPO)).map((event) =>
+        event.type.replace('orchestrator.sandbox.', ''),
+      )
+      expect(types).toEqual(['provisioning', 'provision-failed', 'provisioning'])
     }
   })
 })
