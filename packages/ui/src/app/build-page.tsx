@@ -12,6 +12,7 @@ import {
   EmptySentence,
   FactList,
   SectionHeading,
+  TitleAligned,
 } from '../components/composites'
 import { WordAction } from '../components/controls'
 import { SignOff, StateWord } from '../components/display'
@@ -202,7 +203,8 @@ function timelineBlocks(
  * One build's page: its header row, its attention as sign-off regions, its
  * facts, its ticket and its timeline. The build is found among the frame's
  * active, queued and recently finished rows, which are exactly the rows that
- * link here; any other build still shows its timeline.
+ * link here; any other build still shows its timeline. Every block after a
+ * found build's header aligns beneath its title.
  */
 export function buildPageBlocks({
   frame,
@@ -236,7 +238,13 @@ export function buildPageBlocks({
       : found.kind === 'live'
         ? liveBlocks(found.row, now)
         : finishedBlocks(found.row)
-  return [...page, ...timelineBlocks(timeline, now, expanded)]
+  const blocks = [...page, ...timelineBlocks(timeline, now, expanded)]
+  if (found === undefined) return blocks
+  return blocks.map((block) =>
+    block.key === 'header'
+      ? block
+      : { key: block.key, node: <TitleAligned>{block.node}</TitleAligned> },
+  )
 }
 
 export function BuildPage({
