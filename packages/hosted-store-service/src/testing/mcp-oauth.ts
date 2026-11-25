@@ -20,6 +20,7 @@ import type {
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import type { CanonicalSkillBundle } from '@defrex/autobuild/operator'
 import { createHostedStoreService, type HostedStoreServiceOptions } from '../service'
 import { createWebAuth, type WebAuth } from '../web/auth'
 import { parseWebAuthEnv } from '../web/config'
@@ -63,6 +64,23 @@ export const emptyDB = (): Record<string, Record<string, unknown>[]> => ({
 
 export type App = (request: Request) => Promise<Response>
 
+/** The canonical skill bundle the test service serves for a repository with
+ * no captured agent context. */
+export const TEST_CANONICAL_SKILLS: CanonicalSkillBundle = {
+  version: '0.0.0-test',
+  skills: [
+    {
+      installName: 'ab-operate',
+      files: [
+        {
+          path: 'SKILL.md',
+          content: '---\nname: ab-operate\ndescription: Operate builds.\n---\nUse ab abort.',
+        },
+      ],
+    },
+  ],
+}
+
 /** Better Auth on the memory adapter with the plugin configuration
  * createWebAuth uses. */
 export function buildAuth(env: Record<string, string>, accessTokenExpiresIn?: number): WebAuth {
@@ -92,7 +110,11 @@ export function buildApp(
     sandboxListed?: (repo: string) => Promise<boolean>
   } & Pick<
     HostedStoreServiceOptions,
-    'composeOperatorSandbox' | 'issueDispatcherCredential' | 'reportInternalError' | 'background'
+    | 'composeOperatorSandbox'
+    | 'issueDispatcherCredential'
+    | 'reportInternalError'
+    | 'background'
+    | 'canonicalSkills'
   > = {},
 ): {
   app: App
@@ -117,6 +139,8 @@ export function buildApp(
       ? { reportInternalError: options.reportInternalError }
       : {}),
     ...(options.background !== undefined ? { background: options.background } : {}),
+    // In memory, never the distribution's skills tree: unit tests do no IO.
+    canonicalSkills: options.canonicalSkills ?? (async () => TEST_CANONICAL_SKILLS),
   })
   const endpoint = createMcpEndpoint({
     access,

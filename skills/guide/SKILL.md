@@ -2272,8 +2272,11 @@ failure; `unavailable` means the forge cannot read trees.
 
 All three kinds are retention-managed like the dispatcher config artifacts: the
 newest 200 revisions of each kind survive (`AB_ARTIFACT_RETENTION_MAX_REVISIONS`
-overrides the bound). The dispatcher only writes the record; serving it to
-connected agents is a separate concern.
+overrides the bound). The dispatcher only writes the record. Connected agents
+read it through the `context.list` and `context.read` operator tools, the MCP
+prompt named for each skill, and the agent-context section of the MCP server
+instructions; see [Serving the operator tools over
+MCP](#serving-the-operator-tools-over-mcp).
 
 ### Several dispatchers on one repository
 
@@ -3754,6 +3757,30 @@ args = ["<install-root>/bin/ab.ts", "mcp"]
 
 The server runs until its client disconnects (stdio EOF) and needs no
 daemon: each client session starts one short-lived `ab mcp` process.
+
+### Agent context over MCP
+
+Every MCP binding (`ab mcp`, hosted `/mcp`, and the per-repository URLs) serves
+the repository's captured agent context, so a connected agent learns how to
+work without a checkout:
+
+- `context.list` returns the skills (name, description, files), the agent
+  instructions files with scopes and imports, the commit the record was taken
+  from, and which to load before operating (`ab-operate`) and before ticket
+  work (`ab-spec`, `ab-tickets`, the instructions).
+- `context.read` returns one file by path, or by a relative link with `from`.
+  Skill files that mention `ab` commands start with a generated preamble that
+  maps each command to its operator tool, or marks it as build-session only,
+  runnable in the sandbox, or a host task for a human. Agent instructions get a
+  preamble framing them as the repository's own rules, which win over
+  Autobuild skills for that repository.
+- One MCP prompt per skill returns the same text as `context.read`.
+- The server instructions list each repository's skills and instructions.
+  Hosted endpoints build them only for an `initialize` request: one
+  latest-revision record read per repository in scope.
+
+A repository with no captured record is served the canonical skills bundled
+with the serving Autobuild, and the index and every preamble say so.
 
 ## The installed skills
 
