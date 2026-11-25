@@ -27,6 +27,8 @@ import {
 
 import { preserveWorkspaceBeforeRelease, supersedeRestorationHeads } from './workspace-preservation'
 import { WorkspaceCleanupRequired } from '../ports/types'
+import type { AgentContextCapture } from './agent-context'
+import type { AgentContextDiagnostic } from '../store/agent-context'
 import type { OpenHarvestExecution } from './harvest-execution-state'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import {
@@ -683,6 +685,9 @@ export interface TickReport {
   sandboxIdleStops: number
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: number
+  /** Agent-context stage (`processes/agent-context.ts`): typed problems this
+   * tick found capturing the base branch's skills and agent instructions. */
+  agentContextDiagnostics: AgentContextDiagnostic[]
 }
 
 export function emptyTickReport(): TickReport {
@@ -721,6 +726,7 @@ export function emptyTickReport(): TickReport {
     harvestFailed: 0,
     sandboxIdleStops: 0,
     sandboxSettleFailures: 0,
+    agentContextDiagnostics: [],
   }
 }
 
@@ -955,6 +961,9 @@ export interface DispatcherDeps {
    * harvest settlement stage skips them: their completion chain owns the
    * durable facts. */
   activeHarvestExecutions?: () => ReadonlySet<string>
+  /** The agent-context stage, run last on every tick that still has budget
+   * and repository authority. Absent: the tick captures nothing. */
+  agentContext?: Pick<AgentContextCapture, 'run'>
   ids: IdSource
   clock: Clock
   opts?: DispatcherOpts
@@ -1627,7 +1636,30 @@ export class Dispatcher {
     // launch. Pending control commands still launch the runner so the kernel
     // can settle them under the repository lease.
     await this.triggerHarvest()
+    await this.captureAgentContext(report, opts)
     return report
+  }
+
+  /** Agent-context stage: contained, so a capture failure never fails the
+   * tick; only an authority lapse escapes. */
+  private async captureAgentContext(report: TickReport, opts: TickOpts): Promise<void> {
+    const stage = this.deps.agentContext
+    if (stage === undefined || this.outOfBudget(opts)) return
+    try {
+      report.agentContextDiagnostics.push(
+        ...(await stage.run({
+          baseBranch: this.deps.config.baseBranch,
+          ...(opts.deadlineAt !== undefined ? { deadlineAt: opts.deadlineAt } : {}),
+          holdsAuthority: () => this.deps.holdsRepoAuthority?.() !== false,
+        })),
+      )
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      report.agentContextDiagnostics.push({
+        kind: 'capture-failed',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   /** The repository-wide quiescence flag, from durable state. Guarded like

@@ -7,7 +7,8 @@ import {
   refusedArchiveFallback,
   rulesetsHaveMergeGate,
 } from './github'
-import { FakeForge } from './fake'
+import { FakeForge, fakeTree } from './fake'
+import { gitBlobOid } from './git-blob'
 import { LocalGitForge } from './local-git'
 import {
   GitHubApiError,
@@ -15,7 +16,12 @@ import {
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
-import { ForgeFailure, isForgeFailure, isForgeRejection } from '../forge-failure'
+import {
+  ForgeFailure,
+  ForgeTreeUnlistable,
+  isForgeFailure,
+  isForgeRejection,
+} from '../forge-failure'
 import { ForgeRequestDeferred } from '../forge-request-context'
 import { isForgeMergeQueueRejection, NoCommitsBetweenBranchesError } from '../types'
 
@@ -29,6 +35,7 @@ import {
   fakeGitHub,
   isProbe,
   graphqlCalls,
+  gitDataTransport,
 } from './github-fixtures.test'
 
 const PR_REF = {
@@ -3512,5 +3519,66 @@ describe('GitHub landing when GraphQL is unavailable', () => {
       expect(isForgeRejection(error)).toBe(false)
       expect(error).toBeInstanceOf(GitHubApiError)
     })
+  })
+})
+
+describe('GitHubForge tree reads', () => {
+  const COMMIT = 'c'.repeat(40)
+  const seeded = () =>
+    fakeTree({
+      'AGENTS.md': 'root',
+      'a/one.md': 'one',
+      'a/deep/two.md': 'two',
+      'a/deep/three.md': 'three',
+      'b/four.md': 'four',
+      'b/five.md': 'five',
+      'c.md': 'c',
+    })
+
+  test('readTree reads the commit then its recursive tree and maps entries', async () => {
+    const { entries, blobs } = seeded()
+    const { forge, calls } = gitDataTransport({ commit: COMMIT, entries, blobs })
+    expect(await forge.readTree(COMMIT)).toEqual(entries)
+    expect(calls).toEqual([
+      `GET repos/acme/app/git/commits/${COMMIT}`,
+      `GET repos/acme/app/git/trees/${'f'.repeat(40)}?recursive=1`,
+    ])
+  })
+
+  test('a truncated recursive listing is completed one subtree at a time', async () => {
+    const { entries, blobs } = seeded()
+    // Root (11 entries) and `a` (4) are truncated; `b` (2) and `a/deep` (2) fit.
+    const { forge } = gitDataTransport({ commit: COMMIT, entries, blobs, recursiveLimit: 3 })
+    const sort = (list: { path: string }[]) => [...list].sort((x, y) => (x.path < y.path ? -1 : 1))
+    expect(sort(await forge.readTree(COMMIT))).toEqual(sort(entries))
+  })
+
+  test('a directory too large to list directly is ForgeTreeUnlistable', async () => {
+    const { entries, blobs } = seeded()
+    const { forge } = gitDataTransport({
+      commit: COMMIT,
+      entries,
+      blobs,
+      recursiveLimit: 3,
+      directLimit: 2,
+    })
+    const error = await forge.readTree(COMMIT).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ForgeTreeUnlistable)
+    expect((error as ForgeTreeUnlistable).directory).toBe('')
+  })
+
+  test('readBlob decodes wrapped base64 and rejects content that does not match the id', async () => {
+    const bytes = new Uint8Array(200).map((_, i) => i)
+    const oid = gitBlobOid(bytes)
+    const { forge } = gitDataTransport({
+      commit: COMMIT,
+      entries: [],
+      blobs: new Map([
+        [oid, bytes],
+        ['0'.repeat(40), bytes],
+      ]),
+    })
+    expect(await forge.readBlob(oid)).toEqual(bytes)
+    await expect(forge.readBlob('0'.repeat(40))).rejects.toThrow('does not match')
   })
 })

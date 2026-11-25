@@ -212,8 +212,11 @@ const GIT_SHELL_INVENTORY = [
   'kernel/replay-retention.ts printf %s … | git hash-object -t commit -w --stdin',
   // `input.exec`, the forge kernelExec or deps.exec from recoverLostCandidate.
   'ports/workspace/commit-preservation.ts restore-replay',
+  // The local-git forge's kernelExec: exact blob bytes as hex when text
+  // decoding altered them.
+  'ports/forge/local-git.ts read-blob',
 ]
-const GIT_SHELL_LITERALS = 5
+const GIT_SHELL_LITERALS = 6
 
 /** Shell sites whose script is a variable. They run agent, operator and
  * verify commands in build workspaces, never kernel dispatcher Git. */

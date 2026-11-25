@@ -78,6 +78,26 @@ export function hookProgressKind(name: string): string {
   return `${HOOK_PROGRESS_KIND_PREFIX}${name}`
 }
 
+/**
+ * Repository agent context (`store/agent-context.ts`): the dispatcher's
+ * record of the base branch's installed skills and agent instructions, its
+ * small head pointer, and the continuation slots an interrupted capture
+ * resumes from. Every kind is read only at its latest revision, so ordinary
+ * count-based retention never removes live data. Restated here (no runtime
+ * imports) because this module is bundled into the browser.
+ */
+export const AGENT_CONTEXT_ARTIFACT = 'agent-context'
+export const AGENT_CONTEXT_HEAD_ARTIFACT = 'agent-context-head'
+export const AGENT_CONTEXT_CACHE_KIND_PREFIX = 'agent-context-cache.'
+export const AGENT_CONTEXT_RETENTION_REPO_KINDS = [
+  AGENT_CONTEXT_ARTIFACT,
+  AGENT_CONTEXT_HEAD_ARTIFACT,
+] as const
+
+export function agentContextCacheKind(slot: number): string {
+  return `${AGENT_CONTEXT_CACHE_KIND_PREFIX}${slot}`
+}
+
 /** Default bound: the newest 200 revisions of each retention-managed kind survive. */
 export const DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS = 200
 
@@ -87,7 +107,9 @@ export function isRetentionManagedKind(kind: string): boolean {
     (DISPATCHER_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
     (OPERATOR_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
     (DISPATCHER_RETENTION_BUILD_KINDS as readonly string[]).includes(kind) ||
-    kind.startsWith(HOOK_PROGRESS_KIND_PREFIX)
+    (AGENT_CONTEXT_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
+    kind.startsWith(HOOK_PROGRESS_KIND_PREFIX) ||
+    kind.startsWith(AGENT_CONTEXT_CACHE_KIND_PREFIX)
   )
 }
 

@@ -2312,6 +2312,8 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
   })
 
   test('a valid --store value preserves one-shot dispatch flag ordering', async () => {
+    // The local-git forge serves this repository (no base branch yet).
+    await runGit(['init'], tmp)
     await writeDispatchConfig()
     await writeFile(
       join(tmp, 'autobuild.toml'),

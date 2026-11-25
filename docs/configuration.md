@@ -1051,10 +1051,11 @@ Hosted copies are deleted after `build.completed`; failed deletions remain
 durable and retry on later dispatcher ticks. Upload, target-validation, and
 timeout failures create follow-up observations but preserve every text download
 command and do not fail verification or finalize. BuildStore artifacts remain
-the authoritative copies under the store's own retention policy — dispatcher
-run/config artifact kinds keep their latest 200 revisions
-(`AB_ARTIFACT_RETENTION_MAX_REVISIONS` overrides the bound); other kinds are
-never pruned.
+the authoritative copies under the store's own retention policy.
+Retention-managed kinds keep their latest 200 revisions
+(`AB_ARTIFACT_RETENTION_MAX_REVISIONS` overrides the bound): dispatcher
+run/config, hook progress, operator notes, and the agent-context record,
+pointer and continuation slots. Other kinds are never pruned.
 
 ## `[workspace]`
 
