@@ -1145,7 +1145,14 @@ async function webOverviewReadBudget(store: BuildStore, backing: BuildStore): Pr
 class WebSubscribers {
   readonly early: string[] = []
   readonly late: string[][] = []
+  /** Frames handed to the hub, including unchanged ones it does not fan out. */
+  published = 0
   constructor(private readonly hub: DispatchWeb['hub']) {
+    const publish = hub.publish.bind(hub)
+    hub.publish = (frame) => {
+      this.published++
+      publish(frame)
+    }
     hub.subscribe((json) => this.early.push(json))
   }
   join(): void {
@@ -1238,7 +1245,7 @@ async function webPresentationParity(store: BuildStore, backing: BuildStore): Pr
       const rows = slices?.rows() ?? 0
       if (withWeb) {
         await subscribers!.expectConsistent(store, repo)
-        frames = subscribers!.early.length
+        frames = subscribers!.published
       }
       const calls = counter.histogram()
       // The frontend's upgrade-release check runs on a wall-clock timer, not
@@ -1253,7 +1260,9 @@ async function webPresentationParity(store: BuildStore, backing: BuildStore): Pr
         return count
       }
       const added = position(results[1]!) - position(results[0]!)
-      // At most one per published frame; at least one, so the signal is real.
+      // At most one per frame handed to the hub (it fans out only changed
+      // frames, so delivered frames undercount); at least one, so the signal
+      // is real.
       expect(added).toBeGreaterThan(0)
       expect(added).toBeLessThanOrEqual(frames)
     }
