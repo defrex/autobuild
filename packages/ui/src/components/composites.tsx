@@ -174,6 +174,11 @@ export function BuildRow({ build }: { build: BuildRowModel }) {
   )
 }
 
+/** Build-page content aligned beneath the row title (DESIGN.md Layout); flush at phone width. */
+export function TitleAligned({ children }: { children: ReactNode }) {
+  return <div data-ansi="title-aligned">{children}</div>
+}
+
 /** A page section's heading, with an optional count in a reserved slot. */
 export function SectionHeading({ title, count }: { title: string; count?: string }) {
   return (
