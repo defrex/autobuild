@@ -1121,6 +1121,17 @@ test('hosted admission validates cooldowns before append, deposit or tick finish
           .status,
       ).toBe(400)
       expect(await f.store.getRepoEvents(A)).toEqual(before)
+      expect(
+        (
+          await f.server.fetch(
+            request(`/repos/${encodeURIComponent(A)}/events/conditional`, token, {
+              expectedSeq: before.length,
+              event,
+            }),
+          )
+        ).status,
+      ).toBe(token === f.token ? 403 : 400)
+      expect(await f.store.getRepoEvents(A)).toEqual(before)
       const response = await f.server.fetch(
         request(`/repos/${encodeURIComponent(A)}/deposits`, token, {
           event,
@@ -1160,6 +1171,26 @@ test('hosted admission validates cooldowns before append, deposit or tick finish
       }
     }
   }
+  const conditional = (expectedSeq: number) =>
+    f.server.fetch(
+      request(`/repos/${encodeURIComponent(A)}/events/conditional`, f.project.token, {
+        expectedSeq,
+        event: {
+          actor: { kind: 'kernel' },
+          type: 'dispatcher.forge-degraded',
+          payload: {
+            forge: 'github',
+            message: 'limit',
+            firstFailureAt: f.clock().toISOString(),
+            resetAt: new Date(+f.clock() + 1000).toISOString(),
+          },
+        },
+      }),
+    )
+  const seq = (await f.store.getRepoEvents(A)).length
+  expect((await conditional(seq)).status).toBe(201)
+  const stale = await conditional(seq)
+  expect([stale.status, await stale.json()]).toEqual([200, null])
   for (const offset of [-1000, 86400000]) {
     expect(
       (
