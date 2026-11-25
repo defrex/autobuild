@@ -52,8 +52,9 @@ describeTicketSourceContract('hosted service composition', async () => {
   // The composed service must keep the echo, or the contract would skip targeting.
   expect(await source.negotiateTargeting()).toBe(true)
   expect(source.listTargeting).toBeDefined()
-  // The same response settled paging, so the shared paging fixtures run too.
+  // The same response settled paging and search, so their shared fixtures run too.
   expect(source.listPage).toBeDefined()
+  expect(source.search).toBeDefined()
   return {
     source,
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
