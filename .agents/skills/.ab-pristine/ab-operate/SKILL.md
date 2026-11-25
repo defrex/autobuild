@@ -306,6 +306,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   text for a bare retry. `--dismiss` retires cited review findings,
   `--review-round-ceiling <n>` raises the round limit, `--revise-spec <file>`
   resolves with a revised spec; `--revise-spec-from-ticket` imports an amended ticket.
+  `--accept-target` answers only a target-rewritten escalation: a leaf whose
+  target was force-pushed while it had work of its own. It restacks the build's
+  own commits onto the current target; abort is the alternative. A leaf with no
+  work recovers from a rewritten target by itself and raises nothing.
   Idle collecting or verification-failed nodes need no escalation and recollect
   for verification on the same head; children and contributions remain intact.
   Active work, pause, pending controls and merge intent refuse revision. Leaves
