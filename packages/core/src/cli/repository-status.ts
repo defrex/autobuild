@@ -231,8 +231,10 @@ export interface RepositoryStatus extends DispatchSettings {
     operator: string
     environmentId: string
     provider: string
-    state: 'live' | 'stopped'
+    state: 'provisioning' | 'live' | 'stopped' | 'failed'
     lastEvidenceAt: string
+    /** The failed background attempt's stage and redacted message. */
+    failure?: { stage: string; message: string }
   }>
   /** PR-only publications from operator sandboxes (AUT-343), newest first,
    * latest per (operator, branch). */
@@ -393,8 +395,9 @@ export function projectRepositoryStatus(
         operator: state.operator,
         environmentId: state.environmentId,
         provider: state.provider,
-        state: state.state === 'stopped' ? ('stopped' as const) : ('live' as const),
+        state: state.state === 'released' ? ('stopped' as const) : state.state,
         lastEvidenceAt: state.lastEvidenceTs,
+        ...(state.failure !== undefined ? { failure: { ...state.failure } } : {}),
       })),
     publications,
   }
@@ -437,8 +440,9 @@ export function repositoryStatusFromFacts(
         operator: state.operator,
         environmentId: state.environmentId,
         provider: state.provider,
-        state: state.state === 'stopped' ? ('stopped' as const) : ('live' as const),
+        state: state.state === 'released' ? ('stopped' as const) : state.state,
         lastEvidenceAt: state.lastEvidenceTs,
+        ...(state.failure !== undefined ? { failure: { ...state.failure } } : {}),
       })),
     publications: [...facts.publications].reverse().map((event) => ({
       operator: event.payload.operator,
@@ -601,7 +605,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     ...(status.dependencyDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...status.sandboxes.map(
       (sandbox) =>
-        `operator sandbox ${sandbox.environmentId} (${sandbox.provider}) — ${sandbox.state}, idle since ${sandbox.lastEvidenceAt}`,
+        `operator sandbox ${sandbox.environmentId} (${sandbox.provider}) — ${sandbox.state}${sandbox.failure !== undefined ? ` (${sandbox.failure.stage}: ${sandbox.failure.message.replace(/\s+/g, ' ')})` : ''}, idle since ${sandbox.lastEvidenceAt}`,
     ),
     ...status.publications.map(
       (publication) =>

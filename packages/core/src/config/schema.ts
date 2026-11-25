@@ -1236,7 +1236,7 @@ export const orchestratorSandboxSchema = z.strictObject({
 
 documentFields(orchestratorSandboxSchema, {
   idleMinutes:
-    "Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it.",
+    "Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it.",
   environmentVariables:
     'Names of non-secret host variables forwarded into the sandbox \u2014 the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.',
 })

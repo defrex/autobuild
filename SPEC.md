@@ -4484,11 +4484,20 @@ build workspace and exposed to operator agents only through those tools. The
 typed tools are the only route to state from inside it — the environment
 receives no store, forge, ticket-provider, or model credential, and
 `[orchestrator].sandbox.environmentVariables` may never name one. Its lifecycle
-is repository-journal fact: provisioned/resumed/activity/stopped/released facts
-bracket one deterministic environment per session owner × repository, the
- dispatcher tick's idle settlement stops an environment whose evidence is
-stale (settling an orphan exactly as harvest executions are settled), and
-`ab repository status` reports each session owner's sandbox. A session owner's work
+is repository-journal fact: provisioning/provisioned/resumed/provision-failed/
+activity/refreshed/stopped/closed/released facts bracket one deterministic
+environment per session owner × repository, the dispatcher tick's idle
+settlement stops an environment whose evidence is stale (settling an orphan
+exactly as harvest executions are settled), and `ab repository status` reports
+each session owner's sandbox. `sandbox.open` returns at once and starts
+provisioning or resuming in the background of the serving process, journaling
+`provisioning` and then the attempt's outcome; every other tool refuses typed
+`sandbox-not-ready`, naming the state, until the environment is live, and
+never provisions. `sandbox.status` is a read-only, bounded poll: one reduced
+repository read plus one provider probe, with no write. `sandbox.close` stops
+the environment and keeps its checkout (`closed`); `sandbox.refresh`
+fast-forwards a clean checkout to the current base head (`refreshed`, which
+moves the publication base) and refuses a dirty or diverged one unchanged. A session owner's work
 leaves the sandbox only through `sandbox.publish`, which takes the checkout's
 head (or an explicit commit) to a deterministic operator branch and a pull
 request against the base branch and records published/publish-failed journal

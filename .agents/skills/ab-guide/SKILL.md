@@ -1773,7 +1773,9 @@ environment variable instead and say why.
 ### `[orchestrator]`
 
 Enables credential-free sandbox environments per session owner and repository,
-driven by external agents through `sandbox.*` tools. Operators run in external
+driven by external agents through `sandbox.*` tools: `sandbox.open`,
+`sandbox.status`, `sandbox.close` and `sandbox.refresh` manage the
+environment's lifecycle, and the remaining tools work inside it. Operators run in external
 harnesses; the service never starts or resumes them. The table is strict and
 restart-classified.
 
@@ -1791,7 +1793,7 @@ explicit session wake writes are durable facts and do not execute turns.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
+| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; a later sandbox.open resumes it. |
 | `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
 
 The credential-free rule is structural, not advisory: the environment receives
@@ -1801,19 +1803,43 @@ no store, forge, ticket-provider, or model credential, and naming any of
 `AI_GATEWAY_API_KEY` in `environmentVariables` is a config error. The typed
 operator tools remain the only route to build state from inside the sandbox.
 
-Tool bounds an operator agent should know: `sandbox.exec` waits at most **300
-seconds**; stdout and stderr are each truncated at **65,536 bytes** with a
+Lifecycle an operator agent should follow:
+
+- **Open, then poll.** `sandbox.open` returns at once with state
+  `provisioning`, `resuming`, `ready` or `failed`; provisioning runs in the
+  background of the serving process. Poll `sandbox.status` (read-only, safe to
+  repeat; it also reports the checkout head and the recorded base head) until
+  it reports `ready`.
+- **Not ready refuses.** Until then `sandbox.exec`, `start`, `read_file`,
+  `write_file`, `publish` and `refresh` refuse with code `sandbox-not-ready`
+  and a `state` field (`absent`, `provisioning`, `resuming`, `stopped` or
+  `failed`); none of them provisions. A `failed` status carries the failing
+  stage and a redacted message; open again to retry.
+- **Close keeps work.** `sandbox.close` stops the environment and its detached
+  commands, releases provider capacity and keeps the checkout; a later
+  `sandbox.open` resumes it. Closing nothing succeeds and does nothing.
+- **Refresh is not destructive.** `sandbox.refresh` fast-forwards a clean
+  checkout to the current base-branch head and records it as the publication
+  base. A dirty checkout refuses with `sandbox-refresh-dirty`, a diverged one
+  with `sandbox-refresh-diverged`, and a refusal changes nothing.
+- **Reset is.** `sandbox.reset` discards everything and re-provisions from the
+  current base head in the background, returning the `sandbox.open` result;
+  poll `sandbox.status` again.
+- A workspace provider without this lifecycle answers `sandbox.open`,
+  `status`, `close`, `refresh` and `reset` with code `sandbox-unsupported`.
+
+Tool bounds: `sandbox.exec` waits at most **300 seconds**; stdout and stderr
+are each truncated at **65,536 bytes** with a
 `[truncated by autobuild: output exceeded 65536 bytes]` marker; `sandbox.reset`
-and archiving a session owner's last session are **destructive** (reset re-provisions
-from the current base head); there is at most **one** environment per session owner
-and repository.
+and archiving a session owner's last session are **destructive**; there is at
+most **one** environment per session owner and repository.
 
 Publication: `sandbox.publish` takes a title (1–200 characters), an optional
 body (≤65,536 characters), and an optional explicit commit, and takes your
 sandbox's current head commit to a pull request. It refuses when the checkout
 has uncommitted changes — tracked or untracked (the sandbox's own provisioning
 marker is excluded) — and when the commit is not a descendant of the base head
-recorded when the sandbox was provisioned or last reset — a pre-existing environment without a recorded
+recorded when the sandbox was provisioned, last refreshed, or reset — a pre-existing environment without a recorded
 base head asks you to run `sandbox.reset` first. The rule is PR only, never the
 base branch: the sandbox itself never pushes and holds no credential — the push
 and the PR creation are kernel plumbing through the workspace provider's
@@ -1839,7 +1865,8 @@ Where the tools are served:
   | `sandbox-effective-config-invalid` | The latest deposited effective config cannot be read. |
   | `sandbox-backend-unavailable` | The sandbox backend could not be built. |
 
-  A new deposit takes effect on the next call.
+  A new deposit takes effect on the next call. `sandbox-not-ready` and
+  `sandbox-unsupported` apply here as they do locally.
 
 ### `[upgrade]`
 
