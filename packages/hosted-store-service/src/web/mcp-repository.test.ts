@@ -225,6 +225,17 @@ describe('per-repository MCP URLs', () => {
     // A deployment-wide token covers every per-repository URL.
     const { tokens: wide, client } = await deploymentToken(h)
     expect((await list(wide.access_token, REPO_URL)).status).toBe(200)
+    // Refreshing it with a per-repository resource narrows it to that URL.
+    const narrowed = await rawTokenRequest(h, {
+      grant_type: 'refresh_token',
+      refresh_token: wide.refresh_token!,
+      client_id: (client as { client_id: string }).client_id,
+      resource: REPO_URL,
+    })
+    expect(narrowed.status).toBe(200)
+    const narrow = ((await narrowed.json()) as OAuthTokens).access_token
+    expect((await list(narrow, REPO_URL)).status).toBe(200)
+    expect((await list(narrow, OTHER_URL)).status).toBe(401)
 
     // A refresh keeps the binding, and naming another resource is refused.
     const clientId = (flow.client as { client_id: string }).client_id

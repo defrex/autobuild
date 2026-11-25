@@ -233,8 +233,11 @@ per-repository URL as its `resource`. The token endpoint honors RFC 8707
   project's URL or at `/mcp` it gets `401` with `error="invalid_token"`, so
   the client signs in again for that URL.
 - A token issued for `/mcp`, or without a `resource`, is accepted at every URL.
-- A refresh keeps its token's resource. A refresh naming a different resource,
-  or any request naming a resource this deployment does not serve, is refused
+- Refreshing a per-repository token keeps its resource. Naming a different
+  resource on that refresh is refused with `invalid_target`.
+- Refreshing a `/mcp` or resource-less token may name one per-repository URL.
+  The new token is then bound to that URL only.
+- Any request naming a resource this deployment does not serve is refused
   with `invalid_target`.
 
 ### Success results
