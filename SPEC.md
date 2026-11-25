@@ -1053,7 +1053,9 @@ sandbox tools, credential isolation, archive cleanup and dispatcher idle
 settlement. New config rejects the removed `model`, `invocationBudgetSeconds`,
 `approvals` and repository-default `wake` keys. Immutable historical effective
 config artifacts discard only those obsolete keys during validation; stored
-bytes are unchanged and other unknown or malformed settings still fail.
+bytes are unchanged and other unknown or malformed settings still fail. An
+unset `enabled` resolves per host: enabled when a hosted deployment serves the
+project, disabled for local `ab mcp`, dispatch and init; an explicit value wins.
 
 #### 7.1.3 Ticket assets
 
@@ -4520,7 +4522,11 @@ moves the publication base) and refuses a dirty or diverged one unchanged. A ses
 leaves the sandbox only through `sandbox.publish`, which takes the checkout's
 head (or an explicit commit) to a deterministic operator branch and a pull
 request against the base branch and records published/publish-failed journal
-facts.
+facts. On a hosted deployment only the `vercel-sandbox` provider can host the
+environment, so a project with any other workspace provider gets it from the
+deployment's Vercel Sandbox provider, cloned in the guest with the deployment's
+forge token placed only in the host-side upload-pack egress transform; without
+those deployment credentials the tools refuse `sandbox-credentials-missing`.
 
 Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
 sampled triage-count change, or attention transition append no tick boundary

@@ -119,7 +119,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Autobuild runs builds from tickets: a dispatcher claims groomed tickets, an embedded agent implements each build through plan/implement/verify rounds, and every durable action is attributed.',
   'Call `repositories.list` first to discover which repository identities this deployment serves; every tool names its repository explicitly via `repo`.',
   'Mutating tools append durable, human-attributed events under the signed-in operator who authorized this client; destructive controls are annotated.',
-  'Sandbox tools act only in repositories whose effective config enables `[orchestrator]`; a call for another repository is refused with a typed `sandbox-*` code that names the reason.',
+  'Sandbox tools act in repositories whose latest effective config does not disable `[orchestrator]`; a call for another repository is refused with a typed `sandbox-*` code that names the reason.',
   'Start each operator round with `repository.attention`: one call returns everything waiting on the operator, each item naming the tool call that resolves it; pass back its cursor next time.',
   'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`; `repository.events` after a cursor delivers repository attention such as `ticket.handed-back`.',
 ].join(' ')

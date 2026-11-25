@@ -193,7 +193,9 @@ export interface VercelSandboxHandle {
 
 export type VercelSandboxCreateInput = {
   name: string
-  source: {
+  /** Absent starts a sandbox without a git source (SDK 3.1.0); only the
+   * deployment-fallback operator sandbox omits it and clones in the guest. */
+  source?: {
     type: 'git'
     url: string
     revision: string
@@ -643,6 +645,30 @@ async function relocateCheckout(
       { cause: error },
     )
   }
+}
+
+/** Clone the bare HTTPS origin inside the guest with no credential in argv,
+ * env or git config; the host-side upload-pack egress transform authenticates
+ * the two upload-pack requests. `GIT_TERMINAL_PROMPT=0` makes a missing
+ * transform fail fast instead of prompting. */
+async function guestCloneCheckout(
+  sandbox: VercelSandboxHandle,
+  url: string,
+  head: string,
+): Promise<void> {
+  await commandOrThrow(sandbox, {
+    cmd: 'mkdir',
+    args: ['-p', VERCEL_WORKSPACE_PATH.slice(0, VERCEL_WORKSPACE_PATH.lastIndexOf('/'))],
+  })
+  await commandOrThrow(sandbox, {
+    cmd: 'git',
+    args: ['clone', '--no-checkout', url, VERCEL_WORKSPACE_PATH],
+    env: { GIT_TERMINAL_PROMPT: '0' },
+  })
+  await commandOrThrow(sandbox, {
+    cmd: 'git',
+    args: ['-C', VERCEL_WORKSPACE_PATH, 'checkout', '--detach', head],
+  })
 }
 
 async function commandOrThrow(
@@ -1299,6 +1325,15 @@ export interface VercelSandboxProviderOptions {
    * environment is otherwise always built from an empty record — never the
    * process environment — so no credential can leak in. */
   sandboxEnvironmentVariables?: readonly string[]
+  /** Internal deployment composition only, never user configuration: the git
+   * read credential of a hosted deployment's fallback operator sandbox. It is
+   * placed only in the host-side upload-pack egress transform (GET
+   * `info/refs?service=git-upload-pack` and POST `git-upload-pack`), never in
+   * a create `source`, a guest command, or the guest env; the operator
+   * sandbox is then created source-less and clones in the guest. Build
+   * provisioning never uses it. Mutually exclusive with a configured
+   * `gitPasswordEnv`. */
+  egressReadCredential?: { username: string; password: string }
 }
 
 /** Vercel-backed working copy and executor. Completed SDK command output is
@@ -1370,6 +1405,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       (!options.storeToken && !options.delegateCredential)
     ) {
       throw new Error('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
+    }
+    if (options.egressReadCredential !== undefined && options.config.gitPasswordEnv !== undefined) {
+      throw new Error(
+        'vercel-sandbox accepts either a deployment egress read credential or a configured gitPasswordEnv, not both',
+      )
     }
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
@@ -1999,6 +2039,27 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return result.policy
   }
 
+  /** The upload-pack egress transform's authorization: the deployment egress
+   * read credential when set, else the configured env pair, Basic-encoded.
+   * Every policy write after creation goes through here, so a reset never
+   * drops or widens the transform. */
+  private uploadPackAuthorization(): string | undefined {
+    const egress = this.options.egressReadCredential
+    if (egress !== undefined) {
+      return `Basic ${Buffer.from(`${egress.username}:${egress.password}`).toString('base64')}`
+    }
+    if (this.options.config.gitPasswordEnv === undefined) return undefined
+    const username = requireVercelEnvironmentValue(
+      this.options.env,
+      this.options.config.gitUsernameEnv!,
+    )
+    const password = requireVercelEnvironmentValue(
+      this.options.env,
+      this.options.config.gitPasswordEnv,
+    )
+    return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+  }
+
   private async normalNetworkPolicy(ref: string): Promise<{
     origin: ReturnType<typeof cleanGithubOrigin>
     policy: NetworkPolicy
@@ -2007,15 +2068,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.origins.set(ref, origin)
     return {
       origin,
-      policy: this.billingPolicy(
-        uploadPackPolicy(
-          origin,
-          this.options.config.gitPasswordEnv === undefined
-            ? undefined
-            : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
-        ),
-        ref,
-      ),
+      policy: this.billingPolicy(uploadPackPolicy(origin, this.uploadPackAuthorization()), ref),
     }
   }
 
@@ -2499,12 +2552,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (Object.keys(accounts).length) {
       const origin =
         this.origins.get(identity.workspaceRef) ?? cleanGithubOrigin(await this.origin())
-      const base = uploadPackPolicy(
-        origin,
-        this.options.config.gitPasswordEnv === undefined
-          ? undefined
-          : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
-      )
+      const base = uploadPackPolicy(origin, this.uploadPackAuthorization())
       const refreshed = accountPolicy(
         base,
         accounts,
@@ -2701,26 +2749,36 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (head === null) {
       throw new SandboxOperationError('provision', `remote base ${input.baseBranch} does not exist`)
     }
+    // The deployment-fallback operator sandbox (egress read credential) is
+    // created without a git source and clones in the guest: its credential
+    // reaches only the upload-pack egress transform, never the Vercel source
+    // API. Every other provision keeps the configured source clone.
+    const guestClone = this.options.egressReadCredential !== undefined
     const username =
-      this.options.config.gitUsernameEnv === undefined
+      guestClone || this.options.config.gitUsernameEnv === undefined
         ? undefined
         : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
     const password =
-      this.options.config.gitPasswordEnv === undefined
+      guestClone || this.options.config.gitPasswordEnv === undefined
         ? undefined
         : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
-    const readAuth =
-      password === undefined
+    const readAuth = guestClone
+      ? this.uploadPackAuthorization()
+      : password === undefined
         ? undefined
         : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
     sandbox = await this.facade.create({
       name,
-      source: {
-        type: 'git',
-        url: origin.url,
-        revision: head,
-        ...(username !== undefined && password !== undefined ? { username, password } : {}),
-      },
+      ...(guestClone
+        ? {}
+        : {
+            source: {
+              type: 'git' as const,
+              url: origin.url,
+              revision: head,
+              ...(username !== undefined && password !== undefined ? { username, password } : {}),
+            },
+          }),
       image: this.options.config.image,
       resources: { vcpus: this.options.config.vcpus },
       timeout: this.options.config.timeoutSeconds * 1000,
@@ -2737,7 +2795,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       signal: this.operationSignal(),
     })
     try {
-      await relocateCheckout(sandbox, origin.directory)
+      if (guestClone) {
+        await guestCloneCheckout(sandbox, origin.url, head)
+      } else {
+        await relocateCheckout(sandbox, origin.directory)
+      }
       await commandOrThrow(sandbox, {
         cmd: 'git',
         args: ['remote', 'set-url', 'origin', origin.url],

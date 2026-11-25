@@ -1,6 +1,11 @@
 import { OPERATOR_PRESENCE_UNAVAILABLE } from '../cli/repository-status'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
-import { decodeEffectiveConfig, orchestratorConfig } from './query'
+import {
+  decodeEffectiveConfig,
+  orchestratorConfig,
+  readOrchestratorGate,
+  sandboxToolsListed,
+} from './query'
 import { describe, expect, test } from 'bun:test'
 import { composeBuildConfig } from '../config/live'
 import { parseConfig } from '../config/load'
@@ -1324,7 +1329,7 @@ for (const enabled of [false, true]) {
     expect(
       decodeEffectiveConfig(new TextEncoder().encode(content), 'legacy').orchestrator.enabled,
     ).toBe(enabled)
-    const sandbox = await orchestratorConfig(store, REPO)
+    const sandbox = await orchestratorConfig(store, REPO, 'hosted')
     expect(sandbox?.orchestrator.enabled ?? false).toBe(enabled)
     if (sandbox) expect(sandbox.orchestrator.sandbox.idleMinutes).toBe(7)
     expect(
@@ -1340,9 +1345,37 @@ for (const enabled of [false, true]) {
     expect(() =>
       decodeEffectiveConfig(new TextEncoder().encode(JSON.stringify(input)), 'bad'),
     ).toThrow('invalid')
-    await expect(orchestratorConfig(store, REPO)).rejects.toThrow('invalid')
+    await expect(orchestratorConfig(store, REPO, 'hosted')).rejects.toThrow('invalid')
   })
 }
+
+test('the sandbox gate resolves an unset enabled per host; an explicit value wins', async () => {
+  const ready = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
+  const cases: [string, { hosted: boolean; local: boolean }][] = [
+    [effectiveBuildConfigContent(parseConfig(ready)), { hosted: true, local: false }],
+    [
+      effectiveBuildConfigContent(parseConfig(`${ready}[orchestrator]\nenabled = false\n`)),
+      { hosted: false, local: false },
+    ],
+    // The older-release shape: an explicit `enabled: false` stays disabled.
+    [JSON.stringify(historicalEffectiveConfig(false)), { hosted: false, local: false }],
+    [
+      effectiveBuildConfigContent(parseConfig(`${ready}[orchestrator]\nenabled = true\n`)),
+      { hosted: true, local: true },
+    ],
+  ]
+  for (const [content, expected] of cases) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(REPO)
+    await store.putRepoArtifact(REPO, { kind: 'dispatcher-effective-config', content })
+    expect(await sandboxToolsListed(store, REPO)).toBe(expected.hosted)
+    for (const host of ['hosted', 'local'] as const) {
+      const gate = await readOrchestratorGate(store, REPO, host)
+      expect(gate.enabled).toBe(expected[host])
+      if (!gate.enabled) expect(gate.reason).toBe('orchestrator-disabled')
+    }
+  }
+})
 
 test('MCP build event pages traverse several pages without gaps or duplication', async () => {
   const { MemoryBuildStore } = await import('../store/memory')

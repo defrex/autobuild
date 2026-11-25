@@ -88,6 +88,9 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
         ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
         ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
         ...(opts.refusedArchive !== undefined ? { refusedArchive: opts.refusedArchive } : {}),
+        ...(opts.sandboxEgressReadCredential !== undefined
+          ? { egressReadCredential: opts.sandboxEgressReadCredential }
+          : {}),
       })
     },
   },

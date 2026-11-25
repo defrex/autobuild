@@ -200,7 +200,8 @@ served table, and the table's contract suite is the single gate. The hosted
 deployment can host operator sandboxes, and each call is gated per repository
 on the latest deposited effective config. A closed gate is a `409 refusal`
 with code `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,
-`sandbox-effective-config-invalid` or `sandbox-backend-unavailable`.
+`sandbox-effective-config-invalid`, `sandbox-credentials-missing` or
+`sandbox-backend-unavailable`.
 
 ### Per-repository MCP URLs
 
