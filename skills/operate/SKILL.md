@@ -274,9 +274,9 @@ that appear after you arm. Finishing the initially queued set is no reason to st
    alive and keep discovering work until the human ends or hands off the role.
 
 Use `ab wait` and named unflagged watches only as separate diagnostics. They
-cannot replace the registered monitor or its cursor. In MCP, poll
-`repository.events` for repository attention and `builds.events` for each build;
-operator presence is not exposed there, and its
+cannot replace the registered monitor or its cursor. In MCP, start each round
+with `repository.attention` (see the connected-agent section); operator presence
+is not exposed there, and its
 `repository.status` marks presence `unavailable` rather than absent.
 
 ### Inspect
@@ -480,10 +480,24 @@ Do not assume session-owner delegation or a runner-provided repository scope.
 Respect a human denial as a firm no. Any approval or suspension flow in your
 external harness belongs to that harness. Protocol session approval answers are durable records only. Do not repeat completed work when your harness resumes.
 
+### Each round
+
+Begin every operator round with `repository.attention`. One call returns
+everything waiting on you: blocked builds with their open escalation questions,
+merges awaiting consent or held, repository attention events after your cursor,
+builds paused, stalled or failing verification, and dispatcher attention. Each
+item's `resolve` names the tool call that acts on it, primary first; `by:
+"human"` marks a condition you report rather than fix. Act on each item, then
+pass back `events.cursor` next round. Omit the cursor on the first call to get
+a baseline; on `code: "cursor-too-old"`, call again without one.
+
 ### The tool surface
 
 Your tools are the operator registry. The read-only ones are always safe:
 
+- `repository.attention` — the attention digest: everything waiting on the
+  operator, each item naming its resolving tool call. The first call of each
+  round.
 - `builds.list` — active, queued, or all builds, with effective status.
 - `builds.get` — one build's detail.
 - `builds.events` — one build's event log from a cursor (use a cursor; logs
@@ -491,14 +505,15 @@ Your tools are the operator registry. The read-only ones are always safe:
 - `builds.artifact` — one artifact's bytes, base64-encoded.
 - `repository.status` — the repository's derived status. Its `operator.presence`
   is `unavailable`: it does not load presence, so it is not evidence of absence.
-- `repository.events` — your repository attention watch: the repository journal
-  after a `cursor`, with an optional bounded `waitSeconds` (at most 30). Its
+- `repository.events` — the repository journal after a `cursor`, with an
+  optional bounded `waitSeconds` (at most 30), for waiting on new events. Its
   default `attention` filter returns exactly the repository records
   `ab watch --operator` reports, such as `ticket.handed-back`; `filter: "all"`
   returns every event. Omit the cursor once to get a baseline, then pass back
   the returned cursor, which advances past filtered events; follow it while
   `hasMore` is true. On `code: "cursor-too-old"`, re-baseline and reconcile
-  `repository.status`. Build attention comes from `builds.events`.
+  `repository.status`. The attention digest reports blocked, waiting and
+  merge-ready builds; `builds.events` gives one build's history.
 - `harvest.status` — the observation workflow's current state.
 
 The mutating ones carry the human's authority — prefer the narrowest
@@ -570,7 +585,8 @@ report it, adapt, and carry on.
 
 ### The attention set
 
-Obtain current facts through supported status, event and monitoring reads.
+Obtain current facts through supported status, event and monitoring reads; as
+a connected agent, `repository.attention` is that current-facts read.
 Notifications may be stale; reconcile current state before acting on routine
 outcomes or self-healing failures. The service does not automatically deliver
 wake payloads to your external harness.

@@ -20,7 +20,7 @@ import { inheritedGitConfigIsolation } from '../testing/git-config-isolation'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
-const TOOL_NAMES = 37
+const TOOL_NAMES = 38
 
 let tmp: string
 let storeDir: string
@@ -68,7 +68,7 @@ async function connect(env: Record<string, string> = bareEnv()): Promise<Client>
   return client
 }
 
-test('ab mcp advertises the registry: 37 tools with schemas and annotations', async () => {
+test('ab mcp advertises the registry: 38 tools with schemas and annotations', async () => {
   await seed()
   const client = await connect()
   try {
@@ -82,6 +82,7 @@ test('ab mcp advertises the registry: 37 tools with schemas and annotations', as
     expect(names).toContain('optimization.stop')
     expect(names).toContain('optimization.settle-unmeasured')
     expect(names).toContain('repository.forge_clear')
+    expect(names).toContain('repository.attention')
     expect(names).toContain('landings.list')
     expect(names).toContain('tickets.tree')
     expect(names).toContain('notes.write')

@@ -2196,6 +2196,15 @@ repo-gated `sandbox.*` tools are listed when the deployment can host operator
 sandboxes, and each call is refused with a typed reason when the repository's
 latest deposited effective config does not enable them.
 
+The registry's `repository.attention` digest is a connected agent's first read
+of each operator round. It composes the operator services the dedicated tools
+call — the open escalations `builds.get` reports, the `merges.list` consent
+queue, the attention page of `repository.events` and the `repository.status`
+projection — adds the builds waiting on operator action (paused, stalled,
+failing node verification or forge CI), and names a resolving registry tool per
+item. It takes the `repository.events` cursor, never waits, reads only open
+builds, and reads zero event rows when nothing changed since the cursor.
+
 ### 8.10 Hosted project connection
 
 `ab connect <service-url>` requests owner browser approval for the normalized

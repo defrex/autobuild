@@ -1,6 +1,7 @@
 import { readBuildPage } from '../store/event-reads'
 import { abortDestinationSchema, unmeasuredSettlementPolicySchema } from '../events/payloads'
 import { readRepositoryAttentionPage } from './repository-events'
+import { getOperatorAttention } from './attention'
 import { requestNodeRestack } from './restack'
 import { reviseObjective, settleUnmeasuredAttempt, stopObjective } from './optimization'
 import { objectiveEpsilonSchema } from '../objective'
@@ -505,6 +506,19 @@ const repositoryEventsInput = z.strictObject({
     .default('attention')
     .describe(
       '"attention" (the default) returns only the repository events `ab watch --operator` reports by default, such as ticket.handed-back; "all" returns every scanned event.',
+    ),
+})
+
+const repositoryAttentionInput = z.strictObject({
+  repo: repoField,
+  cursor: z
+    .number()
+    .int()
+    .min(0)
+    .safe()
+    .optional()
+    .describe(
+      'Repository journal cursor from the previous attention call: report attention events with seq strictly greater than this. Omit on the first call to receive no events and a baseline cursor for the current head.',
     ),
 })
 
@@ -1110,6 +1124,21 @@ export const TOOLS: readonly ToolEntry[] = [
         ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
         waitSeconds: input.waitSeconds,
         filter: input.filter,
+      })
+    },
+  ),
+  defineTool(
+    'repository.attention',
+    'One read of everything waiting on the operator for a repository — blocked builds with their open escalation questions, merges awaiting consent or held, repository attention events after the cursor, builds paused/stalled/failing verification, and dispatcher attention — each item naming the tool call that resolves it. The first call of each operator round.',
+    repositoryAttentionInput,
+    '{repo, generatedAt, escalations, merges, events: {items, cursor, hasMore}, waiting, dispatcher}. escalations: open builds with open escalations (as builds.get reports them), wait-only builds excluded. merges: the merges.list entries with each build’s PR. events: the repository.events attention page after the cursor; pass events.cursor back next call. waiting: builds paused, stalled (live lease, no durable event for an hour), failing node verification or failing forge CI, each with a reason and detail. dispatcher: no holder, a current upgrade failure, a rollback hold or a forge cooldown from repository.status. Every item carries resolve: [{tool, input, by, note?}], primary first; input is partial, and by "human" means no agent call fixes it — the tool reads the evidence to report. An omitted cursor returns no events and a baseline cursor beside every current-state section; an expired cursor fails with code "cursor-too-old": call again without one.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof repositoryAttentionInput>
+      return getOperatorAttention({
+        store: ctx.store,
+        repo: input.repo,
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+        now: ctx.clock(),
       })
     },
   ),
