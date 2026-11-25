@@ -1745,7 +1745,10 @@ import remaps every id to a new issue number (see the
 [ticket migration procedure](references/ticket-migration.md)). Dispatcher reads are conditional requests whose validators
 live under the local state root and are evicted after 7 days unused, so an
 unchanged repository costs a tick no primary rate-limit budget. Rate limits
-surface as the ticket-source rate-limit error. A keyed create needs
+surface as the ticket-source rate-limit error. Each search page is one GitHub
+search API request on its own 30-per-minute quota; exhausting that quota
+refuses only searches until its reset, while a secondary rate limit pauses the
+whole source, like any other GitHub request. A keyed create needs
 `idempotencyKeyReservedAt`, the earliest time the key could first have been
 used; harvest supplies it. Drive all of it through `ab ticket`, never by
 hand-editing state or link labels.
@@ -2350,8 +2353,9 @@ provider-specific API/MCP calls:
   and `--cursor` continues from the previous page's cursor. `--json` emits
   `{tickets, cursor?, diagnostics}`, identical to MCP `tickets.search`. Sources
   without search exit nonzero naming themselves and list nothing. The file,
-  hosted and Linear sources search; GitHub refuses, and the hosted source
-  refuses against a service predating search.
+  hosted, Linear and GitHub sources search; GitHub matches whole words through
+  GitHub issue search. The hosted source refuses against a service predating
+  search.
 - `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
   labeled metadata and the body verbatim, so it can read a stored spec back.
 - `ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--json]`

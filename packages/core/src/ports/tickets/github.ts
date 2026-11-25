@@ -39,6 +39,10 @@
  * `"me"` through the same memoized `GET /user`; a dispatcher prepared it at
  * startup, so a harvest proposal filed under `createAssignee = "me"` adds no
  * `GET /user` and an idle tick adds nothing.
+ * Each `search` page is one `GET /search/issues` on GitHub's separate search
+ * quota, sent fresh and storing nothing; hits come from that response alone.
+ * Confirmed primary search-quota exhaustion arms only a search cooldown;
+ * secondary or ambiguous rate limits arm the source cooldown like any request.
  */
 import { z } from 'zod'
 import {
@@ -58,6 +62,9 @@ import type {
   TicketDraft,
   TicketClaimOptions,
   TicketListing,
+  TicketSearchHit,
+  TicketSearchPage,
+  TicketSearchQuery,
   TicketSource,
   TicketStateCount,
   TicketStateInfo,
@@ -110,6 +117,7 @@ import { type GitHubValidatorStore, MemoryGitHubValidatorStore } from './github-
 import { normalizeIssueLinks } from './issue-links'
 import { holdsState, type TicketLifecycle } from './lifecycle'
 import { ticketRevision } from './revision'
+import { searchTerms, TicketSearchCursorInvalid } from './search'
 import {
   matchStateNames,
   orderStates,
@@ -268,6 +276,166 @@ function assigneeLogins(issue: GitHubIssue): string[] {
   return (issue.assignees ?? []).map((assignee) => assignee.login)
 }
 
+// ── Search ────────────────────────────────────────────────────────────────
+//
+// GitHub documentation this rests on:
+// - https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests
+//   (`q`, `sort`, `order`, `per_page`, `page`; at most 1,000 results per
+//   search; query text at most 256 characters, excluding qualifiers)
+// - https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests
+//   (`repo:`, `is:issue`, `is:open`/`is:closed`, `reason:`, `label:`, `in:`)
+// - https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax
+//   (case-insensitive; quoted terms are literal; `-` excludes)
+// - https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+//   (the search quota is its own resource; secondary limits)
+
+/** GitHub serves only the first 1,000 results of a search. */
+export const SEARCH_RESULT_CAP = 1000
+/** GitHub refuses query text longer than this, qualifiers excluded. */
+export const SEARCH_TEXT_MAX = 256
+
+/** The `q` of one GitHub issue search, and the fingerprint its cursors carry. */
+export function githubSearchQuery(
+  repository: string,
+  lifecycle: TicketLifecycle,
+  query: Pick<TicketSearchQuery, 'text' | 'state' | 'labels'>,
+): { q: string; fingerprint: string } {
+  // Every term is quoted, so text that looks like search syntax (`repo:`,
+  // `OR`, a leading `-`) stays a literal word and never widens the scope.
+  const terms = searchTerms(query.text)
+    .map((term) => term.replaceAll('"', ''))
+    .filter((term) => term !== '')
+  if (terms.length === 0) throw new Error('github ticket search: the query has no searchable words')
+  const quoted = terms.map((term) => `"${term}"`).join(' ')
+  if (quoted.length > SEARCH_TEXT_MAX)
+    throw new Error(
+      `github ticket search: the query is ${quoted.length} characters once quoted; GitHub search allows at most ${SEARCH_TEXT_MAX}`,
+    )
+  const labels = query.labels ?? []
+  for (const label of labels) {
+    if (label.includes('"'))
+      throw new Error(`github ticket search: label "${label}" contains a double quote`)
+    // GitHub reads `label:"a,b"` as a OR b even when quoted, so a comma would
+    // widen the filter instead of naming one label.
+    if (label.includes(','))
+      throw new Error(`github ticket search: label "${label}" contains a comma`)
+  }
+  const state = searchStateQualifiers(lifecycle, query.state)
+  const q = [
+    `repo:${repository}`,
+    'is:issue',
+    'in:title,body',
+    ...state,
+    ...labels.map((label) => `label:"${label}"`),
+    quoted,
+  ].join(' ')
+  const key = JSON.stringify([terms, state, [...labels].map((l) => l.toLowerCase()).sort()])
+  return { q, fingerprint: fnv1a(key) }
+}
+
+/** Qualifiers that select a superset of the issues holding `state`, resolved
+ * as `listReady` resolves it; the caller filters hits to the exact state. */
+function searchStateQualifiers(lifecycle: TicketLifecycle, state: string | undefined): string[] {
+  if (state === undefined) return []
+  if (state.includes('"'))
+    throw new Error(`github ticket search: state "${state}" contains a double quote`)
+  const rejected = rejectedStateOf(lifecycle)
+  // `is:closed` and not `reason:completed`: a legacy closure with no reason
+  // is done, and only the local filter can keep it.
+  if (holdsState(state, lifecycle.done)) return ['is:closed']
+  if (holdsState(state, rejected)) return ['is:closed', '-reason:completed']
+  if (holdsState(state, lifecycle.triage))
+    return [
+      'is:open',
+      ...lifecycleNames(lifecycle)
+        .filter(
+          (name) =>
+            !holdsState(name, lifecycle.triage) &&
+            !holdsState(name, lifecycle.done) &&
+            !holdsState(name, rejected),
+        )
+        .map((name) => `-label:"${stateLabel(name)}"`),
+    ]
+  const name = lifecycleNames(lifecycle).find((known) => holdsState(known, state)) ?? state
+  return ['is:open', `label:"${stateLabel(name)}"`]
+}
+
+/** 32-bit FNV-1a as 8 hex digits. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+export function encodeSearchCursor(offset: number, fingerprint: string): string {
+  return `${offset}.${fingerprint}`
+}
+
+/** The match offset a cursor names, or `TicketSearchCursorInvalid` for a
+ * cursor another search (or source) issued. */
+export function decodeSearchCursor(cursor: string | undefined, fingerprint: string): number {
+  if (cursor === undefined) return 0
+  const match = /^(0|[1-9]\d*)\.([0-9a-f]{8})$/.exec(cursor)
+  const offset = match ? Number(match[1]) : NaN
+  if (!match || match[2] !== fingerprint || !(offset < SEARCH_RESULT_CAP))
+    throw new TicketSearchCursorInvalid('github', cursor)
+  return offset
+}
+
+/** One request's window starting exactly at `offset`: the largest page size
+ * up to `limit` that divides `offset` and stays within the first 1,000. */
+export function searchWindow(offset: number, limit: number): { perPage: number; page: number } {
+  let perPage = Math.max(1, Math.min(limit, SEARCH_RESULT_CAP - offset))
+  while (offset % perPage !== 0) perPage--
+  return { perPage, page: offset / perPage + 1 }
+}
+
+/** GitHub's documented signs of a secondary rate limit. A secondary refusal
+ * can also carry `x-ratelimit-remaining: 0`, so this is checked first. */
+function githubSecondaryLimitEvidence(error: GitHubApiError): boolean {
+  if (error.headers['retry-after'] !== undefined) return true
+  const body = (error.body ?? {}) as { message?: unknown; documentation_url?: unknown }
+  const secondary = /secondary rate limit|abuse detection/i
+  if (secondary.test(error.message)) return true
+  if (typeof body.message === 'string' && secondary.test(body.message)) return true
+  return (
+    typeof body.documentation_url === 'string' &&
+    body.documentation_url.includes('secondary-rate-limits')
+  )
+}
+
+/**
+ * Whether a refusal is confirmed exhaustion of GitHub's primary search quota
+ * (a resource separate from every other endpoint's), which may refuse only
+ * further searches. Secondary-limit evidence takes precedence over the
+ * exhaustion headers: GitHub documents that a secondary-limit response may
+ * also report `x-ratelimit-remaining: 0`
+ * (https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit),
+ * and GitHub asks integrations to stop all requests on a secondary limit.
+ * Anything not confirmed here pauses the whole source.
+ */
+export function githubSearchQuotaExhausted(error: unknown): boolean {
+  if (!(error instanceof GitHubApiError)) return false
+  if (error.status !== 403 && error.status !== 429) return false
+  if (githubSecondaryLimitEvidence(error)) return false
+  return (
+    error.headers['x-ratelimit-resource'] === 'search' &&
+    error.headers['x-ratelimit-remaining'] === '0' &&
+    error.headers['x-ratelimit-reset'] !== undefined
+  )
+}
+
+const githubSearchResponseSchema = z
+  .object({
+    total_count: z.number(),
+    incomplete_results: z.boolean().optional(),
+    items: z.array(z.unknown()),
+  })
+  .passthrough()
+
 export class GitHubTicketSource implements TicketSource {
   readonly name = 'github'
   readonly issueLinks = true
@@ -288,6 +456,9 @@ export class GitHubTicketSource implements TicketSource {
   /** A rate limit hit by the unassigned-ready report, kept apart from
    * `cooldown` so it never refuses the listing or claim reads. */
   private unassignedCooldownUntil?: number
+  /** Primary search-quota exhaustion, kept apart from `cooldown` so it
+   * refuses only searches. */
+  private searchCooldownUntil?: number
   /** Exact label name (lowercased) → the one registry write in progress. */
   private readonly pendingLabels = new Map<string, Promise<void>>()
   /** Labels this instance created or saw created, lowercased. */
@@ -344,6 +515,9 @@ export class GitHubTicketSource implements TicketSource {
       body?: unknown
       remember?: boolean
       missing?: boolean
+      /** A rate limit this predicate accepts is thrown without arming the
+       * source cooldown; the caller keeps its own (search's quota). */
+      localRateLimit?: (error: unknown) => boolean
     } = {},
   ): Promise<Response | null> {
     if (this.cooldown !== undefined) {
@@ -366,6 +540,11 @@ export class GitHubTicketSource implements TicketSource {
     try {
       response = await this.transport(method, path, request)
     } catch (error) {
+      if (opts.localRateLimit?.(error) === true) {
+        const resetAt = githubRateLimitUntil(error, this.now())
+        if (resetAt !== undefined)
+          throw new TicketSourceRateLimitError('github', Date.parse(resetAt))
+      }
       this.rateLimited(error)
       const status = statusOf(error)
       if (opts.missing && (status === 404 || status === 410)) return null
@@ -398,7 +577,12 @@ export class GitHubTicketSource implements TicketSource {
     operation: string,
     method: string,
     path: string,
-    opts: { query?: Record<string, string>; body?: unknown; remember?: boolean } = {},
+    opts: {
+      query?: Record<string, string>
+      body?: unknown
+      remember?: boolean
+      localRateLimit?: (error: unknown) => boolean
+    } = {},
   ): Promise<Response> {
     return (await this.request(operation, method, path, opts)) as Response
   }
@@ -895,6 +1079,84 @@ export class GitHubTicketSource implements TicketSource {
     const read = await this.readIssue('get', number, true)
     if (read === null) return null
     return (await this.hydrate(read.issue, { remember: true, ...etagOf(read) })).ticket
+  }
+
+  /**
+   * One page of GitHub issue search: exactly one `GET /search/issues`, sent
+   * fresh on GitHub's separate search quota, with every hit built from its
+   * items (no read per hit, so hits carry no target, and a reopened issue's
+   * stale label reports its label's state until a listing heals it). A state
+   * filter queries a superset and keeps hits holding exactly that state, so a
+   * page can be shorter than `limit` and still carry a cursor. Only the first
+   * 1,000 matches are reachable. See the doc links above `SEARCH_RESULT_CAP`.
+   */
+  async search(query: TicketSearchQuery): Promise<TicketSearchPage> {
+    const { q, fingerprint } = githubSearchQuery(this.fullName, this.lifecycle, query)
+    const offset = decodeSearchCursor(query.cursor, fingerprint)
+    if (this.searchCooldownUntil !== undefined) {
+      if (this.now() < this.searchCooldownUntil)
+        throw new TicketSourceRateLimitError('github', this.searchCooldownUntil)
+      this.searchCooldownUntil = undefined
+    }
+    const { perPage, page } = searchWindow(offset, query.limit)
+    let response: Response
+    try {
+      response = await this.must('search', 'GET', 'search/issues', {
+        query: {
+          q,
+          sort: 'created',
+          order: 'desc',
+          per_page: String(perPage),
+          page: String(page),
+        },
+        localRateLimit: githubSearchQuotaExhausted,
+      })
+    } catch (error) {
+      // Not the source cooldown: confirmed search-quota exhaustion.
+      if (error instanceof TicketSourceRateLimitError && error !== this.cooldown)
+        this.searchCooldownUntil = error.resetAt
+      throw error
+    }
+    const parsed = githubSearchResponseSchema.safeParse(response.json)
+    if (!parsed.success)
+      throw new Error(`github search: unexpected response shape — ${parsed.error.message}`)
+    const { total_count: total, incomplete_results: incomplete, items } = parsed.data
+    const tickets: TicketSearchHit[] = []
+    const diagnostics: string[] = []
+    for (const json of items) {
+      const issue = this.parseIssue('search', json)
+      if (!this.isLocalChild(issue)) continue
+      const read = issueState(issue, this.lifecycle)
+      if ('malformed' in read) {
+        diagnostics.push(
+          `github #${issue.number}: has ${read.malformed.length} state labels (${read.malformed.join(', ')}); a ticket holds one state — remove all but one`,
+        )
+        continue
+      }
+      if (query.state !== undefined && !holdsState(read.state, query.state)) continue
+      tickets.push({
+        id: String(issue.number),
+        title: issue.title,
+        state: read.state,
+        labels: ticketLabelsOf(issue),
+        kind: isNode(issue) ? 'node' : 'work',
+      })
+    }
+    const next = offset + perPage
+    const full = items.length === perPage
+    if (full && next >= SEARCH_RESULT_CAP && total > SEARCH_RESULT_CAP)
+      diagnostics.push(
+        `GitHub search returns only the first ${SEARCH_RESULT_CAP} of ${total} matches; narrow the query`,
+      )
+    if (incomplete === true)
+      diagnostics.push('GitHub search timed out and returned partial results for this page')
+    return {
+      tickets,
+      ...(full && next < Math.min(total, SEARCH_RESULT_CAP)
+        ? { cursor: encodeSearchCursor(next, fingerprint) }
+        : {}),
+      diagnostics,
+    }
   }
 
   // ── Export and import ─────────────────────────────────────────────────────
