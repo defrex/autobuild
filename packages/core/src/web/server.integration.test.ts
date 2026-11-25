@@ -259,3 +259,28 @@ test('ab web takes no lease, registers no presence and writes nothing', async ()
   expect(web.writes).toEqual([])
   for (const name of web.calls) expect(name).not.toMatch(/lease|presence|append|put|ensure/i)
 })
+
+test('ab web answers the analytics route with JSON over the store it holds', async () => {
+  const web = await serve({
+    seed: async (store) => {
+      await store.createBuild({ slug: 'built', repo: REPO })
+      await store.append('built', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    },
+  })
+  try {
+    const answer = await fetch(new URL('/api/analytics?outcome=all', web.url))
+    expect(answer.status).toBe(200)
+    expect(answer.headers.get('content-type')).toBe('application/json')
+    const body = (await answer.json()) as { gantt: { rows: { slug: string }[] } }
+    expect(body.gantt.rows.map((row) => row.slug)).toEqual(['built'])
+    const timeline = await fetch(new URL('/api/builds/built/timeline', web.url))
+    expect(((await timeline.json()) as { row: { slug: string } }).row.slug).toBe('built')
+  } finally {
+    await web.stop()
+  }
+  expect(web.writes).toEqual([])
+})
