@@ -10,8 +10,11 @@
  * every issue, the paginated `GET /issues/{n}/sub_issues`, `POST` to add one
  * and `DELETE /issues/{n}/sub_issue` to remove one. It deliberately
  * serves the comment-history route (`comments-list`) for explicit migration reads,
- * but no REST issue-events or REST search route: any
- * adapter read of those fails a test with a 404.
+ * but no REST issue-events route: any adapter read of it fails a test with a
+ * 404. REST issue search (`search-issues`) understands exactly the qualifiers
+ * the adapter sends and answers 422 for anything else, including an unquoted
+ * word; a quoted term matches as a case-insensitive substring of the title or
+ * body, the fake's approximation of GitHub's word matching.
  * Identity routes answer for the requesting credential: `GET user` returns
  * its login (or 403 for `transportAs(null)`), and the assignee-check route
  * answers 204 for `assignable` logins. Issue create and edit set the
@@ -89,6 +92,7 @@ export type FakeGitHubRequestKind =
   | 'timeline-closed'
   | 'user'
   | 'assignee-check'
+  | 'search-issues'
   | 'unknown'
 
 export interface FakeGitHubRequestRecord {
@@ -159,6 +163,14 @@ export class FakeGitHubIssues {
   /** Logins (lowercased) that can be assigned issues in the repository. */
   readonly assignable = new Set<string>()
   subIssuePageCap: number | undefined
+  /** `incomplete_results` on every search response. */
+  searchIncomplete = false
+  /** Searches per 60-second window on the fake clock before GitHub's primary
+   * search-quota 403; off when undefined. */
+  searchRateLimit: number | undefined
+  private searchWindow?: { start: number; count: number }
+  /** Lowercased search text by original, so equal bodies share one copy. */
+  private readonly lowercase = new Map<string, string>()
 
   private readonly issues = new Map<number, FakeIssue>()
   private readonly foreign = new Map<string, FakeIssue & { repo: string }>()
@@ -573,6 +585,7 @@ export class FakeGitHubIssues {
     const prefix = `repos/${this.fullName}`
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path
     if (path === 'user') return 'user'
+    if (path === 'search/issues') return 'search-issues'
     if (rest === '') return 'repo'
     if (/^\/assignees\/[^/]+$/.test(rest)) return 'assignee-check'
     if (rest === '/issues') return method === 'POST' ? 'create-issue' : 'list-issues'
@@ -604,6 +617,7 @@ export class FakeGitHubIssues {
       if (identity === null) throw new GitHubApiError(403, 'Resource not accessible by integration')
       return { json: { login: identity } }
     }
+    if (path === 'search/issues' && method === 'GET') return this.searchIssues(query)
     const prefix = `repos/${this.fullName}`
     if (!path.startsWith(prefix)) throw this.notFound()
     const rest = path.slice(prefix.length)
@@ -892,6 +906,117 @@ export class FakeGitHubIssues {
     }
     this.labels.set(input.name.toLowerCase(), label)
     return { json: label, status: 201 }
+  }
+
+  // ── Search ────────────────────────────────────────────────────────────────
+
+  private searchIssues(query: Record<string, string>): { json: unknown } {
+    const unsupported = (what: string) =>
+      new GitHubApiError(422, `fake: unsupported search ${what}`, {
+        message: `fake: unsupported search ${what}`,
+      })
+    if (this.searchRateLimit !== undefined) {
+      const now = this.clock()
+      if (this.searchWindow === undefined || now >= this.searchWindow.start + 60_000)
+        this.searchWindow = { start: now, count: 0 }
+      if (this.searchWindow.count >= this.searchRateLimit)
+        throw new GitHubApiError(
+          403,
+          'API rate limit exceeded for user ID 1.',
+          { message: 'API rate limit exceeded for user ID 1.' },
+          {
+            'x-ratelimit-resource': 'search',
+            'x-ratelimit-limit': String(this.searchRateLimit),
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': String(Math.ceil((this.searchWindow.start + 60_000) / 1000)),
+          },
+        )
+      this.searchWindow.count++
+    }
+    if (query.sort !== 'created' || query.order !== 'desc')
+      throw unsupported(`order sort=${query.sort} order=${query.order}`)
+    const perPage = Number(query.per_page ?? 30)
+    const page = Number(query.page ?? 1)
+    if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100)
+      throw unsupported(`per_page ${query.per_page}`)
+    if (!Number.isInteger(page) || page < 1) throw unsupported(`page ${query.page}`)
+    if ((page - 1) * perPage >= 1000)
+      throw new GitHubApiError(422, 'Only the first 1000 search results are available', {
+        message: 'Only the first 1000 search results are available',
+      })
+    const q = query.q ?? ''
+    let repoMatches = false
+    let isIssue = false
+    let state: 'open' | 'closed' | undefined
+    let reason: boolean | undefined
+    const terms: string[] = []
+    const labels: Array<{ name: string; negated: boolean }> = []
+    const token = /(-?)([a-z_]+):("([^"]*)"|\S+)|"([^"]*)"|(\S+)/g
+    for (const match of q.matchAll(token)) {
+      const [whole, minus, name, raw, quotedValue, term, bare] = match
+      if (bare !== undefined) throw unsupported(`word ${bare}`)
+      if (term !== undefined) {
+        terms.push(term.toLowerCase())
+        continue
+      }
+      const value = quotedValue ?? raw!
+      const negated = minus === '-'
+      if (name === 'repo' && !negated)
+        repoMatches = value.toLowerCase() === this.fullName.toLowerCase()
+      else if (name === 'is' && !negated && value === 'issue') isIssue = true
+      else if (name === 'is' && !negated && (value === 'open' || value === 'closed')) state = value
+      else if (name === 'in' && !negated && value === 'title,body') continue
+      else if (name === 'reason' && value === 'completed') reason = !negated
+      else if (name === 'label') labels.push({ name: value.toLowerCase(), negated })
+      else throw unsupported(`qualifier ${whole}`)
+    }
+    if (!isIssue)
+      throw new GitHubApiError(422, 'fake: search requires is:issue', {
+        message: 'fake: search requires is:issue',
+      })
+    const matches = repoMatches
+      ? [...this.issues.values()].filter((issue) => {
+          if (issue.gone || issue.pull_request) return false
+          if (state !== undefined && issue.state !== state) return false
+          // The fake's conservative assumption, as for counts: a null
+          // (legacy) close reason matches neither `reason:completed` nor its
+          // negation.
+          if (reason !== undefined) {
+            if (issue.state !== 'closed' || issue.state_reason === null) return false
+            if ((issue.state_reason === 'completed') !== reason) return false
+          }
+          for (const label of labels) {
+            const held = issue.labels.some((name) => name.toLowerCase() === label.name)
+            if (held === label.negated) return false
+          }
+          const [title, body] = this.lowered(issue)
+          return terms.every((term) => title.includes(term) || body.includes(term))
+        })
+      : []
+    matches.sort((a, b) =>
+      a.created_at === b.created_at ? b.number - a.number : a.created_at < b.created_at ? 1 : -1,
+    )
+    const start = (page - 1) * perPage
+    const items = matches.slice(start, Math.min(start + perPage, 1000))
+    return {
+      json: {
+        total_count: matches.length,
+        incomplete_results: this.searchIncomplete,
+        items: items.map((issue) => this.json(issue)),
+      },
+    }
+  }
+
+  private lowered(issue: FakeIssue): [string, string] {
+    const lower = (text: string): string => {
+      let cached = this.lowercase.get(text)
+      if (cached === undefined) {
+        cached = text.toLowerCase()
+        this.lowercase.set(text, cached)
+      }
+      return cached
+    }
+    return [lower(issue.title), lower(issue.body ?? '')]
   }
 
   // ── GraphQL ───────────────────────────────────────────────────────────────
