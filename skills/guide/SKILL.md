@@ -1840,6 +1840,9 @@ Where the tools are served:
   | `sandbox-backend-unavailable` | The sandbox backend could not be built. |
 
   A new deposit takes effect on the next call.
+- **A hosted per-repository URL** (`/mcp/<host><path>`) lists `sandbox.*` only
+  when that repository's latest deposited effective config enables
+  `[orchestrator]`. Calls keep the same typed codes.
 
 ### `[upgrade]`
 

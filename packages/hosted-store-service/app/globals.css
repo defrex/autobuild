@@ -1367,6 +1367,42 @@ a.rowhead {
 .settings-page h3 {
   margin-block: 1.5em 0.75em;
 }
+/* MCP connector: the project's URL in a square read-only well (Fields rule)
+   beside a secondary word button whose labels share one grid cell, so its
+   width never changes between COPY, COPIED and REFUSED (Stable Layout rule). */
+.mcp-connector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  align-items: start;
+}
+/* Mono comes from the shared .m register (no contextual alternates). */
+.mcp-url {
+  flex: 1 1 32ch;
+  min-width: 0;
+  padding: 4px 10px;
+  border: 1.5px solid var(--rule);
+  background: var(--well);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.copy-state {
+  display: inline-grid;
+}
+.copy-state > span {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transition: opacity 84ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.copy-state > span[data-shown] {
+  opacity: 1;
+  transition-duration: 120ms;
+}
+.copy-state[data-state="refused"] {
+  border-color: var(--red);
+  color: var(--red);
+}
 
 .confirm-body input.project {
   font-family: var(--mono);
