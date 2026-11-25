@@ -236,6 +236,8 @@ const PARITY_INPUTS: Record<string, Record<string, unknown>> = {
   'sandbox.write_file': { ...ref, path: 'parity.txt', content: 'parity', encoding: 'utf8' },
   'sandbox.reset': ref,
   'sandbox.publish': { ...ref, title: 'Parity' },
+  'context.list': ref,
+  'context.read': { ...ref, path: '.agents/skills/ab-operate/SKILL.md' },
 }
 
 const sandboxNames = TOOLS.map((tool) => tool.name as string).filter((name) =>

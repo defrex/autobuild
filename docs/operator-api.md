@@ -215,7 +215,8 @@ URL. Adding it to an agent harness connects that harness to one repository.
 | `repositories.list` | offered | not offered |
 | A `repo` argument | names the repository | equal to the URL's repository is ignored; any other is a `validation` result |
 | `sandbox.*` listed | when the deployment can host sandboxes | also needs the repository's latest deposited effective config to enable `[orchestrator]` (one latest-artifact read per listing) |
-| Instructions | describe the deployment | name only that repository |
+| Instructions | describe the deployment, with each accessible repository's agent context | name only that repository, with its agent context |
+| Prompts | one per skill per accessible repository, `<label>.<skill>` | one per skill, named for the skill |
 
 `<resource>` is `AB_WEB_MCP_RESOURCE`, by default `<origin>/mcp`. The URL is
 derived from the repository identity, so it is stable across deploys and
@@ -242,6 +243,25 @@ per-repository URL as its `resource`. The token endpoint honors RFC 8707
   The new token is then bound to that URL only.
 - Any request naming a resource this deployment does not serve is refused
   with `invalid_target`.
+
+### Agent context
+
+`context.list` and `context.read` are registry tools, so they appear on both
+endpoints and on this route. They serve the repository's captured skills and
+agent instructions, or the canonical skills bundled with the serving Autobuild
+when none are captured. Each read prepends a generated preamble mapping the `ab`
+commands the file mentions to tools; agent instructions are framed as the
+repository's own rules.
+
+- Both endpoints expose one MCP prompt per skill whose message is the
+  `context.read` text of its `SKILL.md`. On `/mcp` the name is
+  `<label>.<skill>`, where `<label>` is the identity without its scheme and
+  with every character outside `[A-Za-z0-9_-]` as `_`; colliding names gain a
+  `~<hash>` suffix. An unknown name is `InvalidParams`.
+- The agent-context section of the server instructions is built only for an
+  `initialize` request: one latest-revision record read per repository in
+  scope. `tools/list`, `tools/call` and other requests read nothing for it, and
+  prompt indexes load only for `prompts/list` and `prompts/get`.
 
 ### Success results
 

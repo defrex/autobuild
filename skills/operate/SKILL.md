@@ -20,9 +20,11 @@ edits the repository, and never touches a build's checkout. Its reach is the
 operator surface — the `ab` CLI, or the operator tool registry exposed through MCP.
 
 Find your setting and read that section: **Running locally with the `ab`
-CLI** if you are a session with a shell, **Running as an external connected agent** if
-your tools are the registry's `builds.*` / `tickets.*` family. The sections
-after them apply to both.
+CLI** if you run at the repository root with a shell and the CLI, **Running as an
+external connected agent** if you are connected over MCP and your tools are the
+registry's `builds.*` / `tickets.*` family. A connected agent has no shell and no
+`ab` CLI of its own. The sections after them apply to both, and a connected agent
+maps each `ab` command they name to its tool as the next section describes.
 
 ## Running locally with the `ab` CLI
 
@@ -454,15 +456,16 @@ human and recommend setting that key rather than inventing a custom state.
 The registry has operator notes, harvest control, and `discard`, which have no
 CLI equivalent, and no bulk control beyond `pause --all` / `resume --all`. Say
 so rather than improvising; tell the human, or record it with `ab observe`
-when you are inside a build. `ab mcp` mounts the same registry over MCP for
-harnesses that support it — if you have those tools, the connected-agent section's tool
-descriptions apply.
+when you are inside a build. `ab mcp` mounts the same registry over MCP for a
+local harness that supports it; its tools then work as the connected-agent
+section describes.
 
 ## Running as an external connected agent
 
 This section applies when an external agent harness connects to the operator
-registry through MCP. With a shell and the `ab` CLI, use the section above.
-Which repository you act on depends on the connector:
+registry through MCP. You have no shell and no `ab` CLI: you read context
+through the context tools, explore code in the sandbox, and act through
+operator tools. Which repository you act on depends on the connector:
 
 - **Per-repository connector** (a URL such as `<origin>/mcp/github.com/acme/widgets`,
   copied from the project's Settings tab): it serves that one repository. Its
@@ -472,6 +475,38 @@ Which repository you act on depends on the connector:
   Call `repositories.list` to find the identities you can reach.
 
 Either way, follow each advertised tool schema exactly.
+
+### Load context first
+
+The server instructions list each repository's skills and agent instructions.
+Before acting:
+
+1. Call `context.list`. It returns the repository's skills with descriptions,
+   its agent instructions files (`AGENTS.md`, `CLAUDE.md`) with their scopes, and
+   which to load before operating and before ticket work.
+2. Read this skill (`ab-operate`) and the repository's agent instructions with
+   `context.read`, or invoke the MCP prompt named for the skill. Follow a
+   relative link in a file by passing it as `path` with the file as `from`.
+3. Treat the agent instructions as the repository's own rules: they win over
+   Autobuild skills for that repository. Their commands and rules about local
+   processes apply inside the sandbox.
+
+Every `context.read` result starts with a generated preamble that maps each
+`ab` command the file mentions to the tool that performs it, or says the
+command is for build sessions, for the sandbox, or for a human on the host. A
+repository with no captured context serves the canonical skills bundled with
+Autobuild, and the index says so.
+
+### Explore in the sandbox
+
+Read code, docs and history in your operator sandbox, a persistent checkout of
+the repository: `sandbox.open`, poll `sandbox.status` until it is ready, then
+`sandbox.exec`, `sandbox.read_file`, and `sandbox.close` when you are done. Run
+repository commands there, including the `ab` commands a preamble marks for the
+sandbox. The sandbox holds no store, forge or model credentials, so every build
+and ticket action still goes through the operator tools. Sandbox tools are
+offered only where the repository's config enables `[orchestrator]`; otherwise
+they are absent or refuse with a `sandbox-*` code.
 
 ### How you run
 
@@ -503,6 +538,8 @@ a baseline; on `code: "cursor-too-old"`, call again without one.
 
 Your tools are the operator registry. The read-only ones are always safe:
 
+- `context.list`, `context.read` — the repository's skills and agent
+  instructions, with a generated preamble on each read. Call them first.
 - `repository.attention` — the attention digest: everything waiting on the
   operator, each item naming its resolving tool call. The first call of each
   round.
@@ -586,6 +623,14 @@ that does the job, and say what you are doing before you do it:
 - `optimization.settle-unmeasured` — release the slot of an attempt that merged
   without a landing measurement, under an explicit policy; see
   [optimization nodes](#optimization-nodes).
+- `sandbox.open`, `sandbox.status`, `sandbox.close`, `sandbox.refresh` — your
+  sandbox's lifecycle; `refresh` fast-forwards a clean checkout to the base head.
+- `sandbox.exec`, `sandbox.start`, `sandbox.wait`, `sandbox.read_file`,
+  `sandbox.write_file` — run commands and read or write files in the sandbox.
+- `sandbox.reset` and `sandbox.publish` — destructive. `reset` discards every
+  change and re-provisions; `publish` pushes the sandbox's commit to your
+  operator branch and opens or updates a pull request. Use them only on clear
+  instruction.
 
 Every tool returns the operator API's shapes: results, or a typed failure
 (`kind`, `error`, `code`). A refusal is information, not an exception:

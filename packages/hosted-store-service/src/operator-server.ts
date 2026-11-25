@@ -80,6 +80,7 @@ import {
   ticketUpdateRequestSchema,
   toggleHarvestGate,
   toggleRepositorySetting,
+  type CanonicalSkillBundle,
 } from '@defrex/autobuild/operator'
 import {
   answerOperatorApproval,
@@ -108,6 +109,9 @@ export interface OperatorServerOptions {
   clock?: Clock
   /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
   ticketBackend?: OperatorTicketBackend
+  /** The canonical skill loader for the context tools (default: the
+   * serving distribution's `skills/` tree); tests inject one. */
+  canonicalSkills?: () => Promise<CanonicalSkillBundle>
   /** Static operator-sandbox backend (AUT-340), consulted only by the
    * session-archive route: archiving an operator's last open session for a
    * repository releases their sandbox environment. It is never fed into the
@@ -186,6 +190,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     store: opts.store,
     clock,
     ...(opts.ticketBackend !== undefined ? { tickets: opts.ticketBackend } : {}),
+    ...(opts.canonicalSkills !== undefined ? { canonicalSkills: opts.canonicalSkills } : {}),
     ...(opts.sandboxResolver !== undefined
       ? { sandboxResolution: { canPublish: opts.sandboxResolver.canPublish } }
       : {}),
