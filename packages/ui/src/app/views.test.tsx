@@ -100,6 +100,30 @@ describe('build page', () => {
     expect(buildPage('nope')).toContain(missing)
     expect(buildPage(RUNNING_SLUG, { notice: 'later' })).toContain(missing)
   })
+
+  test('every block after the header aligns under the title; a missing build has no title', () => {
+    const aligned = '<div data-ansi="title-aligned">'
+    const kinds: Record<string, string> = {
+      [BLOCKED_SLUG]: 'data-kind="escalation"',
+      [WAITING_SLUG]: 'data-kind="wait"',
+    }
+    for (const slug of [RUNNING_SLUG, BLOCKED_SLUG, WAITING_SLUG, 'github-cooldown-exhausted']) {
+      const [header, ...body] = buildPageBlocks({ frame: overviewFrame(), slug, now: NOW })
+      expect(header!.key).toBe('header')
+      expect(renderToStaticMarkup(header!.node)).not.toContain('title-aligned')
+      expect(body.length).toBeGreaterThan(0)
+      for (const block of body)
+        expect(renderToStaticMarkup(block.node).startsWith(aligned)).toBe(true)
+      if (kinds[slug] !== undefined)
+        expect(body.map((block) => renderToStaticMarkup(block.node)).join('')).toContain(
+          kinds[slug],
+        )
+    }
+    const missing = buildPageBlocks({ frame: { position: '7' }, slug: 'older-build', now: NOW })
+    expect(missing.map((block) => renderToStaticMarkup(block.node)).join('')).not.toContain(
+      'title-aligned',
+    )
+  })
 })
 
 test('masked pages are the same markup as the pages, wrapped', () => {

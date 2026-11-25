@@ -47,12 +47,21 @@ html {
   gap: var(--space-lg);
 }
 /* The build page's sign-off regions sit between ruled blocks. */
-[data-ansi="flow-block"] > [data-ansi="sign-off"] {
+[data-ansi="flow-block"] > [data-ansi="sign-off"],
+[data-ansi="title-aligned"] > [data-ansi="sign-off"] {
   margin: var(--space-md) 0 0;
 }
 
 @media (max-width: 719px) {
   [data-app="frame"] {
     padding: 0 var(--space-md) var(--space-xl);
+  }
+  /* Escalation sign-off spans the viewport edge to edge (DESIGN.md Layout):
+     it bleeds through the frame's padding, and its own padding keeps the
+     text inset. */
+  [data-app="frame"] [data-ansi="sign-off"][data-kind="escalation"] {
+    margin-inline: calc(-1 * var(--space-md));
+    border-inline-width: 0;
+    max-width: none;
   }
 }
