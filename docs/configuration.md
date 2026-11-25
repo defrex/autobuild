@@ -3884,6 +3884,17 @@ and restart-classified as a whole. The removed runner keys `model`,
 `invocationBudgetSeconds`, `approvals` and `wake` are rejected with a diagnostic;
 existing effective-config artifacts remain readable without changing stored bytes.
 
+`enabled` defaults per host:
+
+| `enabled` | Hosted deployment | Local `ab mcp`, dispatch, `ab init` |
+|---|---|---|
+| unset | on | off |
+| `true` | on | on |
+| `false` | off | off |
+
+Dispatcher releases older than the hosted default deposit an explicit
+`enabled = false`, so their projects stay off until they upgrade.
+
 <!-- configuration-reference:orchestrator -->
 
 #### `orchestrator`
@@ -3905,12 +3916,12 @@ existing effective-config artifacts remain readable without changing stored byte
 **TOML key:** `orchestrator.enabled`
 
 - **Type:** `boolean`
-- **Default:** `false`
+- **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 - **Local override:** Committed only: set in autobuild.toml.
 
-**Description:** Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses.
+**Description:** Enables externally driven sandbox tools, archive cleanup and dispatcher idle settlement. Operators run in external agent harnesses. Unset: enabled when served by a hosted deployment, disabled for local `ab mcp`, dispatch and init; an explicit value wins on every host.
 
 **Constraints:** None beyond the input type.
 
@@ -3954,7 +3965,7 @@ existing effective-config artifacts remain readable without changing stored byte
 
 **Description:** Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none.
 
-**Constraints:** When enabled, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.; Each item: minimum length 1
+**Constraints:** Unless `enabled = false`, forwarding store, forge, ticket-provider, model or Vercel credentials, or builtin-provider forbidden names, is rejected.; Each item: minimum length 1
 
 <!-- configuration-reference:/orchestrator -->
 
@@ -4018,8 +4029,19 @@ On a hosted deployment:
 - **Gate.** Each call reads the repository's latest deposited effective config.
   A closed gate is a typed refusal instead of a missing tool:
   `sandbox-orchestrator-disabled`, `sandbox-no-effective-config`,
-  `sandbox-effective-config-invalid`, or `sandbox-backend-unavailable` for a
-  provider or forge construction failure, which also raises a diagnostic.
+  `sandbox-effective-config-invalid`, `sandbox-credentials-missing` when the
+  fallback provider below lacks a deployment credential (the message names
+  which), or `sandbox-backend-unavailable` for a provider or forge
+  construction failure, which also raises a diagnostic.
+- **Fallback provider.** Only `vercel-sandbox` can host a sandbox on a
+  deployment. A project with any other `[workspace].provider`, such as
+  `git-worktree` dispatched locally, gets its sandbox from the deployment's
+  Vercel Sandbox provider. It needs the deployment's Vercel credential (below)
+  and `GITHUB_TOKEN` or `GH_TOKEN`. The sandbox is created without a git
+  source and clones inside the guest; the forge token is the read credential,
+  injected only by the host-side egress transform on upload-pack requests.
+  Neither the guest nor the Vercel source API sees it, and a project's own
+  `gitPasswordEnv` still may not name it.
 - **Reuse.** The backend is composed once per process, repository,
   effective-config revision and OIDC value, then reused. Its repo-scoped store
   credential is cached until near expiry.

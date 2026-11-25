@@ -70,6 +70,7 @@ import {
 } from '@defrex/autobuild/operator'
 import {
   createHostedOperatorSandboxService,
+  hostedOperatorSandboxComposition,
   type HostedOperatorSandboxOptions,
 } from '@defrex/autobuild/operator-sandbox-host'
 import { createTicketServer, HOSTED_TICKET_OPERATIONS } from './remote-tickets'
@@ -710,6 +711,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                   )(repo, 'system:hosted-operator-sandbox', expiresAt),
                 credentialKey: (credentials) =>
                   sandboxCompositionEnv(env, credentials).VERCEL_OIDC_TOKEN ?? '',
+                // Refuse a deployment that lacks what the fallback provider
+                // needs before minting a store token; the same decision runs
+                // again inside the composition.
+                preflight: ({ config, credentials }) => {
+                  hostedOperatorSandboxComposition(config, sandboxCompositionEnv(env, credentials))
+                },
                 compose: ({ repo, config, storeToken, credentials }) =>
                   (options.composeOperatorSandbox ?? createHostedOperatorSandboxService)({
                     store,
