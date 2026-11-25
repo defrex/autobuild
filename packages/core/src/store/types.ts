@@ -122,6 +122,13 @@ export interface BuildDigestTicketWait {
   tickets: TicketRef[]
 }
 
+/** One entry of `BuildStore.listOpenBuilds`: a nonterminal build's record
+ * with its persisted digest. */
+export interface OpenBuild {
+  record: BuildRecord
+  digest: BuildDigest
+}
+
 export interface BuildDigest {
   compatibility?: import('../events/compatibility').CompatibilityState
   /** A kernel landing requested an audit and no audit settlement has followed. */
@@ -452,6 +459,16 @@ export interface BuildStore extends BoundedEventReads {
   ): Promise<EventPayload<'node.rewritten'> | null>
 
   getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>>
+
+  /** The records and persisted digests of the repository's open builds —
+   * those whose latest terminal fact is not `build.completed`, so queued,
+   * running, paused, blocked and settled-awaiting-merge builds plus aborted
+   * builds still in cleanup — ordered by createdAt then slug. Membership is
+   * maintained with each build insert and with each `build.completed`,
+   * `build.aborted` and `build.reopened` append, in the appending
+   * transaction, so the cost is proportional to open builds and never to
+   * settled history. Read-only; an unknown repo answers an empty list. */
+  listOpenBuilds(repo: string): Promise<OpenBuild[]>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>
   /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */
