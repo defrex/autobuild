@@ -45,7 +45,6 @@ import { currentDeferralObservationReducer, type DeferralLedger } from '../kerne
  */
 import { mergeDecisionFromFacts, mergeIdentity } from './attention'
 import type { AbEvent } from '../events/catalog'
-import type { EventType } from '../events/payloads'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { buildReducer, reduceBuild } from '../kernel/reducer'
 import { isPhase, type BuildStatus, type Phase } from '../ontology'

@@ -3537,7 +3537,12 @@ test("a fresh watch reports a node's current upstream rewrite with branch and bo
 })
 
 test('default rewrite attention is once per episode for a node and never for a leaf', async () => {
-  const [A, B, C, D] = ['a', 'b', 'c', 'd'].map((c) => c.repeat(40))
+  const [A, B, C, D] = ['a', 'b', 'c', 'd'].map((c) => c.repeat(40)) as [
+    string,
+    string,
+    string,
+    string,
+  ]
   const rewrites = [
     [A, B],
     [A, C],
