@@ -693,6 +693,12 @@ export interface WorkspaceProvider {
    * dispatcher invocation won't start provisioning with less budget
    * remaining. Absent means no gate. */
   readonly provisionEstimateMs?: number
+  /** True only when `refs/heads/<branch>` exists locally in the checkout this
+   * provider creates build branches in (`repo`). The dispatcher consults it at
+   * claim time only, so a stale local branch of the chosen name counts as a
+   * slug collision (#1261). Throws when the probe itself fails. Omitted by
+   * providers whose branches are not local; the forge probe covers those. */
+  localBranchExists?(repo: string, branch: string): Promise<boolean>
   provision(opts: {
     repo: string
     baseBranch: string
@@ -729,6 +735,14 @@ export interface WorkspaceProvider {
      * any doubt, it throws `WorkspaceCleanupRequired` as for any incomplete
      * environment. Never expose an unverified environment. */
     adoptAbandoned?: boolean
+    /** The build has no prior `workspace.provisioned` or cleanup-required
+     * fact. A pre-existing branch of this name is not the build's work and
+     * must never become its base, unless the provider holds its own creation
+     * receipt for `owner`. `owner` matches `^[A-Za-z0-9_-]{1,64}$`, is unique
+     * to the build and stable across its retries. A local provider cuts from
+     * `baseBranch` and keeps the old tip under a private ref (#1261).
+     * Providers that cannot honor it rely on claim-time deduplication. */
+    fresh?: { owner: string }
   }): Promise<WorkspaceProvisionResult>
   release(handle: WorkspaceHandle): Promise<void>
 }

@@ -4,7 +4,7 @@
   "title": "Workspaces",
   "group": "reference",
   "description": "Provision local git worktrees or Vercel Sandboxes, handle private repositories, and implement a workspace provider.",
-  "textHash": "a437054f9193a2d42dfb7383c9aafcb8421f5c6ddffe6cd26aef2a6f468f3219",
+  "textHash": "65ad04c7cbaa05299fc03c3a0346fea782e58f68174c2128a4f2b064c1498af1",
   "headings": [
     "Responsibility",
     "Shipped adapters",

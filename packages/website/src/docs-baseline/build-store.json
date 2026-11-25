@@ -4,7 +4,7 @@
   "title": "Build store",
   "group": "reference",
   "description": "Select local SQLite or an HTTP service and understand the storage extension contract.",
-  "textHash": "f66b5a5f6fc6d2802cfa661c136f31db4b49b20fff170b7b6c764780e7e2878b",
+  "textHash": "6ead6c9ae80f67d357cf8efd13403d53264062efc5b103e6936ac21532e2b63e",
   "headings": [
     "Responsibility",
     "Shipped adapters",

@@ -43,6 +43,7 @@ Run `bun ab init`, install and authenticate your runtime, then run `bun ab init 
 - **Isolation.** Each build gets its own directory and branch over the shared Git object database. Files are isolated; host processes, network and credentials aren't.
 - **No options.** No `[workspace.config]` and no provisioning; system packages must already be on the host.
 - **Resume.** Intact reprovision keeps uncommitted work; a lost directory is rebuilt from branch and publication evidence, never a newer base.
+- **First provision.** A new build never adopts an existing local branch of its name: it cuts from the base and keeps the old tip under `refs/autobuild/displaced/<branch>/<sha>`. A worktree holding that branch is detached in place, and moved to `<worktree root>/.displaced/` if it sits at the build's path, with its files untouched.
 - **Release** is idempotent and removes the working copy, not the forge branch.
 
 ### Vercel Sandbox (`vercel-sandbox`)
