@@ -1019,7 +1019,13 @@ describe('hosted native paging negotiation', () => {
 describe('hosted search negotiation', () => {
   const ECHO = { [TICKET_SEARCH_HEADER]: TICKET_SEARCH_CAPABILITY }
   const NO_ROUTE = errorBodySchema.parse({ error: 'no route', kind: 'not-found' })
-  const HIT = { id: 'ENG-42', title: 'Rate-limit auth', state: 'Ready', labels: [], kind: 'work' }
+  const HIT = {
+    id: 'ENG-42',
+    title: 'Rate-limit auth',
+    state: 'Ready',
+    labels: [] as string[],
+    kind: 'work' as const,
+  }
   const QUERY = { text: 'rate', state: 'Ready', labels: ['autobuild'], limit: 1, cursor: '9' }
 
   async function searchSource(responses: CannedResponse[]) {
