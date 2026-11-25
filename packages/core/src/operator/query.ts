@@ -1,6 +1,7 @@
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
+import { repositoryQueueDepth } from '../cli/dashboard/header'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import {
   dispatchCapacity,
@@ -476,7 +477,7 @@ async function dashboardFromView(
     enrichIntegrationRows(projected, await integrationRecords(view, opts.repo, projected, records)),
     {
       repo: opts.repo,
-      queued: status.queued ?? 0,
+      queued: repositoryQueueDepth(repositoryEvents),
       activeCount: capacityProjection.occupied,
       capacityProjection,
       capacity: config.capacity,
@@ -525,7 +526,11 @@ function noDispatcherRunSnapshot(
   clock: Clock,
 ): OperatorDashboardSnapshot {
   const model: DashboardModel = {
-    ...buildDashboardFromProjected([], { repo, queued: 0, activeCount: 0, capacity: 0 }, facts),
+    ...buildDashboardFromProjected(
+      [],
+      { repo, queued: repositoryQueueDepth(facts), activeCount: 0, capacity: 0 },
+      facts,
+    ),
     configuration: 'no-dispatcher-run',
   }
   return dashboardSnapshot(model, clock)

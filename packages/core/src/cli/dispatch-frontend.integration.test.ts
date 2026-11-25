@@ -70,6 +70,30 @@ const tickCounters = {
   harvestFailed: 0,
 }
 
+/** The ticket scan a real dispatcher records before it publishes a tick. Its
+ * depth is every frontend's queue count, whichever run recorded it. */
+function ticketScanCompleted(
+  queued: number,
+): RepositoryEventWrite<'dispatcher.ticket-scan-completed'> {
+  return {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-scan-completed',
+    payload: {
+      startedAt: '2026-01-01T00:00:00.000Z',
+      readinessFingerprint: 'ready',
+      criteriaFingerprint: 'criteria',
+      mode: 'admission',
+      queued,
+      invalidTickets: 0,
+      ticketDiagnostics: [],
+      dependencyBlocked: 0,
+      dependencyDiagnostics: [],
+      creationWithheld: 0,
+      creationDiagnostics: [],
+    },
+  }
+}
+
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   message: string,
@@ -152,6 +176,7 @@ test('once renders one durable snapshot without starting interactive presentatio
             },
           }),
         )
+        .then(() => store.appendRepo(repo, ticketScanCompleted(3)))
         .then(() =>
           store.appendRepo(repo, {
             actor: DISPATCHER,
@@ -2139,6 +2164,7 @@ async function runBoundedSeed(input: {
             },
           }),
         )
+        .then(() => input.backing.appendRepo(input.repo, ticketScanCompleted(3)))
         .then(() =>
           input.backing.appendRepo(input.repo, {
             actor: DISPATCHER,
@@ -2316,6 +2342,7 @@ test('once mode warms before launch and folds only the final delta', async () =>
             },
           }),
         )
+        .then(() => backing.appendRepo(repo, ticketScanCompleted(3)))
         .then(() =>
           backing.appendRepo(repo, {
             actor: DISPATCHER,
@@ -3541,7 +3568,7 @@ test('viewer once follows canonical run/config changes without child, raw histor
   const store = new MemoryBuildStore()
   const repo = '/viewer-repo'
   await store.ensureRepo(repo)
-  const seed = async (run: string, capacity: number, queued: number) => {
+  const start = async (run: string, capacity: number) => {
     await store.appendRepoWithArtifacts(
       repo,
       [
@@ -3565,6 +3592,10 @@ test('viewer once follows canonical run/config changes without child, raw histor
         },
       }),
     )
+  }
+  const seed = async (run: string, capacity: number, queued: number) => {
+    await start(run, capacity)
+    await store.appendRepo(repo, ticketScanCompleted(queued))
     await store.appendRepo(repo, {
       actor: DISPATCHER,
       type: 'dispatcher.tick-completed',
@@ -3581,6 +3612,19 @@ test('viewer once follows canonical run/config changes without child, raw histor
   }
   await seed('hosted-one', 2, 3)
   await store.claimRepoLease(repo, 'hosted-one', 60_000)
+  // An overlapping hosted invocation starts, yields to the lease holder, and
+  // stops without a tick (#1278): it must not displace the scanned depth.
+  await start('hosted-yielded', 2)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-yielded',
+    payload: { run: 'hosted-yielded', holder: 'hosted-one' },
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'hosted-yielded', outcome: 'normal' },
+  })
   const before = await store.getRepoEvents(repo)
   const leaseBefore = await store.getRepo(repo)
   const watched = new Proxy(store, {
@@ -3979,6 +4023,7 @@ test('live viewer follows a new dispatcher run and changed config on the same co
         },
       }),
     )
+    await h.store.appendRepo('/session-view-repo', ticketScanCompleted(9))
     await h.store.appendRepo('/session-view-repo', {
       actor: DISPATCHER,
       type: 'dispatcher.tick-completed',
@@ -3997,6 +4042,35 @@ test('live viewer follows a new dispatcher run and changed config on the same co
     expect(h.frame()).toContain('active 1/6')
     expect(h.frame()).toContain('new dispatcher warning')
     expect(h.frame()).toContain('viewer')
+
+    // An overlapping run starts, yields, and stops: the queue keeps the
+    // holder's scanned depth (#1278). A later scan, as after a claim, shows
+    // on the next frame without a restart.
+    await h.store.appendRepo('/session-view-repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'yielded',
+        pid: 100,
+        roleWarnings: [],
+        effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 },
+      },
+    })
+    await h.store.appendRepo('/session-view-repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-yielded',
+      payload: { run: 'yielded', holder: 'successor' },
+    })
+    await h.store.appendRepo('/session-view-repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'yielded', outcome: 'normal' },
+    })
+    await (h.frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+    expect(h.frame()).toContain('queue 9')
+    await h.store.appendRepo('/session-view-repo', ticketScanCompleted(8))
+    await (h.frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+    expect(h.frame()).toContain('queue 8')
   } finally {
     await h.finish()
   }
