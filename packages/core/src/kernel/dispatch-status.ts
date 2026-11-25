@@ -192,6 +192,145 @@ export function dispatchStatusReducer(
   }
 }
 
+/** Shared current reads retain a fixed recent window of dispatcher runs. It
+ * bounds `recentRuns` in repository read facts and the pending runs the
+ * reported dispatch status tracks. Historical holder correlations outside it
+ * use the explicitly parameterized cache. */
+export const RECENT_DISPATCH_RUN_LIMIT = 16
+
+/** A started, unstopped run other than the reported one, folded from its own
+ * `dispatcher.run-started` onward. `started` is that start's seq. */
+export interface PendingDispatchRun {
+  started: number
+  status: DispatchStatus
+}
+
+/** Which dispatcher run the repository's reduced status describes. */
+export interface ReportedDispatch {
+  run?: string
+  status: DispatchStatus
+  /** Whether the reported run has recorded a tick boundary. */
+  ticked: boolean
+  /** Seq of the reported run's latest retained start; 0 when never seen. */
+  started: number
+  /** Sorted ascending by `started`, at most `RECENT_DISPATCH_RUN_LIMIT`. */
+  pending: PendingDispatchRun[]
+}
+
+export function initialReportedDispatch(): ReportedDispatch {
+  return {
+    status: dispatchStatusReducer('initial').initial(),
+    ticked: false,
+    started: 0,
+    pending: [],
+  }
+}
+
+function stopped(status: Readonly<DispatchStatus>): boolean {
+  return status.health === 'stopped' || status.health === 'failed'
+}
+
+function tickBoundary(event: RepositoryEvent): boolean {
+  return (
+    event.type === 'dispatcher.tick-started' ||
+    event.type === 'dispatcher.tick-completed' ||
+    event.type === 'dispatcher.tick-failed'
+  )
+}
+
+/** Insert in start order, then evict the oldest starts beyond the bound. */
+function retain(state: ReportedDispatch, entry: PendingDispatchRun): void {
+  let index = state.pending.length
+  while (index > 0 && state.pending[index - 1]!.started > entry.started) index--
+  state.pending.splice(index, 0, entry)
+  while (state.pending.length > RECENT_DISPATCH_RUN_LIMIT) state.pending.shift()
+}
+
+/** Move the reported run aside (while it is live) and report `status`. */
+function report(
+  state: ReportedDispatch,
+  status: DispatchStatus,
+  started: number,
+  ticked: boolean,
+): void {
+  if (state.run !== undefined && !stopped(state.status))
+    retain(state, { started: state.started, status: state.status })
+  state.run = status.run
+  state.status = status
+  state.started = started
+  state.ticked = ticked
+}
+
+/** Fold one repository event into the reported dispatcher run, in place.
+ *
+ * The reported run is the one that holds repository authority, or held it
+ * most recently, as far as the journal shows: a run that has recorded a tick
+ * boundary (`tick-started`, `tick-completed`, `tick-failed`). A run that
+ * starts while a ticked, live run is reported waits in `pending` and only
+ * displaces it by recording its own tick boundary, so a newcomer that yields
+ * and stops never touches the holder's status. When the reported run has
+ * stopped or has not ticked yet, a new start is reported at once, as is any
+ * start when no run is reported. A tick boundary from a run whose start is
+ * no longer retained promotes it too, carrying the last known effective
+ * config until the run records its own. Other events from unknown runs are
+ * ignored; a run's stop is its last event, so a stopped pending run is
+ * dropped rather than remembered.
+ *
+ * Pending holds at most `RECENT_DISPATCH_RUN_LIMIT` runs, the most recently
+ * started, so the state is bounded independent of journal length.
+ *
+ * `repositoryReadFacts` persists this state: changing this fold or its shape
+ * requires a `repositoryReadFacts` reducer revision. */
+export function foldReportedDispatch(state: ReportedDispatch, event: RepositoryEvent): void {
+  const run = (event.payload as { run?: unknown }).run
+  if (typeof run !== 'string') return
+  if (event.type === 'dispatcher.run-started') {
+    const fresh = reduceDispatchStatus([event], run)
+    if (state.run === run) {
+      state.status = fresh
+      state.started = event.seq
+      state.ticked = false
+      return
+    }
+    const index = state.pending.findIndex((entry) => entry.status.run === run)
+    if (index !== -1) state.pending.splice(index, 1)
+    if (state.run === undefined || stopped(state.status) || !state.ticked)
+      report(state, fresh, event.seq, false)
+    else retain(state, { started: event.seq, status: fresh })
+    return
+  }
+  if (state.run === run) {
+    state.status = reduceDispatchStatus([event], run, state.status)
+    if (tickBoundary(event)) state.ticked = true
+    return
+  }
+  const index = state.pending.findIndex((entry) => entry.status.run === run)
+  if (index !== -1) {
+    const entry = state.pending[index]!
+    if (tickBoundary(event)) {
+      state.pending.splice(index, 1)
+      report(state, reduceDispatchStatus([event], run, entry.status), entry.started, true)
+    } else if (event.type === 'dispatcher.run-stopped') {
+      state.pending.splice(index, 1)
+    } else {
+      entry.status = reduceDispatchStatus([event], run, entry.status)
+    }
+    return
+  }
+  if (!tickBoundary(event)) return
+  const seed: DispatchStatus = {
+    run,
+    health: 'running',
+    ...(state.status.effectiveConfig !== undefined
+      ? { effectiveConfig: state.status.effectiveConfig }
+      : {}),
+    roleWarnings: [],
+    diagnostics: [],
+    lastSeq: 0,
+  }
+  report(state, reduceDispatchStatus([event], run, seed), 0, true)
+}
+
 export function forgeReadinessWarnings(status: Readonly<DispatchStatus>): string[] {
   return (status.forgeReadinessFailures ?? []).map(formatReadinessFailure)
 }
