@@ -356,12 +356,14 @@ terminal.
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
 The dispatcher owns a hard deadline, strict validation, and `-2`, `-3`, …
-collision suffixes that skip both this store's slugs and `ab/` or `ab-node/`
-build branches already on the remote, checked once at claim time. A forge
-without that capability deduplicates against the store only and says so in a
+collision suffixes that skip this store's slugs, `ab/` or `ab-node/` build
+branches already on the remote, and, for a workspace provider that creates
+branches in the local checkout (git-worktree), branches that already exist
+there, checked once at claim time. A forge without the remote capability
+deduplicates against the store (and local branches) only and says so in a
 startup warning. A missing or failed model proposal falls back to the first
 three words of the kebab-cased title, so the proposal never blocks dispatch.
-The branch check is not optional: if a remote lookup fails, or the base and its
+The branch check is not optional: if a remote or local lookup fails, or the base and its
 `-2` … `-100` suffixes are all taken, the claim fails, no build is created, and
 the ticket is handed back to ready for a later tick. The slug
 and `ab/<slug>` (or `ab-node/<slug>` for a node) branch are chosen once;
@@ -2240,8 +2242,11 @@ dispatchers but not store-owned state. Separate local stores each see only their
   API show only the local store's builds.
 - **Branch collisions are only partly guarded.** A dispatcher skips any slug
   whose `ab/` or `ab-node/` branch already exists on the remote (when its forge
-  supports `remoteBranchExists`), but two stores that claim the same name
-  before either pushes can still collide.
+  supports `remoteBranchExists`) or locally in its checkout (when its workspace
+  provider, such as git-worktree, supports `localBranchExists`), but two stores
+  that claim the same name before either pushes can still collide. A build's
+  first provision never adopts an existing branch: it cuts from the base and
+  keeps the old tip under `refs/autobuild/displaced/<branch>/<sha>`.
 
 ## Connect a project
 
