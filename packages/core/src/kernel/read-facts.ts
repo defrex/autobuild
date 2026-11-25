@@ -633,11 +633,15 @@ import { autoMergeDefaultReducer } from './auto-merge-default'
 import { effectiveConfigReducer } from './service-facts'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openHarvestExecutionsReducer } from '../processes/harvest-execution-state'
-import { dispatchStatusReducer } from './dispatch-status'
+import {
+  dispatchStatusReducer,
+  foldReportedDispatch,
+  initialReportedDispatch,
+  RECENT_DISPATCH_RUN_LIMIT,
+  type ReportedDispatch,
+} from './dispatch-status'
 
-/** Shared current reads retain a fixed recent window. Historical holder
- * correlations outside it use the explicitly parameterized cache. */
-export const RECENT_DISPATCH_RUN_LIMIT = 16
+export { RECENT_DISPATCH_RUN_LIMIT } from './dispatch-status'
 export interface RepositoryReadAcc {
   missingAccounts: Record<string, import('../accounts/availability').MissingAccountCredential>
   preparation: ReturnType<typeof ticketPreparationReducer.initial>
@@ -689,8 +693,8 @@ export interface RepositoryReadAcc {
   autoMerge: ReturnType<typeof autoMergeDefaultReducer.initial>
   config: ReturnType<typeof effectiveConfigReducer.initial>
   sandboxes: ReturnType<typeof sandboxStatesReducer.initial>
-  status: ReturnType<ReturnType<typeof dispatchStatusReducer>['initial']>
-  run?: string
+  /** The dispatcher run the reduced status describes; see `foldReportedDispatch`. */
+  dispatch: ReportedDispatch
   scanSeq?: number
   scan?: Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }>['payload']
   recentRuns: [string, DispatcherRunFacts][]
@@ -754,7 +758,7 @@ export const repositoryReadFactsReducer = defineReducer({
     autoMerge: autoMergeDefaultReducer.initial(),
     config: effectiveConfigReducer.initial(),
     sandboxes: sandboxStatesReducer.initial(),
-    status: dispatchStatusReducer('initial').initial(),
+    dispatch: initialReportedDispatch(),
     publications: [],
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
@@ -846,11 +850,7 @@ export const repositoryReadFactsReducer = defineReducer({
         acc.dismissedThrough = Math.max(acc.dismissedThrough, acc.pendingHumanResume)
       if (event.type === 'harvest.failed' && !event.payload.willRetry)
         acc.failedAt[JSON.stringify(event.payload.run)] = event.ts
-      if (event.type === 'dispatcher.run-started') {
-        acc.run = event.payload.run
-        acc.status = dispatchStatusReducer(acc.run).initial()
-      }
-      if (acc.run) acc.status = dispatchStatusReducer(acc.run).advance(acc.status, [event])
+      foldReportedDispatch(acc.dispatch, event)
       if (event.type === 'dispatcher.ticket-scan-completed') {
         acc.scan = event.payload
         acc.scanSeq = event.seq
@@ -917,7 +917,9 @@ export const repositoryReadFactsReducer = defineReducer({
     autoMerge: autoMergeDefaultReducer.finish(acc.autoMerge),
     config: effectiveConfigReducer.finish(acc.config),
     sandboxes: sandboxStatesReducer.finish(acc.sandboxes),
-    status: acc.run ? dispatchStatusReducer(acc.run).finish(acc.status) : undefined,
+    status: acc.dispatch.run
+      ? dispatchStatusReducer(acc.dispatch.run).finish(acc.dispatch.status)
+      : undefined,
     scan: acc.scan,
     scanSeq: acc.scanSeq,
     recentRuns: structuredClone(acc.recentRuns),
