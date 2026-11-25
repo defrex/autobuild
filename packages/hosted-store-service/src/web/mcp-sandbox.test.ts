@@ -179,6 +179,7 @@ const PARITY_INPUTS: Record<string, Record<string, unknown>> = {
   'tickets.states': ref,
   'tickets.state.create': { ...ref, name: 'parity' },
   'tickets.list': ref,
+  'tickets.search': { ...ref, query: 'parity' },
   'tickets.get': ticket,
   'tickets.create': { ...ref, title: 'Parity', body: 'parity' },
   'tickets.update': { ...ticket, title: 'Parity' },
