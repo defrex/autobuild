@@ -8,7 +8,7 @@ import { publishBranch, remoteBranchHead, refreshBranchCache } from '../forge/gi
  * resume-after-sandbox-death (§15.6-C) a re-run, not a special path
  * (constitution #2).
  */
-import { lstat, mkdir, realpath } from 'node:fs/promises'
+import { lstat, mkdir, realpath, rename } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFile as fsReadFile, rm, stat, writeFile as fsWriteFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -42,13 +42,20 @@ export interface ExecResult {
 /** Injectable exec seam — the default shells out via Bun.spawn. */
 export type Exec = (
   cmd: string[],
-  opts: { cwd?: string; signal?: AbortSignal; env?: Record<string, string | undefined> },
+  opts: {
+    cwd?: string
+    signal?: AbortSignal
+    env?: Record<string, string | undefined>
+    /** Bytes written to the child's stdin; omitted means no stdin at all.
+     * Wrappers that delegate must forward it (spread the opts). */
+    stdin?: string
+  },
 ) => Promise<ExecResult>
 
 export const spawnExec: Exec = async (cmd, opts) => {
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
-    stdin: 'ignore',
+    stdin: opts.stdin === undefined ? 'ignore' : new Blob([opts.stdin]),
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
@@ -177,7 +184,18 @@ interface WorktreeSelection {
   detached?: WorktreeEntry
   /** The requested branch is attached anywhere, including outside our root. */
   branchAttached: boolean
+  /** Every registration attached to the requested branch anywhere, plus a
+   * detached registration at one of its deterministic paths. */
+  holders: WorktreeEntry[]
 }
+
+/** Where fresh-provision creation receipts for `branch` live. */
+function receiptPrefix(branch: string): string {
+  return `refs/autobuild/provision/${branch}/created`
+}
+
+/** Owner tokens are opaque, ref-safe and bounded. */
+const OWNER_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 function parseWorktreeList(porcelain: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = []
@@ -343,6 +361,31 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return result
   }
 
+  /** `git` with `input` on stdin; used only by the creation transactions. */
+  private async gitWithInput(dir: string, args: string[], input: string): Promise<ExecResult> {
+    return this.exec(['git', '-C', dir, ...args], { stdin: input })
+  }
+
+  private async gitWithInputOrThrow(
+    dir: string,
+    args: string[],
+    input: string,
+  ): Promise<ExecResult> {
+    const result = await this.gitWithInput(dir, args, input)
+    if (result.exitCode !== 0) throw new GitError(['-C', dir, ...args], result)
+    return result
+  }
+
+  /** True only for a local `refs/heads/<branch>` in `repo`; throws when the
+   * probe itself fails. Claim-time slug deduplication (#1261). */
+  async localBranchExists(repo: string, branch: string): Promise<boolean> {
+    const args = ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]
+    const result = await this.git(repo, args)
+    if (result.exitCode === 0) return true
+    if (result.exitCode === 1) return false
+    throw new GitError(['-C', repo, ...args], result)
+  }
+
   private shaFrom(dir: string, args: string[], result: ExecResult): string {
     if (result.exitCode !== 0) {
       throw new GitError(['-C', dir, ...args], result)
@@ -502,6 +545,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     baseBranch: string
     branch: string
     publication?: { sha: string; cacheHeads: string[] }
+    fresh?: { owner: string }
   }): Promise<WorkspaceProvisionResult> {
     const { repo, baseBranch, branch } = opts
     // Fails with git's stderr for a missing path or a non-repo directory.
@@ -521,6 +565,18 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       roots,
       roots.map((root) => join(root, leaf)),
     )
+    if (opts.fresh) {
+      return this.provisionFresh({
+        repo,
+        baseBranch,
+        branch,
+        owner: opts.fresh.owner,
+        leaf,
+        chosenDir,
+        roots,
+        holders: worktrees.holders,
+      })
+    }
     // A registration that already exists at the legacy in-checkout root is
     // adopted in place without the isolation check, so builds provisioned
     // before worktrees moved resume, clean up and release. Nothing new is
@@ -670,6 +726,200 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
     await this.gitOrThrow(repo, ['worktree', 'prune'])
     this.repos.delete(path)
+    // Every later provision of a released build is non-fresh, so its creation
+    // receipts are spent. Best effort: a leftover receipt only pins a commit.
+    if (handle.branch) {
+      const listed = await this.git(repo, [
+        'for-each-ref',
+        '--format=%(refname)',
+        `${receiptPrefix(handle.branch)}/`,
+      ])
+      if (listed.exitCode === 0) {
+        for (const ref of listed.stdout.split('\n').filter((line) => line !== '')) {
+          await this.git(repo, ['update-ref', '-d', ref])
+        }
+      }
+    }
+  }
+
+  /** This owner's creation receipt for `branch`, when one exists. */
+  private async ownCreation(
+    repo: string,
+    branch: string,
+    owner: string,
+  ): Promise<string | undefined> {
+    if (!OWNER_PATTERN.test(owner)) {
+      throw new Error(`invalid fresh-provision owner ${JSON.stringify(owner)}`)
+    }
+    return (
+      (await this.resolveOptionalCommit(repo, `${receiptPrefix(branch)}/${owner}`)) ?? undefined
+    )
+  }
+
+  /**
+   * A build's first provision (#1261). A pre-existing branch of this name is
+   * not the build's work: on 2026-11-25 a new build adopted a months-old
+   * merged branch's local ref as its base and parked forever on
+   * `target-rewritten`. Ownership is proven only by this owner's creation
+   * receipt, which is written in one atomic ref transaction with the build's
+   * own branch write, after every foreign holder is set aside. Ancestry is
+   * never consulted. Foreign holders are detached in place (and moved under
+   * `.displaced/` when they occupy a provider path), never destroyed; a
+   * foreign tip is kept under `refs/autobuild/displaced/<branch>/<sha>`.
+   */
+  private async provisionFresh(input: {
+    repo: string
+    baseBranch: string
+    branch: string
+    owner: string
+    leaf: string
+    chosenDir: string
+    roots: string[]
+    holders: WorktreeEntry[]
+  }): Promise<WorkspaceProvisionResult> {
+    const { repo, baseBranch, branch, owner, leaf, chosenDir, roots } = input
+    const branchRef = `refs/heads/${branch}`
+    const receiptRef = `${receiptPrefix(branch)}/${owner}`
+    const leafPaths = roots.map((root) => join(root, leaf))
+    const ownPath = join(chosenDir, leaf)
+    const tip = (await this.resolveOptionalCommit(repo, branchRef)) ?? undefined
+    const receipt = await this.ownCreation(repo, branch, owner)
+    let holders = input.holders
+
+    // This owner's interrupted creation: adopt it, so a lost
+    // `workspace.provisioned` append re-runs as a no-op.
+    if (
+      tip !== undefined &&
+      receipt === tip &&
+      holders.every((holder) => holder.branch === branch && holder.path === ownPath)
+    ) {
+      const attached = holders[0]
+      let path = attached?.path
+      if (path === undefined) {
+        path = join(await this.assertIsolatedRoot(repo), leaf)
+        await this.gitOrThrow(repo, ['worktree', 'add', path, branch])
+        const head = await this.resolveCommit(path, 'HEAD')
+        if (head !== tip) {
+          throw new Error(`checked out ${path} at ${head}, expected own creation ${tip}`)
+        }
+      }
+      this.repos.set(path, repo)
+      return {
+        provider: this.name,
+        ref: path,
+        path,
+        localPath: path,
+        branch,
+        base: { source: 'existing', sha: tip },
+      }
+    }
+
+    // Set every foreign holder aside before any ref moves. Nothing is written
+    // yet, so an interrupted attempt leaves no receipt and simply repeats.
+    for (const holder of holders) {
+      let head = holder.head ?? tip
+      if (holder.branch === branch) {
+        if (tip === undefined) {
+          throw new Error(`worktree ${holder.path} holds ${branchRef}, which does not resolve`)
+        }
+        await this.gitOrThrow(holder.path, ['update-ref', '--no-deref', 'HEAD', tip])
+        const symbolic = await this.git(holder.path, ['symbolic-ref', '-q', 'HEAD'])
+        const detachedHead = await this.resolveCommit(holder.path, 'HEAD')
+        if (symbolic.exitCode === 0 || detachedHead !== tip) {
+          throw new Error(`could not detach worktree ${holder.path} from ${branchRef} at ${tip}`)
+        }
+        head = tip
+      }
+      if (leafPaths.includes(holder.path)) {
+        await this.moveAside(
+          repo,
+          holder.path,
+          join(chosenDir, '.displaced', leaf, head ?? 'unknown'),
+        )
+      }
+    }
+    holders = (await this.findWorktrees(repo, branch, roots, leafPaths)).holders
+    if (holders.length > 0) {
+      throw new Error(
+        `${branchRef} is still held by ${holders.map((holder) => holder.path).join(', ')} after displacement`,
+      )
+    }
+
+    const worktreePath = join(await this.assertIsolatedRoot(repo), leaf)
+    const base = await this.selectNewBranchBase(repo, baseBranch, branch)
+    const archiveRef =
+      tip !== undefined && tip !== base.sha
+        ? `refs/autobuild/displaced/${branch}/${tip}`
+        : undefined
+    const transaction = [
+      'start',
+      tip === undefined
+        ? `create ${branchRef} ${base.sha}`
+        : `update ${branchRef} ${base.sha} ${tip}`,
+      ...(archiveRef !== undefined ? [`update ${archiveRef} ${tip}`] : []),
+      `update ${receiptRef} ${base.sha}`,
+      'prepare',
+      'commit',
+      '',
+    ].join('\n')
+    await this.gitWithInputOrThrow(repo, ['update-ref', '--stdin'], transaction)
+    // A seam that dropped stdin would let git commit an empty transaction
+    // and exit 0; read every ref back so that fails loudly.
+    const expected: Array<[string, string]> = [
+      [branchRef, base.sha],
+      [receiptRef, base.sha],
+      ...(archiveRef !== undefined ? [[archiveRef, tip!] as [string, string]] : []),
+    ]
+    for (const [ref, sha] of expected) {
+      const actual = await this.resolveOptionalCommit(repo, ref)
+      if (actual !== sha) {
+        throw new Error(`ref transaction left ${ref} at ${actual ?? '(missing)'}, expected ${sha}`)
+      }
+    }
+
+    await this.gitOrThrow(repo, ['worktree', 'add', worktreePath, branch])
+    const actualSha = await this.resolveCommit(repo, branchRef)
+    if (actualSha !== base.sha) {
+      throw new Error(`created ${branchRef} at ${actualSha}, expected selected base ${base.sha}`)
+    }
+    const head = await this.resolveCommit(worktreePath, 'HEAD')
+    if (head !== base.sha) {
+      throw new Error(`checked out ${worktreePath} at ${head}, expected selected base ${base.sha}`)
+    }
+    this.repos.set(worktreePath, repo)
+    return {
+      provider: this.name,
+      ref: worktreePath,
+      path: worktreePath,
+      localPath: worktreePath,
+      branch,
+      base: { ...base, sha: actualSha },
+    }
+  }
+
+  /** Move a foreign registration off a provider-derived path, keeping every
+   * file and its lock. Git refuses `worktree move` with submodules; a
+   * same-filesystem rename plus `worktree repair` keeps the files then. */
+  private async moveAside(repo: string, from: string, preferred: string): Promise<void> {
+    let dest = preferred
+    for (
+      let n = 2;
+      await lstat(dest).then(
+        () => true,
+        () => false,
+      );
+      n += 1
+    ) {
+      dest = `${preferred}-${n}`
+    }
+    await mkdir(dirname(dest), { recursive: true })
+    const moved = await this.git(repo, ['worktree', 'move', '--force', '--force', from, dest])
+    if (moved.exitCode === 0) return
+    if (!/submodule/i.test(moved.stderr)) {
+      throw new GitError(['-C', repo, 'worktree', 'move', '--force', '--force', from, dest], moved)
+    }
+    await rename(from, dest)
+    await this.gitOrThrow(repo, ['worktree', 'repair', dest])
   }
 
   /** Discover only registrations relevant to the requested branch. Attached
@@ -696,6 +946,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         .map((path) => entries.find((entry) => entry.detached && entry.path === path))
         .find((entry) => entry !== undefined),
       branchAttached: entries.some((entry) => entry.branch === branch),
+      holders: entries.filter(
+        (entry) =>
+          entry.branch === branch || (entry.detached && worktreePaths.includes(entry.path)),
+      ),
     }
   }
 

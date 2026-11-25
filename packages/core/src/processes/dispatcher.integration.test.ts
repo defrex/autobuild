@@ -778,7 +778,12 @@ describe('Dispatcher dispatch', () => {
     expect(spec ? textContent(spec) : null).toBe(CONFORMING_BODY)
 
     expect(h.workspaces.provisions).toEqual([
-      { repo: REPO, baseBranch: 'main', branch: 'ab/add-rate-limiting' },
+      {
+        repo: REPO,
+        baseBranch: 'main',
+        branch: 'ab/add-rate-limiting',
+        fresh: { owner: expect.stringMatching(/^[0-9a-f]{32}$/) },
+      },
     ])
     expect(h.tickets.comments).toEqual([{ id: 'T-1', body: 'build add-rate-limiting dispatched' }])
     expect(h.launches).toEqual(['add-rate-limiting'])
@@ -841,7 +846,12 @@ describe('Dispatcher dispatch', () => {
     )
     expect(created?.payload.baseBranch).toBe('trunk')
     expect(h.workspaces.provisions).toEqual([
-      { repo: REPO, baseBranch: 'trunk', branch: 'ab/add-rate-limiting' },
+      {
+        repo: REPO,
+        baseBranch: 'trunk',
+        branch: 'ab/add-rate-limiting',
+        fresh: { owner: expect.stringMatching(/^[0-9a-f]{32}$/) },
+      },
     ])
   })
 
@@ -1575,6 +1585,80 @@ readyState = "Ready"
     expect(builds.map((r) => r.slug)).toEqual(['login-rate-limit-2'])
     expect(builds.map((r) => r.branch)).toEqual(['ab/login-rate-limit-2'])
     expect(remote.remoteBranches.get('ab/login-rate-limit')).toBe('a-commit')
+  })
+
+  test('a local branch of the chosen name in the checkout is a collision (#1261)', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')], nameSlug: async () => 'login-rate-limit' })
+    h.workspaces.localBranches.add('ab/login-rate-limit')
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((r) => [r.slug, r.branch])).toEqual([
+      ['login-rate-limit-2', 'ab/login-rate-limit-2'],
+    ])
+  })
+
+  test('a failed local branch probe fails naming closed and hands the claim back', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    h.workspaces.localBranchExists = async () => {
+      throw new Error('checkout unreadable')
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('ticket preparation failed (naming)')
+    expect(await h.store.listBuilds()).toEqual([])
+    expect(h.tickets.transitions).toContainEqual({ id: 'T-1', state: 'Ready' })
+  })
+
+  test("only a build's first provision is fresh, with one owner across its retries (#1261)", async () => {
+    const fake = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
+    const owners: Array<string | undefined> = []
+    let failing = true
+    const workspaceProvider = new Proxy(fake, {
+      get: (target, key, receiver) =>
+        key === 'provision'
+          ? async (input: Parameters<WorkspaceProvider['provision']>[0]) => {
+              owners.push(input.fresh?.owner)
+              if (failing) throw new Error('workspace backend offline')
+              return target.provision(input)
+            }
+          : Reflect.get(target, key, receiver),
+    })
+    const first = harness({ tickets: [readyTicket('T-recover')], workspaceProvider })
+    await seedInterrupted(first)
+    await first.dispatcher.tick({ acceptNewWork: false })
+    failing = false
+    await first.dispatcher.tick({ acceptNewWork: false })
+    expect(owners).toHaveLength(2)
+    expect(owners[0]).toMatch(/^[0-9a-f]{32}$/)
+    expect(owners[1]).toBe(owners[0])
+
+    // A replacement provision after a release is a resume, never fresh.
+    const replacements: Array<{ fresh?: { owner: string } }> = []
+    const replacing: WorkspaceProvider = {
+      name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
+      recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
+        reap: async () => ({ outcome: 'absent', snapshots: { outcome: 'confirmed', deleted: 0 } }),
+      },
+      provision: async (input) => {
+        replacements.push({ ...(input.fresh ? { fresh: input.fresh } : {}) })
+        throw new Error('remote environment no longer exists')
+      },
+      release: async () => undefined,
+    }
+    const h = harness({ workspaceProvider: replacing })
+    const slug = await seedBuild(h, {
+      pr: PR,
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-g0', reason: 'replacement' },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    expect(replacements).toEqual([{}])
   })
 
   test('a node branch another store opened is skipped and left untouched', async () => {
