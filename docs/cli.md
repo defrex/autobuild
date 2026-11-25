@@ -98,5 +98,5 @@ another session's process; a preference does not authorize takeover.
 `ab web [--json]` is always allowed, even while a dispatcher exists: it serves a
 read-only UI without acquiring a dispatcher lease. `ab dispatch --web` serves the
 same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
-stderr. Both default to loopback. Serving beyond loopback has no access control;
+stderr; a TTY dashboard keeps it on its top line. Both default to loopback. Serving beyond loopback has no access control;
 see [operator surfaces](operator-surfaces.md) for binding and refresh details.
