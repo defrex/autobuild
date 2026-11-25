@@ -1,7 +1,19 @@
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
-import { reduceDispatchStatus } from './dispatch-status'
+import {
+  dispatchJournal,
+  takeoverJournal,
+  yieldedNewcomerJournal,
+} from '../testing/dispatch-journals'
+import {
+  foldReportedDispatch,
+  forgeReadinessWarnings,
+  initialReportedDispatch,
+  RECENT_DISPATCH_RUN_LIMIT,
+  reduceDispatchStatus,
+  type ReportedDispatch,
+} from './dispatch-status'
 
 function event(
   seq: number,
@@ -389,4 +401,223 @@ test('forge failures survive config and routine notices, incremental replay, and
       full,
     ).forgeReadinessFailures,
   ).toBeUndefined()
+})
+
+describe('reported dispatch run', () => {
+  const fold = (events: readonly RepositoryEvent[], state = initialReportedDispatch()) => {
+    for (const e of events) foldReportedDispatch(state, e)
+    return state
+  }
+  const pendingRuns = (state: ReportedDispatch) => state.pending.map((entry) => entry.status.run)
+
+  test('a newcomer that yields and stops never displaces the ticking holder', () => {
+    const events = yieldedNewcomerJournal()
+    const bStop = events.findIndex((e) => e.type === 'dispatcher.run-stopped')
+    for (let i = bStop; i <= events.length; i++) {
+      expect(fold(events.slice(0, i)).status.health).toBe('running')
+    }
+    const state = fold(events)
+    expect(state.run).toBe('run-a')
+    expect(state.pending).toEqual([])
+    expect(state.status).toMatchObject({
+      run: 'run-a',
+      health: 'running',
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: ['A role warning'],
+      queued: 11,
+      triage: 3,
+      diagnostics: ['A later diagnostic'],
+      availableUpgrade: '9.9.9',
+      warningNotice: 'A notice',
+    })
+    expect(forgeReadinessWarnings(state.status)).toHaveLength(1)
+    expect(state.status.yieldedHolder).toBeUndefined()
+    // The holder's own stop still reports it.
+    const j = dispatchJournal()
+    j.events.push(...events)
+    j.stop('run-a', 'abnormal')
+    expect(fold(j.events).status.health).toBe('failed')
+  })
+
+  test('a takeover is reported from its first tick boundary with its start facts', () => {
+    const events = takeoverJournal()
+    const tick = events.findIndex(
+      (e) => e.type === 'dispatcher.tick-started' && e.payload.run === 'run-b',
+    )
+    expect(fold(events.slice(0, tick)).run).toBe('run-a')
+    const state = fold(events)
+    expect(state.run).toBe('run-b')
+    expect(state.status).toMatchObject({
+      health: 'running',
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 },
+      roleWarnings: ['B role warning'],
+      queued: 7,
+    })
+    expect(forgeReadinessWarnings(state.status)).toEqual([
+      expect.stringContaining('run-b cannot squash'),
+    ])
+    // A was demoted on takeover and dropped by its superseded stop.
+    expect(state.pending).toEqual([])
+  })
+
+  test('a start after the reported run stops, or before any tick, is reported at once', () => {
+    const j = dispatchJournal()
+    j.start('run-a')
+    j.tick('run-a', 1)
+    j.stop('run-a')
+    j.start('run-b', 1)
+    expect(fold(j.events).status).toMatchObject({
+      run: 'run-b',
+      health: 'running',
+      effectiveConfig: { rev: 1 },
+    })
+
+    const cold = dispatchJournal()
+    cold.start('run-a')
+    cold.start('run-b', 1)
+    expect(fold(cold.events).run).toBe('run-b')
+    // Cold-start overlap: the earlier run takes authority by ticking.
+    cold.tick('run-a', 2)
+    expect(fold(cold.events).status).toMatchObject({ run: 'run-a', queued: 2 })
+  })
+
+  test('one run at a time reports exactly the latest started run at every prefix', () => {
+    let seed = 7
+    const random = () => {
+      seed = (seed * 48271) % 2147483647
+      return seed / 2147483647
+    }
+    for (let journal = 0; journal < 8; journal++) {
+      const j = dispatchJournal()
+      for (let r = 0; r < 6; r++) {
+        const run = `run-${journal}-${r}`
+        j.start(run, r, random() < 0.5 ? [`${run} warning`] : [])
+        if (random() < 0.4) j.forgeFailure(run)
+        const ticks = Math.floor(random() * 3)
+        for (let t = 0; t < ticks; t++) j.tick(run, t, random() < 0.5 ? ['diag'] : [])
+        if (random() < 0.3)
+          j.push('dispatcher.config-reloaded', {
+            run,
+            artifact: { kind: 'config', rev: r },
+            restartRequired: [],
+            effectiveChanged: true,
+            effectiveConfig: { kind: 'dispatcher-effective-config', rev: 100 + r },
+          })
+        if (random() < 0.3) j.push('dispatcher.tick-failed', { run, error: 'boom' })
+        if (r < 5 || random() < 0.5) j.stop(run, random() < 0.2 ? 'abnormal' : 'normal')
+      }
+      const state = initialReportedDispatch()
+      j.events.forEach((event, i) => {
+        foldReportedDispatch(state, event)
+        const latest = j.events
+          .slice(0, i + 1)
+          .findLast((e) => e.type === 'dispatcher.run-started')!.payload.run as string
+        expect(state.run).toBe(latest)
+        expect(state.status).toEqual(reduceDispatchStatus(j.events.slice(0, i + 1), latest))
+      })
+    }
+  })
+
+  test('a takeover from the oldest retained start keeps its start facts', () => {
+    const j = dispatchJournal()
+    j.start('run-a')
+    j.tick('run-a', 1)
+    j.start('run-b', 1, ['B role warning'])
+    j.forgeFailure('run-b')
+    for (let i = 0; i < RECENT_DISPATCH_RUN_LIMIT - 1; i++) j.start(`newer-${i}`)
+    j.tick('run-b', 5)
+    const state = fold(j.events)
+    expect(state.status).toMatchObject({
+      run: 'run-b',
+      effectiveConfig: { rev: 1 },
+      roleWarnings: ['B role warning'],
+    })
+    expect(forgeReadinessWarnings(state.status)).toHaveLength(1)
+  })
+
+  test('a tick from an evicted run promotes it, carrying the last known config', () => {
+    const j = dispatchJournal()
+    j.start('run-a', 3)
+    j.tick('run-a', 1)
+    j.start('run-b', 1, ['B role warning'])
+    j.forgeFailure('run-b')
+    for (let i = 0; i < RECENT_DISPATCH_RUN_LIMIT; i++) j.start(`newer-${i}`)
+    j.tick('run-b', 9, ['B diagnostic'])
+    let state = fold(j.events)
+    expect(state.status).toEqual({
+      run: 'run-b',
+      health: 'running',
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 3 },
+      queued: 9,
+      creationWithheld: undefined,
+      roleWarnings: [],
+      diagnostics: ['B diagnostic'],
+      lastSeq: j.events.length,
+    })
+    // A's start is older than every retained one, so its demotion evicts it.
+    expect(pendingRuns(state)).not.toContain('run-a')
+    j.push('dispatcher.config-reloaded', {
+      run: 'run-b',
+      artifact: { kind: 'config', rev: 1 },
+      restartRequired: [],
+      effectiveChanged: true,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 8 },
+    })
+    j.stop('run-a')
+    state = fold(j.events)
+    expect(state.status).toMatchObject({ health: 'running', effectiveConfig: { rev: 8 } })
+
+    const never = fold([dispatchJournal().tick('run-x', 2)])
+    expect(never.status).toMatchObject({ run: 'run-x', health: 'running', queued: 2 })
+    expect(never.status).not.toHaveProperty('effectiveConfig')
+  })
+
+  test('retention follows start order across promotions and demotions', () => {
+    const j = dispatchJournal()
+    j.start('A')
+    j.tick('A', 0)
+    const letters = 'BCDEFGHIJKLMNOPQ'.split('')
+    for (const [i, run] of letters.entries()) j.start(run, 10 + i, [`${run} warning`])
+    j.tick('B', 1) // A is demoted to the oldest position and evicted at once
+    j.tick('C', 2) // B is demoted to the front
+    j.start('R')
+    const state = fold(j.events)
+    expect(pendingRuns(state)).toEqual(['B', ...'DEFGHIJKLMNOPQR'.split('')])
+    const starts = state.pending.map((entry) => entry.started)
+    expect(starts).toEqual([...starts].sort((a, b) => a - b))
+
+    const branch = dispatchJournal()
+    branch.events.push(...j.events)
+    branch.tick('D', 3)
+    expect(fold(branch.events).status).toMatchObject({
+      run: 'D',
+      effectiveConfig: { rev: 12 },
+      roleWarnings: ['D warning'],
+    })
+
+    j.start('S') // B's start is now the oldest retained
+    j.tick('B', 4)
+    const evicted = fold(j.events)
+    expect(evicted.status).toMatchObject({
+      run: 'B',
+      roleWarnings: [],
+      effectiveConfig: { rev: 11 }, // carried from C
+    })
+  })
+
+  test('pending stays bounded and ignores stragglers from evicted runs', () => {
+    const j = dispatchJournal()
+    j.start('holder')
+    j.tick('holder', 1)
+    for (let i = 0; i < 100; i++) j.start(`run-${i}`)
+    j.yielded('run-0', 'holder')
+    j.stop('run-0')
+    const state = fold(j.events)
+    expect(state.run).toBe('holder')
+    expect(state.status.health).toBe('running')
+    expect(state.status.yieldedHolder).toBeUndefined()
+    expect(pendingRuns(state)).toEqual(
+      Array.from({ length: RECENT_DISPATCH_RUN_LIMIT }, (_, i) => `run-${84 + i}`),
+    )
+  })
 })
