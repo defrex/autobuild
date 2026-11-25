@@ -54,6 +54,7 @@ import type {
   BuildStore,
   NewBuildInput,
   NewSessionInput,
+  OpenBuild,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
@@ -124,6 +125,12 @@ export class RepoViewStore implements BuildStore {
   private discovery = new Map<string, BuildDigest>()
   private readonly dirtyDigests = new Set<string>()
   private discoveryDirty = true
+  /** The repository's open builds as `refreshOpen` (or the first
+   * `listOpenBuilds` of an epoch) read them; re-read after any write through
+   * this view. */
+  private open?: OpenBuild[]
+  private openEpoch = -1
+  private openDirty = true
   private repoFacts = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
   /** While retained (`retainBuildFacts`): each build's facts as
    * `buildFacts` last read them in this epoch, with this view's append count
@@ -164,6 +171,33 @@ export class RepoViewStore implements BuildStore {
       this.records = await this.backing.listBuilds()
       this.discovery = await readBuildDigests(this.backing, this.repo)
       this.initialized = true
+    })
+  }
+  /** Start an epoch that discovers builds through the open-build listing:
+   * one read whose cost follows open builds, never settled history. Operator
+   * passes use it; `refresh` still discovers every build for the dispatcher. */
+  async refreshOpen(): Promise<void> {
+    this.epoch++
+    await this.refreshJournal()
+    await this.metaChain.run(() => this.readOpen())
+  }
+  private async readOpen(): Promise<void> {
+    const epoch = this.epoch
+    this.openDirty = false
+    try {
+      this.open = await this.backing.listOpenBuilds(this.repo)
+      this.openEpoch = epoch
+    } catch (error) {
+      this.openDirty = true
+      throw error
+    }
+  }
+  async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    if (repo !== this.repo) return this.backing.listOpenBuilds(repo)
+    return this.metaChain.run(async () => {
+      if (this.openDirty || this.openEpoch !== this.epoch || this.open === undefined)
+        await this.readOpen()
+      return structuredClone(this.open!)
     })
   }
   async startJournal(): Promise<void> {
@@ -234,7 +268,10 @@ export class RepoViewStore implements BuildStore {
     return entry?.epoch === this.epoch ? entry.facts : undefined
   }
   private recordUpdatedAt(slug: string): string | undefined {
-    return this.records.find((record) => record.slug === slug)?.updatedAt
+    return (
+      this.records.find((record) => record.slug === slug) ??
+      this.open?.find((entry) => entry.record.slug === slug)?.record
+    )?.updatedAt
   }
   /** One served read, retained when asked. Runs on the build's chain. */
   private async readFacts(slug: string): Promise<CurrentBuildFacts> {
@@ -411,6 +448,7 @@ export class RepoViewStore implements BuildStore {
   }
   private invalidate(slug?: string): void {
     this.recordsDirty = true
+    this.openDirty = true
     if (slug) {
       this.dirtyDigests.add(slug)
       this.appends.set(slug, (this.appends.get(slug) ?? 0) + 1)

@@ -420,6 +420,11 @@ export const buildDigestWireSchema = z.object({
     .optional(),
 })
 export const buildDigestListSchema = z.array(buildDigestWireSchema)
+/** `GET /repos/{repo}/open-builds`: the records and digests of the repo's
+ * open builds (latest terminal fact is not `build.completed`). */
+export const openBuildListSchema = z.array(
+  z.object({ record: buildRecordWireSchema, digest: buildDigestWireSchema }),
+)
 
 // ── Artifacts ────────────────────────────────────────────────────────────────
 

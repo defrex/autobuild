@@ -736,6 +736,7 @@ without a journal record, or a repository without builds.
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
 | `listRepoArtifacts` | `GET /repos/{repo}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
+| `listOpenBuilds` | `GET /repos/{repo}/open-builds` | none | `200` + `[{"record", "digest"}]`, a build record and its `BuildDigest` for every open build of the repository (possibly empty), ordered by `createdAt` and then slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
 | `releaseRepoLease` | `POST /repos/{repo}/lease/release` | holder request | `200 {"ok": true}`; a wrong holder is a successful no-op |
@@ -836,6 +837,18 @@ moved — a stale peer is now rejected at the handshake (`409 conflict`) instead
 This is the same discipline the transport's supported-window rules promise:
 wire shapes that independently implemented servers must reproduce update this
 document and the protocol version together.
+
+An open build is one whose latest terminal fact is not `build.completed`:
+queued, running, paused, blocked and settled-awaiting-merge builds, plus
+aborted builds whose cleanup has not finished. The server maintains the set
+in the same transaction that inserts a build or appends its
+`build.completed`, `build.aborted` or `build.reopened`, so answering costs one
+entry per open build and never grows with settled history. Operator reads of
+active work use it. The route is additive and keeps the protocol version. A
+server without it answers the generic `no route` `404`, or its
+repository-existence gate's `unknown repo` `404` for a journal-less
+repository; a client surfaces either as a typed capability error and never
+answers from `build-digests` or the build list instead.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded
