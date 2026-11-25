@@ -1360,6 +1360,11 @@ describe('runCli — sessionless build controls', () => {
     const d = controlDeps(join(tmp, 'grammar-store'))
     expect(await runCli(['answer', slug, '--dismiss', '--revise-spec-from-ticket'], d)).toBe(1)
     expect(d.err.join('\n')).toContain('resolution flags are mutually exclusive')
+    expect(await runCli(['answer', slug, '--accept-target', '--dismiss'], d)).toBe(1)
+    expect(
+      await runCli(['answer', slug, '--accept-target', '--review-round-ceiling', '3'], d),
+    ).toBe(1)
+    expect(d.err.join('\n')).toContain('cannot combine --review-round-ceiling with --accept-target')
   })
 
   test('from-ticket refuses a configured source that differs from the build ticket', async () => {

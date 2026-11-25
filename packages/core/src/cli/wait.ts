@@ -45,7 +45,6 @@ import { currentDeferralObservationReducer, type DeferralLedger } from '../kerne
  */
 import { mergeDecisionFromFacts, mergeIdentity } from './attention'
 import type { AbEvent } from '../events/catalog'
-import type { EventType } from '../events/payloads'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { buildReducer, reduceBuild } from '../kernel/reducer'
 import { isPhase, type BuildStatus, type Phase } from '../ontology'
@@ -116,8 +115,17 @@ export interface EventGlob {
   text: string
 }
 
-function isAttentionEvent(type: EventType): boolean {
-  return (BUILD_ATTENTION_EVENTS as readonly string[]).includes(type)
+/** Default attention membership. A `target.rewritten` wakes only for a node,
+ * once per episode (its first fact); a leaf's kernel owns the response. */
+function isAttentionEvent(
+  event: Pick<AbEvent, 'type'> & { seq?: number },
+  state: BuildState | undefined,
+): boolean {
+  if (event.type === 'target.rewritten')
+    return (
+      state?.kind === 'node' && (event.seq === undefined || event.seq === state.targetRewriteSince)
+    )
+  return (BUILD_ATTENTION_EVENTS as readonly string[]).includes(event.type)
 }
 
 /**
@@ -231,7 +239,7 @@ function stateSatisfies(
       return (
         (state.kind === 'node' && integrationFailed(state)) ||
         state.janitor?.attention === true ||
-        !!state.targetRewrite ||
+        (state.kind === 'node' && !!state.targetRewrite) ||
         awaitsConsent(state, restack) ||
         !!state.nodeRestack?.conflict ||
         !!(restack.active && restack.replay?.conflicted) ||
@@ -288,7 +296,7 @@ export function matchEvent(
       return text
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) ||
+      (isAttentionEvent(event, Array.isArray(events) ? undefined : events.state) ||
         (event.type === 'restack.replayed' &&
           !!(event.payload as { conflicted?: boolean })?.conflicted) ||
         (!Array.isArray(events) && stateSatisfies(cond, events.state, events)) ||
@@ -335,7 +343,7 @@ function matchFirst(
       return text
     if (
       cond.kind === 'attention' &&
-      (isAttentionEvent(event.type) ||
+      (isAttentionEvent(event, Array.isArray(events) ? undefined : events.state) ||
         (event.type === 'restack.replayed' &&
           !!(event.payload as { conflicted?: boolean })?.conflicted) ||
         (!Array.isArray(events) && stateSatisfies(cond, events.state, events)) ||

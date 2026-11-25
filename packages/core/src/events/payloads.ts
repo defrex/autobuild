@@ -2102,6 +2102,58 @@ export const eventPayloadSchemas = {
     sha: gitOid,
     lineage: targetLineageSchema.optional(),
   }),
+  /** The kernel proved a leaf parked on a rewritten target had no work of
+   * its own at local head `from` and is about to reset its branch to the
+   * target snapshot `sha`. A later `target.rewrite-recovered` completes it; a
+   * resuming runner completes the reset forward and never re-classifies. */
+  'target.rewrite-reprovision-prepared': z.strictObject({
+    branch: z.string().min(1),
+    previousSha: gitOid,
+    base: gitOid,
+    from: gitOid,
+    sha: gitOid,
+  }),
+  /** Closes a leaf's rewritten-target episode. `reprovisioned`: the build had
+   * no work, so its branch was reset to the target `sha`, which becomes its
+   * base in use. `accepted`: an operator answered the episode's
+   * `policy/target-rewritten` escalation with `accept-target`; the rejected
+   * base in use `base` is waived and the build's own commits restack onto
+   * the target at the next replay boundary. `pendingLocal` names unpublished
+   * local commits and the open occurrence whose completion publishes them. */
+  'target.rewrite-recovered': z
+    .strictObject({
+      branch: z.string().min(1),
+      previousSha: gitOid,
+      sha: gitOid,
+      base: gitOid,
+      recovery: z.enum(['reprovisioned', 'accepted']),
+      escalation: z.string().min(1).optional(),
+      pendingLocal: z
+        .strictObject({
+          head: gitOid,
+          owner: z.discriminatedUnion('kind', [
+            z.strictObject({
+              kind: z.literal('phase'),
+              phase: z.enum(['implement', 'finalize', 'reconcile']),
+            }),
+            z.strictObject({
+              kind: z.literal('finalize-step'),
+              step: z.string().min(1),
+              startedSeq: z.number().int().positive(),
+            }),
+          ]),
+        })
+        .optional(),
+    })
+    .superRefine((value, ctx) => {
+      if ((value.recovery === 'accepted') !== (value.escalation !== undefined))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'escalation is required exactly when recovery is accepted',
+        })
+      if (value.pendingLocal !== undefined && value.recovery !== 'accepted')
+        ctx.addIssue({ code: 'custom', message: 'pendingLocal is allowed only when accepted' })
+    }),
   'restack.prepared': leafRestackSchema,
   'restack.replayed': z.strictObject({
     id: z.string().min(1),

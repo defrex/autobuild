@@ -56,6 +56,9 @@ export const answerRequestSchema = z.union([
   z.strictObject({ resolution: z.literal('guidance'), text: z.string().trim().min(1) }),
   z.strictObject({ resolution: z.literal('retry') }),
   z.strictObject({ resolution: z.literal('dismiss'), text: optionalText }),
+  /** Answers only a leaf's target-rewritten escalation: restack its own
+   * commits onto the current target. */
+  z.strictObject({ resolution: z.literal('accept-target'), text: optionalText }),
   z.strictObject({
     resolution: z.literal('review-round-ceiling'),
     ceiling: z.number().int().positive(),

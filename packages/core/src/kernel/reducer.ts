@@ -430,6 +430,9 @@ export interface BuildState {
   ciFailure?: CiFailureRecord
   /** Readiness provenance, landing-bound consent and native application receipts. */
   targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
+  /** seq of the first `target.rewritten` of the open episode: the run of
+   * rewrites with the same branch and rejected baseline. */
+  targetRewriteSince?: number
   janitor?: {
     firstFailureAt: string
     attempt: number
@@ -655,12 +658,20 @@ export interface BuildAcc {
   /** seq of the latest `reconcile.completed`: a wait-resume
    * `restack.completed` citing another cycle replayed cleanly. */
   lastReconcileCompletedSeq?: number
+  /** An accepted rewritten target whose unpublished local commits await
+   * their owner's publishing completion, which opens the verify cycle. */
+  acceptedRewriteOwner?: NonNullable<
+    import('../events/payloads').EventPayload<'target.rewrite-recovered'>['pendingLocal']
+  >['owner'] & { acceptedSeq: number }
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   reopen?: ReopenState
   pr: BuildState['pr']
   prState?: PrLifecycle
   ciFailure?: CiFailureRecord
   targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
+  /** seq of the first `target.rewritten` of the open episode: the run of
+   * rewrites with the same branch and rejected baseline. */
+  targetRewriteSince?: number
   janitor?: {
     firstFailureAt: string
     attempt: number
@@ -881,13 +892,55 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       for (const escalation of [...openEscalations.values()])
         if (escalation.janitor) openEscalations.delete(escalation.id)
     }
-    if (event.type === 'target.rewritten') acc.targetRewrite = event
+    if (event.type === 'target.rewritten') {
+      // An episode is a run of rewrites with the same branch and rejected
+      // baseline: its first fact's seq identifies it for attention.
+      const open = acc.targetRewrite?.payload
+      if (
+        open === undefined ||
+        acc.targetRewriteSince === undefined ||
+        open.branch !== event.payload.branch ||
+        open.previousSha !== event.payload.previousSha
+      )
+        acc.targetRewriteSince = event.seq
+      acc.targetRewrite = event
+    }
     if (
       event.type === 'target.moved' ||
       event.type === 'target.rewrite-cleared' ||
+      event.type === 'target.rewrite-recovered' ||
       event.type === 'node.parent-accepted'
-    )
+    ) {
       delete acc.targetRewrite
+      delete acc.targetRewriteSince
+    }
+    // An accepted rewritten target opens a leaf verify cycle, like a completed
+    // reconcile, at the engine's `acceptedRewriteBoundary`: the accept itself,
+    // or its pending local owner's first completion after it.
+    if (
+      acc.kind !== 'node' &&
+      event.type === 'target.rewrite-recovered' &&
+      event.payload.recovery === 'accepted'
+    ) {
+      delete acc.acceptedRewriteOwner
+      if (event.payload.pendingLocal === undefined)
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+      else
+        acc.acceptedRewriteOwner = { ...event.payload.pendingLocal.owner, acceptedSeq: event.seq }
+    }
+    const owner = acc.acceptedRewriteOwner
+    if (
+      owner !== undefined &&
+      event.seq > owner.acceptedSeq &&
+      (owner.kind === 'phase'
+        ? (event.type === 'implement.completed' && owner.phase === 'implement') ||
+          (event.type === 'finalize.completed' && owner.phase === 'finalize') ||
+          (event.type === 'reconcile.completed' && owner.phase === 'reconcile')
+        : event.type === 'finalize.step-completed' && event.payload.step === owner.step)
+    ) {
+      verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+      delete acc.acceptedRewriteOwner
+    }
     advanceLanding(acc.landing, event)
     if (event.type.startsWith('integration.')) {
       acc.integration ??= {}
@@ -1621,6 +1674,11 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
                 : event.payload.headSha,
           }
         break
+      case 'target.rewrite-recovered':
+        // A no-work reprovision reset the branch onto the target snapshot.
+        if (acc.kind !== 'node' && event.payload.recovery === 'reprovisioned')
+          implement.contributionBase = event.payload.sha
+        break
       case 'restack.advanced':
         if (acc.kind !== 'node') implement.contributionBase = event.payload.to
         if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
@@ -1983,6 +2041,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     prState: acc.prState,
     ...(acc.ciFailure !== undefined ? { ciFailure: structuredClone(acc.ciFailure) } : {}),
     targetRewrite: acc.targetRewrite,
+    ...(acc.targetRewriteSince !== undefined ? { targetRewriteSince: acc.targetRewriteSince } : {}),
     janitor: acc.janitor,
     landing: acc.landing,
     autoMerge: acc.autoMerge,

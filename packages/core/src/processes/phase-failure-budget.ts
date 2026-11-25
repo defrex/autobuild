@@ -20,6 +20,7 @@ export const POLICY_PHASE_FAILURE_RESET_SCOPES = {
   'non-retryable-phase-failure': 'matching-round',
   'wait-unresolvable': 'none',
   'measurement-failed': 'none',
+  'target-rewritten': 'none',
 } as const satisfies Record<PolicyEscalationCause, PhaseFailureBudgetResetScope>
 
 export interface PhaseFailureResetEscalation {
