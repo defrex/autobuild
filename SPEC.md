@@ -4731,7 +4731,8 @@ requests are explicit reads once its store is open, and answer 503 before. It sh
 repository facts that a refresh the dispatcher already makes has read: the
 frontend's refresh loop under a TTY, the kernel's repository-view journal
 refreshes in plain mode (so frames update at the dispatcher's tick cadence),
-and the viewer loop for `--viewer`. A TTY keeps the terminal dashboard;
+and the viewer loop for `--viewer`. A TTY keeps the terminal dashboard, which
+shows the URL right-aligned on its first line in every generation;
 under `--plain` or without a TTY the web UI is the only presentation. The
 server binds before the repository lease, so a taken port fails dispatch
 before it claims anything. For `--web` without a fixed port, the launcher
@@ -4739,7 +4740,8 @@ reserves a free port once and pins `--port` into every generation's argv. A
 generation closes its server before it appends `dispatcher.terminal-released`,
 and its successor, which already holds the lease, rebinds the same port, so
 the URL survives automatic runtime upgrades. Only a first generation announces
-the URL, so it is printed once.
+the URL on stdout; a TTY dashboard shows it on its first line in every
+generation.
 
 Within the immutable generation, interactive `ab dispatch` owns the terminal in a frontend process and supervises
 one private child containing the dispatcher, build runners, Harvest, config and

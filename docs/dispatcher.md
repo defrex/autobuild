@@ -27,8 +27,9 @@ bun ab dispatch --viewer --dispatched-by app.autobuild.run
 
 The optional label is descriptive input. Every frame says `viewer · dispatched by
 <label>`, or simply `viewer` when omitted. Plain/non-TTY output states the mode
-at startup and prints state changes. With `--web`, it prints only the URL and the
-web UI is the presentation. `--once` reads one snapshot; `--interval <s>`
+at startup and prints state changes. With `--web`, a TTY viewer shows the web UI's
+URL at the right of its `viewer` line, and plain/non-TTY output prints only the URL
+and the web UI is the presentation. `--once` reads one snapshot; `--interval <s>`
 sets the polling cadence. Without a recorded configuration it waits for the dispatcher.
 
 The viewer takes no repository lease and starts no build, harvest, scan, janitor,
@@ -174,5 +175,5 @@ another session's process; a preference does not authorize takeover.
 `ab web [--json]` is always allowed, even while a dispatcher exists: it serves a
 read-only UI without acquiring a dispatcher lease. `ab dispatch --web` serves the
 same UI alongside dispatch; `--plain` keeps the URL on stdout and diagnostics on
-stderr. Both default to loopback. Serving beyond loopback has no access control;
+stderr; a TTY dashboard keeps it on its top line. Both default to loopback. Serving beyond loopback has no access control;
 see [operator surfaces](operator-surfaces.md) for binding and refresh details.

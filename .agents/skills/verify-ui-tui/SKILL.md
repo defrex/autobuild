@@ -52,6 +52,9 @@ the diff and not to decide applicability again.
    alternate), its status, and its stream id with open or closed status.
    Long lines wrap rather than truncate at 70 columns, and nothing names a
    candidate or baseline side.
+   The `web-url-*` frames must show the web UI URL whole and flush against the
+   right edge of the first line, after at least two spaces; in the narrow frame
+   the summary is truncated with `~` before the URL is.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
    including `headline-happy-wide.png`. Judge the images themselves. The `.txt`
    files are human evidence and may help identify a frame, but they are not a

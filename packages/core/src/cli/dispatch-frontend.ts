@@ -53,6 +53,7 @@ import {
   detailScrollLimit,
   moveDetailScroll,
   moveTranscriptScroll,
+  pinTopLineUrl,
   renderDashboard,
   viewerIndicator,
   renderViewerNotice,
@@ -109,7 +110,8 @@ export interface DispatchFrontendOptions {
   viewer?: { dispatchedBy?: string }
   plainOutput?: (line: string) => void
   /** `--web`: each frame's repository facts are published to the web UI from
-   * the read this frontend already made; the web adds no store read. */
+   * the read this frontend already made; the web adds no store read. A TTY
+   * frontend also pins `url` to the right end of every frame's top line. */
   web?: { dispatch: DispatchWeb }
   /** Repository identity (§12): the normalized origin, or the checkout path
    * when there is no origin. Every Store key uses this. */
@@ -346,7 +348,14 @@ export class DispatchFrontend {
       const frame = lines.join('\n')
       if (frame !== this.lastPlainFrame) this.opts.plainOutput(frame)
       this.lastPlainFrame = frame
-    } else this.region.update(lines)
+    } else this.region.update(this.withWebUrl(lines))
+  }
+
+  /** Pin the served web UI's URL to the top line of a TTY frame; identity
+   * under plain output or without `--web`. */
+  private withWebUrl(lines: string[]): string[] {
+    if (this.opts.plainOutput !== undefined || this.opts.web === undefined) return lines
+    return pinTopLineUrl(lines, this.opts.web.dispatch.url, this.opts.terminal.columns)
   }
 
   private contentHeight(): number {
@@ -459,7 +468,7 @@ export class DispatchFrontend {
               ),
             )
           } else if (status.health === 'failed' && status.warningNotice !== undefined)
-            this.region.update([status.warningNotice])
+            this.region.update(this.withWebUrl([status.warningNotice]))
           // Startup is incomplete: retry at the same position.
           return undefined
         }

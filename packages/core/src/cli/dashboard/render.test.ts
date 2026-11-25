@@ -19,7 +19,9 @@ import {
   moveDetailScroll,
   moveSessionScroll,
   moveTranscriptScroll,
+  pinTopLineUrl,
   renderDashboard,
+  renderViewerNotice,
   revealDetailFocus,
   resumeHintRows,
   resumeKeysRows,
@@ -3361,5 +3363,103 @@ describe('renderDashboard: a ticket wait is held work, not a blocker', () => {
       12,
     ).map(stripAnsi)
     expect(rows).toContain('  ! Waiting on B, C to complete: needs B.')
+  })
+})
+
+describe('pinTopLineUrl: the web UI URL on the top line', () => {
+  const URL = 'http://127.0.0.1:41234/'
+
+  function expectPinned(line: string, width: number): void {
+    const plain = stripAnsi(line)
+    expect(plain.endsWith(`  ${URL}`)).toBe(true)
+    expect(cellWidth(plain)).toBe(width)
+    // Contiguous plain text: no escape inside or right before the URL.
+    expect(line.endsWith(URL)).toBe(true)
+    expect(line.slice(0, -URL.length).endsWith(' ')).toBe(true)
+  }
+
+  test('ends in the last column of the terminal, plain and colored', () => {
+    for (const width of [80, 120, 141])
+      for (const color of [false, true]) {
+        const lines = rd(model([build()]), { color, width })
+        const pinned = pinTopLineUrl(lines, URL, width)
+        expectPinned(pinned[0]!, width)
+        expect(stripAnsi(pinned[0]!)).toContain('Autobuild')
+      }
+  })
+
+  test('adds no row and leaves every other line untouched in every view', () => {
+    const b = build()
+    const transcript = { kind: 'raw' as const, text: 'one\ntwo' }
+    const session = {
+      kind: 'session' as const,
+      slug: b.slug,
+      sessionId: 's1',
+      stream: 'stdout',
+      status: 'closed' as const,
+      source: { kind: 'parts' as const, parts: [], lastSeq: 0 },
+      follow: true,
+      scroll: 0,
+    }
+    const views = [
+      undefined,
+      { kind: 'detail' as const, slug: b.slug, scroll: 0 },
+      { kind: 'transcript' as const, slug: b.slug, sessionId: 's1', transcript, scroll: 0 },
+      session,
+    ]
+    for (const height of [1, 2, 40])
+      for (const viewer of [undefined, {}, { dispatchedBy: 'app.autobuild.run' }])
+        for (const view of views) {
+          const lines = rd(
+            { ...model([b]), ...(viewer ? { viewer } : {}), view },
+            { color: false, width: 120, height },
+          )
+          const pinned = pinTopLineUrl(lines, URL, 120)
+          expect(pinned.length).toBe(lines.length)
+          expect(pinned.slice(1)).toEqual(lines.slice(1))
+          expectPinned(pinned[0]!, 120)
+          if (viewer) expect(pinned[0]).toContain('viewer')
+        }
+    const notice = renderViewerNotice({}, NO_DISPATCHER_RUN_LINE, 100, 10)
+    const pinnedNotice = pinTopLineUrl(notice, URL, 100)
+    expect(pinnedNotice.slice(1)).toEqual(notice.slice(1))
+    expect(pinnedNotice[0]).toStartWith(' viewer')
+    expectPinned(pinnedNotice[0]!, 100)
+  })
+
+  test('truncates the rest of the line first, then leaves the URL out whole', () => {
+    for (const [first, label] of [
+      [rd(model([build()]), { color: true, width: 200 })[0]!, '   Autobuild'],
+      [renderViewerNotice({ dispatchedBy: 'app.autobuild.run' }, 'x', 200, 1)[0]!, ' viewer'],
+    ] as const) {
+      // Smallest width that holds the label, the `~`, two spaces and the URL.
+      const fits = cellWidth(label) + 1 + 2 + cellWidth(URL)
+      const pinned = pinTopLineUrl([first], URL, fits)[0]!
+      expectPinned(pinned, fits)
+      expect(stripAnsi(pinned)).toStartWith(`${label}~  `)
+      const omitted = pinTopLineUrl([first], URL, fits - 1)[0]!
+      expect(omitted).toBe(first)
+      for (let n = 'http://'.length + 1; n < URL.length; n++)
+        expect(stripAnsi(omitted)).not.toContain(URL.slice(0, n))
+    }
+  })
+
+  test('a one-line startup-failure frame stays one line', () => {
+    const reason = `dispatcher stopped unexpectedly: ${'connection refused '.repeat(3)}`.trim()
+    const wide = pinTopLineUrl([reason], URL, 160)
+    expect(wide.length).toBe(1)
+    expect(wide[0]).toStartWith(reason)
+    expectPinned(wide[0]!, 160)
+    const narrow = pinTopLineUrl([reason], URL, 50)
+    expect(narrow.length).toBe(1)
+    expect(narrow[0]).toStartWith('dispatcher')
+    expect(narrow[0]).toContain('~')
+    expectPinned(narrow[0]!, 50)
+  })
+
+  test('degenerate input is returned unchanged', () => {
+    expect(pinTopLineUrl([], URL, 80)).toEqual([])
+    expect(pinTopLineUrl([' Autobuild'], URL, 0)).toEqual([' Autobuild'])
+    expect(pinTopLineUrl([' Autobuild'], '', 80)).toEqual([' Autobuild'])
   })
 })
