@@ -540,9 +540,10 @@ export interface DispatchOpts {
    * command or POSTing to its URL (`processes/hook-webhook.ts`). */
   invokeHook?: HookInvoke
   /** `--web`: serve the read-only web UI from this process. It binds before
-   * the repository lease and adds no store reads: frames come from the
-   * refresh this dispatcher already runs. `start` is a test seam that
-   * replaces the real socket bind. */
+   * the repository lease, and frames come from the refresh this dispatcher
+   * already runs; only the kernel path adds one change-position read per
+   * frame while a browser is connected. `start` is a test seam that replaces
+   * the real socket bind. */
   web?: DispatchWebArgs & { start?: WebServerStarter }
   /** Private: closes this generation's web server. `abDispatch` sets it; the
    * loop awaits it before `dispatcher.terminal-released`, so a successor can
