@@ -849,7 +849,8 @@ readyState = "ready"
       delete: async () => {
         deletes += 1
       },
-      update: async (_params: { networkPolicy: NetworkPolicy }) => {},
+      update: async (_params: { networkPolicy?: NetworkPolicy }) => {},
+      extendTimeout: async () => {},
     }
     let freshInput: Record<string, unknown> | undefined
     const facade: VercelSandboxFacade = {
@@ -1004,6 +1005,7 @@ readyState = "ready"
         deletes += 1
       },
       update: async () => {},
+      extendTimeout: async () => {},
     }
     const facade: VercelSandboxFacade = {
       get: async () => null,
@@ -1058,6 +1060,7 @@ readyState = "ready"
         throw new Error('delete denied')
       },
       update: async () => {},
+      extendTimeout: async () => {},
     }
     const facade: VercelSandboxFacade = {
       get: async () => null,
@@ -1113,6 +1116,7 @@ readyState = "ready"
       stop: async () => {},
       delete: async () => {},
       update: async () => {},
+      extendTimeout: async () => {},
     }
     const stuck: VercelSnapshotInfo = {
       id: 'snap-stuck',
@@ -1282,6 +1286,7 @@ readyState = "ready"
         available = false
       },
       update: async () => {},
+      extendTimeout: async () => {},
     }
     const facade: VercelSandboxFacade = {
       get: async () => (available ? sandbox : null),
@@ -1371,6 +1376,7 @@ readyState = "ready"
         deletes += 1
       },
       update: async () => {},
+      extendTimeout: async () => {},
     }
     const facade: VercelSandboxFacade = {
       get: async () => null,
@@ -2752,7 +2758,8 @@ region = "overseas"
       writeFiles: async () => {},
       stop: async () => {},
       delete: async () => {},
-      update: async (params: { networkPolicy: NetworkPolicy }) => {
+      extendTimeout: async () => {},
+      update: async (params: { networkPolicy?: NetworkPolicy }) => {
         policies.push(params.networkPolicy)
       },
     }
