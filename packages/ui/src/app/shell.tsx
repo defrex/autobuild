@@ -97,7 +97,10 @@ function Main({
   const read = r.page === 'build' ? buildPageFetch(frame, r.slug) : undefined
   const timeline = useApi<WebBuildTimeline>(read?.url, read?.key)
   const row = timeline.data?.row
-  const now = useClock(ticking(frame ?? hint) || (row !== undefined && timelineLive(row)))
+  const now = useClock(
+    ticking(frame ?? hint) ||
+      (timeline.error === undefined && row !== undefined && timelineLive(row)),
+  )
   const ready = settled !== undefined
   useEffect(() => {
     if (!ready) return

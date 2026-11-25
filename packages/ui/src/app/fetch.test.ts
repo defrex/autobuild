@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { timelineLive } from './analytics-model'
-import { shouldRefetch } from './fetch'
+import { type ApiState, apiFailed, apiStarted, apiSucceeded, shouldRefetch } from './fetch'
 
 test('only a new URL or a moved position fetches; triggers in flight coalesce', () => {
   const at = (url: string, key?: string) => ({ url, key })
@@ -31,4 +31,15 @@ test('a timeline is live while any segment is open', () => {
   expect(timelineLive(row('open'))).toBe(true)
   expect(timelineLive(row('closed'))).toBe(false)
   expect(timelineLive(row('abandoned'))).toBe(false)
+})
+
+test('a failed refresh keeps the earlier answer but marks it failed until a success', () => {
+  const loaded: ApiState<number> = apiSucceeded(1, '/a')
+  const failed = apiFailed(apiStarted(loaded, '/a'), '/a', 'store down')
+  expect(failed).toMatchObject({ data: 1, dataUrl: '/a', error: 'store down', errorUrl: '/a' })
+  // A retry of the same request keeps the failure showing until it answers.
+  expect(apiStarted(failed, '/a')).toMatchObject({ error: 'store down', loading: true })
+  // Another request's failure no longer applies.
+  expect(apiStarted(failed, '/b')).toMatchObject({ error: undefined, errorUrl: undefined })
+  expect(apiSucceeded(2, '/a')).toMatchObject({ data: 2, error: undefined })
 })

@@ -33,8 +33,30 @@ export interface ApiState<T> {
   data: T | undefined
   /** The URL `data` answers. */
   dataUrl: string | undefined
+  /** The latest request's failure for `errorUrl`; it outranks `data`, which
+   * is then stale. A later success clears it. */
   error: string | undefined
+  /** The URL `error` failed for. */
+  errorUrl: string | undefined
   loading: boolean
+}
+
+/** A request starts: a failure for another URL no longer applies, while one
+ * for the same URL stands until this retry answers. */
+export function apiStarted<T>(state: ApiState<T>, url: string): ApiState<T> {
+  return state.errorUrl === url
+    ? { ...state, loading: true }
+    : { ...state, error: undefined, errorUrl: undefined, loading: true }
+}
+
+export function apiSucceeded<T>(data: T, url: string): ApiState<T> {
+  return { data, dataUrl: url, error: undefined, errorUrl: undefined, loading: false }
+}
+
+/** A request fails: the earlier answer is kept but marked failed, so a page
+ * never presents it as current. */
+export function apiFailed<T>(state: ApiState<T>, url: string, message: string): ApiState<T> {
+  return { ...state, error: message, errorUrl: url, loading: false }
 }
 
 /**
@@ -48,6 +70,7 @@ export function useApi<T>(url: string | undefined, refreshKey: string | undefine
     data: undefined,
     dataUrl: undefined,
     error: undefined,
+    errorUrl: undefined,
     loading: true,
   })
   const last = useRef<ApiRequest | undefined>(undefined)
@@ -60,7 +83,7 @@ export function useApi<T>(url: string | undefined, refreshKey: string | undefine
   const run = useRef((request: ApiRequest) => {
     const controller = new AbortController()
     inFlight.current = { request, controller }
-    setState((s) => ({ ...s, loading: true }))
+    setState((s) => apiStarted(s, request.url))
     const settle = (next: (s: ApiState<T>) => ApiState<T>) => {
       if (inFlight.current?.controller !== controller) return
       inFlight.current = undefined
@@ -82,11 +105,11 @@ export function useApi<T>(url: string | undefined, refreshKey: string | undefine
         return body as T
       })
       .then(
-        (data) => settle(() => ({ data, dataUrl: request.url, error: undefined, loading: false })),
+        (data) => settle(() => apiSucceeded(data, request.url)),
         (error: unknown) => {
           if (controller.signal.aborted) return
           const message = error instanceof Error ? error.message : String(error)
-          settle((s) => ({ ...s, error: message, loading: false }))
+          settle((s) => apiFailed(s, request.url, message))
         },
       )
   })

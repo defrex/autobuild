@@ -172,7 +172,8 @@ function timelineBlocks(
 ): FlowBlock[] {
   const heading: FlowBlock = { key: 'h:timeline', node: <SectionHeading title="Timeline" /> }
   const row = timeline?.data?.row
-  if (row === undefined && timeline?.error !== undefined)
+  // A failed refresh outranks the earlier answer, which is now stale.
+  if (timeline?.error !== undefined)
     return [heading, { key: 'timeline', node: <EmptySentence>{timeline.error}</EmptySentence> }]
   if (row === undefined) return [heading, { key: 'timeline', node: <GanttSkeleton rows={1} /> }]
   return [

@@ -258,6 +258,16 @@ describe('analytics', () => {
     const failed = render(view({ data: undefined, current: false, error: 'Store read failed: x' }))
     expect(failed).toContain('Store read failed: x')
   })
+
+  test('a refresh that fails after an answer shows its message, not the stale charts', () => {
+    const stale = view({ error: 'incompatible reducer stepDurations' })
+    const markup = render(stale)
+    expect(markup.split('incompatible reducer stepDurations').length - 1).toBe(2)
+    expect(markup).not.toContain('Build 1')
+    expect(markup).not.toContain('data-ansi="step-durations"')
+    expect(markup).toContain('<a data-ansi="word-action" aria-disabled="true">Older</a>')
+    expect(keys(stale)).toContain('gantt:error')
+  })
 })
 
 describe('build page timeline', () => {
@@ -285,6 +295,12 @@ describe('build page timeline', () => {
     expect(loaded).toContain('data-open=""')
     expect(loaded).toContain('data-expanded')
     expect(timelineLive(row)).toBe(true)
+    // A later refresh failing replaces the chart with its message.
+    const refreshFailed = html(
+      <div>{blocks({ data: { row }, error: 'Store read failed: down' }).at(-1)!.node}</div>,
+    )
+    expect(refreshFailed).toContain('Store read failed: down')
+    expect(refreshFailed).not.toContain('data-open=""')
     expect(buildPageFetch({ position: '7' }, 'a/b')).toEqual({
       url: '/api/builds/a%2Fb/timeline',
       key: '7',

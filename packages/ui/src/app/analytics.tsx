@@ -53,6 +53,8 @@ export interface AnalyticsView {
   data: WebAnalytics | undefined
   /** Whether `data` answers the current filters and page. */
   current: boolean
+  /** The current request's failure. It outranks `data`: a failed refresh
+   * shows its message, never the stale charts as if current. */
   error: string | undefined
   filters: AnalyticsFilters
   cursor: PageCursor
@@ -184,7 +186,7 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
             {pagerAction('Newer', cursor.stack.length > 0 ? () => on.page(newerPage) : undefined)}
             {pagerAction(
               'Older',
-              view.current && data?.gantt.next != null
+              view.current && view.error === undefined && data?.gantt.next != null
                 ? () => on.page((c) => olderPage(c, data.gantt.next!))
                 : undefined,
             )}
@@ -194,7 +196,7 @@ export function analyticsBlocks(view: AnalyticsView): FlowBlock[] {
     },
   ]
 
-  const failed = view.error !== undefined && !view.current
+  const failed = view.error !== undefined
   const label = `Builds, page ${pageNumber}`
   if (data === undefined && !failed)
     blocks.push({
@@ -275,14 +277,16 @@ export function AnalyticsPage({ position }: { position: string | undefined }) {
   }, [filters])
   const url = analyticsUrl(filters, cursor.page)
   const state = useApi<WebAnalytics>(url, position)
-  const live = state.data?.gantt.rows.some(timelineLive) ?? false
+  const error = state.errorUrl === url ? state.error : undefined
+  // A failed refresh shows no chart, so nothing grows on a stale answer.
+  const live = error === undefined && (state.data?.gantt.rows.some(timelineLive) ?? false)
   const now = useClock(live)
   const blocks = useMemo(
     () =>
       analyticsBlocks({
         data: state.data,
         current: state.dataUrl === url,
-        error: state.error,
+        error,
         filters,
         cursor,
         axis,
@@ -300,7 +304,7 @@ export function AnalyticsPage({ position }: { position: string | undefined }) {
           expanded: setExpanded,
         },
       }),
-    [state, url, filters, cursor, axis, mode, now, expanded],
+    [state, error, url, filters, cursor, axis, mode, now, expanded],
   )
   return <StableFlow blocks={blocks} seq={0} />
 }
