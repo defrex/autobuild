@@ -3819,15 +3819,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         if (status.state === 'failed') attempt = status
       }
       // Stopping releases capacity and keeps the snapshot — and with it any
-      // failure evidence, which a later open recovers.
-      if (running) {
+      // failure evidence, which a later open recovers. A pending session
+      // (another process resuming it) is stopped too, without a guest
+      // command: it would otherwise start and hold capacity until its timer.
+      if (running || session === 'pending') {
         try {
           await sandbox.stop({ signal: this.operationSignal() })
         } catch (error) {
           if (!isInterruptedLongPoll(error)) {
             const after = await this.facade.get(name, this.operationSignal())
             if (after === null) return withAttempt({ outcome: 'absent' as const })
-            if (after.sessionStatus === 'running') throw error
+            if (after.sessionStatus === 'running' || after.sessionStatus === 'pending') {
+              throw error
+            }
           }
         }
       }

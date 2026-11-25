@@ -3595,6 +3595,15 @@ describe('operator sandbox capability', () => {
     })
     expect(elsewhere.sandbox.deletes).toBe(1)
 
+    // Another process's resume still pending: stopped, with no guest command.
+    const pending = harness()
+    pending.adoptExisting()
+    pending.sandbox.sessionStatus = 'pending'
+    pending.sandbox.guardStopped = true
+    expect(await close(pending.restart())).toEqual({ outcome: 'closed' })
+    expect([pending.sandbox.stops, pending.sandbox.deletes]).toEqual([1, 0])
+    expect(pending.sandbox.commands).toEqual([])
+
     // A failed environment is stopped, never reaped: its record survives.
     const failed = harness()
     failed.adoptExisting()
