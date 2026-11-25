@@ -1461,8 +1461,11 @@ The base-selection invariants make this safe with Git:
   Sampling never provisions a workspace, renders Git reads, or gates restacking.
 - **Observation never mutates a running workspace.** `target.moved` records an
   accepted remote head, even during a session. Non-descendant observations without
-  indexed kernel publication lineage record `target.rewritten` and attention
-  without changing the accepted target. Transactions freeze their target;
+  indexed kernel publication lineage record `target.rewritten` without changing
+  the accepted target. A node waits with attention once per episode; a leaf's
+  next runner reprovisions it from the target when it has no work of its own,
+  else raises one `policy/target-rewritten` escalation that `--accept-target`
+  or abort resolves (see "Forge failure recovery"). Transactions freeze their target;
   later observations coalesce into one follow-on transaction for the newest
   snapshot at the next eligible point. Session and execution settlement fence
   rewrites, and trusted publication waits for remote guest teardown.
@@ -2818,7 +2821,7 @@ the matching phase and `round`; a missing round cannot broaden either cause.
 `review-round-limit` retains the same matching-round effect.
 `verify-failure-limit` is the explicit phase-level case and re-arms every
 phase-runner failure round for its verify target. `reconcile-no-progress`,
-`setup-failure-limit`, `wait-unresolvable` and `measurement-failed` have no phase-runner failure-budget effect (setup's own
+`setup-failure-limit`, `wait-unresolvable`, `measurement-failed` and `target-rewritten` have no phase-runner failure-budget effect (setup's own
 answer/retry accounting remains separate). Agent and stall raises, and
 cause-less historical policy raises, retain the legacy shape rule: a matching
 round resets that round and an absent round resets all rounds for the target.
@@ -5035,7 +5038,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}`, kernel or dispatcher decisive `history.retained {operation: restack \| reconcile, id, base, store, target, unretained}` (leaf restacks and reconciles, §15.7) |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, kernel `target.rewrite-reprovision-prepared {branch, previousSha, base, from, sha}` and `target.rewrite-recovered {branch, previousSha, sha, base, recovery: reprovisioned \| accepted, escalation?, pendingLocal?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}`, kernel `restack.regenerated {id, files, commands, outcome, head?, reason?}`, kernel or dispatcher decisive `history.retained {operation: restack \| reconcile, id, base, store, target, unretained}` (leaf restacks and reconciles, §15.7) |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Propose (§5, §13.1.1) | Kernel `propose.started {round, request}`; agent `propose.completed {round, request, proposals, artifact}` (the deposited proposal ids and the `attempts` artifact) |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, advisory dispatcher `pr.checks-failed {pr, head, buildHead, checks, total, digest}` and `pr.checks-cleared {pr, head, cause}` (forge CI on finished leaves, §15.7), `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
@@ -5593,9 +5596,12 @@ round-matched rule. A bare retry reruns the verifier with no feedback.
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 `escalation.raised {source: "stall", refs: [chain]}`; status → `blocked`.
 `escalation.answered` uses the resolution vocabulary `guidance`,
-`dismiss-finding`, `revise-spec`, `abort`, or `retry`. Operators produce
-`dismiss-finding` and `revise-spec` through `ab answer`; a `revise-spec` answer
-names the exact replacement artifact it authorizes. `guidance` feeds the answer
+`dismiss-finding`, `revise-spec`, `abort`, `retry`, or `accept-target`. Operators produce
+`dismiss-finding`, `revise-spec` and `accept-target` through `ab answer`; a `revise-spec` answer
+names the exact replacement artifact it authorizes. `accept-target` answers only
+a leaf's `policy/target-rewritten` escalation (§7.4): it waives the rejected base
+and restacks the build's own commits onto the current target; other answer forms
+skip that escalation. `guidance` feeds the answer
 into the next producer round as authoritative feedback; `dismiss-finding`
 marks the chain human-resolved and the next reviewer round is told so. Engine-routed
 guidance is latest-only per destination (`plan`, `code`, or one exact agent
@@ -7147,10 +7153,26 @@ heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
 defers new replay. A non-descendant without kernel lineage records
 `target.rewritten` with branch,
-previous SHA and observed SHA, retains the accepted target, and raises watch/wait
-attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
-clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
-Upstream force-pushes are never adopted automatically. Accepted node reparenting
+previous SHA and observed SHA, and retains the accepted target. Repeated rewrite
+pairs are deduplicated. Returning to a safe target clears the wait
+(`target.rewrite-cleared` when the accepted tip is unchanged). Upstream
+force-pushes are never adopted on top of existing work automatically:
+
+- A leaf with no work of its own (no published head, no PR, no commits beyond
+  its base in use) is reprovisioned from the current target by its next runner,
+  without operator action: `target.rewrite-reprovision-prepared`, a branch
+  reset, then `target.rewrite-recovered` (`reprovisioned`). A runner that dies
+  mid-reset completes it forward.
+- A leaf with work raises one `policy/target-rewritten` escalation per episode
+  (a run of rewrites of the same rejected base), naming that base, the new
+  target head and its own commits. `ab answer <slug> --accept-target` waives
+  the rejected base (`target.rewrite-recovered`, `accepted`) and restacks its
+  own commits onto the target at the next replay boundary; `ab abort` is the
+  other way out.
+- A node waits, and raises watch/wait attention once per episode.
+
+`ab build status` names a leaf's recovery state, and the base when the build's
+first provision adopted it from a pre-existing branch. Accepted node reparenting
 starts a new branch scope; frozen transactions recover their retained inputs.
 
 Kernel restacks of a node are admitted through durable guarded publication

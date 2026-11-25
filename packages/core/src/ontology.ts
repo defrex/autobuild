@@ -118,6 +118,7 @@ export const policyEscalationCauseSchema = z.enum([
   'non-retryable-phase-failure',
   'wait-unresolvable',
   'measurement-failed',
+  'target-rewritten',
 ])
 export type PolicyEscalationCause = z.infer<typeof policyEscalationCauseSchema>
 
@@ -142,6 +143,10 @@ export const escalationResolutionSchema = z.enum([
   'abort',
   /** Bare re-attempt with no phase guidance: human UI, or policy-only startup. */
   'retry',
+  /** Accept a rewritten target for a leaf's `policy/target-rewritten`
+   * escalation: waive the rejected base and restack the build's own commits
+   * onto the current target. Re-arms no budget and is never guidance. */
+  'accept-target',
 ])
 export type EscalationResolution = z.infer<typeof escalationResolutionSchema>
 

@@ -43,7 +43,9 @@ export function mergeDecisionFromFacts(
 export function buildNeedsAttention(events: AbEvent[], state: BuildState): boolean {
   return (
     state.janitor?.attention === true ||
-    !!state.targetRewrite ||
+    // A leaf's rewritten target is the kernel's to resolve: it reprovisions
+    // itself or raises an escalation, which `actionableEscalations` covers.
+    (state.kind === 'node' && !!state.targetRewrite) ||
     (state.compatibility?.decisiveFacts ?? 0) > 0 ||
     actionableEscalations(state).length > 0 ||
     currentCiFailure(state) !== undefined ||
