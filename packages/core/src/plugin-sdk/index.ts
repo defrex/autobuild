@@ -184,9 +184,11 @@ export {
   ArchiveConflictError,
   ForgeFailure,
   ForgeRejection,
+  ForgeTreeUnlistable,
   isArchiveConflict,
   isForgeFailure,
   isForgeRejection,
+  isForgeTreeUnlistable,
 } from '../ports/forge-failure'
 export type {
   ForgeFailureDetails,

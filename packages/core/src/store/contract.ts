@@ -1460,6 +1460,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             ticketDiagnostics,
             creationDiagnostics,
             dependencyDiagnostics,
+            agentContextDiagnostics,
             ...counters
           } = emptyTickReport()
           for (let i = 0; i < 20; i++) {

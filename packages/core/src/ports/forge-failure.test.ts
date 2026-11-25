@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { ForgeFailure, ForgeRejection, isForgeFailure, isForgeRejection } from './forge-failure'
+import {
+  ForgeFailure,
+  ForgeRejection,
+  ForgeTreeUnlistable,
+  isForgeFailure,
+  isForgeRejection,
+  isForgeTreeUnlistable,
+} from './forge-failure'
 import { NoCommitsBetweenBranchesError } from './types'
 
 describe('ForgeRejection', () => {
@@ -41,4 +48,12 @@ describe('ForgeRejection', () => {
       forgeMessage: 'No commits between main and ab/x',
     })
   })
+})
+
+test('ForgeTreeUnlistable is recognized by brand, including a copy from another SDK instance', () => {
+  expect(isForgeTreeUnlistable(new ForgeTreeUnlistable('src'))).toBe(true)
+  expect(
+    isForgeTreeUnlistable({ treeUnlistable: 'autobuild.tree-unlistable.v1', directory: '' }),
+  ).toBe(true)
+  expect(isForgeTreeUnlistable(new Error('forge cannot list directory src completely'))).toBe(false)
 })

@@ -146,6 +146,7 @@ test('metadata-only completions refresh held and stopped runs; heartbeat and ope
     ticketDiagnostics,
     creationDiagnostics,
     dependencyDiagnostics,
+    agentContextDiagnostics,
     ...counters
   } = emptyTickReport()
   const clock = manualClock()

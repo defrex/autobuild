@@ -109,6 +109,13 @@ An adapter must provide:
 
 Reconciliation needs the optional `Forge.rewrite` group: immutable exact-SHA archives, branch snapshots and head-guarded replacement. Archives are best effort: throw a plain error for a refusal (the kernel keeps a BuildStore copy instead) and `ArchiveConflictError` when the immutable ref names a different SHA. Report lease mismatches separately and preserve unknown work. Without it, reconciliation fails with an actionable refusal, never an ordinary push.
 
+[Repository agent context](dispatcher.md#repository-agent-context) capture needs `remoteBranchSha` and two optional read capabilities:
+
+- `readTree(commit)` returns the commit's complete recursive tree, directories included, each entry with its object id and each blob with its exact byte size. Never return a partial listing: throw `ForgeTreeUnlistable` (SDK, with `isForgeTreeUnlistable`) naming the directory you cannot list completely.
+- `readBlob(oid)` returns the blob's exact bytes, verified against `oid`.
+
+Without them the dispatcher still dispatches; it reports `unavailable` once and captures no agent context.
+
 Classify failures with `ForgeFailure` (API 1.8):
 
 ```ts
