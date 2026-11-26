@@ -17,7 +17,13 @@ import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext, decideNextFromFacts } from '../kernel/engine'
-import { epilogueLeaf, settlementKey } from '../kernel/dispatch-capacity'
+import {
+  dispatchCapacity,
+  epilogueLeaf,
+  settlementKey,
+  type CapacityBuild,
+} from '../kernel/dispatch-capacity'
+import { expectSlotAgreement } from '../testing/slot-agreement'
 import { listOperatorBuilds } from '../operator/query'
 import { requestTicketStart } from '../operator/ticket-start'
 import type { TicketStartPriority } from '../events/repository'
@@ -252,6 +258,29 @@ function harness(
 }
 
 type Harness = ReturnType<typeof harness>
+
+/** The slot state the status surfaces report for one build, after proving it
+ * agrees with the dispatcher's own capacity projection (#1341): `held` is
+ * counted in occupancy and `requested` is a waiter. */
+async function reportedSlot(h: Pick<Harness, 'store' | 'clock'>, slug: string) {
+  // A fresh dispatcher over the same store: a running one caches its build
+  // listing for the tick.
+  const { dispatcher } = harness({ store: h.store, clock: h.clock })
+  const builds = await (
+    Reflect.get(dispatcher, 'capacityBuilds') as () => Promise<CapacityBuild[]>
+  ).call(dispatcher)
+  const capacity = dispatchCapacity(builds, 1, h.clock())
+  expectSlotAgreement(builds, h.clock(), capacity)
+  const listed = await listOperatorBuilds({
+    store: h.store,
+    repo: REPO,
+    scope: 'all',
+    now: h.clock(),
+  })
+  const reported = listed.find((summary) => summary.slug === slug)?.slot
+  expect({ slug, reported }).toEqual({ slug, reported: capacity.slots?.[slug] })
+  return reported
+}
 
 /** Seed a build's log directly — the janitor/sweep read events, not history
  * of how they got there (state is a reduction, §3.4). Mirrors dispatch (§12):
@@ -6063,11 +6092,13 @@ describe('Dispatcher startup resume', () => {
 
     // The answered build holds no slot: it is admitted as a resume request
     // once this tick has evaluated urgent claims, then launched.
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'requested', request: 'resume' })
     expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
       ...emptyTickReport(),
       swept: 1,
     })
     expect(h.launches).toEqual([slug])
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'held' })
     const after = (await h.store.getEvents(slug)).filter(
       (e): boolean => e.type !== 'target.distance',
     )
@@ -17464,6 +17495,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     await h.dispatcher.tick()
     expect(await settlements(h, running)).toBe(1)
     expect(await settlements(h, waiting)).toBe(1)
+    expect(await reportedSlot(h, running)).toEqual({ state: 'none' })
 
     // A admitted for its reconcile, now re-verifying on a provider-confirmed
     // execution whose lease expires.
@@ -17506,6 +17538,8 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(h.launches).toEqual([])
     expect(effects).toEqual([])
     expect(await slotWait(h, waiting)).toBe('reconcile')
+    expect(await reportedSlot(h, waiting)).toEqual({ state: 'requested', request: 'reconcile' })
+    expect(await reportedSlot(h, running)).toEqual({ state: 'held' })
     expect(await failures(h, waiting)).toEqual([])
 
     // The runner re-verifies; provider-proved completion ends the execution and frees the slot.
@@ -17939,15 +17973,54 @@ describe('capacity counts builds running work, not builds parked for a merge dec
         expect(await admissions(h, slug)).toBe(0)
         expect(await slotWait(h, slug)).toBe('resume')
       }
+      expect(await reportedSlot(h, 'e-answered')).toEqual({
+        state: 'requested',
+        request: 'resume',
+        priority: 'urgent',
+      })
+      expect(await reportedSlot(h, 'a-busy')).toEqual({ state: 'held' })
       await finish(h, busy)
       h.clock.advance(60_000)
       await h.dispatcher.tick()
       expect(h.launches).toEqual(['e-answered'])
       expect(await admissions(h, 'e-answered')).toBe(1)
+      expect(await reportedSlot(h, 'e-answered')).toEqual({ state: 'held' })
       for (const slug of ['c-answered', 'd-answered']) {
         expect(await admissions(h, slug)).toBe(0)
         expect(await slotWait(h, slug)).toBe('resume')
+        expect(await reportedSlot(h, slug)).toEqual({ state: 'requested', request: 'resume' })
       }
+    })
+
+    test('the reported slot state follows a leaf from claim to settlement, as admission counts it (#1341)', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const leaf = 'a-leaf'
+      await ticketed(h, leaf)
+      // Claimed: admitted by its build.created.
+      expect(await reportedSlot(h, leaf)).toEqual({ state: 'held' })
+      await h.store.append(leaf, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'esc-leaf', phase: 'implement', source: 'stall', question: 'why?' },
+      })
+      expect(await reportedSlot(h, leaf)).toEqual({ state: 'none' })
+      await h.store.append(leaf, {
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: { id: 'esc-leaf', answer: 'retry', resolution: 'retry' },
+      })
+      expect(await reportedSlot(h, leaf)).toEqual({ state: 'requested', request: 'resume' })
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(await admissions(h, leaf)).toBe(1)
+      expect(await reportedSlot(h, leaf)).toEqual({ state: 'held' })
+      // Finished but unsettled it keeps its slot; settled, it waits on the
+      // merge decision and holds none.
+      const parked = await parkedBuild(h, 'b-parked', 2)
+      expect(await reportedSlot(h, parked)).toEqual({ state: 'held' })
+      await h.dispatcher.tick()
+      expect(await settlements(h, parked)).toBe(1)
+      expect(await reportedSlot(h, parked)).toEqual({ state: 'none' })
     })
 
     test('a live runner from before the answer never re-admits it (f_43f94fec)', async () => {

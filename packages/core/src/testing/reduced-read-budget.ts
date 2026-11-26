@@ -8208,13 +8208,17 @@ function memoryListingEntryCounter(store: import('../store/memory').MemoryBuildS
  * held-config capacity — receive the same record and digest entries at 1 and
  * 30 settled builds and at 100 and 100,000 events, each through a fresh
  * store handle (the stand-in for a fresh process), and read zero event rows
- * while nothing changes (#1230). Returns the per-surface entry vectors. */
-export async function openBuildListingReadBudget() {
+ * while nothing changes (#1230). Every answer reports slot state (#1341).
+ * With `commands`, `ab builds`, `ab build status` and `ab repository status`
+ * JSON also report it with zero event rows; they read checkout files, so only
+ * an integration test passes it. Returns the per-surface entry vectors. */
+export async function openBuildListingReadBudget(opts: { commands?: boolean } = {}) {
   const { MemoryBuildStore } = await import('../store/memory')
   const { listOperatorLandings } = await import('../operator/landings')
   const { getOperatorAttention } = await import('../operator/attention')
-  const { readRepositoryCapacity } = await import('../cli/repository-status')
-  const repo = 'open-listing-budget'
+  const { readRepositoryCapacity, abRepositoryStatus } = await import('../cli/repository-status')
+  const { abBuilds, abBuildStatus } = await import('../cli/status')
+  const repo = '/open-listing-budget'
   const now = new Date(1000)
   const created = (slug: string) => ({
     actor: DISPATCHER,
@@ -8306,9 +8310,59 @@ export async function openBuildListingReadBudget() {
     dashboard: (store: BuildStore) => getOperatorDashboard({ store, repo, clock: () => now }),
     status: (store: BuildStore) => getRepositoryStatus(store, repo, now),
     attention: (store: BuildStore) => getOperatorAttention({ store, repo, now }),
+    get: (store: BuildStore) => getOperatorBuild({ store, repo, slug: 'open-consent', now }),
     history: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'all', now }),
   }
-  let baseline: Record<string, { records: number; digests: number }> | undefined
+  type Vector = { records: number; digests: number; calls: Record<string, number> }
+  // The CLI status commands over the same store: each prints its JSON once.
+  const exec = async (args: string[]) =>
+    args[1] === 'remote'
+      ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+      : { stdout: `${repo}/.git\n${repo}/.git\n${repo}\n`, stderr: '', exitCode: 0 }
+  const cli = async (
+    store: BuildStore,
+    command: (opts: {
+      targetRepo: string
+      env: Record<string, string>
+      exec: typeof exec
+      storeRef: string
+      openStore: () => BuildStore
+      now: () => Date
+      json: true
+      stdout: (line: string) => void
+    }) => Promise<void>,
+  ) => {
+    const lines: string[] = []
+    // A handle whose close leaves the shared memory store open.
+    const handle = new Proxy(store, {
+      get(target, property) {
+        if (property === 'close') return async () => {}
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    await command({
+      targetRepo: repo,
+      env: {},
+      exec,
+      // A named store reads no checkout configuration.
+      storeRef: '/budget',
+      openStore: () => handle,
+      now: () => now,
+      json: true,
+      stdout: (line) => lines.push(line),
+    })
+    return JSON.parse(lines.join('\n'))
+  }
+  const commands = opts.commands
+    ? {
+        builds: (store: BuildStore) => cli(store, abBuilds),
+        buildStatus: (store: BuildStore) =>
+          cli(store, (command) => abBuildStatus({ ...command, slug: 'open-consent' })),
+        repositoryStatus: (store: BuildStore) => cli(store, abRepositoryStatus),
+      }
+    : {}
+  let baseline: Record<string, Vector> | undefined
   const history = new Map<number, number>()
   for (const settled of [1, 30])
     for (const padding of [100, 100_000]) {
@@ -8322,8 +8376,28 @@ export async function openBuildListingReadBudget() {
       const all = { ...surfaces, capacity, attentionAtHead }
       // Warm-up: every once-per-key reduction happens here. The seeded
       // surfaces answer real work, so the counted reads are meaningful.
-      for (const run of Object.values(all)) await run(store)
+      for (const run of [...Object.values(all), ...Object.values(commands)]) await run(store)
       expect((await surfaces.landings(store)).map((entry) => entry.slug)).toEqual(['open-consent'])
+      // Every answer reports slot state (#1341) from the facts it already read.
+      const held = { state: 'held' } as const
+      const none = { state: 'none' } as const
+      // The consent leaf has not recorded `pipeline.settled`: it still holds.
+      const slots = { 'open-queued': held, 'open-consent': held, 'open-aborted': none }
+      for (const scope of ['active', 'queued'] as const)
+        for (const row of await surfaces[scope](store))
+          expect({ slug: row.slug, slot: row.slot }).toEqual({
+            slug: row.slug,
+            slot: slots[row.slug as keyof typeof slots],
+          })
+      const dashboardRows = (await surfaces.dashboard(store)).model.builds
+      expect(Object.fromEntries(dashboardRows.map((row) => [row.slug, row.slot]))).toEqual(slots)
+      // Repository status projects capacity as the dispatcher does, without
+      // the aborted build in cleanup.
+      const { 'open-aborted': _aborted, ...admitted } = slots
+      expect((await surfaces.status(store)).capacity?.slots).toEqual(admitted)
+      expect((await capacity(store))?.slots).toEqual(admitted)
+      const got = await surfaces.get(store)
+      expect([got.detail.slot, got.dashboardRow?.slot]).toEqual([held, held])
       expect(
         (await surfaces.dashboard(store)).model.builds.map((build) => build.slug).sort(),
       ).toEqual(['open-aborted', 'open-consent', 'open-queued'])
@@ -8334,7 +8408,8 @@ export async function openBuildListingReadBudget() {
       expect(JSON.stringify(digest)).not.toMatch(/open-aborted|settled-/)
       const rows = memoryRepositoryReadCounter(store, repo)
       const entries = memoryListingEntryCounter(store)
-      const vectors: Record<string, { records: number; digests: number }> = {}
+      const calls = memoryStoreRequestCounter(store)
+      const vectors: Record<string, Vector> = {}
       try {
         for (const [name, run] of Object.entries(all)) {
           // A fresh handle shares no store-identity-keyed cache.
@@ -8346,6 +8421,7 @@ export async function openBuildListingReadBudget() {
           })
           rows.reset()
           entries.reset()
+          calls.reset()
           await run(fresh)
           expect({ name, rows: rows.rows, buildRows: rows.buildRows }).toEqual({
             name,
@@ -8353,9 +8429,34 @@ export async function openBuildListingReadBudget() {
             buildRows: 0,
           })
           if (name === 'history') history.set(settled, entries.vector.records)
-          else vectors[name] = entries.vector
+          else vectors[name] = { ...entries.vector, calls: calls.vector() }
+        }
+        // The CLI listing iterates every record (pre-existing), so it stays
+        // out of the flat vectors; it still reads no event row.
+        for (const [name, run] of Object.entries(commands)) {
+          rows.reset()
+          const output = await run(store)
+          expect({ name, rows: rows.rows, buildRows: rows.buildRows }).toEqual({
+            name,
+            rows: 0,
+            buildRows: 0,
+          })
+          const reported =
+            name === 'builds'
+              ? Object.fromEntries(
+                  (output as { slug: string; slot?: unknown }[]).map((row) => [row.slug, row.slot]),
+                )
+              : name === 'buildStatus'
+                ? { 'open-consent': output.slot }
+                : output.capacity.slots
+          expect({ name, reported }).toEqual({
+            name,
+            // `ab builds` lists the active scope: the queued build is under --queued.
+            reported: name === 'repositoryStatus' ? admitted : { 'open-consent': held },
+          })
         }
       } finally {
+        calls.restore()
         entries.restore()
       }
       if (baseline) expect(vectors).toEqual(baseline)

@@ -33,15 +33,31 @@ test('human repository status reports slot holders against configured capacity',
     effective: 2,
     borrowingNodes: [],
     waitingNodes: [{ slug: 'release-node', request: 'verification' }],
+    waitingBuilds: [{ slug: 'fix', request: 'resume', priority: 'urgent' }],
+    slots: {
+      'release-node': { state: 'requested', request: 'verification' },
+      fix: { state: 'requested', request: 'resume', priority: 'urgent' },
+      b: { state: 'held' },
+      a: { state: 'held' },
+      parked: { state: 'none' },
+    },
   }
-  const line = renderRepositoryStatus(status).find((entry) => entry.startsWith('capacity:'))
-  expect(line).toBe(
-    'capacity: 2/2; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification)',
-  )
+  const lines = renderRepositoryStatus(status)
+  const at = lines.findIndex((entry) => entry.startsWith('capacity:'))
+  expect(lines.slice(at, at + 2)).toEqual([
+    'capacity: 2/2; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification); 1 parked build waiting for a slot ahead of normal ticket claims: fix (resume, urgent)',
+    // Every build's slot state; occupancy counts exactly the held ones.
+    'slots: held a, b; requested fix (resume, urgent), release-node (verification); none parked',
+  ])
   expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
-  // An older server's projection renders its occupancy as-is, never borrowing.
+  status.capacity = { ...status.capacity, slots: {} }
+  expect(renderRepositoryStatus(status)).toContain('slots: none')
+  // An older server's projection renders its occupancy as-is, never borrowing,
+  // and without slot states reports none of them: unknown is never `none`.
   status.capacity = { configured: 5, occupied: 6, effective: 6, borrowingNodes: ['website-node'] }
-  expect(renderRepositoryStatus(status)).toContain('capacity: 6/5')
+  const older = renderRepositoryStatus(status)
+  expect(older).toContain('capacity: 6/5')
+  expect(older.some((line) => line.startsWith('slots:'))).toBe(false)
 })
 
 test('the event projection and the facts projection agree on forge rate limits', () => {

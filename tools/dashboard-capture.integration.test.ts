@@ -234,13 +234,17 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     } else if (frame.id === 'capacity-wide') {
       // Paused and blocked descendants hold no slot; the answered leaf waits
       // as a resume request ahead of normal ticket claims.
-      expect(frame.model.capacity).toEqual({
+      const { slots, ...capacity } = frame.model.capacity!
+      expect(capacity).toEqual({
         configured: 4,
         occupied: 4,
         effective: 4,
         borrowingNodes: [],
         waitingBuilds: [{ slug: 'answered-leaf', request: 'resume' }],
       })
+      // Slot state agrees with occupancy and the waiter list (#1341).
+      expect(slots?.['answered-leaf']).toEqual({ state: 'requested', request: 'resume' })
+      expect(Object.values(slots ?? {}).filter((slot) => slot.state === 'held')).toHaveLength(4)
       expect(frame.text).not.toContain('descendant-held slots')
     } else if (frame.id === 'backpressure-wide') {
       expect(frame.model.capacity?.backpressure).toEqual({
