@@ -541,12 +541,15 @@ for (const waiting of ['blocked', 'paused'] as const)
           resolution: 'guidance',
         },
       })
-      h.tickets.add(readyTicket('COMPETITOR', { title: 'New ticket must wait' }))
+      h.tickets.add(readyTicket('COMPETITOR', { title: 'Claimed within the free slots' }))
       await h.dispatcher.tick()
       await h.dispatcher.drainProvisioning()
+      // The answered conflict holds no slot until admitted (SPEC §12 "What
+      // holds a slot"): it requests reconcile and is admitted through the
+      // tiers with one durable fact, ahead of the normal claim.
       expect(
-        (await h.store.listBuilds()).some((record) => record.ticket?.id === 'COMPETITOR'),
-      ).toBe(false)
+        ofType(await h.events(owner.slug), 'slot.admitted').map((event) => event.payload.request),
+      ).toEqual(['reconcile'])
       const nodeRunner = h.launched.find((entry) => entry.slug === owner.slug)!
       expect(nodeRunner).toBeDefined()
       {

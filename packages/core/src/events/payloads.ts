@@ -2087,13 +2087,16 @@ export const eventPayloadSchemas = {
    * (max of the verify cycle start and finalize completion seqs). Capacity
    * evidence only; no pipeline decision reads it. */
   'pipeline.settled': z.strictObject({ cycle: z.number().int().positive() }),
-  /** The dispatcher's slot gate admitted a work build that held no slot
+  /** The dispatcher's slot gate admitted a build that held no slot
    * (SPEC §12 "What holds a slot"), recorded before any lease claim,
    * provisioning or launch. `request` names the slot request admitted;
-   * omitted for an admission without one. Capacity evidence only; no
-   * pipeline decision reads it. */
+   * omitted for an admission without one. `need` names the node runner need
+   * admitted (a verification cycle, a measurement, a proposal or an active
+   * restack); a node holds its slot while that need remains. Omitted for work
+   * builds. Capacity evidence only; no pipeline decision reads it. */
   'slot.admitted': z.strictObject({
     request: z.enum(['verification', 'reconcile', 'resume', 'reopen', 'propose']).optional(),
+    need: z.string().min(1).optional(),
   }),
   'target.rewritten': z.strictObject({
     branch: z.string().min(1),
