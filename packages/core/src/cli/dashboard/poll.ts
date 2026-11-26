@@ -97,6 +97,7 @@ interface ReducedEntry {
   state: BuildState
   workspace: boolean
   provisioning: boolean
+  provisioningSeq?: number
   restackDue: boolean
   build: DashboardBuild | null
 }
@@ -110,16 +111,21 @@ export function isDashboardTerminal(state: BuildState): boolean {
   return state.status === 'done'
 }
 
+function provisioningSeqOf(seq: number | undefined): Pick<CapacityBuild, 'provisioningSeq'> {
+  return seq === undefined ? {} : { provisioningSeq: seq }
+}
+
 /** One build's capacity facts from its saved `buildReadFacts` value. */
 export function capacityBuildFromFacts(
   record: BuildRecord,
   value: CurrentBuildFacts,
-): Required<CapacityBuild> {
+): Required<Omit<CapacityBuild, 'provisioningSeq'>> & Pick<CapacityBuild, 'provisioningSeq'> {
   return {
     record,
     state: value.state,
     workspace: value.workspace !== null,
     provisioning: value.provisionMarker !== undefined,
+    ...(value.provisionMarker !== undefined ? { provisioningSeq: value.provisionMarker.seq } : {}),
     restackDue: landingRestackDue(value.state, value.log),
   }
 }
@@ -368,6 +374,9 @@ export class DashboardBuildPollCache {
             state: value.state,
             workspace: capacity.workspace,
             provisioning: capacity.provisioning,
+            ...(capacity.provisioningSeq !== undefined
+              ? { provisioningSeq: capacity.provisioningSeq }
+              : {}),
             restackDue: capacity.restackDue,
             build:
               current?.kind === 'reduced' &&
@@ -453,6 +462,9 @@ export class DashboardBuildPollCache {
         workspace: entry.kind === 'reduced' ? entry.workspace : entry.workspace.open !== null,
         provisioning:
           entry.kind === 'reduced' ? entry.provisioning : entry.provisionMarker.marker !== null,
+        ...provisioningSeqOf(
+          entry.kind === 'reduced' ? entry.provisioningSeq : entry.provisionMarker.marker?.seq,
+        ),
         restackDue:
           entry.kind === 'reduced'
             ? entry.restackDue

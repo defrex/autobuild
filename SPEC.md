@@ -3203,9 +3203,12 @@ first, "Slot admission order"). The requests are:
 A request records nothing, consumes no attempt and raises no attention. A paused
 or blocked build requests nothing until its pause or question ends. Admission is
 durable. A ticket claim or start request is admitted by its `build.created`.
-When the dispatcher admits a work build that holds no slot, it records an
-advisory `slot.admitted { request? }` fact before it claims a lease,
-provisions or launches anything. A runner allocation never admits by itself,
+When the dispatcher admits a build that holds no slot, it records an
+advisory `slot.admitted { request?, need? }` fact before it claims a lease,
+provisions or launches anything. A node's fact also names the runner need it
+admitted (`need`), and the node holds its slot while that need remains: a
+verification cycle, a measurement, a proposal, or an active restack it was
+admitted to reconcile. A runner allocation never admits by itself,
 so a runner or execution left over from before a release, such as a pause or
 abort acknowledgement or one still winding down, never takes a slot back. From
 then on the build holds its slot through relaunches until its next release.
@@ -3713,8 +3716,8 @@ idle node polling, so a slot freed in any tick goes to the node, not to a new
 normal claim. A node's admission counts every build that holds a slot, as every
 admission does. Blocked and paused descendants hold none (§12 "What holds a
 slot"), so they never stand between a node and the slot it needs to unblock
-them, and no node uses a descendant's slot. Provisioning reserves node
-occupancy before the runner starts. Status and both dashboards report
+them, and no node uses a descendant's slot. Admission is durable and precedes
+provisioning; a node's workspace never counts toward occupancy. Status and both dashboards report
 occupancy against configured capacity. Status, `ab builds` and both dashboards
 report each node waiting for a slot ahead of normal ticket claims, marking
 urgent waiters, the pending start requests of each tier and the urgent ticket
@@ -5183,7 +5186,7 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, decisive `workspace.commits-retained` (the same receipt when some head is a BuildStore copy, §15.7), `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, advisory `slot.admitted {request?}` (§12), `build.completed` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, decisive `workspace.commits-retained` (the same receipt when some head is a BuildStore copy, §15.7), `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, advisory `slot.admitted {request?, need?}` (§12), `build.completed` |
 | Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.priority-set {priority}` (advisory slot-admission priority, §12); `build.land-requested` → `landing.command-acknowledged`; decisive human `build.reopened {feedback?, spec?: {artifact, assets?}}` (§15.7); `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node or a settled leaf's reopen, §15.7; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
@@ -5991,9 +5994,13 @@ no pipeline decision reads it (§12). A leaf counts as finished when its latest
 settlement follows the spec restart, or when that restart published its reopen's
 spec (§15.5).
 
-`slot.admitted { request? }` is advisory capacity evidence: the dispatcher
-appends it when its slot gate admits a work build that holds no slot (§12); no
-pipeline decision reads it.
+`slot.admitted { request?, need? }` is advisory capacity evidence: the
+dispatcher appends it when its slot gate admits a build that holds no slot
+(§12), with `need` naming a node's admitted runner need; no pipeline decision
+reads it. A node whose runner was started before node admissions were recorded
+(its log has none naming a need) keeps counting as holding its slot; the
+dispatcher records that runner's admission once, so new intake never
+overcommits it.
 
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 

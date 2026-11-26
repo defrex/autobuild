@@ -5,7 +5,7 @@ import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
-import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
+import { nodeMeasurementDue, nodeMeasurementNeed, pendingMeasurementRequest } from './measurement'
 import {
   reopenRestart,
   reopenSpecPending,
@@ -31,13 +31,18 @@ import {
  * forge. Release follows state; acquisition never does, so a leaf whose
  * outside wait ended asks for a slot (`slotRequest`) and holds none until it
  * is admitted again. Runner liveness plays no part in a leaf's hold, and its
- * workspace never counts. Nodes hold a slot only while they need a runner;
- * their provisioning marker reserves one before a workspace exists. */
+ * workspace never counts. A node holds a slot only once the dispatcher
+ * admitted it for a runner need it still has (`nodeHoldsSlot`); a workspace,
+ * a lease or a provisioning marker never takes one. */
 export interface CapacityBuild {
   record: BuildRecord
   state: BuildState
   workspace: boolean
   provisioning?: boolean
+  /** seq of the open provisioning marker's `workspace.provision-started`;
+   * omitted when `provisioning` is, or unknown. Anchors a runner launched
+   * before node admissions were recorded (`legacyNodeRunner`). */
+  provisioningSeq?: number
   /** The engine's awaiting-landing restack is due (`landingRestackDue`); omitted means false. */
   restackDue?: boolean
 }
@@ -46,7 +51,8 @@ export interface CapacityBuild {
  * is a leaf whose escalation was answered, whose pause was resumed, whose
  * ticket wait ended or whose target was rewritten; `reopen` is a leaf an
  * operator reopened; `propose` is an optimization node's open, still
- * eligible proposal request. */
+ * eligible proposal request. A node requests `verification`, `reconcile` or
+ * `propose` for runner work it has not been admitted for. */
 export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'reopen' | 'propose'
 
 /** One node or leaf waiting for a slot. `priority` is omitted for normal
@@ -140,11 +146,6 @@ function runnerAllocated(build: CapacityBuild, now: Date): boolean {
   )
 }
 
-/** A workspace, a provisioning marker or a live lease holds runner capacity. */
-function allocated(build: CapacityBuild, now: Date): boolean {
-  return build.workspace || runnerAllocated(build, now)
-}
-
 /** The position the dispatcher records as settled: the later of the current
  * verify cycle's start and the latest finalize completion. A reconcile,
  * restack or config supersession opens a new cycle and so a new key. */
@@ -215,15 +216,20 @@ function epilogueWorkDue(build: LeafSlotFacts): boolean {
  * merge gates or the forge). */
 export function leafOutsideWait(build: LeafSlotFacts): boolean {
   const { state } = build
-  if (state.status === 'blocked') return true
-  if (
-    state.status === 'paused' &&
+  if (humanWait(state, state.status)) return true
+  if (reviseSpecPending(state)) return true
+  return epilogueLeaf(state) && !epilogueWorkDue(build)
+}
+
+/** Blocked on a question, or paused with no resume requested (or with an
+ * open escalation): the build waits on a human. */
+function humanWait(state: BuildState, status: BuildState['status']): boolean {
+  if (status === 'blocked') return true
+  return (
+    status === 'paused' &&
     (state.openEscalations.length > 0 ||
       !state.pendingCommands.some((command) => command.command === 'resume'))
   )
-    return true
-  if (reviseSpecPending(state)) return true
-  return epilogueLeaf(state) && !epilogueWorkDue(build)
 }
 
 /** A nonterminal leaf holds a slot when it does not wait on the outside world
@@ -281,15 +287,130 @@ export function settlementDue(state: BuildState): boolean {
   )
 }
 
+/** One runner need of a node and the slot request that admits it. The key
+ * names the work, not when a tick saw it, so it stays the same from admission
+ * until that work is done (SPEC §12 "What holds a slot"). */
+export interface NodeSlotNeed {
+  request: 'verification' | 'reconcile' | 'propose'
+  key: string
+}
+
+function reconcileNeed(state: BuildState): NodeSlotNeed | undefined {
+  const restack = state.nodeRestack
+  const id = restack?.active?.id ?? restack?.conflict?.id
+  return id === undefined ? undefined : { request: 'reconcile', key: `reconcile:${id}` }
+}
+
+function proposeNeed(state: BuildState): NodeSlotNeed | undefined {
+  const proposal = state.optimization?.proposal
+  return proposal === undefined ? undefined : { request: 'propose', key: `propose:${proposal.id}` }
+}
+
+function measurementNeed(state: BuildState): NodeSlotNeed | undefined {
+  const key = nodeMeasurementNeed(state)
+  return key === undefined ? undefined : { request: 'verification', key }
+}
+
+function integrationNeed(state: BuildState): NodeSlotNeed | undefined {
+  const cycle = state.integration?.cycle
+  return cycle === undefined
+    ? undefined
+    : { request: 'verification', key: `integration:${cycle.id}:${cycle.seq}` }
+}
+
+/** Every runner need a node has now, reconcile first: an active restack (held
+ * across the kernel's replay of the items between conflicts, so the slot it
+ * was admitted for is not dropped and retaken without admission), a starting
+ * or progress measurement, an undeposited proposal, and an integration cycle
+ * that needs a runner. Pure over reduced state, with no clock. Completing the
+ * work removes its key, which releases a slot admitted for it with no write. */
+export function nodeRunnerNeeds(state: BuildState): NodeSlotNeed[] {
+  if (state.kind !== 'node' || terminal(state)) return []
+  const needs: NodeSlotNeed[] = []
+  const reconcile = reconcileNeed(state)
+  if (reconcile) needs.push(reconcile)
+  const measurement = measurementNeed(state)
+  if (measurement) needs.push(measurement)
+  if (proposeRunDue(state.optimization)) needs.push(proposeNeed(state)!)
+  if (integrationNeedsRunner(state)) needs.push(integrationNeed(state)!)
+  return needs
+}
+
+/** A node waiting on the outside world, which holds no slot: blocked on a
+ * question (a restack conflict's escalation included) or paused with no
+ * resume requested. The janitor's own escalation is not an outside wait: the
+ * dispatcher keeps retrying the work it blocks, so Autobuild still owes the
+ * next move. */
+export function nodeOutsideWait(state: BuildState): boolean {
+  return humanWait(state, state.statusWithoutJanitorEscalation ?? state.status)
+}
+
+/** A nonterminal node holds a slot when it does not wait on the outside world,
+ * was admitted since its last release, and the runner need that admission
+ * named is still one it has (SPEC §12 "What holds a slot"). A workspace, a
+ * lease or a provisioning marker never enters; finished work releases the
+ * slot by dropping its need. A value from an older server, which carries no
+ * slot seqs, falls back to the version-window rule: a runner need with a
+ * provisioning marker or live lease. */
+export function nodeHoldsSlot(build: CapacityBuild, now: Date): boolean {
+  const { state } = build
+  if (state.kind !== 'node' || terminal(state) || nodeOutsideWait(state)) return false
+  const needs = nodeRunnerNeeds(state)
+  if (state.slotAdmittedSeq === undefined) return needs.length > 0 && runnerAllocated(build, now)
+  const need = state.slotAdmittedNeed
+  return slotAdmitted(state) && need !== undefined && needs.some((entry) => entry.key === need)
+}
+
+/** The version transition (SPEC §15 `slot.admitted`): a runner an older
+ * dispatcher launched before node admissions were recorded, which that
+ * dispatcher counted as holding a slot. The node was never admitted under
+ * this model, does not wait on the outside world, has a runner need (a
+ * reconcile only with its conflict open, as the older rule held) and runner
+ * evidence later than its last release: an open execution or provisioning
+ * marker, or, with neither and no release ever recorded, a live lease. With
+ * a pause or abort pending, only a runner anchored before the earliest one
+ * counts; one started after it only acknowledges. The dispatcher records its
+ * admission once (`legacyNodeRunnerNeed`), after which `slotAdmittedNeed` is
+ * set and this never matches the node again. */
+export function legacyNodeRunner(build: CapacityBuild, now: Date): boolean {
+  return legacyNodeRunnerNeed(build, now) !== undefined
+}
+
+/** The need a legacy node runner (`legacyNodeRunner`) is adopted for. */
+export function legacyNodeRunnerNeed(build: CapacityBuild, now: Date): NodeSlotNeed | undefined {
+  const { state } = build
+  if (
+    state.kind !== 'node' ||
+    terminal(state) ||
+    state.slotAdmittedSeq === undefined ||
+    state.slotAdmittedNeed !== undefined ||
+    nodeOutsideWait(state)
+  )
+    return undefined
+  const need = nodeRunnerNeeds(state).find(
+    (entry) => entry.request !== 'reconcile' || state.nodeRestack?.conflict !== undefined,
+  )
+  if (need === undefined) return undefined
+  const start = state.openExecution?.seq ?? (build.provisioning ? build.provisioningSeq : undefined)
+  const lease =
+    build.record.lease !== undefined && Date.parse(build.record.lease.expiresAt) > now.getTime()
+  const evidence =
+    start !== undefined
+      ? start > (state.slotReleasedSeq ?? 0)
+      : lease && state.slotReleasedSeq === undefined
+  if (!evidence) return undefined
+  const controls = state.pendingCommands
+    .filter((command) => command.command === 'pause' || command.command === 'abort')
+    .map((command) => command.seq)
+  if (controls.length && (start === undefined || start >= Math.min(...controls))) return undefined
+  return need
+}
+
 export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   const { state } = build
   if (terminal(state)) return false
   if (state.kind !== 'node') return leafHoldsSlot(build)
-  return (
-    !!state.nodeRestack?.conflict ||
-    ((integrationNeedsRunner(state) || nodeMeasurementDue(state)) && allocated(build, now)) ||
-    (proposeRunDue(state.optimization) && allocated(build, now))
-  )
+  return nodeHoldsSlot(build, now) || legacyNodeRunner(build, now)
 }
 
 /** The durable slot request of a leaf that holds none and no longer waits on
@@ -328,32 +449,56 @@ export function leafSlotRequest(build: LeafSlotFacts): SlotRequest | undefined {
   return undefined
 }
 
-/** A node's or leaf's durable request for a slot it does not hold yet.
- * Admission outranks ticket claims of the same priority, so this never
- * depends on when a tick saw it. */
-export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
+/** A node's durable request for a slot it does not hold: the runner need it
+ * would be admitted for, or undefined. A node that holds its slot, or a
+ * legacy runner counted as holding one, requests nothing. */
+export function nodeSlotNeed(build: CapacityBuild, now: Date): NodeSlotNeed | undefined {
   const { state } = build
-  if (state.kind !== 'node') return leafSlotRequest(build)
   if (
+    state.kind !== 'node' ||
     state.status === 'done' ||
     state.status === 'aborted' ||
     state.status === 'paused' ||
     state.status === 'blocked' ||
     // Mixed-version deferral withholds every decision, admission included.
     (state.compatibility?.decisiveFacts ?? 0) > 0 ||
-    allocated(build, now)
+    nodeHoldsSlot(build, now) ||
+    legacyNodeRunner(build, now)
   )
     return undefined
-  if (state.nodeRestack?.conflict) return state.openEscalations.length ? undefined : 'reconcile'
-  if (proposeStarted(state)) return 'propose'
+  if (state.nodeRestack?.conflict)
+    return state.openEscalations.length ? undefined : reconcileNeed(state)
+  if (proposeStarted(state)) return proposeNeed(state)
   // A node measurement (starting or progress) is admitted as a re-verify is.
-  if (nodeMeasurementDue(state)) return 'verification'
+  if (nodeMeasurementDue(state)) return measurementNeed(state)
   // A stale request (stopped, spent or shrunk below its room) reserves
   // nothing; the dispatcher withdraws it. A started session was admitted
   // already and resumes whatever its eligibility.
-  if (proposeAdmissible(state.optimization, now)) return 'propose'
-  if (integrationAdmissible(state) && integrationNeedsRunner(state)) return 'verification'
+  if (proposeAdmissible(state.optimization, now)) return proposeNeed(state)
+  if (integrationAdmissible(state) && integrationNeedsRunner(state)) return integrationNeed(state)
   return undefined
+}
+
+/** The runner work a node has a slot for or is asking one for: its held need
+ * when it holds its slot, otherwise its request. The dispatcher starts or
+ * restarts the runner of a holder; a requester waits for admission. */
+export function nodeRunnerWork(build: CapacityBuild, now: Date): NodeSlotNeed | undefined {
+  if (nodeHoldsSlot(build, now)) {
+    const held = build.state.slotAdmittedNeed
+    return (
+      nodeRunnerNeeds(build.state).find((need) => need.key === held) ??
+      nodeRunnerNeeds(build.state)[0]
+    )
+  }
+  return nodeSlotNeed(build, now)
+}
+
+/** A node's or leaf's durable request for a slot it does not hold yet.
+ * Admission outranks ticket claims of the same priority, so this never
+ * depends on when a tick saw it. */
+export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
+  if (build.state.kind !== 'node') return leafSlotRequest(build)
+  return nodeSlotNeed(build, now)?.request
 }
 
 export function dispatchCapacity(
@@ -410,12 +555,6 @@ function startRequestsOf(
   return Object.keys(startRequests).length ? { startRequests } : {}
 }
 
-/** A node verification or propose request reserves a slot until the node
- * holds it; a node reconcile request already occupies one. */
-function nodeReserves(node: SlotWaiter): boolean {
-  return node.request === 'verification' || node.request === 'propose'
-}
-
 /** Slots reserved ahead of one parked waiter: manual start requests for
  * urgent work; for normal work, also every other urgent reservation, the
  * urgent start requests and the urgent ticket claims still waiting. A waiter
@@ -428,7 +567,7 @@ export function reservedAhead(
   if (waiter.priority === 'urgent') return startsOf(capacity, ['manual'])
   const urgent = (entry: SlotWaiter) => entry.priority === 'urgent' && entry.slug !== waiter.slug
   return (
-    (capacity.waitingNodes ?? []).filter((node) => nodeReserves(node) && urgent(node)).length +
+    (capacity.waitingNodes ?? []).filter(urgent).length +
     (capacity.waitingBuilds ?? []).filter(urgent).length +
     (capacity.urgentClaims ?? 0) +
     startsOf(capacity, ['manual', 'urgent'])
@@ -449,9 +588,7 @@ function waitersAhead(
 ): number {
   const counts = (entry: { priority?: TicketPriority }) =>
     priority === 'normal' || entry.priority === 'urgent'
-  const nodes = (capacity.waitingNodes ?? []).filter(
-    (node) => nodeReserves(node) && counts(node),
-  ).length
+  const nodes = (capacity.waitingNodes ?? []).filter(counts).length
   const builds = new Set(
     (capacity.waitingBuilds ?? [])
       .filter((build) => counts(build) && !adjust.settled?.has(build.slug))
@@ -466,10 +603,8 @@ function waitersAhead(
  * same or a higher priority reserves ahead of them: an urgent claim waits only
  * for urgent parked work, a normal claim for every waiter. Pending start
  * requests of the same or a higher tier reserve ahead too: manual and urgent
- * ones for an urgent claim, every one for a normal claim. A node verification or
- * propose request reserves one slot until the node holds it; a node reconcile
- * request already occupies one. A parked build's request occupies nothing, so
- * each one reserves a slot. Never more than the configured budget minus
+ * ones for an urgent claim, every one for a normal claim. A waiting node's or
+ * parked build's request occupies nothing, so each one reserves a slot. Never more than the configured budget minus
  * occupied builds.
  *
  * The dispatcher refines the projection with its own decisions this tick:

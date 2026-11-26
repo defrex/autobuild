@@ -744,6 +744,9 @@ export async function readRepositoryCapacity(
       state: build.state,
       workspace: build.workspace !== null,
       provisioning: build.provisionMarker !== undefined,
+      ...(build.provisionMarker !== undefined
+        ? { provisioningSeq: build.provisionMarker.seq }
+        : {}),
       restackDue: landingRestackDue(build.state, build.log),
     })
   }
