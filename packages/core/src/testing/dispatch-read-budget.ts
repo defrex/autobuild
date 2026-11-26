@@ -1624,6 +1624,7 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
     await preparationObservationBudget(store, repo, check, metrics)
   }
   await upgradeGenerationReadBudget()
+  await releaseObservationBudget()
 }
 
 /** A durably detected, unresolved preparation earns the launcher's bounded
@@ -1687,13 +1688,15 @@ async function preparationObservationBudget(
 
 /** Completed dispatcher generations must not grow the saved upgrade values or
  * the idle cost of any recurring reader: a dispatch tick, a dashboard poll, an
- * `ab watch` liveness check, `ab repository status` and one step of the
- * between-tick yield observation. */
+ * `ab watch` liveness check, `ab repository status`, one step of the
+ * between-tick yield observation and one step of successor release
+ * observation. */
 async function upgradeGenerationReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
   const { manualClock } = await import('./fixed')
   const { readDispatchUpgrade } = await import('../store/reduced-reads')
   const { observeYield } = await import('../cli/dispatch-yield-observer')
+  const { observeSuccessorRelease } = await import('../cli/dispatch-release-observer')
   const { memoryRepositoryReadCounter } = await import('./reduced-read-budget')
   const { upgradeGenerationRun, upgradeGenerationWrites, resolutionOnlyWrites } = await import(
     './upgrade-generations'
@@ -1793,6 +1796,7 @@ async function upgradeGenerationReadBudget(): Promise<void> {
       watch,
       status,
       yieldObservation: () => observeYield(store, repo, current, 'budget-correlation', 'launcher'),
+      releaseObservation: () => observeSuccessorRelease(store, repo, current),
     }
     // The one serialized reduction per key, and each reader's own first
     // appends, happen before measurement.
@@ -1825,6 +1829,68 @@ async function upgradeGenerationReadBudget(): Promise<void> {
           reduced: baseline.get(name)!,
         })
     }
+    await store.close()
+  }
+}
+
+/** A successor waiting for its predecessor's release observes at the bounded
+ * cadence: a finite fast window, a short backoff, then the idle pause. Every
+ * unchanged observation reads zero event rows and makes the same reduced reads
+ * at any journal length, and the release itself is seen at bounded cost. */
+async function releaseObservationBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const {
+    observeSuccessorRelease,
+    releaseObservationCadence,
+    RELEASE_OBSERVATION_FAST_LIMIT,
+    RELEASE_OBSERVATION_FAST_MS,
+    RELEASE_OBSERVATION_IDLE_MS,
+  } = await import('../cli/dispatch-release-observer')
+  const { memoryRepositoryReadCounter } = await import('./reduced-read-budget')
+  const { upgradeGenerationRun, upgradeGenerationWrites } = await import('./upgrade-generations')
+  const costs = new Map<string, number>()
+  // About 100 and 10,000 filler events before the waiting predecessor.
+  for (const generations of [10, 1_000]) {
+    const repo = '/release-observation-budget'
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    for (let i = 0; i < generations; i++)
+      for (const write of upgradeGenerationWrites(i)) await store.appendRepo(repo, write)
+    const predecessor = upgradeGenerationRun(generations)
+    const writes = upgradeGenerationWrites(generations)
+    // Start, resolve, prepare and request yield; the release is still pending.
+    for (const write of writes.slice(0, 5)) await store.appendRepo(repo, write)
+    const observe = () => observeSuccessorRelease(store, repo, predecessor)
+    expect((await observe()).current?.request).toBeDefined()
+    const counter = memoryRepositoryReadCounter(store, repo)
+    const cadence = releaseObservationCadence()
+    const delays: number[] = []
+    const steps = RELEASE_OBSERVATION_FAST_LIMIT + 4 + 20
+    for (let step = 0; step < steps; step++) {
+      const { current } = await observe()
+      expect(current?.released).toBeUndefined()
+      delays.push(cadence(0))
+    }
+    expect(counter.rows).toBe(0)
+    expect(counter.reducedCalls % steps).toBe(0)
+    const perStep = counter.reducedCalls / steps
+    if (generations === 10) costs.set('step', perStep)
+    else expect(perStep).toBe(costs.get('step')!)
+    const steady = delays.indexOf(RELEASE_OBSERVATION_IDLE_MS)
+    expect(steady).toBe(RELEASE_OBSERVATION_FAST_LIMIT + 4)
+    expect(delays.slice(0, RELEASE_OBSERVATION_FAST_LIMIT)).toEqual(
+      Array(RELEASE_OBSERVATION_FAST_LIMIT).fill(RELEASE_OBSERVATION_FAST_MS),
+    )
+    expect(delays.slice(RELEASE_OBSERVATION_FAST_LIMIT, steady)).toEqual([50, 100, 200, 400])
+    expect(delays.slice(steady).every((delay) => delay === RELEASE_OBSERVATION_IDLE_MS)).toBe(true)
+    // handoff-started and terminal-released for the waiting correlation.
+    for (const write of writes.slice(5, 7)) await store.appendRepo(repo, write)
+    counter.reset()
+    const { current } = await observe()
+    expect(current?.handoff?.payload.correlation).toBe(`c-${predecessor}`)
+    expect(current?.released?.payload.correlation).toBe(`c-${predecessor}`)
+    if (generations === 10) costs.set('release', counter.rows)
+    else expect(counter.rows).toBe(costs.get('release')!)
     await store.close()
   }
 }

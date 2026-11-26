@@ -210,10 +210,19 @@ async function runGenerationPreflight(
     prepared = true
     // The successor claims with its own configured lease timeout.
     let leaseTtlMs = 60_000
+    const { observeSuccessorRelease, releaseObservationCadence } = await import(
+      './dispatch-release-observer'
+    )
+    const { supervisionPause } = await import('./dispatch-launcher-cadence')
+    const cadence = releaseObservationCadence()
     for (;;) {
       signal.throwIfAborted()
-      const current = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[handoff.run]
-      const facts = (await readDispatcherRunFacts(opened.store, opened.repo, handoff.run)).value
+      const started = performance.now()
+      const { current, facts } = await observeSuccessorRelease(
+        opened.store,
+        opened.repo,
+        handoff.run,
+      )
       if (facts.stopRequest || current?.failure) return false
       if (facts.stop && !current?.handoff) return false
       if (
@@ -257,7 +266,7 @@ async function runGenerationPreflight(
         })
         return true
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 500))
+      await supervisionPause(cadence(performance.now() - started), [], signal)
     }
   } finally {
     await opened.store.close()

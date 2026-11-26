@@ -608,6 +608,9 @@ checks target configuration, provider compatibility and actual protocol-write
 admission before requesting yield. `dispatch-yield-observer.ts` watches the reduced
 upgrade value at a fixed cadence and step limit while the run has a prepared
 target, and queues acceptance through the tick serialization.
+`dispatch-release-observer.ts` holds the successor's two-read post-yield
+observation step and its pause schedule: 25 ms for at most 240 observations,
+doubling to 500 ms, never shorter than the last observation.
 `kernel/dispatch-upgrade.ts` folds correlated
 acceptance, terminal release, takeover, per-execution retirement and completion.
 The runtime-owned `dispatch-handoff.ts` reader lets the filesystem-only launcher
