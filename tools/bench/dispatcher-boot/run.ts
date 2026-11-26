@@ -83,7 +83,11 @@ class Journal {
   constructor(private readonly file: string) {}
 
   read(): Event[] {
-    this.db ??= new Database(this.file, { readonly: true })
+    if (!this.db) {
+      this.db = new Database(this.file, { readonly: true })
+      // Wait out the dispatcher's write locks rather than failing a read.
+      this.db.exec('PRAGMA busy_timeout = 5000')
+    }
     const rows = this.db
       .query('select seq, ts, type, payload from repo_events where seq > ? order by seq')
       .all(this.seen) as { seq: number; ts: string; type: string; payload: string }[]
@@ -113,10 +117,15 @@ async function until<T>(what: string, child: Child, probe: () => T | undefined):
     try {
       found = probe()
     } catch (error) {
-      // The warm-up boot creates the store: its file can be missing, or exist
-      // before the dispatcher has created the journal table.
+      // The warm-up boot creates the store: its file can be missing, exist
+      // before the dispatcher has created the journal table, or be locked
+      // while the dispatcher initializes it.
       const message = String(error)
-      if (!message.includes('unable to open database') && !message.includes('no such table'))
+      if (
+        !message.includes('unable to open database') &&
+        !message.includes('no such table') &&
+        !message.includes('database is locked')
+      )
         throw error
     }
     if (found !== undefined) return found
