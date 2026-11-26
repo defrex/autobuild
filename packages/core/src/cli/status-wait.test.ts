@@ -106,7 +106,9 @@ test('ab builds lists a lone open wait as waiting on its tickets; JSON keeps blo
   })
   const row = rows[1]!.split(/\s{2,}/)
   expect(row[1]).toBe('waiting')
-  expect(row[2]).toEndWith(', waiting on B, C')
+  // A build waiting on the outside world holds no slot and requests none.
+  expect(row[2]).toBe('none')
+  expect(row[3]).toEndWith(', waiting on B, C')
 })
 
 test('another open escalation keeps an open wait blocked', async () => {

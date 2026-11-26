@@ -17,6 +17,7 @@ import {
   startClaimDemand,
   urgentClaimDemand,
   type DispatchCapacity,
+  type SlotState,
 } from '../../kernel/dispatch-capacity'
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
@@ -248,6 +249,9 @@ export function dashboardWait(state: BuildState): DashboardWait | undefined {
 }
 
 export interface DashboardBuild {
+  /** The build's slot state from the frame's capacity projection (SPEC §12
+   * "What holds a slot"); absent is unknown, never `none`. */
+  slot?: SlotState
   draining?: boolean
   /** A work row's standing alert, such as a parked build waiting for a slot. */
   alert?: { tone: 'yellow' | 'red'; text: string }
@@ -1499,6 +1503,20 @@ export function decorateSlotWaits(
   })
 }
 
+/** Each row's slot state from the capacity projection. Returns copies;
+ * cached projected rows stay intact. */
+function decorateSlots(
+  rows: readonly DashboardBuild[],
+  capacity: DispatchCapacity | undefined,
+): DashboardBuild[] {
+  const slots = capacity?.slots
+  if (!slots) return [...rows]
+  return rows.map((row) => {
+    const slot = slots[row.slug]
+    return slot ? { ...row, slot } : row
+  })
+}
+
 export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
@@ -1511,8 +1529,11 @@ export function buildDashboardFromProjected(
     repositoryEvents,
     upgrades,
   )
-  const builds = decorateSlotWaits(
-    enrichIntegrationRows(projectedBuilds.map((row) => enrichDrainingRow(row, draining))),
+  const builds = decorateSlots(
+    decorateSlotWaits(
+      enrichIntegrationRows(projectedBuilds.map((row) => enrichDrainingRow(row, draining))),
+      header.capacityProjection,
+    ),
     header.capacityProjection,
   ).sort((a, b) => a.slug.localeCompare(b.slug))
   // Member order matches the terminal model's historical literal.

@@ -29,9 +29,14 @@ import { readBuildFacts } from '../store/reduced-reads'
 import {
   buildPriority,
   slotRequest,
+  slotState,
   slotWaitText,
+  type CapacityBuild,
   type SlotRequest,
+  type SlotState,
 } from '../kernel/dispatch-capacity'
+import { capacityBuildFromFacts } from '../kernel/capacity-build'
+import { openBuildWorkspace, provisionMarkerReducer } from '../processes/dispatcher-selectors'
 import { URGENT_MARK } from './dashboard/queue'
 import {
   ticketWaitStatus,
@@ -184,6 +189,11 @@ export interface BuildSummary {
   /** A node's or parked build's runner request, admitted ahead of normal
    * ticket claims (urgent work first: SPEC §12 "Slot admission order"). */
   slotWait?: SlotRequest
+  /** The build's slot state by the rules the dispatcher admits work by
+   * (SPEC §12 "What holds a slot"). Absent for a `done` build, and unknown
+   * (never `none`) when absent on any other: a value from an older server,
+   * or a caller without the build's capacity facts. */
+  slot?: SlotState
   /** The build's slot-admission priority when urgent; omitted means normal. */
   priority?: 'urgent'
   /** The build's ticket wait while it is requested, open, or ended and not
@@ -432,8 +442,10 @@ export function summarizeFrom(
   record: BuildRecord,
   state: BuildState,
   now: Date,
-  slotWait?: SlotRequest,
+  capacity?: CapacityBuild,
 ): BuildSummary {
+  const slotWait = capacity ? slotRequest(capacity, now) : undefined
+  const slot = capacity ? slotState(capacity, now) : undefined
   // `phase`, `round`, and `attempt` describe ONE phase occurrence, so they come
   // from ONE source: the in-flight phase, else the last completed one — the
   // same `currentPhase ?? lastCompletedPhase` the reducer uses to derive
@@ -508,6 +520,7 @@ export function summarizeFrom(
     lease: leaseInfo(record, now),
     progress: buildProgress(record, state),
     ...(slotWait ? { slotWait } : {}),
+    ...(slot ? { slot } : {}),
     ...(buildPriority(state) === 'urgent' ? { priority: 'urgent' as const } : {}),
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
@@ -533,7 +546,20 @@ export function summarizeFrom(
  * happening now rather than the last thing that finished.
  */
 export function summarize(record: BuildRecord, events: AbEvent[], now: Date): BuildSummary {
-  return summarizeFrom(record, reduceBuild(events), now)
+  const state = reduceBuild(events)
+  return summarizeFrom(record, state, now, capacityFromEvents(record, state, events))
+}
+
+/** A build's capacity facts from its whole log, as `buildDashboard` derives
+ * them: pure, for the event-array convenience callers. */
+function capacityFromEvents(record: BuildRecord, state: BuildState, events: AbEvent[]) {
+  return {
+    record,
+    state,
+    workspace: openBuildWorkspace(events) !== null,
+    provisioning: provisionMarkerReducer.reduce(events) !== undefined,
+    restackDue: landingRestackDue(state, indexLog(events)),
+  } satisfies CapacityBuild
 }
 
 /** Summary plus the detail fields; `eventCount` appends the newest n events. */
@@ -551,10 +577,11 @@ export function detail(
   decision?: BuildDecisionProjection,
   streams?: readonly StreamRecord[],
 ): BuildDetail {
+  const state = reduceBuild(events)
   return detailFromFacts(
     record,
     {
-      state: reduceBuild(events),
+      state,
       runnerAttaches: buildReadFactsReducer.reduce(events).runnerAttaches,
       log: indexLog(events),
       observations: events
@@ -570,6 +597,7 @@ export function detail(
     eventCount === undefined ? undefined : events.slice(-eventCount),
     decision,
     streams,
+    capacityFromEvents(record, state, events),
   )
 }
 
@@ -645,6 +673,7 @@ export function detailFromFacts(
   events?: AbEvent[],
   decision?: BuildDecisionProjection,
   streams?: readonly StreamRecord[],
+  capacity?: CapacityBuild,
 ): BuildDetail {
   const state = facts.state
   const streamStatus = new Map<string, { stream?: string; status: 'open' | 'closed' }>()
@@ -657,7 +686,7 @@ export function detailFromFacts(
       })
     }
   }
-  const summary = summarizeFrom(record, state, now)
+  const summary = summarizeFrom(record, state, now, capacity)
   // §15.6-A: only the CURRENT cycle's results describe the current code.
   // Without this filter an earlier cycle's passes read as current — wrong, and
   // wrong in the reassuring direction.
@@ -891,7 +920,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
   // The two free-text columns (ticket title, PR link) go last, where their
   // width costs no alignment on the scannable columns to their left.
   const rows: string[][] = [
-    ['BUILD', 'STATUS', 'PHASE', 'LEASE', 'HEARTBEAT', 'PROGRESS', 'TICKET', 'PR'],
+    ['BUILD', 'STATUS', 'SLOT', 'PHASE', 'LEASE', 'HEARTBEAT', 'PROGRESS', 'TICKET', 'PR'],
   ]
   for (const summary of summaries) {
     const progressAge =
@@ -906,6 +935,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
     rows.push([
       summary.slug,
       `${summaryStatus(summary)}${summary.priority === 'urgent' ? ` ${URGENT_MARK}` : ''}`,
+      slotText(summary) ?? '—',
       summary.kind === 'integration'
         ? `${summary.optimization ? treeVocabulary.optimizationKind : treeVocabulary.integrationKind} ${summary.integration ?? ''}${slotWait}`
         : `${phaseCell(summary)}${slotWait}${ticketWait}`,
@@ -939,6 +969,17 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
         : [`    ! ${safeStatusText(summary.ciFailure.text)}`]),
     ]
   })
+}
+
+/** A summary's slot state in neutral raw terms, or undefined for a `done`
+ * build. An absent value on any other build is `unknown`, never `none`. */
+function slotText(summary: BuildSummary, urgent = (text: string) => `${text} urgent`) {
+  if (summary.status === 'done') return undefined
+  const slot = summary.slot
+  if (slot === undefined) return 'unknown'
+  if (slot.state !== 'requested') return slot.state
+  const text = `requested ${slot.request}`
+  return slot.priority === 'urgent' ? urgent(text) : text
 }
 
 /** The status word text renderers print: `waiting` for a build whose only
@@ -1036,6 +1077,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     }
   }
   lines.push(`  status:   ${summaryStatus(d)}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
+  const slot = slotText(d, (text) => `${text} (urgent)`)
+  if (slot !== undefined) lines.push(`  slot:     ${slot}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
   if (d.reopened !== undefined)
     lines.push(
@@ -1372,21 +1415,7 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
       // exactly — so it keeps its per-build history read (correct, just not
       // accelerated).
       const facts = (await readBuildFacts(store, record.slug)).value
-      const summary = summarizeFrom(
-        record,
-        facts.state,
-        now,
-        slotRequest(
-          {
-            record,
-            state: facts.state,
-            workspace: facts.workspace !== null,
-            provisioning: facts.provisionMarker !== undefined,
-            restackDue: landingRestackDue(facts.state, facts.log),
-          },
-          now,
-        ),
-      )
+      const summary = summarizeFrom(record, facts.state, now, capacityBuildFromFacts(record, facts))
       if (wanted.has(summary.status)) summaries.push(summary)
     }
     summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -1612,7 +1641,15 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     } catch {
       streams = undefined
     }
-    const projected = detailFromFacts(record, facts, now, events, decision, streams)
+    const projected = detailFromFacts(
+      record,
+      facts,
+      now,
+      events,
+      decision,
+      streams,
+      capacityBuildFromFacts(record, facts),
+    )
     // Operator visibility (SPEC §16.1): which autobuild.toml the build's
     // pinned pipeline came from, alongside the effective-config revision.
     const configArtifact = await context.store.getArtifact(

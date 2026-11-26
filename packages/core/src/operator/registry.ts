@@ -867,7 +867,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.list',
     'List one repository’s builds, newest first, with effective status derived from the build log.',
     buildListInput,
-    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, durable-event progress, any ticket wait (`wait` with its state and tickets; `waitOnly` when the wait is the only open escalation), and an optimization node’s objective progress (`objective`).',
+    'JSON array of build summaries: slug, ticket ref, effective status, phase/round/attempt, PR number/url/state, updatedAt, lease health, durable-event progress, any ticket wait (`wait` with its state and tickets; `waitOnly` when the wait is the only open escalation), an optimization node’s objective progress (`objective`), and each nonterminal build’s slot state (`slot`: `{state: "held"}`, `{state: "requested", request, priority?: "urgent"}` or `{state: "none"}`; absent means unknown, never none).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildListInput>
       return listOperatorBuilds({
@@ -882,7 +882,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.get',
     'Show detailed state for one build: open escalations, verify progress, PR lifecycle, lease health, and the dashboard row.',
     buildDetailInput,
-    '{detail, dashboardRow}: the full build detail projection and the dashboard row a terminal dashboard would render (null when the build has no dashboard row). An optimization node carries its objective progress as `detail.objective` and `dashboardRow.objectiveRow`.',
+    '{detail, dashboardRow}: the full build detail projection and the dashboard row a terminal dashboard would render (null when the build has no dashboard row). An optimization node carries its objective progress as `detail.objective` and `dashboardRow.objectiveRow`. A nonterminal build reports its slot state as `detail.slot` and `dashboardRow.slot`, shaped as in builds.list.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildDetailInput>
       return getOperatorBuild({
@@ -1152,7 +1152,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'repository.status',
     'Report one repository’s durable dispatcher settings and journal state.',
     repositoryStatusInput,
-    'The repository status projection: dispatcherRunning is true for a holder, expired holder or unfinished draining handoff; ticket intake, repository-wide pause, claim-time auto-merge default, and the harvest/dispatch journal state the sessionless CLI and dashboard read. operator.presence is "unavailable" here because this tool does not load presence registrations; that is not evidence that no operator is present.',
+    'The repository status projection: dispatcherRunning is true for a holder, expired holder or unfinished draining handoff; ticket intake, repository-wide pause, claim-time auto-merge default, and the harvest/dispatch journal state the sessionless CLI and dashboard read. capacity.slots maps each nonterminal build to its slot state, shaped as in builds.list; occupied counts its held entries. operator.presence is "unavailable" here because this tool does not load presence registrations; that is not evidence that no operator is present.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof repositoryStatusInput>
       return getRepositoryStatus(ctx.store, input.repo)

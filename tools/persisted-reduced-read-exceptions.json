@@ -391,6 +391,18 @@
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
   },
+  "packages/core/src/cli/status.ts::capacityFromEvents::openBuildWorkspace": {
+    "kind": "reduction",
+    "reason": "Capacity facts for the pure summarize/detail event-array overloads, as buildDashboard derives them; store-backed callers pass persisted capacity facts."
+  },
+  "packages/core/src/cli/status.ts::capacityFromEvents::reduce": {
+    "kind": "reduction",
+    "reason": "Capacity facts for the pure summarize/detail event-array overloads, as buildDashboard derives them; store-backed callers pass persisted capacity facts."
+  },
+  "packages/core/src/cli/status.ts::capacityFromEvents::indexLog": {
+    "kind": "reduction",
+    "reason": "Capacity facts for the pure summarize/detail event-array overloads, as buildDashboard derives them; store-backed callers pass persisted capacity facts."
+  },
   "packages/core/src/cli/wait.ts::attentionFrom::reduceBuild": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
