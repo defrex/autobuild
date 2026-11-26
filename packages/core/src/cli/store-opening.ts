@@ -1,4 +1,3 @@
-import { AccountRedactor, redactAccountStore } from '../store/account-redaction'
 import { untilDeadline } from './watch-lifetime'
 /**
  * Production BuildStore composition for CLI commands.
@@ -8,49 +7,35 @@ import { untilDeadline } from './watch-lifetime'
  * joins those seams to the production remote adapter and owns finite-command
  * store lifecycle.
  */
-import { projectToken } from './project-credentials'
-import { isRemoteStoreRef } from './repo-state'
+import {
+  composeProductionStore,
+  openStoreForRepoStateWith,
+  type OpenedStoreContext,
+  type OpenStoreForRepoStateOpts,
+  type StoreOpener,
+} from './production-store'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
 import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import {
-  InvalidAmbientContextError,
   resolveAmbientReadSession,
   type AmbientReadSession,
   type CliEnv,
   type HarvestCliEnv,
 } from './env'
 import { resolveRepoState, type RepoStatePaths } from './repo-state'
-import { resolveStore } from './store-ref'
 
-/** Shared injection seam used by every command that opens a BuildStore. */
-export type StoreOpener = (ref: string, token?: string) => BuildStore
-
-function optionalToken(value: string | undefined): string | undefined {
-  // Bearer credentials are opaque. Only absence and the exact empty value mean
-  // "no token"; nonempty values are forwarded byte-for-byte.
-  return value !== undefined && value !== '' ? value : undefined
-}
+export type { StoreOpener } from './production-store'
 
 /** Production local/remote composition. The low-level parser stays injectable
  * and does not import the HTTP adapter. */
-export const openProductionStore: StoreOpener = (ref, token) => {
-  const forwardedToken = optionalToken(token)
-  const store = resolveStore(ref, {
-    remoteFactory: (url, remoteToken) => new RemoteBuildStore({ url, token: remoteToken }),
-    ...(forwardedToken !== undefined ? { token: forwardedToken } : {}),
-  })
-  const raw = process.env.AB_ACCOUNT_CREDENTIAL_ENVS
-  if (!raw) return store
-  const names: unknown = JSON.parse(raw)
-  if (!Array.isArray(names) || !names.every((name) => typeof name === 'string'))
-    throw new Error('Invalid account credential variable inventory')
-  return redactAccountStore(
-    store,
-    new AccountRedactor(() => names.map((name) => process.env[name])),
+export const openProductionStore: StoreOpener = (ref, token) =>
+  composeProductionStore(
+    ref,
+    token,
+    (url, remoteToken) => new RemoteBuildStore({ url, token: remoteToken }),
   )
-}
 
 /** Apply validated ambient authority to a selected Store handle. Remote
  * handles retain server-side project authorization; every handle receives
@@ -74,20 +59,7 @@ export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildSt
   return scopeSelectedStoreToPhaseSession(openProductionStore(env.store, env.token), env.store, env)
 }
 
-export interface OpenedStoreContext extends RepoStatePaths {
-  store: BuildStore
-  token?: string
-  /** The validated ambient phase/Harvest identity this invocation carries, if
-   * any — the same value that scoped `store`. Exposed for commands whose
-   * repository selection also depends on ambient own-build authority. */
-  ambient?: AmbientReadSession
-}
-
-export interface OpenStoreForRepoStateOpts {
-  env: Record<string, string | undefined>
-  openStore?: StoreOpener
-  useProjectCredential?: boolean
-}
+export type { OpenedStoreContext, OpenStoreForRepoStateOpts } from './production-store'
 
 /** Open from an already canonicalized state selection. Dispatch uses this form
  * so repository topology and relative overrides are decided exactly once. */
@@ -95,22 +67,7 @@ export function openStoreForRepoState(
   state: RepoStatePaths,
   opts: OpenStoreForRepoStateOpts,
 ): OpenedStoreContext {
-  // A judge session's only store authority is its one preference.
-  if (opts.env.AB_JUDGE !== undefined)
-    throw new InvalidAmbientContextError('a judge session has no read authority')
-  const token =
-    opts.useProjectCredential !== false && isRemoteStoreRef(state.storeRef)
-      ? projectToken(state.storeRef, state.repo, opts.env)
-      : optionalToken(opts.env.AB_TOKEN)
-  if (!token && isRemoteStoreRef(state.storeRef) && state.configStore === state.storeRef) {
-    throw new Error('No project credential for this service; run ab connect')
-  }
-  const store = (opts.openStore ?? openProductionStore)(state.storeRef, token)
-  return {
-    ...state,
-    store,
-    ...(token !== undefined ? { token } : {}),
-  }
+  return openStoreForRepoStateWith(state, opts, opts.openStore ?? openProductionStore)
 }
 
 export interface SessionlessStoreOpts extends OpenStoreForRepoStateOpts {
