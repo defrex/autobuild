@@ -456,6 +456,18 @@ test('registry guest delivery is lazy, version-validated and reusable offline', 
   expect(new Bun.CryptoHasher('sha256').update(sourceBytes).digest('hex')).toBe(
     sourceRuntime.archiveDigest,
   )
+  // The kept archive packs at a lower gzip level, yet carries exactly the
+  // contents a default-level pack of the same runtime root does.
+  const unpacked = async (archive: Uint8Array) => {
+    const dir = await temp()
+    await writeFile(join(dir, 'archive.tgz'), archive)
+    await mkdir(join(dir, 'tree'))
+    await Bun.$`tar -xzf ${join(dir, 'archive.tgz')} --strip-components=1 -C ${join(dir, 'tree')}`.quiet()
+    return treeDigest(join(dir, 'tree'))
+  }
+  expect(await unpacked(sourceBytes)).toBe(
+    await unpacked(await packageDistribution(sourceRuntime.root)),
+  )
   expect(sourceRuntime.guestArchive).toMatchObject({
     provenance: 'source',
     digest: sourceRuntime.archiveDigest,

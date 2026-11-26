@@ -1,8 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { packageDistribution } from './distribution-packaging'
+import { treeDigest } from './cli/dispatch-runtime-dependencies'
+import {
+  packageDistribution,
+  RUNTIME_ARCHIVE_GZIP_LEVEL,
+  SCRATCH_ARCHIVE_GZIP_LEVEL,
+} from './distribution-packaging'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -106,4 +111,89 @@ test('second allocation rejection removes the first; cleanup attempts both roots
   expect(removed.length).toBe(2)
   expect(caught).toBeInstanceOf(AggregateError)
   expect(String((caught as AggregateError).cause)).toContain('primary pack failure')
+})
+
+test('gzip level reaches bun before the destination; invalid levels fail before any allocation', async () => {
+  const root = await fixture()
+  let command: string[] = []
+  await packageDistribution(
+    root,
+    async (cmd) => {
+      command = cmd
+      await writeFile(join(cmd.at(-1)!, 'fixture.tgz'), 'archive')
+      return { exitCode: 0, stdout: '', stderr: '' }
+    },
+    undefined,
+    undefined,
+    { gzipLevel: 2 },
+  )
+  expect(command.slice(0, -1)).toEqual([
+    'bun',
+    'pm',
+    'pack',
+    '--ignore-scripts',
+    '--gzip-level',
+    '2',
+    '--destination',
+  ])
+  for (const gzipLevel of [-1, 10, 1.5, Number.NaN]) {
+    let allocated = 0
+    await expect(
+      packageDistribution(
+        root,
+        async () => {
+          throw Error('pack must not run')
+        },
+        undefined,
+        {
+          mkdtemp: async () => {
+            allocated++
+            throw Error('must not allocate')
+          },
+          rm,
+        },
+        { gzipLevel },
+      ),
+    ).rejects.toThrow('gzip level must be an integer from 0 to 9')
+    expect(allocated).toBe(0)
+  }
+})
+
+test('every boot gzip level extracts the same packaged tree as the default', async () => {
+  const root = await fixture({
+    name: 'fixture',
+    version: '1.0.0',
+    files: ['src', 'bin', 'docs', '!src/**/*.test.ts'],
+    devDependencies: { local: 'workspace:*' },
+    patchedDependencies: { local: 'patch' },
+  })
+  await mkdir(join(root, 'src/nested'), { recursive: true })
+  await mkdir(join(root, 'bin'))
+  await mkdir(join(root, 'docs'))
+  await writeFile(join(root, 'src/nested/module.ts'), 'export const value = 1\n'.repeat(2000))
+  await writeFile(join(root, 'src/nested/module.test.ts'), 'excluded\n')
+  await writeFile(join(root, 'bin/tool.ts'), '#!/usr/bin/env bun\n')
+  await chmod(join(root, 'bin/tool.ts'), 0o755)
+  await writeFile(join(root, 'docs/guide.md'), '# Guide\n')
+  const unpack = async (bytes: Uint8Array) => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pack-extract-'))
+    roots.push(dir)
+    await writeFile(join(dir, 'archive.tgz'), bytes)
+    await mkdir(join(dir, 'tree'))
+    await Bun.$`tar -xzf ${join(dir, 'archive.tgz')} --strip-components=1 -C ${join(dir, 'tree')}`.quiet()
+    return join(dir, 'tree')
+  }
+  const defaultBytes = await packageDistribution(root)
+  const expected = await unpack(defaultBytes)
+  await absent(join(expected, 'src/nested/module.test.ts'))
+  expect((await stat(join(expected, 'bin/tool.ts'))).mode & 0o111).not.toBe(0)
+  const manifest = JSON.parse(await readFile(join(expected, 'package.json'), 'utf8'))
+  expect(manifest.devDependencies).toBeUndefined()
+  expect(manifest.patchedDependencies).toBeUndefined()
+  for (const gzipLevel of [SCRATCH_ARCHIVE_GZIP_LEVEL, RUNTIME_ARCHIVE_GZIP_LEVEL]) {
+    const bytes = await packageDistribution(root, undefined, undefined, undefined, { gzipLevel })
+    expect(await treeDigest(await unpack(bytes))).toBe(await treeDigest(expected))
+    if (gzipLevel === SCRATCH_ARCHIVE_GZIP_LEVEL)
+      expect(bytes.length).toBeGreaterThan(defaultBytes.length)
+  }
 })
