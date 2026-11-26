@@ -13,6 +13,8 @@ import {
   chmod,
   symlink,
   stat,
+  lstat,
+  readlink,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -162,6 +164,83 @@ test('a failed concurrent check publishes nothing and removes staging only after
   await writeFile(metadata, valid)
   expect((await prepareRuntime(source, checkout)).id).toBe(first.id)
 }, 30000)
+test('both import probes resolve the stage-private dependency snapshot; the published runtime keeps independent bytes', async () => {
+  const { source, checkout } = await fixture()
+  await file(
+    join(source, 'bin/ab.ts'),
+    `import {value} from 'example'; import {appendFileSync} from 'node:fs'; import {join} from 'node:path'
+if(value !== 42) throw new Error('mutable dependency')
+appendFileSync(join(process.cwd(), 'probe.log'), JSON.stringify({entry: import.meta.dir, dependency: Bun.resolveSync('example', import.meta.dir)}) + '\\n')`,
+  )
+  const runtime = await prepareRuntime(source, checkout)
+  const probes = (await readFile(join(checkout, 'probe.log'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { entry: string; dependency: string })
+  expect(probes.map((probe) => probe.entry.split('/').slice(-2).join('/')).sort()).toEqual([
+    'archive-check/bin',
+    'distribution/bin',
+  ])
+  expect(probes[0]!.dependency).toBe(probes[1]!.dependency)
+  expect(probes[0]!.dependency).toMatch(
+    /\.preparing-[^/]+\/distribution\/node_modules\/\.ab-packages\//,
+  )
+  expect((await lstat(join(runtime.root, 'node_modules'))).isDirectory()).toBe(true)
+  expect((await readlink(join(runtime.root, 'node_modules/example'))).startsWith('/')).toBe(false)
+  const published = (await stat(join(runtime.root, 'node_modules/example/index.js'))).ino
+  const layer = join(
+    checkout,
+    '.autobuild/runtime/layers',
+    runtime.dependencies,
+    'distribution/node_modules/example/index.js',
+  )
+  expect(published).not.toBe((await stat(join(source, 'node_modules/example/index.js'))).ino)
+  expect(published).not.toBe((await stat(layer)).ino)
+  await validateRuntime(runtime)
+  expect(
+    (await readdir(join(checkout, '.autobuild/runtime'))).filter((name) =>
+      name.startsWith('.preparing-'),
+    ),
+  ).toEqual([])
+  expect((await prepareRuntime(source, checkout)).id).toBe(runtime.id)
+}, 30000)
+test('a probe that changes the shared dependency snapshot is refused before publication', async () => {
+  const mutations = {
+    bytes: `writeFileSync(path, 'exports.value = 24')`,
+    mode: `chmodSync(path, 0o755)`,
+    entry: `writeFileSync(join(dirname(path), 'extra.js'), '')`,
+  }
+  const cases: Array<[string, keyof typeof mutations]> = [
+    ['archive-check', 'bytes'],
+    ['archive-check', 'mode'],
+    ['archive-check', 'entry'],
+    ['distribution', 'mode'],
+  ]
+  for (const [tree, mutation] of cases) {
+    const { source, checkout } = await fixture()
+    const probe = await readFile(join(source, 'bin/ab.ts'), 'utf8')
+    // The probe imports the dependency, then changes it and still exits 0.
+    await file(
+      join(source, 'bin/ab.ts'),
+      `import {value} from 'example'; import {writeFileSync, chmodSync} from 'node:fs'; import {dirname, join} from 'node:path'
+console.log(value)
+if (import.meta.dir.includes(${JSON.stringify(`/${tree}/`)})) { const path = Bun.resolveSync('example', import.meta.dir); ${mutations[mutation]} }`,
+    )
+    await expect(prepareRuntime(source, checkout)).rejects.toThrow(
+      'runtime dependency snapshot changed during import validation',
+    )
+    expect(
+      (await readdir(join(checkout, '.autobuild/runtime'))).filter(
+        (name) => name.startsWith('.preparing-') || name.includes('-guest1-'),
+      ),
+    ).toEqual([])
+    expect(await readFile(join(source, 'node_modules/example/index.js'), 'utf8')).toBe(
+      'exports.value = 42',
+    )
+    await file(join(source, 'bin/ab.ts'), probe)
+    await validateRuntime(await prepareRuntime(source, checkout))
+  }
+}, 60000)
 test('missing installed required dependency fails before publication; optional absence and nested versions survive', async () => {
   const { source, checkout } = await fixture()
   await rm(join(source, 'node_modules/example'), { recursive: true })
