@@ -596,8 +596,13 @@ keeping HTTP code outside the resident launcher’s eager filesystem/process gra
 base snapshot, or rereads the original install pathname when unpinned. Frozen
 launcher eligibility selects source mode for a source root sharing the dispatched
 repository's Git common directory. `dispatch-upgrade-source.ts` exports exact
-commits into private cache staging and fingerprints actual packed contents and
-the production-reachable Bun lock closure. Source preparation installs with the
+commits into private cache staging and fingerprints packed contents and the
+production-reachable Bun lock closure. Identity hashes the files a
+`bun pm pack --dry-run` listing selects from the staged `files` set, with no
+archive. It falls back to extracting a real pack archive for manifests Bun would
+rewrite (bundled, `workspace:` or `catalog:` specifiers), for listings that fail
+validation, and where extracted modes could differ from staged ones: a creation
+mask that strips execute bits, or a non-executable `bin` target. Source preparation installs with the
 frozen lock and scripts disabled, then publishes through the existing immutable
 runtime cache. Neither resolution nor installation changes an operator/build
 worktree. Excluded-file commits change observed provenance without adoption.
