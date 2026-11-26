@@ -11,7 +11,7 @@
  * repository's specifics.
  */
 import { z } from 'zod'
-import { EventValidationError } from './catalog'
+import { EventValidationError } from './validation-error'
 import {
   actorSchema,
   VIA_ACTOR_RULE,

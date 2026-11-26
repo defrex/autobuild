@@ -283,19 +283,19 @@
     "kind": "reduction",
     "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
   },
-  "packages/core/src/kernel/read-facts.ts::repositoryReadFactsReducer/fold::advance": {
+  "packages/core/src/kernel/repository-read-facts.ts::repositoryReadFactsReducer/fold::advance": {
     "kind": "reduction",
     "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
   },
-  "packages/core/src/kernel/read-facts.ts::repositoryReadFactsReducer::finish": {
+  "packages/core/src/kernel/repository-read-facts.ts::repositoryReadFactsReducer::finish": {
     "kind": "reduction",
     "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
   },
-  "packages/core/src/kernel/read-facts.ts::optionalValue::finish": {
+  "packages/core/src/kernel/repository-read-facts.ts::optionalValue::finish": {
     "kind": "reduction",
     "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
   },
-  "packages/core/src/kernel/read-facts.ts::optionalValue::reduce": {
+  "packages/core/src/kernel/repository-read-facts.ts::optionalValue::reduce": {
     "kind": "reduction",
     "reason": "Registered incremental semantic projection definition; constituent folds compose one persisted prefix."
   },

@@ -6,10 +6,9 @@
  * the registry needs live in `kernel/`; process modules re-export them.
  */
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
-import ts from 'typescript'
+import { join, resolve } from 'node:path'
 import { REDUCERS } from './reducer-registry'
+import { rel, valueEdges } from '../testing/import-graph'
 
 /** processes/ modules the reducer registry still imports reducers from.
  * Each is a pure reducer leaf that closes no cycle. This list only
@@ -32,62 +31,6 @@ const SRC = resolve(import.meta.dir, '..')
 const REPO_ROOT = resolve(SRC, '../../..')
 const REGISTRY = join(import.meta.dir, 'reducer-registry.ts')
 const BUILD_RUNNER = join(SRC, 'processes/build-runner.ts')
-
-const rel = (path: string): string => relative(SRC, path)
-
-function hasValueBinding(node: ts.ImportDeclaration): boolean {
-  const clause = node.importClause
-  if (clause === undefined) return true
-  if (clause.isTypeOnly) return false
-  if (clause.name !== undefined) return true
-  const bindings = clause.namedBindings
-  if (bindings === undefined) return false
-  if (ts.isNamespaceImport(bindings)) return true
-  return bindings.elements.some((element) => !element.isTypeOnly)
-}
-
-function reExportsValue(node: ts.ExportDeclaration): boolean {
-  if (node.isTypeOnly) return false
-  const clause = node.exportClause
-  if (clause === undefined || ts.isNamespaceExport(clause)) return true
-  return clause.elements.some((element) => !element.isTypeOnly)
-}
-
-function resolveSpecifier(from: string, specifier: string): string | undefined {
-  if (!specifier.startsWith('.')) return undefined
-  const base = resolve(dirname(from), specifier)
-  const candidates = /\.(tsx?|json)$/.test(base)
-    ? [base]
-    : [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]
-  for (const candidate of candidates) if (existsSync(candidate)) return candidate
-  throw new Error(`cannot resolve ${specifier} from ${rel(from)}`)
-}
-
-const edgeCache = new Map<string, string[]>()
-
-/** Modules `path` evaluates at load: static value imports, side-effect
- * imports and value re-exports. Dynamic and `typeof import()` are not edges. */
-function valueEdges(path: string): string[] {
-  const cached = edgeCache.get(path)
-  if (cached !== undefined) return cached
-  if (path.endsWith('.json')) return []
-  const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest)
-  const edges = new Set<string>()
-  for (const statement of source.statements) {
-    let specifier: ts.Expression | undefined
-    if (ts.isImportDeclaration(statement) && hasValueBinding(statement)) {
-      specifier = statement.moduleSpecifier
-    } else if (ts.isExportDeclaration(statement) && reExportsValue(statement)) {
-      specifier = statement.moduleSpecifier
-    }
-    if (specifier === undefined || !ts.isStringLiteral(specifier)) continue
-    const target = resolveSpecifier(path, specifier.text)
-    if (target !== undefined) edges.add(target)
-  }
-  const result = [...edges]
-  edgeCache.set(path, result)
-  return result
-}
 
 describe('reducer registry import boundary', () => {
   test('the reducer registry imports values from no processes/ module outside the shrink-only allowlist', () => {

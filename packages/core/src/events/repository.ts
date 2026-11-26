@@ -31,7 +31,7 @@ import {
   type Actor,
   type ActorKind,
 } from './envelope'
-import { EventValidationError } from './catalog'
+import { EventValidationError } from './validation-error'
 import { handbackCauseSchema, handbackReport, providerAttemptSchema } from './payloads'
 
 const round = z.number().int().positive()
