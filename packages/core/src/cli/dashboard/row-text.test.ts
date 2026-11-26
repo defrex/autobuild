@@ -64,6 +64,12 @@ describe('projectRowText', () => {
     expect('title' in bare || 'ticketUrl' in bare).toBe(false)
   })
 
+  test('passes the slot state through unchanged; absent stays absent (unknown)', () => {
+    const slot = { state: 'requested', request: 'resume', priority: 'urgent' } as const
+    expect(row({ slot }).slot).toEqual(slot)
+    expect('slot' in row()).toBe(false)
+  })
+
   test('flags: held only for queued rows under a repository hold, then draining, paused', () => {
     expect(row({ status: 'queued' }, true).flags.map((f) => f.term)).toEqual(['held'])
     expect(row({}, true).flags).toEqual([])

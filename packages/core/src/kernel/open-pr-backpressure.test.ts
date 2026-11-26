@@ -230,6 +230,8 @@ describe('projection and wording', () => {
       occupied: 3,
       effective: 4,
       borrowingNodes: [],
+      // The fixtures carry no slot seqs, as an older server's values do.
+      slots: {},
     })
     expect(dispatchCapacity(builds, 4, now, { openPrs: { policy: {}, engaged: true } })).toEqual(
       dispatchCapacity(builds, 4, now),

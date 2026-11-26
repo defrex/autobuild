@@ -870,12 +870,15 @@ command = "postgres"
     const store = await seedDashboardStore(3)
     const legacy = await legacySnapshot({ store, repo: REPO, clock })
     const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
-    // The blocked build holds no slot (SPEC §12 "What holds a slot").
+    // The blocked build holds no slot (SPEC §12 "What holds a slot"). The
+    // fixtures carry no `build.created`, as an older server's would: every
+    // slot state is unknown.
     expect(snapshot.model.capacity).toEqual({
       configured: 7,
       occupied: 2,
       effective: 7,
       borrowingNodes: [],
+      slots: {},
     })
     // The legacy oracle has no capacity projection: its active counter is
     // every nonterminal build, the blocked one included.
@@ -1627,14 +1630,48 @@ test('builds.control accepts an abort destination and reason, and refuses them o
 test('operator reads of active work cost the same however many builds have settled (#1230)', async () => {
   const { openBuildListingReadBudget } = await import('../testing/reduced-read-budget')
   const open = { records: 3, digests: 3 }
+  const listing = { getReducerValue: 3, getRepo: 1, listOpenBuilds: 1 }
+  const attention = {
+    getArtifact: 1,
+    getReducerValue: 9,
+    getRepo: 6,
+    getRepoArtifact: 1,
+    getRepoHighWater: 1,
+    listOpenBuilds: 2,
+  }
+  // Pinned before slot-state reporting (#1341): reporting it adds no store call.
   expect(await openBuildListingReadBudget()).toEqual({
-    active: open,
-    queued: open,
-    landings: open,
-    dashboard: open,
-    status: open,
-    attention: { records: 6, digests: 6 },
-    capacity: open,
-    attentionAtHead: { records: 6, digests: 6 },
+    active: { ...open, calls: listing },
+    queued: { ...open, calls: listing },
+    landings: {
+      ...open,
+      calls: { getArtifact: 1, getReducerValue: 3, getRepo: 1, listOpenBuilds: 1 },
+    },
+    dashboard: {
+      ...open,
+      calls: {
+        getArtifact: 3,
+        getReducerValue: 4,
+        getRepo: 1,
+        getRepoArtifact: 1,
+        listOpenBuilds: 1,
+      },
+    },
+    status: {
+      ...open,
+      calls: { getReducerValue: 6, getRepo: 4, getRepoArtifact: 1, listOpenBuilds: 1 },
+    },
+    attention: { records: 6, digests: 6, calls: attention },
+    get: {
+      records: 1,
+      digests: 0,
+      calls: { getArtifact: 1, getBuild: 1, getReducerValue: 2, getRepo: 1, getRepoArtifact: 1 },
+    },
+    capacity: { ...open, calls: { getReducerValue: 2, listOpenBuilds: 1 } },
+    attentionAtHead: {
+      records: 6,
+      digests: 6,
+      calls: { ...attention, getRepositoryTail: 1 },
+    },
   })
 })

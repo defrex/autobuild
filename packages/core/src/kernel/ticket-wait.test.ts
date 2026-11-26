@@ -654,6 +654,7 @@ describe('capacity: ticket waits', () => {
       occupied: 1,
       effective: 1,
       borrowingNodes: [],
+      slots: { a: { state: 'none' }, c: { state: 'held' } },
     })
   })
 

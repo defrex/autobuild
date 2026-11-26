@@ -1409,3 +1409,41 @@ test('an undecided awaiting-PR leaf states why it has no landing decision (#944)
   expect(text).not.toContain('landing:  undecided')
   expect('landingUndecided' in JSON.parse(JSON.stringify(d))).toBe(false)
 })
+
+test('builds and build status report slot state, and an older server reads as unknown (#1341)', async () => {
+  const { reduceBuild } = await import('../kernel/reducer')
+  const { summarizeFrom } = await import('./status')
+  // Released after its admission (an answered escalation): it asks to resume.
+  const state = { ...reduceBuild([]), slotAdmittedSeq: 1, slotReleasedSeq: 2 }
+  const answered = { record: record(), state, workspace: true }
+  const urgent = { ...state, priority: 'urgent' as const }
+  const requested = summarizeFrom(record(), urgent, NOW, { ...answered, state: urgent })
+  expect(requested.slotWait).toBe('resume')
+  expect(requested.slot).toEqual({ state: 'requested', request: 'resume', priority: 'urgent' })
+  const held = summarizeFrom(record(), state, NOW, {
+    ...answered,
+    state: { ...state, slotReleasedSeq: 0 },
+  })
+  expect(held.slot).toEqual({ state: 'held' })
+  // An older server's summary has no slot: unknown, never none.
+  const { slot: _slot, ...older } = JSON.parse(JSON.stringify(held))
+  const done = summarizeFrom(record({ slug: 'merged' }), { ...state, status: 'done' }, NOW, {
+    ...answered,
+    state: { ...state, status: 'done' },
+  })
+  expect(done).not.toHaveProperty('slot')
+  const rows = renderSummaries([requested, held, older, done], NOW, '').map((line) =>
+    line.split(/\s{2,}/),
+  )
+  expect(rows.map((row) => row[2])).toEqual([
+    'SLOT',
+    'requested resume urgent',
+    'held',
+    'unknown',
+    '—',
+  ])
+  const lines = (summary: object) => renderDetail({ ...detail(record(), [], NOW), ...summary }, NOW)
+  expect(lines(requested)).toContain('  slot:     requested resume (urgent)')
+  expect(lines(older)).toContain('  slot:     unknown')
+  expect(lines(done).some((line) => line.startsWith('  slot:'))).toBe(false)
+})
