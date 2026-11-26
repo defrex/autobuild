@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { treeDigest } from './cli/dispatch-runtime-dependencies'
@@ -7,6 +7,7 @@ import {
   packageDistribution,
   RUNTIME_ARCHIVE_GZIP_LEVEL,
   SCRATCH_ARCHIVE_GZIP_LEVEL,
+  withDistributionSelection,
 } from './distribution-packaging'
 
 const roots: string[] = []
@@ -196,4 +197,41 @@ test('every boot gzip level extracts the same packaged tree as the default', asy
     if (gzipLevel === SCRATCH_ARCHIVE_GZIP_LEVEL)
       expect(bytes.length).toBeGreaterThan(defaultBytes.length)
   }
+})
+
+test('dry-run selection falls back on failure or a listed symlink, throws staging errors, and always removes staging', async () => {
+  const root = await fixture({ name: 'fixture', version: '1.0.0', files: ['src'] })
+  await mkdir(join(root, 'src'))
+  await writeFile(join(root, 'src/a'), 'a')
+  await symlink('a', join(root, 'src/link'))
+  const listed = (path: string) =>
+    `bun pack v1.4.5\n\npacked 2B package.json\npacked 1B ${path}\n\nTotal files: 2\n`
+  const allocated: string[] = []
+  const filesystem = {
+    mkdtemp: async (prefix: string) => {
+      const path = await mkdtemp(prefix)
+      allocated.push(path)
+      return path
+    },
+    rm,
+  }
+  const select = (dir: string, stdout: string, exitCode = 0) =>
+    withDistributionSelection(
+      dir,
+      async ({ files }) => files,
+      async (cmd) => {
+        expect(cmd).toEqual(['bun', 'pm', 'pack', '--ignore-scripts', '--dry-run'])
+        return { exitCode, stdout, stderr: '' }
+      },
+      undefined,
+      filesystem,
+    )
+  expect(await select(root, listed('src/a'))).toEqual(['package.json', 'src/a'])
+  expect(await select(root, listed('src/a'), 1)).toBeUndefined()
+  expect(await select(root, listed('src/link'))).toBeUndefined()
+  await expect(
+    select(await fixture({ name: 'fixture', files: ['missing'] }), listed('src/a')),
+  ).rejects.toThrow()
+  expect(allocated.length).toBe(4)
+  for (const path of allocated) await absent(path)
 })
