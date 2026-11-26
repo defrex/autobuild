@@ -10,6 +10,8 @@ import {
   copyFile,
   chmod,
   symlink,
+  rm,
+  writeFile,
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path'
 import {
@@ -129,18 +131,43 @@ export async function copySnapshotTree(
   await applyDirectoryModes(directories)
 }
 
+/** Metadata recorded for every node a verbatim copy created, after the copy
+ * finished writing it. `changed` is the greatest recorded change time. */
+export interface TreeWitness {
+  entries: Array<{
+    path: string
+    ino: bigint
+    mode: bigint
+    size: bigint
+    mtimeNs: bigint
+    ctimeNs: bigint
+  }>
+  changed: bigint
+}
+
+async function witnessEntry(path: string): Promise<TreeWitness['entries'][number]> {
+  const { ino, mode, size, mtimeNs, ctimeNs } = await lstat(path, { bigint: true })
+  return { path, ino, mode, size, mtimeNs, ctimeNs }
+}
+
 /** Copies an already validated runtime tree: link strings verbatim, file bytes
- * and permission bits. Every result is digested or import-checked by callers. */
-export async function copyTreeVerbatim(source: string, target: string): Promise<void> {
+ * and permission bits. Every result is digested or import-checked by callers.
+ * The returned witness records each created node once it is final: files after
+ * their mode, directories after every child and mode, so any later change to
+ * bytes, modes, links or entries changes a recorded change time. */
+export async function copyTreeVerbatim(source: string, target: string): Promise<TreeWitness> {
   type Item = { source: string; target: string; depth: number }
   const directories: Array<{ target: string; mode: number; depth: number }> = []
+  const entries: TreeWitness['entries'] = []
   await drainStack<Item>(
     [{ source, target, depth: 0 }],
     TREE_IO_CONCURRENCY,
     async (item, push) => {
       const stat = await lstat(item.source)
-      if (stat.isSymbolicLink()) await symlink(await readlink(item.source), item.target)
-      else if (stat.isDirectory()) {
+      if (stat.isSymbolicLink()) {
+        await symlink(await readlink(item.source), item.target)
+        entries.push(await witnessEntry(item.target))
+      } else if (stat.isDirectory()) {
         await mkdir(item.target, { recursive: item.depth === 0 })
         directories.push({ target: item.target, mode: stat.mode & 0o777, depth: item.depth })
         for (const name of await readdir(item.source))
@@ -152,10 +179,62 @@ export async function copyTreeVerbatim(source: string, target: string): Promise<
       } else if (stat.isFile()) {
         await copyFile(item.source, item.target)
         await chmod(item.target, stat.mode & 0o777)
+        entries.push(await witnessEntry(item.target))
       } else throw new Error(`unsupported runtime tree entry: ${item.source}`)
     },
   )
   await applyDirectoryModes(directories)
+  await forEachBounded(directories, TREE_IO_CONCURRENCY, async ({ target }) => {
+    entries.push(await witnessEntry(target))
+  })
+  let changed = 0n
+  for (const entry of entries) if (entry.ctimeNs > changed) changed = entry.ctimeNs
+  return { entries, changed }
+}
+
+const WITNESS_SEAL_LIMIT_MS = 1000
+
+/** Waits until the filesystem clock has passed every recorded change time, so
+ * any later modification of a witnessed node carries a different change time
+ * even on coarse timestamps. Fails closed when the clock does not advance. */
+export async function sealTreeWitness(witness: TreeWitness, barrier: string): Promise<void> {
+  const started = performance.now()
+  try {
+    for (;;) {
+      await writeFile(barrier, '')
+      if ((await lstat(barrier, { bigint: true })).ctimeNs > witness.changed) return
+      if (performance.now() - started > WITNESS_SEAL_LIMIT_MS)
+        throw new Error(
+          'runtime dependency witness could not be sealed: filesystem clock did not advance',
+        )
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+  } finally {
+    await rm(barrier, { force: true })
+  }
+}
+
+/** Proves a sealed tree still holds exactly the witnessed nodes. Userspace
+ * cannot set change times, so a write, chmod, relink or added or removed entry
+ * (which changes its parent directory) after sealing is refused. */
+export async function assertTreeUnchanged(witness: TreeWitness, describe: string): Promise<void> {
+  await forEachBounded(witness.entries, TREE_IO_CONCURRENCY, async (entry) => {
+    let current: TreeWitness['entries'][number]
+    try {
+      current = await witnessEntry(entry.path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      throw new Error(`${describe} changed during import validation: ${entry.path}; retry dispatch`)
+    }
+    if (
+      current.ino !== entry.ino ||
+      current.mode !== entry.mode ||
+      current.size !== entry.size ||
+      current.mtimeNs !== entry.mtimeNs ||
+      current.ctimeNs !== entry.ctimeNs
+    )
+      throw new Error(`${describe} changed during import validation: ${entry.path}; retry dispatch`)
+  })
 }
 
 /** Digest includes names, executable bits, bytes and internal link topology.

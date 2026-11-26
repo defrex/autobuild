@@ -10,16 +10,17 @@ import {
   mkdtemp,
   readFile,
   readdir,
-  rename,
   rm,
   writeFile,
   chmod,
   realpath,
+  symlink,
 } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { packageDistribution, RUNTIME_ARCHIVE_GZIP_LEVEL } from '../distribution-packaging'
 import { settleInOrder, withSpeculation } from './bounded-io'
 import {
+  assertTreeUnchanged,
   copyDependencies,
   copySnapshotTree,
   copyTreeVerbatim,
@@ -27,6 +28,8 @@ import {
   inside,
   readManifest,
   scanDependencies,
+  sealTreeWitness,
+  type TreeWitness,
   treeDigest,
 } from './dispatch-runtime-dependencies'
 
@@ -397,8 +400,10 @@ type PreparedArchive =
     }
 
 /** Round-trips the distribution archive: extracts it, checks its compiler
- * boundary, entries and configs, joins a copy of the snapshot's dependencies
- * and runs a real import probe against the result. */
+ * boundary, entries and configs, links the stage-private verified dependency
+ * snapshot beside it and runs a real import probe against the result. The link
+ * lives outside the published root and is removed with the extracted tree;
+ * `prepareRuntime` proves the shared snapshot unchanged before publication. */
 async function verifyArchive(
   root: string,
   stage: string,
@@ -407,39 +412,33 @@ async function verifyArchive(
   signal: AbortSignal,
 ): Promise<{ archive: Uint8Array; archiveDigest: string }> {
   const extracted = join(stage, 'archive-check')
-  const modules = join(stage, 'archive-modules')
-  const [verified] = await settleInOrder([
-    (async () => {
-      const archive = await takeArchive()
-      signal.throwIfAborted()
-      const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
-      await mkdir(extracted)
-      const archiveFile = join(stage, 'distribution.tgz')
-      await writeFile(archiveFile, archive)
-      const unpack = Bun.spawn(
-        ['tar', '-xzf', archiveFile, '--strip-components=1', '-C', extracted],
-        { stdout: 'ignore', stderr: 'pipe', signal },
-      )
-      const unpackError = await new Response(unpack.stderr).text()
-      if (
-        (await unpack.exited) !== 0 ||
-        (await readFile(join(extracted, 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG
-      )
-        throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
-      await validateEntries(extracted)
-      await validateCoreConfigs(extracted)
-      return { archive, archiveDigest }
-    })(),
-    copyTreeVerbatim(join(root, 'node_modules'), modules),
-  ])
+  const archive = await takeArchive()
+  signal.throwIfAborted()
+  const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
+  await mkdir(extracted)
+  const archiveFile = join(stage, 'distribution.tgz')
+  await writeFile(archiveFile, archive)
+  const unpack = Bun.spawn(['tar', '-xzf', archiveFile, '--strip-components=1', '-C', extracted], {
+    stdout: 'ignore',
+    stderr: 'pipe',
+    signal,
+  })
+  const unpackError = await new Response(unpack.stderr).text()
+  if (
+    (await unpack.exited) !== 0 ||
+    (await readFile(join(extracted, 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG
+  )
+    throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
+  await validateEntries(extracted)
+  await validateCoreConfigs(extracted)
   signal.throwIfAborted()
   // Archived dependencies would shadow the snapshot's verified copy.
   if (existsSync(join(extracted, 'node_modules')))
     throw new Error('runtime archive must not contain node_modules')
-  await rename(modules, join(extracted, 'node_modules'))
+  await symlink(relative(extracted, join(root, 'node_modules')), join(extracted, 'node_modules'))
   await validateRuntimeImports(extracted, checkout, signal)
   await rm(extracted, { recursive: true })
-  return verified
+  return { archive, archiveDigest }
 }
 
 /** Digests the completed snapshot and reuses a matching runtime, or else
@@ -495,6 +494,7 @@ export async function prepareRuntime(
     // reports failures in the order the stages once ran serially. Packaging
     // reads only the staged code, so it starts as soon as that is complete and
     // is awaited, or aborted and awaited, before anything else proceeds.
+    let witness: TreeWitness | undefined
     const { graph, prepared } = await withSpeculation(
       async (signal) => {
         await staged
@@ -514,10 +514,14 @@ export async function prepareRuntime(
           })(),
           scanned.then((graph) => acquireLayer(cache, stage, graph)),
         ])
-        await copyTreeVerbatim(
+        // Both import probes resolve this one stage-private snapshot. Sealing
+        // its witness before any probe starts makes every later change to it
+        // observable; publication checks the witness once both have exited.
+        witness = await copyTreeVerbatim(
           join(layer, 'distribution', 'node_modules'),
           join(root, 'node_modules'),
         )
+        await sealTreeWitness(witness, join(stage, 'dependency-witness'))
         await validateEntries(root)
         await validateCoreConfigs(root)
         // The snapshot is complete. These branches only read it or the source,
@@ -544,6 +548,10 @@ export async function prepareRuntime(
       await validateRuntime(prepared.reusable)
       return prepared.reusable
     }
+    // Every probe and branch has settled. The published digest describes the
+    // snapshot as copied from the verified layer, so refuse it if a probe
+    // changed any dependency byte, mode, link or entry since.
+    await assertTreeUnchanged(witness!, 'runtime dependency snapshot')
     const { id, destination, digest, archive, archiveDigest } = prepared
     await writeFile(join(stage, 'distribution.tgz'), archive)
     const guestArchive: NonNullable<CachedRuntime['guestArchive']> =
