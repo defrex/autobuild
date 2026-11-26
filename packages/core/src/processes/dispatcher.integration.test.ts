@@ -19604,6 +19604,28 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       return { h, append, admissions, claimed }
     }
 
+    test('a released node with a retained workspace does not resume at startup into a held slot', async () => {
+      const { h, append, admissions } = await legacy()
+      await append('execution.ended', {
+        instance: 'old',
+        workspaceRef: `/ws/ab-node/${NODE}`,
+        outcome: 'completed',
+      })
+      await h.store.releaseLease(NODE, 'old-runner')
+      await append('build.paused', {})
+      await append('build.resumed', {})
+      // A work build holds the only slot.
+      await h.store.createBuild({ slug: 'holder', repo: REPO, branch: 'ab/holder' })
+      await h.store.append('holder', {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: { source: 'fake', id: 'H' }, repo: REPO, baseBranch: 'main' },
+      })
+      await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+      expect(h.launches).not.toContain(NODE)
+      expect(await admissions()).toEqual([])
+    })
+
     test('it keeps the only slot, is adopted once, and holds through a lost runner and a restart', async () => {
       const { h, append, admissions, claimed } = await legacy()
       await h.dispatcher.tick()

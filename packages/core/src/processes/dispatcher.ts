@@ -2496,7 +2496,8 @@ export class Dispatcher {
     if (!this.accountsAvailable()) return 'already-active'
     if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
-    const launchState = (await this.store.buildFacts(slug)).state
+    const launchFacts = await this.store.buildFacts(slug)
+    const launchState = launchFacts.state
     // A landed node has nothing left to run; the janitor settles it.
     if (nodeLanded(launchState)) return 'already-active'
     if (launchState.kind === 'node' && !launchState.nodeRestack?.conflict) {
@@ -2517,6 +2518,14 @@ export class Dispatcher {
     if (launched.has(slug)) return 'already-active'
     if (launchState.kind !== 'node' && (await this.leafAdmission(slug)) !== 'admit')
       return 'already-active'
+    // Every node launch path (cascade, admission, sweep, startup resume) runs
+    // only work the node holds a slot for (SPEC §12); abort and pause
+    // acknowledgements stay ungated.
+    if (launchState.kind === 'node') {
+      const record = await this.store.getBuild(slug)
+      if (record === null || !this.nodeRelaunchAdmitted(record, launchFacts))
+        return 'already-active'
+    }
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
     // Callers reap and reprovision a flagged workspace; an agent never starts
