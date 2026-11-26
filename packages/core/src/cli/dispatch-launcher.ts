@@ -14,6 +14,7 @@ import {
   restoreLauncherTerminal,
 } from './dispatch-launch-stop'
 import { watchPresentationJob } from './dispatch-presentation-job'
+import { supervisionCadence, supervisionPause } from './dispatch-launcher-cadence'
 import { dirname, basename, resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { distributionRoot } from '../distribution'
@@ -334,6 +335,7 @@ export async function launchDispatcher(launchArgv: string[]): Promise<number> {
       bootstrap.rollbackVersion === 1,
     )
     const readerFailures = generationReaderFailures((message) => console.error(message))
+    const cadence = supervisionCadence()
     for (;;) {
       if (signal) break
       // Once recovery has expired, a failed child must retain its ordinary
@@ -361,6 +363,7 @@ export async function launchDispatcher(launchArgv: string[]): Promise<number> {
         successor?: string
         accepted?: boolean
         released?: boolean
+        preparing?: string
       }
       try {
         projection = await upgradeReader(active)
@@ -571,18 +574,14 @@ export async function launchDispatcher(launchArgv: string[]): Promise<number> {
         if (record !== active && record !== pending?.record && record.result)
           children.delete(record)
       pruneRuntimes(dirname(dirname(runtime.root)))
-      let timer: ReturnType<typeof setTimeout> | undefined
-      try {
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, pending ? 250 : 1_000)
-          }),
+      await supervisionPause(
+        cadence(projection, !!pending),
+        [
           ...(!active.result ? [active.exited] : []),
           ...(pending && !pending.record.result ? [pending.record.exited] : []),
-        ])
-      } finally {
-        clearTimeout(timer)
-      }
+        ],
+        stopping.signal,
+      )
     }
   } catch (error) {
     if (!signal) throw error

@@ -190,6 +190,10 @@ export interface UpgradeProjection {
   accepted?: boolean
   successor?: string
   released?: boolean
+  /** The active run's detected upgrade correlation while it has no prepared
+   * target, failure, request or handoff yet. Advisory scheduling input for
+   * the launcher's observation cadence only, never a lifecycle decision. */
+  preparing?: string
 }
 export interface UpgradeCondition {
   version: 1
@@ -252,6 +256,7 @@ function validUpgradeProjection(value: unknown): value is UpgradeProjection {
     (p.rollbackVersion === undefined || p.rollbackVersion === 1) &&
     (p.takeoverAt === undefined || typeof p.takeoverAt === 'string') &&
     (p.successor === undefined || typeof p.successor === 'string') &&
+    (p.preparing === undefined || (typeof p.preparing === 'string' && p.preparing.length > 0)) &&
     (p.journal === undefined ||
       (!!p.journal && typeof p.journal.storeRef === 'string' && typeof p.journal.repo === 'string'))
   )
