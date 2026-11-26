@@ -87,6 +87,19 @@ export async function listOperatorBuilds(opts: {
   return withOperatorView(opts.store, opts.repo, 'builds', (view) => listFromView(view, opts))
 }
 
+/** A node's provisioning marker, for capacity; a leaf reads none. */
+async function nodeProvisioning(
+  view: RepoViewStore,
+  slug: string,
+  state: BuildState,
+): Promise<{ provisioning: boolean; provisioningSeq?: number }> {
+  if (state.kind !== 'node') return { provisioning: false }
+  const marker = (await readBuildFacts(view, slug)).value.provisionMarker
+  return marker === undefined
+    ? { provisioning: false }
+    : { provisioning: true, provisioningSeq: marker.seq }
+}
+
 async function listFromView(
   view: RepoViewStore,
   opts: { repo: string; scope: BuildListScope; now: Date },
@@ -121,10 +134,10 @@ async function listFromView(
           record,
           state: facts.state,
           workspace: facts.workspace !== null,
-          // Leaves rely on the continuation's lease; only nodes read the marker.
-          provisioning:
-            facts.state.kind === 'node' &&
-            (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+          // Leaves rely on the continuation's lease; only nodes read the
+          // marker, which anchors a node runner launched before node
+          // admissions were recorded (`legacyNodeRunner`).
+          ...(await nodeProvisioning(view, record.slug, facts.state)),
           restackDue: landingRestackDue(facts.state, facts.log),
         },
         opts.now,
@@ -434,9 +447,7 @@ async function dashboardFromView(
       record,
       state: facts.state,
       workspace: facts.workspace !== null,
-      provisioning:
-        facts.state.kind === 'node' &&
-        (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+      ...(await nodeProvisioning(view, record.slug, facts.state)),
       restackDue: landingRestackDue(facts.state, facts.log),
     })
     if (projectsNoDashboardRow(facts.state)) continue

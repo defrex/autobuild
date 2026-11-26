@@ -114,17 +114,21 @@ import {
   leafHoldsSlot,
   leafOutsideWait,
   leafSlotRequest,
-  occupiesCapacity,
+  legacyNodeRunner,
+  legacyNodeRunnerNeed,
+  nodeHoldsSlot,
+  nodeRunnerWork,
+  nodeSlotNeed,
   reservedAhead,
   settlementDue,
   settlementKey,
-  slotRequest,
   startCapacity,
   startClaimDemand,
   strandedNodeWorkspace,
   urgentClaimDemand,
   type CapacityBuild,
   type DispatchCapacity,
+  type NodeSlotNeed,
 } from '../kernel/dispatch-capacity'
 import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import {
@@ -1292,6 +1296,9 @@ export class Dispatcher {
    * "Slot admission order"). Nothing was written for them;
    * `admitDeferredParked` retries each through its generic path. */
   private readonly deferredAdmissions = new Map<string, 'leaf' | 'node' | 'proposer'>()
+  /** Nodes `admitWaitingNodes` admitted in its current verification pass, so
+   * proposer admission counts them even when provisioning or launch failed. */
+  private passNodeAdmissions: Set<string> | undefined
   /** Per tick: admission may defer normal parked work. Opened by `runTick`
    * when claims can run, closed once urgent claims were evaluated. */
   private admissionBoundary = false
@@ -2489,7 +2496,8 @@ export class Dispatcher {
     if (!this.accountsAvailable()) return 'already-active'
     if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
-    const launchState = (await this.store.buildFacts(slug)).state
+    const launchFacts = await this.store.buildFacts(slug)
+    const launchState = launchFacts.state
     // A landed node has nothing left to run; the janitor settles it.
     if (nodeLanded(launchState)) return 'already-active'
     if (launchState.kind === 'node' && !launchState.nodeRestack?.conflict) {
@@ -2510,6 +2518,14 @@ export class Dispatcher {
     if (launched.has(slug)) return 'already-active'
     if (launchState.kind !== 'node' && (await this.leafAdmission(slug)) !== 'admit')
       return 'already-active'
+    // Every node launch path (cascade, admission, sweep, startup resume) runs
+    // only work the node holds a slot for (SPEC §12); abort and pause
+    // acknowledgements stay ungated.
+    if (launchState.kind === 'node') {
+      const record = await this.store.getBuild(slug)
+      if (record === null || !this.nodeRelaunchAdmitted(record, launchFacts))
+        return 'already-active'
+    }
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
     // Callers reap and reprovision a flagged workspace; an agent never starts
@@ -4092,17 +4108,24 @@ export class Dispatcher {
         ? ((allocatedLeaf ? this.store.retainedBuildFacts(record.slug) : undefined) ??
           (await this.store.servedBuildFacts(record.slug)))
         : await this.store.buildFacts(record.slug)
+      // A node's marker no longer holds a slot: it feeds the stranded
+      // workspace release, the proposer skip and the anchor of a runner an
+      // older dispatcher launched (`legacyNodeRunner`).
+      const marker =
+        digest.kind === 'node'
+          ? served
+            ? facts.provisionMarker
+            : (await readBuildFacts(this.store, record.slug)).value.provisionMarker
+          : undefined
       builds.push({
         record,
         state: facts.state,
         workspace: facts.workspace !== null,
         provisioning:
           digest.kind === 'node'
-            ? (served
-                ? facts.provisionMarker
-                : (await readBuildFacts(this.store, record.slug)).value.provisionMarker) !==
-              undefined
+            ? marker !== undefined
             : this.continuations.has(record.slug) || !!launched?.has(record.slug),
+        ...(marker !== undefined ? { provisioningSeq: marker.seq } : {}),
         restackDue: landingRestackDue(facts.state, facts.log),
       })
     }
@@ -4258,10 +4281,13 @@ export class Dispatcher {
         else if (kind === 'node') {
           const builds = await this.capacityBuilds()
           const build = builds.find((entry) => entry.record.slug === slug)
-          if (build) await this.admitNode(build, this.deps.clock(), report, launched)
+          // A deferred reconcile launches only through the cascade.
+          if (build && nodeSlotNeed(build, this.deps.clock())?.request === 'reconcile')
+            await this.cascadeNode(record, build.state, report, launched, opts)
+          else if (build) await this.admitNode(build, this.deps.clock(), report, launched)
         } else {
           const builds = await this.capacityBuilds()
-          await this.admitProposers(builds, this.deps.clock(), 0, report, launched, opts, slug)
+          await this.admitProposers(builds, this.deps.clock(), report, launched, opts, slug)
         }
       } catch (error) {
         rethrowAuthorityLapse(error)
@@ -4306,19 +4332,58 @@ export class Dispatcher {
     )
     await this.releaseStrandedNodeWorkspaces(builds, now, launched, report, opts)
     if (this.outOfBudget(opts)) return
-    const waiting = builds.filter(
-      (build) =>
-        slotRequest(build, now) === 'verification' ||
-        (nodeMeasurementDue(build.state) &&
-          !proposeStarted(build.state) &&
-          slotRequest({ ...build, workspace: false }, now) === 'verification'),
-    )
-    const before = launched.size
-    for (const build of waiting) {
-      if (this.outOfBudget(opts)) return
-      await this.admitNode(build, now, report, launched)
+    await this.adoptLegacyNodeRunners(builds, now, report)
+    // A node asking for a verification slot, and one admitted for
+    // verification whose runner never started or was lost: nothing else
+    // relaunches it.
+    const waiting = builds.filter((build) => nodeRunnerWork(build, now)?.request === 'verification')
+    const admitted = new Set<string>()
+    this.passNodeAdmissions = admitted
+    try {
+      for (const build of waiting) {
+        if (this.outOfBudget(opts)) return
+        await this.admitNode(build, now, report, launched)
+      }
+    } finally {
+      this.passNodeAdmissions = undefined
     }
-    await this.admitProposers(builds, now, launched.size - before, report, launched, opts)
+    // A node admitted this pass holds its slot whatever its provisioning or
+    // launch did: the proposers' capacity counts it from its durable facts,
+    // and a holder that merely relaunched is already counted.
+    for (const build of waiting)
+      if (admitted.has(build.record.slug))
+        build.state = (await this.store.servedBuildFacts(build.record.slug)).state
+    await this.admitProposers(builds, now, report, launched, opts)
+  }
+
+  /**
+   * The version transition (SPEC §15 `slot.admitted`): record, once, the
+   * admission of every node runner an older dispatcher launched without one
+   * (`legacyNodeRunner`). The predicate counts such a runner as holding its
+   * slot from the first tick, before this write; the fact keeps the slot
+   * through a later crash or expired lease until that work is done. Pure over
+   * the states this pass loaded, so nothing is read once no legacy runner
+   * remains. An adopted entry is updated in place; a lost race is decided
+   * again next pass.
+   */
+  private async adoptLegacyNodeRunners(
+    builds: CapacityBuild[],
+    now: Date,
+    report: TickReport,
+  ): Promise<void> {
+    for (const build of builds) {
+      const need = legacyNodeRunnerNeed(build, now)
+      if (need === undefined) continue
+      try {
+        if (await this.admitNodeNeed(build.record.slug, build.state, need))
+          build.state = (await this.store.servedBuildFacts(build.record.slug)).state
+      } catch (error) {
+        rethrowAuthorityLapse(error)
+        report.janitorDiagnostics.push(
+          `build ${build.record.slug}: node runner adoption failed — ${String(error)}`,
+        )
+      }
+    }
   }
 
   /** One waiting node's admission: a measurement or its integration
@@ -4338,7 +4403,7 @@ export class Dispatcher {
       return
     await withForgeRequestContext({ build: record.slug }, async () => {
       try {
-        if ((await this.nodeHasCapacity(record.slug)) !== 'admit') return
+        if ((await this.nodeAdmission(record.slug)) !== 'admit') return
         if (nodeMeasurementDue(state)) await this.prepareNodeMeasurement(record, report, launched)
         else await this.prepareIntegration(record, state, report, launched)
       } catch (error) {
@@ -4398,7 +4463,6 @@ export class Dispatcher {
   private async admitProposers(
     builds: CapacityBuild[],
     now: Date,
-    admittedThisPass: number,
     report: TickReport,
     launched: Set<string>,
     opts: TickOpts,
@@ -4415,7 +4479,7 @@ export class Dispatcher {
       urgentClaims: this.urgentClaims(),
       startRequests: this.startClaims(),
     })
-    let occupied = projection.occupied + admittedThisPass
+    let occupied = projection.occupied
     for (const build of proposers) {
       if (this.outOfBudget(opts)) return
       const { record, state } = build
@@ -4442,18 +4506,19 @@ export class Dispatcher {
               await this.releaseWorkspace(record.slug, facts)
             return
           }
-          // A workspace already holds this node's slot (a proposer that lost
-          // its runner); otherwise it needs a free one.
-          const holding = build.workspace
+          // An admitted proposer holds its slot (one that lost its runner
+          // relaunches); otherwise it needs a free one.
+          const holding = nodeHoldsSlot(build, now) || legacyNodeRunner(build, now)
+          const need = holding ? undefined : nodeSlotNeed(build, now)
           if (
             (holding
               ? state.status === 'paused' || state.status === 'blocked'
-              : slotRequest(build, now) !== 'propose') ||
+              : need?.request !== 'propose') ||
             !state.nodeOpened ||
             !janitorDue(state.janitor, now)
           )
             return
-          if (!holding) {
+          if (need !== undefined) {
             if (!this.accountsAvailable()) return
             const outcome = this.slotAdmission(
               record.slug,
@@ -4463,6 +4528,7 @@ export class Dispatcher {
             )
             if (outcome === 'defer') this.deferredAdmissions.set(record.slug, 'proposer')
             if (outcome !== 'admit') return
+            if (!(await this.admitNodeNeed(record.slug, state, need))) return
             occupied++
           }
           await this.launchProposer(record, report, launched)
@@ -4806,40 +4872,85 @@ export class Dispatcher {
     await this.recordExhausted(record.slug)
   }
 
-  /** A node's admission into a free slot, counting every other build that
-   * holds a slot. A verification or measurement request (`reserving`) yields
-   * to urgent work ahead of it and defers while urgent claims are
-   * unevaluated. A node that already holds its slot — a restack-conflict
-   * reconcile, or runner work that kept its workspace across a failed launch
-   * or expired lease — only needs the node's own room: priority orders free
-   * slots, never one the node owns. */
-  private async nodeHasCapacity(
-    slug: string,
-    reserving = true,
-  ): Promise<'admit' | 'wait' | 'defer'> {
+  /** Whether a node may start runner work now (SPEC §12 "What holds a
+   * slot"). A node that holds its slot is admitted at once: a relaunch after
+   * a crashed runner or an expired lease, or continued provisioning. Every
+   * other node's current request (`verification`, `reconcile` or `propose`)
+   * needs a free slot among every other build, after the work ahead of it,
+   * under the same tiers and urgent ordering as parked leaves. Admission is
+   * the durable `slot.admitted {request, need}` fact, appended on the state
+   * this decision read before anything is provisioned or launched, so a
+   * crash or restart after it keeps the slot until that need is done. A
+   * denial is recorded nowhere; a deferral is retried after this tick's
+   * dispatch. */
+  private async nodeAdmission(slug: string): Promise<'admit' | 'wait' | 'defer'> {
     const builds = await this.capacityBuilds()
     const now = this.deps.clock()
-    const capacity = this.deps.config.capacity
-    const { occupied } = dispatchCapacity(
-      builds.filter((build) => build.record.slug !== slug),
-      capacity,
-      now,
-    )
     const node = builds.find((build) => build.record.slug === slug)
-    if (!reserving || (node && occupiesCapacity(node, now)))
-      return occupied < capacity ? 'admit' : 'wait'
+    if (node === undefined) return 'wait'
+    if (nodeHoldsSlot(node, now) || legacyNodeRunner(node, now)) return 'admit'
+    const need = nodeSlotNeed(node, now)
+    if (need === undefined) return 'wait'
+    const capacity = this.deps.config.capacity
     const outcome = this.slotAdmission(
       slug,
-      node ? buildPriority(node.state) : 'normal',
-      occupied,
+      buildPriority(node.state),
+      dispatchCapacity(
+        builds.filter((build) => build.record.slug !== slug),
+        capacity,
+        now,
+      ).occupied,
       dispatchCapacity(builds, capacity, now, {
         urgentClaims: this.urgentClaims(),
         startRequests: this.startClaims(),
       }),
     )
+    if (outcome === 'admit')
+      return (await this.admitNodeNeed(slug, node.state, need)) ? 'admit' : 'wait'
     if (outcome === 'defer' && !this.deferredAdmissions.has(slug))
       this.deferredAdmissions.set(slug, 'node')
     return outcome
+  }
+
+  /** Record a node's admission for one runner need on the state the decision
+   * read; false when the state moved under it (decided again next tick).
+   * The admitted facts are retained so this tick's capacity counts the node
+   * as holding its slot. */
+  private async admitNodeNeed(
+    slug: string,
+    state: BuildState,
+    need: NodeSlotNeed,
+  ): Promise<boolean> {
+    const admitted = await this.store.appendIfCurrent(slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'slot.admitted',
+      payload: { request: need.request, need: need.key },
+    } satisfies EventWrite<'slot.admitted'>)
+    if (admitted === null) return false
+    this.passNodeAdmissions?.add(slug)
+    await this.store.servedBuildFacts(slug)
+    return true
+  }
+
+  /** A node's runner may be relaunched by the sweep: it holds its slot (or is
+   * a legacy runner counted as holding one), or an abort or pause awaits its
+   * acknowledgement. */
+  private nodeRelaunchAdmitted(record: BuildRecord, facts: CurrentBuildFacts): boolean {
+    const { state } = facts
+    if (
+      state.pendingCommands.some(
+        (command) => command.command === 'abort' || command.command === 'pause',
+      )
+    )
+      return true
+    const now = this.deps.clock()
+    const build: CapacityBuild = {
+      record,
+      state,
+      workspace: facts.workspace !== null,
+      restackDue: landingRestackDue(state, facts.log),
+    }
+    return nodeHoldsSlot(build, now) || legacyNodeRunner(build, now)
   }
 
   private hasLiveExecutionLease(record: BuildRecord): boolean {
@@ -8283,6 +8394,9 @@ export class Dispatcher {
     // A finished leaf with work to run waits for a slot before anything is
     // reaped, provisioned or launched for it.
     if (runs && state.kind !== 'node' && (await this.leafAdmission(record.slug)) !== 'admit') return
+    // A node relaunches only for work it holds a slot for: a retained
+    // workspace confers none. Abort and pause acknowledgements are ungated.
+    if (runs && state.kind === 'node' && !this.nodeRelaunchAdmitted(record, facts)) return
     // A finished parked leaf keeps its workspace until merge or close; a
     // stale environment is reaped only for an admitted replacement.
     // A leaf waiting on tickets, or on the dispatcher's check of its wait,
@@ -9869,7 +9983,7 @@ export class Dispatcher {
         }
 
         if (!this.accountsAvailable()) return
-        if ((await this.nodeHasCapacity(record.slug, false)) !== 'admit') return
+        if ((await this.nodeAdmission(record.slug)) !== 'admit') return
         // `launch()` refuses a flagged workspace and leaves the reap to its
         // callers; this is the node's caller for conflict work.
         const current = await this.replaceFlaggedWorkspace(record, facts, launched)
@@ -10172,7 +10286,7 @@ export class Dispatcher {
         await this.releaseWorkspace(record.slug, facts)
       return
     }
-    if ((await this.nodeHasCapacity(record.slug)) !== 'admit') return
+    if ((await this.nodeAdmission(record.slug)) !== 'admit') return
     await this.observeIntegration(record.slug)
     state = (await this.store.buildFacts(record.slug)).state
     if (!integrationCurrent(state)) return

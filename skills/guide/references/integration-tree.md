@@ -98,19 +98,32 @@ execution lease or dispatch capacity. A PR opens or is adopted when the node
 has commits its current parent lacks; parent-only advancement remains empty.
 
 
-A node requesting reconcile, verification or, for an optimization node,
-propose is admitted before normal ticket claims; urgent work goes first. The request is durable: a
-prepared verification cycle, a restack conflict or an open proposal request,
-with no runner yet. Until the node holds its slot, intake reserves one
-slot for it, and the dispatcher checks its admission every tick regardless of
-idle node polling, so a slot freed in any tick goes to the node, not to a new
-normal claim. A node's admission counts every build that holds a slot, as every
-admission does. Blocked and paused descendants hold none, so they never stand
-between a node and the slot it needs to unblock them, and no node uses a
-descendant's slot. Provisioning reserves node occupancy before the runner
-starts. Status and both dashboards report occupancy against configured
-capacity, and each node waiting for a slot ahead of normal ticket claims,
-marking urgent ones. Idle collecting nodes remain free.
+A node takes a slot only by admission for runner work: `reconcile` for a
+restack conflict, `verification` for an integration cycle or a measurement, and
+`propose` for an optimization node's open proposal request. The request is
+durable and is admitted before normal ticket claims, urgent work first. Until
+the node holds its slot, intake reserves one slot for it, and the dispatcher
+checks its admission every tick regardless of idle node polling, so a slot
+freed in any tick goes to the node, not to a new normal claim. Admission counts
+every build that holds a slot, as every admission does.
+
+- **Recorded before provisioning.** Admission is a durable `slot.admitted`
+  fact naming the work it admitted.
+- **Held through the work.** The node keeps the slot through provisioning,
+  launch and relaunch after a crashed runner or expired lease, and across a
+  dispatcher restart, until that work is done: the cycle verified or failed,
+  the measurement recorded, the proposal deposited or the restack settled.
+- **Released on an outside wait.** A paused node, or one blocked on a question
+  (a restack conflict's escalation included), holds none. Once answered or
+  resumed, it requests its slot again.
+- **Never held by idling.** An idle collecting node, a node waiting for a
+  repair child and a node's retained workspace hold none. Blocked and paused
+  descendants hold none either, so they never stand between a node and the
+  slot it needs to unblock them.
+
+Status and both dashboards report occupancy against configured capacity, and
+each node waiting for a slot ahead of normal ticket claims, marking urgent
+ones.
 
 Claims freeze the destination build generation and branch. Missing, unopened,
 merged, closed or aborted targets leave work queued with diagnostics. The newest
