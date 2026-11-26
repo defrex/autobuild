@@ -13,7 +13,6 @@ import {
   readdir,
   rm,
   writeFile,
-  chmod,
   realpath,
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -21,12 +20,15 @@ import { packageDistribution } from '../distribution-packaging'
 import {
   copyDependencies,
   copySnapshotTree,
+  diskSnapshotWriter,
   excludedSnapshotNames,
   inside,
   readManifest,
   scanDependencies,
   treeDigest,
+  type SnapshotWriter,
 } from './dispatch-runtime-dependencies'
+import { SnapshotModel } from './dispatch-runtime-model'
 
 export const RUNTIME_CONFIG = '{}\n'
 const requiredRuntimeEntries = [
@@ -174,7 +176,11 @@ exec bun --no-install --tsconfig-override "$runtime_root/tsconfig.json" "$runtim
 /** Publication, retention and process-use claims share this short lock. */
 export const withCacheLock = mutateRuntimeCache
 
-async function stageCode(source: string, target: string): Promise<void> {
+export async function stageCode(
+  source: string,
+  target: string,
+  writer: SnapshotWriter = diskSnapshotWriter,
+): Promise<void> {
   const manifest = await readManifest(source)
   let bunTag: string | undefined
   try {
@@ -189,16 +195,23 @@ async function stageCode(source: string, target: string): Promise<void> {
   }
   if (!Array.isArray(manifest.files))
     throw new Error('Autobuild manifest must declare distribution files')
-  await mkdir(target, { recursive: true })
+  await writer.mkdirp(target)
   for (const entry of manifest.files) {
     if (entry.startsWith('!') || entry === 'tsconfig.json') continue
     if (!inside(source, resolve(source, entry)) || excludedSnapshotNames.has(entry))
       throw new Error(`unsafe distribution path: ${entry}`)
-    await copySnapshotTree(join(source, entry), join(target, entry), source)
+    await copySnapshotTree(
+      join(source, entry),
+      join(target, entry),
+      source,
+      undefined,
+      undefined,
+      writer,
+    )
   }
   // Preserve Bun's forge provenance even when the tag only contains an abbreviated SHA.
   if (bunTag) {
-    await writeFile(join(target, '.bun-tag'), bunTag)
+    await writer.writeFile(join(target, '.bun-tag'), bunTag)
     if (!manifest.files.includes('.bun-tag')) manifest.files.push('.bun-tag')
   }
   delete manifest.devDependencies
@@ -225,10 +238,21 @@ async function stageCode(source: string, target: string): Promise<void> {
     /* Package provenance may be unknown without Git. */
   }
   manifest.files = [...manifest.files.filter((p) => p !== 'tsconfig.json'), 'tsconfig.json']
-  await writeFile(join(target, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-  await writeFile(join(target, 'tsconfig.json'), RUNTIME_CONFIG)
-  await writeFile(join(target, 'bin/agent/ab'), cachedAgentTrampoline)
-  await chmod(join(target, 'bin/agent/ab'), 0o755)
+  await writer.writeFile(join(target, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  await writer.writeFile(join(target, 'tsconfig.json'), RUNTIME_CONFIG)
+  await writer.writeFile(join(target, 'bin/agent/ab'), cachedAgentTrampoline)
+  await writer.chmod(join(target, 'bin/agent/ab'), 0o755)
+}
+/** Content identity of a staged code tree, as `sourceCodeDigest` computes it. */
+export function stagedCodeDigest(root: string): Promise<string> {
+  return treeDigest(root, new Set(), undefined, { linkModes: false })
+}
+/** The staged code digest a fresh staging of `source` would produce at
+ * `virtualRoot`, computed from current source bytes without writing a copy. */
+export async function sourceCodeDigest(source: string, virtualRoot: string): Promise<string> {
+  const model = new SnapshotModel(virtualRoot)
+  await stageCode(source, virtualRoot, model)
+  return model.digest()
 }
 export async function guestArchiveProvenance(source: string): Promise<'source' | 'registry'> {
   const cached = await cachedRuntime(source)
@@ -363,12 +387,12 @@ export async function prepareRuntime(
   try {
     const graph = await scanDependencies(source)
     await stageCode(source, root)
-    const codeDigest = await treeDigest(root)
+    const codeDigest = await stagedCodeDigest(root)
+    // The source must still produce exactly the staged bytes. The check is
+    // virtual: it stages into memory and reads every source byte again.
     const check = join(stage, 'source-check')
-    await stageCode(source, check)
-    if ((await treeDigest(check)) !== codeDigest)
+    if ((await sourceCodeDigest(source, check)) !== codeDigest)
       throw new Error('Autobuild source changed while preparing runtime; retry dispatch')
-    await rm(check, { recursive: true })
     const layers = join(cache, 'layers')
     await mkdir(layers, { recursive: true })
     const layer = join(layers, graph.fingerprint)
@@ -402,10 +426,8 @@ export async function prepareRuntime(
     await validateCoreConfigs(root)
     if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
       throw new Error('installed dependencies changed while preparing runtime; retry dispatch')
-    await stageCode(source, check)
-    if ((await treeDigest(check)) !== codeDigest)
+    if ((await sourceCodeDigest(source, check)) !== codeDigest)
       throw new Error('Autobuild source changed while preparing runtime; retry dispatch')
-    await rm(check, { recursive: true })
     // Real Bun import graph validation uses the same pre-entry compiler boundary
     // as every generation and runner. No automatic installer can run here.
     await validateRuntimeImports(root, checkout)

@@ -10,6 +10,7 @@ import {
   copyFile,
   chmod,
   symlink,
+  writeFile,
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path'
 
@@ -49,6 +50,24 @@ export async function installedPackage(name: string, start: string): Promise<str
   }
 }
 
+/** Every target-side effect of snapshot staging. Source-side reads stay direct. */
+export interface SnapshotWriter {
+  mkdirp(path: string): Promise<void>
+  copyFile(from: string, to: string): Promise<void>
+  chmod(path: string, mode: number): Promise<void>
+  symlink(text: string, path: string): Promise<void>
+  writeFile(path: string, data: string): Promise<void>
+}
+export const diskSnapshotWriter: SnapshotWriter = {
+  mkdirp: async (path) => {
+    await mkdir(path, { recursive: true })
+  },
+  copyFile: (from, to) => copyFile(from, to),
+  chmod: (path, mode) => chmod(path, mode),
+  symlink: (text, path) => symlink(text, path),
+  writeFile: (path, data) => writeFile(path, data),
+}
+
 /** Independent bytes, never hardlinks. Package-internal links are normalized;
  * an escaping asset link is rejected rather than silently following a checkout. */
 export async function copySnapshotTree(
@@ -57,6 +76,7 @@ export async function copySnapshotTree(
   boundary = source,
   stack = new Set<string>(),
   exclusions = excludedSnapshotNames,
+  writer: SnapshotWriter = diskSnapshotWriter,
 ): Promise<void> {
   const actual = await realpath(source)
   if (!inside(boundary, actual))
@@ -65,37 +85,52 @@ export async function copySnapshotTree(
   const sourceStat = await lstat(source)
   if (sourceStat.isSymbolicLink()) {
     const mapped = resolve(target, relative(source, actual))
-    await mkdir(dirname(target), { recursive: true })
-    await symlink(relative(dirname(target), mapped), target)
+    await writer.mkdirp(dirname(target))
+    await writer.symlink(relative(dirname(target), mapped), target)
     return
   }
   const stat = await lstat(actual)
   if (stat.isDirectory()) {
-    await mkdir(target, { recursive: true })
+    await writer.mkdirp(target)
     const next = new Set(stack).add(actual)
     for (const name of (await readdir(actual)).sort()) {
       if (exclusions.has(name) || (exclusions.has('.env') && name.startsWith('.env.'))) continue
-      await copySnapshotTree(join(actual, name), join(target, name), boundary, next, exclusions)
+      await copySnapshotTree(
+        join(actual, name),
+        join(target, name),
+        boundary,
+        next,
+        exclusions,
+        writer,
+      )
     }
-    await chmod(target, stat.mode & 0o777)
+    await writer.chmod(target, stat.mode & 0o777)
   } else if (stat.isFile()) {
-    await mkdir(dirname(target), { recursive: true })
-    await copyFile(actual, target)
-    await chmod(target, stat.mode & 0o777)
+    await writer.mkdirp(dirname(target))
+    await writer.copyFile(actual, target)
+    await writer.chmod(target, stat.mode & 0o777)
   } else throw new Error(`unsupported snapshot asset: ${source}`)
 }
 
-/** Digest includes names, executable bits, bytes and internal link topology. */
+/** Digest includes names, executable bits, bytes and internal link topology.
+ * `linkModes: false` hashes a link's mode as 0: `symlink()` never copies a
+ * source link's mode, and its platform-defined bits are not source content. */
 export async function treeDigest(
   root: string,
   exclude = new Set<string>(),
   allowedLink?: string,
+  options: { linkModes?: boolean } = {},
 ): Promise<string> {
   const hash = createHash('sha256')
   async function walk(path: string): Promise<void> {
     const rel = relative(root, path)
     const stat = await lstat(path)
-    hash.update(JSON.stringify([rel, stat.mode & 0o111]))
+    hash.update(
+      JSON.stringify([
+        rel,
+        stat.isSymbolicLink() && options.linkModes === false ? 0 : stat.mode & 0o111,
+      ]),
+    )
     if (stat.isSymbolicLink()) {
       const link = await readlink(path)
       if (

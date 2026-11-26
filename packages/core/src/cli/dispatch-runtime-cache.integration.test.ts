@@ -14,6 +14,9 @@ import {
   validateRuntime,
   RUNTIME_CONFIG,
   validateCoreConfigs,
+  stageCode,
+  stagedCodeDigest,
+  sourceCodeDigest,
 } from './dispatch-runtime-cache'
 import {
   copyDependencies,
@@ -563,4 +566,132 @@ test('rollback activation preserves fallback and held runtime across pruning and
   syncRollbackRetention(cache, 'old', a.root)
   syncRollbackRetention(cache, 'operator-restart')
   expect(JSON.parse(await readFile(join(cache, 'retention.json'), 'utf8')).rollback).toBeUndefined()
+})
+async function stagingFixture(withGit: boolean) {
+  const source = await temp()
+  await file(
+    join(source, 'package.json'),
+    JSON.stringify({
+      name: '@defrex/autobuild',
+      version: '1.2.3',
+      files: ['bin', 'bin/ab.ts', '!bin/**/*.test.ts', 'tsconfig.json', 'package.json', 'docs'],
+      devDependencies: { dev: '1' },
+    }),
+  )
+  await file(join(source, 'tsconfig.json'), '{"compilerOptions":{}}')
+  await file(join(source, 'bin/ab.ts'), 'console.log(1)')
+  await chmod(join(source, 'bin/ab.ts'), 0o755)
+  await file(join(source, 'bin/agent/ab'), 'source launcher')
+  await file(join(source, 'bin/tsconfig.json'), '{}')
+  await file(join(source, 'bin/private/data.txt'), 'data')
+  await chmod(join(source, 'bin/private'), 0o700)
+  await file(join(source, 'bin/lib/a.ts'), 'export {}')
+  await symlink('a.ts', join(source, 'bin/lib/file-link'))
+  await symlink('lib', join(source, 'bin/dir-link'))
+  await symlink('file-link', join(source, 'bin/lib/chain'))
+  await symlink('../private/data.txt', join(source, 'bin/lib/up'))
+  for (const excluded of ['node_modules/x.js', '.env', '.env.local', '.git'])
+    await file(join(source, 'bin', excluded), 'excluded')
+  await file(join(source, 'docs/guide.md'), 'guide')
+  await file(join(source, 'outside.md'), 'not distributed')
+  if (withGit) {
+    const git = (...args: string[]) => {
+      const run = Bun.spawnSync(['git', ...args], {
+        cwd: source,
+        stdout: 'pipe',
+      })
+      if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed`)
+      return run.stdout.toString().trim()
+    }
+    git('init', '-q')
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x')
+    await file(join(source, '.bun-tag'), `defrex-autobuild-${git('rev-parse', 'HEAD').slice(0, 9)}`)
+  }
+  const staged = join(await temp(), 'distribution')
+  await stageCode(source, staged)
+  return { source, staged, virtual: join(dirname(staged), 'source-check') }
+}
+test('the virtual source check matches a staged copy and detects every source change', async () => {
+  const plain = await stagingFixture(false)
+  expect(await sourceCodeDigest(plain.source, plain.virtual)).toBe(
+    await stagedCodeDigest(plain.staged),
+  )
+  const { source, staged, virtual } = await stagingFixture(true)
+  const expected = await stagedCodeDigest(staged)
+  expect(await sourceCodeDigest(source, virtual)).toBe(expected)
+  // The comparator ignores only a link's platform-defined mode bits.
+  expect(await treeDigest(staged)).not.toBe(expected)
+  const git = (...args: string[]) =>
+    Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: source })
+  const changes: Array<[string, () => Promise<unknown>, () => Promise<unknown>]> = [
+    [
+      'bytes',
+      () => file(join(source, 'bin/lib/a.ts'), 'x'),
+      () => file(join(source, 'bin/lib/a.ts'), 'export {}'),
+    ],
+    [
+      'file mode',
+      () => chmod(join(source, 'bin/lib/a.ts'), 0o755),
+      () => chmod(join(source, 'bin/lib/a.ts'), 0o644),
+    ],
+    [
+      'directory mode',
+      () => chmod(join(source, 'bin/private'), 0o750),
+      () => chmod(join(source, 'bin/private'), 0o700),
+    ],
+    [
+      'added file',
+      () => file(join(source, 'docs/new.md'), ''),
+      () => rm(join(source, 'docs/new.md')),
+    ],
+    [
+      'link target',
+      async () => {
+        await rm(join(source, 'bin/lib/chain'))
+        await symlink('../private/data.txt', join(source, 'bin/lib/chain'))
+      },
+      async () => {
+        await rm(join(source, 'bin/lib/chain'))
+        await symlink('file-link', join(source, 'bin/lib/chain'))
+      },
+    ],
+    [
+      'manifest',
+      async () =>
+        file(
+          join(source, 'package.json'),
+          (await readFile(join(source, 'package.json'), 'utf8')).replace('1.2.3', '1.2.4'),
+        ),
+      async () =>
+        file(
+          join(source, 'package.json'),
+          (await readFile(join(source, 'package.json'), 'utf8')).replace('1.2.4', '1.2.3'),
+        ),
+    ],
+    [
+      'forge tag',
+      () => file(join(source, '.bun-tag'), 'defrex-autobuild-abcdef1'),
+      () => file(join(source, '.bun-tag'), tag),
+    ],
+  ]
+  const tag = await readFile(join(source, '.bun-tag'), 'utf8')
+  for (const [name, change, restore] of changes) {
+    await change()
+    expect([name, await sourceCodeDigest(source, virtual)]).not.toEqual([name, expected])
+    await restore()
+  }
+  // Reverted (A→B→A), undistributed, excluded and development-only inputs are not changes.
+  await file(join(source, 'outside.md'), 'changed')
+  await file(join(source, 'bin/node_modules/x.js'), 'changed')
+  await file(join(source, 'bin/.env'), 'changed')
+  expect(await sourceCodeDigest(source, virtual)).toBe(expected)
+  git('commit', '-q', '--allow-empty', '-m', 'y')
+  expect(await sourceCodeDigest(source, virtual)).not.toBe(expected)
+  await rm(join(source, 'bin/lib/a.ts'))
+  await expect(sourceCodeDigest(source, virtual)).rejects.toThrow('ENOENT')
+}, 30000)
+test('a mixed staged snapshot never matches its reverted source', async () => {
+  const { source, staged, virtual } = await stagingFixture(false)
+  await file(join(staged, 'bin/lib/a.ts'), 'mixed')
+  expect(await sourceCodeDigest(source, virtual)).not.toBe(await stagedCodeDigest(staged))
 })
