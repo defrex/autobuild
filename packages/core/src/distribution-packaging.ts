@@ -1,13 +1,17 @@
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-async function spawnExec(cmd: string[], options: { cwd: string; signal?: AbortSignal }) {
+async function spawnExec(
+  cmd: string[],
+  options: { cwd: string; signal?: AbortSignal; env?: Record<string, string | undefined> },
+) {
   const child = Bun.spawn(cmd, {
     cwd: options.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
     signal: options.signal,
+    ...(options.env ? { env: options.env } : {}),
   })
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
@@ -62,6 +66,42 @@ async function execOrThrow(
  * while the repo manifest keeps it for workspace installs. */
 const packedManifestOmittedFields = ['patchedDependencies', 'devDependencies'] as const
 
+/** Stages the manifest's positive `files` entries and the packed manifest
+ * into `staging`, returning that manifest. Shared by the real pack and the
+ * archive-free selection so both see one staging tree. */
+async function stageDistribution(root: string, staging: string): Promise<Record<string, unknown>> {
+  // Pack from a staging copy of the repo's `files` set rather than the repo
+  // root: the packed manifest must differ from the repo manifest (above), and
+  // rewriting the repo manifest in place would leave a window where tracked
+  // files are dirty.
+  const manifestPath = join(root, 'package.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+  const files = manifest.files
+  if (!Array.isArray(files) || files.some((entry) => typeof entry !== 'string')) {
+    throw new Error(
+      'Autobuild packaging requires the root package.json to list its files as an array of paths',
+    )
+  }
+  for (const entry of files as string[]) {
+    // npm `files` entries may be negated globs (for example
+    // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
+    // published package). Only positive entries name a path to stage: the
+    // negations stay in the staged manifest and `bun pm pack` applies them,
+    // so the packed set still excludes those paths.
+    if (entry.startsWith('!')) continue
+    const target = join(staging, entry)
+    await mkdir(dirname(target), { recursive: true })
+    await cp(join(root, entry), target, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    })
+  }
+  for (const field of packedManifestOmittedFields) delete manifest[field]
+  await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  return manifest
+}
+
 export async function packageDistribution(
   root: string,
   exec: PackagingExec = spawnExec,
@@ -76,35 +116,7 @@ export async function packageDistribution(
   let errors: unknown[] = []
   try {
     destination = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-'))
-    // Pack from a staging copy of the repo's `files` set rather than the repo
-    // root: the packed manifest must differ from the repo manifest (above), and
-    // rewriting the repo manifest in place would leave a window where tracked
-    // files are dirty.
-    const manifestPath = join(root, 'package.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
-    const files = manifest.files
-    if (!Array.isArray(files) || files.some((entry) => typeof entry !== 'string')) {
-      throw new Error(
-        'Autobuild packaging requires the root package.json to list its files as an array of paths',
-      )
-    }
-    for (const entry of files as string[]) {
-      // npm `files` entries may be negated globs (for example
-      // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
-      // published package). Only positive entries name a path to stage: the
-      // negations stay in the staged manifest and `bun pm pack` applies them,
-      // so the packed set still excludes those paths.
-      if (entry.startsWith('!')) continue
-      const target = join(staging, entry)
-      await mkdir(dirname(target), { recursive: true })
-      await cp(join(root, entry), target, {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-      })
-    }
-    for (const field of packedManifestOmittedFields) delete manifest[field]
-    await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    await stageDistribution(root, staging)
     await execOrThrow(
       ['bun', 'pm', 'pack', '--ignore-scripts', '--destination', destination],
       staging,
@@ -134,4 +146,187 @@ export async function packageDistribution(
     )
   if (failed) throw failure
   return bytes
+}
+
+const packedLine = /^packed \d+(?:\.\d+)?[KMGT]?B (.+)$/
+
+/** Strictly parses `bun pm pack --dry-run` output (Bun 1.4: a banner, one
+ * `packed <size> <path>` line per selected file, the archive name, then the
+ * `Total files: N` and `Unpacked size` trailer). Any line or path it does not
+ * recognize yields `undefined` so the caller packs a real archive instead of
+ * trusting an incomplete listing. */
+export function parsePackDryRun(stdout: string): string[] | undefined {
+  const files: string[] = []
+  const seen = new Set<string>()
+  let total: number | undefined
+  let phase: 'head' | 'files' | 'tail' = 'head'
+  for (const line of stdout.split('\n')) {
+    const packed = packedLine.exec(line)
+    if (packed) {
+      if (phase === 'tail') return undefined
+      phase = 'files'
+      const path = packed[1]!
+      const segments = path.split('/')
+      if (segments.some((segment) => segment === '' || segment === '.' || segment === '..'))
+        return undefined
+      if (seen.has(path)) return undefined
+      seen.add(path)
+      files.push(path)
+      continue
+    }
+    if (line === '') continue
+    if (phase === 'head') {
+      if (!line.startsWith('bun pack ')) return undefined
+      continue
+    }
+    phase = 'tail'
+    const count = /^Total files: (\d+)$/.exec(line)
+    if (count) {
+      if (total !== undefined) return undefined
+      total = Number(count[1])
+    } else if (
+      !/^Unpacked size: \S+$/.test(line) &&
+      !(line.endsWith('.tgz') && total === undefined)
+    )
+      return undefined
+  }
+  if (!files.length || total !== files.length || !seen.has('package.json')) return undefined
+  return files
+}
+
+export interface DistributionSelection {
+  /** The staging tree `bun pm pack` would archive. */
+  staging: string
+  /** Staging-relative paths of every file the pack selects. */
+  files: string[]
+  /** The staged (packed) manifest. */
+  manifest: Record<string, unknown>
+  /** `lstat` mode of each selected file in staging. */
+  modes: Map<string, number>
+}
+
+const probeNames = ['.autobuild-mode-probe-directory', '.autobuild-mode-probe-file']
+
+/** Selection environment: color would decorate the listing past the parser. */
+function listingEnvironment(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, NO_COLOR: '1' }
+  delete env.FORCE_COLOR
+  return env
+}
+
+/** Hands `use` the exact file set a real `bun pm pack` of `root` archives,
+ * from the same staging tree, without writing an archive. Returns `undefined`
+ * (the caller packs for real) wherever staged files could differ from what an
+ * archive would carry, as observed on Bun 1.4.5:
+ * - bundled dependencies and `workspace:`/`catalog:` specifiers, which Bun
+ *   rewrites or augments (staging cannot resolve them, so the real pack fails
+ *   on them and must keep failing the same way);
+ * - a dry run that fails or prints a listing `parsePackDryRun` refuses;
+ * - a listed path that is not a regular file under real staging directories
+ *   (Bun drops symlinks and emits no directory entries);
+ * - a creation mask that strips an execute bit from new files or directories,
+ *   because extraction modes would then differ from staged modes.
+ * Bun's other selection rules (nested ignore files, default exclusions) are
+ * applied by the dry run itself. Staging failures throw exactly as
+ * `packageDistribution` does. */
+export async function withDistributionSelection<T>(
+  root: string,
+  use: (selection: DistributionSelection) => Promise<T>,
+  exec: PackagingExec = spawnExec,
+  signal?: AbortSignal,
+  filesystem: { mkdtemp(prefix: string): Promise<string>; rm: typeof rm } = { mkdtemp, rm },
+): Promise<T | undefined> {
+  const staging = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
+  let failure: unknown
+  let failed = false
+  let value: T | undefined
+  let errors: unknown[] = []
+  try {
+    value = await (async () => {
+      const manifest = await stageDistribution(root, staging)
+      if (!rewriteFree(manifest)) return undefined
+      const result = await exec(['bun', 'pm', 'pack', '--ignore-scripts', '--dry-run'], {
+        cwd: staging,
+        signal,
+        env: listingEnvironment(),
+      })
+      if (result.exitCode !== 0) {
+        signal?.throwIfAborted()
+        return undefined
+      }
+      const files = parsePackDryRun(result.stdout)
+      if (!files) return undefined
+      const modes = new Map<string, number>()
+      const directories = new Set<string>()
+      for (const file of files) {
+        const stat = await lstat(join(staging, file)).catch(() => undefined)
+        if (!stat?.isFile()) return undefined
+        modes.set(file, stat.mode)
+        for (let at = file.indexOf('/'); at !== -1; at = file.indexOf('/', at + 1))
+          directories.add(file.slice(0, at))
+      }
+      for (const directory of directories)
+        if (!(await lstat(join(staging, directory))).isDirectory()) return undefined
+      if (!(await creationKeepsExecute(staging, files))) return undefined
+      return await use({ staging, files, manifest, modes })
+    })()
+  } catch (error) {
+    failed = true
+    failure = error
+  } finally {
+    const results = await Promise.allSettled([
+      filesystem.rm(staging, { recursive: true, force: true }),
+    ])
+    errors = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+  }
+  if (errors.length)
+    throw new AggregateError(
+      failed ? [failure, ...errors] : errors,
+      'Distribution packaging cleanup failed',
+      failed ? { cause: failure } : undefined,
+    )
+  if (failed) throw failure
+  return value
+}
+
+function rewriteFree(manifest: Record<string, unknown>): boolean {
+  if (
+    Object.hasOwn(manifest, 'bundleDependencies') ||
+    Object.hasOwn(manifest, 'bundledDependencies')
+  )
+    return false
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    const declared = manifest[section]
+    if (declared === undefined) continue
+    if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return false
+    for (const specifier of Object.values(declared))
+      if (
+        typeof specifier !== 'string' ||
+        specifier.startsWith('workspace:') ||
+        specifier.startsWith('catalog:')
+      )
+        return false
+  }
+  return true
+}
+
+/** True when new files and directories in staging keep every execute bit,
+ * so a non-root `tar -x` (which applies the creation mask) and a root one
+ * (which keeps archive modes) both reproduce staged execute bits, and implied
+ * directories carry `0o111`. Reads the effect, never `process.umask()`,
+ * which would briefly change the mask under concurrent file creation. */
+async function creationKeepsExecute(staging: string, files: string[]): Promise<boolean> {
+  if (files.some((file) => probeNames.includes(file.split('/')[0]!))) return false
+  const [directory, file] = probeNames.map((name) => join(staging, name)) as [string, string]
+  try {
+    await mkdir(directory, { mode: 0o777 })
+    await writeFile(file, '', { mode: 0o777, flag: 'wx' })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw error
+  }
+  return (
+    ((await lstat(directory)).mode & 0o111) === 0o111 &&
+    ((await lstat(file)).mode & 0o111) === 0o111
+  )
 }

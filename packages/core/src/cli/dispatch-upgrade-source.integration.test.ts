@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, readdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, readdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -8,7 +8,11 @@ import {
   sourceCommand,
   withSourceExport,
   sourceRepository,
+  packedContentFingerprint,
+  archivedPackageFingerprint,
+  packagedFingerprint,
 } from './dispatch-upgrade-source'
+import { distributionRoot } from '../distribution'
 import { scanDependencies, treeDigest } from './dispatch-runtime-dependencies'
 const roots: string[] = []
 afterEach(async () => {
@@ -174,3 +178,228 @@ test.each(['checkout', 'workspace', 'both'])(
     }
   },
 )
+
+/** Deterministic root + reachable workspace; every mode is explicit so the
+ * golden identity below depends only on content, never on creation defaults. */
+async function goldenFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'ab-source-golden-'))
+  roots.push(root)
+  const write = async (path: string, content: string, mode = 0o644) => {
+    await mkdir(join(root, path, '..'), { recursive: true })
+    await writeFile(join(root, path), content)
+    await chmod(join(root, path), mode)
+  }
+  await write(
+    'package.json',
+    JSON.stringify({
+      version: '2.0.0',
+      name: 'golden-fixture',
+      bin: { golden: 'bin/golden.ts' },
+      files: ['src', '!src/**/*.test.ts', 'docs', 'bin/golden.ts'],
+      dependencies: { 'workspace-dependency': '1.0.0' },
+      devDependencies: { 'dev-only': 'workspace:*' },
+      workspaces: ['packages/*'],
+      gitHead: 'b'.repeat(40),
+    }),
+  )
+  await write('bin/golden.ts', '#!/usr/bin/env bun\n', 0o755)
+  await write('src/main.ts', 'export const value = 1')
+  await write('src/run.sh', 'echo run', 0o755)
+  await write('src/nested/deep.ts', 'deep')
+  await write('src/nested/deep.test.ts', 'excluded')
+  await write('docs/guide.md', 'guide')
+  await write('unpackaged.txt', 'excluded')
+  await write(
+    'packages/dependency/package.json',
+    JSON.stringify({ name: 'workspace-dependency', version: '1.0.0', files: ['src'] }),
+  )
+  await write('packages/dependency/src/index.ts', 'export const dependency = true')
+  await write(
+    'bun.lock',
+    JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: {
+        '': { dependencies: { 'workspace-dependency': '1.0.0' } },
+        'packages/dependency': { name: 'workspace-dependency', version: '1.0.0' },
+      },
+      packages: {
+        'workspace-dependency': ['workspace-dependency@workspace:packages/dependency'],
+      },
+    }),
+  )
+  return root
+}
+
+test('source identity keeps the canonical value captured before archive-free fingerprinting', async () => {
+  const root = await goldenFixture()
+  expect((await sourceContent(root, '/repository')).key).toBe(
+    '4c79b05ee240b1adc25ebe9ddebbc73feb20110d812599ac54213b0f6e535c69',
+  )
+})
+
+type Entry = string | { content: string; mode: number } | { link: string }
+async function tree(entries: Record<string, Entry>) {
+  const root = await mkdtemp(join(tmpdir(), 'ab-source-pack-'))
+  roots.push(root)
+  for (const [path, entry] of Object.entries(entries)) {
+    const file = join(root, path)
+    await mkdir(join(file, '..'), { recursive: true })
+    if (path.endsWith('/')) await mkdir(file, { recursive: true })
+    else if (typeof entry === 'object' && 'link' in entry) await symlink(entry.link, file)
+    else {
+      await writeFile(file, typeof entry === 'string' ? entry : entry.content)
+      await chmod(file, typeof entry === 'string' ? 0o644 : entry.mode)
+    }
+  }
+  return root
+}
+const selectionFixture = () =>
+  tree({
+    'package.json': JSON.stringify({
+      version: '1.0.0',
+      name: 'selection-fixture',
+      gitHead: 'c'.repeat(40),
+      main: 'outside/main.js',
+      bin: { tool: 'bin/tool.js', other: 'outside/other.js' },
+      files: ['src', '!src/**/*.test.ts', '!src/drop.ts', 'bin/tool.js', 'lib/a/b.js', 'workspace'],
+      devDependencies: { local: 'workspace:*' },
+      patchedDependencies: { local: 'patches/local.patch' },
+    }),
+    'bin/tool.js': { content: '#!/usr/bin/env bun', mode: 0o755 },
+    'bin/unlisted.js': 'unlisted',
+    'lib/a/b.js': 'deep',
+    'lib/a/c.js': 'unselected sibling',
+    'outside/main.js': 'outside',
+    'src/B': 'upper',
+    'src/a': 'lower',
+    'src/a b.ts': 'space',
+    'src/é.md': 'accent',
+    'src/drop.ts': 'negated exactly',
+    'src/x/y.test.ts': 'negated glob',
+    'src/x/keep.ts': 'kept',
+    'src/x/.npmignore': 'ignored-by-npmignore\n',
+    'src/x/ignored-by-npmignore': 'ignored',
+    'src/y/.gitignore': 'ignored-by-gitignore\n',
+    'src/y/ignored-by-gitignore': 'ignored',
+    'src/y/kept': 'kept',
+    'src/node_modules/dep/index.js': 'excluded',
+    'src/.DS_Store': 'excluded',
+    'src/.npmrc': 'excluded',
+    'src/edit.swp': 'excluded',
+    'src/bun.lock': '{}',
+    'src/.hidden': 'dotfile',
+    'src/empty/': '',
+    'src/README.md': 'nested readme',
+    'src/LICENSE': 'nested license',
+    'src/owner.sh': { content: 'owner', mode: 0o700 },
+    'src/group.sh': { content: 'group', mode: 0o744 },
+    'src/all.sh': { content: 'all', mode: 0o755 },
+    'src/file-link': { link: 'a' },
+    'src/dir-link': { link: 'x' },
+    'workspace/package.json': JSON.stringify({
+      name: 'selection-workspace',
+      version: '1.0.0',
+      files: ['lib', '!lib/*.map'],
+    }),
+    'workspace/lib/index.js': 'index',
+    'workspace/lib/index.js.map': 'excluded',
+  })
+
+test('archive-free identity equals the real-pack archive identity across selection behavior', async () => {
+  const root = await selectionFixture()
+  for (const dir of [root, join(root, 'workspace')]) {
+    const fast = await packedContentFingerprint(dir)
+    expect(fast).toBeString()
+    expect(fast).toBe(await archivedPackageFingerprint(dir))
+  }
+})
+
+test("the repository's own packed root takes the archive-free path with the archive identity", async () => {
+  const root = distributionRoot()
+  const fast = await packedContentFingerprint(root)
+  expect(fast).toBeString()
+  expect(fast).toBe(await archivedPackageFingerprint(root))
+}, 60_000)
+
+const binCases: Array<[string, Record<string, unknown>, number, string]> = [
+  ['bin string', { bin: 'src/a' }, 0o644, 'src/a'],
+  ['bin dot', { bin: { p: './src/a' } }, 0o644, 'src/a'],
+  ['bin absolute', { bin: { p: '/src/a' } }, 0o600, 'src/a'],
+  ['bin inner parent', { bin: { p: 'src/n/../a' } }, 0o644, 'src/a'],
+  ['directories.bin child', { directories: { bin: 'src/b' } }, 0o644, 'src/b/c'],
+  ['directories.bin deeper', { directories: { bin: './src/b/' } }, 0o644, 'src/b/d/e'],
+  ['bin non-string', { bin: { p: 5 } }, 0o644, 'src/a'],
+]
+test.each(binCases)(
+  'bin targets Bun would re-mode fall back to the archive (%s)',
+  async (name, fields, mode, target) => {
+    const root = await tree({
+      'package.json': JSON.stringify({
+        name: 'bin-fixture',
+        version: '1.0.0',
+        files: ['src'],
+        ...fields,
+      }),
+      'src/a': 'a',
+      'src/b/c': { content: 'c', mode: 0o755 },
+      'src/b/d/e': { content: 'e', mode: 0o755 },
+    })
+    await chmod(join(root, target), mode)
+    expect(await packedContentFingerprint(root)).toBeUndefined()
+    expect(await packagedFingerprint(root)).toBe(await archivedPackageFingerprint(root))
+    if (name === 'bin string') {
+      await chmod(join(root, target), 0o755)
+      const fast = await packedContentFingerprint(root)
+      expect(fast).toBeString()
+      expect(fast).toBe(await archivedPackageFingerprint(root))
+    }
+  },
+)
+
+test('a creation mask that strips execute bits keeps the exact archive identity', async () => {
+  const root = await selectionFixture()
+  const module = join(import.meta.dir, 'dispatch-upgrade-source.ts')
+  const script = `
+    const m = await import(${JSON.stringify(module)})
+    const root = ${JSON.stringify(root)}
+    console.log(JSON.stringify({
+      fast: (await m.packedContentFingerprint(root)) ?? null,
+      packaged: await m.packagedFingerprint(root),
+      archived: await m.archivedPackageFingerprint(root),
+    }))`
+  const under = async (mask: string) =>
+    JSON.parse(
+      await sourceCommand(
+        ['sh', '-c', 'umask "$1"; shift; exec "$@"', 'sh', mask, process.execPath, '-e', script],
+        root,
+      ),
+    ) as { fast: string | null; packaged: string; archived: string }
+  const normal = await archivedPackageFingerprint(root)
+  for (const mask of ['077', '027']) {
+    const result = await under(mask)
+    expect(result.fast).toBeNull()
+    expect(result.packaged).toBe(result.archived)
+    if (mask === '077') expect(result.archived).not.toBe(normal)
+  }
+  const permissive = await under('022')
+  expect(permissive.fast).toBeString()
+  expect(permissive.fast).toBe(permissive.archived)
+}, 60_000)
+
+test.each([
+  { dependencies: { x: '1.0.0' }, bundledDependencies: ['x'] },
+  { dependencies: { x: 'workspace:*' } },
+  { dependencies: { x: 'catalog:' } },
+])('manifests Bun would rewrite get no archive-free identity (%o)', async (fields) => {
+  const root = await tree({
+    'package.json': JSON.stringify({
+      name: 'rewrite',
+      version: '1.0.0',
+      files: ['src'],
+      ...fields,
+    }),
+    'src/a': 'a',
+  })
+  expect(await packedContentFingerprint(root)).toBeUndefined()
+  await expect(packagedFingerprint(root)).rejects.toThrow()
+})
