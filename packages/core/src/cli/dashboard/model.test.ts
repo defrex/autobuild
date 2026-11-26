@@ -670,21 +670,34 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     if (alpha === null || queuedRow === null || zebra === null) {
       throw new Error('expected nonterminal rows')
     }
+    const held = { state: 'held' } as const
     const preprojected = buildDashboardFromProjected([zebra, queuedRow, alpha], {
       repo: '/repos/app',
       queued: 2,
       activeCount: 3,
       capacity: 1,
-      capacityProjection: { configured: 1, occupied: 3, effective: 1, borrowingNodes: [] },
+      capacityProjection: {
+        configured: 1,
+        occupied: 3,
+        effective: 1,
+        borrowingNodes: [],
+        slots: { alpha: held, queued: held, zebra: held },
+      },
       triage: 4,
     })
     expect(preprojected).toEqual(model)
     expect(preprojected).not.toHaveProperty('drift')
     expect(preprojected.triage).toBe(4)
     expect(preprojected).not.toHaveProperty('observations')
-    expect(preprojected.builds[0]).toBe(alpha)
-    expect(preprojected.builds[1]).toBe(queuedRow)
-    expect(preprojected.builds[2]).toBe(zebra)
+    // Rows carry their slot state from the projection on copies; cached
+    // projected rows stay intact.
+    expect(preprojected.builds).toEqual(
+      [alpha, queuedRow, zebra].map((row) => ({ ...row, slot: held })),
+    )
+    for (const row of [alpha, queuedRow, zebra]) expect(row).not.toHaveProperty('slot')
+    // Without a projection a row's slot state is unknown: absent.
+    const unknown = buildDashboardFromProjected([alpha], { repo: '/repos/app', queued: 0 })
+    expect(unknown.builds[0]).toBe(alpha)
 
     const settings = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 2 }, [
       {

@@ -4,12 +4,12 @@ import { repositoryQueueDepth } from '../cli/dashboard/header'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import {
   dispatchCapacity,
-  slotRequest,
   startClaimDemand,
   urgentClaimDemand,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
 import { landingRestackDue } from '../kernel/engine'
+import { capacityBuildFromFacts } from '../kernel/capacity-build'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
 import {
@@ -112,24 +112,16 @@ async function listFromView(
   for (const record of records) {
     if (record.repo !== opts.repo) continue
     const facts = await view.buildFacts(record.slug)
-    const projected = summarizeFrom(
+    const projected = summarizeFrom(record, facts.state, opts.now, {
       record,
-      facts.state,
-      opts.now,
-      slotRequest(
-        {
-          record,
-          state: facts.state,
-          workspace: facts.workspace !== null,
-          // Leaves rely on the continuation's lease; only nodes read the marker.
-          provisioning:
-            facts.state.kind === 'node' &&
-            (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
-          restackDue: landingRestackDue(facts.state, facts.log),
-        },
-        opts.now,
-      ),
-    )
+      state: facts.state,
+      workspace: facts.workspace !== null,
+      // Leaves rely on the continuation's lease; only nodes read the marker.
+      provisioning:
+        facts.state.kind === 'node' &&
+        (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+      restackDue: landingRestackDue(facts.state, facts.log),
+    })
     if (statuses.has(projected.status)) output.push(projected)
   }
   return output.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -342,10 +334,17 @@ export async function getOperatorBuild(opts: {
       }
     }
   }
-  return {
-    detail: detailFromFacts(record, facts, opts.now),
-    dashboardRow,
-  }
+  const detail = detailFromFacts(
+    record,
+    facts,
+    opts.now,
+    undefined,
+    undefined,
+    undefined,
+    capacityBuildFromFacts(record, facts),
+  )
+  if (dashboardRow && detail.slot) dashboardRow.slot = detail.slot
+  return { detail, dashboardRow }
 }
 
 export async function getRepositoryStatus(

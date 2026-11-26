@@ -516,7 +516,13 @@ test.each([false, true])(
     })
     await store.append('child', { actor: DISPATCHER, type: 'build.paused', payload: {} })
     // The paused child holds no slot, so the conflict node fills the only one.
-    const expected = { configured: 1, occupied: 1, effective: 1, borrowingNodes: [] }
+    const expected = {
+      configured: 1,
+      occupied: 1,
+      effective: 1,
+      borrowingNodes: [],
+      slots: { node: { state: 'held' }, child: { state: 'none' } },
+    }
     const opts = options(store, { json: true, now: clock })
     await abRepositoryStatus(opts)
     expect(JSON.parse(opts.output.join('\n')).capacity).toEqual(expected)

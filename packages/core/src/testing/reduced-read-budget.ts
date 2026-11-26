@@ -8306,9 +8306,11 @@ export async function openBuildListingReadBudget() {
     dashboard: (store: BuildStore) => getOperatorDashboard({ store, repo, clock: () => now }),
     status: (store: BuildStore) => getRepositoryStatus(store, repo, now),
     attention: (store: BuildStore) => getOperatorAttention({ store, repo, now }),
+    get: (store: BuildStore) => getOperatorBuild({ store, repo, slug: 'open-consent', now }),
     history: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'all', now }),
   }
-  let baseline: Record<string, { records: number; digests: number }> | undefined
+  type Vector = { records: number; digests: number; calls: Record<string, number> }
+  let baseline: Record<string, Vector> | undefined
   const history = new Map<number, number>()
   for (const settled of [1, 30])
     for (const padding of [100, 100_000]) {
@@ -8334,7 +8336,8 @@ export async function openBuildListingReadBudget() {
       expect(JSON.stringify(digest)).not.toMatch(/open-aborted|settled-/)
       const rows = memoryRepositoryReadCounter(store, repo)
       const entries = memoryListingEntryCounter(store)
-      const vectors: Record<string, { records: number; digests: number }> = {}
+      const calls = memoryStoreRequestCounter(store)
+      const vectors: Record<string, Vector> = {}
       try {
         for (const [name, run] of Object.entries(all)) {
           // A fresh handle shares no store-identity-keyed cache.
@@ -8346,6 +8349,7 @@ export async function openBuildListingReadBudget() {
           })
           rows.reset()
           entries.reset()
+          calls.reset()
           await run(fresh)
           expect({ name, rows: rows.rows, buildRows: rows.buildRows }).toEqual({
             name,
@@ -8353,9 +8357,10 @@ export async function openBuildListingReadBudget() {
             buildRows: 0,
           })
           if (name === 'history') history.set(settled, entries.vector.records)
-          else vectors[name] = entries.vector
+          else vectors[name] = { ...entries.vector, calls: calls.vector() }
         }
       } finally {
+        calls.restore()
         entries.restore()
       }
       if (baseline) expect(vectors).toEqual(baseline)
