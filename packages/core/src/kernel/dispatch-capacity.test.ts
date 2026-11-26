@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL } from '../events/envelope'
-import { validateEventWrite, type AbEvent } from '../events/catalog'
+import { allowedActorKinds, validateEventWrite, type AbEvent } from '../events/catalog'
+import type { EventType } from '../events/payloads'
 import {
   commandObjective,
   OPTIMIZATION_SHA,
@@ -128,9 +129,17 @@ test('an idle node lease does not occupy execution capacity', () => {
 function verifying(slug: string): CapacityBuild {
   const node = build(slug, 'node')
   node.state.nodeRestack = { items: [], contributionBase: 'parent' }
-  node.state.nodeComparison = { headSha: 'head', parentSha: 'parent', ahead: 1 }
+  node.state.nodeComparison = {
+    headSha: 'head',
+    parentSha: 'parent',
+    ahead: 1,
+  }
   node.state.integration = {
-    observation: { openChildren: [], diagnostics: [], contributions: ['child'] },
+    observation: {
+      openChildren: [],
+      diagnostics: [],
+      contributions: ['child'],
+    },
     cycle: {
       id: 'cycle',
       seq: 1,
@@ -261,9 +270,14 @@ test('capacity wording covers waiting and ignores legacy borrowing', () => {
   ).toBe(' (2 configured; 1 node waiting for a slot ahead of normal ticket claims: n)')
   // An older server's projection may still name borrowing nodes and a
   // higher effective capacity; neither is rendered.
-  expect(capacityExplanation({ ...base, occupied: 3, effective: 3, borrowingNodes: ['b'] })).toBe(
-    '',
-  )
+  expect(
+    capacityExplanation({
+      ...base,
+      occupied: 3,
+      effective: 3,
+      borrowingNodes: ['b'],
+    }),
+  ).toBe('')
   expect(slotWaitText('verification')).toBe(
     'verification waiting for a slot ahead of normal ticket claims',
   )
@@ -400,7 +414,10 @@ test('a parked leaf requests reconcile, a due restack, or verification for an un
 test('a deferred parked leaf makes no request; a target-rewritten one resumes unless blocked', () => {
   const deferred = finished('a', { settled: 10 })
   deferred.state.prState = 'conflicted'
-  deferred.state.compatibility = { ...deferred.state.compatibility, decisiveFacts: 1 }
+  deferred.state.compatibility = {
+    ...deferred.state.compatibility,
+    decisiveFacts: 1,
+  }
   expect(slotRequest(deferred, now)).toBeUndefined()
   const rewritten = finished('b', { settled: 10 })
   rewritten.restackDue = true
@@ -546,7 +563,9 @@ describe('slot admission order', () => {
   })
 
   test('one free slot: urgent claims outrank normal parked work', () => {
-    const capacity = dispatchCapacity([reverify('n')], 1, now, { urgentClaims: 1 })
+    const capacity = dispatchCapacity([reverify('n')], 1, now, {
+      urgentClaims: 1,
+    })
     const admitted = (slug: string, priority: 'urgent' | 'normal') =>
       capacity.occupied + reservedAhead(capacity, { slug, priority }) < capacity.configured
     expect(admitted('n', 'normal')).toBe(false)
@@ -587,11 +606,16 @@ describe('slot admission order', () => {
         manual: 2,
         normal: 1,
       })
-      expect(startClaimDemand({ ticketStarts: { pending }, settings: { paused: true } })).toEqual(
-        {},
-      )
       expect(
-        dispatchCapacity([], 2, now, { startRequests: { manual: 1, urgent: 0 } }).startRequests,
+        startClaimDemand({
+          ticketStarts: { pending },
+          settings: { paused: true },
+        }),
+      ).toEqual({})
+      expect(
+        dispatchCapacity([], 2, now, {
+          startRequests: { manual: 1, urgent: 0 },
+        }).startRequests,
       ).toEqual({ manual: 1 })
       expect(dispatchCapacity([], 2, now, { startRequests: {} })).not.toHaveProperty(
         'startRequests',
@@ -733,7 +757,9 @@ const measurementRequest = {
 test('a parked attempt with a pending measurement request is admitted as a re-verify', () => {
   const leaf = finished('a', { settled: 10 })
   expect(slotRequest(leaf, now)).toBeUndefined()
-  leaf.state.attemptMeasurement = { request: { ...measurementRequest, seq: 11 } }
+  leaf.state.attemptMeasurement = {
+    request: { ...measurementRequest, seq: 11 },
+  }
   expect(slotRequest(leaf, now)).toBe('verification')
   expect(dispatchCapacity([leaf], 2, now).waitingBuilds).toEqual([
     { slug: 'a', request: 'verification' },
@@ -862,7 +888,11 @@ describe('the optimization proposer', () => {
         },
       })
       .accept(commandObjective(), 1)
-      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .push({
+        actor: DISPATCHER,
+        type: 'node.opened',
+        payload: { sha: OPTIMIZATION_SHA('a') },
+      })
       .baseline(1, 50, 1)
     if (hours > 0)
       log.wait(hours * 60).activity([
@@ -872,7 +902,11 @@ describe('the optimization proposer', () => {
     log.request('r1', room)
     if (started)
       log
-        .push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+        .push({
+          actor: KERNEL,
+          type: 'propose.started',
+          payload: { round: 1, request: 'r1' },
+        })
         .revise({ concurrency: 1 }, 2)
     return { ...build(slug, 'node'), state: reduceBuild(log.events) }
   }
@@ -925,19 +959,30 @@ describe('the optimization proposer', () => {
           },
         })
         .accept(commandObjective(), 1)
-        .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+        .push({
+          actor: DISPATCHER,
+          type: 'node.opened',
+          payload: { sha: OPTIMIZATION_SHA('a') },
+        })
         .baseline(1, 50, 1)
         .request('r1', 2)
         .deposit('r1', 1, ['a'])
         .file('r1', ['a'])
       extra?.(log)
-      return { ...build('opt', 'node'), workspace: true, state: reduceBuild(log.events) }
+      return {
+        ...build('opt', 'node'),
+        workspace: true,
+        state: reduceBuild(log.events),
+      }
     }
     expect(strandedNodeWorkspace(filedNode(), when)).toBe(true)
     expect(strandedNodeWorkspace({ ...filedNode(), workspace: false }, when)).toBe(false)
     // A live runner or a provisioning marker still owns it.
     const leased = filedNode()
-    leased.record = { ...leased.record, lease: { holder: 'r', expiresAt: '2026-11-17T02:00:00Z' } }
+    leased.record = {
+      ...leased.record,
+      lease: { holder: 'r', expiresAt: '2026-11-17T02:00:00Z' },
+    }
     expect(strandedNodeWorkspace(leased, when)).toBe(false)
     expect(strandedNodeWorkspace({ ...filedNode(), provisioning: true }, when)).toBe(false)
     // An expired lease does not.
@@ -964,7 +1009,11 @@ test('cleanup keeps a workspace while measurement or a proposal owns it', () => 
   const node = measuringNode('node')
   node.workspace = true
   expect(strandedNodeWorkspace(node, now)).toBe(false)
-  node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
+  node.state.optimization!.starting = {
+    value: 10,
+    spread: 0.1,
+    head: 'a'.repeat(40),
+  }
   expect(strandedNodeWorkspace(node, now)).toBe(true)
   node.state.optimization!.proposal = {
     id: 'r1',
@@ -984,10 +1033,19 @@ test('a panel node owing progress requests verification and occupies while measu
   const node = measuringNode('node')
   const panel = {
     ...node.state.optimization!.objective,
-    metric: { kind: 'panel' as const, judges: 3, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+    metric: {
+      kind: 'panel' as const,
+      judges: 3,
+      rubric: 'evals/rubric.md',
+      harness: ['evals/**'],
+    },
   }
   node.state.optimization!.objective = panel
-  node.state.optimization!.starting = { value: 0.5, spread: 0, head: 'a'.repeat(40) }
+  node.state.optimization!.starting = {
+    value: 0.5,
+    spread: 0,
+    head: 'a'.repeat(40),
+  }
   expect(slotRequest(node, now)).toBeUndefined()
   node.state.optimization!.progressQueue = ['c'.repeat(40)]
   expect(slotRequest(node, now)).toBe('verification')
@@ -1045,7 +1103,7 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
           ? human
           : type === 'escalation.raised'
             ? agent
-            : type === 'build.created' || type === 'slot.admitted' || type === 'execution.started'
+            : allowedActorKinds[type as EventType]?.[0] === 'dispatcher'
               ? DISPATCHER
               : KERNEL
     return { actor, type, payload }
@@ -1055,7 +1113,10 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     repo: 'repo',
     baseBranch: 'main',
   })
-  const attached = write('runner.attached', { instance: 'runner-1', host: 'local' })
+  const attached = write('runner.attached', {
+    instance: 'runner-1',
+    host: 'local',
+  })
   const raised = write('escalation.raised', {
     id: 'esc',
     phase: 'implement',
@@ -1064,7 +1125,11 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     question: 'which API?',
   })
   const answer = (resolution = 'guidance') =>
-    write('escalation.answered', { id: 'esc', answer: 'the new one', resolution })
+    write('escalation.answered', {
+      id: 'esc',
+      answer: 'the new one',
+      resolution,
+    })
   const admitted = write('slot.admitted', { request: 'resume' })
   const execution = write('execution.started', {
     provider: 'vercel-sandbox',
@@ -1072,8 +1137,22 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     instance: 'i',
     commandId: 'cmd',
   })
+  // The claim's first execution ran and ended, which spends the launch
+  // record its `build.created` is: what follows decides the slot.
+  const firstRun = [
+    write('execution.started', {
+      provider: 'local',
+      workspaceRef: 'ws',
+      instance: 'i0',
+    }),
+    write('execution.ended', {
+      instance: 'i0',
+      workspaceRef: 'ws',
+      outcome: 'completed',
+    }),
+  ]
   function leaf(slug: string, writes: Write[], lease?: 'live' | 'expired'): CapacityBuild {
-    const events = [created, ...writes].map((entry, index) => ({
+    const events = [created, ...firstRun, ...writes].map((entry, index) => ({
       build: slug,
       seq: index + 1,
       ts: at.toISOString(),
@@ -1123,8 +1202,19 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     expect(request(leaf('a', answered))).toBe('resume')
     expect(holds(leaf('a', [...answered, admitted]))).toBe(true)
     expect(request(leaf('a', [...answered, admitted]))).toBeUndefined()
-    // A new question after admission releases the slot again.
-    expect(holds(leaf('a', [...answered, admitted, raised]))).toBe(false)
+    // A new question after admission releases the slot again once the
+    // admitted launch's runner stops on it.
+    const relaunched = write('execution.started', {
+      provider: 'local',
+      workspaceRef: 'ws',
+      instance: 'i1',
+    })
+    const ended = write('execution.ended', {
+      instance: 'i1',
+      workspaceRef: 'ws',
+      outcome: 'completed',
+    })
+    expect(holds(leaf('a', [...answered, admitted, relaunched, raised, ended]))).toBe(false)
   })
 
   test('a revise-spec answer holds none and requests none until its revision lands', () => {
@@ -1133,7 +1223,10 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     expect(request(leaf('a', revise))).toBeUndefined()
     const revised = [
       ...revise,
-      write('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 3 }),
+      write('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        escalation: 5,
+      }),
     ]
     expect(holds(leaf('a', revised))).toBe(false)
     expect(request(leaf('a', revised))).toBe('resume')
@@ -1178,6 +1271,56 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     }
   })
 
+  test('a blocked leaf whose runner still works holds its slot, whatever its lease (#1348)', () => {
+    const run = (instance: string) => [
+      write('execution.started', { provider: 'local', workspaceRef: 'ws', instance }),
+      write('execution.ended', { instance, workspaceRef: 'ws', outcome: 'completed' }),
+    ]
+    const [started, stopped] = run('i1')
+    const recorded = write('slot.admitted', {})
+    const blocked = [recorded, started!, raised]
+    const janitor = write('build.janitor-escalated', {
+      id: 'jan',
+      operation: 'read build state',
+      message: 'store unavailable',
+      attempt: 3,
+      firstFailureAt: at.toISOString(),
+      question: 'the janitor keeps failing',
+    })
+    const provisioning = write('workspace.provision-started', {
+      provider: 'p',
+      branch: 'ab/a',
+      generation: 2,
+    })
+    const busy = leaf('busy', [])
+    for (const lease of [undefined, 'live', 'expired'] as const)
+      for (const writes of [
+        blocked,
+        [...blocked, answer()],
+        [recorded, started!, janitor],
+        [recorded, provisioning, janitor],
+      ]) {
+        const build = leaf('a', writes, lease)
+        expect(slotState(build, at)).toEqual({ state: 'held' })
+        const capacity = dispatchCapacity([busy, build], 2, at)
+        expect(capacity.occupied).toBe(2)
+        expect(capacity.waitingBuilds).toBeUndefined()
+      }
+    // Stopped, it holds none; answered then, it requests resume.
+    expect(slotState(leaf('a', [...blocked, stopped!]), at)).toEqual({ state: 'none' })
+    expect(slotState(leaf('a', [...blocked, stopped!, answer()]), at)).toEqual({
+      state: 'requested',
+      request: 'resume',
+    })
+    // A recorded launch failure ends a launch in flight.
+    const failed = write('dispatch.failed', { stage: 'workspace', attempt: 1, error: 'boom' })
+    expect(slotState(leaf('a', [recorded, provisioning, failed, janitor]), at)).toEqual({
+      state: 'none',
+    })
+    // A pending revise-spec answer is never carried.
+    expect(holds(leaf('a', [...blocked, answer('revise-spec')]))).toBe(false)
+  })
+
   test('a value from an older server, without slot seqs, reads as admitted and reports unknown', () => {
     const legacy = (build: CapacityBuild) => {
       delete build.state.slotAdmittedSeq
@@ -1201,7 +1344,11 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     const answered = leaf('a', [attached, raised, answer()])
     expect(slot(answered)).toEqual({ state: 'requested', request: 'resume' })
     answered.state.priority = 'urgent'
-    expect(slot(answered)).toEqual({ state: 'requested', request: 'resume', priority: 'urgent' })
+    expect(slot(answered)).toEqual({
+      state: 'requested',
+      request: 'resume',
+      priority: 'urgent',
+    })
     expect(slot(leaf('a', [attached, raised]))).toEqual({ state: 'none' })
     const paused = leaf('a', [attached, write('build.pause-requested'), write('build.paused')])
     expect(slot(paused)).toEqual({ state: 'none' })
@@ -1212,14 +1359,19 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     expect(slotRequest(node, at)).toBeUndefined()
     expect(slot(conflict('waiting', false))).toEqual({ state: 'requested', request: 'reconcile' })
     expect(slot(node)).toEqual({ state: 'held' })
-    expect(slot(build('aborting', 'work', 'aborted'))).toEqual({ state: 'none' })
+    expect(slot(build('aborting', 'work', 'aborted'))).toEqual({
+      state: 'none',
+    })
     expect(slot(build('merged', 'work', 'done'))).toBeUndefined()
   })
 
   test('the wire keeps every earlier field for clients in the version window and adds slots', () => {
     const node = conflict('node')
     const blocked = leaf('child', [attached, raised])
-    blocked.state.target = { build: 'node', ticket: { source: 'file', id: 'node' } }
+    blocked.state.target = {
+      build: 'node',
+      ticket: { source: 'file', id: 'node' },
+    }
     const wire = JSON.parse(JSON.stringify(dispatchCapacity([node, blocked], 1, at)))
     expect(wire).toEqual({
       configured: 1,

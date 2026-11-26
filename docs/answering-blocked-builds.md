@@ -5,10 +5,13 @@ A build is **blocked** while one or more escalations are open. Inspect them with
 Every action below is sessionless, records a human-authored fact, and accepts
 `--store <ref>`.
 
-A blocked build holds no capacity slot. Answering doesn't give it one: it waits
-as a `resume` request ahead of normal ticket claims, urgent work first, and runs
-once a slot frees. A `--revise-spec` answer requests nothing until the
-revision lands.
+A blocked build holds no capacity slot once nothing is still working on it.
+Answering doesn't give it one: it waits as a `resume` request ahead of normal
+ticket claims, urgent work first, and runs once a slot frees. A build whose
+work goes on keeps its slot through the answer and requests nothing: another
+step of its verify stage still running, a launch in flight, or a running
+execution launched with the slot. A `--revise-spec` answer requests nothing
+until the revision lands.
 
 | Need | Command | Effect |
 |---|---|---|
