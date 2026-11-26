@@ -12,7 +12,7 @@ import {
   readlink,
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { packageDistribution } from '../distribution-packaging'
+import { packageDistribution, SCRATCH_ARCHIVE_GZIP_LEVEL } from '../distribution-packaging'
 import { parse as parseToml } from 'smol-toml'
 import { treeDigest, inside, type Manifest } from './dispatch-runtime-dependencies'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -290,7 +290,13 @@ async function packagedFingerprint(root: string, signal?: AbortSignal): Promise<
   try {
     await writeFile(
       join(stage, 'package.tgz'),
-      await packageDistribution(root, undefined, signal ?? AbortSignal.timeout(120_000)),
+      await packageDistribution(
+        root,
+        undefined,
+        signal ?? AbortSignal.timeout(120_000),
+        undefined,
+        { gzipLevel: SCRATCH_ARCHIVE_GZIP_LEVEL },
+      ),
     )
     const extracted = join(stage, 'packed')
     await mkdir(extracted)
