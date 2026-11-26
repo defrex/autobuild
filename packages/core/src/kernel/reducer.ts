@@ -469,6 +469,11 @@ export interface BuildState {
    * "What holds a slot"). Capacity evidence only. Omitted until one lands,
    * and by an older server. */
   slotReleasedSeq?: number
+  /** The node runner need the latest `slot.admitted` named (SPEC §12 "What
+   * holds a slot"): a node holds its slot while that need remains. Cleared by
+   * an admission that names none; `build.created` sets none. Capacity
+   * evidence only. */
+  slotAdmittedNeed?: string
   /** Full-log `finalize.step-completed` facts, in event order (§5).
    * Post-steps are failure-tolerant, so a completion counts whether `ok` is
    * true or false. Current-spec membership is determined by
@@ -699,6 +704,7 @@ export interface BuildAcc {
   pipelineSettled?: number
   slotAdmittedSeq?: number
   slotReleasedSeq?: number
+  slotAdmittedNeed?: string
   finalizeSteps: BuildState['finalizeSteps']
   plan: BuildState['plan']
   implement: BuildState['implement']
@@ -1603,6 +1609,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'slot.admitted':
         acc.slotAdmittedSeq = event.seq
+        if (event.payload.need !== undefined) acc.slotAdmittedNeed = event.payload.need
+        else delete acc.slotAdmittedNeed
         break
       case 'finalize.step-completed':
         // §5: post-steps are independent and failure-tolerant — a completion
@@ -2062,6 +2070,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.pipelineSettled !== undefined ? { pipelineSettled: acc.pipelineSettled } : {}),
     ...(acc.slotAdmittedSeq !== undefined ? { slotAdmittedSeq: acc.slotAdmittedSeq } : {}),
     ...(acc.slotReleasedSeq !== undefined ? { slotReleasedSeq: acc.slotReleasedSeq } : {}),
+    ...(acc.slotAdmittedNeed !== undefined ? { slotAdmittedNeed: acc.slotAdmittedNeed } : {}),
     finalizeSteps: acc.finalizeSteps,
     lastEvent,
     lastSeq: Math.max(lastEvent?.seq ?? 0, acc.compatibility.lastSeq),
