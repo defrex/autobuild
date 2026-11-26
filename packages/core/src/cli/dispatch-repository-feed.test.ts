@@ -554,10 +554,12 @@ test('handoff seed, deadline delta and restored completion agree with the full j
   expect(runs(restored.identities)).toEqual(['next-generation'])
 })
 
+// The harness makes several hundred in-memory reduced reads, each validating and
+// cloning its value; alone it takes about 5.5 s, past the 5 s default timeout.
 test('in-memory launcher idle reads cost one position request at both cadences and journal lengths', async () => {
   const { upgradeReadBudget } = await import('../testing/dispatch-read-budget')
   await upgradeReadBudget(new MemoryBuildStore())
-})
+}, 30_000)
 
 test('completed dispatcher generations keep saved upgrade values and the idle cost of every recurring reader flat', async () => {
   const { upgradeGenerationReadBudget } = await import('../testing/dispatch-read-budget')
