@@ -11,7 +11,6 @@ import type {
   buildStreamSeedReducer,
   repositoryReadFactsReducer,
 } from '../kernel/read-facts'
-import { publicationStateReducer } from '../processes/publication-state'
 import type { SnapshotScope } from './snapshots'
 
 export class ReducerValueValidationError extends Error {
@@ -43,6 +42,9 @@ export async function readBuildFacts(store: Reader, slug: string) {
     'buildReadFacts',
   )
   const value = result.value
+  // A build reducer: repository readers of this module never initialize it.
+  // Once loaded, the read adds no await.
+  if (!publicationStateReducer) publicationStateReducer = await loadPublicationStateReducer()
   return {
     cursor: result.cursor,
     value: {
@@ -51,6 +53,12 @@ export async function readBuildFacts(store: Reader, slug: string) {
       publication: publicationStateReducer.finish(value.publication),
     },
   }
+}
+let publicationStateReducer:
+  | typeof import('../processes/publication-state').publicationStateReducer
+  | undefined
+async function loadPublicationStateReducer() {
+  return (await import('../processes/publication-state')).publicationStateReducer
 }
 async function readValue<T>(
   store: Reader,
