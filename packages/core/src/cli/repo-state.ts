@@ -32,9 +32,8 @@ export { normalizeGitRemoteUrl } from '../kernel/origin'
 
 export const LOCAL_STATE_DIR = '.autobuild'
 
-export function isRemoteStoreRef(ref: string): boolean {
-  return /^https?:\/\//i.test(ref)
-}
+export { isRemoteStoreRef } from './store-ref'
+import { isRemoteStoreRef } from './store-ref'
 
 export { resolveMainRepo } from './main-checkout'
 import { resolveMainRepo } from './main-checkout'
