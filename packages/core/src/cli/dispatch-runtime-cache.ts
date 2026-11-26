@@ -5,7 +5,6 @@ import {
   ownCachedRuntime,
 } from './dispatch-runtime-use'
 import {
-  cp,
   stat,
   mkdir,
   mkdtemp,
@@ -21,6 +20,7 @@ import { packageDistribution, RUNTIME_ARCHIVE_GZIP_LEVEL } from '../distribution
 import {
   copyDependencies,
   copySnapshotTree,
+  copyTreeVerbatim,
   excludedSnapshotNames,
   inside,
   readManifest,
@@ -394,10 +394,7 @@ export async function prepareRuntime(
       })
     }
     await rm(layerStage, { recursive: true, force: true })
-    await cp(join(layer, 'distribution', 'node_modules'), join(root, 'node_modules'), {
-      recursive: true,
-      verbatimSymlinks: true,
-    })
+    await copyTreeVerbatim(join(layer, 'distribution', 'node_modules'), join(root, 'node_modules'))
     await validateEntries(root)
     await validateCoreConfigs(root)
     if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
@@ -439,10 +436,7 @@ export async function prepareRuntime(
       throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
     await validateEntries(extracted)
     await validateCoreConfigs(extracted)
-    await cp(join(root, 'node_modules'), join(extracted, 'node_modules'), {
-      recursive: true,
-      verbatimSymlinks: true,
-    })
+    await copyTreeVerbatim(join(root, 'node_modules'), join(extracted, 'node_modules'))
     await validateRuntimeImports(extracted, checkout)
     await rm(extracted, { recursive: true })
     await writeFile(join(stage, 'distribution.tgz'), archive)
