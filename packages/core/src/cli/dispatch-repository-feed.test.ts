@@ -559,6 +559,11 @@ test('in-memory launcher idle reads cost one position request at both cadences a
   await upgradeReadBudget(new MemoryBuildStore())
 })
 
+test('runtime-owned reader commands cost the same at both journal lengths', async () => {
+  const { readerCommandReadBudget } = await import('../testing/dispatch-read-budget')
+  await readerCommandReadBudget(new MemoryBuildStore())
+})
+
 test('transient writes retry without events at capped exponential deadlines, then settle', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)

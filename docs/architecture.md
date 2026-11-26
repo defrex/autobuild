@@ -612,6 +612,14 @@ target, and queues acceptance through the tick serialization.
 acceptance, terminal release, takeover, per-execution retirement and completion.
 The runtime-owned `dispatch-handoff.ts` reader lets the filesystem-only launcher
 supervise overlapping generations without owning Store or config decisions.
+Each reader is a fresh process, so it initializes only what its operation uses:
+`dispatch-handoff.ts` loads store, reducer and argument modules at first use; a
+journal-backed reader opens through `cli/production-store.ts` without
+repository configuration or the remote adapter; `store/local/capabilities.ts`
+loads write validation and the other unused local-store capabilities on first
+use, before the write's transaction; and `kernel/reducer-value-index.ts` loads
+only the requested reducer's module, building its entry with the same
+`valueReadEntry` as `REDUCERS`.
 A runtime-owned repository-record projection binds the journal transport before
 initial spawn and across handoffs, including when later config edits are invalid.
 The optional conditional `--read-upgrade` environment extension in

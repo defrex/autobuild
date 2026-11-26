@@ -22,16 +22,14 @@ import {
   repositoryReadFactsReducer,
   optionalValue,
 } from './read-facts'
-import { validateAccumulator, encodeReducerValue } from '../store/reducer-value-validation'
 import {
   effectiveConfigReducer,
   buildDelegationReducer,
   harvestDelegationReducer,
 } from './service-facts'
-import { phaseSchema } from '../ontology'
-import { z } from 'zod'
 import { dispatchPlacementReducer } from './dispatch-placement'
 import type { ValueCatalogEntry } from '../store/reducer-values'
+import { valueReadEntry, type RegisteredReducer } from './reducer-value-entry'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { executionNoProgressReducer } from '../processes/execution-no-progress'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
@@ -79,7 +77,6 @@ import { currentDeferralObservationReducer } from './auto-merge'
 import { dispatchSettingsReducer } from './dispatch-settings'
 import { dispatchStatusReducer } from './dispatch-status'
 import { harvestReducer } from './harvest'
-import type { IncrementalReducer } from './incremental'
 import { logIndexReducer } from './log-index'
 import {
   currentPrAttachmentsReducer,
@@ -91,13 +88,7 @@ import { buildReducer } from './reducer'
 import type { AnyRollupDefinition } from './rollup'
 import { stepDurationsRollup } from './step-durations'
 
-export interface RegisteredReducer {
-  valueRead: ValueCatalogEntry | { excluded: string }
-  // biome-ignore lint/suspicious/noExplicitAny: the registry is heterogeneous
-  reducer: IncrementalReducer<any, any, any>
-  /** The whole-array functions (or private methods) this reducer backs. */
-  covers: readonly string[]
-}
+export type { RegisteredReducer } from './reducer-value-entry'
 
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
@@ -216,80 +207,16 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   dispatchPlacement: { reducer: dispatchPlacementReducer, covers: [] },
 }
 
-/** Qualification concerns the existing finished contract, including absence. */
-const valueExclusions: Record<string, string> = {
-  dispatchFrontend: 'returns a list of raw repository journal events',
-  journalView: 'returns a list of raw repository journal events',
-  repositoryStateEvents: 'returns a list of raw repository journal events',
-  session: 'consumes operator-session logs rather than build or repository events',
-  publicationState: 'finished value contains executable selector functions',
-  logIndex: 'finished value contains Maps and Sets',
-  hostedPrAttachments: 'finished value is a Map',
-  ...Object.fromEntries(
-    [
-      'summaryBoundary',
-      'ticketSourceHealth',
-      'frozenPrImageHost',
-      'publishedBranchHead',
-      'verifyDiffBase',
-      'recordedBaseSha',
-      'baseBranch',
-      'provisionMarker',
-      'recoveryCheckpoint',
-    ].map((name) => [name, 'finished contract can return top-level undefined, which is not JSON']),
-  ),
-}
-const repositoryValues = new Set([
-  'dispatchPlacement',
-  'ticketPreparation',
-  'ticketHandbacks',
-  'ticketStarts',
-  'ticketMigrations',
-  'forgeHealthValue',
-  'repositoryReadFacts',
-  'dispatchUpgrade',
-  'dispatcherRunFacts',
-  'repositoryAttention',
-  'effectiveConfig',
-  'harvestDelegation',
-  'harvest',
-  'dispatchSettings',
-  'dispatchStatus',
-  'sandboxStates',
-  'openHarvestExecutions',
-  'hostedHarvestAuthority',
-  'openTick',
-  'autoMergeDefault',
-])
-const noArgs = z.object({}).strict()
-const parameterized: Record<string, Pick<ValueCatalogEntry, 'args' | 'create'>> = {
-  terminalGuard: {
-    args: z
-      .object({ phase: phaseSchema, round: z.number().int(), session: z.string().min(1) })
-      .strict(),
-    create: (args) => terminalGuardReducer(args),
-  },
-  dispatchStatus: {
-    args: z.object({ run: z.string().min(1) }).strict(),
-    create: ({ run }) => dispatchStatusReducer(run),
-  },
-  dispatcherRunFacts: {
-    args: z.object({ run: z.string().min(1) }).strict(),
-    create: ({ run }) => dispatcherRunFactsReducer(run),
-  },
-  openTick: {
-    args: z.object({ run: z.string().min(1) }).strict(),
-    create: ({ run }) => openTickReducer(run),
-  },
-  dispatchFailureBudget: {
-    args: z.object({ infrastructureOwnsWorkspace: z.boolean() }).strict(),
-    create: ({ infrastructureOwnsWorkspace }) =>
-      dispatchFailureBudgetReducer(infrastructureOwnsWorkspace),
-  },
-  phaseFailures: {
-    args: z.object({ phase: phaseSchema, round: z.number().int().nonnegative() }).strict(),
-    create: ({ phase, round }) => phaseFailuresReducer(phase, round),
-  },
+/** Constructors of the parameterized reducers; `parameterizedArgs` holds their
+ * argument schemas. */
+const parameterizedCreate: Record<string, ValueCatalogEntry['create']> = {
+  terminalGuard: (args) => terminalGuardReducer(args),
+  dispatchStatus: ({ run }) => dispatchStatusReducer(run),
+  dispatcherRunFacts: ({ run }) => dispatcherRunFactsReducer(run),
+  openTick: ({ run }) => openTickReducer(run),
+  dispatchFailureBudget: ({ infrastructureOwnsWorkspace }) =>
+    dispatchFailureBudgetReducer(infrastructureOwnsWorkspace),
+  phaseFailures: ({ phase, round }) => phaseFailuresReducer(phase, round),
 }
 /** The node slugs one digest row names: a `build.created` target, or either
  * side of a node parent move. Undecodable payloads name none. */
@@ -361,51 +288,39 @@ function digestTicketWaitOf(
   return {}
 }
 
+/** The build digest folds compact rows rather than whole events. */
+function adaptDigestRows(events: Parameters<ValueCatalogEntry['adapt']>[0]) {
+  return events.map((event) => ({
+    ...(decodeStoredEvent(event) === null ? { rawUnknown: event } : {}),
+    type: event.type,
+    seq: event.seq,
+    ts: event.ts,
+    ...(event.payload !== null && typeof event.payload === 'object' && 'hostedSeq' in event.payload
+      ? { hostedSeq: event.payload.hostedSeq }
+      : {}),
+    ...(event.type === 'integration.landed' ? { auditRequested: !!event.payload.operation } : {}),
+    ...(event.type === 'pr.merged' ? { mergedSha: event.payload.sha } : {}),
+    ...(event.type === 'node.contribution-recorded' ? { nodeContribution: event.payload } : {}),
+    ...(event.type === 'build.created' ? { kind: event.payload.kind } : {}),
+    ...digestNodeTargetsOf(event),
+    ...(event.payload !== null && typeof event.payload === 'object' && 'instance' in event.payload
+      ? { instance: event.payload.instance }
+      : {}),
+    ...digestTicketWaitOf(event),
+    ...digestAttemptOf(event),
+    ...digestOptimizationOf(event),
+  }))
+}
+
 export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
   Object.entries(REGISTERED).map(([name, entry]) => [
     name,
     {
       ...entry,
-      valueRead: valueExclusions[name]
-        ? { excluded: valueExclusions[name] }
-        : {
-            scope: repositoryValues.has(name) ? 'repo' : 'build',
-            args: parameterized[name]?.args ?? noArgs,
-            validate: (state: unknown) => validateAccumulator(name, state),
-            value: encodeReducerValue,
-            adapt: (events: Parameters<ValueCatalogEntry['adapt']>[0]) =>
-              name === 'buildDigest'
-                ? events.map((event) => ({
-                    ...(decodeStoredEvent(event) === null ? { rawUnknown: event } : {}),
-                    type: event.type,
-                    seq: event.seq,
-                    ts: event.ts,
-                    ...(event.payload !== null &&
-                    typeof event.payload === 'object' &&
-                    'hostedSeq' in event.payload
-                      ? { hostedSeq: event.payload.hostedSeq }
-                      : {}),
-                    ...(event.type === 'integration.landed'
-                      ? { auditRequested: !!event.payload.operation }
-                      : {}),
-                    ...(event.type === 'pr.merged' ? { mergedSha: event.payload.sha } : {}),
-                    ...(event.type === 'node.contribution-recorded'
-                      ? { nodeContribution: event.payload }
-                      : {}),
-                    ...(event.type === 'build.created' ? { kind: event.payload.kind } : {}),
-                    ...digestNodeTargetsOf(event),
-                    ...(event.payload !== null &&
-                    typeof event.payload === 'object' &&
-                    'instance' in event.payload
-                      ? { instance: event.payload.instance }
-                      : {}),
-                    ...digestTicketWaitOf(event),
-                    ...digestAttemptOf(event),
-                    ...digestOptimizationOf(event),
-                  }))
-                : events,
-            create: parameterized[name]?.create ?? (() => entry.reducer),
-          },
+      valueRead: valueReadEntry(name, entry.reducer, {
+        ...(parameterizedCreate[name] ? { create: parameterizedCreate[name] } : {}),
+        ...(name === 'buildDigest' ? { adapt: adaptDigestRows } : {}),
+      }),
     },
   ]),
 )
