@@ -3238,7 +3238,11 @@ runtime; historical starts without metadata display `runtime unrecorded`.
 With `[policy].maxOpenPrs` configured and a dispatcher holding the
 repository, an `open-PR backpressure:` line (`capacity.backpressure` in JSON:
 `active`, `openPrs`, `maxOpenPrs`, `resumeOpenPrs`, `excludeHeld`) says whether
-normal intake is paused; the dispatcher records
+normal intake is paused. With a readable held configuration, a `slots:` line
+after `capacity:` groups the builds the dispatcher counts as `held`,
+`requested` (with each request and an `urgent` marker) and `none`
+(`capacity.slots` in JSON, by slug); `occupied` counts the held entries. The
+dispatcher records
 `dispatcher.open-pr-backpressure-engaged` and `-cleared` only on transitions.
 It also lists the latest ticket scan's ticket and dependency diagnostics
 (`queue:` lines, `ticketDiagnostics` and `dependencyDiagnostics` in JSON),
@@ -3256,7 +3260,11 @@ are the ones something can still be done about. `HEARTBEAT` is mutable runner
 liveness; `PROGRESS` is the age of the latest durable event. A literal
 `diverged` suffix means a nonterminal build still holds a live lease but its
 heartbeat is at least one hour newer than its latest event. It is a visibility
-signal, not a stalled/dead verdict.
+signal, not a stalled/dead verdict. `SLOT` (`slot` in JSON) is the build's
+slot state by the rules the dispatcher admits work by: `held`,
+`requested <request>` with an `urgent` suffix for urgent work, or `none`; `—`
+for a done build. `unknown`, or no `slot` in JSON, is an older server's answer;
+never read it as `none`.
 
 | Flag | Effect |
 |---|---|
@@ -3272,7 +3280,8 @@ or `--all` before concluding a build doesn't exist.
 **`ab build status <slug>`** details one build: unresolved escalations, open
 sessions, chronological durable observations, verify progress for the current
 cycle, PR lifecycle, latest event, durable progress age, heartbeat, and lease.
-Every runner attach appears chronologically with its recorded runtime (version,
+A nonterminal build's `slot:` line (`slot` in JSON) reports its slot state as
+`ab builds` does. Every runner attach appears chronologically with its recorded runtime (version,
 commit, source kind/location), or `runtime unrecorded` for historical attaches;
 JSON exposes nullable runtime in `runnerAttaches`. Phases belong to the preceding
 attach boundary. A build created with a [role profile](#profiles) shows a
