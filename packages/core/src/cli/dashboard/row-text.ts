@@ -24,8 +24,9 @@ import { treeVocabulary } from './tree'
 import {
   dispatchedByText,
   dispatcherModeWord,
+  buildStatusText,
   finishedOutcomeText,
-  statusText,
+  harvestStatusText,
   stepMark,
   stepTone,
   type DashboardTone,
@@ -234,6 +235,17 @@ function treeLines(build: DashboardBuild): string[] | undefined {
   ]
 }
 
+/** A build row's status word, tone and note (SPEC §14 "Status words"). */
+export function buildRowStatus(
+  build: Pick<DashboardBuild, 'status' | 'slot' | 'statusBasis'>,
+): StatusText {
+  return buildStatusText({
+    status: build.status,
+    ...(build.slot !== undefined ? { slot: build.slot } : {}),
+    ...(build.statusBasis !== undefined ? { basis: build.statusBasis } : {}),
+  })
+}
+
 /**
  * Everything one build row says. Integration rows (an `integrationRow` is
  * present) show their own steps, progress and alert, and hide the tree,
@@ -243,13 +255,14 @@ export function projectRowText(
   build: DashboardBuild,
   options: { repositoryPaused: boolean },
 ): DashboardRowText {
-  const status = statusText(build.status)
+  const status = buildRowStatus(build)
   const row = build.integrationRow
   const steps = (row?.steps ?? build.steps).map(stepText)
   const phase = steps.find((step) => step.state === 'current')?.label
   const flags: DashboardRowText['flags'] = [
-    // A repository hold changes no build lifecycle state: QUEUED stays literal
-    // and only the rows the hold prevents from launching are annotated.
+    // A repository hold changes no build lifecycle state: a newly claimed
+    // build still reads STARTING, and only the rows the hold prevents from
+    // launching are annotated.
     ...(options.repositoryPaused && build.status === 'queued'
       ? [{ term: 'held' as const, tone: 'held' as const }]
       : []),
@@ -342,7 +355,7 @@ export function projectRowText(
 }
 
 export function projectHarvestRowText(harvest: DashboardHarvest): HarvestRowText {
-  const status = statusText(harvest.status)
+  const status = harvestStatusText(harvest.status)
   return {
     title: HARVEST_TITLE,
     status,
@@ -455,7 +468,7 @@ export function projectAttention(
 ): AttentionItem[] {
   const items: AttentionItem[] = []
   if (harvest !== undefined && (harvest.status === 'escalated' || harvest.status === 'failed')) {
-    const status = statusText(harvest.status)
+    const status = harvestStatusText(harvest.status)
     items.push({
       kind: 'harvest',
       tone: status.tone,

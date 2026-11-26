@@ -12,43 +12,184 @@
  *
  * Tones are presentation-neutral names. The terminal maps them to ANSI colours
  * and the web maps them to `packages/ui` state tones, whose names are the same.
+ *
+ * Build status words come from one closed word→tone table
+ * (`BUILD_STATUS_TONE`, SPEC §14 "Status words"), chosen by
+ * `buildStatusText` from the row's slot state and a small `StatusBasis` of
+ * lifecycle facts. No frontend keeps its own word or tone map.
  */
 import { displayText } from './cells'
 import type { DashboardHarvest, EffectiveStatus, PipelineStep, StepState } from './model'
 import type { RosterOutcome } from '../../kernel/build-roster'
+import type { SlotState } from '../../kernel/dispatch-capacity'
 
 /** The emphasis a term carries. Never the only carrier of meaning: every toned
  * term also has its literal word or glyph. */
 export type DashboardTone = 'ok' | 'live' | 'held' | 'alert' | 'pending'
 
-/** Every lifecycle word a dashboard row can show. */
+/** Every lifecycle status a dashboard row routes on. */
 export type DashboardStatus = EffectiveStatus | DashboardHarvest['status']
 
+/**
+ * The closed build status vocabulary (SPEC §14 "Status words"). Each tone
+ * falls wholly on one side of the slot line (§12 "What holds a slot"): every
+ * `ok` (green) word holds a slot, `live` (teal) requested one, and the rest
+ * hold none.
+ */
+export type BuildStatusWord =
+  | 'RUNNING'
+  | 'STARTING'
+  | 'PAUSING'
+  | 'ABORTING'
+  | 'QUEUED'
+  | 'WAITING'
+  | 'MERGING'
+  | 'PAUSED'
+  | 'COLLECTING'
+  | 'BLOCKED'
+  | 'CLEANING'
+
+/** A harvest run's words. A harvest never holds a slot, so none is green. */
+export type HarvestStatusWord = 'HARVESTING' | 'PAUSED' | 'SUSPENDED' | 'ESCALATED' | 'FAILED'
+
+export const BUILD_STATUS_TONE: Readonly<Record<BuildStatusWord, DashboardTone>> = {
+  RUNNING: 'ok',
+  STARTING: 'ok',
+  PAUSING: 'ok',
+  ABORTING: 'ok',
+  QUEUED: 'live',
+  WAITING: 'held',
+  MERGING: 'held',
+  PAUSED: 'held',
+  COLLECTING: 'held',
+  BLOCKED: 'alert',
+  CLEANING: 'pending',
+}
+
+export const HARVEST_STATUS_TONE: Readonly<Record<HarvestStatusWord, DashboardTone>> = {
+  HARVESTING: 'live',
+  PAUSED: 'held',
+  SUSPENDED: 'held',
+  ESCALATED: 'alert',
+  FAILED: 'alert',
+}
+
 export interface StatusText {
+  /** The routing value: the build's effective status or the harvest status. */
   status: DashboardStatus
   /** The literal uppercase word (`RUNNING`, `BLOCKED`). */
-  word: string
+  word: BuildStatusWord | HarvestStatusWord
   tone: DashboardTone
+  /** Why the build shows its word (`resume`, `merge decision`, `on AUT-1`). */
+  note?: string
 }
 
-const STATUS_TONE: Record<DashboardStatus, DashboardTone> = {
-  queued: 'live',
-  running: 'ok',
-  collecting: 'live',
-  pausing: 'held',
-  paused: 'held',
-  suspended: 'held',
-  resuming: 'live',
-  blocked: 'alert',
-  waiting: 'held',
-  aborting: 'alert',
-  cleaning: 'held',
-  escalated: 'held',
-  failed: 'alert',
+/**
+ * The lifecycle facts a build's status word is chosen from, projected once
+ * from its reduced state. JSON-safe: no member is ever `undefined`.
+ */
+export interface StatusBasis {
+  /** The effective status with pending commands ignored. */
+  resting: 'queued' | 'running' | 'collecting' | 'paused' | 'blocked' | 'waiting' | 'cleaning'
+  /** A pause command is pending. */
+  pause?: true
+  /** An abort command is pending. */
+  abort?: true
+  /** A resume command is pending. */
+  resume?: true
+  /** A runner's execution is open. */
+  runner: boolean
+  node?: true
+  /** A finished pipeline: waiting for a merge decision, on hold, or merging
+   * (consent given, waiting for gates or the forge). */
+  settled?: 'decision' | 'hold' | 'merging'
+  /** A `revise-spec` answer waits for its revision. */
+  reviseSpec?: true
+  /** The open ticket wait's tickets, when the build rests `waiting`. */
+  waitTickets?: string[]
 }
 
-export function statusText(status: DashboardStatus): StatusText {
-  return { status, word: status.toUpperCase(), tone: STATUS_TONE[status] }
+/** The basis a hand-built row without one implies from its status alone. */
+function basisFromStatus(status: EffectiveStatus): StatusBasis {
+  switch (status) {
+    case 'pausing':
+      return { resting: 'running', pause: true, runner: true }
+    case 'aborting':
+      return { resting: 'running', abort: true, runner: true }
+    case 'resuming':
+      return { resting: 'paused', resume: true, runner: false }
+    default:
+      return { resting: status, runner: status === 'running' }
+  }
+}
+
+function buildWord(status: EffectiveStatus, word: BuildStatusWord, note?: string): StatusText {
+  return {
+    status,
+    word,
+    tone: BUILD_STATUS_TONE[word],
+    ...(note !== undefined ? { note } : {}),
+  }
+}
+
+/**
+ * A nonterminal build's status word (SPEC §14 "Status words"): its slot state
+ * picks the tone, then lifecycle facts pick the word within it. A build that
+ * holds no slot is never green. When the slot is unknown (a value from an
+ * older server, or a caller without capacity facts), it is inferred from
+ * lifecycle facts.
+ */
+export function buildStatusText(input: {
+  status: EffectiveStatus
+  slot?: SlotState
+  basis?: StatusBasis
+}): StatusText {
+  const { status } = input
+  const basis = input.basis ?? basisFromStatus(status)
+  if (basis.resting === 'cleaning') return buildWord(status, 'CLEANING')
+  const slot: SlotState | undefined =
+    input.slot ??
+    (((basis.resting === 'queued' || basis.resting === 'running') &&
+      basis.settled === undefined &&
+      basis.reviseSpec === undefined) ||
+    (basis.resting === 'collecting' && basis.runner)
+      ? { state: 'held' }
+      : basis.resume && basis.resting === 'paused'
+        ? { state: 'requested', request: 'resume' }
+        : undefined)
+  if (slot?.state === 'held') {
+    if (basis.abort) return buildWord(status, 'ABORTING')
+    if (basis.pause) return buildWord(status, 'PAUSING')
+    return buildWord(status, basis.runner ? 'RUNNING' : 'STARTING')
+  }
+  if (slot?.state === 'requested')
+    return buildWord(
+      status,
+      'QUEUED',
+      slot.priority === 'urgent' ? `urgent ${slot.request}` : slot.request,
+    )
+  // No slot: a pending pause or abort waits for its acknowledgement.
+  if (basis.resting === 'blocked') return buildWord(status, 'BLOCKED')
+  if (basis.resting === 'waiting')
+    return buildWord(
+      status,
+      'WAITING',
+      basis.waitTickets?.length ? `on ${basis.waitTickets.join(', ')}` : undefined,
+    )
+  if (basis.resting === 'paused') return buildWord(status, 'PAUSED')
+  if (basis.reviseSpec) return buildWord(status, 'WAITING', 'spec revision')
+  if (basis.settled === 'merging') return buildWord(status, 'MERGING')
+  if (basis.settled !== undefined)
+    return buildWord(status, 'WAITING', basis.settled === 'hold' ? 'on hold' : 'merge decision')
+  if (basis.resting === 'collecting' || basis.node) return buildWord(status, 'COLLECTING')
+  return buildWord(status, 'WAITING')
+}
+
+/** A harvest row's word: `HARVESTING` while it works, its stop otherwise. */
+export function harvestStatusText(status: DashboardHarvest['status']): StatusText {
+  const word: HarvestStatusWord =
+    status === 'running' ? 'HARVESTING' : (status.toUpperCase() as HarvestStatusWord)
+  return { status, word, tone: HARVEST_STATUS_TONE[word] }
 }
 
 const STEP_MARK: Record<StepState, string> = {
