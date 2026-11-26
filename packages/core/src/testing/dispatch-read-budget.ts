@@ -1627,11 +1627,13 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
 
 /** Completed dispatcher generations must not grow the saved upgrade values or
  * the idle cost of any recurring reader: a dispatch tick, a dashboard poll, an
- * `ab watch` liveness check and `ab repository status`. */
+ * `ab watch` liveness check, `ab repository status` and one step of the
+ * between-tick yield observation. */
 async function upgradeGenerationReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
   const { manualClock } = await import('./fixed')
   const { readDispatchUpgrade } = await import('../store/reduced-reads')
+  const { observeYield } = await import('../cli/dispatch-yield-observer')
   const { memoryRepositoryReadCounter } = await import('./reduced-read-budget')
   const { upgradeGenerationRun, upgradeGenerationWrites, resolutionOnlyWrites } = await import(
     './upgrade-generations'
@@ -1730,6 +1732,7 @@ async function upgradeGenerationReadBudget(): Promise<void> {
       dashboard: () => getOperatorDashboard({ store, repo, clock }),
       watch,
       status,
+      yieldObservation: () => observeYield(store, repo, current, 'budget-correlation', 'launcher'),
     }
     // The one serialized reduction per key, and each reader's own first
     // appends, happen before measurement.
