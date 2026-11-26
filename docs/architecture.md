@@ -892,11 +892,12 @@ also the urgent reservations, urgent requests and the latest admission scan's
 `urgentWaiting` ahead of a normal waiter, `intakeCapacity` gives ordinary urgent
 and normal claims separate budgets, and `startCapacity` gives each start tier
 its own. The
-dispatcher's `leafAdmission`, `nodeHasCapacity` and proposer admission defer a
+dispatcher's `leafAdmission`, `nodeAdmission` and proposer admission defer a
 normal waiter that fits while claims can run; `dispatch` forces that tick's
 admission scan once per deferral key, and `admitDeferredParked` retries the
-deferred admissions through their generic paths only after the scan completed
-its urgent decision.
+deferred admissions only after the scan completed its urgent decision: a leaf
+through the build sweep, a node reconcile through `cascadeNode`, any other node
+need through `admitNode`, and a proposal through `admitProposers`.
 Ticket waits (SPEC §11) span four seams. `cli/terminals.ts` (`waitOn`, routed
 as `ab wait-on`) appends the agent's terminal `wait.requested`; the build
 digest marks it pending. The dispatcher's lease-sweep pass validates a pending
