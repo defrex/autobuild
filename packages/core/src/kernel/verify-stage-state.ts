@@ -126,7 +126,10 @@ export function runningVerifyMembers(state: VerifyStageState, cycle: number): Ve
 /** What `escalationCarried` reads: reduced facts every `BuildState` carries,
  * or the reducer's in-loop values at an answer. */
 export interface EscalationCarryInput {
-  openEscalations: readonly Pick<OpenEscalation, 'source' | 'session' | 'wait' | 'seq'>[]
+  openEscalations: readonly Pick<
+    OpenEscalation,
+    'source' | 'session' | 'wait' | 'seq' | 'policyCause'
+  >[]
   verifyStage: VerifyStageState
   /** The current verify cycle's boundary (`verify.cycleSince`). */
   verifyCycle: number
@@ -153,17 +156,26 @@ export function launchRecordSeq(input: Pick<EscalationCarryInput, 'slotAdmittedS
 }
 
 /** (L) A launch in flight: its record is newer than the latest
- * `execution.started` and every recorded launch failure. Only the start (which
- * hands over to the execution) or a failure fact ends it; no escalation does,
- * since none proves a provisioning or launching runner stopped. */
+ * `execution.started`, every recorded launch failure and any open
+ * `execution-no-progress` escalation. Only the start (which hands over to the
+ * execution), a failure fact or that refusal ends it. The dispatcher's
+ * progress guard raises `execution-no-progress` in place of the launch, so
+ * that raise is a launch failure; no other escalation ends a launch, since
+ * none proves a provisioning or launching runner stopped. */
 export function launchInFlight(
-  input: Pick<EscalationCarryInput, 'executions' | 'slotAdmittedSeq' | 'failureSeq'>,
+  input: Pick<
+    EscalationCarryInput,
+    'executions' | 'slotAdmittedSeq' | 'failureSeq' | 'openEscalations'
+  >,
 ): boolean {
   const record = launchRecordSeq(input)
   return (
     record !== undefined &&
     record > (input.executions.at(-1)?.seq ?? 0) &&
-    record > input.failureSeq
+    record > input.failureSeq &&
+    !input.openEscalations.some(
+      (escalation) => escalation.policyCause === 'execution-no-progress' && escalation.seq > record,
+    )
   )
 }
 
@@ -183,9 +195,9 @@ export function launchInFlight(
  * - (L) launch in flight (`launchInFlight`).
  * - (B) the open execution started before the earliest open raise.
  *
- * Only (A) looks at escalations, as part of its own definition: (E), (L) and
- * (B) rest on durable launch and execution facts, which no question
- * contradicts. Stale evidence (a crashed runner's open execution, a launch
+ * Only (A) looks at escalations, as part of its own definition, apart from
+ * (L)'s progress-guard refusal, which is a launch failure: (E), (L) and (B)
+ * rest on durable launch and execution facts, which no question contradicts. Stale evidence (a crashed runner's open execution, a launch
  * that died without a failure fact) over-holds a slot the build already
  * held; it never takes a new one. */
 export function escalationCarried(input: EscalationCarryInput): boolean {

@@ -10245,9 +10245,21 @@ for (const resumeCurrent of [false, true]) {
     }
     for (let i = 0; i < 3; i++) await h.dispatcher.tick({ resumeCurrent })
     expect(h.launches).toEqual([])
-    expect(
-      (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised'),
-    ).toHaveLength(1)
+    const raised = (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised')
+    expect(raised).toHaveLength(1)
+    // The refusal ends the launch its record began: the stopped build waits
+    // on a human alone, so it holds no slot, and answered it resumes (#1348).
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'none' })
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: (raised[0]!.payload as { id: string }).id,
+        answer: 'retry',
+        resolution: 'retry',
+      },
+    })
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'requested', request: 'resume' })
     await controlBuild({
       store: h.store,
       repo: REPO,

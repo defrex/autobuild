@@ -860,8 +860,10 @@ pipeline with no epilogue work due), or whose only wait is open escalations
 that `escalationCarried` (`kernel/verify-stage-state.ts`) carries: (A) a
 verify stage member's question while another member runs, the engine's stage
 exemption; (E) an open execution whose launch record precedes it; (L) a launch
-record newer than the latest `execution.started` and launch failure; or (B) an
-execution older than the earliest open raise. Only (A) looks at escalations.
+record newer than the latest `execution.started`, launch failure and open
+`execution-no-progress` refusal; or (B) an execution older than the earliest
+open raise. Apart from (L)'s refusal, which the progress guard raises in place
+of a launch, only (A) looks at escalations.
 The answer fold applies the same predicate. Runner liveness never enters; only
 launch records and execution facts do. Every other leaf without a slot
 requests one, `resume` unless an epilogue reason names another.

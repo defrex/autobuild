@@ -3172,7 +3172,8 @@ move, the build keeps its slot whether or not a runner is working. That covers:
 - a session a stopped dispatcher suspended;
 - an escalation that does not stop the build: one verify step's question
   while other steps of its stage still run, on any runner (§5); a launch
-  recorded before the raise that has not started or failed; or an execution
+  recorded before the raise that has not started, failed or been refused by
+  the progress guard's `execution-no-progress` escalation; or an execution
   launched while the build held its slot that has not ended.
 
 So a slot is never dropped and picked up again mid-flight, and a build whose

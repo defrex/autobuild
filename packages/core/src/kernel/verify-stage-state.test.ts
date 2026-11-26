@@ -166,6 +166,19 @@ describe('escalationCarried (SPEC §12 "What holds a slot")', () => {
       false,
     )
     expect(escalationCarried(input({ ...provisioning, failureSeq: 32 }))).toBe(false)
+    // The progress guard's raise is the launch's refusal; an older one is not.
+    const refusal: OpenEscalation = {
+      id: 'np',
+      phase: 'setup',
+      source: 'policy',
+      policyCause: 'execution-no-progress',
+      question: 'q',
+      seq: 31,
+    }
+    expect(escalationCarried(input({ ...provisioning, openEscalations: [refusal] }))).toBe(false)
+    expect(
+      launchInFlight(input({ ...provisioning, openEscalations: [{ ...refusal, seq: 29 }] })),
+    ).toBe(true)
     // A claim's `build.created` is its first launch record.
     expect(launchInFlight(input({ executions: [], slotAdmittedSeq: 1 }))).toBe(true)
   })
