@@ -4982,8 +4982,10 @@ freezes that eligibility and the initial packaged-content baseline across
 successors; changing the operator checkout cannot change what a generation runs.
 Source targets use the forge-authoritative base commit. Installation exports that
 exact commit into private cache staging, requires the committed Bun lock, and runs
-`bun install --frozen-lockfile --ignore-scripts --no-progress`. The immutable
-cached distribution records that commit and follows normal cache pruning.
+`bun install --frozen-lockfile --ignore-scripts --no-progress --production --filter ./`.
+Only the root package's production dependencies are materialized, and each must
+resolve inside the export; the frozen lock still covers every workspace. The
+immutable cached distribution records that commit and follows normal cache pruning.
 
 Source equality compares actual packed contents and production-reachable lock
 records, including nested dependencies, rather than version or SHA. An excluded

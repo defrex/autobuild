@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { validateUpgradeLockReceipt } from './dispatch-upgrade-install'
+import { SOURCE_INSTALL_ARGUMENTS, validateUpgradeLockReceipt } from './dispatch-upgrade-install'
 
 test('forge staging receipts match resolution and Bun tag across separately parsed metadata objects', () => {
   const text =
@@ -49,4 +49,12 @@ test('registry staging receipts still validate URL and integrity values', () => 
   expect(() =>
     validateUpgradeLockReceipt(authoritative, [...receipt.slice(0, -1), 'sha512-different']),
   ).toThrow('installed integrity contradicts authoritative lock')
+})
+
+test('source upgrade installs only the root production closure from the frozen lock without scripts', () => {
+  const args: readonly string[] = SOURCE_INSTALL_ARGUMENTS
+  expect(args[0]).toBe('install')
+  for (const flag of ['--frozen-lockfile', '--ignore-scripts', '--production'])
+    expect(args).toContain(flag)
+  expect(args[args.indexOf('--filter') + 1]).toBe('./')
 })
