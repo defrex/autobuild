@@ -2,6 +2,7 @@ import type { SelectedAccount } from '../config/accounts'
 import { foldHeadPaths, type HeadPathsSummary } from './head-paths-state'
 import {
   advanceVerifyStage,
+  escalationCarried,
   initialVerifyStageState,
   verifyMemberKey,
   runningVerifyMembers,
@@ -465,7 +466,8 @@ export interface BuildState {
   slotAdmittedSeq?: number
   /** seq of the latest fact that released the slot or ended an outside wait
    * whose runner must be admitted again: `pipeline.settled`, an answer that
-   * closes an open escalation, `wait.ended` and `build.paused` (SPEC §12
+   * closes an open escalation while the build is not carried
+   * (`escalationCarried`), such a `wait.ended`, and `build.paused` (SPEC §12
    * "What holds a slot"). Capacity evidence only. Omitted until one lands,
    * and by an older server. */
   slotReleasedSeq?: number
@@ -784,6 +786,13 @@ function initialBuildAcc(): BuildAcc {
 function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   advanceCompatibility(acc.compatibility, events)
   events = projectEvents(events)
+  // The open execution as of each event, for the answer fold's carry: read
+  // before the pre-pass below marks this batch's ended instances.
+  const latestExecution = acc.executions.at(-1)
+  let liveExecution =
+    latestExecution && !acc.endedExecutionInstances[latestExecution.instance]
+      ? latestExecution
+      : undefined
   for (const event of events) {
     if (event.type === 'build.compatibility-deferred')
       acc.compatibilityDeferredBoundary = event.payload.boundary
@@ -864,6 +873,19 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
   const suspended = new Map(acc.suspendedSessions.map((s) => [s.session, s]))
   const openSessions = new Map(acc.openSessions.map((s) => [s.session, s]))
   const failures = acc.failures
+  /** Work Autobuild started still outruns the open escalations, as of the
+   * event being folded: an answer then releases nothing (SPEC §12). */
+  const carried = () =>
+    escalationCarried({
+      openEscalations: [...openEscalations.values()],
+      verifyStage: acc.verifyStage,
+      verifyCycle: verify.cycleSince,
+      maxAttemptSeen: verify.maxAttemptSeen,
+      executions,
+      liveExecution,
+      slotAdmittedSeq: acc.slotAdmittedSeq,
+      failures: [dispatchFailures, infrastructureFailures, setupFailures],
+    })
 
   const start = (ctx: PhaseContext): void => {
     currentPhase = ctx
@@ -1208,9 +1230,11 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'execution.started':
         executions.push({ ...event.payload, seq: event.seq })
+        liveExecution = executions.at(-1)
         infrastructureFailure = undefined
         break
       case 'execution.ended':
+        if (liveExecution?.instance === event.payload.instance) liveExecution = undefined
         infrastructureFailure = undefined
         break
       case 'infrastructure.failed': {
@@ -1829,7 +1853,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         const wait = acc.wait
         if (wait?.id !== event.payload.id || wait.ended) break
         wait.ended = { cause: event.payload.cause, seq: event.seq, message: event.payload.message }
-        acc.slotReleasedSeq = event.seq
+        if (!carried()) acc.slotReleasedSeq = event.seq
         const open = openEscalations.get(wait.escalation)
         if (open) {
           openEscalations.delete(open.id)
@@ -1901,8 +1925,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         // with no open raise is ignored (total over any prefix).
         const open = openEscalations.get(event.payload.id)
         if (open) {
+          if (!carried()) acc.slotReleasedSeq = event.seq
           openEscalations.delete(event.payload.id)
-          acc.slotReleasedSeq = event.seq
           answeredEscalations.push({
             ...open,
             answer: event.payload.answer,
