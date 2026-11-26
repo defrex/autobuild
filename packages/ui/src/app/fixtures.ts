@@ -354,9 +354,18 @@ const baseFrame: WebFrame = {
   },
 }
 
+/** A derived frame. Its active counter is recounted from the green rows,
+ * since a green status word means the build holds a slot (SPEC §14). */
 function withOverview(change: (o: NonNullable<WebFrame['overview']>) => void): WebFrame {
   const frame = overviewFrame()
-  change(frame.overview!)
+  const overview = frame.overview!
+  change(overview)
+  const held = [...overview.active, ...overview.queued].filter(
+    (row) => row.status.tone === 'ok',
+  ).length
+  overview.header.counts = overview.header.counts.map((count) =>
+    count.label === 'active' ? { ...count, value: `${held}/${count.value.split('/')[1]}` } : count,
+  )
   return frame
 }
 
@@ -417,11 +426,9 @@ export function movedFrame(): WebFrame {
       phase: 'plan',
       steps: [current('plan', 3000), pending('implement')],
     })
-    o.header.counts = [
-      { label: 'triage', value: '4' },
-      { label: 'queue', value: '1' },
-      { label: 'active', value: '4/6' },
-    ]
+    o.header.counts = o.header.counts.map((count) =>
+      count.label === 'queue' ? { ...count, value: '1' } : count,
+    )
   })
 }
 
