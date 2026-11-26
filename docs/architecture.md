@@ -628,6 +628,11 @@ conditional state; a separate predecessor-reader cache uses the active run's
 journal context when the target cannot load. Old peers keep full v1 responses.
 Polling stays at 1 second idle / 250 ms pending, and cached projections still
 pass through ordinary child-exit, pending-preflight and recovery handling.
+`dispatch-launcher-cadence.ts` paces supervision: while the active run's
+durably detected upgrade has no prepared target, failure, request or handoff,
+the reader's advisory `preparing` correlation earns 50 ms checks, at most 600
+per detection, before the idle cadence resumes. Older readers omit the field
+and keep the ordinary cadence; operator shutdown ends any pause.
 `dispatch-frontend.ts` acknowledges terminal release only after joining input
 and rendering. The old kernel releases repository authority but retains local
 execution supervision until completion or the hot policy deadline. Build-log
