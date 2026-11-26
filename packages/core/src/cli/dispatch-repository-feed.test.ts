@@ -559,6 +559,20 @@ test('in-memory launcher idle reads cost one position request at both cadences a
   await upgradeReadBudget(new MemoryBuildStore())
 })
 
+test('completed dispatcher generations keep saved upgrade values and the idle cost of every recurring reader flat', async () => {
+  const { upgradeGenerationReadBudget } = await import('../testing/dispatch-read-budget')
+  await upgradeGenerationReadBudget()
+})
+
+// The release budget's observation steps, split so each test stays well under
+// the default timeout; together the parts observe every step at both lengths.
+const releaseBudgetParts = 3
+for (let part = 0; part < releaseBudgetParts; part++)
+  test(`successor release observation part ${part + 1} of ${releaseBudgetParts} reads no event rows and costs the same at both journal lengths`, async () => {
+    const { releaseObservationBudget } = await import('../testing/dispatch-read-budget')
+    await releaseObservationBudget(part, releaseBudgetParts)
+  })
+
 test('transient writes retry without events at capped exponential deadlines, then settle', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
