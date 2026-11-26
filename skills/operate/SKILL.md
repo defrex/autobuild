@@ -164,7 +164,8 @@ An extra monitor supplements the default standing watch.
 `ab wait [<slug>...] (--for <condition> | --event <glob>) [--since <cursor>] [--json]`
 uses the same hosted resume window and expiry recovery as watch, and blocks until a condition holds and prints one record. `--for` state conditions
 are also satisfied immediately by a build already in that state; `--event` is
-satisfied only by new events. Conditions include `attention`,
+satisfied only by new events. Conditions are lifecycle statuses, not the
+dashboards' status words, and include `attention`,
 `blocked`, `paused`, `running`, `done`, `aborted`, `terminal`, `pr=merged`,
 `pr=closed`, `pr=conflicted`, and `phase=<phase>`. Exit codes: 0 satisfied,
 1 usage or store error, 2 every named build is terminal without satisfying a
@@ -283,13 +284,16 @@ is not exposed there, and its
 
 ### Inspect
 
-- `ab builds [--queued] [--all] [--json]` — builds and their effective status.
+- `ab builds [--queued] [--all] [--json]` — builds and their status words.
   Active builds by default; `--queued` adds queued builds; `--all` is an
   explicit historical listing of every build, for when you were asked for
-  history, not for routine reconciliation.
-  A build parked on a ticket wait lists as `waiting`, with `waiting on <ids>`
-  after its phase; in `--json` its `status` stays `blocked` and `wait` carries
-  `state` and `tickets`.
+  history, not for routine reconciliation. `STATUS` is the shared status word
+  with its note (`WAITING (merge decision)`, `QUEUED (resume)`); a green word
+  means the build holds a slot. In `--json`, `statusWord` carries the word,
+  tone and note while `status` stays the reducer's lifecycle status.
+  A build parked on a ticket wait lists as `WAITING (on <ids>)`, with
+  `waiting on <ids>` after its phase; in `--json` its `status` stays `blocked`
+  and `wait` carries `state` and `tickets`.
   The `SLOT` column (`slot` in `--json`) says whether the build holds a slot,
   has requested one (`resume`, `reconcile`, `verification`, `reopen` or
   `propose`, maybe urgent) or holds none, by the rules the dispatcher admits
@@ -908,8 +912,9 @@ raise with its own event type.
 
 ### Ticket wait attention
 
-A build that `ab builds` and both dashboards show as `waiting` / `WAITING`,
-with an amber `waiting on <ids> — <reason>` line, is a ticket wait. It is not
+A build that `ab builds` and both dashboards show as `WAITING` with an
+`on <ids>` note, and an amber `waiting on <ids> — <reason>` line, is a ticket
+wait. It is not
 a red blocker; its escalation question begins `Waiting on`. Its agent declared with `ab wait-on` that it cannot proceed until
 the named tickets complete, and the dispatcher recorded them in the build
 ticket's `blockedBy`. It holds no capacity slot and keeps its branch and

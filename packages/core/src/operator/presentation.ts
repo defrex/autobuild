@@ -23,6 +23,19 @@ export type {
   StepState,
   StepTiming,
 } from '../cli/dashboard/model'
+export {
+  BUILD_STATUS_TONE,
+  HARVEST_STATUS_TONE,
+  buildStatusText,
+  harvestStatusText,
+} from '../cli/dashboard/vocabulary'
+export type {
+  BuildStatusWord,
+  DashboardTone,
+  HarvestStatusWord,
+  StatusBasis,
+  StatusText,
+} from '../cli/dashboard/vocabulary'
 export { parseTranscript } from '../cli/dashboard/transcript'
 export type {
   TranscriptPresentation,
