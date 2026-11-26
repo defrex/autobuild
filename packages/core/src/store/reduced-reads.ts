@@ -44,7 +44,7 @@ export async function readBuildFacts(store: Reader, slug: string) {
   const value = result.value
   // A build reducer: repository readers of this module never initialize it.
   // Once loaded, the read adds no await.
-  const publicationStateReducer = publicationState ?? (await loadPublicationState())
+  if (!publicationStateReducer) publicationStateReducer = await loadPublicationStateReducer()
   return {
     cursor: result.cursor,
     value: {
@@ -54,12 +54,11 @@ export async function readBuildFacts(store: Reader, slug: string) {
     },
   }
 }
-let publicationState:
+let publicationStateReducer:
   | typeof import('../processes/publication-state').publicationStateReducer
   | undefined
-async function loadPublicationState() {
-  publicationState = (await import('../processes/publication-state')).publicationStateReducer
-  return publicationState
+async function loadPublicationStateReducer() {
+  return (await import('../processes/publication-state')).publicationStateReducer
 }
 async function readValue<T>(
   store: Reader,
