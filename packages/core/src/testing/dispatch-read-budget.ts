@@ -1621,8 +1621,68 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
     metrics.reducer = 0
     await check()
     expect(metrics.reducer).toBeGreaterThan(0)
+    await preparationObservationBudget(store, repo, check, metrics)
   }
   await upgradeGenerationReadBudget()
+}
+
+/** A durably detected, unresolved preparation earns the launcher's bounded
+ * fast cadence. Each observation stays position-only while nothing changes,
+ * the count is finite, and resolution returns to the idle cadence. */
+async function preparationObservationBudget(
+  store: BuildStore,
+  repo: string,
+  check: () => Promise<{ preparing?: string }>,
+  metrics: Record<'position' | 'metadata' | 'reducer' | 'events' | 'rows', number>,
+): Promise<void> {
+  const { supervisionCadence, PREPARATION_OBSERVATION_LIMIT, PREPARATION_OBSERVATION_MS } =
+    await import('../cli/dispatch-launcher-cadence')
+  const { upgradeRuntime, upgradeTarget } = await import('./upgrade-generations')
+  const reset = () => {
+    for (const key of Object.keys(metrics) as (keyof typeof metrics)[]) metrics[key] = 0
+  }
+  const identity = {
+    correlation: `prepare-${repo}`,
+    run: 'budget',
+    lineage: 'budget',
+    from: upgradeRuntime('1.0.0'),
+    target: upgradeTarget('next'),
+  }
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.upgrade-detected',
+    payload: identity,
+  })
+  reset()
+  const cadence = supervisionCadence()
+  const first = await check()
+  expect(first.preparing).toBe(identity.correlation)
+  expect(metrics.position).toBe(1)
+  expect(metrics.reducer).toBeLessThanOrEqual(1)
+  expect(cadence(first, false)).toBe(PREPARATION_OBSERVATION_MS)
+  reset()
+  const delays: number[] = []
+  for (let i = 0; i < PREPARATION_OBSERVATION_LIMIT; i++) delays.push(cadence(await check(), false))
+  expect(delays.slice(0, -1).every((delay) => delay === PREPARATION_OBSERVATION_MS)).toBe(true)
+  expect(delays.at(-1)).toBe(1_000)
+  expect(metrics).toEqual({
+    position: PREPARATION_OBSERVATION_LIMIT,
+    metadata: 0,
+    reducer: 0,
+    events: 0,
+    rows: 0,
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.upgrade-failed',
+    payload: { ...identity, reason: 'budget' },
+  })
+  const failed = await check()
+  expect(failed.preparing).toBeUndefined()
+  expect(cadence(failed, false)).toBe(1_000)
+  reset()
+  for (let i = 0; i < 10; i++) await check()
+  expect(metrics).toEqual({ position: 10, metadata: 0, reducer: 0, events: 0, rows: 0 })
 }
 
 /** Completed dispatcher generations must not grow the saved upgrade values or
