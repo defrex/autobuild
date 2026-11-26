@@ -1504,7 +1504,9 @@ steps = []
 
 /** Script a minute at both launcher cadences using the real runtime reader and
  * launcher cache. Each helper gets a fresh facade; private reads use that same
- * instrumented receiver rather than escaping into an uncounted reducer. */
+ * instrumented receiver rather than escaping into an uncounted reducer. The
+ * sibling budgets `upgradeGenerationReadBudget` and `releaseObservationBudget`
+ * cover completed generations and successor release observation. */
 export async function upgradeReadBudget(store: BuildStore): Promise<void> {
   const { readUpgradeProjection } = await import('../cli/dispatch-handoff')
   const { conditionalUpgradeClient } = await import('../cli/dispatch-launch-contract')
@@ -1623,8 +1625,6 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
     expect(metrics.reducer).toBeGreaterThan(0)
     await preparationObservationBudget(store, repo, check, metrics)
   }
-  await upgradeGenerationReadBudget()
-  await releaseObservationBudget()
 }
 
 /** A durably detected, unresolved preparation earns the launcher's bounded
@@ -1691,7 +1691,7 @@ async function preparationObservationBudget(
  * `ab watch` liveness check, `ab repository status`, one step of the
  * between-tick yield observation and one step of successor release
  * observation. */
-async function upgradeGenerationReadBudget(): Promise<void> {
+export async function upgradeGenerationReadBudget(): Promise<void> {
   const { MemoryBuildStore } = await import('../store/memory')
   const { manualClock } = await import('./fixed')
   const { readDispatchUpgrade } = await import('../store/reduced-reads')
@@ -1836,8 +1836,14 @@ async function upgradeGenerationReadBudget(): Promise<void> {
 /** A successor waiting for its predecessor's release observes at the bounded
  * cadence: a finite fast window, a short backoff, then the idle pause. Every
  * unchanged observation reads zero event rows and makes the same reduced reads
- * at any journal length, and the release itself is seen at bounded cost. */
-async function releaseObservationBudget(): Promise<void> {
+ * at any journal length, and the release itself is seen at bounded cost.
+ *
+ * One call observes one `part` of `parts` equal slices of the observation
+ * steps, at both journal lengths; calling every part covers every step. The
+ * cadence schedule and the release itself are asserted in full by every part. */
+export async function releaseObservationBudget(part: number, parts: number): Promise<void> {
+  if (!Number.isInteger(parts) || parts < 1) throw new Error(`invalid parts ${parts}`)
+  if (!Number.isInteger(part) || part < 0 || part >= parts) throw new Error(`invalid part ${part}`)
   const { MemoryBuildStore } = await import('../store/memory')
   const {
     observeSuccessorRelease,
@@ -1866,14 +1872,19 @@ async function releaseObservationBudget(): Promise<void> {
     const cadence = releaseObservationCadence()
     const delays: number[] = []
     const steps = RELEASE_OBSERVATION_FAST_LIMIT + 4 + 20
+    let observed = 0
     for (let step = 0; step < steps; step++) {
-      const { current } = await observe()
-      expect(current?.released).toBeUndefined()
+      if (Math.floor((step * parts) / steps) === part) {
+        observed++
+        const { current } = await observe()
+        expect(current?.released).toBeUndefined()
+      }
       delays.push(cadence(0))
     }
+    expect(observed).toBeGreaterThan(0)
     expect(counter.rows).toBe(0)
-    expect(counter.reducedCalls % steps).toBe(0)
-    const perStep = counter.reducedCalls / steps
+    expect(counter.reducedCalls % observed).toBe(0)
+    const perStep = counter.reducedCalls / observed
     if (generations === 10) costs.set('step', perStep)
     else expect(perStep).toBe(costs.get('step')!)
     const steady = delays.indexOf(RELEASE_OBSERVATION_IDLE_MS)
