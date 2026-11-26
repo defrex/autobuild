@@ -385,7 +385,11 @@ serialization. The observation carries no outcome, and ordinary tick cadence is
 unchanged. Its terminal frontend removes and joins
 input/render work before acknowledging terminal release. Only after that durable
 acknowledgement and a successful repository lease claim may the successor draw
-or consume input. Only the successor ticks, claims, runs janitor/harvest and
+or consume input. After its yield request, the successor observes the durable
+handoff, release and stop facts through the same reduced reads at a bounded
+cadence: a finite fast window, then backoff to an ordinary 500 ms pause. No
+pause is shorter than the last observation took, and operator abort ends the
+pause. Takeover still requires every check and the atomic lease claim. Only the successor ticks, claims, runs janitor/harvest and
 launches runners. Execution leases remain with existing local runners; remote
 executions detach immediately. Their exact instances and recorded guest runtimes
 are captured separately on `dispatcher.handoff-started.remoteBuilds`. This
