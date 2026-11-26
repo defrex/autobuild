@@ -7473,6 +7473,9 @@ export async function ticketStartReadBudget(): Promise<{
       },
     }) as unknown as Source
     // Unrelated active builds: legacy aliases and readable ids in mixed case.
+    // Each runs under an attached runner's live lease, so it holds its slot
+    // for the whole budget: a build blocked by a failed dispatch boundary
+    // would hold none (SPEC §12 "What holds a slot").
     for (let i = 1; i <= builds; i++) {
       const ref = { source: 'hosted', id: i % 2 ? `ticket-${i}` : `ab-${i}` }
       await store.createBuild({
@@ -7486,6 +7489,12 @@ export async function ticketStartReadBudget(): Promise<{
           payload: { ticket: ref, repo, baseBranch: 'main' },
         },
       })
+      await store.append(`active-${i}`, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: `runner-active-${i}`, host: 'budget' },
+      })
+      await store.claimLease(`active-${i}`, `runner-active-${i}`, 365 * 24 * 3_600_000)
     }
     // Unrelated builds this runtime defers for a newer writer's decisive
     // fact, one per five active builds: they hold slots and their deferral
@@ -7643,10 +7652,9 @@ export async function ticketStartReadBudget(): Promise<{
         control.fresh()
         pending.fresh()
       }
-      // The unleased builds are relaunched until their launch budget blocks
-      // them. Capacity is measured from the facts the tick's own stages
-      // read, so even a fresh process's first waiting tick reads no build
-      // the control does not.
+      // Capacity is measured from the facts the tick's own stages read, so
+      // even a fresh process's first waiting tick reads no build the control
+      // does not.
       for (let i = 0; i < (fresh ? 1 : 2); i++) {
         const base = await control.tick()
         const measured = await pending.tick()

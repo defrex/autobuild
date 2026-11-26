@@ -3212,7 +3212,10 @@ then on the build holds its slot through relaunches until its next release.
 
 Occupancy never exceeds `capacity`. Every admission counts every build that
 holds a slot, node admission included, and no build uses another's slot.
-Abort and pause acknowledgements are not gated. A build that holds no slot
+Abort and pause acknowledgements are not gated, and neither is an
+acknowledgement for a build that still waits on the outside world afterwards,
+such as resuming a paused build that is blocked or finished; none of them
+confers a slot. A build that holds no slot
 keeps its branch, workspace and completed phase work, so retained workspaces
 can exceed `capacity`; slots cannot.
 

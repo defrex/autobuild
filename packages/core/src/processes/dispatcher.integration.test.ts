@@ -6122,11 +6122,10 @@ describe('Dispatcher startup resume', () => {
               },
       )
 
-      // Abort and pause acknowledgements are ungated; a resume acknowledgement
-      // is admitted once this tick has evaluated urgent claims.
+      // A blocked build holds no slot, and its acknowledgements need none.
       expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
         ...emptyTickReport(),
-        ...(command === 'resume' ? { swept: 1 } : { resumed: 1 }),
+        resumed: 1,
       })
       expect(h.launches).toEqual([slug])
     }

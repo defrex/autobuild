@@ -112,6 +112,7 @@ import {
   epilogueLeaf,
   intakeCapacity,
   leafHoldsSlot,
+  leafOutsideWait,
   leafSlotRequest,
   occupiesCapacity,
   reservedAhead,
@@ -4164,8 +4165,9 @@ export class Dispatcher {
   }
 
   /** Whether a leaf may reserve a runner now (SPEC §12 "What holds a slot").
-   * A leaf that holds its slot is admitted at once, and so are abort and pause
-   * acknowledgements, which are never gated and confer no slot. Every other
+   * A leaf that holds its slot is admitted at once, and so are a leaf waiting
+   * on the outside world and abort and pause acknowledgements, which are never
+   * gated and confer no slot. Every other
    * leaf needs a free slot among every other build, after the work ahead of
    * it. Admission is the durable `slot.admitted` fact, appended on the state
    * this decision read before any lease claim, provisioning or launch, so a
@@ -4176,8 +4178,11 @@ export class Dispatcher {
     const facts = await this.store.buildFacts(slug)
     const { state } = facts
     const self = { state, restackDue: landingRestackDue(state, facts.log) }
+    // A leaf waiting on the outside world can hold no slot, so what runs for
+    // it (an acknowledgement) is neither gated nor admitted.
     if (
       leafHoldsSlot(self) ||
+      leafOutsideWait(self) ||
       state.pendingCommands.some(
         (command) => command.command === 'abort' || command.command === 'pause',
       )
