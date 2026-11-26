@@ -870,15 +870,24 @@ command = "postgres"
     const store = await seedDashboardStore(3)
     const legacy = await legacySnapshot({ store, repo: REPO, clock })
     const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    // The blocked build holds no slot (SPEC §12 "What holds a slot").
     expect(snapshot.model.capacity).toEqual({
       configured: 7,
-      occupied: 3,
+      occupied: 2,
       effective: 7,
       borrowingNodes: [],
     })
+    // The legacy oracle has no capacity projection: its active counter is
+    // every nonterminal build, the blocked one included.
+    expect(legacy.model.active).toEqual({ current: 3, limit: 7 })
+    expect(snapshot.model.active).toEqual({ current: 2, limit: 7 })
     expect(snapshot).toEqual({
       ...legacy,
-      model: { ...legacy.model, capacity: snapshot.model.capacity },
+      model: {
+        ...legacy.model,
+        active: snapshot.model.active,
+        capacity: snapshot.model.capacity,
+      },
     })
 
     // Explicit assertions on the snapshot's shape, so a future change that
@@ -897,7 +906,6 @@ command = "postgres"
       'running',
     ])
     expect(snapshot.model.queued).toBe(2)
-    expect(snapshot.model.active).toEqual({ current: 3, limit: 7 })
     expect(snapshot.model.triage).toBe(6)
     expect(snapshot.model).not.toHaveProperty('observations')
     expect(snapshot.model.warningLines).toEqual(['role warning', 'operator warning'])

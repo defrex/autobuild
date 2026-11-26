@@ -39,6 +39,9 @@ export const buildEventPolicy = {
   'landing.native-applied': 'decisive',
   'target.distance': 'advisory',
   'pipeline.settled': 'advisory',
+  // A reader that ignores it only counts capacity by its own older rules; no
+  // pipeline decision reads it.
+  'slot.admitted': 'advisory',
   'target.rewritten': 'decisive',
   'target.rewrite-cleared': 'decisive',
   'target.moved': 'decisive',

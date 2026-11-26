@@ -585,7 +585,7 @@ any table header.
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 - **Local override:** Allowed in .autobuild/local.toml.
 
-**Description:** Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of normal ticket claims when it must run again, urgent work first (see [slot admission order](dispatcher.md#slot-admission-order)). Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).
+**Description:** Slots for this repository. A build holds one from admission (a ticket claim, a start request or an admitted slot request) until it waits on a human, another ticket, the forge or its children, or ends. A build whose outside wait ends is admitted again ahead of normal ticket claims, urgent work first (see [slot admission order](dispatcher.md#slot-admission-order)). Occupancy never exceeds capacity.
 
 **Constraints:** safe integer; > 0
 
@@ -4725,12 +4725,12 @@ action. Check the gates in this order:
 5. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
    same source. This includes harvest proposals filed directly into the ready
    state. Plain dispatch output reports unresolved ids and cycles.
-6. **Capacity:** every unfinished build for this repository—including paused
-   builds and builds blocked on a question—uses a slot. A build that has
-   finished its pipeline and waits for a merge decision holds none, and neither
-   does a build waiting on other tickets. One that must re-verify or reconcile,
-   or whose ticket wait ended, is admitted ahead of normal claims and reserves a
-   slot while it waits; urgent work goes first (see
+6. **Capacity:** a build holds a slot from admission while Autobuild owes its
+   next move, runner or not. Paused builds, builds blocked on a question, builds
+   waiting for a merge decision or merge gates, and builds waiting on other
+   tickets hold none. An answered or resumed build, one whose ticket wait ended,
+   and one that must re-verify or reconcile reserve a slot ahead of normal
+   claims until admitted; urgent work goes first (see
    [slot admission order](dispatcher.md#slot-admission-order)). Inspect `ab repository status`, `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.
 7. **Duplicate work:** a ready ticket already represented by an active build is

@@ -259,13 +259,23 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'capacity-wide',
     width: 1440,
     height: 1600,
-    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+    requires: [
+      'active 4/4',
+      '4 configured',
+      '1 parked build waiting for a slot ahead of normal ticket claims: answered-leaf',
+    ],
+    forbids: ['descendant-held slots', 'effective'],
   },
   {
     id: 'capacity-narrow',
     width: 390,
     height: 3200,
-    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+    requires: [
+      'active 4/4',
+      '4 configured',
+      '1 parked build waiting for a slot ahead of normal ticket claims: answered-leaf',
+    ],
+    forbids: ['descendant-held slots', 'effective'],
   },
   {
     id: 'backpressure-wide',
@@ -721,7 +731,7 @@ export interface WebFixtureModels {
   integrationNarrow?: DashboardModel
   integration: DashboardModel
   capacity?: DashboardModel
-  /** Open-PR backpressure as the only capacity condition: no waiters, no borrowed slots. */
+  /** Open-PR backpressure as the only capacity condition: no slot waiters. */
   backpressure?: DashboardModel
   mixed: DashboardModel
 }
