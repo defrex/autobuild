@@ -40,6 +40,38 @@ export function validateUpgradeLockReceipt(
     throw new Error('installed integrity contradicts authoritative lock')
 }
 
+/** Runtime staging consumes only the root package's production closure, so
+ * `--production --filter ./` skips development-only dependencies and
+ * workspaces. The lock stays frozen for every workspace and scripts stay off. */
+export const SOURCE_INSTALL_ARGUMENTS = [
+  'install',
+  '--frozen-lockfile',
+  '--ignore-scripts',
+  '--no-progress',
+  '--production',
+  '--filter',
+  './',
+] as const
+
+export async function installSourceDependencies(
+  root: string,
+  env: Record<string, string | undefined>,
+  signal: AbortSignal,
+): Promise<void> {
+  // Require a committed lock explicitly: frozen-lockfile alone permits a missing lock.
+  await readFile(join(root, 'bun.lock'))
+  const child = Bun.spawn([process.execPath, ...SOURCE_INSTALL_ARGUMENTS], {
+    cwd: root,
+    env,
+    stdout: 'ignore',
+    stderr: 'pipe',
+    signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
+  })
+  const [code] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  signal.throwIfAborted()
+  if (code !== 0) throw new Error('source dependency installation failed')
+}
+
 export async function prepareUpgrade(input: {
   target: UpgradeTarget
   checkout: string
@@ -130,21 +162,7 @@ export async function prepareUpgrade(input: {
     return withSourceExport({ checkout, sha: target.sha!, signal }, async (root) => {
       const content = await sourceContent(root, target.source, signal)
       if (content.key !== target.key) throw new Error('source target changed during preparation')
-      // Require a committed lock explicitly: frozen-lockfile alone permits a missing lock.
-      await readFile(join(root, 'bun.lock'))
-      const child = Bun.spawn(
-        [process.execPath, 'install', '--frozen-lockfile', '--ignore-scripts', '--no-progress'],
-        {
-          cwd: root,
-          env: input.env,
-          stdout: 'ignore',
-          stderr: 'pipe',
-          signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
-        },
-      )
-      const [code] = await Promise.all([child.exited, new Response(child.stderr).text()])
-      signal.throwIfAborted()
-      if (code !== 0) throw new Error('source dependency installation failed')
+      await installSourceDependencies(root, input.env, signal)
       const path = join(root, 'package.json')
       const manifest = JSON.parse(await readFile(path, 'utf8'))
       manifest.gitHead = target.sha
@@ -158,7 +176,9 @@ export async function prepareUpgrade(input: {
             upgradeKey: target.key,
             commit: target.sha!,
           },
-          { provenance: 'source' },
+          // The export sits inside the checkout, so a dependency missing from
+          // it would otherwise resolve from the checkout's own node_modules.
+          { provenance: 'source', containDependencies: true },
         )
         if (captureRuntimeIdentity(runtime.root).commit !== target.sha)
           throw new Error('source runtime commit contradicts target')

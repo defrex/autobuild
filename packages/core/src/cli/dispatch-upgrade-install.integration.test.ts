@@ -1,10 +1,12 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, expect, test } from 'bun:test'
-import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { cp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { prepareUpgrade } from './dispatch-upgrade-install'
+import { installSourceDependencies, prepareUpgrade } from './dispatch-upgrade-install'
+import { inside, scanDependencies } from './dispatch-runtime-dependencies'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { Forge } from '../ports/types'
@@ -237,3 +239,101 @@ test('source installation publishes exact provenance atomically, reuses a valida
     await rm(root, { recursive: true, force: true })
   }
 })
+
+for (const linker of ['isolated', 'hoisted'] as const)
+  test(`production-only ${linker} source install keeps the full production graph and still refuses contradictions`, async () => {
+    const { sourceCommand } = await import('./dispatch-upgrade-source')
+    const root = await mkdtemp(join(tmpdir(), 'ab-source-production-'))
+    const fixture = join(root, 'fixture')
+    const json = (path: string, value: unknown) => writeFile(path, JSON.stringify(value))
+    await mkdir(join(fixture, 'packages/lib'), { recursive: true })
+    await mkdir(join(fixture, 'packages/devtool'), { recursive: true })
+    await writeFile(join(fixture, 'bunfig.toml'), `[install]\nlinker = "${linker}"\n`)
+    await json(join(fixture, 'package.json'), {
+      name: 'fixture-root',
+      private: true,
+      workspaces: ['packages/*'],
+      // debug nests ms@2.1.2 beside the root's ms@2.1.3; gateway peers on zod.
+      dependencies: {
+        debug: '4.3.4',
+        ms: '2.1.3',
+        '@ai-sdk/gateway': '4.0.82',
+        zod: '^4.4.3',
+        '@fx/lib': 'workspace:*',
+      },
+      optionalDependencies: { 'is-number': '7.0.0' },
+      // A development version that conflicts with the library's production one.
+      devDependencies: { semver: '7.7.4', jose: '6.2.3', '@fx/devtool': 'workspace:*' },
+    })
+    await json(join(fixture, 'packages/lib/package.json'), {
+      name: '@fx/lib',
+      version: '1.0.0',
+      main: 'index.js',
+      dependencies: { 'is-odd': '3.0.1', jose: '6.2.13' },
+      devDependencies: { 'left-pad': '1.3.0' },
+    })
+    await writeFile(join(fixture, 'packages/lib/index.js'), 'module.exports = require("is-odd")')
+    await json(join(fixture, 'packages/devtool/package.json'), {
+      name: '@fx/devtool',
+      version: '1.0.0',
+      dependencies: { 'left-pad': '1.3.0' },
+    })
+    await sourceCommand([process.execPath, 'install', '--ignore-scripts', '--no-progress'], fixture)
+    const copy = async (name: string) => {
+      const target = join(root, name)
+      await cp(fixture, target, {
+        recursive: true,
+        filter: (path) => !path.split('/').includes('node_modules'),
+      })
+      return realpath(target)
+    }
+    const signal = new AbortController().signal
+    const full = await copy('full')
+    await sourceCommand(
+      [process.execPath, 'install', '--frozen-lockfile', '--ignore-scripts', '--no-progress'],
+      full,
+    )
+    const prod = await copy('prod')
+    await installSourceDependencies(prod, process.env, signal)
+
+    const [expected, actual] = await Promise.all([scanDependencies(full), scanDependencies(prod)])
+    expect(actual.fingerprint).toBe(expected.fingerprint)
+    expect(actual.roots).toEqual(expected.roots)
+    for (const entry of actual.packages) expect(inside(prod, entry.source)).toBe(true)
+    expect(
+      actual.packages
+        .filter((entry) => entry.manifest.name === 'jose')
+        .map((e) => e.manifest.version),
+    ).toEqual(['6.2.13'])
+    for (const path of [
+      'node_modules/semver',
+      'node_modules/@fx/devtool',
+      'node_modules/left-pad',
+      'packages/devtool/node_modules',
+      'packages/lib/node_modules/left-pad',
+    ])
+      expect(existsSync(join(prod, path))).toBe(false)
+    await sourceCommand(
+      [
+        process.execPath,
+        '-e',
+        'for (const name of ["debug", "@ai-sdk/gateway", "zod", "is-number", "@fx/lib"]) await import(name)',
+      ],
+      prod,
+    )
+
+    // The frozen lock still covers dev-only workspaces and the root manifest.
+    for (const manifest of ['packages/devtool/package.json', 'package.json']) {
+      const contradicted = await copy(`contradicted-${manifest.split('/').length}`)
+      const path = join(contradicted, manifest)
+      const value = JSON.parse(await readFile(path, 'utf8'))
+      value.dependencies['is-even'] = '1.0.0'
+      await json(path, value)
+      await expect(installSourceDependencies(contradicted, process.env, signal)).rejects.toThrow(
+        'source dependency installation failed',
+      )
+    }
+    const unlocked = await copy('unlocked')
+    await rm(join(unlocked, 'bun.lock'))
+    await expect(installSourceDependencies(unlocked, process.env, signal)).rejects.toThrow('ENOENT')
+  }, 120_000)
