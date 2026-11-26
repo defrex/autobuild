@@ -483,7 +483,7 @@ files, including development configs, remain exactly as installed.
 - **dispatcher** — watches the TicketSource for tickets passing the configured
   ready gate, claims, establishes the final conforming spec, chooses a short
   immutable build slug, provisions a workspace, and launches build-runners up
-  to capacity, which counts builds running work (§12). On process startup it attempts every current build for its
+  to capacity, which counts builds holding a slot (§12). On process startup it attempts every current build for its
   repo, so re-running `ab dispatch` resumes durable work rather than only
   looking for new tickets. Every ordinary tick also completes queued dispatch
   records whose pre-run sequence was interrupted: it reconstructs a missing
@@ -684,6 +684,7 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Node ticket** | A named integration point represented by a ticket of kind `node`; its integration build owns a branch collecting child work |
 | **Build** | One ticket execution with a slug; either a work pipeline or an integration branch lifecycle; the unit the operator sees |
 | **Integration build** | A node build that opens its branch without a runner or capacity charge, collects child work, verifies its complete head and merges under ordered policy (node consent by default) |
+| **Slot** | One unit of a repository's `capacity`. A build holds one from admission until it waits on a human, another ticket, the forge or its children, or ends (§12 "What holds a slot") |
 | **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
 | **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
@@ -735,8 +736,8 @@ while an auto rule authorizes a complete, verified candidate without a command.
 Nodes never enter plan, implement, code-review or finalize; they enter
 reconcile, and optimization nodes also enter `propose`. A node conflict uses
 source-aware reconcile. Idle collecting nodes own no execution resources;
-reconcile, verification and propose use descendant-sensitive execution
-capacity (§12). Empty nodes have no PR.
+reconcile, verification and propose take a slot like any other runner work
+(§12 "What holds a slot"). Empty nodes have no PR.
 
 The **propose** phase is an optimization node's own agent phase. The
 dispatcher requests it (`optimization.proposal-requested`) only when the node
@@ -2973,7 +2974,8 @@ The reducer reads a `wait-unresolvable` raise against an open wait as its end:
 wait's own escalation closes as answered `guidance` with the question as its
 answer, and the new escalation carries the wait's `wait: {id}` marker. The
 build is `blocked` on an ordinary policy escalation, in the default attention
-filter, and holds its slot. Because the digest clears on the raise it is never
+filter, and, like any build blocked on a question, holds no slot (§12 "What
+holds a slot"). Because the digest clears on the raise it is never
 raised twice. Its answer routes and delivers like a wait answer: a reviewer
 resumes the same review round, the session's `guidance.json` carries the
 `wait` block, and after the answer the ended wait requests its resume slot; a
@@ -3078,8 +3080,9 @@ does not stop, pause or displace a running build.
 **Slot admission order.** Free slots are admitted in five tiers:
 
 1. `manual` single-ticket start requests (the `ab start` default, §11);
-2. urgent parked work (nodes and parked leaves waiting for verification,
-   reconcile, resume or propose);
+2. urgent parked work (nodes and leaves that hold no slot and request one:
+   `resume`, `reconcile`, `verification`, `reopen` or `propose`, "What holds
+   a slot" below);
 3. urgent ticket claims: `urgent` start requests, then ordinary urgent ready
    tickets while intake is on;
 4. normal parked work;
@@ -3131,7 +3134,8 @@ urgent tickets count, so an urgent ticket blocked on a dependency never holds
 back normal parked work. Free slots only: priority never interrupts a running
 build or session.
 
-**Open-PR backpressure.** When `[policy].maxOpenPrs` is set, the dispatcher
+**Open-PR backpressure.** An optional intake throttle, off by default and
+independent of slots. When `[policy].maxOpenPrs` is set, the dispatcher
 counts open unmerged root PRs: nonterminal builds with an open or conflicted
 PR and no integration-node target, root leaves and root integration nodes
 alike. Children targeting a node do not count. A PR whose active landing
@@ -3149,29 +3153,64 @@ from the reduced build facts each tick already holds. The dispatcher records
 transitions (a cleared fact names `drained`, or `disabled` when the key is
 removed while engaged); the engaged fact is the hysteresis memory a fresh
 process reads. Repository status and both dashboards report the count,
-watermarks and whether normal intake is paused. Unset `maxOpenPrs` disables
-backpressure entirely.
+watermarks and whether normal intake is paused. `maxOpenPrs` is unset by
+default, which disables backpressure entirely.
 
-**What holds a slot.** `capacity` counts builds running work. A work build that
-has finished its pipeline (every verify step and every finalize post-step for
-the current spec) holds no slot while it waits for a merge decision, for merge
-gates or the forge, or on hold, and the slot goes to the next ready ticket. The
-dispatcher records the finish as an advisory `pipeline.settled` fact when the
-engine first decides `wait awaiting-pr`. A work build waiting on other tickets
-(an entered ticket wait, §11) with no runner working also holds no slot, and
-keeps its branch, workspace and completed phase work. Any other build that has
-not finished keeps its slot, even while paused, blocked on a question, waiting
-for the dispatcher to check a ticket wait, or interrupted between
-`finalize.completed` and its post-steps. When a finished build must restack,
-re-verify, reconcile or run a requested optimization measurement (§13.1.1), an
-operator reopens it (§15.7), or a ticket wait ends, the build is admitted before normal
-ticket claims, as a node is (urgent work first: "Slot admission order"): intake reserves a slot for it (`reopen` for a
-reopened leaf, `resume` for an ended wait), and its wait records nothing,
-consumes no attempt and raises no attention. A reopened leaf stays a finished
-build until it settles again, so, like a blocked reconcile, it holds no slot
-while it waits on a question. Abort and pause acknowledgements are not gated. A finished or
-waiting build keeps its workspace, so retained workspaces can exceed
-`capacity`; running work cannot.
+**What holds a slot.** `capacity` is the repository's number of slots. A
+build takes a slot only by admission: a ticket claim, a start request (§11), or
+an admitted slot request (below). It holds that slot until it waits on
+something outside Autobuild, or ends. While Autobuild owes the build's next
+move, the build keeps its slot whether or not a runner is working. That covers:
+
+- the boundaries between phases and steps;
+- provisioning its workspace and launching its runner;
+- relaunching after a crashed runner or an expired lease;
+- the dispatcher publishing its spec, retrying a forge publication or deciding
+  a requested ticket wait;
+- a mixed-version deferral or a verify stage holding it;
+- a requested pause or abort waiting for its runner to stop;
+- a session a stopped dispatcher suspended.
+
+So a slot is never dropped and picked up again mid-flight.
+
+A build releases its slot as soon as it waits on the outside world:
+
+| Waiting on | Cases |
+|---|---|
+| a human | an open escalation, an acknowledged pause, a `revise-spec` answer waiting for its revision, a finished pipeline waiting for a merge decision or on hold |
+| another ticket | an entered ticket wait (§11) |
+| the forge | a finished pipeline waiting for merge gates or for the forge to merge |
+| its children | an integration build with no cycle, conflict, measurement or proposal that needs a runner: collecting child work, or waiting for a repair child |
+| nothing | `done` or `aborted`; abort cleanup holds no slot |
+
+A pipeline is finished once every verify step and every finalize post-step for
+the current spec has passed. The dispatcher records the finish as an advisory
+`pipeline.settled` fact when the engine first decides `wait awaiting-pr`.
+
+Release follows state; acquisition never does. A build whose outside wait ends
+holds no slot until it is admitted. It is then **parked work**: it requests a
+slot, and intake reserves one for it ahead of normal ticket claims (urgent work
+first, "Slot admission order"). The requests are:
+
+| Request | Raised by |
+|---|---|
+| `resume` | an answered escalation, a resumed pause, an ended ticket wait, or a parked leaf whose target was rewritten |
+| `reconcile` | a conflicted PR, or a node restack conflict with no open escalation |
+| `verification` | a finished leaf that must restack or re-verify, a node verification cycle, or a requested optimization measurement (§13.1.1) |
+| `reopen` | a leaf an operator reopened (§15.7), once any replacement spec is published |
+| `propose` | an optimization node's open proposal request |
+
+A request records nothing, consumes no attempt and raises no attention. A paused
+or blocked build requests nothing until its pause or question ends. Admission is
+durable: the build's first runner allocation after its release, a provisioning
+marker or an attached runner, marks it admitted. From then on it holds its slot
+through relaunches until its next release.
+
+Occupancy never exceeds `capacity`. Every admission counts every build that
+holds a slot, node admission included, and no build uses another's slot.
+Abort and pause acknowledgements are not gated. A build that holds no slot
+keeps its branch, workspace and completed phase work, so retained workspaces
+can exceed `capacity`; slots cannot.
 
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
@@ -3664,19 +3703,16 @@ prepared verification cycle, a restack conflict or an open proposal request,
 with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
-normal claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
-paused descendants, following accepted source-qualified build target ancestry.
-Running descendants and unrelated builds still count; ordinary blocked and
-paused work retains its slot for every other admission, except a work build
-parked by a ticket wait, which holds none. Provisioning reserves
-node occupancy before the runner starts. This exception never raises the budget
-for new claims. Status and both dashboards report actual occupancy, configured
-capacity, effective display capacity and the nodes using descendant-held slots.
-Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of normal ticket claims, marking urgent waiters, the pending start
-requests of each tier and the urgent ticket claims waiting ahead of normal
-parked work, and report a finished work build waiting to run again the same
-way. Idle collecting nodes remain free.
+normal claim. A node's admission counts every build that holds a slot, as every
+admission does. Blocked and paused descendants hold none (§12 "What holds a
+slot"), so they never stand between a node and the slot it needs to unblock
+them, and no node uses a descendant's slot. Provisioning reserves node
+occupancy before the runner starts. Status and both dashboards report
+occupancy against configured capacity. Status, `ab builds` and both dashboards
+report each node waiting for a slot ahead of normal ticket claims, marking
+urgent waiters, the pending start requests of each tier and the urgent ticket
+claims waiting ahead of normal parked work, and report every other parked
+build waiting to run again the same way. Idle collecting nodes remain free.
 
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
@@ -4992,8 +5028,50 @@ Triage for human judgment by default, or to Ready when the operator asks. Any se
 the list or detail view with `a`; Enter confirms and Escape cancels, so the first
 keypress never writes destructive intent. CLI and dashboard both append the same
 `build.abort-requested` fact through the shared control service. The concrete
-presentation — layout, key bindings, colors — is owned by the dashboard
-implementation and its tests.
+presentation (layout, key bindings, exact colors) is owned by the dashboard
+implementation and its tests. The status words and their tones are not: they
+are fixed below.
+
+**Status words.** Every nonterminal build row shows one status word from a
+closed vocabulary. Both dashboards, `ab builds` and build status render the
+same words from the shared dashboard projection. A word's tone is its color
+(`DESIGN.md`, "The Color Is State Rule"), and tones nest inside the slot model
+(§12 "What holds a slot"): each tone falls wholly on one side of it. Every
+green word holds a slot. Every other word holds none. Words refine their
+tone's category and never cross it, so the color tells whether a build is
+using a slot and the word tells why.
+
+| Tone | Slot | Word | Shown when |
+|---|---|---|---|
+| green (`ok`) | held | `RUNNING` | a runner is working |
+| | held | `STARTING` | no runner is working yet: provisioning, a relaunch, spec publication, a publication retry, a pending ticket-wait decision, an upgrade drain, a suspended session |
+| | held | `PAUSING` | a pause was requested and the runner is still stopping |
+| | held | `ABORTING` | an abort was requested and the runner is still stopping |
+| teal (`live`) | requested | `QUEUED` | parked work waiting for admission; the note names the request (`resume`, `reconcile`, `verification`, `reopen`, `propose`) and marks urgent waiters |
+| amber (`held`) | none | `WAITING` | a finished pipeline waiting for a merge decision or on hold, or an entered ticket wait; the note says which |
+| | none | `MERGING` | a finished pipeline with merge consent, waiting for merge gates or for the forge to merge |
+| | none | `PAUSED` | an acknowledged pause |
+| | none | `COLLECTING` | an integration build collecting child work |
+| red (`alert`) | none | `BLOCKED` | an open escalation, other than a ticket wait's own, or a failed node verification waiting for a repair child |
+| dim (`pending`) | none | `CLEANING` | abort cleanup |
+
+A build's slot state picks its tone first, then the word within that tone.
+`BLOCKED` outranks `PAUSED` for a paused build with an open question.
+`PAUSING` and `ABORTING` describe a runner winding down, so only a build
+holding a slot shows them. A build without a slot keeps its word until the
+acknowledgement, which is not gated. A resumed pause is `QUEUED` until it is
+admitted again; there is no separate resuming word. The reducer's `queued` and
+`running` statuses are lifecycle facts, not display words: a newly claimed
+build shows `STARTING`, and a settled build shows `WAITING` or `MERGING`.
+
+A harvest run is never a build and never holds a slot. Its row shows
+`HARVESTING` (teal) while it works, `PAUSED` or `SUSPENDED` (amber) while it is
+stopped, and `ESCALATED` or `FAILED` (red) when it needs a human. Finished rows
+show their outcome (`MERGED`, `CLOSED`, `ABORTED`) in their own section, and
+step marks keep their own tones. The capacity line reads
+`<occupied>/<capacity>`, where occupied equals the number of green build rows,
+followed by the parked work and start requests waiting for a slot, in
+admission order.
 
 ## 15. Event vocabulary
 
@@ -5318,8 +5396,9 @@ remain readable with explicit unavailable-title/file fallbacks; display metadata
 never authorizes collection or merge.
 A rewrite receipt alone never promotes the boundary; only completed settlement
 does. CLI status exposes pending/active work, reachable build identities and
-node-owned foreign changes. A node stays `collecting` while its narrow reconcile
-runner is attached; it does not acquire a leaf pipeline.
+node-owned foreign changes. A node's lifecycle status stays `collecting` while
+its narrow reconcile runner is attached, and its row shows `RUNNING` (§14
+"Status words"); it does not acquire a leaf pipeline.
 
 **Declined attempts.** `implement.declined` completes the implement phase
 and sets `declined {round, reason, seq}`. The engine decides
@@ -6628,7 +6707,7 @@ also carries the hook's `command` or `url`.
 
 ```toml
 baseBranch = "main"
-capacity = 3                    # builds running work at once; builds parked for a merge decision hold no slot
+capacity = 3                    # slots; a build waiting on a human, another ticket or a merge holds none
 ticketScanIntervalSeconds = 60  # positive integer; ready scans, with tick spacing as floor
 forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
