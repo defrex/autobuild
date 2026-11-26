@@ -375,6 +375,24 @@ async function seedBuild(
   return slug
 }
 
+/** The claim's first execution ran and stopped, spending the launch record
+ * its `build.created` is: a question raised after it waits on a human alone
+ * (SPEC §12 "What holds a slot"). The harness's launches record no
+ * execution, so a fixture that models a stopped runner says so. */
+async function firstRunEnded(h: Pick<Harness, 'store'>, slug: string, instance = 'first-run') {
+  const workspaceRef = `/ws/ab/${slug}`
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'fake', workspaceRef, instance },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.ended',
+    payload: { instance, workspaceRef, outcome: 'completed' },
+  })
+}
+
 async function seedHostedPrAttachment(h: Harness, slug: string, name = 'screenshot', assetId = 7) {
   const designated = await h.store.append(slug, {
     actor: agentActor('verify:visual', 's_visual'),
@@ -1331,6 +1349,7 @@ readyState = "Ready"
     for (const release of ['blocked', 'paused'] as const) {
       const h = harness({ tickets: [readyTicket('T-1')] })
       await seedBuild(h, { slug: 'stuck' })
+      await firstRunEnded(h, 'stuck')
       await h.store.append(
         'stuck',
         release === 'blocked'
@@ -6071,6 +6090,7 @@ describe('Dispatcher startup resume', () => {
   test('an already-recorded human answer is actionable on startup without another answer', async () => {
     const h = harness()
     const slug = await seedBuild(h)
+    await firstRunEnded(h, slug)
     await h.store.append(slug, {
       actor: KERNEL,
       type: 'escalation.raised',
@@ -17368,12 +17388,14 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       const slug = await parkedBuild(h, 'a-finalizing', 2)
       if (variant === 'paused')
         await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
-      if (variant === 'blocked')
+      if (variant === 'blocked') {
+        await firstRunEnded(h, slug)
         await h.store.append(slug, {
           actor: KERNEL,
           type: 'escalation.raised',
           payload: { id: 'e_1', phase: 'finalize', source: 'stall', question: 'why?' },
         })
+      }
       h.tickets.add(readyTicket('T-next'))
       const waiting = variant !== 'interrupted'
       expect((await h.dispatcher.tick()).dispatched).toBe(waiting ? 1 : 0)
@@ -17940,6 +17962,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
      * no slot until admitted (SPEC §12 "What holds a slot"). */
     async function answeredLeaf(h: Harness, slug: string, lease?: string): Promise<string> {
       await ticketed(h, slug)
+      await firstRunEnded(h, slug)
       if (lease !== undefined) await h.store.claimLease(slug, lease, 120_000)
       await h.store.append(slug, {
         actor: KERNEL,
@@ -17998,6 +18021,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       await ticketed(h, leaf)
       // Claimed: admitted by its build.created.
       expect(await reportedSlot(h, leaf)).toEqual({ state: 'held' })
+      await firstRunEnded(h, leaf)
       await h.store.append(leaf, {
         actor: KERNEL,
         type: 'escalation.raised',
@@ -18023,7 +18047,8 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(await reportedSlot(h, parked)).toEqual({ state: 'none' })
     })
 
-    test('a live runner from before the answer never re-admits it (f_43f94fec)', async () => {
+    // A bare lease is no launch record and no execution: it carries nothing.
+    test('a bare lease from before the answer does not keep the slot (f_43f94fec)', async () => {
       const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
       await busyBuild(h, 'a-busy')
       const leaf = await answeredLeaf(h, 'b-answered', 'runner-old')
@@ -18054,7 +18079,8 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       await h.dispatcher.tick()
       expect(h.launches).toEqual([leaf])
       expect(await admissions(h, leaf)).toBe(1)
-      expect(await types(h, leaf)).not.toContain('execution.started')
+      const launched = await types(h, leaf)
+      expect(launched.slice(launched.indexOf('slot.admitted'))).not.toContain('execution.started')
       h.clock.advance(15 * 60_000)
       const fresh = harness({
         toml: VERIFY_TOML,
@@ -18240,6 +18266,8 @@ describe('dispatcher — ticket waits', () => {
         reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
       },
     })
+    // Its runner stops on the declaration.
+    await firstRunEnded(h, WAITER)
   }
 
   const waitEvents = async (h: Harness) =>

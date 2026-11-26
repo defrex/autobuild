@@ -34,6 +34,8 @@ import {
 } from './generators/optimization-log'
 import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
+import { escalationCarryInput } from './dispatch-capacity'
+import { escalationCarried } from './verify-stage-state'
 import { checkIncremental } from './incremental-contract'
 import { indexLog, logIndexReducer } from './log-index'
 import { acceptedRewriteBoundary } from './leaf-restack-base'
@@ -139,7 +141,11 @@ function toLog(writes: EventWrite[]): AbEvent[] {
       ts: clock().toISOString(),
       actor: KERNEL,
       type: 'restack.completed',
-      payload: { ...leafTransaction, cycle: boundary.seq, headSha: 'e'.repeat(40) },
+      payload: {
+        ...leafTransaction,
+        cycle: boundary.seq,
+        headSha: 'e'.repeat(40),
+      },
     })
   }
   // Every engine fixture also holds the log index to the incremental contract.
@@ -306,7 +312,11 @@ function verifyAllPass(attempt: number): EventWrite[] {
   ]
 }
 
-const PR = { number: 7, url: 'https://github.com/defrex/app/pull/7', headSha: 'sha-r1' }
+const PR = {
+  number: 7,
+  url: 'https://github.com/defrex/app/pull/7',
+  headSha: 'sha-r1',
+}
 
 function finalized(): EventWrite[] {
   return [
@@ -378,7 +388,12 @@ describe('decideNext: §15.6 happy path — prefix walk', () => {
     command: 'bun tsc --noEmit',
     attempt: 1,
   }
-  const checkUnit: Decision = { kind: 'run-check', step: 'unit', command: 'bun test', attempt: 1 }
+  const checkUnit: Decision = {
+    kind: 'run-check',
+    step: 'unit',
+    command: 'bun test',
+    attempt: 1,
+  }
   const agentE2e: Decision = {
     kind: 'run-agent-verify',
     step: 'e2e',
@@ -483,7 +498,11 @@ describe('decideNext: recovery starts are evidence, not policy budget', () => {
     expect(decide(duplicateStarts(crashedVerify, new Set(['verify.started'])))).toEqual(
       verifyDecision,
     )
-    expect(verifyDecision).toMatchObject({ kind: 'run-check', step: 'unit', attempt: 1 })
+    expect(verifyDecision).toMatchObject({
+      kind: 'run-check',
+      step: 'unit',
+      attempt: 1,
+    })
 
     const crashedReconcile = [
       ...prelude(),
@@ -539,7 +558,12 @@ describe('decideNext: rule 1 — terminal states', () => {
     expect(
       decide([
         ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          source: 'agent',
+          question: 'q?',
+        }),
         ev('build.completed', { outcome: 'merged' }),
         ev('build.pause-requested', {}),
       ]),
@@ -605,16 +629,35 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
   test('explicit and escalation-based abort intent win over pause and open escalations', () => {
     const explicit = [
       ...prelude(),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'plan',
+        source: 'agent',
+        question: 'q?',
+      }),
       ev('build.pause-requested', {}),
       ev('build.abort-requested', { reason: 'wrong ticket' }),
     ]
     const answered = [
       ...prelude(),
       ev('build.pause-requested', {}),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
-      ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'agent', question: 'two?' }),
-      ev('escalation.answered', { id: 'e_1', answer: 'Kill it.', resolution: 'abort' }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'plan',
+        source: 'agent',
+        question: 'one?',
+      }),
+      ev('escalation.raised', {
+        id: 'e_2',
+        phase: 'plan',
+        source: 'agent',
+        question: 'two?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_1',
+        answer: 'Kill it.',
+        resolution: 'abort',
+      }),
     ]
 
     for (const writes of [explicit, answered]) {
@@ -667,7 +710,12 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
     expect(
       decide([
         ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          source: 'agent',
+          question: 'q?',
+        }),
         ev('build.pause-requested', {}),
       ]),
     ).toEqual({ kind: 'acknowledge', command: 'pause' })
@@ -676,7 +724,12 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
   test('paused wins over blocked; the escalation is not lost (§15.5)', () => {
     const writes = [
       ...prelude(),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'plan',
+        source: 'agent',
+        question: 'q?',
+      }),
       ev('build.pause-requested', {}),
       ev('build.paused', {}),
     ]
@@ -707,7 +760,12 @@ describe('decideNext: rule 3 — escalation gating', () => {
     expect(
       decide([
         ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          source: 'agent',
+          question: 'one?',
+        }),
         ev('escalation.raised', {
           id: 'e_2',
           phase: 'plan',
@@ -715,7 +773,11 @@ describe('decideNext: rule 3 — escalation gating', () => {
           policyCause: 'phase-attempt-limit',
           question: 'two?',
         }),
-        ev('escalation.answered', { id: 'e_2', answer: 'B', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_2',
+          answer: 'B',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual(wait('blocked'))
   })
@@ -792,13 +854,20 @@ describe('decideNext: rule 3 — escalation gating', () => {
         source: 'agent',
         question: 'spec wrong?',
       }),
-      ev('escalation.answered', { id: 'e_1', answer: 'Spec updated.', resolution: 'revise-spec' }),
+      ev('escalation.answered', {
+        id: 'e_1',
+        answer: 'Spec updated.',
+        resolution: 'revise-spec',
+      }),
     ]
     expect(decide(writes)).toEqual(wait('awaiting-spec'))
     expect(
       decide([
         ...writes,
-        ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 }),
+        ev('spec.revised', {
+          artifact: { kind: 'spec', rev: 1 },
+          escalation: 5,
+        }),
       ]),
     ).toEqual(runPhase('plan', 1))
   })
@@ -827,7 +896,10 @@ describe('decideNext: rule 4 — spec gate (§6.3)', () => {
           repo: 'defrex/app',
           baseBranch: 'main',
         }),
-        ev('spec.authored', { artifact: { kind: 'spec', rev: 0 }, session: 's_spec' }),
+        ev('spec.authored', {
+          artifact: { kind: 'spec', rev: 0 },
+          session: 's_spec',
+        }),
       ]),
     ).toEqual(runPhase('plan', 1))
   })
@@ -941,7 +1013,9 @@ describe('decideNext: rule 5 — plan loop', () => {
         }),
       ]),
     ).toEqual(
-      runPhase('plan', 2, { guidance: { escalation: 'e_1', answer: 'Only the API surface.' } }),
+      runPhase('plan', 2, {
+        guidance: { escalation: 'e_1', answer: 'Only the API surface.' },
+      }),
     )
   })
 
@@ -957,9 +1031,17 @@ describe('decideNext: rule 5 — plan loop', () => {
           source: 'agent',
           question: 'Which auth flow?',
         }),
-        ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'OAuth only.',
+          resolution: 'guidance',
+        }),
       ]),
-    ).toEqual(runPhase('plan', 1, { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }))
+    ).toEqual(
+      runPhase('plan', 1, {
+        guidance: { escalation: 'e_1', answer: 'OAuth only.' },
+      }),
+    )
   })
 
   test('plan-loop guidance remains pending until its exact phase occurrence launches', () => {
@@ -974,7 +1056,11 @@ describe('decideNext: rule 5 — plan loop', () => {
         source: 'agent',
         question: 'Which auth flow?',
       }),
-      ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
+      ev('escalation.answered', {
+        id: 'e_1',
+        answer: 'OAuth only.',
+        resolution: 'guidance',
+      }),
       ev('plan.started', { round: 1, feedback: guidance }),
       ev('plan.started', { round: 1, feedback: guidance }), // repeated pre-launch recovery
     ]
@@ -1196,7 +1282,11 @@ describe('decideNext: rule 5 — plan loop', () => {
           source: 'agent',
           question: 'Which auth flow?',
         }),
-        ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'OAuth only.',
+          resolution: 'guidance',
+        }),
         ev('plan.started', {
           round: 1,
           feedback: { guidance: { escalation: 'e_1', answer: 'OAuth only.' } },
@@ -1210,7 +1300,11 @@ describe('decideNext: rule 5 — plan loop', () => {
           round: 1,
         }),
       ]),
-    ).toEqual(runPhase('plan', 1, { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }))
+    ).toEqual(
+      runPhase('plan', 1, {
+        guidance: { escalation: 'e_1', answer: 'OAuth only.' },
+      }),
+    )
   })
 
   test('a persistence chain surviving stallRounds → stall escalation with chain refs', () => {
@@ -1385,7 +1479,10 @@ describe('decideNext: rule 5 — plan loop', () => {
       ]),
     ).toEqual(
       runPhase('plan', 7, {
-        guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' },
+        guidance: {
+          escalation: 'e_1',
+          answer: 'One more round: drop scope X.',
+        },
       }),
     )
     expect(
@@ -1520,9 +1617,17 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decide([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: GUIDANCE,
+          resolution: 'guidance',
+        }),
       ]),
-    ).toEqual(runPhase('implement', 4, { guidance: { escalation: 'e_1', answer: GUIDANCE } }))
+    ).toEqual(
+      runPhase('implement', 4, {
+        guidance: { escalation: 'e_1', answer: GUIDANCE },
+      }),
+    )
   })
 
   test('implement guidance is consumed only after the matching session launch', () => {
@@ -1530,7 +1635,11 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
     const cited = [
       ...threeReviseRounds,
       stallRaised,
-      ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
+      ev('escalation.answered', {
+        id: 'e_1',
+        answer: GUIDANCE,
+        resolution: 'guidance',
+      }),
       ev('implement.started', { round: 4, feedback: guidance }),
     ]
     expect(decide(cited)).toEqual(runPhase('implement', 4, guidance))
@@ -1553,8 +1662,14 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decide([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
-        ...implementRound(4, 'sha-r4', { guidance: { escalation: 'e_1', answer: GUIDANCE } }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: GUIDANCE,
+          resolution: 'guidance',
+        }),
+        ...implementRound(4, 'sha-r4', {
+          guidance: { escalation: 'e_1', answer: GUIDANCE },
+        }),
         ...codeReview(4, 'revise', [finding('f_4')]), // fresh finding — chain not continued
       ]),
     ).toEqual(runPhase('implement', 5, { findings: ['f_4'] }))
@@ -1565,8 +1680,14 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decide([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
-        ...implementRound(4, 'sha-r4', { guidance: { escalation: 'e_1', answer: GUIDANCE } }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: GUIDANCE,
+          resolution: 'guidance',
+        }),
+        ...implementRound(4, 'sha-r4', {
+          guidance: { escalation: 'e_1', answer: GUIDANCE },
+        }),
         ...codeReview(4, 'revise', [finding('f_4', ['f_3'])]), // chain lives on
       ]),
     ).toEqual({
@@ -1707,7 +1828,9 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   test('the fixed round goes to code-review, then verify re-runs from the FIRST step at attempt 2', () => {
     const fixed = [
       ...failAtUnit,
-      ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } }),
+      ...implementRound(2, 'sha-r2', {
+        verify: { step: 'unit', report: report0 },
+      }),
     ]
     expect(decide(fixed)).toEqual(runPhase('code-review', 2))
     expect(decide([...fixed, ...codeReview(2, 'approve')])).toEqual({
@@ -1775,7 +1898,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       }),
     ]
     const guidance = {
-      guidance: { escalation: 'e_verify', answer: 'Use the seeded admin account.' },
+      guidance: {
+        escalation: 'e_verify',
+        answer: 'Use the seeded admin account.',
+      },
     }
 
     expect(decide(beforeAnswer)).toEqual({
@@ -1901,11 +2027,15 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   test('skips carry attempt identity but do not consume the failure budget', () => {
     const afterTwoFailures = [
       ...failAtUnit,
-      ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } }),
+      ...implementRound(2, 'sha-r2', {
+        verify: { step: 'unit', report: report0 },
+      }),
       ...codeReview(2, 'approve'),
       ...verifyRun('types', 2, true),
       ...verifyRun('unit', 2, false, report1),
-      ...implementRound(3, 'sha-r3', { verify: { step: 'unit', report: report1 } }),
+      ...implementRound(3, 'sha-r3', {
+        verify: { step: 'unit', report: report1 },
+      }),
       ...codeReview(3, 'approve'),
       ...verifySkip('types', 3, 'No TypeScript files changed'),
     ]
@@ -1922,11 +2052,15 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
 
   const exhausted: EventWrite[] = [
     ...failAtUnit, // fail 1 (seq 16)
-    ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } }), // 17-18
+    ...implementRound(2, 'sha-r2', {
+      verify: { step: 'unit', report: report0 },
+    }), // 17-18
     ...codeReview(2, 'approve'), // 19-20
     ...verifyRun('types', 2, true), // 21-22
     ...verifyRun('unit', 2, false, report1), // 23-24 — fail 2
-    ...implementRound(3, 'sha-r3', { verify: { step: 'unit', report: report1 } }), // 25-26
+    ...implementRound(3, 'sha-r3', {
+      verify: { step: 'unit', report: report1 },
+    }), // 25-26
     ...codeReview(3, 'approve'), // 27-28
     ...verifyRun('types', 3, true), // 29-30
     ...verifyRun('unit', 3, false, report2), // 31-32 — fail 3 = maxVerifyAttempts
@@ -2032,7 +2166,9 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   })
 
   test('new failure evidence after an answered exhaustion re-arms that verify target', () => {
-    const guidance = { guidance: { escalation: 'e_1', answer: 'Fix and retry.' } }
+    const guidance = {
+      guidance: { escalation: 'e_1', answer: 'Fix and retry.' },
+    }
     expect(
       decide([
         ...exhausted,
@@ -2102,7 +2238,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       }),
     ]
     const latestGuidance = {
-      guidance: { escalation: 'e_verify', answer: 'Fix the failing boundary assertion.' },
+      guidance: {
+        escalation: 'e_verify',
+        answer: 'Fix the failing boundary assertion.',
+      },
     }
 
     expect(decide(beforeDelivery)).toEqual(runPhase('implement', 2, latestGuidance))
@@ -2142,7 +2281,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       ]),
     ).toEqual(
       runPhase('implement', 2, {
-        guidance: { escalation: 'e_after', answer: 'Assert the public result.' },
+        guidance: {
+          escalation: 'e_after',
+          answer: 'Assert the public result.',
+        },
       }),
     )
   })
@@ -2169,7 +2311,12 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         ...verifyRun('types', 1, true),
         ev('verify.started', { step: 'unit', attempt: 1 }),
       ]),
-    ).toEqual({ kind: 'run-check', step: 'unit', command: 'bun test', attempt: 1 })
+    ).toEqual({
+      kind: 'run-check',
+      step: 'unit',
+      command: 'bun test',
+      attempt: 1,
+    })
   })
 
   test('no verify steps configured → straight to finalize', () => {
@@ -2418,7 +2565,12 @@ command = "unit"
         ]),
         selectedConfig,
       ),
-    ).toEqual({ kind: 'run-check', step: 'unit', command: 'bun test', attempt: 1 })
+    ).toEqual({
+      kind: 'run-check',
+      step: 'unit',
+      command: 'bun test',
+      attempt: 1,
+    })
   })
 
   test('mandatory always steps run defensively even if a direct event omitted them', () => {
@@ -2631,7 +2783,11 @@ skill = "custom-screenshot-skill"
     // step files an observation, never re-runs, never kills a green build.
     const firstFailed = [
       ...done,
-      ev('finalize.step-completed', { step: 'release-notes', ok: false, note: 'no template' }),
+      ev('finalize.step-completed', {
+        step: 'release-notes',
+        ok: false,
+        note: 'no template',
+      }),
     ]
     expect(decideNext(toLog(firstFailed), twoSteps)).toEqual({
       kind: 'run-finalize-step',
@@ -2720,7 +2876,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
 
   test('a parked attempt with an unmeasured request runs the measurement', () => {
     const requested = [...throughFinalize, ev('attempt.measurement-requested', measurementRequest)]
-    expect(decide(requested)).toEqual({ kind: 'run-measurement', request: measurementRequest })
+    expect(decide(requested)).toEqual({
+      kind: 'run-measurement',
+      request: measurementRequest,
+    })
     // Sampled, the request is the dispatcher's to decide; the runner parks.
     expect(
       decide([
@@ -2818,7 +2977,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       ...codeReview(1, 'approve'),
       request,
     ]
-    expect(decide(midPipeline)).toMatchObject({ kind: 'run-check', step: 'types' })
+    expect(decide(midPipeline)).toMatchObject({
+      kind: 'run-check',
+      step: 'types',
+    })
     expect(
       decide([
         ...throughFinalize,
@@ -2881,7 +3043,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
           artifact: { kind: 'reconcile-notes', rev: 0 },
         }),
       ]),
-    ).toEqual({ kind: 'capture-reconcile-policy', reconcileSeq: throughFinalize.length + 3 })
+    ).toEqual({
+      kind: 'capture-reconcile-policy',
+      reconcileSeq: throughFinalize.length + 3,
+    })
   })
 
   test('captured exclusions survive incremental replay, historical starts rerun, and later code review clears policy', () => {
@@ -2923,7 +3088,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     ]
     const log = toLog(skipped) // validates writes and checks incremental log-index replay
     checkIncremental(buildReducer, log)
-    expect(decideNext(log, config)).toMatchObject({ kind: 'skip-verify', step: 'unit' })
+    expect(decideNext(log, config)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'unit',
+    })
     expect(reduceBuild(log).verify.results.at(-1)?.skipCause).toBe('post-reconcile-policy')
     expect(
       decide([...reconciled, ev('verify.started', { step: 'types', attempt: 2 })]),
@@ -2970,7 +3138,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
   })
 
   test('post-reconcile verification failures remain bounded by maxVerifyAttempts', () => {
-    const report = (attempt: number) => ({ kind: 'verify-report:types', rev: attempt })
+    const report = (attempt: number) => ({
+      kind: 'verify-report:types',
+      rev: attempt,
+    })
     expect(
       decide([
         ...throughFinalize,
@@ -3148,7 +3319,11 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         answer: 'Retry that condition.',
         resolution: 'retry',
       }),
-      ev('reconcile.progress-checked', { conflictSeq, attempt: 3, baseSha: stable }),
+      ev('reconcile.progress-checked', {
+        conflictSeq,
+        attempt: 3,
+        baseSha: stable,
+      }),
     ]
 
     const required: Decision = {
@@ -3356,7 +3531,11 @@ describe('decideNext: spec revision restart (§6.3)', () => {
       const escalation = writes.length
       expect(decide(writes)).toEqual(wait('blocked'))
       writes.push(
-        ev('escalation.answered', { id: 'replay', answer: 'Revised.', resolution: 'revise-spec' }),
+        ev('escalation.answered', {
+          id: 'replay',
+          answer: 'Revised.',
+          resolution: 'revise-spec',
+        }),
       )
       expect(decide(writes)).toEqual(wait('awaiting-spec'))
       writes.push(ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation }))
@@ -3378,7 +3557,10 @@ describe('decideNext: spec revision restart (§6.3)', () => {
         JSON.parse(JSON.stringify(logIndexReducer.advance(logIndexReducer.initial(), log))),
       )
       expect(decideNextFromFacts(restoredState, restoredIndex, config)).toEqual(expected)
-      expect(state.currentPhase).toMatchObject({ phase: 'reconcile', attempt: 2 })
+      expect(state.currentPhase).toMatchObject({
+        phase: 'reconcile',
+        attempt: 2,
+      })
       expect(state.specRev).toBe(1)
       writes.push(
         ev('escalation.raised', {
@@ -3398,7 +3580,10 @@ describe('decideNext: spec revision restart (§6.3)', () => {
       )
       expect(decide(writes)).toEqual(wait('awaiting-spec'))
       writes.push(
-        ev('spec.revised', { artifact: { kind: 'spec', rev: 2 }, escalation: secondEscalation }),
+        ev('spec.revised', {
+          artifact: { kind: 'spec', rev: 2 },
+          escalation: secondEscalation,
+        }),
       )
       expect(decide(writes)).toEqual(expected)
       writes.push(
@@ -3440,7 +3625,12 @@ describe('decideNext: spec revision restart (§6.3)', () => {
         ...implementRound(2, 'sha-r2'),
         ...codeReview(2, 'approve'),
       ]),
-    ).toEqual({ kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 2 })
+    ).toEqual({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun tsc --noEmit',
+      attempt: 2,
+    })
   })
 
   test('attempts stay collision-free across a restart with MULTIPLE pre-restart cycles', () => {
@@ -3456,7 +3646,10 @@ describe('decideNext: spec revision restart (§6.3)', () => {
       ...codeReview(1, 'approve'), // 11-12
       ...verifyRun('types', 1, false, { kind: 'verify-report:types', rev: 0 }), // 13-14
       ...implementRound(2, 'sha-r2', {
-        verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } },
+        verify: {
+          step: 'types',
+          report: { kind: 'verify-report:types', rev: 0 },
+        },
       }), // 15-16
       ...codeReview(2, 'approve'), // 17-18
       ...verifyRun('types', 2, false, { kind: 'verify-report:types', rev: 1 }), // 19-20
@@ -3467,8 +3660,15 @@ describe('decideNext: spec revision restart (§6.3)', () => {
         source: 'agent',
         question: 'The spec is unimplementable as written.',
       }), // 21
-      ev('escalation.answered', { id: 'e_2', answer: 'Spec updated.', resolution: 'revise-spec' }), // 22
-      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 21 }), // 23
+      ev('escalation.answered', {
+        id: 'e_2',
+        answer: 'Spec updated.',
+        resolution: 'revise-spec',
+      }), // 22
+      ev('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        escalation: 21,
+      }), // 23
       // Rounds continue monotonically across the restart (§6.3): plan was at
       // round 1, implement at round 2.
       ...planRound(2, 'approve'),
@@ -3484,7 +3684,12 @@ describe('decideNext: spec revision restart (§6.3)', () => {
     // The crashed-step rule still holds at the continued number: a started-
     // but-not-completed step re-runs at the SAME attempt (§15.6-C).
     expect(decide([...twoFailCycles, ev('verify.started', { step: 'types', attempt: 3 })])).toEqual(
-      { kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 3 },
+      {
+        kind: 'run-check',
+        step: 'types',
+        command: 'bun tsc --noEmit',
+        attempt: 3,
+      },
     )
   })
 
@@ -3527,7 +3732,10 @@ describe('decideNext: spec revision restart (§6.3)', () => {
         answer: 'revised',
         resolution: 'revise-spec',
       }),
-      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 18 }),
+      ev('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        escalation: 18,
+      }),
     ]
     const throughFive = [
       ...oldRounds,
@@ -3655,13 +3863,17 @@ command = "unit"
       ...verifyRun('postgres', 1, false, postgresReport),
     ],
     [
-      ...implementRound(2, 'sha-r2', { verify: { step: 'postgres', report: postgresReport } }),
+      ...implementRound(2, 'sha-r2', {
+        verify: { step: 'postgres', report: postgresReport },
+      }),
       ...codeReview(2, 'approve'),
       ...verifyRun('postgres', 2, true),
       ...verifyRun('website', 2, false, websiteReport),
     ],
     [
-      ...implementRound(3, 'sha-r3', { verify: { step: 'website', report: websiteReport } }),
+      ...implementRound(3, 'sha-r3', {
+        verify: { step: 'website', report: websiteReport },
+      }),
       ...codeReview(3, 'approve'),
       ...verifyRun('postgres', 3, true),
       ...verifyRun('website', 3, true),
@@ -3720,7 +3932,10 @@ command = "unit"
       ...verifyRun('types', 1, false, report0),
       ...verifyRun('types', 1, false, report0),
     ]
-    expect(decide(writes)).toMatchObject({ kind: 'run-phase', phase: 'implement' })
+    expect(decide(writes)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+    })
   })
 })
 
@@ -3769,7 +3984,10 @@ test('read deferral projection is exact-session, terminal-first and incremental 
     refs: [`own-build-read:${log.length - 1}`],
   })
   const raised = toLog([...prelude(), start, marker, ended, settled, raise])
-  expect(decideNext(raised, config)).toEqual({ kind: 'wait', reason: 'blocked' })
+  expect(decideNext(raised, config)).toEqual({
+    kind: 'wait',
+    reason: 'blocked',
+  })
   checkIncremental(logIndexReducer, raised)
   checkIncremental(buildReducer, raised)
   const answered = toLog([
@@ -3779,9 +3997,17 @@ test('read deferral projection is exact-session, terminal-first and incremental 
     ended,
     settled,
     raise,
-    ev('escalation.answered', { id: 'esc_read', answer: 'repaired', resolution: 'retry' }),
+    ev('escalation.answered', {
+      id: 'esc_read',
+      answer: 'repaired',
+      resolution: 'retry',
+    }),
   ])
-  expect(decideNext(answered, config)).toMatchObject({ kind: 'run-phase', phase: 'plan', round: 1 })
+  expect(decideNext(answered, config)).toMatchObject({
+    kind: 'run-phase',
+    phase: 'plan',
+    round: 1,
+  })
   checkIncremental(logIndexReducer, answered)
   const recovered = toLog([
     ...prelude(),
@@ -3794,7 +4020,10 @@ test('read deferral projection is exact-session, terminal-first and incremental 
     ),
     ended,
   ])
-  expect(decideNext(recovered, config)).toMatchObject({ kind: 'run-phase', phase: 'plan-review' })
+  expect(decideNext(recovered, config)).toMatchObject({
+    kind: 'run-phase',
+    phase: 'plan-review',
+  })
   expect(decideNext(toLog([...prelude(), marker, ended]), config)).toMatchObject({
     kind: 'run-phase',
     phase: 'plan',
@@ -3877,7 +4106,12 @@ describe('read deferral recovery', () => {
     const evidence = seqOf(writes)
     writes.push(failed('s_p', 'plan'), started('s_c', 'plan', 's_p'))
     expect(pendingOf(toLog(writes))).toMatchObject([
-      { session: 's_c', evidenceSeq: evidence, lastFailureSeq: evidence, recovered: false },
+      {
+        session: 's_c',
+        evidenceSeq: evidence,
+        lastFailureSeq: evidence,
+        recovered: false,
+      },
     ])
     writes.push(
       ev(
@@ -3890,7 +4124,10 @@ describe('read deferral recovery', () => {
     )
     const log = toLog(writes)
     expect(pendingOf(log)).toEqual([])
-    expect(decideNext(log, config)).toMatchObject({ kind: 'run-phase', phase: 'plan-review' })
+    expect(decideNext(log, config)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'plan-review',
+    })
   })
 
   test('a continuation that ends without a terminal parks the chain once', () => {
@@ -3958,7 +4195,9 @@ describe('read deferral recovery', () => {
       stepCompleted('s_f'),
     ])
     expect(pendingOf(late)).toMatchObject([{ recovered: false }])
-    expect(decideNext(late, config)).toMatchObject({ kind: 'raise-read-deferral' })
+    expect(decideNext(late, config)).toMatchObject({
+      kind: 'raise-read-deferral',
+    })
   })
 
   test('a later failure invalidates recovery until newer evidence arrives', () => {
@@ -3969,10 +4208,17 @@ describe('read deferral recovery', () => {
     writes.push(failed('s_f', 'finalize', 'again'))
     const stale = [...writes, recovered('s_f', 'finalize', first, first), ended('s_f')]
     expect(pendingOf(toLog(stale))).toMatchObject([
-      { evidenceSeq: first, lastFailureSeq: second, recovered: false, diagnostic: 'again' },
+      {
+        evidenceSeq: first,
+        lastFailureSeq: second,
+        recovered: false,
+        diagnostic: 'again',
+      },
     ])
     expect(pendingOf(toLog([...stale, stepCompleted('s_f')]))).toHaveLength(1)
-    expect(decideNext(toLog(stale), config)).toMatchObject({ kind: 'raise-read-deferral' })
+    expect(decideNext(toLog(stale), config)).toMatchObject({
+      kind: 'raise-read-deferral',
+    })
 
     writes.push(recovered('s_f', 'finalize', first, second), ended('s_f'))
     expect(pendingOf(toLog(writes))).toMatchObject([{ recovered: true }])
@@ -3993,7 +4239,12 @@ describe('read deferral recovery', () => {
     writes.push(failed('s_c', 'finalize'))
     const parked = toLog([...writes, ended('s_c')])
     expect(pendingOf(parked)).toMatchObject([
-      { session: 's_c', evidenceSeq: first, lastFailureSeq: second, recovered: false },
+      {
+        session: 's_c',
+        evidenceSeq: first,
+        lastFailureSeq: second,
+        recovered: false,
+      },
     ])
     expect(decideNext(parked, config)).toMatchObject({
       kind: 'raise-read-deferral',
@@ -4028,7 +4279,13 @@ test('interleaved target passes never erase failures and the third distinct fail
     const outcome = attempt % 2 ? 'fail' : 'pass'
     for (const step of outcome === 'fail' ? ['types'] : ['types', 'unit', 'e2e']) {
       writes.push(
-        ev('verify.started', { step, attempt, baseSha, headSha, restackId: `restack-${attempt}` }),
+        ev('verify.started', {
+          step,
+          attempt,
+          baseSha,
+          headSha,
+          restackId: `restack-${attempt}`,
+        }),
       )
       writes.push(
         ev('verify.completed', {
@@ -4065,9 +4322,16 @@ test('interleaved target passes never erase failures and the third distinct fail
   )
   expect(decide(writes)).toEqual({ kind: 'wait', reason: 'blocked' })
   writes.push(
-    ev('escalation.answered', { id: 'esc_failures', answer: 'retry', resolution: 'retry' }),
+    ev('escalation.answered', {
+      id: 'esc_failures',
+      answer: 'retry',
+      resolution: 'retry',
+    }),
   )
-  expect(decide(writes)).toMatchObject({ kind: 'run-phase', phase: 'implement' })
+  expect(decide(writes)).toMatchObject({
+    kind: 'run-phase',
+    phase: 'implement',
+  })
 })
 
 describe('ordered concurrent verification stages', () => {
@@ -4132,17 +4396,125 @@ describe('ordered concurrent verification stages', () => {
     })
     const cancelled = [
       ...failed,
-      ev('verify.cancelled', { step: 'unit', attempt: 1, cause: { step: 'types' } }),
+      ev('verify.cancelled', {
+        step: 'unit',
+        attempt: 1,
+        cause: { step: 'types' },
+      }),
     ]
-    expect(decideNext(toLog(cancelled), fast)).toEqual({ kind: 'restart-execution' })
+    expect(decideNext(toLog(cancelled), fast)).toEqual({
+      kind: 'restart-execution',
+    })
     const replacement = [
       ...cancelled,
-      ev('execution.started', { provider: 'test', workspaceRef: '/ws', instance: 'new' }),
+      ev('execution.started', {
+        provider: 'test',
+        workspaceRef: '/ws',
+        instance: 'new',
+      }),
     ]
     expect(decideNext(toLog(replacement), fast).kind).toBe('record-verify-stage-failure')
     expect(decideNext(toLog([...failed, ...verifyRun('unit', 1, true)]), fast).kind).toBe(
       'record-verify-stage-failure',
     )
+  })
+})
+
+describe('stage carry matches the engine exemption (SPEC §12 "What holds a slot")', () => {
+  // `escalationCarried`'s (A) keeps a blocked build's slot exactly while the
+  // engine still runs the question's siblings; the two change together.
+  const grouped = parseConfig(
+    CONFIG_TOML.replace('steps = ["types", "unit", "e2e"]', 'steps = [["unit", "e2e"], "types"]'),
+  )
+  const session = 's_e2e'
+  const raised = (overrides: Partial<PayloadInput<'escalation.raised'>> = {}) =>
+    ev(
+      'escalation.raised',
+      {
+        id: 'esc_e2e',
+        phase: 'verify:e2e',
+        round: 1,
+        source: 'agent',
+        question: 'which fixture?',
+        ...overrides,
+      },
+      { kind: 'agent', role: 'verify', session },
+    )
+  const staged = [
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'approve'),
+    ev('verify.started', { step: 'unit', attempt: 1 }),
+    ev('verify.started', { step: 'e2e', attempt: 1 }),
+    ev('session.started', {
+      session,
+      role: 'verify',
+      runner: 'scripted',
+      phase: 'verify:e2e',
+      round: 1,
+    }),
+  ]
+  // (A) alone: no execution or launch record enters.
+  const carried = (writes: EventWrite[]) =>
+    escalationCarried({
+      ...escalationCarryInput(reduceBuild(toLog(writes))),
+      liveExecution: undefined,
+      slotAdmittedSeq: undefined,
+    })
+  const blocked = (writes: EventWrite[]) => {
+    const decision = decideNext(toLog(writes), grouped)
+    return decision.kind === 'wait' && decision.reason === 'blocked'
+  }
+  test('a member question with a running sibling: carried, and the engine runs on', () => {
+    const log = [...staged, raised()]
+    expect(carried(log)).toBe(true)
+    expect(blocked(log)).toBe(false)
+  })
+  test('any other open question: not carried, and the engine waits blocked', () => {
+    for (const log of [
+      [
+        ...staged,
+        ev(
+          'escalation.raised',
+          {
+            id: 'esc_p',
+            phase: 'verify:e2e',
+            round: 1,
+            source: 'policy',
+            policyCause: 'phase-attempt-limit',
+            question: 'q',
+          },
+          KERNEL,
+        ),
+      ],
+      [
+        ...staged,
+        raised(),
+        ev('escalation.raised', {
+          id: 'esc_h',
+          phase: 'implement',
+          round: 1,
+          source: 'agent',
+          question: 'q',
+        }),
+      ],
+    ]) {
+      expect(carried(log)).toBe(false)
+      expect(blocked(log)).toBe(true)
+    }
+  })
+  test('once the siblings finish, nothing carries and the engine runs nothing', () => {
+    const log = [
+      ...staged,
+      raised(),
+      ev('verify.completed', { step: 'unit', attempt: 1, pass: true }),
+    ]
+    expect(carried(log)).toBe(false)
+    expect(decideNext(toLog(log), grouped)).toEqual({
+      kind: 'wait',
+      reason: 'verify-stage',
+    })
   })
 })
 
@@ -4188,7 +4560,13 @@ describe('verification stages resumed by a clean wait-resume restack', () => {
     }),
     ev(
       'wait.requested',
-      { id: 'wait_1', phase: 'verify:e2e', round: 1, tickets: ['B'], reason: 'needs B' },
+      {
+        id: 'wait_1',
+        phase: 'verify:e2e',
+        round: 1,
+        tickets: ['B'],
+        reason: 'needs B',
+      },
       agentActor,
     ),
     ev('session.ended', {
@@ -4208,7 +4586,11 @@ describe('verification stages resumed by a clean wait-resume restack', () => {
   const resumed = (writes: EventWrite[]): EventWrite[] => {
     const ended = [
       ...writes,
-      ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
+      ev('wait.ended', {
+        id: 'wait_1',
+        cause: 'automatic',
+        message: 'B completed',
+      }),
     ]
     const tx = {
       ...leafTransaction,
@@ -4249,7 +4631,10 @@ describe('verification stages resumed by a clean wait-resume restack', () => {
 
   test('a waiting member with a failed sibling relaunches the whole stage', () => {
     const waited = [...ready(), ...e2eWaits(), ...verifyRun('types', 1, false)]
-    expect(decideNext(toLog(waited), typesE2eFirst)).toEqual({ kind: 'wait', reason: 'blocked' })
+    expect(decideNext(toLog(waited), typesE2eFirst)).toEqual({
+      kind: 'wait',
+      reason: 'blocked',
+    })
     const log = resumed(waited)
     const decision = decideNext(toLog(log), typesE2eFirst)
     expect(members(decision)).toEqual([
@@ -4258,7 +4643,14 @@ describe('verification stages resumed by a clean wait-resume restack', () => {
     ])
     // The declaring verifier still receives the wait's answer.
     expect(decision).toMatchObject({
-      members: [{}, { feedback: { guidance: { escalation: 'esc_w', answer: 'B completed' } } }],
+      members: [
+        {},
+        {
+          feedback: {
+            guidance: { escalation: 'esc_w', answer: 'B completed' },
+          },
+        },
+      ],
     })
   })
 
@@ -4268,8 +4660,16 @@ describe('verification stages resumed by a clean wait-resume restack', () => {
       ...ready(),
       ...e2eWaits(),
       ...verifyRun('types', 1, false),
-      ev('verify.cancelled', { step: 'e2e', attempt: 1, cause: { step: 'types' } }),
-      ev('execution.started', { provider: 'test', workspaceRef: '/ws', instance: 'new' }),
+      ev('verify.cancelled', {
+        step: 'e2e',
+        attempt: 1,
+        cause: { step: 'types' },
+      }),
+      ev('execution.started', {
+        provider: 'test',
+        workspaceRef: '/ws',
+        instance: 'new',
+      }),
     ]
     const log = toLog(resumed(waited))
     const boundary = leafVerifyCycleInputs(logIndexReducer.reduce(log))
@@ -4361,7 +4761,12 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
     }),
     ev(
       'escalation.raised',
-      { id: 'held', phase: 'verify:e2e', source: 'agent', question: 'question' },
+      {
+        id: 'held',
+        phase: 'verify:e2e',
+        source: 'agent',
+        question: 'question',
+      },
       { kind: 'agent', role: 'e2e', session: 's_held' },
     ),
   ]
@@ -4370,7 +4775,10 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
   if (decision.kind === 'run-verify-stage')
     expect(decision.members.map((m) => m.step)).toEqual(['types'])
   const failed = [...held, ...verifyRun('types', 1, false)]
-  expect(decideNext(toLog(failed), grouped)).toEqual({ kind: 'wait', reason: 'verify-stage' })
+  expect(decideNext(toLog(failed), grouped)).toEqual({
+    kind: 'wait',
+    reason: 'verify-stage',
+  })
   const answered = [
     ...failed,
     ev('escalation.answered', {
@@ -4386,7 +4794,9 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
       {
         kind: 'run-agent-verify',
         step: 'e2e',
-        feedback: { guidance: { escalation: 'held', answer: 'retry this verifier' } },
+        feedback: {
+          guidance: { escalation: 'held', answer: 'retry this verifier' },
+        },
       },
     ],
   })
@@ -4408,7 +4818,11 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
   })
   const cancelled = [
     ...failed,
-    ev('verify.cancelled', { step: 'e2e', attempt: 1, cause: { step: 'types' } }),
+    ev('verify.cancelled', {
+      step: 'e2e',
+      attempt: 1,
+      cause: { step: 'types' },
+    }),
   ]
   expect(reduceBuild(toLog(cancelled)).openEscalations).toEqual([])
   const unrelated = [
@@ -4421,7 +4835,10 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
       question: 'unrelated',
     }),
   ]
-  expect(decideNext(toLog(unrelated), fast)).toEqual({ kind: 'wait', reason: 'blocked' })
+  expect(decideNext(toLog(unrelated), fast)).toEqual({
+    kind: 'wait',
+    reason: 'blocked',
+  })
 })
 
 describe('landingRestackDue', () => {
@@ -4439,7 +4856,10 @@ describe('landingRestackDue', () => {
         restack: { gates: {}, initialBase: 'b'.repeat(40), target: moved },
       }),
     ).toBe(false)
-    const targeted = { ...state, target: { build: 'node', ticket: { source: 'file', id: 'n' } } }
+    const targeted = {
+      ...state,
+      target: { build: 'node', ticket: { source: 'file', id: 'n' } },
+    }
     expect(
       landingRestackDue(targeted, {
         restack: {
@@ -4477,12 +4897,21 @@ describe('decideNext: optimization node starting measurement', () => {
       baseBranch: 'main',
       kind: 'node',
     }),
-    ev('optimization.objective-accepted', { objective, revision: 1, harnessPin: pin, specRev: 0 }),
+    ev('optimization.objective-accepted', {
+      objective,
+      revision: 1,
+      harnessPin: pin,
+      specRev: 0,
+    }),
     ev('node.opened', { sha: pin }),
   ]
 
   test('an opened command node measures its harness pin first', () => {
-    expect(decide(opened)).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
+    expect(decide(opened)).toEqual({
+      kind: 'measure-baseline',
+      revision: 1,
+      harnessPin: pin,
+    })
   })
 
   test('once measured, the node waits as before', () => {
@@ -4535,7 +4964,11 @@ describe('decideNext: optimization node starting measurement', () => {
           policyCause: 'measurement-failed',
           question: 'exited 1',
         }),
-        ev('escalation.answered', { id: 'esc-m', answer: 'retry', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'esc-m',
+          answer: 'retry',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
   })
@@ -4555,7 +4988,11 @@ describe('the optimization proposer', () => {
         },
       })
       .accept(commandObjective(), 1)
-      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .push({
+        actor: DISPATCHER,
+        type: 'node.opened',
+        payload: { sha: OPTIMIZATION_SHA('a') },
+      })
       .baseline(1, 50, 1)
 
   test('an open request runs propose at its round; a deposit or withdrawal does not', () => {
@@ -4577,9 +5014,18 @@ describe('the optimization proposer', () => {
       .push({
         actor: KERNEL,
         type: 'escalation.raised',
-        payload: { id: 'e1', phase: 'propose', round: 1, source: 'agent', question: 'why?' },
+        payload: {
+          id: 'e1',
+          phase: 'propose',
+          round: 1,
+          source: 'agent',
+          question: 'why?',
+        },
       })
-    expect(decideNext(blocked.events, config)).toEqual({ kind: 'wait', reason: 'blocked' })
+    expect(decideNext(blocked.events, config)).toEqual({
+      kind: 'wait',
+      reason: 'blocked',
+    })
   })
 })
 
@@ -4597,11 +5043,19 @@ describe('baseline and proposer ordering after a ruler change', () => {
         },
       })
       .accept(commandObjective(), 1)
-      .push({ actor: DISPATCHER, type: 'node.opened', payload: { sha: OPTIMIZATION_SHA('a') } })
+      .push({
+        actor: DISPATCHER,
+        type: 'node.opened',
+        payload: { sha: OPTIMIZATION_SHA('a') },
+      })
       .baseline(1, 50, 1)
       .request('r1', 2)
     if (started)
-      log.push({ actor: KERNEL, type: 'propose.started', payload: { round: 1, request: 'r1' } })
+      log.push({
+        actor: KERNEL,
+        type: 'propose.started',
+        payload: { round: 1, request: 'r1' },
+      })
     return log.accept(
       commandObjective({
         metric: {
@@ -4617,9 +5071,15 @@ describe('baseline and proposer ordering after a ruler change', () => {
   }
   test('an admitted proposer finishes before the replacement baseline, then proposing resumes', () => {
     const log = pending(true)
-    expect(decideNext(log.events, config)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
+    expect(decideNext(log.events, config)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'propose',
+    })
     log.deposit('r1', 1, ['a']).file('r1', ['a'])
-    expect(decideNext(log.events, config)).toMatchObject({ kind: 'measure-baseline', revision: 2 })
+    expect(decideNext(log.events, config)).toMatchObject({
+      kind: 'measure-baseline',
+      revision: 2,
+    })
     log.baseline(2, 45, 1).request('r2', 1)
     expect(decideNext(log.events, config)).toMatchObject({
       kind: 'run-phase',
@@ -4629,9 +5089,15 @@ describe('baseline and proposer ordering after a ruler change', () => {
   })
   test('a waiting proposer runs only after the replacement baseline', () => {
     const log = pending(false)
-    expect(decideNext(log.events, config)).toMatchObject({ kind: 'measure-baseline', revision: 2 })
+    expect(decideNext(log.events, config)).toMatchObject({
+      kind: 'measure-baseline',
+      revision: 2,
+    })
     log.baseline(2, 45, 1)
-    expect(decideNext(log.events, config)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
+    expect(decideNext(log.events, config)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'propose',
+    })
   })
 })
 
@@ -4640,7 +5106,12 @@ describe('decideNext: panel node starting measurement and progress', () => {
   const head = 'c'.repeat(40)
   const objective = {
     purpose: 'clearer prose',
-    metric: { kind: 'panel' as const, judges: 3, rubric: 'evals/rubric.md', harness: ['evals/**'] },
+    metric: {
+      kind: 'panel' as const,
+      judges: 3,
+      rubric: 'evals/rubric.md',
+      harness: ['evals/**'],
+    },
     target: { threshold: 0.8, epsilon: { absolute: 0.1 } },
     budget: { maxAttempts: 5 },
     stop: { mode: 'drain' as const },
@@ -4653,7 +5124,12 @@ describe('decideNext: panel node starting measurement and progress', () => {
       baseBranch: 'main',
       kind: 'node',
     }),
-    ev('optimization.objective-accepted', { objective, revision: 1, harnessPin: pin, specRev: 0 }),
+    ev('optimization.objective-accepted', {
+      objective,
+      revision: 1,
+      harnessPin: pin,
+      specRev: 0,
+    }),
     ev('node.opened', { sha: pin }),
   ]
   const accepted: EventWrite[] = [
@@ -4675,7 +5151,12 @@ describe('decideNext: panel node starting measurement and progress', () => {
     ev('optimization.attempts-proposed', {
       request: 'r1',
       proposals: [
-        { id: 'p1', ticket: { source: 'linear', id: 'ENG-9' }, title: 'One', strategy: 's' },
+        {
+          id: 'p1',
+          ticket: { source: 'linear', id: 'ENG-9' },
+          title: 'One',
+          strategy: 's',
+        },
       ],
     }),
     ev('attempt.settled', {
@@ -4687,7 +5168,11 @@ describe('decideNext: panel node starting measurement and progress', () => {
   ]
 
   test('an opened panel node judges its harness pin against itself first', () => {
-    expect(decide(opened)).toEqual({ kind: 'measure-baseline', revision: 1, harnessPin: pin })
+    expect(decide(opened)).toEqual({
+      kind: 'measure-baseline',
+      revision: 1,
+      harnessPin: pin,
+    })
   })
 
   test('an accepted head is judged against the starting head', () => {
@@ -4729,11 +5214,19 @@ describe('decideNext: panel node starting measurement and progress', () => {
           ev('optimization.attempts-proposed', {
             request: 'r2',
             proposals: [
-              { id: 'p2', ticket: { source: 'linear', id: 'ENG-10' }, title: 'Two', strategy: 's' },
+              {
+                id: 'p2',
+                ticket: { source: 'linear', id: 'ENG-10' },
+                title: 'Two',
+                strategy: 's',
+              },
             ],
           }),
         )
-        expect(decide(pending)).toMatchObject({ kind: 'measure-progress', head })
+        expect(decide(pending)).toMatchObject({
+          kind: 'measure-progress',
+          head,
+        })
         pending.push(
           ev('optimization.proposal-requested', {
             id: 'r3',
@@ -4752,7 +5245,10 @@ describe('decideNext: panel node starting measurement and progress', () => {
           judges: 3,
         }),
       )
-      expect(decide(pending)).toMatchObject({ kind: 'run-phase', phase: 'propose' })
+      expect(decide(pending)).toMatchObject({
+        kind: 'run-phase',
+        phase: 'propose',
+      })
     },
   )
 
@@ -4878,7 +5374,10 @@ describe('decideNext: a reopened settled leaf', () => {
     expect(decide(recorded)).toEqual(wait('awaiting-spec'))
     const published = [
       ...recorded,
-      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, operator: { user: 'aron' } }),
+      ev('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        operator: { user: 'aron' },
+      }),
     ]
     expect(decide(published)).toEqual(runPhase('plan', 2))
   })
@@ -4904,7 +5403,13 @@ describe('decideNext: a leaf on a rewritten target (SPEC §7.4)', () => {
   const raise = (id: string, phase: PayloadInput<'escalation.raised'>['phase'] = 'setup') =>
     ev(
       'escalation.raised',
-      { id, phase, source: 'policy', policyCause: 'target-rewritten', question: 'q' },
+      {
+        id,
+        phase,
+        source: 'policy',
+        policyCause: 'target-rewritten',
+        question: 'q',
+      },
       KERNEL,
     )
   const answer = (id: string, resolution: 'accept-target' | 'retry') =>
@@ -5016,7 +5521,11 @@ describe('decideNext: a leaf on a rewritten target (SPEC §7.4)', () => {
     })
     const restacked = toLog([
       ...verified,
-      ev('restack.completed', { ...leafTransaction, cycle: boundary, headSha: 'f'.repeat(40) }),
+      ev('restack.completed', {
+        ...leafTransaction,
+        cycle: boundary,
+        headSha: 'f'.repeat(40),
+      }),
     ])
     expect(decideNextFromFacts(reduceBuild(restacked), indexLog(restacked), config)).toEqual({
       kind: 'run-check',
@@ -5073,7 +5582,10 @@ describe('decideNext: a leaf on a rewritten target (SPEC §7.4)', () => {
       rewritten(),
       raise('e1', 'finalize'),
       answer('e1', 'accept-target'),
-      accepted({ head: C, owner: { kind: 'finalize-step', step: 'release-notes', startedSeq } }),
+      accepted({
+        head: C,
+        owner: { kind: 'finalize-step', step: 'release-notes', startedSeq },
+      }),
     ]
     const log = toLog(owned)
     expect(openPublishingOwner(reduceBuild(log), indexLog(log))).toEqual({
@@ -5088,7 +5600,11 @@ describe('decideNext: a leaf on a rewritten target (SPEC §7.4)', () => {
     })
     const done = toLog([
       ...owned,
-      ev('finalize.step-completed', { step: 'release-notes', ok: true, headSha: C }),
+      ev('finalize.step-completed', {
+        step: 'release-notes',
+        ok: true,
+        headSha: C,
+      }),
     ])
     expect(decideNext(done, config)).toEqual({
       kind: 'restack',
