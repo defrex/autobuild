@@ -339,8 +339,10 @@ pathname retained across handoffs. A launch from a source root in the dispatched
 repository's Git common-directory topology selects source mode instead. That
 eligibility and its initial packaged snapshot are frozen across successors. The
 target is the forge-authoritative base commit, exported into private cache staging
-without changing any operator or build worktree. A frozen-lockfile, script-free
-Bun install supplies dependencies; the completed immutable runtime records the
+without changing any operator or build worktree. A frozen-lockfile, script-free,
+production-only Bun install of the root package's dependency closure supplies
+dependencies, each resolved inside the export; development-only dependencies and
+workspaces are not materialized. The completed immutable runtime records the
 exact commit and follows ordinary cache retention and pruning. Source adoption
 compares packaged contents and production-reachable dependency resolution rather
 than version or commit: excluded-file advances do not hand off. Included shipped
