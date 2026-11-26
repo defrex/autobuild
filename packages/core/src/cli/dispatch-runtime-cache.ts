@@ -309,11 +309,16 @@ export async function validateRuntime(runtime: CachedRuntime): Promise<void> {
     throw new Error(`corrupt guest archive: ${runtime.root}`)
 }
 
-async function validateRuntimeImports(root: string, checkout: string): Promise<void> {
+async function validateRuntimeImports(
+  root: string,
+  checkout: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const probe = Bun.spawn(runtimeSpawnArguments(root, join(root, 'bin/ab.ts'), ['--version']), {
     cwd: checkout,
     stdout: 'pipe',
     stderr: 'pipe',
+    signal,
   })
   const [code, stderr] = await Promise.all([
     probe.exited,
@@ -391,37 +396,29 @@ type PreparedArchive =
       archiveDigest: string
     }
 
-/** Digests the completed snapshot and, unless a matching runtime already
- * exists, round-trips its distribution archive through extraction and a real
- * import probe. The archive check's dependency copy runs beside the digest
- * and is awaited before this settles, whether or not it was needed. */
-async function prepareArchive(
+/** Round-trips the distribution archive: extracts it, checks its compiler
+ * boundary, entries and configs, joins a copy of the snapshot's dependencies
+ * and runs a real import probe against the result. */
+async function verifyArchive(
   root: string,
   stage: string,
-  cache: string,
   checkout: string,
-  guest: { provenance: 'source' | 'registry' },
   takeArchive: () => Promise<Uint8Array>,
-): Promise<PreparedArchive> {
+  signal: AbortSignal,
+): Promise<{ archive: Uint8Array; archiveDigest: string }> {
+  const extracted = join(stage, 'archive-check')
   const modules = join(stage, 'archive-modules')
-  return withSpeculation(
-    () => copyTreeVerbatim(join(root, 'node_modules'), modules),
-    async (takeModules): Promise<PreparedArchive> => {
-      const digest = await treeDigest(root)
-      const manifest = await readManifest(root)
-      const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
-      const destination = join(cache, id)
-      const reusable = await cachedRuntime(join(destination, 'distribution'))
-      if (reusable) return { kind: 'reuse', id, reusable }
+  const [verified] = await settleInOrder([
+    (async () => {
       const archive = await takeArchive()
+      signal.throwIfAborted()
       const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
-      const extracted = join(stage, 'archive-check')
       await mkdir(extracted)
       const archiveFile = join(stage, 'distribution.tgz')
       await writeFile(archiveFile, archive)
       const unpack = Bun.spawn(
         ['tar', '-xzf', archiveFile, '--strip-components=1', '-C', extracted],
-        { stdout: 'ignore', stderr: 'pipe' },
+        { stdout: 'ignore', stderr: 'pipe', signal },
       )
       const unpackError = await new Response(unpack.stderr).text()
       if (
@@ -431,14 +428,41 @@ async function prepareArchive(
         throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
       await validateEntries(extracted)
       await validateCoreConfigs(extracted)
-      await takeModules()
-      // Archived dependencies would shadow the verified layer copy.
-      if (existsSync(join(extracted, 'node_modules')))
-        throw new Error('runtime archive must not contain node_modules')
-      await rename(modules, join(extracted, 'node_modules'))
-      await validateRuntimeImports(extracted, checkout)
-      await rm(extracted, { recursive: true })
-      return { kind: 'fresh', id, destination, digest, archive, archiveDigest }
+      return { archive, archiveDigest }
+    })(),
+    copyTreeVerbatim(join(root, 'node_modules'), modules),
+  ])
+  signal.throwIfAborted()
+  // Archived dependencies would shadow the snapshot's verified copy.
+  if (existsSync(join(extracted, 'node_modules')))
+    throw new Error('runtime archive must not contain node_modules')
+  await rename(modules, join(extracted, 'node_modules'))
+  await validateRuntimeImports(extracted, checkout, signal)
+  await rm(extracted, { recursive: true })
+  return verified
+}
+
+/** Digests the completed snapshot and reuses a matching runtime, or else
+ * requires the archive round trip. That round trip runs speculatively beside
+ * the digest, is aborted on reuse, and is awaited before this settles. */
+async function prepareArchive(
+  root: string,
+  stage: string,
+  cache: string,
+  checkout: string,
+  guest: { provenance: 'source' | 'registry' },
+  takeArchive: () => Promise<Uint8Array>,
+): Promise<PreparedArchive> {
+  return withSpeculation(
+    (signal) => verifyArchive(root, stage, checkout, takeArchive, signal),
+    async (takeVerified): Promise<PreparedArchive> => {
+      const digest = await treeDigest(root)
+      const manifest = await readManifest(root)
+      const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
+      const destination = join(cache, id)
+      const reusable = await cachedRuntime(join(destination, 'distribution'))
+      if (reusable) return { kind: 'reuse', id, reusable }
+      return { kind: 'fresh', id, destination, digest, ...(await takeVerified()) }
     },
   )
 }
