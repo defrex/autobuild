@@ -15,6 +15,7 @@ import {
   stat,
   lstat,
   readlink,
+  rename,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -274,6 +275,28 @@ test('missing installed required dependency fails before publication; optional a
     await readFile(join(destination, 'node_modules/example/node_modules/nested/index.js'), 'utf8'),
   ).toBe('module.exports = 1')
 })
+test('contained preparation refuses a dependency resolved from a parent node_modules', async () => {
+  const { source: original, checkout } = await fixture()
+  // Same layout as a source export nested in a checkout with its own install.
+  const parent = await temp()
+  const source = join(parent, 'export')
+  await rename(original, source)
+  await rename(join(source, 'node_modules'), join(parent, 'node_modules'))
+  await expect(
+    prepareRuntime(source, checkout, undefined, {
+      provenance: 'source',
+      containDependencies: true,
+    }),
+  ).rejects.toThrow('installed dependency example resolves outside the prepared source')
+  expect(
+    (await readdir(join(checkout, '.autobuild/runtime'))).filter(
+      (name) => name.startsWith('.preparing-') || name.includes('-guest1-'),
+    ),
+  ).toEqual([])
+  // Uncontained preparation, as the launcher uses, still resolves upward.
+  await prepareRuntime(source, checkout)
+}, 30000)
+
 test('Autobuild compiler configs fail closed while third-party configs are outside the audit', async () => {
   const { source } = await fixture()
   await file(join(source, 'packages/tsconfig.json'), '{"extends":"../../mutable.json"}')
