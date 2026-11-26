@@ -472,9 +472,21 @@ export async function prepareRuntime(
   publication?: { upgradeKey: string; commit: string },
   guest: {
     provenance: 'source' | 'registry'
+    /** Refuse any production dependency that resolves outside `source`. */
+    containDependencies?: boolean
   } = { provenance: 'source' },
 ): Promise<CachedRuntime> {
   source = await realpath(source)
+  const scan = async () => {
+    const graph = await scanDependencies(source)
+    if (guest.containDependencies)
+      for (const entry of graph.packages)
+        if (!inside(source, entry.source))
+          throw new Error(
+            `installed dependency ${entry.manifest.name ?? 'unnamed'} resolves outside the prepared source; retry dispatch`,
+          )
+    return graph
+  }
   checkout = await realpath(checkout)
   const cache = join(checkout, '.autobuild', 'runtime')
   await mkdir(cache, { recursive: true })
@@ -488,7 +500,7 @@ export async function prepareRuntime(
     await rm(check, { recursive: true })
   }
   try {
-    const scanned = scanDependencies(source)
+    const scanned = scan()
     const staged = stageCode(source, root)
     // Every branch is joined before cleanup or publication, and each join
     // reports failures in the order the stages once ran serially. Packaging
@@ -528,7 +540,7 @@ export async function prepareRuntime(
         // and nothing is reserved, returned or published until all of them pass.
         const [, , , prepared] = await settleInOrder([
           (async () => {
-            if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
+            if ((await scan()).fingerprint !== graph.fingerprint)
               throw new Error(
                 'installed dependencies changed while preparing runtime; retry dispatch',
               )

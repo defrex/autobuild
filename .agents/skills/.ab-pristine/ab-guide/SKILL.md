@@ -431,8 +431,9 @@ The distinctions that change an administrator's answer:
   sharing the dispatched repository's Git common directory selects source mode
   first; that eligibility and the initial packaged baseline stay frozen across
   successors. Source mode follows the forge-authoritative base commit, exported
-  into private cache staging with a frozen-lockfile, script-free dependency
-  install. The immutable runtime records the exact commit. Adoption compares
+  into private cache staging with a frozen-lockfile, script-free install of the
+  root package's production dependencies only; each must resolve inside the
+  export. The immutable runtime records the exact commit. Adoption compares
   actual packaged contents and production-reachable lock records, so same-version
   changes adopt while excluded-file and unrelated workspace-lock advances do not.
   Shipped documentation counts as packaged content. The advisory successful
