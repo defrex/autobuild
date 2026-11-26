@@ -270,15 +270,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
  * wrong and what would be accepted, so the in-session correction loop is
  * immediate and cheap.
  */
-export class EventValidationError extends Error {
-  constructor(
-    message: string,
-    readonly issues?: unknown,
-  ) {
-    super(message)
-    this.name = 'EventValidationError'
-  }
-}
+import { EventValidationError } from './validation-error'
+export { EventValidationError }
 
 /**
  * The single validation gate. Every store adapter MUST pass writes through
