@@ -6,7 +6,6 @@ import {
   type CapacityBuild,
 } from '../../kernel/dispatch-capacity'
 import type { DispatchStatus } from '../../kernel/dispatch-status'
-import { migrationIdentity } from '../../kernel/ticket-migrations'
 import {
   openBuildWorkspaceReducer,
   provisionMarkerReducer,
@@ -243,20 +242,14 @@ export function repositoryDashboardHeader(input: {
       (state) => state.kind !== 'node' && state.status !== 'done' && state.status !== 'aborted',
     ).length,
     capacity: config.capacity,
-    capacityProjection: dispatchCapacity(
-      input.capacityBuilds,
-      config.capacity,
-      input.now,
-      migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
-      {
-        urgentClaims: urgentClaimDemand(repositoryFacts),
-        openPrs: {
-          policy: config.policy,
-          engaged: repositoryFacts.openPrBackpressure !== undefined,
-        },
-        startRequests: startClaimDemand(repositoryFacts),
+    capacityProjection: dispatchCapacity(input.capacityBuilds, config.capacity, input.now, {
+      urgentClaims: urgentClaimDemand(repositoryFacts),
+      openPrs: {
+        policy: config.policy,
+        engaged: repositoryFacts.openPrBackpressure !== undefined,
       },
-    ),
+      startRequests: startClaimDemand(repositoryFacts),
+    }),
     ...(input.triage !== undefined ? { triage: input.triage } : {}),
     ...(status.availableUpgrade !== undefined ? { availableUpgrade: status.availableUpgrade } : {}),
     ...(warningLines.length > 0 ? { warningLines } : {}),

@@ -1,6 +1,5 @@
 import { workTargetDistance } from './target-distance'
 import { openTicketWait, waitingOnLine } from '../../kernel/ticket-wait'
-import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { openPrBackpressureReducer } from '../../kernel/open-pr-backpressure-state'
 import type { DashboardRollback } from './rollback'
 import type { DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
@@ -400,7 +399,8 @@ export interface DashboardModel {
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
-  /** Shared occupied/effective slot counter; idle integration nodes are free. */
+  /** Shared slot counter: builds holding a slot against configured capacity;
+   * paused, blocked and idle builds hold none. */
   active: DashboardCounter
   capacity?: DispatchCapacity
   /** Absent: the recorded run's effective configuration projected this model.
@@ -1524,7 +1524,7 @@ export function buildDashboardFromProjected(
     queued: repository.queued,
     active: {
       current: header.capacityProjection?.occupied ?? header.activeCount,
-      limit: header.capacityProjection?.effective ?? header.capacity,
+      limit: header.capacityProjection?.configured ?? header.capacity,
     },
     ...(header.capacityProjection ? { capacity: header.capacityProjection } : {}),
     drained: repository.drained,
@@ -1563,12 +1563,6 @@ export function buildDashboard(
     })),
     config.capacity,
     new Date(),
-    migrationIdentity(
-      Array.isArray(repositoryEvents)
-        ? ticketMigrationsReducer.reduce(repositoryEvents)
-        : repositoryEvents.ticketMigrations,
-      config.tickets.source,
-    ),
     {
       ...(Array.isArray(repositoryEvents)
         ? {}

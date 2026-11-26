@@ -431,7 +431,7 @@ test('a live latest holder never falls back to full history in CLI or operator s
 })
 
 test.each([false, true])(
-  'CLI JSON and operator status use the held dispatcher configuration and the same borrowed-slot projection (legacy enabled=%s)',
+  'CLI JSON and operator status use the held dispatcher configuration and the same slot projection (legacy enabled=%s)',
   async (enabled) => {
     const { DISPATCHER, KERNEL } = await import('../events/envelope')
     const { manualClock } = await import('../testing/fixed')
@@ -515,7 +515,8 @@ test.each([false, true])(
       },
     })
     await store.append('child', { actor: DISPATCHER, type: 'build.paused', payload: {} })
-    const expected = { configured: 1, occupied: 2, effective: 2, borrowingNodes: ['node'] }
+    // The paused child holds no slot, so the conflict node fills the only one.
+    const expected = { configured: 1, occupied: 1, effective: 1, borrowingNodes: [] }
     const opts = options(store, { json: true, now: clock })
     await abRepositoryStatus(opts)
     expect(JSON.parse(opts.output.join('\n')).capacity).toEqual(expected)

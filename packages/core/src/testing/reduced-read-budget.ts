@@ -4263,8 +4263,9 @@ export async function urgentIntakeReadBudget() {
  * on a full repository cost each idle tick zero historical rows, no append and
  * no ready listing inside the scan interval, at 100 and 100,000 events. Once
  * `free` opens one slot for the normal build, its first deferral forces one
- * listing; while its launch keeps being refused under the same deferral key,
- * idle ticks force no further listing and still read no history. */
+ * listing and admits it with exactly one `slot.admitted` fact; while its
+ * launch keeps being refused, idle ticks retry it holding its slot, append
+ * nothing, force no further listing and read no history. */
 export async function slotAdmissionReadBudget(opts: {
   store: import('../store/memory').MemoryBuildStore
   /** The normal parked build; filler events extend its log. */
@@ -4290,7 +4291,15 @@ export async function slotAdmissionReadBudget(opts: {
       total += repo.events.length
     return total
   }
-  const idle = async (ticks: number) => {
+  const admissions = () => {
+    let total = 0
+    for (const build of (
+      Reflect.get(store, 'builds') as Map<string, { events: { type: string }[] }>
+    ).values())
+      total += build.events.filter((event) => event.type === 'slot.admitted').length
+    return total
+  }
+  const idle = async (ticks: number, relaunches = false) => {
     const boundary = events.at(-1)!.seq
     const metrics = { historicalRows: 0, tailRows: 0 }
     const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
@@ -4305,7 +4314,9 @@ export async function slotAdmissionReadBudget(opts: {
     }
     expect(metrics.historicalRows).toBe(0)
     expect(opts.listed() - before.listed).toBe(0)
-    expect(opts.launched() - before.launched).toBe(0)
+    // An admitted build holds its slot, so its refused launch is retried
+    // (here with no first-claim grace); a waiter is never launched.
+    expect(opts.launched() - before.launched).toBe(relaunches ? ticks : 0)
     expect(appended() - before.appended).toBe(0)
   }
   let filler = 0
@@ -4330,10 +4341,20 @@ export async function slotAdmissionReadBudget(opts: {
   await opts.free()
   opts.advance()
   const listed = opts.listed()
+  const admitted = admissions()
   await opts.tick()
-  // The first deferral forces one listing and admits the build after it.
+  // The first deferral forces one listing and admits the build after it:
+  // admission is one durable `slot.admitted` fact (SPEC §12 "What holds a
+  // slot"), appended once and never per idle tick.
   expect(opts.listed() - listed).toBe(1)
-  await idle(3)
+  expect(admissions() - admitted).toBe(1)
+  // One tick advances the saved reduced values past that fact; the admitted
+  // build then holds its slot and its refused launch is retried, with no
+  // listing, append or history read.
+  opts.advance()
+  await opts.tick()
+  await idle(3, true)
+  expect(admissions() - admitted).toBe(1)
 }
 
 /** Open-PR backpressure (SPEC §12 Intake order) counts open root PRs over the
@@ -7452,6 +7473,9 @@ export async function ticketStartReadBudget(): Promise<{
       },
     }) as unknown as Source
     // Unrelated active builds: legacy aliases and readable ids in mixed case.
+    // Each runs under an attached runner's live lease, so it holds its slot
+    // for the whole budget: a build blocked by a failed dispatch boundary
+    // would hold none (SPEC §12 "What holds a slot").
     for (let i = 1; i <= builds; i++) {
       const ref = { source: 'hosted', id: i % 2 ? `ticket-${i}` : `ab-${i}` }
       await store.createBuild({
@@ -7465,6 +7489,12 @@ export async function ticketStartReadBudget(): Promise<{
           payload: { ticket: ref, repo, baseBranch: 'main' },
         },
       })
+      await store.append(`active-${i}`, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: `runner-active-${i}`, host: 'budget' },
+      })
+      await store.claimLease(`active-${i}`, `runner-active-${i}`, 365 * 24 * 3_600_000)
     }
     // Unrelated builds this runtime defers for a newer writer's decisive
     // fact, one per five active builds: they hold slots and their deferral
@@ -7622,10 +7652,9 @@ export async function ticketStartReadBudget(): Promise<{
         control.fresh()
         pending.fresh()
       }
-      // The unleased builds are relaunched until their launch budget blocks
-      // them. Capacity is measured from the facts the tick's own stages
-      // read, so even a fresh process's first waiting tick reads no build
-      // the control does not.
+      // Capacity is measured from the facts the tick's own stages read, so
+      // even a fresh process's first waiting tick reads no build the control
+      // does not.
       for (let i = 0; i < (fresh ? 1 : 2); i++) {
         const base = await control.tick()
         const measured = await pending.tick()

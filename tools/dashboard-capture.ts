@@ -270,8 +270,13 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     id: 'capacity-wide',
     scenario: 'capacity',
     columns: 180,
-    rows: 44,
-    requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
+    rows: 64,
+    requires: [
+      'active 4/4',
+      '4 configured',
+      '1 parked build waiting for a slot ahead of normal ticket claims: answered-leaf',
+    ],
+    forbids: ['descendant-held slots', 'effective'],
   },
   {
     id: 'backpressure-wide',
@@ -810,10 +815,7 @@ function captureHandlers(): SkillHandlers {
   return handlers
 }
 
-async function prepareIntegrationScenario(
-  consentQueueFixtures: boolean,
-  capacityIdentities = false,
-): Promise<E2eHarness> {
+async function prepareIntegrationScenario(consentQueueFixtures: boolean): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: happyHandlers(),
     configToml: `${CAPTURE_CONFIG_TOML}
@@ -946,12 +948,7 @@ mode = "auto"
       actor: DISPATCHER,
       type: 'integration.observed',
       payload: {
-        openChildren:
-          label === 'with-pr'
-            ? capacityIdentities
-              ? ['NODE-3', ...(consentQueueFixtures ? ['queue-active'] : []), 'QUEUED-CHILD']
-              : ['WORK-1', 'WORK-2', 'QUEUED-CHILD']
-            : [],
+        openChildren: label === 'with-pr' ? ['WORK-1', 'WORK-2', 'QUEUED-CHILD'] : [],
         contributions:
           label === 'with-pr'
             ? Array.from({ length: 8 }, (_, i) => `landed-${i}`)
@@ -1017,7 +1014,7 @@ mode = "auto"
     if (label === 'aborted')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
   }
-  for (const [index, phase] of (capacityIdentities ? [] : ['implement', 'code-review']).entries()) {
+  for (const [index, phase] of ['implement', 'code-review'].entries()) {
     const slug = `detail-work-${index + 1}`
     const ticket = {
       source: 'fake',
@@ -1070,8 +1067,6 @@ mode = "auto"
       slug,
       repo: harness.origin,
       branch: `preview/${label}`,
-      // Only borrowed-slot evidence needs source-qualified record identities.
-      ...(capacityIdentities ? { ticket: { source: 'fake', id: `QUEUE-${index}` } } : {}),
       created: {
         actor: DISPATCHER,
         type: 'build.created',
@@ -1258,7 +1253,12 @@ mode = "auto"
   return harness
 }
 
-async function prepareBorrowedCapacity(harness: E2eHarness): Promise<void> {
+/** A full repository: the conflict node and the unsettled ready leaf hold
+ * slots beside the two busy detail leaves (4/4). The node's paused and blocked
+ * descendants hold none, and an answered leaf waits as a `resume` request
+ * ahead of normal ticket claims (SPEC §12 "What holds a slot"). Every build
+ * sits under a sentinel lease so the capture tick leaves it alone. */
+async function prepareFullCapacity(harness: E2eHarness): Promise<void> {
   await harness.store.append('queue-conflict', {
     actor: KERNEL,
     type: 'workspace.provisioned',
@@ -1269,8 +1269,15 @@ async function prepareBorrowedCapacity(harness: E2eHarness): Promise<void> {
       base: { source: 'local', sha: 'a'.repeat(40), remoteError: 'capture' },
     },
   })
-  for (let index = 0; index < 3; index++) {
-    const slug = `waiting-child-${index}`
+  const question = (id: string) =>
+    ({
+      actor: { kind: 'agent', role: 'implementer', session: `s-${id}` },
+      type: 'escalation.raised',
+      payload: { id, phase: 'implement', round: 1, source: 'agent', question: 'Which API?' },
+    }) as const
+  const children = ['paused-child', 'blocked-child']
+  for (const slug of [...children, 'answered-leaf']) {
+    const child = children.includes(slug)
     await harness.store.createBuild({
       slug,
       repo: harness.origin,
@@ -1281,18 +1288,34 @@ async function prepareBorrowedCapacity(harness: E2eHarness): Promise<void> {
         payload: {
           repo: harness.origin,
           ticket: { source: 'fake', id: slug },
-          baseBranch: 'preview/conflict',
-          target: { build: 'queue-conflict', ticket: { source: 'fake', id: 'QUEUE-5' } },
+          baseBranch: child ? 'preview/conflict' : 'main',
+          ...(child
+            ? { target: { build: 'queue-conflict', ticket: { source: 'fake', id: 'QUEUE-5' } } }
+            : {}),
         },
       },
     })
-    await harness.store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: slug, host: 'capture' },
+    })
+    if (slug === 'paused-child')
+      await harness.store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    if (slug === 'blocked-child' || slug === 'answered-leaf')
+      await harness.store.append(slug, question(`esc-${slug}`))
+    if (slug === 'answered-leaf')
+      await harness.store.append(slug, {
+        actor: humanActor('capture'),
+        type: 'escalation.answered',
+        payload: { id: `esc-${slug}`, answer: 'Use the new one.', resolution: 'guidance' },
+      })
     await harness.store.claimLease(slug, `sentinel-${slug}`, HAPPY_LEASE_TTL_MS)
   }
 }
 
 /** Two root leaves with open PRs at `maxOpenPrs = 2`: open-PR backpressure
- * is the only capacity condition (no slot waiters, no borrowed slots). Each
+ * is the only capacity condition (no slot waiters). Each
  * leaf is paused under a sentinel lease so the capture tick leaves it alone. */
 async function prepareBackpressureScenario(): Promise<E2eHarness> {
   const harness = await makeHarness({
@@ -2262,8 +2285,8 @@ export async function captureDashboardFrames(
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
   const mixedHarness = await prepareScenario()
-  const capacityHarness = await prepareIntegrationScenario(true, true)
-  await prepareBorrowedCapacity(capacityHarness)
+  const capacityHarness = await prepareIntegrationScenario(true)
+  await prepareFullCapacity(capacityHarness)
   const backpressureHarness = await prepareBackpressureScenario()
   const integrationHarness = await prepareIntegrationScenario(
     options.consentQueueFixtures !== false,

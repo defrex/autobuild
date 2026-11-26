@@ -7,7 +7,6 @@ import {
 } from '../kernel/ticket-starts'
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
-import { migrationIdentity } from '../kernel/ticket-migrations'
 import {
   dispatchUpgradeReducer,
   upgradeRunRecency,
@@ -574,7 +573,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `repository: ${status.repo}`,
     ...(status.capacity
       ? [
-          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims || status.capacity.startRequests ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
+          `capacity: ${status.capacity.occupied}/${status.capacity.configured}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims || status.capacity.startRequests ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
     ...(status.capacity?.backpressure
@@ -748,17 +747,11 @@ export async function readRepositoryCapacity(
       restackDue: landingRestackDue(build.state, build.log),
     })
   }
-  return dispatchCapacity(
-    builds,
-    config.capacity,
-    now,
-    migrationIdentity(facts.ticketMigrations, config.tickets.source),
-    {
-      urgentClaims: urgentClaimDemand(facts),
-      startRequests: startClaimDemand(facts),
-      openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
-    },
-  )
+  return dispatchCapacity(builds, config.capacity, now, {
+    urgentClaims: urgentClaimDemand(facts),
+    startRequests: startClaimDemand(facts),
+    openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
+  })
 }
 
 /**

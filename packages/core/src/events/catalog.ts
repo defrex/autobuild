@@ -64,6 +64,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'landing.native-applied': ['dispatcher', 'kernel'],
   'target.distance': ['dispatcher'],
   'pipeline.settled': ['dispatcher'],
+  'slot.admitted': ['dispatcher'],
   'target.rewritten': ['dispatcher', 'kernel'],
   'target.rewrite-cleared': ['dispatcher', 'kernel'],
   'target.moved': ['dispatcher', 'kernel'],

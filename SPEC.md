@@ -3202,13 +3202,20 @@ first, "Slot admission order"). The requests are:
 
 A request records nothing, consumes no attempt and raises no attention. A paused
 or blocked build requests nothing until its pause or question ends. Admission is
-durable: the build's first runner allocation after its release, a provisioning
-marker or an attached runner, marks it admitted. From then on it holds its slot
-through relaunches until its next release.
+durable. A ticket claim or start request is admitted by its `build.created`.
+When the dispatcher admits a work build that holds no slot, it records an
+advisory `slot.admitted { request? }` fact before it claims a lease,
+provisions or launches anything. A runner allocation never admits by itself,
+so a runner or execution left over from before a release, such as a pause or
+abort acknowledgement or one still winding down, never takes a slot back. From
+then on the build holds its slot through relaunches until its next release.
 
 Occupancy never exceeds `capacity`. Every admission counts every build that
 holds a slot, node admission included, and no build uses another's slot.
-Abort and pause acknowledgements are not gated. A build that holds no slot
+Abort and pause acknowledgements are not gated, and neither is an
+acknowledgement for a build that still waits on the outside world afterwards,
+such as resuming a paused build that is blocked or finished; none of them
+confers a slot. A build that holds no slot
 keeps its branch, workspace and completed phase work, so retained workspaces
 can exceed `capacity`; slots cannot.
 
@@ -5176,7 +5183,7 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, decisive `workspace.commits-retained` (the same receipt when some head is a BuildStore copy, §15.7), `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, decisive `workspace.commits-retained` (the same receipt when some head is a BuildStore copy, §15.7), `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, advisory `slot.admitted {request?}` (§12), `build.completed` |
 | Operator commands [D2] | `build.abort-requested {reason?, to?, origin?: {kind: optimization-stop, node}}` → `build.aborted` (a human, or the dispatcher for an attempt of a stopped optimization node, §13.1.1); `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested {reason?}`; `build.priority-set {priority}` (advisory slot-admission priority, §12); `build.land-requested` → `landing.command-acknowledged`; decisive human `build.reopened {feedback?, spec?: {artifact, assets?}}` (§15.7); `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode, matched `paths?` summary); advisory `landing.deferred` (candidate, reason, rule, policy); kernel `landing.consent-revoked {commandSeq, source, rule, previousHead, head, consentedHead?, paths}`; `landing.native-enable-started`; `landing.native-applied`; advisory dispatcher `landing.polling-selected {candidate, decisionSeq, commandSeq?, detail}` and `landing.human-merge-required {candidate, decisionSeq, commandSeq?, cause: merge-queue-rule \| merge-queue-activity \| merge-refused, detail}` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node or a settled leaf's reopen, §15.7; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
@@ -5983,6 +5990,10 @@ and the latest `finalize.completed`) when the engine decides `wait awaiting-pr`;
 no pipeline decision reads it (§12). A leaf counts as finished when its latest
 settlement follows the spec restart, or when that restart published its reopen's
 spec (§15.5).
+
+`slot.admitted { request? }` is advisory capacity evidence: the dispatcher
+appends it when its slot gate admits a work build that holds no slot (§12); no
+pipeline decision reads it.
 
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 

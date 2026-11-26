@@ -432,18 +432,21 @@ test('a node waiting for a slot alone opens the capacity notice', () => {
   expect(html).toContain('1 node waiting for a slot ahead of normal ticket claims: release-node')
 })
 
-test('no borrowed or waiting nodes renders no capacity notice; a legacy projection still borrows', () => {
+test('no waiting nodes renders no capacity notice; a legacy projection never renders borrowing', () => {
   const quiet = renderCapacity({ configured: 2, occupied: 1, effective: 2, borrowingNodes: [] })
   expect(quiet).not.toContain('capacity-notice')
   expect(quiet).not.toContain('class="messages"')
-  const legacy = renderCapacity({
-    configured: 2,
-    occupied: 3,
-    effective: 3,
-    borrowingNodes: ['website-node'],
+  // An older server's projection: occupancy above configured, a borrowing node.
+  const legacy = { configured: 2, occupied: 3, effective: 3, borrowingNodes: ['website-node'] }
+  expect(renderCapacity(legacy)).not.toContain('capacity-notice')
+  const waiting = renderCapacity({
+    ...legacy,
+    waitingNodes: [{ slug: 'release-node', request: 'verification' }],
   })
-  expect(legacy).toContain('capacity-notice')
-  expect(legacy).toContain('using descendant-held slots: website-node')
+  expect(waiting).toContain('capacity-notice')
+  expect(waiting).toContain('(2 configured; 1 node waiting for a slot')
+  expect(waiting).not.toContain('descendant-held')
+  expect(waiting).not.toContain('effective')
 })
 
 test('a parked build waiting for a slot opens the capacity notice and alerts on its row', () => {
