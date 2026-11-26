@@ -231,13 +231,13 @@ describe('projection and wording', () => {
       effective: 4,
       borrowingNodes: [],
     })
-    expect(
-      dispatchCapacity(builds, 4, now, undefined, { openPrs: { policy: {}, engaged: true } }),
-    ).toEqual(dispatchCapacity(builds, 4, now))
+    expect(dispatchCapacity(builds, 4, now, { openPrs: { policy: {}, engaged: true } })).toEqual(
+      dispatchCapacity(builds, 4, now),
+    )
   })
 
   test('an active backpressure clause joins the shared control-line wording', () => {
-    const capacity = dispatchCapacity(open(2), 4, now, undefined, {
+    const capacity = dispatchCapacity(open(2), 4, now, {
       openPrs: { policy: { maxOpenPrs: 2, excludeHeldOpenPrs: false }, engaged: false },
     })
     expect(capacity.backpressure).toEqual({
@@ -250,7 +250,7 @@ describe('projection and wording', () => {
     expect(capacityExplanation(capacity)).toBe(
       ' (4 configured; open-PR backpressure: 2 open root PRs ≥ maxOpenPrs 2; normal claims paused until ≤ 1 (urgent still claimed))',
     )
-    const inactive = dispatchCapacity(open(1), 4, now, undefined, {
+    const inactive = dispatchCapacity(open(1), 4, now, {
       openPrs: { policy: { maxOpenPrs: 2, excludeHeldOpenPrs: false }, engaged: false },
     })
     expect(inactive.backpressure?.active).toBe(false)
@@ -258,7 +258,7 @@ describe('projection and wording', () => {
   })
 
   test('backpressure retains urgent claim reservations in the shared projection', () => {
-    const capacity = dispatchCapacity(open(2), 4, now, undefined, {
+    const capacity = dispatchCapacity(open(2), 4, now, {
       urgentClaims: 1,
       openPrs: { policy: { maxOpenPrs: 2 }, engaged: false },
     })

@@ -1,5 +1,4 @@
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
-import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { repositoryQueueDepth } from '../cli/dashboard/header'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
@@ -459,20 +458,14 @@ async function dashboardFromView(
     ...forgeReadinessWarnings(status),
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
   ]
-  const capacityProjection = dispatchCapacity(
-    capacityBuilds,
-    config.capacity,
-    opts.clock(),
-    migrationIdentity(repositoryEvents.ticketMigrations, config.tickets.source),
-    {
-      urgentClaims: urgentClaimDemand(repositoryEvents),
-      openPrs: {
-        policy: config.policy,
-        engaged: repositoryEvents.openPrBackpressure !== undefined,
-      },
-      startRequests: startClaimDemand(repositoryEvents),
+  const capacityProjection = dispatchCapacity(capacityBuilds, config.capacity, opts.clock(), {
+    urgentClaims: urgentClaimDemand(repositoryEvents),
+    openPrs: {
+      policy: config.policy,
+      engaged: repositoryEvents.openPrBackpressure !== undefined,
     },
-  )
+    startRequests: startClaimDemand(repositoryEvents),
+  })
   const model = buildDashboardFromProjected(
     enrichIntegrationRows(projected, await integrationRecords(view, opts.repo, projected, records)),
     {

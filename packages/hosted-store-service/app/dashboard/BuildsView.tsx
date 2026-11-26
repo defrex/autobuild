@@ -232,10 +232,9 @@ export function BuildsView(props: BuildsViewProps) {
     '--ticket-w': `${widths.ticket}ch`,
     '--status-w': `${widths.status}ch`,
   }
-  // Borrowed slots, slot waiters and active open-PR backpressure share one capacity notice.
+  // Slot waiters and active open-PR backpressure share one capacity notice.
   const capacityNotice = Boolean(
-    model.capacity?.borrowingNodes.length ||
-      model.capacity?.waitingNodes?.length ||
+    model.capacity?.waitingNodes?.length ||
       model.capacity?.waitingBuilds?.length ||
       model.capacity?.backpressure?.active,
   )
