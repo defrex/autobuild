@@ -45,7 +45,7 @@ test('human repository status reports slot holders against configured capacity',
   const lines = renderRepositoryStatus(status)
   const at = lines.findIndex((entry) => entry.startsWith('capacity:'))
   expect(lines.slice(at, at + 2)).toEqual([
-    'capacity: 2/2; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification); 1 parked build waiting for a slot ahead of normal ticket claims: fix (resume, urgent)',
+    'capacity: 2/2; 1 parked build waiting for a slot ahead of normal ticket claims: fix (resume, urgent); 1 node waiting for a slot ahead of normal ticket claims: release-node (verification)',
     // Every build's slot state; occupancy counts exactly the held ones.
     'slots: held a, b; requested fix (resume, urgent), release-node (verification); none parked',
   ])

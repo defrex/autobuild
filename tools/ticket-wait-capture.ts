@@ -24,14 +24,17 @@ export function ticketWaitCapture(model: DashboardModel): DashboardModel {
     escalation: 'esc_capture_wait',
     question: `Waiting on ${TICKET_WAIT_TICKETS.join(', ')} to complete: needs the new API schema.`,
   })
+  const released = waiting.slot?.state === 'held' ? 1 : 0
   return {
     ...model,
-    active: { ...model.active, current: Math.max(0, model.active.current - 1) },
+    active: { ...model.active, current: Math.max(0, model.active.current - released) },
     builds: model.builds.map((build) =>
       build.slug === waiting.slug
         ? {
             ...build,
             status: 'waiting' as const,
+            slot: { state: 'none' as const },
+            statusBasis: { resting: 'waiting' as const, runner: false, waitTickets: wait.tickets },
             blockers: [],
             wait,
             // A parked build's open step stops ticking while it waits.

@@ -448,26 +448,24 @@ textarea,
   text-align: right;
   white-space: nowrap;
 }
-.status[data-status="running"] {
+.status[data-tone="ok"] {
   color: var(--green);
 }
-.status[data-status="queued"],
-.status[data-status="collecting"],
-.status[data-status="resuming"] {
+.status[data-tone="live"] {
   color: var(--teal);
 }
-.status[data-status="blocked"],
-.status[data-status="aborting"],
-.status[data-status="failed"] {
+.status[data-tone="held"] {
+  color: var(--amber);
+}
+.status[data-tone="alert"] {
   color: var(--red);
 }
-.status[data-status="paused"],
-.status[data-status="pausing"],
-.status[data-status="suspended"],
-.status[data-status="cleaning"],
-.status[data-status="escalated"],
-.status[data-status="waiting"] {
-  color: var(--amber);
+.status[data-tone="pending"],
+.status .status-note {
+  color: var(--slack);
+}
+.status .status-note {
+  font-weight: 400;
 }
 .steps {
   display: flex;
@@ -517,6 +515,9 @@ textarea,
 }
 .message[data-tone="live"] {
   color: var(--teal);
+}
+.message[data-tone="slack"] {
+  color: var(--slack);
 }
 .legend {
   margin-top: 20px;

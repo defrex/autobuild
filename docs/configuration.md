@@ -4581,7 +4581,7 @@ poll. Editing TOML cannot change them.
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
 | Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only ordinary ready-queue listing, claims, and dispatch. A pending `ab start` (`tickets.start`) request still claims its one named ticket while intake is off, subject to repository pause, capacity, and the usual ticket gates. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
-| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` while retaining its literal `QUEUED` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
+| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` beside its `STARTING` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
@@ -4714,7 +4714,7 @@ action. Check the gates in this order:
    `ab watch`.
 2. **Repository pause:** a pause all holds every queued build, so the dashboard
    controls line shows `repository PAUSED` and an existing held build shows
-   `(held)` beside its literal `QUEUED` status. Intake off alone shows neither
+   `(held)` beside its `STARTING` status. Intake off alone shows neither
    pause indication. `r` on the dashboard's global row or `ab resume --all`
    releases the hold and restores intake.
 3. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
