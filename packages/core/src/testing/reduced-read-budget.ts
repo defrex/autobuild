@@ -2887,6 +2887,10 @@ export async function nodePollingReadBudget(opts: {
    * so the every-tick admission stage is measured on its waiting path. Its
    * own reads are excluded from the measurement. */
   slotWaiting?: () => Promise<boolean>
+  /** Proves an admitted node keeps holding its slot after each measured tick
+   * with no further admission: `admissions()` counts its `slot.admitted`
+   * facts, `held()` reports `nodeHoldsSlot`. Their own reads are excluded. */
+  slotHeld?: { admissions(): Promise<number>; held(): Promise<boolean> }
   /** An optimization node with one in-flight attempt build (#1069): proves
    * its active-hours activity pass. Each change is appended on the attempt
    * build; `pad` appends unrelated events there. */
@@ -2950,6 +2954,7 @@ export async function nodePollingReadBudget(opts: {
       return selected
     }
     const costs: number[] = []
+    const admitted = opts.slotHeld ? await opts.slotHeld.admissions() : 0
     let calls = 0
     const getReduced = store.getReducerValue.bind(store)
     store.getReducerValue = async (...args) => {
@@ -2967,6 +2972,10 @@ export async function nodePollingReadBudget(opts: {
         if (elapsed === 10_000) expect(rows).toBe(0)
         costs.push(rows, calls)
         if (opts.slotWaiting) expect(await opts.slotWaiting()).toBe(true)
+        if (opts.slotHeld) {
+          expect(await opts.slotHeld.held()).toBe(true)
+          expect(await opts.slotHeld.admissions()).toBe(admitted)
+        }
         history = 0
       }
     } finally {
@@ -7113,11 +7122,11 @@ export async function panelProgressReadBudget(): Promise<void> {
       const shared = { record, state, workspace: true }
       const before = requests.vector()
       for (let repeat = 0; repeat < 5; repeat++) {
-        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('verification')
+        expect(slotRequest(shared, now)).toBe('verification')
         expect(decideNextFromFacts(state, facts.log, config).kind).toBe('measure-progress')
         expect(strandedNodeWorkspace(shared, now)).toBe(false)
         state.currentPhase = { phase: 'propose', round: 100, seq: state.lastSeq }
-        expect(slotRequest({ ...shared, workspace: false }, now)).toBe('propose')
+        expect(slotRequest(shared, now)).toBe('propose')
         expect(decideNextFromFacts(state, facts.log, config)).toMatchObject({
           kind: 'run-phase',
           phase: 'propose',

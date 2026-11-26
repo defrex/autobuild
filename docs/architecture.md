@@ -859,9 +859,21 @@ outside world (`leafOutsideWait`: blocked, an acknowledged pause, a pending
 liveness never enters, so a leftover runner never takes a slot back. Every
 other leaf without a slot requests one, `resume` unless an epilogue reason
 names another. `leafAdmission` neither gates nor admits a leaf that holds its
-slot, still waits on the outside world, or acknowledges a pause or abort. Node
-admission (`nodeHasCapacity`) counts every slot holder;
-there is no descendant borrowing.
+slot, still waits on the outside world, or acknowledges a pause or abort.
+Node slots use the same seqs. The dispatcher's `nodeAdmission` appends
+`slot.admitted {request, need}` before provisioning, where `need` is the
+runner need's key from `nodeRunnerNeeds` (an active restack, a measurement, a
+proposal or an integration cycle); the reducer keeps it as `slotAdmittedNeed`.
+`nodeHoldsSlot` holds a node admitted since its last release, not waiting on
+the outside world (`nodeOutsideWait`), whose admitted need is still current, so
+finished work releases the slot with no write and a workspace, lease or
+provisioning marker never counts. `nodeAdmission` admits a holder at once and
+sends every other request (`nodeSlotNeed`) through the same tiers as leaves;
+`nodeRunnerWork` finds holders whose runner must be relaunched. The version
+transition is `legacyNodeRunner`: a node runner an older dispatcher launched
+without an admission counts as holding its slot, and
+`adoptLegacyNodeRunners` records its admission once. Node admission counts
+every slot holder.
 Reopening a settled leaf (SPEC §15.7) spans the same seams. The shared
 `cli/build-control.ts` control appends the human `build.reopened` and, for a
 spec, publishes the kernel's operator `spec.revised`; `ab reopen` and the
