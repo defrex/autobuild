@@ -324,3 +324,89 @@ for (const admitted of [false, true])
       await store.close()
     }
   })
+
+async function waitingSuccessor(prefix: string) {
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { writeFile } = await import('node:fs/promises')
+  const { openLocalStore } = await import('../store/local/store')
+  const { preflightGeneration } = await import('./dispatch-preflight')
+  const root = await mkdtemp(join(tmpdir(), prefix))
+  await writeFile(
+    join(root, 'autobuild.toml'),
+    'forge = "local-git"\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  const store = openLocalStore(root)
+  const actor = { kind: 'dispatcher' as const }
+  await store.ensureRepo('repo')
+  await store.claimRepoLease('repo', 'old', 60_000)
+  await store.appendRepo('repo', { actor, type: 'dispatcher.target-prepared', payload: handoff })
+  await store.appendRepo('repo', {
+    actor,
+    type: 'dispatcher.yield-requested',
+    payload: { ...handoff, successor: 'new', mode: 'drain', evidence: 'same schema' },
+  })
+  const abort = new AbortController()
+  const launch = {
+    version: 1,
+    overlapVersion: 1,
+    runtimeRoot: handoff.root,
+    checkout: root,
+    originalInstall: '/install',
+    run: 'new',
+    lineage: handoff.lineage,
+    predecessor: 'old',
+    predecessorCorrelation: handoff.correlation,
+    journal: { storeRef: root, repo: 'repo' },
+  } as const
+  // No predecessor failure writer: publishing a failure would reject `work`.
+  const work = preflightGeneration(launch, ['dispatch'], {}, abort.signal)
+  return { store, actor, abort, work }
+}
+
+test('a requested successor takes over promptly once the predecessor releases', async () => {
+  const { store, actor, abort, work } = await waitingSuccessor('ab-prompt-release-')
+  try {
+    await Bun.sleep(100)
+    await store.appendRepo('repo', {
+      actor,
+      type: 'dispatcher.handoff-started',
+      payload: { ...handoff, successor: 'new', mode: 'drain', builds: [] },
+    })
+    await store.appendRepo('repo', {
+      actor,
+      type: 'dispatcher.terminal-released',
+      payload: handoff,
+    })
+    await store.releaseRepoLease('repo', 'old')
+    const released = performance.now()
+    expect(await work).toBe(true)
+    expect(performance.now() - released).toBeLessThan(2_000)
+    expect((await store.getRepo('repo'))!.lease!.holder).toBe('new')
+    const types = (await store.getRepoEvents('repo')).map((event) => event.type)
+    expect(types.filter((type) => type === 'dispatcher.takeover')).toHaveLength(1)
+  } finally {
+    abort.abort()
+    await work.catch(() => {})
+    await store.close()
+  }
+})
+
+test('abort ends the successor release wait promptly without publishing failure', async () => {
+  const { store, abort, work } = await waitingSuccessor('ab-abort-release-')
+  try {
+    await Bun.sleep(300)
+    const aborted = performance.now()
+    abort.abort()
+    expect(await work).toBe(false)
+    expect(performance.now() - aborted).toBeLessThan(300)
+    expect((await store.getRepo('repo'))!.lease!.holder).toBe('old')
+    const types = (await store.getRepoEvents('repo')).map((event) => event.type)
+    expect(types).not.toContain('dispatcher.takeover')
+    expect(types).not.toContain('dispatcher.upgrade-failed')
+  } finally {
+    abort.abort()
+    await work.catch(() => {})
+    await store.close()
+  }
+})
