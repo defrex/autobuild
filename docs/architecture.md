@@ -847,8 +847,19 @@ build-owned identity and source ancestry at settled stage boundaries. Typed
 `verify.config-captured` and `verify.config-superseded` facts advance the result
 boundary in the reducer and log index, independently of reconcile identity.
 The advisory `pipeline.settled` fact records that the engine reached a leaf's
-`wait awaiting-pr`; `kernel/dispatch-capacity.ts` reads it so a finished build
-parked for its merge decision holds no slot.
+`wait awaiting-pr`. Leaf slots (SPEC §12 "What holds a slot") are durable
+facts: the build reducer folds `slotAdmittedSeq` (`build.created`, or the
+advisory `slot.admitted` the dispatcher's `leafAdmission` appends with
+`appendIfCurrent` before any lease, provisioning or launch) and
+`slotReleasedSeq` (`pipeline.settled`, an answer closing an open escalation,
+`wait.ended`, `build.paused`). `kernel/dispatch-capacity.ts`'s `leafHoldsSlot`
+holds a leaf admitted since its last release that does not wait on the
+outside world (`leafOutsideWait`: blocked, an acknowledged pause, a pending
+`revise-spec`, or a finished pipeline with no epilogue work due). Runner
+liveness never enters, so a leftover runner never takes a slot back. Every
+other leaf without a slot requests one, `resume` unless an epilogue reason
+names another. Node admission (`nodeHasCapacity`) counts every slot holder;
+there is no descendant borrowing.
 Reopening a settled leaf (SPEC §15.7) spans the same seams. The shared
 `cli/build-control.ts` control appends the human `build.reopened` and, for a
 spec, publishes the kernel's operator `spec.revised`; `ab reopen` and the

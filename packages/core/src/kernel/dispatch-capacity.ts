@@ -309,6 +309,9 @@ export function leafSlotRequest(build: LeafSlotFacts): SlotRequest | undefined {
   // A ticket wait parks a leaf mid-pipeline: it asks for a slot only once the
   // wait has ended, to resume the phase that declared it.
   if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined
+  // Every other unfinished leaf an outside wait released resumes where it
+  // stopped: an answered escalation, a resumed pause, a landed spec revision.
+  if (!epilogueLeaf(state)) return 'resume'
   if (state.prState === 'conflicted') return 'reconcile'
   // A reopen asks for a slot once any replacement spec is published.
   if (reopenSpecPending(state)) return undefined
@@ -321,9 +324,7 @@ export function leafSlotRequest(build: LeafSlotFacts): SlotRequest | undefined {
     pendingMeasurementRequest(state) !== undefined
   )
     return 'verification'
-  // Every other leaf an outside wait released resumes where it stopped: an
-  // answered escalation, a resumed pause, a landed spec revision.
-  return epilogueLeaf(state) ? undefined : 'resume'
+  return undefined
 }
 
 /** A node's or leaf's durable request for a slot it does not hold yet.

@@ -319,17 +319,21 @@ Read events with a cursor or a small `--events` count; logs are long.
   resumes under the revised spec and its publication is confirmed; a finished
   leaf waiting for its merge decision revises with `ab reopen`. Answering a
   ticket wait's escalation ends the wait early; the dispatcher ends it when its
-  tickets complete (see ticket wait attention). Run
+  tickets complete (see ticket wait attention). A blocked build holds no slot,
+  and an answer does not give it one: it waits as a `resume` request ahead of
+  normal ticket claims (urgent work first) until a slot frees. Run
   `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
   sessions and acknowledges after they stop. Resume continues the same native
   session where supported; remote or unsupported sessions rerun fresh, with a
   reason recorded in session.resume-fallback. Without a live agent (including
-  check-only verify), pause still takes effect at the next boundary.
+  check-only verify), pause still takes effect at the next boundary. A paused
+  build holds no slot once the pause is acknowledged; resumed, it waits for a
+  slot ahead of normal ticket claims like an answered build.
 - `ab abort <slug> [--to triage|ready] [--reason <text>]` — destructive:
   closes the PR, removes branches, and hands the ticket back to triage by
-  default. To free a build's slot while it waits on other work, use
+  default. To send back a build that waits on other work, use
   `--to ready`: the ticket goes straight to ready with its blockers kept and
   redispatches once they merge, so it needs no second move. A ticket that no
   longer conforms to the spec standard falls back to triage, and the comment
@@ -852,8 +856,8 @@ unfinished or automatically authorized candidates do not ask for attention.
 Queued and held candidates hold no capacity slot; one that must re-verify or
 reconcile waits for a slot ahead of normal ticket claims (urgent work first), so
 a full repository delays it without failing it. A build waiting on other
-tickets holds no slot either, and takes one ahead of normal claims once its
-wait ends.
+tickets, paused, or blocked on a question holds no slot either, and takes one
+ahead of normal claims once its wait ends.
 
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
@@ -907,7 +911,7 @@ Drive the named tickets to completion: the dispatcher ends the wait on its
 first tick after every named ticket completes, with no answer needed, and a
 wait with some tickets still open stays in place. Answer sooner only when the
 needed work landed another way or the wait is mistaken; any answer ends the
-wait early. Either way the build then takes a
+wait early. Either way the build then waits as a `resume` request and takes a
 slot ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
 target's current head, so the resumed phase sees the merged blockers;
 `ab build status` shows a `restack:` line with trigger `wait-resume`, and a

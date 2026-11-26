@@ -90,7 +90,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound, after slots reserved for
   integration nodes awaiting verification, reconcile or propose, for finished builds
-  waiting to re-verify or reconcile, and for builds whose ticket wait ended.
+  waiting to re-verify or reconcile, and for builds resuming after an answered
+  escalation, a resumed pause or an ended ticket wait.
   Free slots go to `manual` start requests, then urgent waiting work, then
   urgent start requests and urgent tickets, then normal waiting work, then
   normal start requests and normal tickets; a build takes its ticket's priority at
@@ -98,9 +99,12 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   priority. An optimization node's attempts claim at the node's current
   priority instead, so `ab priority <node> urgent` speeds up its attempts
   claimed afterwards. Priority orders free slots only.
-  `capacity` counts builds running work: a build that finished its pipeline
-  holds no slot while it waits for a merge decision, though it keeps its
-  workspace until it merges or closes. Priority never preempts a running build.
+  `capacity` counts slots. A build takes one by admission and holds it while
+  Autobuild owes its next move, runner or not. It holds none while it waits on
+  the outside world (paused, blocked on a question, waiting for a merge
+  decision, merge gates or other tickets), though it keeps its workspace. When
+  that wait ends it waits for a slot again ahead of normal ticket claims, so
+  occupancy never exceeds `capacity`. Priority never preempts a running build.
   With `[policy].maxOpenPrs` set, open-PR backpressure pauses new ordinary
   normal-priority claims (not `ab start` requests) once that many root PRs are open and unmerged, until
   the count drains to `resumeOpenPrs` (below `maxOpenPrs` when the two are
@@ -127,7 +131,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   It ends the wait (cause `unresolvable`), shows in the default attention
   filter, and its answer resumes the declaring phase like a wait answer. An
   operator may still end a wait early by answering its escalation (cause
-  `operator`). The build then takes a slot
+  `operator`). The build then waits as a `resume` request and takes a slot
   ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
   target's current head (published work is replayed as one change, and a
   conflict reconciles first unless it is confined to declared `[generated]`
@@ -699,7 +703,7 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` replays the build change onto. |
 | `ticketScanIntervalSeconds` | `60` | positive integer seconds | Hot-reloaded ready scan cadence; tick spacing is the floor, and same-repository merge/completion/abort forces an early scan. |
-| `capacity` | `1` | positive integer | Maximum builds running work at once for this repository; builds parked for a merge decision or waiting on other tickets hold no slot. |
+| `capacity` | `1` | positive integer | Slots for this repository. A build holds one from admission until it waits on a human, another ticket, the forge or its children, or ends; occupancy never exceeds it. |
 | `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. `github` authenticates with `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
@@ -2705,8 +2709,9 @@ restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
 steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
-A work build that finished its pipeline and must re-verify or reconcile, or
-whose ticket wait ended (`resume`), shows the same slot-wait alert on its row,
+A work build waiting for a slot, one that finished its pipeline and must
+re-verify or reconcile or one resuming after an answered escalation, a resumed
+pause or an ended ticket wait (`resume`), shows the same slot-wait alert on its row,
 and `ab builds` appends it to the phase. A build whose only open escalation is
 its open ticket wait shows `WAITING` and a yellow (amber on the web)
 `waiting on <ids> — <reason>` line, distinct from a red `BLOCKED` question;
@@ -2739,9 +2744,8 @@ headless ticks that publish no count, and shows `–` until its first read
 succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth measured by the latest completed ticket scan,
 whichever dispatcher run recorded it (0 before any scan), so an overlapping
-run that starts and yields cannot displace it. `active` is occupied capacity (every unfinished
-build except one waiting on tickets, plus finished builds running work again)
-against root `capacity`. Observation pressure is not a header counter: the
+run that starts and yields cannot displace it. `active` is occupied capacity (builds holding a
+slot; paused, blocked and waiting builds hold none) against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
 Harvest state.
 The execution-mode frontend checkpoints only the latest run start and the sampled
