@@ -17,7 +17,7 @@ import {
   realpath,
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { packageDistribution } from '../distribution-packaging'
+import { packageDistribution, RUNTIME_ARCHIVE_GZIP_LEVEL } from '../distribution-packaging'
 import {
   copyDependencies,
   copySnapshotTree,
@@ -419,7 +419,9 @@ export async function prepareRuntime(
       await validateRuntime(reusable)
       return reusable
     }
-    const archive = await packageDistribution(root)
+    const archive = await packageDistribution(root, undefined, undefined, undefined, {
+      gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
+    })
     const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
     const extracted = join(stage, 'archive-check')
     await mkdir(extracted)
