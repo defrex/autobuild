@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { controlBuild } from '../cli/build-control'
 import { detail, renderDetail } from '../cli/status'
+import { DISPATCHER } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
 import {
   CONFIG_TOML,
@@ -41,6 +42,29 @@ async function slugFor(h: E2eHarness, ticket: string): Promise<string> {
 
 function runnersFor(h: E2eHarness, slug: string) {
   return h.launched.filter((entry) => entry.slug === slug)
+}
+
+/** Runs a launched runner inside the execution a real launch records
+ * (`execution.started`, then `execution.ended` once it stops). The harness
+ * launches bare runners, and a launch whose execution never started keeps the
+ * build's slot (SPEC §12 "What holds a slot"). */
+async function runExecution(h: E2eHarness, entry: E2eHarness['launched'][number]) {
+  const workspaceRef = openWorkspacePath(await h.events(entry.slug))!
+  const { instance, slug } = entry
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'e2e', workspaceRef, instance },
+  })
+  try {
+    return await entry.runner.run()
+  } finally {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance, workspaceRef, outcome: 'completed' },
+    })
+  }
 }
 
 type Guidance = {
@@ -84,7 +108,7 @@ test('a waiting build frees its slot, keeps its work, and resumes ahead of norma
 
   expect((await h.dispatcher.tick()).dispatched).toBe(1)
   const a = await slugFor(h, 'T-A')
-  await runnersFor(h, a)[0]!.runner.run()
+  await runExecution(h, runnersFor(h, a)[0]!)
   expect(h.cliErrors).toEqual([])
   let events = await h.events(a)
   expect(ofType(events, 'phase.failed')).toEqual([])
@@ -127,7 +151,7 @@ test('a waiting build frees its slot, keeps its work, and resumes ahead of norma
 
   // T-C finishes its pipeline and parks for its merge decision. The tick that
   // settles it reserves the freed slot for T-A, and the next admits T-A.
-  await runnersFor(h, c)[0]!.runner.run()
+  await runExecution(h, runnersFor(h, c)[0]!)
   for (let tick = 0; tick < 2; tick++) {
     h.clock.advance(3_600_001)
     expect((await h.dispatcher.tick()).dispatched).toBe(0)
