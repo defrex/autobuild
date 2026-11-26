@@ -3169,15 +3169,21 @@ move, the build keeps its slot whether or not a runner is working. That covers:
   a requested ticket wait;
 - a mixed-version deferral or a verify stage holding it;
 - a requested pause or abort waiting for its runner to stop;
-- a session a stopped dispatcher suspended.
+- a session a stopped dispatcher suspended;
+- an escalation that does not stop the build: one verify step's question
+  while other steps of its stage still run, on any runner (§5); a launch
+  recorded before the raise that has not started, failed or been refused by
+  the progress guard's `execution-no-progress` escalation; or an execution
+  launched while the build held its slot that has not ended.
 
-So a slot is never dropped and picked up again mid-flight.
+So a slot is never dropped and picked up again mid-flight, and a build whose
+runner is working always holds one.
 
 A build releases its slot as soon as it waits on the outside world:
 
 | Waiting on | Cases |
 |---|---|
-| a human | an open escalation, an acknowledged pause, a `revise-spec` answer waiting for its revision, a finished pipeline waiting for a merge decision or on hold |
+| a human | an open escalation nothing above still carries, an acknowledged pause, a `revise-spec` answer waiting for its revision, a finished pipeline waiting for a merge decision or on hold |
 | another ticket | an entered ticket wait (§11) |
 | the forge | a finished pipeline waiting for merge gates or for the forge to merge |
 | its children | an integration build with no cycle, conflict, measurement or proposal that needs a runner: collecting child work, or waiting for a repair child |
@@ -3187,14 +3193,15 @@ A pipeline is finished once every verify step and every finalize post-step for
 the current spec has passed. The dispatcher records the finish as an advisory
 `pipeline.settled` fact when the engine first decides `wait awaiting-pr`.
 
-Release follows state; acquisition never does. A build whose outside wait ends
-holds no slot until it is admitted. It is then **parked work**: it requests a
+Release follows state; acquisition never does. An answer that lands while the
+build is still carried releases nothing: the build keeps its slot and requests
+none. A build whose outside wait ends holds no slot until it is admitted. It is then **parked work**: it requests a
 slot, and intake reserves one for it ahead of normal ticket claims (urgent work
 first, "Slot admission order"). The requests are:
 
 | Request | Raised by |
 |---|---|
-| `resume` | an answered escalation, a resumed pause, an ended ticket wait, or a parked leaf whose target was rewritten |
+| `resume` | an answered escalation that had stopped the build, a resumed pause, an ended ticket wait, or a parked leaf whose target was rewritten |
 | `reconcile` | a conflicted PR, or a node restack conflict with no open escalation |
 | `verification` | a finished leaf that must restack or re-verify, a node verification cycle, or a requested optimization measurement (§13.1.1) |
 | `reopen` | a leaf an operator reopened (§15.7), once any replacement spec is published |
@@ -3208,7 +3215,11 @@ advisory `slot.admitted { request?, need? }` fact before it claims a lease,
 provisions or launches anything. A node's fact also names the runner need it
 admitted (`need`), and the node holds its slot while that need remains: a
 verification cycle, a measurement, a proposal, or an active restack it was
-admitted to reconcile. A runner allocation never admits by itself,
+admitted to reconcile. For a work build, the dispatcher also records one before
+every launch that holds its slot, unless a recorded launch is still in flight
+or another runner's live lease will refuse the launch; a claim's
+`build.created` is its first launch's record. An acknowledgement launch
+records none and confers no slot. A runner allocation never admits by itself,
 so a runner or execution left over from before a release, such as a pause or
 abort acknowledgement or one still winding down, never takes a slot back. From
 then on the build holds its slot through relaunches until its next release.

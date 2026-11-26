@@ -112,6 +112,7 @@ import {
   epilogueLeaf,
   intakeCapacity,
   leafHoldsSlot,
+  escalationCarryInput,
   leafOutsideWait,
   leafSlotRequest,
   legacyNodeRunner,
@@ -130,6 +131,7 @@ import {
   type DispatchCapacity,
   type NodeSlotNeed,
 } from '../kernel/dispatch-capacity'
+import { launchInFlight } from '../kernel/verify-stage-state'
 import { attemptCreationKey } from '../kernel/attempt-creation-key'
 import {
   ExecutionFactsMissingError,
@@ -4099,8 +4101,9 @@ export class Dispatcher {
     const builds: CapacityBuild[] = []
     for (const { record, digest } of await this.repoBuildDigests(true)) {
       if (digest.terminal) continue
-      // A leaf with a runner provisioning holds its slot and requests none
-      // whatever its state, so any read this tick serves it, launch or not.
+      // A leaf with a runner provisioning or launched this tick has an
+      // admission or launch record its served facts already include, so any
+      // read this tick serves it, launch or not.
       const allocatedLeaf =
         digest.kind !== 'node' &&
         (this.continuations.has(record.slug) || !!launched?.has(record.slug))
@@ -4194,17 +4197,34 @@ export class Dispatcher {
    * leaf needs a free slot among every other build, after the work ahead of
    * it. Admission is the durable `slot.admitted` fact, appended on the state
    * this decision read before any lease claim, provisioning or launch, so a
-   * crash after it keeps the slot; runner liveness never admits. A denial or
+   * crash after it keeps the slot; runner liveness never admits. A holding
+   * leaf's launch appends one too, its launch record (`launchInFlight`),
+   * unless one is already in flight or another runner's live lease will
+   * refuse this launch; an acknowledgement appends none. A denial or
    * deferral is recorded only in memory, for this tick's intake reservation;
    * a deferral is retried after this tick's dispatch. */
   private async leafAdmission(slug: string): Promise<'admit' | 'wait' | 'defer'> {
     const facts = await this.store.buildFacts(slug)
     const { state } = facts
     const self = { state, restackDue: landingRestackDue(state, facts.log) }
+    if (leafHoldsSlot(self)) {
+      if (launchInFlight(escalationCarryInput(state))) return 'admit'
+      // A live runner (a restarted dispatcher re-attempting a running build)
+      // wins the lease claim, so this attempt launches nothing to record.
+      const record = await this.store.getBuild(slug)
+      if (record !== null && this.hasLiveExecutionLease(record)) return 'admit'
+      const recorded = await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'slot.admitted',
+        payload: {},
+      })
+      if (recorded === null) return 'wait'
+      await this.store.servedBuildFacts(slug)
+      return 'admit'
+    }
     // A leaf waiting on the outside world can hold no slot, so what runs for
     // it (an acknowledgement) is neither gated nor admitted.
     if (
-      leafHoldsSlot(self) ||
       leafOutsideWait(self) ||
       state.pendingCommands.some(
         (command) => command.command === 'abort' || command.command === 'pause',

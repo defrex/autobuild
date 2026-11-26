@@ -13,6 +13,13 @@ async function waiting(stage: 'requested' | 'waiting' | 'ended' | 'blocked' | 'r
     type: 'build.created',
     payload: { ticket: { source: 'file', id: 'A' }, repo: '/repo', baseBranch: 'main' },
   })
+  // The declaring runner's execution; it stops once the wait is entered.
+  const run = { workspaceRef: '/ws/waits', instance: 'i1' }
+  await store.append(record.slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'local', ...run },
+  })
   await store.append(record.slug, {
     actor: { kind: 'agent', role: 'implement', session: 's_impl' },
     type: 'wait.requested',
@@ -33,6 +40,11 @@ async function waiting(stage: 'requested' | 'waiting' | 'ended' | 'blocked' | 'r
         question: 'Waiting on B, C to complete: needs B.',
       },
     })
+  await store.append(record.slug, {
+    actor: DISPATCHER,
+    type: 'execution.ended',
+    payload: { ...run, outcome: 'completed' },
+  })
   if (stage === 'blocked')
     await store.append(record.slug, {
       actor: DISPATCHER,

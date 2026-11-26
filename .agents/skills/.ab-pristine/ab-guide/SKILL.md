@@ -102,8 +102,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   `capacity` counts slots. A build takes one by admission and holds it while
   Autobuild owes its next move, runner or not. It holds none while it waits on
   the outside world (paused, blocked on a question, waiting for a merge
-  decision, merge gates or other tickets), though it keeps its workspace. When
-  that wait ends it waits for a slot again ahead of normal ticket claims, so
+  decision, merge gates or other tickets), though it keeps its workspace. A
+  question does not release the slot while work Autobuild started goes on:
+  other steps of its verify stage, or a recorded launch and its execution.
+  Such a build keeps its slot through the answer and requests nothing. When
+  a wait ends it waits for a slot again ahead of normal ticket claims, so
   occupancy never exceeds `capacity`. Priority never preempts a running build.
   With `[policy].maxOpenPrs` set, open-PR backpressure pauses new ordinary
   normal-priority claims (not `ab start` requests) once that many root PRs are open and unmerged, until
@@ -131,8 +134,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   It ends the wait (cause `unresolvable`), shows in the default attention
   filter, and its answer resumes the declaring phase like a wait answer. An
   operator may still end a wait early by answering its escalation (cause
-  `operator`). The build then waits as a `resume` request and takes a slot
-  ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
+  `operator`). A build whose runner has stopped then waits as a `resume`
+  request and takes a slot ahead of normal ticket claims (urgent work first). If its target moved, it first restacks onto the
   target's current head (published work is replayed as one change, and a
   conflict reconciles first unless it is confined to declared `[generated]`
   files, which the kernel regenerates; with nothing published, the branch fast-forwards
@@ -2777,7 +2780,8 @@ succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth measured by the latest completed ticket scan,
 whichever dispatcher run recorded it (0 before any scan), so an overlapping
 run that starts and yields cannot displace it. `active` is occupied capacity (builds holding a
-slot; paused, blocked and waiting builds hold none) against root `capacity`.
+slot; paused and waiting builds, and blocked ones with nothing still working
+on them, hold none) against root `capacity`.
 Each build's `slot` in `ab builds`, `ab build status` and the dashboard rows,
 and `capacity.slots` in `ab repository status`, report the per-build state
 behind that count: held, requested (with its request) or none; a missing value
