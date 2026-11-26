@@ -8208,8 +8208,11 @@ function memoryListingEntryCounter(store: import('../store/memory').MemoryBuildS
  * held-config capacity — receive the same record and digest entries at 1 and
  * 30 settled builds and at 100 and 100,000 events, each through a fresh
  * store handle (the stand-in for a fresh process), and read zero event rows
- * while nothing changes (#1230). Returns the per-surface entry vectors. */
-export async function openBuildListingReadBudget() {
+ * while nothing changes (#1230). Every answer reports slot state (#1341).
+ * With `commands`, `ab builds`, `ab build status` and `ab repository status`
+ * JSON also report it with zero event rows; they read checkout files, so only
+ * an integration test passes it. Returns the per-surface entry vectors. */
+export async function openBuildListingReadBudget(opts: { commands?: boolean } = {}) {
   const { MemoryBuildStore } = await import('../store/memory')
   const { listOperatorLandings } = await import('../operator/landings')
   const { getOperatorAttention } = await import('../operator/attention')
@@ -8322,6 +8325,7 @@ export async function openBuildListingReadBudget() {
       targetRepo: string
       env: Record<string, string>
       exec: typeof exec
+      storeRef: string
       openStore: () => BuildStore
       now: () => Date
       json: true
@@ -8341,6 +8345,8 @@ export async function openBuildListingReadBudget() {
       targetRepo: repo,
       env: {},
       exec,
+      // A named store reads no checkout configuration.
+      storeRef: '/budget',
       openStore: () => handle,
       now: () => now,
       json: true,
@@ -8348,12 +8354,14 @@ export async function openBuildListingReadBudget() {
     })
     return JSON.parse(lines.join('\n'))
   }
-  const commands = {
-    builds: (store: BuildStore) => cli(store, abBuilds),
-    buildStatus: (store: BuildStore) =>
-      cli(store, (opts) => abBuildStatus({ ...opts, slug: 'open-consent' })),
-    repositoryStatus: (store: BuildStore) => cli(store, abRepositoryStatus),
-  }
+  const commands = opts.commands
+    ? {
+        builds: (store: BuildStore) => cli(store, abBuilds),
+        buildStatus: (store: BuildStore) =>
+          cli(store, (command) => abBuildStatus({ ...command, slug: 'open-consent' })),
+        repositoryStatus: (store: BuildStore) => cli(store, abRepositoryStatus),
+      }
+    : {}
   let baseline: Record<string, Vector> | undefined
   const history = new Map<number, number>()
   for (const settled of [1, 30])
