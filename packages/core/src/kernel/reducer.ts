@@ -878,11 +878,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       executions,
       liveExecution,
       slotAdmittedSeq: acc.slotAdmittedSeq,
-      failureSeq: Math.max(
-        dispatchFailures.at(-1)?.seq ?? 0,
-        infrastructureFailures.at(-1)?.seq ?? 0,
-        setupFailures.at(-1)?.seq ?? 0,
-      ),
+      failures: [dispatchFailures, infrastructureFailures, setupFailures],
     })
 
   const start = (ctx: PhaseContext): void => {

@@ -140,9 +140,9 @@ export interface EscalationCarryInput {
   liveExecution?: { seq: number } | undefined
   /** The latest admission: `build.created` or `slot.admitted`. */
   slotAdmittedSeq?: number | undefined
-  /** The latest `dispatch.failed`, `infrastructure.failed` or
-   * `runner.setup-failed` seq, or 0. */
-  failureSeq: number
+  /** The recorded launch failures, each list in log order: `dispatch.failed`,
+   * `infrastructure.failed` and `runner.setup-failed`. */
+  failures: readonly (readonly { seq: number }[])[]
 }
 
 /** The latest launch record, or undefined: the admission (`build.created` or
@@ -165,16 +165,34 @@ export function launchRecordSeq(input: Pick<EscalationCarryInput, 'slotAdmittedS
 export function launchInFlight(
   input: Pick<
     EscalationCarryInput,
-    'executions' | 'slotAdmittedSeq' | 'failureSeq' | 'openEscalations'
+    'executions' | 'slotAdmittedSeq' | 'failures' | 'openEscalations'
   >,
 ): boolean {
   const record = launchRecordSeq(input)
   return (
     record !== undefined &&
     record > (input.executions.at(-1)?.seq ?? 0) &&
-    record > input.failureSeq &&
-    !input.openEscalations.some(
-      (escalation) => escalation.policyCause === 'execution-no-progress' && escalation.seq > record,
+    !launchEnded(input, record, Number.POSITIVE_INFINITY)
+  )
+}
+
+/** The launch recorded at `record` failed or was refused before `before`: a
+ * launch failure fact, or an open `execution-no-progress` escalation, lies
+ * between them. Such a record never qualifies a later execution, which is an
+ * acknowledgement's (SPEC §12: an acknowledgement confers no slot). */
+function launchEnded(
+  input: Pick<EscalationCarryInput, 'failures' | 'openEscalations'>,
+  record: number,
+  before: number,
+): boolean {
+  const between = (seq: number) => seq > record && seq < before
+  return (
+    input.failures.some((failures) => {
+      const last = failures.findLast((failure) => failure.seq < before)
+      return last !== undefined && last.seq > record
+    }) ||
+    input.openEscalations.some(
+      (escalation) => escalation.policyCause === 'execution-no-progress' && between(escalation.seq),
     )
   )
 }
@@ -191,13 +209,15 @@ export function launchInFlight(
  *   `engine.ts`), which keeps the stage's other members running; the two
  *   change together.
  * - (E) held execution: the open execution was launched while the build held
- *   its slot (its launch record lies between the previous start and its own).
+ *   its slot (its launch record lies between the previous start and its own,
+ *   and no failure or refusal ended that launch before it started).
  * - (L) launch in flight (`launchInFlight`).
  * - (B) the open execution started before the earliest open raise.
  *
  * Only (A) looks at escalations, as part of its own definition, apart from
  * (L)'s progress-guard refusal, which is a launch failure: (E), (L) and (B)
- * rest on durable launch and execution facts, which no question contradicts. Stale evidence (a crashed runner's open execution, a launch
+ * rest on durable launch and execution facts, which no question contradicts.
+ * Stale evidence (a crashed runner's open execution, a launch
  * that died without a failure fact) over-holds a slot the build already
  * held; it never takes a new one. */
 export function escalationCarried(input: EscalationCarryInput): boolean {
@@ -236,7 +256,13 @@ function executionCarried(input: EscalationCarryInput): boolean {
   if (live === undefined) return false
   const record = launchRecordSeq(input)
   const previous = input.executions.findLast((execution) => execution.seq < live.seq)?.seq ?? 0
-  if (record !== undefined && record > previous && record < live.seq) return true
+  if (
+    record !== undefined &&
+    record > previous &&
+    record < live.seq &&
+    !launchEnded(input, record, live.seq)
+  )
+    return true
   if (input.openEscalations.length === 0) return false
   return live.seq < Math.min(...input.openEscalations.map((escalation) => escalation.seq))
 }

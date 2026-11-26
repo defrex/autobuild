@@ -10250,6 +10250,33 @@ for (const resumeCurrent of [false, true]) {
     // The refusal ends the launch its record began: the stopped build waits
     // on a human alone, so it holds no slot, and answered it resumes (#1348).
     expect(await reportedSlot(h, slug)).toEqual({ state: 'none' })
+    // A pause acknowledgement launched now reuses no refused record: its
+    // execution takes no slot.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug,
+      user: 'operator',
+      action: { kind: 'pause' },
+    })
+    await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([slug])
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { instance: 'ack', provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+    })
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'none' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'ack',
+        workspaceRef: '/ws/ab/auth-limit',
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
     await h.store.append(slug, {
       actor: humanActor('operator'),
       type: 'escalation.answered',
@@ -10268,7 +10295,8 @@ for (const resumeCurrent of [false, true]) {
       action: { kind: 'abort' },
     })
     await h.dispatcher.tick({ resumeCurrent })
-    expect(h.launches).toEqual([slug])
+    // The pause acknowledgement, then the abort's.
+    expect(h.launches).toEqual([slug, slug])
   })
 }
 

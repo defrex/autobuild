@@ -859,7 +859,8 @@ blocked, an acknowledged pause, a pending `revise-spec`, or a finished
 pipeline with no epilogue work due), or whose only wait is open escalations
 that `escalationCarried` (`kernel/verify-stage-state.ts`) carries: (A) a
 verify stage member's question while another member runs, the engine's stage
-exemption; (E) an open execution whose launch record precedes it; (L) a launch
+exemption; (E) an open execution whose launch record precedes it, with no launch
+failure or refusal between them; (L) a launch
 record newer than the latest `execution.started`, launch failure and open
 `execution-no-progress` refusal; or (B) an execution older than the earliest
 open raise. Apart from (L)'s refusal, which the progress guard raises in place

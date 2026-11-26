@@ -49,7 +49,7 @@ function input(overrides: Partial<EscalationCarryInput> = {}): EscalationCarryIn
     maxAttemptSeen: 1,
     executions: [{ seq: 5 }],
     slotAdmittedSeq: 1,
-    failureSeq: 0,
+    failures: [],
     ...overrides,
   }
 }
@@ -121,6 +121,25 @@ describe('escalationCarried (SPEC §12 "What holds a slot")', () => {
         }),
       ),
     ).toBe(false)
+    // An acknowledgement after its record's launch failed or was refused: the
+    // spent record never qualifies it.
+    const refusal: OpenEscalation = {
+      id: 'np',
+      phase: 'setup',
+      source: 'policy',
+      policyCause: 'execution-no-progress',
+      question: 'q',
+      seq: 26,
+    }
+    const live = {
+      ...replacement,
+      executions: [{ seq: 5 }, { seq: 27 }],
+      liveExecution: { seq: 27 },
+    }
+    expect(escalationCarried(input({ ...live, openEscalations: [janitor, refusal] }))).toBe(false)
+    expect(escalationCarried(input({ ...live, failures: [[{ seq: 26 }]] }))).toBe(false)
+    // A failure during the execution does not unmake its launch.
+    expect(escalationCarried(input({ ...live, failures: [[{ seq: 28 }]] }))).toBe(true)
   })
 
   test('(B) an execution older than the earliest open raise carries', () => {
@@ -165,7 +184,7 @@ describe('escalationCarried (SPEC §12 "What holds a slot")', () => {
     expect(launchInFlight(input({ ...provisioning, executions: [{ seq: 5 }, { seq: 32 }] }))).toBe(
       false,
     )
-    expect(escalationCarried(input({ ...provisioning, failureSeq: 32 }))).toBe(false)
+    expect(escalationCarried(input({ ...provisioning, failures: [[{ seq: 32 }]] }))).toBe(false)
     // The progress guard's raise is the launch's refusal; an older one is not.
     const refusal: OpenEscalation = {
       id: 'np',

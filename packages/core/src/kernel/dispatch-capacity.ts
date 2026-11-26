@@ -254,12 +254,7 @@ export function escalationCarryInput(state: BuildState): EscalationCarryInput {
     executions: state.executions,
     liveExecution: state.openExecution,
     slotAdmittedSeq: state.slotAdmittedSeq,
-    failureSeq: Math.max(
-      0,
-      ...[state.dispatchFailures, state.infrastructureFailures, state.setupFailures].map(
-        (failures) => failures.at(-1)?.seq ?? 0,
-      ),
-    ),
+    failures: [state.dispatchFailures, state.infrastructureFailures, state.setupFailures],
   }
 }
 
