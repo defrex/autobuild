@@ -57,6 +57,15 @@ export interface SlotWaiter {
   priority?: 'urgent'
 }
 
+/** One build's slot state (SPEC §12 "What holds a slot"), by the rules
+ * admission counts: `held` exactly when `occupiesCapacity`, otherwise
+ * `requested` exactly when `slotRequest` names one (`priority` as the
+ * build's `SlotWaiter` carries it), otherwise `none`. */
+export type SlotState =
+  | { state: 'held' }
+  | { state: 'requested'; request: SlotRequest; priority?: 'urgent' }
+  | { state: 'none' }
+
 /** Slot admission order for free slots (SPEC §12, "Slot admission order"):
  * manual start requests, urgent parked work, urgent ticket claims (urgent
  * start requests first), normal parked work, normal ticket claims (normal
@@ -86,6 +95,10 @@ export interface DispatchCapacity {
    * reserves a slot ahead of the lower tiers. Omitted when none, by an older
    * server, and when the caller has no repository facts. */
   startRequests?: Partial<Record<TicketStartPriority, number>>
+  /** Each projected build's `slotState` by slug; empty when no build's is
+   * known. Omitted by an older server. A missing entry, or a missing map,
+   * is unknown, never `none`. */
+  slots?: Record<string, SlotState>
 }
 
 /** A build's slot-admission priority; absent (historical builds, sources
@@ -356,6 +369,24 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
   return undefined
 }
 
+/** A nonterminal build's slot state, or undefined when it is unknown: a
+ * `done` build reports none, and a value from a server older than durable
+ * admission (no `slotAdmittedSeq`, which every current reducer sets on
+ * `build.created`) was decided by older rules. A held slot outranks a
+ * request: a conflicted node both occupies a slot and is listed as a
+ * `reconcile` waiter, and reports `held`. An aborted build in cleanup
+ * reports `none`. */
+export function slotState(build: CapacityBuild, now: Date): SlotState | undefined {
+  const { state } = build
+  if (state.status === 'done' || state.slotAdmittedSeq === undefined) return undefined
+  if (occupiesCapacity(build, now)) return { state: 'held' }
+  const request = slotRequest(build, now)
+  if (!request) return { state: 'none' }
+  return buildPriority(state) === 'urgent'
+    ? { state: 'requested', request, priority: 'urgent' }
+    : { state: 'requested', request }
+}
+
 export function dispatchCapacity(
   builds: readonly CapacityBuild[],
   configured: number,
@@ -381,6 +412,11 @@ export function dispatchCapacity(
       .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
   const waitingNodes = waiting('node')
   const waitingBuilds = waiting('leaf')
+  const slots: Record<string, SlotState> = {}
+  for (const build of unique) {
+    const slot = slotState(build, now)
+    if (slot) slots[build.record.slug] = slot
+  }
   const backpressure = options.openPrs
     ? openPrBackpressure(
         unique,
@@ -398,6 +434,7 @@ export function dispatchCapacity(
     ...(options.urgentClaims ? { urgentClaims: options.urgentClaims } : {}),
     ...(backpressure ? { backpressure } : {}),
     ...startRequestsOf(options.startRequests),
+    slots,
   }
 }
 

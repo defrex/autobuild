@@ -50,11 +50,14 @@ test('a slot wait names the waiter priority', async () => {
     payload: { priority: 'urgent' },
   })
   const state = reduceBuild(await store.getEvents(record.slug))
-  const urgent = summarizeFrom(record, state, now, 'reconcile')
+  const urgent = { ...summarizeFrom(record, state, now), slotWait: 'reconcile' as const }
   expect(renderSummaries([urgent], now, '')[1]).toContain(
     'urgent reconcile waiting for a slot ahead of normal work',
   )
-  const normal = summarizeFrom(record, { ...state, priority: 'normal' }, now, 'reconcile')
+  const normal = {
+    ...summarizeFrom(record, { ...state, priority: 'normal' }, now),
+    slotWait: 'reconcile' as const,
+  }
   expect(renderSummaries([normal], now, '')[1]).toContain(
     'reconcile waiting for a slot ahead of normal ticket claims',
   )

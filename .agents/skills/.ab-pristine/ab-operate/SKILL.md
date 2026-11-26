@@ -290,13 +290,20 @@ is not exposed there, and its
   A build parked on a ticket wait lists as `waiting`, with `waiting on <ids>`
   after its phase; in `--json` its `status` stays `blocked` and `wait` carries
   `state` and `tickets`.
-- `ab build status <slug> [--events N]` — one build's detail, chronological runner
-  attaches with runtime identity, and recent events. Historical runtime is null
-  in JSON and unrecorded in human output.
+  The `SLOT` column (`slot` in `--json`) says whether the build holds a slot,
+  has requested one (`resume`, `reconcile`, `verification`, `reopen` or
+  `propose`, maybe urgent) or holds none, by the rules the dispatcher admits
+  work by. `unknown`, or no `slot`, means an older server; never read it as none.
+- `ab build status <slug> [--events N]` — one build's detail, its `slot:` line
+  (`slot` in JSON), chronological runner attaches with runtime identity, and
+  recent events. Historical runtime is null in JSON and unrecorded in human
+  output.
 - `ab repository status` — the repository's derived status, including the lease
-  holder’s recorded runtime version, commit, and source kind/location, and the
-  latest scan's queue diagnostics and startup warnings, and each configured
-  hook's last delivery, backlog and failure. Historical runtime is
+  holder’s recorded runtime version, commit, and source kind/location, the
+  latest scan's queue diagnostics and startup warnings, each configured
+  hook's last delivery, backlog and failure, and a `slots:` line after
+  `capacity:` grouping builds as held, requested or none (`capacity.slots` in
+  JSON; `occupied` counts its held entries). Historical runtime is
   null in JSON and unrecorded in human output.
 - `ab artifact` — fetch one artifact's bytes.
 
