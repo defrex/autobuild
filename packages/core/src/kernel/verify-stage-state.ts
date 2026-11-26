@@ -1,6 +1,5 @@
 import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
-import { normalizeVerifyCompletion } from '../events/payloads'
 import type { OpenEscalation, AnsweredEscalation } from './reducer'
 
 export interface VerifyMember extends EventPayload<'verify.started'> {
@@ -85,8 +84,7 @@ export function advanceVerifyStage(state: VerifyStageState, event: AbEvent): voi
       break
     }
     case 'verify.completed': {
-      const result = normalizeVerifyCompletion(event.payload)
-      const key = verifyMemberKey(result.step, result.attempt)
+      const key = verifyMemberKey(event.payload.step, event.payload.attempt)
       if (!state.cancellations[key]) state.outcomes[key] = event.seq
       break
     }
