@@ -418,7 +418,12 @@ The distinctions that change an administrator's answer:
   Errors discard conditional state; unloadable targets retain the healthy
   predecessor reader fallback with the active query. Old peers still exchange
   full v1 answers. Polling remains 1 second idle / 250 ms pending, and cached
-  answers still drive pending actions, child exits and recovery expiry.
+  answers still drive pending actions, child exits and recovery expiry. While
+  the active run's durably detected upgrade has no prepared target, failure,
+  request or handoff yet, the reader reports it as advisory `preparing` and the
+  launcher checks every 50 ms, at most 600 times per detection, then returns to
+  the idle cadence. Older readers omit the field and keep the ordinary cadence;
+  operator shutdown ends any pause.
   Automatic upgrades default on: the kernel checks immediately and every
   60 seconds, resolving a declared Autobuild dependency and Bun lock from the same
   authoritative base-branch commit. Unpinned repositories reread the original
