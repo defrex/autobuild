@@ -700,12 +700,13 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
         slug: node.slug,
         request: 'verification',
       })
-      const summary = summarizeFrom(
-        node,
-        reduceBuild(await h.events(node.slug)),
-        h.clock(),
-        'verification',
-      )
+      const state = reduceBuild(await h.events(node.slug))
+      const summary = summarizeFrom(node, state, h.clock(), {
+        record: node,
+        state,
+        workspace: false,
+      })
+      expect(summary.slotWait).toBe('verification')
       expect(renderSummaries([summary], h.clock(), '').join('\n')).toContain(
         slotWaitText('verification'),
       )

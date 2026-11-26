@@ -16,6 +16,7 @@ import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { AbEvent } from '../../events/catalog'
 import { buildReducer, type BuildAcc, type BuildState } from '../../kernel/reducer'
 import { landingRestackDue } from '../../kernel/engine'
+import { capacityBuildFromFacts } from '../../kernel/capacity-build'
 import { leafRestackReducer, type LeafRestackState } from '../../kernel/leaf-restack-state'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
@@ -29,11 +30,7 @@ import type {
   StreamRecord,
   StreamScope,
 } from '../../store/types'
-import {
-  readBuildFacts,
-  type CurrentBuildFacts,
-  type RepositoryReadFacts,
-} from '../../store/reduced-reads'
+import { readBuildFacts, type RepositoryReadFacts } from '../../store/reduced-reads'
 import { dispatchWarningLines, repositoryQueueDepth } from './header'
 import {
   projectBuild,
@@ -110,19 +107,7 @@ export function isDashboardTerminal(state: BuildState): boolean {
   return state.status === 'done'
 }
 
-/** One build's capacity facts from its saved `buildReadFacts` value. */
-export function capacityBuildFromFacts(
-  record: BuildRecord,
-  value: CurrentBuildFacts,
-): Required<CapacityBuild> {
-  return {
-    record,
-    state: value.state,
-    workspace: value.workspace !== null,
-    provisioning: value.provisionMarker !== undefined,
-    restackDue: landingRestackDue(value.state, value.log),
-  }
-}
+export { capacityBuildFromFacts }
 
 /** The display-only reads that decorate one row: authoritative stream
  * records (SPEC §9) and the pinned effective-config artifact (SPEC §16.1). */

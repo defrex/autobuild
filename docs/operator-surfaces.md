@@ -48,6 +48,17 @@ When a leaf with an open pull request waits on the PR but has no landing decisio
 
 If none of these apply, the line says no refusal is recorded and the dispatcher decides at its next janitor poll. Repository-wide forge deferrals appear in `ab repository status`. When a decision is recorded for the current candidate, the line and the field are no longer shown.
 
+Status output reports each nonterminal build's slot state, by the rules the dispatcher admits work by ([slots](dispatcher.md#ready-work-becomes-a-build)):
+
+| Surface | Text | JSON |
+|---|---|---|
+| `ab builds`, `ab build status` | `SLOT` column, `slot:` line | `slot` |
+| `ab repository status` | `slots:` line after `capacity:` | `capacity.slots`, by slug |
+
+- Values: `{"state":"held"}`, `{"state":"requested","request":…,"priority":"urgent"}` (`request` is `resume`, `reconcile`, `verification`, `reopen` or `propose`; `priority` only when urgent), or `{"state":"none"}`.
+- `capacity.occupied` counts exactly the `held` entries. A requested build is a slot waiter.
+- A missing value is unknown, from a server older than this field. It is never `none`, and text prints `unknown`. A `done` build reports no slot state.
+
 A local CLI can use a remote Store:
 
 <!-- seam-config:start -->

@@ -10,7 +10,7 @@ import { reduceBuild } from './reducer'
 import {
   buildPriority,
   capacityExplanation,
-  dispatchCapacity,
+  dispatchCapacity as projectCapacity,
   epilogueLeaf,
   epilogueUnsettled,
   intakeCapacity,
@@ -19,6 +19,7 @@ import {
   settlementDue,
   settlementKey,
   slotRequest,
+  slotState,
   slotWaitText,
   startCapacity,
   startClaimDemand,
@@ -28,6 +29,15 @@ import {
   type CapacityBuild,
   type DispatchCapacity,
 } from './dispatch-capacity'
+import { expectSlotAgreement } from '../testing/slot-agreement'
+
+/** Every projection in this file also proves the reported slot state agrees
+ * with what admission counts (#1341). */
+function dispatchCapacity(...args: Parameters<typeof projectCapacity>): DispatchCapacity {
+  const capacity = projectCapacity(...args)
+  expectSlotAgreement(args[0], args[2], capacity)
+  return capacity
+}
 
 const now = new Date('2026-10-20T15:00:00Z')
 function build(
@@ -72,11 +82,23 @@ test('blocked and paused descendants hold no slot, so occupancy never exceeds co
     build('idle', 'node', 'collecting'),
     build('done', 'work', 'done'),
   ]
+  const none = { state: 'none' } as const
   expect(dispatchCapacity(builds, 3, now)).toEqual({
     configured: 3,
     occupied: 3,
     effective: 3,
     borrowingNodes: [],
+    // The done build is terminal and not reported.
+    slots: {
+      node: { state: 'held' },
+      other: { state: 'held' },
+      a: { state: 'held' },
+      b: none,
+      c: none,
+      d: none,
+      e: none,
+      idle: none,
+    },
   })
   // Duplicate identities count once.
   expect(dispatchCapacity([...builds, builds[2]!], 3, now).occupied).toBe(3)
@@ -130,6 +152,11 @@ test('pending verification counts every slot holder; a paused descendant holds n
     effective: 1,
     borrowingNodes: [],
     waitingNodes: [{ slug: 'second', request: 'verification' }],
+    slots: {
+      first: { state: 'held' },
+      second: { state: 'requested', request: 'verification' },
+      child: { state: 'none' },
+    },
   })
 })
 
@@ -142,6 +169,11 @@ test('a node awaiting verification reserves one intake slot without occupying on
     effective: 3,
     borrowingNodes: [],
     waitingNodes: [{ slug: 'node', request: 'verification' }],
+    slots: {
+      node: { state: 'requested', request: 'verification' },
+      a: { state: 'held' },
+      b: { state: 'held' },
+    },
   })
   expect(intakeCapacity(capacity)).toBe(0)
 })
@@ -396,6 +428,13 @@ test('parked leaves free capacity and reserve intake while they wait', () => {
       { slug: 'wait-r', request: 'reconcile' },
       { slug: 'wait-v', request: 'verification' },
     ],
+    slots: {
+      running: { state: 'held' },
+      parked: { state: 'none' },
+      'wait-r': { state: 'requested', request: 'reconcile' },
+      'wait-v': { state: 'requested', request: 'verification' },
+      unsettled: { state: 'held' },
+    },
   })
   expect(intakeCapacity(capacity)).toBe(0)
   expect(intakeCapacity(capacity, { settled: new Set(['wait-v']) })).toBe(1)
@@ -1099,7 +1138,7 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     }
   })
 
-  test('a value from an older server, without slot seqs, reads as admitted', () => {
+  test('a value from an older server, without slot seqs, reads as admitted and reports unknown', () => {
     const legacy = (build: CapacityBuild) => {
       delete build.state.slotAdmittedSeq
       delete build.state.slotReleasedSeq
@@ -1108,13 +1147,45 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     expect(holds(legacy(leaf('a', [attached])))).toBe(true)
     expect(holds(legacy(leaf('a', [attached, raised])))).toBe(false)
     expect(holds(legacy(leaf('a', [attached, raised, answer()])))).toBe(true)
+    // Its slot state was decided by older rules: unknown, never `none`.
+    const old = legacy(leaf('a', [attached, raised]))
+    expect(slotState(old, at)).toBeUndefined()
+    const capacity = dispatchCapacity([old, legacy(leaf('b', [attached]))], 2, at)
+    expect(capacity.occupied).toBe(1)
+    expect(capacity.slots).toEqual({})
   })
 
-  test('the wire keeps effective and borrowingNodes for clients in the version window', () => {
+  test('slot state reports held, requested or none by the rules admission counts', () => {
+    const slot = (build: CapacityBuild) => slotState(build, at)
+    expect(slot(leaf('a', [attached], 'live'))).toEqual({ state: 'held' })
+    const answered = leaf('a', [attached, raised, answer()])
+    expect(slot(answered)).toEqual({ state: 'requested', request: 'resume' })
+    answered.state.priority = 'urgent'
+    expect(slot(answered)).toEqual({ state: 'requested', request: 'resume', priority: 'urgent' })
+    expect(slot(leaf('a', [attached, raised]))).toEqual({ state: 'none' })
+    const paused = leaf('a', [attached, write('build.pause-requested'), write('build.paused')])
+    expect(slot(paused)).toEqual({ state: 'none' })
+    expect(slot(finished('a', { settled: 10 }))).toEqual({ state: 'none' })
+    // A conflicted node both occupies a slot and waits as reconcile: held.
+    const node = conflict('node')
+    node.workspace = false
+    expect(slotRequest(node, at)).toBe('reconcile')
+    expect(slot(node)).toEqual({ state: 'held' })
+    expect(slot(build('aborting', 'work', 'aborted'))).toEqual({ state: 'none' })
+    expect(slot(build('merged', 'work', 'done'))).toBeUndefined()
+  })
+
+  test('the wire keeps every earlier field for clients in the version window and adds slots', () => {
     const node = conflict('node')
     const blocked = leaf('child', [attached, raised])
     blocked.state.target = { build: 'node', ticket: { source: 'file', id: 'node' } }
     const wire = JSON.parse(JSON.stringify(dispatchCapacity([node, blocked], 1, at)))
-    expect(wire).toEqual({ configured: 1, occupied: 1, effective: 1, borrowingNodes: [] })
+    expect(wire).toEqual({
+      configured: 1,
+      occupied: 1,
+      effective: 1,
+      borrowingNodes: [],
+      slots: { node: { state: 'held' }, child: { state: 'none' } },
+    })
   })
 })

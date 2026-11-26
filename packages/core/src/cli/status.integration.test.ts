@@ -318,6 +318,11 @@ describe('abBuilds', () => {
 // accumulate. The old algorithm is computed inline in each test so the output
 // equivalence is pinned against the pre-change behavior, not against a
 // re-derivation of the new gate.
+test('ab builds, ab build status and ab repository status JSON report slot state with no event row (#1341)', async () => {
+  const { openBuildListingReadBudget } = await import('../testing/reduced-read-budget')
+  await openBuildListingReadBudget({ commands: true })
+})
+
 describe('abBuilds store cost (AUT-488)', () => {
   function countingStore(store: MemoryBuildStore): {
     store: BuildStore

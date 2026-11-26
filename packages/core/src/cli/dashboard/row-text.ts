@@ -11,7 +11,7 @@
  *
  * Layout (padding, truncation, wrapping, separators) stays with each frontend.
  */
-import { capacityExplanation } from '../../kernel/dispatch-capacity'
+import { capacityExplanation, type SlotState } from '../../kernel/dispatch-capacity'
 import type { BuildRosterFinished } from '../../kernel/build-roster'
 import type { DispatchHealth } from '../../kernel/dispatch-status'
 import { NO_DISPATCHER_RUN_LINE, activeCounterText } from './configuration'
@@ -67,6 +67,9 @@ export interface DashboardRowText {
   ticketUrl?: string
   kind: 'work' | 'integration'
   status: StatusText
+  /** The build's slot state, passed through from the projection; absent is
+   * unknown, never `none`. */
+  slot?: SlotState
   /** The label of the step currently running. */
   phase?: string
   /** Ordered parenthesised annotations beside the status. */
@@ -315,6 +318,7 @@ export function projectRowText(
       : {}),
     kind: build.kind === 'integration' ? 'integration' : 'work',
     status,
+    ...(build.slot !== undefined ? { slot: build.slot } : {}),
     ...(phase !== undefined ? { phase } : {}),
     flags,
     ...(build.kind !== 'integration'

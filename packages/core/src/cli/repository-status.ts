@@ -14,7 +14,7 @@ import {
   type UpgradeRun,
 } from '../kernel/dispatch-upgrade'
 import { formatRuntimeIdentity } from '../events/runtime'
-import { landingRestackDue } from '../kernel/engine'
+import { capacityBuildFromFacts } from '../kernel/capacity-build'
 import {
   dispatchCapacity,
   startClaimDemand,
@@ -22,6 +22,7 @@ import {
   waitingExplanation,
   type DispatchCapacity,
   type CapacityBuild,
+  type SlotState,
 } from '../kernel/dispatch-capacity'
 import { backpressureStatusLine } from '../kernel/open-pr-backpressure'
 import {
@@ -576,6 +577,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `capacity: ${status.capacity.occupied}/${status.capacity.configured}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length || status.capacity.urgentClaims || status.capacity.startRequests ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
+    ...(status.capacity?.slots ? [slotsStatusLine(status.capacity.slots)] : []),
     ...(status.capacity?.backpressure
       ? [backpressureStatusLine(status.capacity.backpressure)]
       : []),
@@ -722,6 +724,24 @@ export function localOverridesFromArtifact(
 
 /** Capacity is optional when no held dispatcher has a retrievable configuration
  * (`artifact` comes from `readHeldEffectiveConfig`). */
+/** Every reported build's slot state, grouped held, requested and none,
+ * each group sorted by slug; `none` when no build is reported. Builds whose
+ * state is unknown are not listed. */
+function slotsStatusLine(slots: Record<string, SlotState>): string {
+  const entries = Object.entries(slots).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const label = (slug: string, slot: SlotState) =>
+    slot.state === 'requested'
+      ? `${slug} (${slot.request}${slot.priority === 'urgent' ? ', urgent' : ''})`
+      : slug
+  const clauses = (['held', 'requested', 'none'] as const).flatMap((state) => {
+    const members = entries.filter(([, slot]) => slot.state === state)
+    return members.length
+      ? [`${state} ${members.map(([slug, slot]) => label(slug, slot)).join(', ')}`]
+      : []
+  })
+  return `slots: ${clauses.length ? clauses.join('; ') : 'none'}`
+}
+
 export async function readRepositoryCapacity(
   store: BuildStore,
   repo: string,
@@ -738,14 +758,7 @@ export async function readRepositoryCapacity(
   // settled build, so this read stays flat as history accumulates.
   for (const { record, digest } of await store.listOpenBuilds(repo)) {
     if (digest.terminal) continue
-    const build = (await readBuildFacts(store, record.slug)).value
-    builds.push({
-      record,
-      state: build.state,
-      workspace: build.workspace !== null,
-      provisioning: build.provisionMarker !== undefined,
-      restackDue: landingRestackDue(build.state, build.log),
-    })
+    builds.push(capacityBuildFromFacts(record, (await readBuildFacts(store, record.slug)).value))
   }
   return dispatchCapacity(builds, config.capacity, now, {
     urgentClaims: urgentClaimDemand(facts),
