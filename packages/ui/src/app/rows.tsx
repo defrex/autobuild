@@ -133,6 +133,7 @@ export function liveRowModel(row: WebBuildRow, now: number): BuildRowModel {
     slug: row.slug,
     status: row.status.word,
     tone: row.status.tone,
+    ...(row.status.note !== undefined ? { note: row.status.note } : {}),
     href: buildHref(row.slug),
     flags: row.flags,
     ...(meta !== undefined ? { meta } : {}),

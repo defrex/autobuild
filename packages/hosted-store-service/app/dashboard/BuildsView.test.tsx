@@ -482,3 +482,41 @@ test('a parked build waiting for a slot opens the capacity notice and alerts on 
   expect(html).toContain('class="sub integration-alert warn" role="status"')
   expect(html).toContain('verification waiting for a slot ahead of normal ticket claims</p>')
 })
+
+test('rows render the shared status word, tone and note; the harvest row reads HARVESTING', () => {
+  const settled = renderBuildsView({
+    ...pinnedBuild({}),
+    slot: { state: 'none' },
+    statusBasis: { resting: 'running', runner: false, settled: 'decision' },
+  })
+  expect(settled).toContain('data-status="running"')
+  expect(settled).toContain(
+    '<span class="status" data-tone="held"><span class="status-note">(merge decision) </span>',
+  )
+  expect(settled).toContain('WAITING')
+  expect(settled).not.toContain('RUNNING')
+  const harvest = renderToStaticMarkup(
+    <BuildsView
+      repo="owner/repo"
+      model={{
+        ...model(pinnedBuild({})),
+        harvest: {
+          kind: 'harvest',
+          run: 'r',
+          status: 'running',
+          steps: [],
+          observations: 1,
+          rounds: 1,
+        },
+      }}
+      now={0}
+      onActivate={noop}
+      onHoverPreview={noop}
+      onOpenBuild={noop}
+      onRowBuildControl={noop}
+      onRowHarvest={noop}
+    />,
+  )
+  expect(harvest).toContain('data-tone="live"')
+  expect(harvest).toContain('HARVESTING')
+})
