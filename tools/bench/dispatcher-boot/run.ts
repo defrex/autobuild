@@ -113,8 +113,11 @@ async function until<T>(what: string, child: Child, probe: () => T | undefined):
     try {
       found = probe()
     } catch (error) {
-      // The store file appears only once the dispatcher creates it.
-      if (!String(error).includes('unable to open database')) throw error
+      // The warm-up boot creates the store: its file can be missing, or exist
+      // before the dispatcher has created the journal table.
+      const message = String(error)
+      if (!message.includes('unable to open database') && !message.includes('no such table'))
+        throw error
     }
     if (found !== undefined) return found
     if (child.exitCode !== null)
