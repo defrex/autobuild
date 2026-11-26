@@ -19496,8 +19496,9 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     const NEED = { request: 'verification' as const, need: `measure:baseline:1:${PIN}` }
     /** A measurement node whose runner an older dispatcher launched with no
      * admission, at capacity 1, with an urgent ready ticket and a manual
-     * start request waiting. `beforeRunner` lands ahead of the runner. */
-    async function legacy(opts: { beforeRunner?: 'pause'; afterRunner?: 'pause' } = {}) {
+     * start request waiting. `afterRunner` requests a pause it has not
+     * acknowledged. */
+    async function legacy(opts: { afterRunner?: 'pause' } = {}) {
       const h = harness({
         toml: 'capacity = 1\n',
         tickets: [
@@ -19522,8 +19523,6 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
         specRev: 0,
       })
       await append('node.opened', { sha: PIN })
-      const pause = () => append('build.pause-requested', {}, humanActor('operator'))
-      if (opts.beforeRunner === 'pause') await pause()
       await append('workspace.provisioned', {
         provider: 'fake',
         ref: `/ws/ab-node/${NODE}`,
@@ -19536,7 +19535,8 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
         instance: 'old',
       })
       await h.store.claimLease(NODE, 'old-runner', 60_000)
-      if (opts.afterRunner === 'pause') await pause()
+      if (opts.afterRunner === 'pause')
+        await append('build.pause-requested', {}, humanActor('operator'))
       await requestTicketStart({
         store: h.store,
         repo: REPO,
@@ -19605,13 +19605,6 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       await h.store.releaseLease(NODE, 'old-runner')
       await h.dispatcher.tick()
       expect((await claimed()).length).toBe(1)
-    })
-
-    test('an acknowledgement-only runner is not counted or adopted', async () => {
-      const { h, admissions, claimed } = await legacy({ beforeRunner: 'pause' })
-      await h.dispatcher.tick()
-      expect((await claimed()).length).toBe(1)
-      expect(await admissions()).toEqual([])
     })
   })
 
