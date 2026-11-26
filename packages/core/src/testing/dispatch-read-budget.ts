@@ -2656,3 +2656,124 @@ export async function warmRestoreReadBudget(
     for (const report of reports.slice(1, 3)) expect(report.missing).toEqual(reports[0]!.missing)
   return reports
 }
+
+/**
+ * Store calls of every runtime-owned reader command, at 100 and 10,000
+ * journal events. Each reader runs in a fresh process, so its cost per
+ * occurrence is its whole cost:
+ *
+ * - `--read-journal` (once per cold start, once per handoff target for
+ *   `supportsRollback`): `ensureRepo` and `getRepo`; 0 event rows, 0 reducer
+ *   reads.
+ * - `--read-handoff` without a run or lineage (the install probe, once per
+ *   prepared target): opens no store.
+ * - `--read-handoff` with a run and lineage (once per generation exit):
+ *   `getRepo` and one `dispatchUpgrade` value, advanced incrementally; an
+ *   unprepared run reads no `dispatcherRunFacts`, and an unchanged journal
+ *   reads 0 event rows.
+ *
+ * `--read-upgrade` (every 1 s, 250 ms with a pending successor) is bounded by
+ * `upgradeReadBudget`. Nothing here may grow with the journal.
+ */
+export async function readerCommandReadBudget(store: BuildStore): Promise<void> {
+  const { readGenerationJournal, readHandoff } = await import('../cli/dispatch-handoff')
+  const { readDispatchUpgrade } = await import('../store/reduced-reads')
+  for (const length of [100, 10_000]) {
+    const repo = `/reader-budget-${length}`
+    await store.ensureRepo(repo)
+    for (let i = 0; i < length; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+    // The saved value exists, as it does after the first reader of this key.
+    await readDispatchUpgrade(store, repo)
+    const launch = {
+      version: 1 as const,
+      runtimeRoot: '/runtime',
+      checkout: repo,
+      journal: { repo, storeRef: '/memory' },
+      run: 'budget',
+      lineage: 'budget',
+    }
+    const counted = countedStore(store)
+    let opened = 0
+    const openStore = () => {
+      opened++
+      return counted.store
+    }
+
+    const journal = await readGenerationJournal(launch, ['dispatch'], {}, { openStore })
+    expect(journal.journal).toEqual({ storeRef: '/memory', repo })
+    expect(counted.take()).toEqual({ calls: ['ensureRepo', 'getRepo'], reducers: [], rows: 0 })
+
+    const probe = { ...launch, run: undefined, lineage: undefined }
+    expect(await readHandoff(probe, ['dispatch'], {}, false, { openStore })).toBeUndefined()
+    expect(opened).toBe(1)
+
+    expect(await readHandoff(launch, ['dispatch'], {}, true, { openStore })).toBeUndefined()
+    expect(counted.take()).toEqual({
+      calls: ['getRepo', 'getReducerValue'],
+      reducers: ['dispatchUpgrade'],
+      rows: 0,
+    })
+  }
+}
+
+/** `store` with every method call, requested reducer and event row counted,
+ * including the memory adapter's private reducer-storage slices. */
+function countedStore(store: BuildStore) {
+  let calls: string[] = []
+  let reducers: string[] = []
+  let rows = 0
+  const counted = new Proxy(store, {
+    get(target, key, receiver) {
+      if (key === 'close') return async () => {}
+      if (key === 'repoState')
+        return (...args: unknown[]) => {
+          const state = Reflect.get(target, key).apply(receiver, args)
+          return new Proxy(state, {
+            get(state, field) {
+              const value = Reflect.get(state, field)
+              if (field !== 'events') return value
+              return new Proxy(value, {
+                get(events, method) {
+                  if (method !== 'slice') return Reflect.get(events, method)
+                  return (since: number, through: number) => {
+                    const sliced = events.slice(since, through)
+                    rows += sliced.length
+                    return sliced
+                  }
+                },
+              })
+            },
+          })
+        }
+      const value = Reflect.get(target, key, receiver)
+      if (typeof value !== 'function' || typeof key !== 'string') return value
+      // Count the store's public reads and writes; the adapter's own private
+      // helpers run unwrapped through the same receiver.
+      if (!/^(get|list|append|put|ensure|create|finish|claim|release)/.test(key))
+        return value.bind(receiver)
+      return async (...args: unknown[]) => {
+        calls.push(key)
+        if (key === 'getReducerValue') reducers.push((args[1] as { reducer: string }).reducer)
+        const result = await value.apply(receiver, args)
+        if ((key === 'getRepoEvents' || key === 'getRepoStateEvents') && Array.isArray(result))
+          rows += result.length
+        return result
+      }
+    },
+  })
+  return {
+    store: counted,
+    take() {
+      const taken = { calls, reducers, rows }
+      calls = []
+      reducers = []
+      rows = 0
+      return taken
+    },
+  }
+}
