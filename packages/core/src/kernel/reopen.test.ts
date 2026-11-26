@@ -311,15 +311,12 @@ describe('capacity and landing for a reopened leaf', () => {
   })
 
   test('once admitted it occupies a slot; resettled it requests nothing', () => {
-    const current = state([...settledWrites(), reopen({ feedback: 'x' })])
-    const leased = {
-      ...capacityBuild(current),
-      record: {
-        ...capacityBuild(current).record,
-        lease: { holder: 'h', expiresAt: new Date(now.getTime() + 60_000).toISOString() },
-      },
-    }
-    expect(dispatchCapacity([leased], 2, now).occupied).toBe(1)
+    const admitted = state([
+      ...settledWrites(),
+      reopen({ feedback: 'x' }),
+      w('slot.admitted', { request: 'reopen' }),
+    ])
+    expect(dispatchCapacity([capacityBuild(admitted)], 2, now).occupied).toBe(1)
     const resettled = state([
       ...settledWrites(),
       reopen({ feedback: 'x' }),

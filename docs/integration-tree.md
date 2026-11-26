@@ -104,16 +104,13 @@ prepared verification cycle, a restack conflict or an open proposal request,
 with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
-normal claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
-paused descendants, following accepted source-qualified build target ancestry.
-Running descendants and unrelated builds still count; ordinary blocked and
-paused work retains its slot for every other admission, except a work build
-parked by a ticket wait, which holds none. Provisioning reserves
-node occupancy before the runner starts. This exception never raises the budget
-for new claims. Status and both dashboards report actual occupancy, configured
-capacity, effective display capacity and the nodes using descendant-held slots.
-Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of normal ticket claims, marking urgent ones. Idle collecting nodes remain free.
+normal claim. A node's admission counts every build that holds a slot, as every
+admission does. Blocked and paused descendants hold none, so they never stand
+between a node and the slot it needs to unblock them, and no node uses a
+descendant's slot. Provisioning reserves node occupancy before the runner
+starts. Status and both dashboards report occupancy against configured
+capacity, and each node waiting for a slot ahead of normal ticket claims,
+marking urgent ones. Idle collecting nodes remain free.
 
 Claims freeze the destination build generation and branch. Missing, unopened,
 merged, closed or aborted targets leave work queued with diagnostics. The newest

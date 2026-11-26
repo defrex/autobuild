@@ -42,6 +42,16 @@ export function reopenUnsettled(
   )
 }
 
+/** An answered `revise-spec` escalation still waits for its revision: no
+ * `spec.revised` has landed since the answer (§6.3). */
+export function reviseSpecPending(
+  state: Pick<BuildState, 'answeredEscalations' | 'restartSince'>,
+): boolean {
+  return state.answeredEscalations.some(
+    (e) => e.resolution === 'revise-spec' && e.answeredSeq > state.restartSince,
+  )
+}
+
 /** Where a reopen sends the leaf. */
 export function reopenRoute(reopen: NonNullable<BuildState['reopen']>): 'implement' | 'plan' {
   return reopen.spec !== undefined ? 'plan' : 'implement'

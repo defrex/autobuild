@@ -472,7 +472,9 @@ for (const waiting of ['blocked', 'paused'] as const)
         slug: owner.slug,
         user: 'operator',
       })
-      // Two unrelated running builds and three blocked descendants fill all five slots.
+      // Two unrelated running builds hold slots; the three blocked or paused
+      // descendants hold none, so the node is admitted within configured
+      // capacity without using a descendant's slot.
       const { DISPATCHER: actor } = await import('../events/envelope')
       for (const [index, target] of [undefined, owner.slug, owner.slug, owner.slug].entries()) {
         const slug = `capacity-holder-${index}`
@@ -547,6 +549,28 @@ for (const waiting of ['blocked', 'paused'] as const)
       ).toBe(false)
       const nodeRunner = h.launched.find((entry) => entry.slug === owner.slug)!
       expect(nodeRunner).toBeDefined()
+      {
+        const { dispatchCapacity } = await import('../kernel/dispatch-capacity')
+        const { readBuildFacts } = await import('../store/reduced-reads')
+        const builds = []
+        for (const record of await h.store.listBuilds()) {
+          const facts = (await readBuildFacts(h.store, record.slug)).value
+          builds.push({
+            record: (await h.store.getBuild(record.slug))!,
+            state: facts.state,
+            workspace: facts.workspace !== null,
+            provisioning: facts.provisionMarker !== undefined,
+          })
+        }
+        const capacity = dispatchCapacity(builds, 5, h.clock())
+        expect(capacity.occupied).toBeLessThanOrEqual(5)
+        expect(capacity).toMatchObject({ effective: 5, borrowingNodes: [] })
+        const descendants = builds.filter((build) =>
+          /^capacity-holder-[123]$/.test(build.record.slug),
+        )
+        expect(descendants.map((build) => build.state.status)).toEqual([waiting, waiting, waiting])
+        expect(dispatchCapacity(descendants, 5, h.clock()).occupied).toBe(0)
+      }
       await nodeRunner.runner.run()
       await h.store.releaseLease(nodeRunner.slug, nodeRunner.instance)
       expect(resolved).toBe(1)
@@ -634,13 +658,13 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
       await run(child.slug)
       // The leaf awaits its human merge and a second leaf holds the other slot.
       // A leaf parked for its merge decision holds no slot once the sweep
-      // settles it, so an open escalation keeps this one unsettled: it holds
-      // its slot until its PR closes.
+      // settles it, so a requested pause its runner never acknowledges keeps
+      // this one unsettled: it holds its slot until its PR closes.
       await run(leaf.slug)
       await h.store.append(leaf.slug, {
-        actor: { kind: 'kernel' },
-        type: 'escalation.raised',
-        payload: { id: 'e_hold_slot', phase: 'finalize', source: 'stall', question: 'hold' },
+        actor: { kind: 'human', user: 'operator' },
+        type: 'build.pause-requested',
+        payload: {},
       })
       await h.store.createBuild({
         slug: 'slot-holder',

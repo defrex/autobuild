@@ -1440,7 +1440,7 @@ documentFields(configRootSchema, {
     'Named observe-only hooks: the dispatcher delivers each matching watch record to a command or URL, in order and at least once.',
   baseBranch: 'Branch used to cut builds, target PRs, and merge during reconciliation.',
   capacity:
-    'Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision, nor does a build waiting on other tickets; either is admitted ahead of normal ticket claims when it must run again, urgent work first (see [slot admission order](dispatcher.md#slot-admission-order)). Other unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
+    'Slots for this repository. A build holds one from admission (a ticket claim, a start request or an admitted slot request) until it waits on a human, another ticket, the forge or its children, or ends. A build whose outside wait ends is admitted again ahead of normal ticket claims, urgent work first (see [slot admission order](dispatcher.md#slot-admission-order)). Occupancy never exceeds capacity.',
   ticketScanIntervalSeconds:
     'Ticket-source ready scan cadence; tick spacing is the effective minimum.',
   forge:

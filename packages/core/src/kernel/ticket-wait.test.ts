@@ -657,8 +657,8 @@ describe('capacity: ticket waits', () => {
     })
   })
 
-  test('a live lease, an open execution or a co-open question keeps the slot', () => {
-    expect(occupiesCapacity(capacityBuild('a', open(), true), now)).toBe(true)
+  test('an entered wait holds no slot whatever its runner or a co-open question', () => {
+    expect(occupiesCapacity(capacityBuild('a', open(), true), now)).toBe(false)
     const executing = open()
     executing.openExecution = {
       provider: 'vercel-sandbox',
@@ -667,7 +667,7 @@ describe('capacity: ticket waits', () => {
       commandId: 'cmd',
       seq: 1,
     } as BuildState['openExecution'] & object
-    expect(occupiesCapacity(capacityBuild('a', executing), now)).toBe(true)
+    expect(occupiesCapacity(capacityBuild('a', executing), now)).toBe(false)
     const questioned = reduce([
       ...planWait(),
       entered('wait_1', 'esc_w'),
@@ -677,7 +677,8 @@ describe('capacity: ticket waits', () => {
         agent('s_other'),
       ),
     ])
-    expect(occupiesCapacity(capacityBuild('a', questioned), now)).toBe(true)
+    expect(occupiesCapacity(capacityBuild('a', questioned), now)).toBe(false)
+    expect(slotRequest(capacityBuild('a', questioned), now)).toBeUndefined()
   })
 
   test('pending and refused requests keep the slot', () => {
@@ -689,13 +690,31 @@ describe('capacity: ticket waits', () => {
     expect(occupiesCapacity(capacityBuild('a', refused), now)).toBe(true)
   })
 
-  test('an ended wait requests a resume slot ahead of normal claims', () => {
-    const resuming = capacityBuild('a', answered())
-    expect(occupiesCapacity(resuming, now)).toBe(false)
-    expect(slotRequest(resuming, now)).toBe('resume')
-    const capacity = dispatchCapacity([resuming], 1, now)
-    expect(capacity.waitingBuilds).toEqual([{ slug: 'a', request: 'resume' }])
-    expect(intakeCapacity(capacity)).toBe(0)
+  test('an ended wait requests a resume slot ahead of normal claims until admitted', () => {
+    const automatic = reduce([
+      ...planWait(),
+      entered('wait_1', 'esc_w'),
+      ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
+    ])
+    for (const ended of [answered(), automatic]) {
+      const resuming = capacityBuild('a', ended)
+      expect(occupiesCapacity(resuming, now)).toBe(false)
+      expect(slotRequest(resuming, now)).toBe('resume')
+      const capacity = dispatchCapacity([resuming], 1, now)
+      expect(capacity.waitingBuilds).toEqual([{ slug: 'a', request: 'resume' }])
+      expect(intakeCapacity(capacity)).toBe(0)
+    }
+    const admitted = capacityBuild(
+      'a',
+      reduce([
+        ...planWait(),
+        entered('wait_1', 'esc_w'),
+        ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
+        ev('slot.admitted', { request: 'resume' }),
+      ]),
+    )
+    expect(occupiesCapacity(admitted, now)).toBe(true)
+    expect(slotRequest(admitted, now)).toBeUndefined()
   })
 
   test('a paused or revise-spec wait requests no slot', () => {

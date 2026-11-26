@@ -214,7 +214,13 @@ describe('projectHeaderText', () => {
     drained: false,
     harvestPaused: false,
     repositoryPaused: false,
-    capacity: { configured: 3, occupied: 1, effective: 3, borrowingNodes: ['n'] },
+    capacity: {
+      configured: 3,
+      occupied: 1,
+      effective: 3,
+      borrowingNodes: [],
+      waitingNodes: [{ slug: 'n', request: 'verification' as const }],
+    },
   }
   test('counts and capacity note', () => {
     const text = projectHeaderText(header)
@@ -223,7 +229,9 @@ describe('projectHeaderText', () => {
       { label: 'queue', value: '2' },
       { label: 'active', value: '1/3' },
     ])
-    expect(text.capacityNote).toBe('(3 configured; 1 node using descendant-held slots: n)')
+    expect(text.capacityNote).toBe(
+      '(3 configured; 1 node waiting for a slot ahead of normal ticket claims: n)',
+    )
     expect(projectHeaderText({ ...header, triage: 4 }).counts[0]?.value).toBe('4')
     const noRun = projectHeaderText({ ...header, configuration: 'no-dispatcher-run' })
     expect(noRun.capacityNote).toBeUndefined()
@@ -369,7 +377,7 @@ describe('projectOverview', () => {
         viewer: { dispatchedBy: 'h' },
         triage: 1,
         repositoryPaused: true,
-        capacity: { configured: 1, occupied: 1, effective: 1, borrowingNodes: ['n'] },
+        capacity: { configured: 1, occupied: 1, effective: 1, borrowingNodes: [] },
         harvest: {
           kind: 'harvest',
           run: 'r',
